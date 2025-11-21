@@ -232,17 +232,79 @@ def _download_image(url: str) -> Optional[Image.Image]:
         return None
 
 
-def _remove_label(rating_key: str, label: str) -> None:
+
+def _remove_label(rating_key: str, label: str):
+    """
+    Universal Plex label removal compatible with:
+    - modern Plex
+    - Kometa / Plex Meta Manager labels
+    - Aura / Mediux labels
+    - TCM labels
+    """
+
     if not label:
         return
+
+    # Method 1: Direct PUT to /library/sections/{section}/all endpoint
+    # This is the most reliable method for most Plex versions
+    try:
+        url = f"{PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all"
+        params = {
+            "type": "1",
+            "id": rating_key,
+            "label[].tag.tag-": label
+        }
+        
+        r = requests.put(url, headers=_plex_headers(), params=params, timeout=10)
+        
+        if r.status_code in (200, 201, 204):
+            logger.info("Removed label '%s' from ratingKey=%s (Method 1)", label, rating_key)
+            return
+        else:
+            logger.warning("Method 1 failed for label '%s': HTTP %s", label, r.status_code)
+    
+    except Exception as e:
+        logger.warning("Method 1 exception for label '%s': %s", label, str(e))
+
+    # Method 2: DELETE with query parameters
     try:
         url = f"{PLEX_URL}/library/metadata/{rating_key}/labels"
-        params = {"tag.tag": label, "tag.type": "label"}
+        params = {
+            "tag.tag": label,
+            "tag.type": "label"
+        }
+        
         r = requests.delete(url, headers=_plex_headers(), params=params, timeout=10)
-        r.raise_for_status()
-        logger.info("Removed label '%s' from ratingKey=%s", label, rating_key)
-    except Exception:
-        logger.exception("Failed to remove label '%s' for ratingKey=%s", label, rating_key)
+        
+        if r.status_code in (200, 201, 204):
+            logger.info("Removed label '%s' from ratingKey=%s (Method 2)", label, rating_key)
+            return
+        else:
+            logger.warning("Method 2 failed for label '%s': HTTP %s", label, r.status_code)
+    
+    except Exception as e:
+        logger.warning("Method 2 exception for label '%s': %s", label, str(e))
+
+    # Method 3: PUT with label removal syntax
+    try:
+        url = f"{PLEX_URL}/library/metadata/{rating_key}"
+        params = {
+            "label[].tag.tag-": label,
+            "type": "1"
+        }
+        
+        r = requests.put(url, headers=_plex_headers(), params=params, timeout=10)
+        
+        if r.status_code in (200, 201, 204):
+            logger.info("Removed label '%s' from ratingKey=%s (Method 3)", label, rating_key)
+            return
+        else:
+            logger.warning("Method 3 failed for label '%s': HTTP %s", label, r.status_code)
+    
+    except Exception as e:
+        logger.warning("Method 3 exception for label '%s': %s", label, str(e))
+
+    logger.error("All methods failed to remove label '%s' from ratingKey=%s", label, rating_key)
 
 
 # ---------------- API Routes ----------------
