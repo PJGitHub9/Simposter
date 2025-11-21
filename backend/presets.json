@@ -4,8 +4,8 @@
     "name": "Default Template",
     "presets": [
       {
-        "id": "darkmatte",
-        "name": "DarkMatte",
+        "id": "dmatte",
+        "name": "DMatte",
         "options": {
           "poster_zoom": 1.0,
           "poster_shift_y": -0.13,
@@ -74,3 +74,4 @@
     ]
   }
 }
+
