@@ -24,7 +24,30 @@ import json
 
 PLEX_URL = os.getenv("PLEX_URL", "http://localhost:32400")
 PLEX_TOKEN = os.getenv("PLEX_TOKEN", "")
-PLEX_MOVIE_LIB_ID = os.getenv("PLEX_MOVIE_LIB_ID", "1")
+RAW_PLEX_LIBRARY = os.getenv("PLEX_MOVIE_LIBRARY_NAME", "1")
+
+def resolve_library_id(name: str) -> str:
+    name = name.strip()
+    if name.isdigit():
+        return name
+
+    url = f"{PLEX_URL}/library/sections"
+    try:
+        r = requests.get(url, headers=_plex_headers(), timeout=10)
+        r.raise_for_status()
+        root = ET.fromstring(r.text)
+    except:
+        return "1"
+
+    for directory in root.findall(".//Directory"):
+        title = (directory.get("title") or "").strip().lower()
+        key = directory.get("key")
+        if title == name.lower():
+            return key
+
+    return "1"
+    
+PLEX_MOVIE_LIB_ID = resolve_library_id(RAW_PLEX_LIBRARY)
 
 OUTPUT_ROOT = os.getenv("OUTPUT_ROOT", "/poster-outputs")
 PRESETS_PATH = os.path.join(os.path.dirname(__file__), "presets.json")
@@ -156,7 +179,7 @@ def _plex_headers() -> Dict[str, str]:
     if not PLEX_TOKEN:
         return {}
     return {"X-Plex-Token": PLEX_TOKEN}
-
+    
 
 def _get_plex_movies() -> List[Movie]:
     url = f"{PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all?type=1"
