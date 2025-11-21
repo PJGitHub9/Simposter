@@ -5,7 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from io import BytesIO
 from typing import Any, Dict, List, Optional
-
+from tempfile import NamedTemporaryFile
 import logging
 import requests
 from fastapi import FastAPI, HTTPException
@@ -445,38 +445,44 @@ def api_plex_send(req: PlexSendRequest):
         raise HTTPException(status_code=400, detail="Invalid background image.")
 
     logo = _download_image(req.logo_url) if req.logo_url else None
-
     renderer = get_renderer(req.template_id)
     img = renderer(bg, logo, req.options or {})
 
-    buf = BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=95)
-    buf.seek(0)
+    # --- Save to temp file ---
+    with NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        temp_path = tmp.name
+        img.convert("RGB").save(tmp, "JPEG", quality=95)
 
-    url = f"{PLEX_URL}/library/metadata/{req.rating_key}/posters"
+    logger.info(f"Prepared Plex upload temp file: {temp_path}")
+
+    # --- Upload using the real file ---
     try:
-        r = requests.post(
-            url,
-            headers=_plex_headers(),
-            files={"file": ("poster.jpg", buf, "image/jpeg")},
-            timeout=20,
-        )
+        upload_url = f"{PLEX_URL}/library/metadata/{req.rating_key}/posters"
+        
+        headers = {
+            "X-Plex-Token": PLEX_TOKEN,
+            "Content-Type": "image/jpeg"
+        }
+        
+        # img is the rendered PIL image
+        buf = BytesIO()
+        img.convert("RGB").save(buf, "JPEG", quality=95)
+        payload = buf.getvalue()
+        
+        r = requests.post(upload_url, headers=headers, data=payload, timeout=20)
         r.raise_for_status()
-    except Exception:
-        logger.exception("Failed to send poster to Plex for ratingKey=%s", req.rating_key)
+
+    except Exception as e:
+        logger.exception("Failed to send poster to Plex")
         raise HTTPException(status_code=500, detail="Failed to send poster to Plex.")
 
-    labels = req.labels or []
-    for label in labels:
+    # Remove labels
+    for label in (req.labels or []):
         _remove_label(req.rating_key, label)
 
-    logger.info(
-        "Sent poster to Plex for ratingKey=%s (removed labels: %s)",
-        req.rating_key,
-        ", ".join(labels) if labels else "none",
-    )
-    return {"status": "ok"}
+    logger.info(f"Sent poster to Plex for ratingKey={req.rating_key}")
 
+    return {"status": "ok"}
 
 @app.get("/api/logs")
 def api_logs():
