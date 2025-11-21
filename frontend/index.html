@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Simposter v1.1</title>
+  <title>Simposter V1.1</title>
   <style>
     body { margin:0; background:#111; color:#eee; font-family:system-ui,sans-serif; }
     .wrap { display:flex; padding:16px; gap:16px; height:100vh; box-sizing:border-box; }
@@ -739,7 +739,11 @@ document.getElementById("sendPlexBtn").onclick = async () => {
   try {
     const posterRes = await fetch(`${API}/movie/${ratingKey}/poster`);
     const posterData = await posterRes.json();
-    document.getElementById("existingPosterImg").src = posterData.url || "";
+    
+    const ts = Date.now();
+    document.getElementById("existingPosterImg").src =
+      posterData.url ? `${posterData.url}&t=${ts}` : "";
+
   } catch {
     document.getElementById("existingPosterImg").src = "";
   }
