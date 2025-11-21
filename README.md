@@ -5,6 +5,8 @@
 Simposter is a small FastAPI + HTML/JS app that helps you generate clean, vertical (2:3) artwork for your media library.  
 It talks to **Plex** for your movie list, **TMDb** for posters/logos, and renders final images via **Pillow** – with sliders for zoom, matte, fade, vignette, grain, and logo controls.
 
+https://github.com/PJGitHub9/Simposter/blob/main/ui/Pic%20of%20UI.png?raw=true
+
 ---
 
 ## ✨ Features
