@@ -12,9 +12,12 @@ def _resize_cover(
     img: Image.Image,
     target_w: int,
     target_h: int,
-    zoom: float = 1.0
+    zoom: float = 1.0,
 ) -> Image.Image:
-    """Resize to fully cover canvas, then center-crop."""
+    """
+    Resize to fully cover the target canvas (like CSS background-size: cover),
+    then apply an extra zoom factor (poster_zoom) and center-crop.
+    """
     w, h = img.size
     if w == 0 or h == 0:
         return img.resize((target_w, target_h), Image.LANCZOS)
@@ -32,47 +35,82 @@ def _resize_cover(
 
 
 def _add_vignette(img: Image.Image, strength: float) -> Image.Image:
+    """Radial vignette; strength 0..1."""
     if strength <= 0:
         return img
 
     img = img.convert("RGB")
     w, h = img.size
-    mask = Image.new("L", (w, h), 0)
-    draw = ImageDraw.Draw(mask)
+    vig = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(vig)
 
-    steps = 50
+    steps = 60
     max_r = max(w, h)
+
     for i in range(steps):
         r = max_r * (i / steps)
         a = int(255 * strength * (i / steps))
-        bbox = (w/2 - r, h/2 - r, w/2 + r, h/2 + r)
+        bbox = (w / 2 - r, h / 2 - r, w / 2 + r, h / 2 + r)
         draw.ellipse(bbox, fill=a)
 
-    mask = mask.filter(ImageFilter.GaussianBlur(80))
+    vig = vig.filter(ImageFilter.GaussianBlur(90))
     black = Image.new("RGB", (w, h), 0)
-
-    return Image.composite(black, img, mask)
+    return Image.composite(black, img, vig)
 
 
 def _add_grain(img: Image.Image, amount: float) -> Image.Image:
+    """
+    Film grain; amount 0..0.6
+    """
     if amount <= 0:
         return img
 
     img = img.convert("RGB")
     w, h = img.size
-    noise = Image.new("L", (w, h))
-    px = noise.load()
+    grain = Image.new("L", (w, h))
+    gp = grain.load()
 
     rng = random.Random()
     for y in range(h):
         for x in range(w):
             v = 128 + int(rng.uniform(-128 * amount, 128 * amount))
-            px[x, y] = max(0, min(255, v))
+            gp[x, y] = max(0, min(255, v))
 
-    noise = noise.filter(ImageFilter.GaussianBlur(1.4))
-    noise_rgb = Image.merge("RGB", (noise, noise, noise))
+    grain = grain.filter(ImageFilter.GaussianBlur(1.5))
+    grain_rgb = Image.merge("RGB", (grain, grain, grain))
 
-    return Image.blend(img, noise_rgb, amount)
+    # blend strength directly = amount
+    return Image.blend(img, grain_rgb, amount)
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert #RRGGBB (or RRGGBB) to (r,g,b)."""
+    h = hex_color.lstrip("#")
+    if len(h) != 6:
+        return (255, 255, 255)
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    return (r, g, b)
+
+
+def _solid_color_logo(logo: Image.Image, color: tuple[int, int, int]) -> Image.Image:
+    """
+    Return a logo where ONLY the non-transparent regions are filled with `color`,
+    keeping the original alpha. No boxes / backgrounds.
+    """
+    logo = logo.convert("RGBA")
+    r, g, b, a = logo.split()
+    cr, cg, cb = color
+    return Image.merge(
+        "RGBA",
+        (
+            Image.new("L", logo.size, cr),
+            Image.new("L", logo.size, cg),
+            Image.new("L", logo.size, cb),
+            a,
+        ),
+    )
 
 
 # ============================================================
@@ -84,119 +122,132 @@ def render(
     logo: Optional[Image.Image],
     options: Dict[str, Any] | None,
 ) -> Image.Image:
+    """
+    Single renderer obeying slider options.
+    Templates (DarkMatte, Clean, etc.) ONLY change the 'options' dict;
+    all sliders are always available.
+
+    Options (all floats, usually 0..1 coming from the UI):
+      - poster_zoom
+      - poster_shift_y
+      - matte_height_ratio
+      - fade_height_ratio
+      - vignette_strength
+      - grain_amount
+      - logo_scale
+      - logo_offset        (0..1 → top..bottom of canvas)
+      - logo_mode          ("stock" | "match" | "hex")
+      - logo_hex           ("#RRGGBB")
+    """
+
+    if background is None:
+        raise ValueError("Background image is required")
 
     if options is None:
         options = {}
 
+    # fixed 2:3 canvas (TPDB friendly, vertical)
     canvas_w = 2000
     canvas_h = 3000
 
-    # ---------------- OPTIONS ----------------
-    poster_zoom = float(options.get("poster_zoom", 1.0))
-    poster_shift_y = float(options.get("poster_shift_y", 0.0))
+    # ------------- OPTIONS -------------
+    poster_zoom = float(options.get("poster_zoom", 1.0))          # 1.0 = normal
+    poster_shift_y = float(options.get("poster_shift_y", 0.0))    # -0.5..0.5
 
-    matte_height_ratio = float(options.get("matte_height_ratio", 0.0))
-    fade_height_ratio = float(options.get("fade_height_ratio", 0.0))
+    matte_height_ratio = float(options.get("matte_height_ratio", 0.0))  # 0..0.5
+    fade_height_ratio = float(options.get("fade_height_ratio", 0.0))    # 0..0.5
 
-    vignette_strength = float(options.get("vignette_strength", 0.0))
-    grain_amount = float(options.get("grain_amount", 0.0))
+    vignette_strength = float(options.get("vignette_strength", 0.0))    # 0..1
+    grain_amount = float(options.get("grain_amount", 0.0))              # 0..0.6
 
-    logo_scale = float(options.get("logo_scale", 0.5))  # width fraction
-    logo_position = float(options.get("logo_offset", 75))  # NOW 0–100%
+    logo_scale = float(options.get("logo_scale", 0.5))         # fraction of canvas width
+    logo_offset = float(options.get("logo_offset", 0.75))      # 0..1 top→bottom
 
-    logo_mode = options.get("logo_mode", "stock")
-    logo_hex = options.get("logo_hex", "#FFFFFF")
+    logo_mode = str(options.get("logo_mode", "stock") or "stock")
+    logo_hex = str(options.get("logo_hex", "#FFFFFF") or "#FFFFFF")
 
-    # ---------------- BASE POSTER ----------------
+    # clamp helpers
+    def clamp(v, lo, hi):
+        return max(lo, min(hi, v))
+
+    poster_zoom = max(poster_zoom, 0.1)
+    poster_shift_y = clamp(poster_shift_y, -0.5, 0.5)
+
+    matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
+    fade_height_ratio = clamp(fade_height_ratio, 0.0, 0.5)
+
+    vignette_strength = clamp(vignette_strength, 0.0, 1.0)
+    grain_amount = clamp(grain_amount, 0.0, 0.6)
+
+    logo_scale = clamp(logo_scale, 0.1, 1.0)
+    logo_offset = clamp(logo_offset, 0.0, 1.0)
+
+    # ------------- BASE POSTER -------------
     base = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
 
     poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom)
     shift_px = int(poster_shift_y * canvas_h)
     base.paste(poster, (0, shift_px))
 
-    # ---------------- MATTE / FADE ----------------
+    # ------------- MATTE + FADE -------------
     matte_h = int(canvas_h * matte_height_ratio)
     fade_h = int(canvas_h * fade_height_ratio)
 
     if matte_h > 0 or fade_h > 0:
-        mask = Image.new("L", (canvas_w, canvas_h), 0)
-        mp = mask.load()
+        matte_mask = Image.new("L", (canvas_w, canvas_h), 0)
+        mp = matte_mask.load()
 
-        matte_start = canvas_h - matte_h
-        fade_start = max(0, matte_start - fade_h)
+        matte_start = canvas_h - matte_h               # where solid matte begins
+        fade_start = max(0, matte_start - fade_h)      # top of fade
 
         for y in range(canvas_h):
             if y >= matte_start:
-                a = 255
+                alpha = 255  # solid matte
             elif y >= fade_start:
                 t = (y - fade_start) / max(fade_h, 1)
-                a = int(255 * t)
+                alpha = int(255 * t)  # from 0 → 255 downward
             else:
-                a = 0
-
+                alpha = 0  # pure poster
             for x in range(canvas_w):
-                mp[x, y] = a
+                mp[x, y] = alpha
 
-        matte_black = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
-        base = Image.composite(matte_black, base, mask)
+        black = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
+        base = Image.composite(black, base, matte_mask)
 
-    # ---------------- APPLY EFFECTS (POSTER ONLY) ----------------
-    poster_processed = base.convert("RGB")
-    poster_processed = _add_vignette(poster_processed, vignette_strength)
-    poster_processed = _add_grain(poster_processed, grain_amount)
+    # ------------- VIGNETTE + GRAIN (poster only) -------------
+    base_rgb = base.convert("RGB")
+    base_rgb = _add_vignette(base_rgb, vignette_strength)
+    base_rgb = _add_grain(base_rgb, grain_amount)
 
-    base = poster_processed.convert("RGBA")
+    base = base_rgb.convert("RGBA")
 
-    # ---------------- PREPARE LOGO ----------------
-        # ------------- LOGO DRAWING (absolute positioning, not matte-based) -------------
-        # ---------------- PREPARE LOGO (absolute positioning, not matte-based) ----------------
+    # ------------- LOGO -------------
     if logo is not None:
         logo = logo.convert("RGBA")
 
-        # Apply logo color mode BEFORE whitening
         if logo_mode == "match":
-            # Average poster color
-            poster_avg = background.resize((1, 1), Image.Resampling.LANCZOS).getpixel((0, 0))
-            r, g, b = poster_avg[:3]
-            tinted = Image.new("RGBA", logo.size, (r, g, b, 255))
-            logo = Image.blend(logo, tinted, 0.6)
+            # Color match using poster's average color
+            poster_avg = background.resize((1, 1), Image.LANCZOS).getpixel((0, 0))
+            color = poster_avg[:3]
+            logo = _solid_color_logo(logo, color)
 
         elif logo_mode == "hex":
-            h = logo_hex.lstrip("#")
-            r, g, b = tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-            tinted = Image.new("RGBA", logo.size, (r, g, b, 255))
-            logo = Image.blend(logo, tinted, 1.0)
+            color = _hex_to_rgb(logo_hex)
+            logo = _solid_color_logo(logo, color)
 
-        if logo_mode in ("match", "hex"):
-            # Pure white conversion only for recoloring modes
-            r, g, b, a = logo.split()
-            logo = Image.merge(
-                "RGBA",
-                (
-                    Image.new("L", logo.size, 255),
-                    Image.new("L", logo.size, 255),
-                    Image.new("L", logo.size, 255),
-                    a,
-                ),
-            )
+        # stock: keep original logo RGBA
 
-
-        # Resize logo
+        # Resize logo to logo_scale * canvas width
         max_w = int(canvas_w * logo_scale)
-        scale = max_w / logo.width
-        new_size = (int(logo.width * scale), int(logo.height * scale))
-        logo = logo.resize(new_size, Image.LANCZOS)
+        if max_w > 0 and logo.width > 0:
+            scale = max_w / logo.width
+            new_size = (int(logo.width * scale), int(logo.height * scale))
+            logo = logo.resize(new_size, Image.LANCZOS)
 
-        # ---- NEW ABSOLUTE POSITION LOGIC (0–1 range) ----
-        pos = float(options.get("logo_offset", 0.75))  # default 75%
-        pos = max(0.0, min(1.0, pos))  # clamp
-
-        y_logo = int((canvas_h - logo.height) * pos)
+        # Absolute position: 0..1 top→bottom, based on logo height
+        y_logo = int((canvas_h - logo.height) * logo_offset)
         x_logo = (canvas_w - logo.width) // 2
 
         base.alpha_composite(logo, (x_logo, y_logo))
-
-        #base_rgba.alpha_composite(logo, (x_logo, y_logo))
-
 
     return base.convert("RGB")
