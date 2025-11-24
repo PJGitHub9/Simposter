@@ -1,6 +1,7 @@
+##V1.2
 # backend/templates/universal.py
 from typing import Dict, Any, Optional
-from PIL import Image, ImageFilter, ImageDraw
+from PIL import Image, ImageDraw, ImageOps, ImageEnhance, ImageFilter, ImageChops
 import random
 
 
@@ -149,7 +150,7 @@ def render(
     # fixed 2:3 canvas (TPDB friendly, vertical)
     canvas_w = 2000
     canvas_h = 3000
-
+    
     # ------------- OPTIONS -------------
     poster_zoom = float(options.get("poster_zoom", 1.0))          # 1.0 = normal
     poster_shift_y = float(options.get("poster_shift_y", 0.0))    # -0.5..0.5
@@ -250,4 +251,51 @@ def render(
 
         base.alpha_composite(logo, (x_logo, y_logo))
 
-    return base.convert("RGB")
+    canvas = base.convert("RGBA")
+    W = canvas_w
+    H = canvas_h
+    # ---- ROUNDED CANVAS CLIP FIRST ----
+    radius = int(min(W, H) * 0.03)
+    
+    round_mask = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(round_mask).rounded_rectangle(
+        [(0, 0), (W, H)],
+        radius=radius,
+        fill=255
+    )
+    
+    canvas = canvas.convert("RGBA")
+    canvas.putalpha(round_mask)
+    
+    # ---- BORDER ----
+    border_enabled = bool(options.get("border_enabled", False))
+    if border_enabled:
+        border_px = int(options.get("border_px", 0))
+        border_color = _hex_to_rgb(options.get("border_color", "#FFFFFF"))
+        
+        filled_bg = Image.new("RGBA", (W, H), (*border_color, 255))
+        canvas = Image.alpha_composite(filled_bg, canvas.convert("RGBA"))
+    
+        if border_px > 0:
+            # Outer round rect
+            outer = round_mask
+    
+            # Inner round rect
+            inner = Image.new("L", (W, H), 0)
+            ImageDraw.Draw(inner).rounded_rectangle(
+                [(border_px, border_px), (W - border_px, H - border_px)],
+                radius=max(1, radius - border_px),
+                fill=255
+            )
+    
+            border_mask = ImageChops.subtract(outer, inner)
+    
+            border_layer = Image.new("RGBA", (W, H), (*border_color, 255))
+            border_layer.putalpha(border_mask)
+    
+            canvas = Image.alpha_composite(canvas, border_layer)
+    
+
+
+    # ... existing logo drawing, etc, then return RGB
+    return canvas.convert("RGB")
