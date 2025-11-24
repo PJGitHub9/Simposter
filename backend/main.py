@@ -1,3 +1,4 @@
+#V1.2
 # backend/main.py
 import base64
 import os
@@ -14,10 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from PIL import Image
-
+from fastapi import UploadFile, File
+from fastapi.responses import FileResponse
 from .templates import list_templates, get_renderer
 from .tmdb_client import get_images_for_movie, TMDBError
-
+from typing import Any, Dict, List, Optional
+import time  # make sure this is imported near the top
 import json
 
 # ---------------- Environment ----------------
@@ -55,7 +58,12 @@ LOG_FILE = os.getenv("LOG_FILE", "/config/simposter.log")
 CONFIG_DIR = os.getenv("CONFIG_DIR", "/config")
 DEFAULT_PRESETS_PATH = os.path.join(os.path.dirname(__file__), "presets.json")
 USER_PRESETS_PATH = os.path.join(CONFIG_DIR, "presets.json")
-
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/tmp/simposter_uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+WEBHOOK_DEFAULT_PRESET = os.getenv("WEBHOOK_DEFAULT_PRESET", "default")
+WEBHOOK_AUTO_SEND = os.getenv("WEBHOOK_AUTO_SEND", "true").lower() == "true"
+WEBHOOK_AUTO_LABELS = os.getenv("WEBHOOK_AUTO_LABELS", "Overlay").split(",")  # labels to remove
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")  # optional, not enforced yet
 
 
 
@@ -172,14 +180,42 @@ class LabelsResponse(BaseModel):
 class LabelsRemoveRequest(BaseModel):
     labels: List[str]
 
+class BatchRequest(BaseModel):
+    rating_keys: List[str]              # Plex ratingKeys (WAY faster)
+    template_id: str = "default"
+    options: Dict[str, Any]
+    send_to_plex: bool = True
+    labels: Optional[List[str]] = None
 
+
+    
+class RadarrWebhookMovie(BaseModel):
+    title: str
+    year: Optional[int] = None
+    tmdbId: Optional[int] = None
+
+
+class RadarrWebhook(BaseModel):
+    eventType: str
+    movie: RadarrWebhookMovie
 # ---------------- Helpers ----------------
 
 def _plex_headers() -> Dict[str, str]:
     if not PLEX_TOKEN:
         return {}
     return {"X-Plex-Token": PLEX_TOKEN}
-    
+
+def _rating_key_from_tmdb(tmdb_id: int) -> Optional[str]:
+    """
+    Finds the Plex ratingKey for a given TMDb ID.
+    """
+    movies = _get_plex_movies()
+    for m in movies:
+        rk = m.key
+        if get_movie_tmdb_id(rk) == tmdb_id:
+            return rk
+    return None
+
 
 def _get_plex_movies() -> List[Movie]:
     url = f"{PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all?type=1"
@@ -198,6 +234,19 @@ def _get_plex_movies() -> List[Movie]:
     # Show most recently added at the top.
     #movies.reverse()
     return movies
+
+
+def _find_rating_key_by_title_year(title: str, year: Optional[int]) -> Optional[str]:
+    movies = _get_plex_movies()
+    norm = title.lower().strip()
+    cand = []
+
+    for m in movies:
+        if m.title.lower().strip() == norm:
+            if year is None or m.year is None or m.year == year:
+                cand.append(m.key)
+
+    return cand[0] if cand else None
 
 
 def extract_tmdb_id_from_metadata(xml_text: str) -> Optional[int]:
@@ -239,6 +288,22 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     r = requests.get(url, headers=_plex_headers(), timeout=10)
     r.raise_for_status()
     return extract_tmdb_id_from_metadata(r.text)
+
+
+def _render_poster_image(template_id: str,
+                         background_url: str,
+                         logo_url: Optional[str],
+                         options: Dict[str, Any]) -> Image.Image:
+    """
+    Shared renderer used by preview, save, plex send, webhooks, and batch.
+    """
+    bg = _download_image(background_url)
+    if bg is None:
+        raise HTTPException(status_code=400, detail="Invalid background image.")
+
+    logo = _download_image(logo_url) if logo_url else None
+    renderer = get_renderer(template_id)
+    return renderer(bg, logo, options or {})
 
 
 def _download_image(url: str) -> Optional[Image.Image]:
@@ -583,3 +648,211 @@ def api_logs():
 
     tail = lines[-500:]
     return {"text": "".join(tail)}
+
+@app.post("/api/batch")
+def api_batch(req: BatchRequest):
+    """
+    Batch-generate posters using rating_keys (fast UI),
+    resolve TMDb IDs ONLY for selected movies.
+    """
+    results = []
+
+    for idx, rating_key in enumerate(req.rating_keys):
+        try:
+            # 1) Resolve TMDb ID for this Plex item
+            tmdb_id = get_movie_tmdb_id(rating_key)
+            if not tmdb_id:
+                results.append({
+                    "rating_key": rating_key,
+                    "status": "error",
+                    "error": "No TMDb ID"
+                })
+                continue
+
+            # 2) Fetch TMDb assets
+            imgs = get_images_for_movie(tmdb_id)
+            posters = imgs.get("posters") or []
+            logos = imgs.get("logos") or []
+
+            if not posters:
+                results.append({
+                    "rating_key": rating_key,
+                    "status": "error",
+                    "error": "No posters from TMDb"
+                })
+                continue
+
+            bg_url = posters[0]["url"]
+            logo_url = logos[0]["url"] if logos else None
+
+            # 3) Render
+            img = _render_poster_image(
+                req.template_id,
+                bg_url,
+                logo_url,
+                req.options
+            )
+
+            # 4) Upload?
+            if req.send_to_plex:
+                buf = BytesIO()
+                img.convert("RGB").save(buf, "JPEG", quality=95)
+                payload = buf.getvalue()
+
+                upload_url = f"{PLEX_URL}/library/metadata/{rating_key}/posters"
+                headers = {"X-Plex-Token": PLEX_TOKEN, "Content-Type": "image/jpeg"}
+                r = requests.post(upload_url, headers=headers, data=payload, timeout=20)
+                r.raise_for_status()
+
+                # Label removal
+                for label in (req.labels or []):
+                    _remove_label(rating_key, label)
+
+                results.append({
+                    "rating_key": rating_key,
+                    "status": "ok",
+                    "sent_to_plex": True
+                })
+            else:
+                results.append({
+                    "rating_key": rating_key,
+                    "status": "ok",
+                    "sent_to_plex": False
+                })
+
+            # Avoid rate limiting
+            time.sleep(0.7)
+
+        except Exception as e:
+            logger.exception("Batch error for rating_key=%s", rating_key)
+            results.append({
+                "rating_key": rating_key,
+                "status": "error",
+                "error": str(e)
+            })
+
+    return {"results": results}
+
+
+
+@app.post("/api/upload/background")
+async def api_upload_background(file: UploadFile = File(...)):
+    """
+    Accept a local image (drag/drop) and make it addressable by URL
+    so the renderer can use it like a TMDb URL.
+    """
+    contents = await file.read()
+    # simple unique-ish name
+    ext = os.path.splitext(file.filename or "bg.jpg")[1] or ".jpg"
+    fname = f"bg_{int(time.time()*1000)}{ext}"
+    path = os.path.join(UPLOAD_DIR, fname)
+
+    with open(path, "wb") as f:
+        f.write(contents)
+
+    return {"url": f"/api/uploaded/{fname}"}
+
+@app.get("/api/uploaded/{filename}")
+def api_uploaded(filename: str):
+    path = os.path.join(UPLOAD_DIR, filename)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path, media_type="image/jpeg")
+
+@app.get("/api/movies/tmdb")
+def api_movies_tmdb():
+    """
+    FAST list for batch mode:
+    Returns Plex movies with rating_keys only.
+    No TMDb lookups here.
+    """
+    movies = _get_plex_movies()
+    out = []
+
+    for m in movies:
+        out.append({
+            "title": m.title,
+            "year": m.year,
+            "rating_key": m.key,
+            "tmdb_id": None  # resolved later during batch
+        })
+    return out
+
+
+
+
+#radarr webhooks
+@app.post("/api/webhook/radarr")
+def api_webhook_radarr(payload: RadarrWebhook):
+    """
+    Radarr → Simposter → Plex auto poster pipeline.
+    Configure this URL in Radarr's webhook settings.
+    """
+    if payload.eventType.lower() not in ("download", "grab"):
+        return {"status": "ignored", "reason": "eventType not handled"}
+
+    title = payload.movie.title
+    year = payload.movie.year
+    tmdb_id = payload.movie.tmdbId
+
+    logger.info("Radarr webhook for '%s' (%s), tmdb=%s",
+                title, year, tmdb_id)
+
+    rating_key = _find_rating_key_by_title_year(title, year)
+    if not rating_key:
+        logger.warning("No Plex match for '%s' (%s)", title, year)
+        return {"status": "error", "error": "No Plex match"}
+
+    # Resolve TMDb if missing
+    if not tmdb_id:
+        tmdb_id = get_movie_tmdb_id(rating_key)
+
+    if not tmdb_id:
+        logger.warning("No TMDb id for '%s' (%s)", title, year)
+        return {"status": "error", "error": "No TMDb id"}
+
+    # Get TMDb images
+    imgs = get_images_for_movie(tmdb_id)
+    posters = imgs.get("posters") or []
+    logos = imgs.get("logos") or []
+
+    if not posters:
+        return {"status": "error", "error": "No posters from TMDb"}
+
+    bg_url = posters[0]["url"]
+    logo_url = logos[0]["url"] if logos else None
+
+    # Load preset options
+    presets_data = load_presets()
+    presets_list = presets_data.get("default", {}).get("presets", [])
+    preset = next((p for p in presets_list if p.get("id") == WEBHOOK_DEFAULT_PRESET), None)
+    options = preset["options"] if preset else {}
+
+    # Render
+    img = _render_poster_image("default", bg_url, logo_url, options)
+
+    if not WEBHOOK_AUTO_SEND:
+        # Just log + done
+        logger.info("Webhook rendered poster for '%s' but auto-send disabled.", title)
+        return {"status": "ok", "sent_to_plex": False}
+
+    # Send to Plex
+    buf = BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=95)
+    payload_bytes = buf.getvalue()
+
+    upload_url = f"{PLEX_URL}/library/metadata/{rating_key}/posters"
+    headers = {
+        "X-Plex-Token": PLEX_TOKEN,
+        "Content-Type": "image/jpeg"
+    }
+    r = requests.post(upload_url, headers=headers, data=payload_bytes, timeout=20)
+    r.raise_for_status()
+
+    # Label cleanup
+    labels = [l.strip() for l in WEBHOOK_AUTO_LABELS if l.strip()]
+    for lab in labels:
+        _remove_label(rating_key, lab)
+
+    logger.info("Webhook poster sent to Plex for ratingKey=%s", rating_key)
+    return {"status": "ok", "sent_to_plex": True, "rating_key": rating_key}
