@@ -1,0 +1,1628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Simposter V1.3.1</title>
+  <style>
+    body { margin:0; background:#111; color:#eee; font-family:system-ui,sans-serif; }
+    .wrap { display:flex; padding:16px; gap:16px; height:100vh; box-sizing:border-box; }
+    .controls { width:380px; background:#181818; padding:16px; border-radius:8px; overflow-y:auto; }
+    .preview { flex:1; display:flex; justify-content:center; align-items:center; overflow:auto; padding:10px; }
+    #previewImg { max-height:90vh; width:auto; user-select:none; box-shadow:0 0 40px rgba(0,0,0,0.6); border-radius:8px; background:#000; }
+
+    select, input[type="text"], input[type="range"], button, textarea, input[type="color"] {
+      width:100%; margin-top:4px; box-sizing:border-box;
+    }
+    label { display:block; margin-top:12px; font-size:14px; }
+    textarea {
+      background:#111; color:#eee; border-radius:4px;
+      min-height:80px; font-size:11px; border:1px solid #333; padding:6px;
+    }
+    hr { border:0; border-top:1px solid #333; margin:12px 0; }
+
+    .slider-row { display:flex; justify-content:space-between; align-items:center; }
+    .slider-value { min-width:42px; text-align:right; font-size:12px; color:#aaa; padding-left:6px; }
+    #posterBoundingBox {
+      position: absolute;
+      border: 2px dashed rgba(255,255,0,0.8);
+      pointer-events: none;
+      display: none;
+    }
+    .thumb-strip { display:flex; gap:6px; overflow-x:auto; padding:6px 0; margin-top:4px; }
+    .thumb { flex:0 0 auto; width:70px; border-radius:4px; cursor:pointer;
+             border:2px solid transparent; transition:0.15s; }
+    .thumb:hover { transform:translateY(-2px); border-color:#555; }
+    .thumb.selected { border-color:#00b3ff; }
+
+    .thumb-actions { display:flex; gap:8px; margin-top:4px; }
+    .thumb-actions button { flex:1; font-size:12px; padding:6px; }
+
+    button { background:#2a7be4; border:none; color:#fff; padding:8px;
+             border-radius:4px; font-size:14px; cursor:pointer; }
+    button:hover { background:#3b8df2; }
+    button.secondary { background:#333; }
+    button.secondary:hover { background:#444; }
+
+    .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.8);
+                      display:none; align-items:center; justify-content:center; z-index:999; }
+    .modal-backdrop.show { display:flex; }
+    .modal { background:#181818; border-radius:8px; padding:16px;
+             max-width:90vw; max-height:90vh; overflow:auto; box-shadow:0 0 40px rgba(0,0,0,0.9); }
+    .modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+    .modal-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:10px; }
+    .modal-thumb { width:100%; border-radius:6px; cursor:pointer; border:2px solid transparent; transition:0.15s; }
+    .modal-thumb:hover { border-color:#00b3ff; transform:translateY(-2px); }
+
+    .status-bar { margin-top:8px; font-size:12px; color:#aaa; }
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+  <div class="controls">
+    <h2>Simposter</h2>
+
+    <label>
+      Template
+      <select id="templateSelect">
+        <option value="default">Default</option>
+        <option value="uniformlogo">Uniform Logo</option>
+      </select>
+    </label>
+
+
+    <label>
+      Preset
+      <select id="presetSelect"></select>
+    </label>
+    
+    
+    <label>
+      Movie (from Plex)
+      <input type="text" id="movieSearch" placeholder="Search..." style="margin-bottom:6px;">
+      <select id="movieSelect"></select>
+    </label>
+    
+
+    <label>
+      Poster Filter
+      <select id="posterFilter">
+        <option value="all">All Posters</option>
+        <option value="textless">Textless Only</option>
+        <option value="text">With Text</option>
+      </select>
+    </label>
+
+    <div class="label">TMDb Posters</div>
+    <div class="thumb-strip" id="posterThumbStrip"></div>
+    <div class="thumb-actions">
+      <button class="secondary" id="posterViewAllBtn">View All Posters</button>
+      <button class="secondary" id="posterClearBtn">Clear Poster</button>
+    </div>
+
+    <div class="label">TMDb Logos</div>
+    <div class="thumb-strip" id="logoThumbStrip"></div>
+    <div class="thumb-actions">
+      <button class="secondary" id="logoViewAllBtn">View All Logos</button>
+      <button class="secondary" id="logoNoneBtn">No Logo</button>
+    </div>
+
+    <!-- Logo Selection Preference -->
+    <label>
+      Logo Preference
+      <select id="logoPreference">
+        <option value="first">First Available</option>
+        <option value="white">White Logos</option>
+        <option value="color">Colored Logos</option>
+      </select>
+    </label>
+
+    <label>
+      Logo Mode
+      <select id="logoMode">
+        <option value="stock">Keep Original</option>
+        <option value="match">Color Match Poster</option>
+        <option value="hex">Use Custom Hex</option>
+      </select>
+    </label>
+    
+    <label id="logoColorLabel" style="display:none">
+      Logo Color
+      <input type="color" id="logoColor" value="#ffffff">
+    </label>
+    <label>Background URL
+      <input type="text" id="bgUrl" placeholder="TMDb or custom image URL" />
+    </label>
+    
+    <div id="bgDropZone" style="
+      border:1px dashed #444;
+      border-radius:4px;
+      padding:6px;
+      font-size:11px;
+      color:#aaa;
+      margin-top:4px;
+      text-align:center;
+    ">
+      Drag & drop an image file here to use as background
+    </div>
+    
+        
+    <label>Logo URL
+      <input type="text" id="logoUrl" placeholder="TMDb or custom logo URL" />
+    </label>
+
+    <hr />
+
+    <!-- Sliders -->
+    <div class="slider-group">
+      <label>Poster Zoom %
+        <div class="slider-row">
+          <input type="range" id="posterZoom" min="80" max="140" value="100">
+          <div class="slider-value" id="posterZoomVal">100%</div>
+        </div>
+      </label>
+
+      <label>Poster Shift Y %
+        <div class="slider-row">
+          <input type="range" id="posterShiftY" min="-50" max="50" value="0">
+          <div class="slider-value" id="posterShiftYVal">0%</div>
+        </div>
+      </label>
+
+      <label>Matte Height %
+        <div class="slider-row">
+          <input type="range" id="matteHeight" min="0" max="50" value="0">
+          <div class="slider-value" id="matteHeightVal">0%</div>
+        </div>
+      </label>
+
+      <label>Fade Height %
+        <div class="slider-row">
+          <input type="range" id="fadeHeight" min="0" max="40" value="0">
+          <div class="slider-value" id="fadeHeightVal">0%</div>
+        </div>
+      </label>
+
+      <label>Vignette
+        <div class="slider-row">
+          <input type="range" id="vignette" min="0" max="100" value="0">
+          <div class="slider-value" id="vignetteVal">0%</div>
+        </div>
+      </label>
+
+      <label>Grain
+        <div class="slider-row">
+          <input type="range" id="grain" min="0" max="60" value="0">
+          <div class="slider-value" id="grainVal">0%</div>
+        </div>
+      </label>
+
+      <label>Logo Scale %
+        <div class="slider-row">
+          <input type="range" id="logoScale" min="20" max="80" value="50">
+          <div class="slider-value" id="logoScaleVal">50%</div>
+        </div>
+      </label>
+
+      <label>Logo Position %
+        <div class="slider-row">
+          <input type="range" id="logoOffset" min="0" max="100" value="75">
+          <div class="slider-value" id="logoOffsetVal">75%</div>
+        </div>
+      </label>
+      
+      <div id="uniformLogoControls" 
+          style="display:none; margin-top:12px; padding:6px; border:1px solid #333; border-radius:4px;">
+        
+        <div style="font-size:13px; font-weight:600; margin-bottom:6px; color:#ccc;">
+          Uniform Logo Parameters
+        </div>
+        <label>Uniform Logo Max Width (px)
+          <div class="slider-row">
+              <input type="range" id="uniformLogoMaxW" min="50" max="1800" value="500">
+            <div class="slider-value" id="uniformLogoMaxWVal">200px</div>
+          </div>
+        </label>
+        
+        <label>Uniform Logo Max Height (px)
+          <div class="slider-row">
+            <input type="range" id="uniformLogoMaxH" min="50" max="600" value="200">
+            <div class="slider-value" id="uniformLogoMaxHVal">200px</div>
+          </div>
+        </label>      
+        <label style="margin-top:8px;">
+          <input type="checkbox" id="debugBoundingBox">
+          Show Logo Bounding Box (debug)
+        </label>
+        <label>Logo Box X %
+          <div class="slider-row">
+            <input type="range" id="uniformLogoOffsetX" min="0" max="100" value="50">
+            <div class="slider-value" id="uniformLogoOffsetXVal">50%</div>
+          </div>
+        </label>
+        
+        <label>Logo Box Y %
+          <div class="slider-row">
+            <input type="range" id="uniformLogoOffsetY" min="0" max="100" value="78">
+            <div class="slider-value" id="uniformLogoOffsetYVal">78%</div>
+          </div>
+        </label>
+
+        <label style="margin-top:8px;">
+          <input type="checkbox" id="uniformLogoOverride">
+          Enable Manual Override
+        </label>
+
+        <div id="uniformOverrideControls" style="display:none; margin-left:10px; margin-top:8px;">
+        
+          <label>Override Logo Scale %
+            <div class="slider-row">
+              <input type="range" id="overrideLogoScale" min="10" max="200" value="100">
+              <div class="slider-value" id="overrideLogoScaleVal">100%</div>
+            </div>
+          </label>
+        
+          <label>Override Logo Position %
+            <div class="slider-row">
+              <input type="range" id="overrideLogoOffset" min="0" max="100" value="78">
+              <div class="slider-value" id="overrideLogoOffsetVal">78%</div>
+            </div>
+          </label>
+        
+        </div>
+
+      </div>
+
+
+      <label>
+        Border Enabled
+        <select id="borderEnabled">
+          <option value="off">Off</option>
+          <option value="on">On</option>
+        </select>
+      </label>
+
+      <label>Border Thickness px
+        <div class="slider-row">
+          <input type="range" id="borderThickness" min="0" max="30" value="0">
+          <div class="slider-value" id="borderThicknessVal">0px</div>
+        </div>
+      </label>
+
+      <label>Border Color
+        <input type="color" id="borderColor" value="#ffffff">
+      </label>
+
+      <label>
+        Overlay PNG
+        <input type="text" id="overlayFile" placeholder="e.g. grain_overlay.png">
+      </label>
+
+      <label>Overlay Opacity %
+        <div class="slider-row">
+          <input type="range" id="overlayOpacity" min="0" max="100" value="40">
+          <div class="slider-value" id="overlayOpacityVal">40%</div>
+        </div>
+      </label>
+
+      <label>
+        Overlay Mode
+        <select id="overlayMode">
+          <option value="screen">Screen</option>
+          <option value="multiply">Multiply</option>
+          <option value="alpha">Alpha Composite</option>
+        </select>
+      </label>
+    </div>
+
+    <hr />
+
+    <label>Settings JSON
+      <textarea id="settingsJson" placeholder='Copy/apply preset + options JSON here'></textarea>
+    </label>
+    <div class="thumb-actions">
+      <button id="copySettingsBtn">Copy JSON</button>
+      <button id="applySettingsBtn">Apply JSON</button>
+    </div>
+
+    <label style="margin-top:8px;">
+      New Preset ID (optional)
+      <input type="text" id="presetIdInput" placeholder="e.g. border+textless" />
+    </label>
+
+    <div style="margin-top:6px;">
+      <button id="savePresetBtn">Save / Overwrite Preset</button>
+    </div>
+    <button id="deletePresetBtn" class="secondary" style="margin-top:6px;">
+      Delete Preset
+    </button>
+
+    <hr />
+
+    <button id="previewBtn">Preview</button>
+    <button id="saveBtn" style="margin-top:8px;">Save to Disk</button>
+    <button id="sendPlexBtn" style="margin-top:8px;">Send to Plex</button>
+
+    <div style="margin-top:10px;">
+      <label style="font-size:13px;">
+        <input type="checkbox" id="enableLabelRemoval" checked />
+        Remove labels in Plex when sending
+      </label>
+      <div id="labelList" style="margin-top:4px; font-size:12px;"></div>
+    </div>
+
+    <button id="viewLogsBtn" class="secondary" style="margin-top:12px;">View Logs</button>
+
+    <div class="status-bar" id="status">Loading…</div>
+  </div>
+
+  <div class="preview" style="display:flex; gap:18px; align-items:flex-start;">
+
+    <div style="text-align:center;">
+      <div style="font-size:12px; color:#bbb; margin-bottom:6px;">Existing Poster</div>
+      <img id="existingPosterImg" style="width:160px; border-radius:6px; box-shadow:0 0 12px rgba(0,0,0,0.5);" />
+    </div>
+  
+    <div style="position:relative; display:inline-block;">
+      <img id="previewImg" alt="Preview will appear here" />
+          <!-- NEW bounding box -->
+      <div id="posterBoundingBox"
+          style="position:absolute; pointer-events:none; border:2px dashed yellow; display:none;">
+      </div>
+      
+    </div>
+
+  </div>
+  <hr />
+  <div style="margin-top:8px;">
+    <details>
+      <summary style="cursor:pointer;font-size:13px;">Batch Mode (advanced)</summary>
+      <div style="margin-top:8px;font-size:12px;">
+        <label>
+          Movies for Batch (Plex Items)
+          <select id="batchMovieSelect" multiple size="8" style="width:100%; margin-top:4px;"></select>
+        </label>
+
+        <label style="margin-top:6px;">
+          Remove labels (comma-separated, optional)
+          <input type="text" id="batchLabels" placeholder="e.g. Overlay, KD-Overlay" />
+        </label>
+        <label style="margin-top:6px;">
+          <input type="checkbox" id="batchSendToPlex" checked />
+          Send to Plex
+        </label>
+        <button id="runBatchBtn" style="margin-top:6px;">Run Batch</button>
+        <pre id="batchResult" style="margin-top:6px;max-height:120px;overflow:auto;background:#111;padding:4px;border-radius:4px;"></pre>
+      </div>
+    </details>
+  </div>
+
+</div>
+
+<!-- Image Modal -->
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modalTitle">Select Image</h3>
+      <button class="secondary" id="modalCloseBtn">Close</button>
+    </div>
+    <div class="modal-grid" id="modalGrid"></div>
+  </div>
+</div>
+
+<!-- Logs Modal -->
+<div class="modal-backdrop" id="logModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Simposter Logs</h3>
+      <button class="secondary" id="logModalCloseBtn">Close</button>
+    </div>
+    <pre id="logContent" style="max-height:70vh;overflow:auto;font-size:11px;background:#111;padding:8px;border-radius:4px;white-space:pre-wrap;"></pre>
+  </div>
+</div>
+
+<script>
+const API = location.origin + "/api";
+
+let PRESETS = {};
+let CURRENT_POSTERS = [];
+let CURRENT_LOGOS = [];
+let previewTimer = null;
+
+function currentTemplateId() {
+  return document.getElementById("templateSelect").value || "default";
+}
+
+function getPresetListForTemplate(tid) {
+  const block = PRESETS[tid];
+  if (block && Array.isArray(block.presets)) return block.presets;
+  return [];
+}
+
+/* ----------------- helpers ----------------- */
+function setStatus(msg) {
+  document.getElementById("status").textContent = msg;
+}
+
+function autoPreview() {
+    
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
+    preview();
+    drawLogoTargetArea();
+  }, 250);
+}
+
+function choosePoster(posters, filter) {
+    if (!posters || posters.length === 0) return null;
+
+    if (filter === "textless") {
+        return posters.find(p => p.has_text === false) || posters[0];
+    }
+    if (filter === "text") {
+        return posters.find(p => p.has_text === true) || posters[0];
+    }
+    return posters[0];
+}
+
+
+// Compute auto values for uniform logo so override sliders start from correct position
+async function computeAutoUniformLogoValues() {
+    const maxW = parseInt(document.getElementById("uniformLogoMaxW").value, 10);
+    const maxH = parseInt(document.getElementById("uniformLogoMaxH").value, 10);
+
+    return new Promise(resolve => {
+        const img = new Image();
+        img.src = document.getElementById("logoUrl").value;
+
+        img.onload = () => {
+            const lw = img.width;
+            const lh = img.height;
+
+            let scale = maxW / lw;
+            if (lh * scale > maxH) scale = maxH / lh;
+            scale = Math.min(scale, 1.0);
+
+            const offsetY =
+                parseInt(document.getElementById("uniformLogoOffsetY").value, 10) / 100;
+
+            resolve({ scale, offsetY });
+        };
+
+        img.onerror = () => resolve({ scale: 1.0, offsetY: 0.78 });
+    });
+}
+
+
+const uniformLogoControls = document.getElementById("uniformLogoControls");
+const uniformLogoOverride = document.getElementById("uniformLogoOverride");
+const uniformOverrideControls = document.getElementById("uniformOverrideControls");
+
+uniformLogoOverride.addEventListener("change", async () => {
+    const enabled = uniformLogoOverride.checked;
+    uniformOverrideControls.style.display = enabled ? "block" : "none";
+
+    if (enabled) {
+        const auto = await computeAutoUniformLogoValues();
+
+        const scalePct = Math.round(auto.scale * 100);
+        document.getElementById("overrideLogoScale").value = scalePct;
+        document.getElementById("overrideLogoScaleVal").textContent = scalePct + "%";
+
+        const offsetPct = Math.round(auto.offsetY * 100);
+        document.getElementById("overrideLogoOffset").value = offsetPct;
+        document.getElementById("overrideLogoOffsetVal").textContent = offsetPct + "%";
+    }
+
+    autoPreview();
+});
+
+
+
+function hookSliderPx(id) {
+  const el = document.getElementById(id);
+  const lab = document.getElementById(id + "Val");
+  el.addEventListener("input", () => {
+    lab.textContent = el.value + "%";
+    autoPreview();
+  });
+}
+
+function liveUpdateBox() {
+    drawLogoTargetArea();
+}
+
+document.getElementById("templateSelect").addEventListener("change", () => {
+  const t = document.getElementById("templateSelect").value;
+
+  const logoScaleRow = document.getElementById("logoScale").closest("label");
+  const logoOffsetRow = document.getElementById("logoOffset").closest("label");
+
+  if (t === "uniformlogo") {
+    uniformLogoControls.style.display = "block";
+
+    // hide standard logo controls
+    logoScaleRow.style.display = "none";
+    logoOffsetRow.style.display = "none";
+  } else {
+    uniformLogoControls.style.display = "none";
+
+    // show standard logo controls
+    logoScaleRow.style.display = "block";
+    logoOffsetRow.style.display = "block";
+
+    // reset bounding box debug when leaving uniform logo
+    const dbg = document.getElementById("debugBoundingBox");
+    dbg.checked = false;
+    document.getElementById("posterBoundingBox").style.display = "none";
+  }
+
+  populatePresets();
+  autoPreview();
+});
+
+
+
+async function chooseLogo(logos, preference) {
+    if (!logos || logos.length === 0) return null;
+    
+    if (preference === "white" || preference === "color") {
+        const targetBright = preference === "white" ? 220 : 200;
+        const op = preference === "white" ? (b) => b > targetBright : (b) => b < targetBright;
+        
+        for (let logo of logos) {
+            try {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = logo.thumb;
+                });
+                
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                
+                const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                let sum = 0;
+                let count = 0;
+                
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i + 3] > 128) {
+                        sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+                        count++;
+                    }
+                }
+                
+                const brightness = count > 0 ? sum / count : 0;
+                if (op(brightness)) return logo;
+            } catch (e) {
+                continue;
+            }
+        }
+    }
+    
+    return logos[0];
+}
+
+function hookSlider(id) {
+  const el = document.getElementById(id);
+  const lab = document.getElementById(id + "Val");
+
+  const updateLabel = () => {
+    if (id === "borderThickness") {
+      lab.textContent = el.value + "px";
+    } else {
+      lab.textContent = el.value + "%";
+    }
+  };
+
+  el.addEventListener("input", () => {
+    updateLabel();
+    autoPreview();
+  });
+
+  // initial
+  updateLabel();
+}
+
+
+/* ----------------- presets ----------------- */
+async function loadPresets() {
+  const res = await fetch(`${API}/presets`);
+  PRESETS = await res.json();
+}
+
+function populatePresets(preferPresetId) {
+  const presetSelect = document.getElementById("presetSelect");
+  presetSelect.innerHTML = "";
+
+  const templateId = currentTemplateId();
+  const list = getPresetListForTemplate(templateId);
+  const fallback = templateId === "default" ? [] : getPresetListForTemplate("default");
+  const useList = list.length ? list : fallback;
+
+  useList.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name;
+    presetSelect.appendChild(opt);
+  });
+
+  if (useList.length) {
+    const targetId = preferPresetId && useList.some(p => p.id === preferPresetId)
+      ? preferPresetId
+      : useList[0].id;
+
+    presetSelect.value = targetId;
+    const preset = useList.find(p => p.id === targetId);
+    if (preset) {
+      setSlidersFromOptions(preset.options);
+    }
+  }
+}
+
+document.getElementById("presetSelect").addEventListener("change", async e => {
+  const id = e.target.value;
+  const list = getPresetListForTemplate(currentTemplateId());
+  const preset = list.find(p => p.id === id);
+  if (!preset) return;
+
+  // Apply slider + extra options
+  setSlidersFromOptions(preset.options || {});
+
+  // Apply filter + logo preference dropdowns
+  const posterFilterEl = document.getElementById("posterFilter");
+  if (posterFilterEl && preset.options?.poster_filter) {
+    posterFilterEl.value = preset.options.poster_filter;
+  }
+
+  const logoPrefEl = document.getElementById("logoPreference");
+  if (logoPrefEl && preset.options?.logo_preference) {
+    logoPrefEl.value = preset.options.logo_preference;
+  }
+
+  // Re-render thumbs with updated filter
+  renderThumbStrips();
+
+  // Auto select poster
+  // Auto select poster (fix: always use filter correctly)
+  if (CURRENT_POSTERS.length > 0) {
+      const filter =
+          preset.options?.poster_filter ||
+          document.getElementById("posterFilter").value;
+  
+      const selectedPoster = choosePoster(CURRENT_POSTERS, filter);
+  
+      if (selectedPoster) {
+          document.getElementById("bgUrl").value = selectedPoster.url;
+      }
+  }
+
+
+  // Auto select logo
+  if (CURRENT_LOGOS && CURRENT_LOGOS.length > 0) {
+    const selectedLogo = await chooseLogo(
+      CURRENT_LOGOS,
+      preset.options?.logo_preference || document.getElementById("logoPreference").value || "first"
+    );
+    if (selectedLogo) {
+      document.getElementById("logoUrl").value = selectedLogo.url;
+    }
+  }
+
+  autoPreview();
+});
+
+
+/* ----------------- movies ----------------- */
+
+async function loadLabelsForMovie(key) {
+  const res = await fetch(`${API}/movie/${key}/labels`);
+  const data = await res.json();
+  const box = document.getElementById("labelList");
+  box.innerHTML = "";
+
+  if (!data.labels || data.labels.length === 0) {
+    box.textContent = "No labels found on this item.";
+    return;
+  }
+
+  data.labels.forEach(label => {
+    const row = document.createElement("div");
+    row.innerHTML = `
+      <label>
+        <input type="checkbox" class="label-checkbox" value="${label}">
+        ${label}
+      </label>
+    `;
+    box.appendChild(row);
+  });
+}
+
+hookSliderPx("overrideLogoScale");
+hookSliderPx("overrideLogoOffset");
+hookSlider("uniformLogoOffsetX");
+hookSlider("uniformLogoOffsetY");
+
+
+document.getElementById("movieSelect").addEventListener("change", async () => {
+  const key = document.getElementById("movieSelect").value;
+  if (!key) return;
+  setStatus("Fetching TMDb images…");
+
+  const tmdbRes = await fetch(`${API}/movie/${key}/tmdb`);
+  const tmdb = await tmdbRes.json();
+
+  if (!tmdb.tmdb_id) {
+    CURRENT_POSTERS = [];
+    CURRENT_LOGOS = [];
+    renderThumbStrips();
+    setStatus("No TMDb ID.");
+    await loadLabelsForMovie(key);
+    return;
+  }
+
+  const imgRes = await fetch(`${API}/tmdb/${tmdb.tmdb_id}/images`);
+  const imgs = await imgRes.json();
+
+  CURRENT_POSTERS = imgs.posters || [];
+  CURRENT_LOGOS = imgs.logos || [];
+
+  renderThumbStrips();
+
+  // Auto-select poster using filter preference
+  const posterFilter = document.getElementById("posterFilter").value;
+  const selectedPoster = choosePoster(CURRENT_POSTERS, posterFilter);
+  
+  if (selectedPoster) {
+      document.getElementById("bgUrl").value = selectedPoster.url;
+  }
+  if (CURRENT_LOGOS.length) {
+    document.getElementById("logoUrl").value = CURRENT_LOGOS[0].url;
+  }
+
+  // Fetch existing poster from Plex  
+  try {
+    const posterUrl = `${API}/movie/${key}/poster`;  
+    const posterRes = await fetch(posterUrl);
+    const posterData = await posterRes.json();
+    document.getElementById("existingPosterImg").src = posterData.url || "";
+  } catch {
+    document.getElementById("existingPosterImg").src = "";
+  }
+  
+  // Labels
+  await loadLabelsForMovie(key);
+  
+  setStatus("TMDb assets loaded.");
+  // auto-select preferred logo (white/color/first)
+  const pref = document.getElementById("logoPreference").value;
+  if (CURRENT_LOGOS.length > 0) {
+      const selectedLogo = await chooseLogo(CURRENT_LOGOS, pref);
+      if (selectedLogo) {
+          document.getElementById("logoUrl").value = selectedLogo.url;
+      }
+  }
+
+  autoPreview();
+
+});
+
+/* ---- movie list ---- */
+let ALL_MOVIES = [];
+
+async function loadMovies() {
+  const res = await fetch(`${API}/movies`);
+  ALL_MOVIES = await res.json();
+  populateMovieDropdown(ALL_MOVIES);
+}
+
+function populateMovieDropdown(list) {
+  const sel = document.getElementById("movieSelect");
+  sel.innerHTML = "";
+  list.forEach(m => {
+    const o = document.createElement("option");
+    o.value = m.key;
+    o.textContent = m.year ? `${m.title} (${m.year})` : m.title;
+    sel.appendChild(o);
+  });
+}
+
+document.getElementById("movieSearch").addEventListener("input", e => {
+  const term = e.target.value.toLowerCase();
+  const filtered = ALL_MOVIES.filter(m =>
+    m.title.toLowerCase().includes(term)
+  );
+  populateMovieDropdown(filtered);
+});
+
+/* ----- auto-fetch after search ----- */
+let movieSearchTimer = null;
+
+document.getElementById("movieSearch").addEventListener("input", () => {
+  clearTimeout(movieSearchTimer);
+
+  movieSearchTimer = setTimeout(() => {
+    const sel = document.getElementById("movieSelect");
+    if (sel.options.length === 0) return;
+
+    // Auto-select the top match
+    sel.selectedIndex = 0;
+
+    // Trigger full fetch (same as user manually picking)
+    sel.dispatchEvent(new Event("change"));
+  }, 400); // 400ms after typing stops
+});
+
+
+/* ----------------- thumbs + filter ----------------- */
+function renderThumbStrips() {
+  const posterStrip = document.getElementById("posterThumbStrip");
+  const logoStrip = document.getElementById("logoThumbStrip");
+  posterStrip.innerHTML = "";
+  logoStrip.innerHTML = "";
+
+  const currentBg = document.getElementById("bgUrl").value;
+  const currentLogo = document.getElementById("logoUrl").value;
+  const filter = document.getElementById("posterFilter").value;
+
+  let posters = CURRENT_POSTERS;
+  if (filter === "textless") posters = posters.filter(p => !p.has_text);
+  if (filter === "text") posters = posters.filter(p => p.has_text);
+
+  posters.forEach(p => {
+    const img = document.createElement("img");
+    img.src = p.thumb;
+    img.className = "thumb";
+    if (p.url === currentBg) img.classList.add("selected");
+    img.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      document.getElementById("bgUrl").value = p.url;
+      posterStrip.querySelectorAll(".thumb").forEach(t => t.classList.remove("selected"));
+      img.classList.add("selected");
+      autoPreview();
+    });
+
+    posterStrip.appendChild(img);
+  });
+
+  CURRENT_LOGOS.forEach(l => {
+    const img = document.createElement("img");
+    img.src = l.thumb;
+    img.className = "thumb";
+    if (l.url === currentLogo) img.classList.add("selected");
+    img.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      document.getElementById("logoUrl").value = l.url;
+      logoStrip.querySelectorAll(".thumb").forEach(t => t.classList.remove("selected"));
+      img.classList.add("selected");
+      autoPreview();
+    });
+
+    logoStrip.appendChild(img);
+  });
+}
+
+document.getElementById("posterFilter").addEventListener("change", () => {
+  renderThumbStrips();
+});
+
+function drawLogoTargetArea() {
+  const bb = document.getElementById("posterBoundingBox");
+  const img = document.getElementById("previewImg");
+
+  // Only show bounding box in uniform logo template and when debug is enabled
+  if (currentTemplateId() !== "uniformlogo" || !document.getElementById("debugBoundingBox")?.checked) {
+    bb.style.display = "none";
+    return;
+  }
+
+  const W = img.clientWidth;
+  const H = img.clientHeight;
+
+    const maxW = parseInt(document.getElementById("uniformLogoMaxW").value, 10);
+    const maxH = parseInt(document.getElementById("uniformLogoMaxH").value, 10);
+
+    const offsetX = document.getElementById("uniformLogoOffsetX").value / 100;
+    const offsetY = document.getElementById("uniformLogoOffsetY").value / 100;
+
+    const boxW = maxW * (W / 2000);
+    const boxH = maxH * (H / 3000);
+
+  const boxX = W * offsetX - boxW / 2;
+  const boxY = H * offsetY - boxH / 2;
+
+  bb.style.width = boxW + "px";
+  bb.style.height = boxH + "px";
+  bb.style.left = boxX + "px";
+  bb.style.top = boxY + "px";
+  bb.style.display = "block";
+}
+
+
+
+/* ----------------- modal (view all) ----------------- */
+const modalBackdrop = document.getElementById("modalBackdrop");
+const modalGrid = document.getElementById("modalGrid");
+const modalTitle = document.getElementById("modalTitle");
+
+function openModal(kind) {
+  modalGrid.innerHTML = "";
+  modalTitle.textContent = kind === "poster" ? "Choose Poster" : "Choose Logo";
+
+  let items = kind === "poster" ? CURRENT_POSTERS : CURRENT_LOGOS;
+  if (kind === "poster") {
+    const filter = document.getElementById("posterFilter").value;
+    if (filter === "textless") items = items.filter(p => !p.has_text);
+    if (filter === "text") items = items.filter(p => p.has_text);
+  }
+
+  items.forEach(item => {
+    const img = document.createElement("img");
+    img.src = item.thumb;
+    img.className = "modal-thumb";
+    img.onclick = () => {
+      if (kind === "poster") {
+        document.getElementById("bgUrl").value = item.url;
+      } else {
+        document.getElementById("logoUrl").value = item.url;
+      }
+      modalBackdrop.classList.remove("show");
+      renderThumbStrips();
+      autoPreview();
+    };
+    modalGrid.appendChild(img);
+  });
+
+  modalBackdrop.classList.add("show");
+}
+
+function closeModal() {
+  modalBackdrop.classList.remove("show");
+}
+
+document.getElementById("posterViewAllBtn").onclick = () => {
+  if (!CURRENT_POSTERS.length) return setStatus("No posters loaded.");
+  openModal("poster");
+};
+document.getElementById("logoViewAllBtn").onclick = () => {
+  if (!CURRENT_LOGOS.length) return setStatus("No logos loaded.");
+  openModal("logo");
+};
+document.getElementById("modalCloseBtn").onclick = closeModal;
+modalBackdrop.onclick = e => { if (e.target === modalBackdrop) closeModal(); };
+
+document.getElementById("posterClearBtn").onclick = () => {
+  document.getElementById("bgUrl").value = "";
+  renderThumbStrips();
+  autoPreview();
+};
+document.getElementById("logoNoneBtn").onclick = () => {
+  document.getElementById("logoUrl").value = "";
+  renderThumbStrips();
+  autoPreview();
+};
+
+/* ----------------- logo mode selector ----------------- */
+const logoModeSel = document.getElementById("logoMode");
+const logoColorLabel = document.getElementById("logoColorLabel");
+
+logoModeSel.addEventListener("change", () => {
+  const mode = logoModeSel.value;
+  if (mode === "hex") {
+    logoColorLabel.style.display = "block";
+  } else {
+    logoColorLabel.style.display = "none";
+  }
+  autoPreview();
+});
+
+document.getElementById("debugBoundingBox").addEventListener("change", () => {
+  drawLogoTargetArea();
+});
+
+/* ----------------- drag and drop bg ----------------- */
+
+function setupBackgroundDrop() {
+  const dz = document.getElementById("bgDropZone");
+  const bgInput = document.getElementById("bgUrl");
+
+  ["dragenter","dragover"].forEach(ev => {
+    dz.addEventListener(ev, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dz.style.borderColor = "#2a7be4";
+    });
+  });
+
+  ["dragleave","drop"].forEach(ev => {
+    dz.addEventListener(ev, e => {
+      e.preventDefault();
+      e.stopPropagation();
+      dz.style.borderColor = "#444";
+    });
+  });
+
+  dz.addEventListener("drop", async e => {
+    e.preventDefault();
+    e.stopPropagation();
+    dz.style.borderColor = "#444";
+
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    setStatus("Uploading background…");
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch(`${API}/upload/background`, {
+      method: "POST",
+      body: formData
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus("Upload error: " + (data.detail || res.statusText));
+      return;
+    }
+
+    // IMPORTANT: set the bgUrl input so preview() uses it
+    bgInput.value = data.url;
+
+    setStatus("Background uploaded.");
+
+    // 🔥 THE FIX — TRIGGER LIVE PREVIEW AFTER DROP
+    autoPreview();
+  });
+
+  
+}
+
+
+/* ----------------- sliders <-> options ----------------- */
+function setSlidersFromOptions(o) {
+  o = o || {};
+  const map = {
+    posterZoom: o.poster_zoom,
+    posterShiftY: o.poster_shift_y,
+    matteHeight: o.matte_height_ratio,
+    fadeHeight: o.fade_height_ratio,
+    vignette: o.vignette_strength,
+    grain: o.grain_amount,
+    logoScale: o.logo_scale,
+    logoOffset: o.logo_offset,
+    borderThickness: o.border_thickness,
+    overlayOpacity: o.overlay_opacity
+  };
+
+  Object.entries(map).forEach(([id, val]) => {
+    if (typeof val !== "number") return;
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    // borderThickness is absolute px; others are 0–1 ratios
+    if (id === "borderThickness") {
+      el.value = val;
+      document.getElementById(id + "Val").textContent = `${val}px`;
+    } else {
+      const pct = Math.round(val * 100);
+      el.value = pct;
+      document.getElementById(id + "Val").textContent = pct + "%";
+    }
+    if (typeof o.uniform_logo_override_enabled === "boolean") {
+        document.getElementById("uniformLogoOverride").checked = o.uniform_logo_override_enabled;
+        uniformOverrideControls.style.display =
+            o.uniform_logo_override_enabled ? "block" : "none";
+    }
+    
+    if (o.override_logo_scale) {
+        const v = Math.round(o.override_logo_scale * 100);
+        document.getElementById("overrideLogoScale").value = v;
+        document.getElementById("overrideLogoScaleVal").textContent = v + "%";
+    }
+    
+    if (o.override_logo_offset) {
+        const v = Math.round(o.override_logo_offset * 100);
+        document.getElementById("overrideLogoOffset").value = v;
+        document.getElementById("overrideLogoOffsetVal").textContent = v + "%";
+    }
+
+  });
+
+  if (o.logo_mode) {
+    document.getElementById("logoMode").value = o.logo_mode;
+    logoColorLabel.style.display = o.logo_mode === "hex" ? "block" : "none";
+  }
+  if (o.logo_hex) {
+    document.getElementById("logoColor").value = o.logo_hex;
+  }
+  if (typeof o.uniform_logo_max_w === "number") {
+    const el = document.getElementById("uniformLogoMaxW");
+    const lab = document.getElementById("uniformLogoMaxWVal");
+    el.value = o.uniform_logo_max_w;
+    lab.textContent = `${o.uniform_logo_max_w}px`;
+  }
+  if (typeof o.uniform_logo_max_h === "number") {
+    const el = document.getElementById("uniformLogoMaxH");
+    const lab = document.getElementById("uniformLogoMaxHVal");
+    el.value = o.uniform_logo_max_h;
+    lab.textContent = `${o.uniform_logo_max_h}px`;
+  }
+  if (typeof o.uniform_logo_offset_x === "number") {
+    const el = document.getElementById("uniformLogoOffsetX");
+    const lab = document.getElementById("uniformLogoOffsetXVal");
+    el.value = Math.round(o.uniform_logo_offset_x * 100);
+    lab.textContent = `${el.value}%`;
+  }
+  if (typeof o.uniform_logo_offset_y === "number") {
+    const el = document.getElementById("uniformLogoOffsetY");
+    const lab = document.getElementById("uniformLogoOffsetYVal");
+    el.value = Math.round(o.uniform_logo_offset_y * 100);
+    lab.textContent = `${el.value}%`;
+  }
+
+  if (typeof o.border_px === "number") {
+    const el = document.getElementById("borderThickness");
+    const lab = document.getElementById("borderThicknessVal");
+    el.value = o.border_px;
+    lab.textContent = o.border_px + "px";
+  }
+
+  if (typeof o.border_enabled === "boolean") {
+    document.getElementById("borderEnabled").value = o.border_enabled ? "on" : "off";
+  }
+  if (o.border_color) {
+    document.getElementById("borderColor").value = o.border_color;
+  }
+  if (o.overlay_file) {
+    document.getElementById("overlayFile").value = o.overlay_file;
+  }
+  if (o.overlay_mode) {
+    document.getElementById("overlayMode").value = o.overlay_mode;
+  }
+
+  // NEW: restore poster filter + logo preference into dropdowns
+  if (o.poster_filter) {
+    const el = document.getElementById("posterFilter");
+    if (el) el.value = o.poster_filter;
+  }
+  if (o.logo_preference) {
+    const el = document.getElementById("logoPreference");
+    if (el) el.value = o.logo_preference;
+  }
+  // === FIX: Ensure override sliders populate when loading a preset ===
+  (async function() {
+      const overrideEnabled = o.uniform_logo_override_enabled === true;
+  
+      // Set checkbox correctly
+      const chk = document.getElementById("uniformLogoOverride");
+      chk.checked = overrideEnabled;
+      uniformOverrideControls.style.display = overrideEnabled ? "block" : "none";
+  
+      if (!overrideEnabled) return;
+  
+      // If override is enabled in preset, preload values:
+  
+      // If preset defines override scale, use it (convert 0–1 float → %)
+      if (typeof o.uniform_logo_override_scale === "number") {
+          const pct = Math.round(o.uniform_logo_override_scale * 100);
+          document.getElementById("overrideLogoScale").value = pct;
+          document.getElementById("overrideLogoScaleVal").textContent = pct + "%";
+      } 
+      // Otherwise compute auto scale so sliders match auto-placement
+      else {
+          const auto = await computeAutoUniformLogoValues();
+          const pct = Math.round(auto.scale * 100);
+          document.getElementById("overrideLogoScale").value = pct;
+          document.getElementById("overrideLogoScaleVal").textContent = pct + "%";
+      }
+  
+      // Same logic for Y offset
+      if (typeof o.uniform_logo_override_offset_y === "number") {
+          const pct = Math.round(o.uniform_logo_override_offset_y * 100);
+          document.getElementById("overrideLogoOffset").value = pct;
+          document.getElementById("overrideLogoOffsetVal").textContent = pct + "%";
+      } else {
+          const auto = await computeAutoUniformLogoValues();
+          const pct = Math.round(auto.offsetY * 100);
+          document.getElementById("overrideLogoOffset").value = pct;
+          document.getElementById("overrideLogoOffsetVal").textContent = pct + "%";
+      }
+  
+  })();
+
+}
+
+
+function collectOptions() {
+  const g = id => document.getElementById(id).value / 100;
+  return {
+    poster_zoom: g("posterZoom"),
+    poster_shift_y: g("posterShiftY"),
+    matte_height_ratio: g("matteHeight"),
+    fade_height_ratio: g("fadeHeight"),
+    vignette_strength: g("vignette"),
+    grain_amount: g("grain"),
+    logo_scale: g("logoScale"),
+    logo_offset: g("logoOffset"),
+    logo_mode: document.getElementById("logoMode").value,
+    logo_hex: document.getElementById("logoColor").value,
+
+    // NEW preset-driven bits:
+    poster_filter: document.getElementById("posterFilter").value,
+    logo_preference: document.getElementById("logoPreference").value,
+
+    uniform_logo_max_w: parseInt(document.getElementById("uniformLogoMaxW").value, 10),
+    uniform_logo_max_h: parseInt(document.getElementById("uniformLogoMaxH").value, 10),
+    uniform_logo_offset_x: parseInt(document.getElementById("uniformLogoOffsetX").value, 10) / 100,
+    uniform_logo_offset_y: parseInt(document.getElementById("uniformLogoOffsetY").value, 10) / 100,
+    
+    uniform_logo_override_enabled: document.getElementById("uniformLogoOverride").checked,
+
+    // Backend-expected override properties:
+    uniform_logo_override_scale: parseInt(document.getElementById("overrideLogoScale").value, 10) / 100,
+    uniform_logo_override_offset_x: 0.5, // keeps center X unless you add an X slider
+    uniform_logo_override_offset_y: parseInt(document.getElementById("overrideLogoOffset").value, 10) / 100,
+
+    
+    border_enabled: document.getElementById("borderEnabled").value === "on",
+    border_px: parseInt(document.getElementById("borderThickness").value, 10),
+    border_color: document.getElementById("borderColor").value,
+    overlay_file: document.getElementById("overlayFile").value.trim() || null,
+    overlay_opacity: document.getElementById("overlayOpacity").value / 100,
+    overlay_mode: document.getElementById("overlayMode").value
+    
+  };
+}
+
+
+/* ----------------- preview / save ----------------- */
+async function preview() {
+  const bg = document.getElementById("bgUrl").value.trim();
+  if (!bg) {
+    setStatus("Background URL required.");
+    return;
+  }
+
+  const payload = {
+    template_id: document.getElementById("templateSelect").value || "default",
+    preset_id: document.getElementById("presetSelect").value,   // ⭐ FIXED ⭐
+    background_url: document.getElementById("bgUrl").value.trim(),
+    logo_url: document.getElementById("logoUrl").value.trim() || null,
+    options: collectOptions(),
+  };
+
+  setStatus("Rendering…");
+  const res = await fetch(`${API}/preview`, {
+    method: "POST",
+    headers: { "Content-Type":"application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus("Error: " + (data.detail || res.statusText));
+    return;
+  }
+
+  document.getElementById("previewImg").src =
+    "data:image/jpeg;base64," + data.image_base64;
+  setStatus("Preview updated.");
+  drawLogoTargetArea();
+  
+
+}
+
+document.getElementById("previewBtn").onclick = () => preview();
+
+document.getElementById("saveBtn").onclick = async () => {
+  const bg = document.getElementById("bgUrl").value.trim();
+  if (!bg) return setStatus("Background URL required.");
+
+  const movieSel = document.getElementById("movieSelect");
+  const movieText = movieSel.selectedOptions[0]?.textContent || "Unknown";
+  const key = movieSel.value;
+  const m = movieText.match(/(.+?) \((\d{4})\)/);
+  const title = m ? m[1] : movieText;
+  const year = m ? parseInt(m[2]) : null;
+
+  const payload = {
+    template_id: document.getElementById("templateSelect").value || "default",
+    background_url: document.getElementById("bgUrl").value.trim(),
+    logo_url: document.getElementById("logoUrl").value.trim() || null,
+    options: collectOptions(),
+    movie_title: title,
+    movie_year: year,
+    filename: "poster.jpg",
+  };
+
+  setStatus("Saving…");
+  const res = await fetch(`${API}/save`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) return setStatus("Error: " + (data.detail || res.statusText));
+  setStatus("Saved: " + data.path);
+};
+
+document.getElementById("sendPlexBtn").onclick = async () => {
+  const bg = document.getElementById("bgUrl").value.trim();
+  if (!bg) return setStatus("Background URL required.");
+
+  const movieSel = document.getElementById("movieSelect");
+  const ratingKey = movieSel.value;
+  if (!ratingKey) return setStatus("Select a movie first.");
+
+  let labels = [];
+  if (document.getElementById("enableLabelRemoval").checked) {
+    document.querySelectorAll("#labelList .label-checkbox").forEach(cb => {
+      if (cb.checked) labels.push(cb.value);
+    });
+  }
+
+  const payload = {
+    template_id: document.getElementById("templateSelect").value || "default",
+    preset_id: document.getElementById("presetSelect").value,  // ⭐ FIXED ⭐
+    rating_key: ratingKey,                                     // ⭐ FIXED ⭐
+    background_url: document.getElementById("bgUrl").value.trim(),
+    logo_url: document.getElementById("logoUrl").value.trim() || null,
+    options: collectOptions(),
+    labels: labels                                             // ⭐ FIXED ⭐
+  };
+
+  setStatus("Sending to Plex…");
+  const res = await fetch(`${API}/plex/send`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus("Error: " + (data.detail || res.statusText));
+    return;
+  }
+  setStatus("Sent to Plex." + (labels.length ? ` Removed labels: ${labels.join(", ")}` : ""));
+
+  //
+  // Refresh existing poster preview
+  //
+  try {
+    const posterRes = await fetch(`${API}/movie/${ratingKey}/poster`);
+    const posterData = await posterRes.json();
+    
+    const ts = Date.now();
+    document.getElementById("existingPosterImg").src =
+      posterData.url ? `${posterData.url}&t=${ts}` : "";
+
+  } catch {
+    document.getElementById("existingPosterImg").src = "";
+  }
+};
+
+/* ----------------- settings JSON + preset save ----------------- */
+document.getElementById("copySettingsBtn").onclick = () => {
+  const json = JSON.stringify({
+    preset: document.getElementById("presetSelect").value,
+    options: collectOptions(),
+  }, null, 2);
+
+  const ta = document.getElementById("settingsJson");
+  ta.value = json;
+  ta.select();
+  document.execCommand("copy");
+  setStatus("Settings JSON copied.");
+};
+
+document.getElementById("applySettingsBtn").onclick = () => {
+  try {
+    const obj = JSON.parse(document.getElementById("settingsJson").value);
+    if (obj.preset) {
+      document.getElementById("presetSelect").value = obj.preset;
+    }
+    if (obj.options) {
+      setSlidersFromOptions(obj.options);
+      autoPreview();
+    }
+    setStatus("Settings applied.");
+  } catch {
+    setStatus("Invalid JSON.");
+  }
+};
+
+document.getElementById("savePresetBtn").onclick = async () => {
+  const enteredId = document.getElementById("presetIdInput").value.trim();
+  const selectedFromList = document.getElementById("presetSelect").value;
+  const presetId = enteredId || selectedFromList || "custom";
+  const options = collectOptions();
+  const templateId = currentTemplateId();
+
+  setStatus(`Saving preset "${presetId}"…`);
+
+  const res = await fetch(`${API}/presets/save`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ template_id: templateId, preset_id: presetId, options })
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus("Error: " + (data.detail || res.statusText));
+    return;
+  }
+
+  const selected = presetId;
+  const currentOptions = options;
+
+  await loadPresets();
+  populatePresets(selected);
+  document.getElementById("presetSelect").value = selected;
+  setSlidersFromOptions(currentOptions);
+
+  setStatus(data.message);
+};
+
+
+// ---------------- delete preset ----------------
+document.getElementById("deletePresetBtn").onclick = async () => {
+    const id = document.getElementById("presetSelect").value;
+    if (!id) return setStatus("Select a preset first.");
+    if (!confirm(`Delete preset "${id}"?`)) return;
+
+    const templateId = currentTemplateId();
+    setStatus(`Deleting preset "${id}"…`);
+
+    const res = await fetch(`${API}/presets/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template_id: templateId, preset_id: id })
+    });
+
+    const data = await res.json();
+    if (!res.ok) return setStatus("Error: " + (data.detail || res.statusText));
+
+    await loadPresets();
+    populatePresets();
+
+    setStatus(data.message);
+};
+
+
+/* ----------------- batch run ----------------- */
+document.getElementById("runBatchBtn").onclick = async () => {
+
+  const rating_keys = Array.from(
+    document.getElementById("batchMovieSelect").selectedOptions
+  ).map(o => o.value);
+
+  if (rating_keys.length === 0) {
+    setStatus("Batch error: Select at least 1 movie.");
+    return;
+  }
+
+  // Ensure a background is selected in UI
+  const bg = document.getElementById("bgUrl").value.trim();
+  if (!bg) {
+    setStatus("Batch error: Pick a poster before running batch.");
+    return;
+  }
+
+  const labelsRaw = document.getElementById("batchLabels").value.trim();
+  const labels = labelsRaw
+    ? labelsRaw.split(",").map(s => s.trim()).filter(Boolean)
+    : [];
+
+  const payload = {
+    rating_keys,
+    template_id: document.getElementById("templateSelect").value || "default",
+    preset_id: document.getElementById("presetSelect").value,
+    options: collectOptions(),
+    send_to_plex: document.getElementById("batchSendToPlex").checked,
+    labels
+  };
+
+
+  setStatus("Running batch…");
+  const res = await fetch(`${API}/batch`, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus("Batch error: " + (data.detail || res.statusText));
+    return;
+  }
+
+  setStatus("Batch complete.");
+  document.getElementById("batchResult").textContent =
+    JSON.stringify(data.results, null, 2);
+};
+
+
+async function loadBatchMovieList() {
+  const res = await fetch(`${API}/movies/tmdb`);
+  const movies = await res.json();
+  const sel = document.getElementById("batchMovieSelect");
+
+  sel.innerHTML = "";
+  movies.forEach(m => {
+    const op = document.createElement("option");
+    op.value = m.rating_key;
+    op.textContent = m.year ? `${m.title} (${m.year})` : m.title;
+    sel.appendChild(op);
+  });
+}
+
+
+
+/* ----------------- logs modal ----------------- */
+const logModal = document.getElementById("logModal");
+const logContent = document.getElementById("logContent");
+document.getElementById("viewLogsBtn").onclick = async () => {
+  setStatus("Loading logs…");
+  const res = await fetch(`${API}/logs`);
+  const data = await res.json();
+  logContent.textContent = data.text || "";
+  logModal.classList.add("show");
+  setStatus("Logs loaded.");
+};
+document.getElementById("logModalCloseBtn").onclick = () => {
+  logModal.classList.remove("show");
+};
+logModal.onclick = e => {
+  if (e.target === logModal) logModal.classList.remove("show");
+};
+
+/* ----------------- label list toggle ----------------- */
+const labelRemovalCheckbox = document.getElementById("enableLabelRemoval");
+const labelListEl = document.getElementById("labelList");
+
+function updateLabelListVisibility() {
+  if (labelRemovalCheckbox.checked) {
+    labelListEl.style.display = "block";
+  } else {
+    labelListEl.style.display = "none";
+  }
+}
+
+labelRemovalCheckbox.addEventListener("change", updateLabelListVisibility);
+updateLabelListVisibility();
+
+/* ----------------- init ----------------- */
+(async function init() {
+  ["posterZoom","posterShiftY","matteHeight","fadeHeight",
+   "vignette","grain","logoScale","logoOffset","borderThickness","overlayOpacity"].forEach(hookSlider);
+  // ---- Live bounding box updating (no render required) ----
+  ["uniformLogoMaxW","uniformLogoMaxH","uniformLogoOffsetX","uniformLogoOffsetY"]
+      .forEach(id => {
+          document.getElementById(id).addEventListener("input", liveUpdateBox);
+      });
+  
+  await loadPresets();
+  populatePresets();
+  await loadMovies();
+  await loadBatchMovieList();
+  // bg/logo URL manual typing auto-preview
+  document.getElementById("bgUrl").addEventListener("input", autoPreview);
+  document.getElementById("logoUrl").addEventListener("input", autoPreview);
+  setupBackgroundDrop();
+  // ensure correct initial visibility for hex mode
+  if (document.getElementById("logoMode").value === "hex") {
+    logoColorLabel.style.display = "block";
+  } else {
+    logoColorLabel.style.display = "none";
+  }
+
+  setStatus("Ready. Pick a movie, preset, then tweak sliders.");
+})();
+</script>
+
+</body>
+</html>
