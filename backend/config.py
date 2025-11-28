@@ -77,9 +77,10 @@ DEFAULT_PRESETS_PATH = os.path.join(os.path.dirname(__file__), "presets.json")
 USER_PRESETS_PATH = os.path.join(settings.CONFIG_DIR, "presets.json")
 
 
-# FRONTEND DIRECTORY FOR LOCAL DEV
-FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "frontend")
-FRONTEND_DIR = os.path.abspath(FRONTEND_DIR)
+# FRONTEND DIRECTORY (serve built dist if present; otherwise use source for dev)
+_frontend_base = Path(__file__).resolve().parent.parent / "frontend"
+_frontend_dist = _frontend_base / "dist"
+FRONTEND_DIR = str(_frontend_dist if _frontend_dist.exists() else _frontend_base)
 
 
 def load_presets() -> dict:
@@ -159,7 +160,8 @@ def get_plex_movies():
         key = video.get("ratingKey")
         title = video.get("title") or ""
         year = video.get("year")
-        out.append(Movie(key=key, title=title, year=int(year) if year else None))
+        added_at = video.get("addedAt")
+        out.append(Movie(key=key, title=title, year=int(year) if year else None, addedAt=int(added_at) if added_at else None))
 
     logger.info("[PLEX] Loaded %d movies from library %s", len(out), PLEX_MOVIE_LIB_ID)
     return out

@@ -10,6 +10,7 @@ from . import (
     uploads,
     logs,
     webhooks,
+    ui_settings,
 )
 
 router = APIRouter()
@@ -23,3 +24,4 @@ router.include_router(batch.router)
 router.include_router(uploads.router)
 router.include_router(logs.router)
 router.include_router(webhooks.router)
+router.include_router(ui_settings.router)

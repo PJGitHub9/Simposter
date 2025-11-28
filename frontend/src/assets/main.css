@@ -1,0 +1,119 @@
+@import './base.css';
+
+:root {
+  --surface: #0f1117;
+  --surface-soft: #141824;
+  --surface-strong: #0a0c12;
+  --accent: #3dd6b7;
+  --accent-2: #5b8dee;
+  --muted: #9aa4bf;
+  --border: #1c2233;
+  --radius: 18px;
+  --shadow:
+    0 20px 70px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.02);
+  --bg: radial-gradient(circle at 20% 20%, rgba(61, 214, 183, 0.14), transparent 35%),
+    radial-gradient(circle at 80% 0%, rgba(91, 141, 238, 0.1), transparent 30%),
+    #070910;
+}
+
+/* Themes */
+:root[data-theme='dracula'] {
+  --surface: #1e1e2e;
+  --surface-soft: #242437;
+  --surface-strong: #181825;
+  --accent: #ff79c6;
+  --accent-2: #8be9fd;
+  --muted: #c3c8e8;
+  --border: #313244;
+  --bg: radial-gradient(circle at 30% 20%, rgba(255, 121, 198, 0.12), transparent 40%), #181825;
+}
+
+:root[data-theme='nord'] {
+  --surface: #1f2a36;
+  --surface-soft: #253443;
+  --surface-strong: #19232c;
+  --accent: #88c0d0;
+  --accent-2: #81a1c1;
+  --muted: #c0c8d7;
+  --border: #2e3a46;
+  --bg: radial-gradient(circle at 20% 10%, rgba(136, 192, 208, 0.12), transparent 40%), #1b2630;
+}
+
+:root[data-theme='oled'] {
+  --surface: #000000;
+  --surface-soft: #0a0a0a;
+  --surface-strong: #000000;
+  --accent: #3dd6b7;
+  --accent-2: #5b8dee;
+  --muted: #a8b0c0;
+  --border: #1a1a1a;
+  --bg: #000000;
+}
+
+:root[data-theme='light'] {
+  --surface: #ffffff;
+  --surface-soft: #f5f7fb;
+  --surface-strong: #eef1f7;
+  --accent: #4c8dff;
+  --accent-2: #8e9dfd;
+  --muted: #5c6475;
+  --border: #dbe2ef;
+  --bg: #f4f6fb;
+}
+
+body {
+  background: var(--bg);
+  color: #eef2ff;
+}
+
+#app {
+  min-height: 100vh;
+  padding: 0;
+  font-weight: 400;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+/* Send-to-Plex button variant */
+.btn-plex {
+  background: linear-gradient(120deg, #ff8a65, #ff7043);
+  color: #fff;
+  border: none;
+  box-shadow: 0 6px 18px rgba(255, 112, 67, 0.12);
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-plex:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(255, 112, 67, 0.18);
+}
+
+/* Save-to-disk button variant */
+.btn-save {
+  background: linear-gradient(120deg, #7a6bff, #9b8bff);
+  color: #fff;
+  border: none;
+  box-shadow: 0 6px 18px rgba(122, 107, 255, 0.12);
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-save:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(122, 107, 255, 0.18);
+}

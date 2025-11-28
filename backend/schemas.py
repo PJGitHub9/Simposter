@@ -8,6 +8,7 @@ class Movie(BaseModel):
     key: str
     title: str
     year: Optional[int] = None
+    addedAt: Optional[int] = None
 
 
 class MovieTMDbResponse(BaseModel):
@@ -40,6 +41,11 @@ class PresetDeleteRequest(BaseModel):
     preset_id: str
 
 
+class UISettings(BaseModel):
+    theme: str = "neon"
+    showBoundingBoxes: bool = True
+    autoSave: bool = False
+    posterDensity: int = 20
 class PlexSendRequest(BaseModel):
     template_id: str
     preset_id: str  # ADD THIS
