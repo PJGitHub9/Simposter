@@ -19,8 +19,8 @@ const fetchLogs = async () => {
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     text.value = data.text || ''
-  } catch (err: any) {
-    error.value = err?.message || 'Failed to load logs'
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Failed to load logs'
   } finally {
     loading.value = false
   }

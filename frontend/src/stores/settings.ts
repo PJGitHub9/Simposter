@@ -34,8 +34,9 @@ async function loadSettings() {
     posterDensity.value = Number(data.posterDensity) || 20
     defaultLabelsToRemove.value = data.defaultLabelsToRemove || []
     loaded.value = true
-  } catch (e: any) {
-    error.value = e?.message || 'Failed to load settings'
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Failed to load settings'
+    error.value = message
   } finally {
     loading.value = false
   }
@@ -58,8 +59,9 @@ async function saveSettings() {
       body: JSON.stringify(payload)
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
-  } catch (e: any) {
-    error.value = e?.message || 'Failed to save settings'
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Failed to save settings'
+    error.value = message
   } finally {
     loading.value = false
   }

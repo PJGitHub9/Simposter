@@ -21,14 +21,15 @@ export function usePresetService() {
       const tplKeys = Object.keys(data)
       templates.value = tplKeys.length ? tplKeys : ['default']
       if (!tplKeys.includes(selectedTemplate.value)) {
-        selectedTemplate.value = templates.value[0]
+        selectedTemplate.value = templates.value[0] || 'default'
       }
       presets.value = data[selectedTemplate.value]?.presets || []
       if (!presets.value.find((p) => p.id === selectedPreset.value)) {
         selectedPreset.value = presets.value[0]?.id || ''
       }
-    } catch (e: any) {
-      error.value = e?.message || 'Failed to load presets'
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to load presets'
+      error.value = message
     } finally {
       loading.value = false
     }
@@ -51,8 +52,9 @@ export function usePresetService() {
       })
       if (!res.ok) throw new Error(`API error ${res.status}`)
       await load()
-    } catch (e: any) {
-      error.value = e?.message || 'Failed to save preset'
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to save preset'
+      error.value = message
     } finally {
       loading.value = false
     }

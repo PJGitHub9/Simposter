@@ -8,13 +8,9 @@ import { useMovies } from '../composables/useMovies'
 type Movie = {
   key: string
   title: string
-  year?: number
+  year?: number | string
   addedAt?: number
   poster?: string | null
-}
-
-type MovieWithLabels = Movie & {
-  labels: string[]
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
@@ -129,7 +125,7 @@ const sorted = computed(() => {
   if (sortBy.value === 'title') {
     list.sort((a, b) => a.title.localeCompare(b.title))
   } else if (sortBy.value === 'year') {
-    list.sort((a, b) => (b.year || 0) - (a.year || 0))
+    list.sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0))
   } else if (sortBy.value === 'addedAt') {
     list.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
   }
@@ -177,8 +173,8 @@ const fetchMovies = async () => {
       moviesLoaded.value = true
     }
     movies.value = moviesCache.value
-  } catch (err: any) {
-    error.value = err?.message || 'Failed to load movies'
+  } catch (err: unknown) {
+    error.value = err instanceof Error ? err.message : 'Failed to load movies'
   } finally {
     loading.value = false
   }
@@ -228,7 +224,7 @@ const fetchLabels = async (list: Movie[]) => {
   saveLabelCache()
 }
 
-const handleSelect = (movie: any) => {
+const handleSelect = (movie: Movie) => {
   emit('select', movie)
 }
 

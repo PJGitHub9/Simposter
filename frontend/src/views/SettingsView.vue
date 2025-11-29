@@ -27,15 +27,14 @@ const clearCache = () => {
 
 // Fetch all available labels from movies
 const fetchAllLabels = async () => {
-  const apiBase = import.meta.env.VITE_API_URL || window.location.origin
   try {
     const labelCache = sessionStorage.getItem('simposter-labels-cache')
     if (labelCache) {
-      const cache = JSON.parse(labelCache)
+      const cache = JSON.parse(labelCache) as Record<string, string[]>
       const labels = new Set<string>()
-      Object.values(cache as any[]).forEach((movieLabels: any) => {
+      Object.values(cache).forEach((movieLabels) => {
         if (Array.isArray(movieLabels)) {
-          movieLabels.forEach(label => labels.add(label))
+          movieLabels.forEach((label) => labels.add(label))
         }
       })
       allLabels.value = Array.from(labels).sort()

@@ -3,7 +3,8 @@ import { ref } from 'vue'
 type Movie = {
   key: string
   title: string
-  year?: number
+  year?: number | string
+  addedAt?: number
   poster?: string | null
 }
 

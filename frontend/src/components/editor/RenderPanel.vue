@@ -11,7 +11,7 @@ const status = ref('')
 
 const service = useRenderService()
 const loading = service.loading
-const error = service.error ?? ref<string | null>(null)
+const error = service.error
 
 watch(
   () => props.movie,
@@ -26,21 +26,21 @@ watch(
 const doPreview = async () => {
   if (!props.movie) return
   status.value = 'Rendering…'
-  await service.preview(props.movie, bgUrl.value, logoUrl.value)
+  await service.preview(props.movie, bgUrl.value, logoUrl.value, {}, 'default', 'default')
   status.value = error.value || 'Preview done'
 }
 
 const doSave = async () => {
   if (!props.movie) return
   status.value = 'Saving…'
-  await service.save(props.movie, bgUrl.value, logoUrl.value)
+  await service.save(props.movie, bgUrl.value, logoUrl.value, {}, 'default', 'default')
   status.value = error.value || 'Saved'
 }
 
 const doSend = async () => {
   if (!props.movie) return
   status.value = 'Sending…'
-  await service.send(props.movie, bgUrl.value, logoUrl.value)
+  await service.send(props.movie, bgUrl.value, logoUrl.value, {}, [], 'default', 'default')
   status.value = error.value || 'Sent to Plex'
 }
 </script>
@@ -59,12 +59,12 @@ const doSend = async () => {
       </label>
     </div>
     <div class="actions">
-      <button :disabled="loading.value || !movie" @click="doPreview">Preview</button>
-      <button :disabled="loading.value || !movie" @click="doSave">Save</button>
-      <button :disabled="loading.value || !movie" @click="doSend">Send to Plex</button>
+      <button :disabled="loading || !movie" @click="doPreview">Preview</button>
+      <button :disabled="loading || !movie" @click="doSave">Save</button>
+      <button :disabled="loading || !movie" @click="doSend">Send to Plex</button>
     </div>
-    <p class="status">{{ loading.value ? 'Working…' : status }}</p>
-    <p v-if="error && error.value" class="error">{{ error.value }}</p>
+    <p class="status">{{ loading ? 'Working…' : status }}</p>
+    <p v-if="error" class="error">{{ error }}</p>
   </div>
 </template>
 

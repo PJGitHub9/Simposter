@@ -7,7 +7,6 @@ import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 
 const props = defineProps<{ movie: MovieInput }>()
-const emit = defineEmits<{ (e: 'close'): void }>()
 
 const settings = useSettingsStore()
 
@@ -66,7 +65,6 @@ const presets = presetService.presets
 const selectedTemplate = presetService.selectedTemplate
 const selectedPreset = presetService.selectedPreset
 const presetLoading = presetService.loading
-const presetError = presetService.error
 
 const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 
@@ -186,27 +184,31 @@ const logoUrl = computed(() => (logoMode.value === 'none' ? '' : selectedLogo.va
 const reloadPreset = () => {
   const p = presets.value.find((x) => x.id === selectedPreset.value)
   if (p?.options) {
-    const o = p.options as any
-    options.value.posterZoom = Math.round((o.poster_zoom ?? 1) * 100)
-    options.value.posterShiftY = Math.round((o.poster_shift_y ?? 0) * 100)
-    options.value.matteHeight = Math.round((o.matte_height_ratio ?? 0) * 100)
-    options.value.fadeHeight = Math.round((o.fade_height_ratio ?? 0) * 100)
-    options.value.vignette = Math.round((o.vignette_strength ?? 0) * 100)
-    options.value.grain = Math.round((o.grain_amount ?? 0) * 100)
-    options.value.logoScale = Math.round((o.logo_scale ?? 0.5) * 100)
-    options.value.logoOffset = Math.round((o.logo_offset ?? 0.75) * 100)
-    if (o.uniform_logo_max_w) options.value.uniformLogoMaxW = o.uniform_logo_max_w
-    if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = o.uniform_logo_max_h
+    const o = p.options
+    options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
+    options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
+    options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
+    options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+    options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
+    options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
+    options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
+    options.value.logoOffset = Math.round((Number(o.logo_offset) || 0.75) * 100)
+    if (o.uniform_logo_max_w) options.value.uniformLogoMaxW = Number(o.uniform_logo_max_w)
+    if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
     if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
     if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
     options.value.borderEnabled = !!o.border_enabled
-    options.value.borderThickness = o.border_px ?? 0
-    if (o.border_color) options.value.borderColor = o.border_color
-    if (o.overlay_file) options.value.overlayFile = o.overlay_file
+    options.value.borderThickness = Number(o.border_px) || 0
+    if (o.border_color) options.value.borderColor = String(o.border_color)
+    if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
     if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
-    if (o.overlay_mode) options.value.overlayMode = o.overlay_mode
-    if (o.poster_filter) posterFilter.value = o.poster_filter
-    if (o.logo_preference) logoPreference.value = o.logo_preference
+    if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
+    if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
+      posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
+    }
+    if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
+      logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
+    }
 
     applyPosterFilter()
     applyLogoPreference()
@@ -218,12 +220,15 @@ const applyLogoPreference = () => {
   if (!logos.value.length) return
   if (logoMode.value === 'none') return
   if (logoPreference.value === 'first') {
-    selectedLogo.value = logos.value[0].url
+    const firstLogo = logos.value[0]
+    if (firstLogo) selectedLogo.value = firstLogo.url
     return
   }
   const target = logoPreference.value === 'white' ? 'white' : 'color'
   const match = logos.value.find((l) => (l.thumb || l.url).toLowerCase().includes(target))
-  selectedLogo.value = (match || logos.value[0]).url
+  const fallback = logos.value[0]
+  if (match) selectedLogo.value = match.url
+  else if (fallback) selectedLogo.value = fallback.url
 }
 
 const applyPosterFilter = () => {
@@ -231,13 +236,14 @@ const applyPosterFilter = () => {
   if (posterFilter.value === 'textless') {
     const textless = posters.value.find((p) => p.has_text === false)
     if (textless) selectedPoster.value = textless.url
-    else if (!selectedPoster.value) selectedPoster.value = posters.value[0]?.url
+    else if (!selectedPoster.value) selectedPoster.value = posters.value[0]?.url || null
   } else if (posterFilter.value === 'text') {
     const withText = posters.value.find((p) => p.has_text === true)
     if (withText) selectedPoster.value = withText.url
-    else if (!selectedPoster.value) selectedPoster.value = posters.value[0]?.url
+    else if (!selectedPoster.value) selectedPoster.value = posters.value[0]?.url || null
   } else if (!selectedPoster.value && posters.value.length) {
-    selectedPoster.value = posters.value[0].url
+    const firstPoster = posters.value[0]
+    if (firstPoster) selectedPoster.value = firstPoster.url
   }
 }
 
@@ -270,7 +276,7 @@ const fetchLabels = async () => {
     labels.value = data.labels || []
     // Apply default labels to remove from settings
     const defaultToRemove = settings.defaultLabelsToRemove.value || []
-    selectedLabels.value = new Set(defaultToRemove.filter(label => labels.value.includes(label)))
+    selectedLabels.value = new Set(defaultToRemove.filter((label: string) => labels.value.includes(label)))
   } catch (e) {
     console.error(e)
   }
@@ -325,8 +331,9 @@ const doSend = async () => {
     await new Promise(resolve => setTimeout(resolve, 600))
     await fetchExistingPoster()
     await fetchLabels()
-  } catch (err: any) {
-    notifyError(err?.message || 'Failed to send poster to Plex')
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to send poster to Plex'
+    notifyError(message)
   }
 }
 
@@ -362,27 +369,31 @@ watch(logoPreference, () => {
 watch(selectedPreset, (id) => {
   const p = presets.value.find((x) => x.id === id)
   if (p?.options) {
-    const o = p.options as any
-    options.value.posterZoom = Math.round((o.poster_zoom ?? 1) * 100)
-    options.value.posterShiftY = Math.round((o.poster_shift_y ?? 0) * 100)
-    options.value.matteHeight = Math.round((o.matte_height_ratio ?? 0) * 100)
-    options.value.fadeHeight = Math.round((o.fade_height_ratio ?? 0) * 100)
-    options.value.vignette = Math.round((o.vignette_strength ?? 0) * 100)
-    options.value.grain = Math.round((o.grain_amount ?? 0) * 100)
-    options.value.logoScale = Math.round((o.logo_scale ?? 0.5) * 100)
-    options.value.logoOffset = Math.round((o.logo_offset ?? 0.75) * 100)
-    if (o.uniform_logo_max_w) options.value.uniformLogoMaxW = o.uniform_logo_max_w
-    if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = o.uniform_logo_max_h
+    const o = p.options
+    options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
+    options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
+    options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
+    options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+    options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
+    options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
+    options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
+    options.value.logoOffset = Math.round((Number(o.logo_offset) || 0.75) * 100)
+    if (o.uniform_logo_max_w) options.value.uniformLogoMaxW = Number(o.uniform_logo_max_w)
+    if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
     if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
     if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
     options.value.borderEnabled = !!o.border_enabled
-    options.value.borderThickness = o.border_px ?? 0
-    if (o.border_color) options.value.borderColor = o.border_color
-    if (o.overlay_file) options.value.overlayFile = o.overlay_file
+    options.value.borderThickness = Number(o.border_px) || 0
+    if (o.border_color) options.value.borderColor = String(o.border_color)
+    if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
     if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
-    if (o.overlay_mode) options.value.overlayMode = o.overlay_mode
-    if (o.poster_filter) posterFilter.value = o.poster_filter
-    if (o.logo_preference) logoPreference.value = o.logo_preference
+    if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
+    if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
+      posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
+    }
+    if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
+      logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
+    }
 
     applyPosterFilter()
     applyLogoPreference()
@@ -440,9 +451,9 @@ watch(
             </button>
           </div>
         </div>
-
+        
         <hr class="divider" />
-
+        
         <!-- Poster & Logo Selection -->
         <div class="section">
           <label class="field-label">
@@ -453,6 +464,7 @@ watch(
               <option value="text">With Text</option>
             </select>
           </label>
+          
 
           <div class="label-title">TMDb Posters</div>
           <div class="thumb-strip">
@@ -1355,4 +1367,3 @@ button:disabled {
   pointer-events: none;
 }
 </style>
-

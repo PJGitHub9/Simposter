@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { computed, onMounted, ref, watch } from 'vue'
 import type { MovieInput } from '../../services/types'
 import { useRenderService } from '../../services/render'
@@ -95,22 +96,26 @@ watch(
     if (p?.options) {
       // try to map known options
       const o = p.options
-      options.value.posterZoom = Math.round((o.poster_zoom ?? 1) * 100)
-      options.value.posterShiftY = Math.round((o.poster_shift_y ?? 0) * 100)
-      options.value.matteHeight = Math.round((o.matte_height_ratio ?? 0) * 100)
-      options.value.fadeHeight = Math.round((o.fade_height_ratio ?? 0) * 100)
-      options.value.vignette = Math.round((o.vignette_strength ?? 0) * 100)
-      options.value.grain = Math.round((o.grain_amount ?? 0) * 100)
-      options.value.logoScale = Math.round((o.logo_scale ?? 0.5) * 100)
-      options.value.logoOffset = Math.round((o.logo_offset ?? 0.75) * 100)
+      options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
+      options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
+      options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
+      options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+      options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
+      options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
+      options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
+      options.value.logoOffset = Math.round((Number(o.logo_offset) || 0.75) * 100)
       options.value.borderEnabled = !!o.border_enabled
-      options.value.borderThickness = o.border_px ?? 0
-      if (o.border_color) options.value.borderColor = o.border_color
-      if (o.overlay_file) options.value.overlayFile = o.overlay_file
+      options.value.borderThickness = Number(o.border_px) || 0
+      if (o.border_color) options.value.borderColor = String(o.border_color)
+      if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
       if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
-      if (o.overlay_mode) options.value.overlayMode = o.overlay_mode
-      if (o.poster_filter) posterFilter.value = o.poster_filter
-      if (o.logo_preference) logoPreference.value = o.logo_preference
+      if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
+      if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
+        posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
+      }
+      if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
+        logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
+      }
     }
   },
   { immediate: true }
@@ -119,13 +124,16 @@ watch(
 const applyLogoPreference = () => {
   if (!logos.value.length) return
   if (logoPreference.value === 'first') {
-    selectedLogo.value = logos.value[0].url
+    const firstLogo = logos.value[0]
+    if (firstLogo) selectedLogo.value = firstLogo.url
     return
   }
   // naive white/color preference: pick first where thumb endswith "white"/"color" or by heuristic
   const target = logoPreference.value === 'white' ? 'white' : 'color'
   const match = logos.value.find((l) => (l.thumb || l.url).toLowerCase().includes(target))
-  selectedLogo.value = (match || logos.value[0]).url
+  const fallback = logos.value[0]
+  if (match) selectedLogo.value = match.url
+  else if (fallback) selectedLogo.value = fallback.url
 }
 
 const fetchTmdbAssets = async () => {
@@ -259,32 +267,151 @@ watch(
     <div class="editor-body">
       <!-- Left: Previews -->
       <div class="preview-pane">
-        
+
         <div class="preview-block">
           <h3>Generated Preview</h3>
-          <img v-if="generatedPoster" :src="generatedPoster" class="poster-img" />
-          <div v-else class="poster-placeholder">Working...</div>
+          <img v-if="lastPreview" :src="lastPreview" class="poster-img" />
+          <div v-else-if="loading" class="poster-placeholder">Generating...</div>
+          <div v-else class="poster-placeholder">No preview yet</div>
         </div>
 
         <div class="preview-block">
           <h3>Existing Plex Poster</h3>
-          <img v-if="plexPoster" :src="plexPoster" class="poster-img" />
-          <div v-else class="poster-placeholder">Loading...</div>
+          <img v-if="existingPoster" :src="existingPoster" class="poster-img" />
+          <div v-else class="poster-placeholder">No poster</div>
         </div>
 
       </div>
 
       <!-- Right: Tools -->
       <div class="tools-pane">
-        <slot></slot>
-        <!-- Your entire tools panel goes here -->
-        <EditorTools
-          :movie="movie"
-          :settings="settings"
-          @update="updateSetting"
-          @refresh="refreshPreview"
-          @save="savePoster"
-        />
+        <!-- Template Selection -->
+        <div class="section">
+          <h3>Template</h3>
+          <select v-model="selectedTemplate" class="select-input">
+            <option v-for="t in templates" :key="t" :value="t">{{ t }}</option>
+          </select>
+        </div>
+
+        <!-- Preset Selection -->
+        <div class="section">
+          <h3>Preset</h3>
+          <select v-model="selectedPreset" class="select-input">
+            <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+          </select>
+        </div>
+
+        <!-- Poster Selection -->
+        <div class="section">
+          <h3>Posters</h3>
+          <div class="filter-tabs">
+            <button
+              :class="{ active: posterFilter === 'all' }"
+              @click="posterFilter = 'all'"
+            >All</button>
+            <button
+              :class="{ active: posterFilter === 'textless' }"
+              @click="posterFilter = 'textless'"
+            >Textless</button>
+            <button
+              :class="{ active: posterFilter === 'text' }"
+              @click="posterFilter = 'text'"
+            >With Text</button>
+          </div>
+          <div class="thumbnail-grid">
+            <img
+              v-for="p in filteredPosters"
+              :key="p.url"
+              :src="p.thumb || p.url"
+              :class="{ selected: selectedPoster === p.url }"
+              @click="selectedPoster = p.url"
+              class="thumbnail"
+            />
+          </div>
+        </div>
+
+        <!-- Logo Selection -->
+        <div class="section">
+          <h3>Logos</h3>
+          <div class="filter-tabs">
+            <button
+              :class="{ active: logoPreference === 'first' }"
+              @click="logoPreference = 'first'; applyLogoPreference()"
+            >First</button>
+            <button
+              :class="{ active: logoPreference === 'white' }"
+              @click="logoPreference = 'white'; applyLogoPreference()"
+            >White</button>
+            <button
+              :class="{ active: logoPreference === 'color' }"
+              @click="logoPreference = 'color'; applyLogoPreference()"
+            >Color</button>
+          </div>
+          <div class="thumbnail-grid">
+            <img
+              v-for="l in filteredLogos"
+              :key="l.url"
+              :src="l.thumb || l.url"
+              :class="{ selected: selectedLogo === l.url }"
+              @click="selectedLogo = l.url"
+              class="thumbnail logo-thumb"
+            />
+          </div>
+        </div>
+
+        <!-- Options -->
+        <div class="section">
+          <h3>Options</h3>
+
+          <label>Poster Zoom: {{ options.posterZoom }}%</label>
+          <input type="range" v-model.number="options.posterZoom" min="50" max="200" />
+
+          <label>Poster Shift Y: {{ options.posterShiftY }}%</label>
+          <input type="range" v-model.number="options.posterShiftY" min="-50" max="50" />
+
+          <label>Matte Height: {{ options.matteHeight }}%</label>
+          <input type="range" v-model.number="options.matteHeight" min="0" max="100" />
+
+          <label>Fade Height: {{ options.fadeHeight }}%</label>
+          <input type="range" v-model.number="options.fadeHeight" min="0" max="100" />
+
+          <label>Vignette: {{ options.vignette }}%</label>
+          <input type="range" v-model.number="options.vignette" min="0" max="100" />
+
+          <label>Grain: {{ options.grain }}%</label>
+          <input type="range" v-model.number="options.grain" min="0" max="100" />
+
+          <label>Logo Scale: {{ options.logoScale }}%</label>
+          <input type="range" v-model.number="options.logoScale" min="0" max="100" />
+
+          <label>Logo Offset: {{ options.logoOffset }}%</label>
+          <input type="range" v-model.number="options.logoOffset" min="0" max="100" />
+        </div>
+
+        <!-- Labels -->
+        <div class="section" v-if="labels.length">
+          <h3>Labels</h3>
+          <div class="label-chips">
+            <button
+              v-for="label in labels"
+              :key="label"
+              :class="{ active: selectedLabels.has(label) }"
+              @click="toggleLabel(label)"
+              class="label-chip"
+            >{{ label }}</button>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="section actions">
+          <button @click="doPreview" :disabled="loading" class="btn btn-primary">
+            {{ loading ? 'Generating...' : 'Preview' }}
+          </button>
+          <button @click="doSave" :disabled="loading" class="btn btn-secondary">Save</button>
+          <button @click="doSend" :disabled="loading" class="btn btn-secondary">Send to Plex</button>
+        </div>
+
+        <div v-if="error" class="error-message">{{ error }}</div>
       </div>
     </div>
   </div>
@@ -373,5 +500,200 @@ watch(
   overflow-y: auto;
   padding: 20px;
 }
-</style>
 
+.section {
+  margin-bottom: 24px;
+}
+
+.section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #a0a0a0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.select-input {
+  width: 100%;
+  background: #1a1d27;
+  color: white;
+  border: 1px solid #2a2d37;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.select-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.filter-tabs button {
+  flex: 1;
+  background: #1a1d27;
+  color: #999;
+  border: 1px solid #2a2d37;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.filter-tabs button.active {
+  background: #3b82f6;
+  color: white;
+  border-color: #3b82f6;
+}
+
+.thumbnail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.thumbnail {
+  width: 100%;
+  aspect-ratio: 2/3;
+  object-fit: cover;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.thumbnail:hover {
+  border-color: #555;
+}
+
+.thumbnail.selected {
+  border-color: #3b82f6;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}
+
+.logo-thumb {
+  aspect-ratio: 16/9;
+  background: #1a1d27;
+  padding: 8px;
+}
+
+.section label {
+  display: block;
+  font-size: 13px;
+  color: #ccc;
+  margin-bottom: 6px;
+  margin-top: 12px;
+}
+
+.section input[type="range"] {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #2a2d37;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.section input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+}
+
+.section input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: none;
+}
+
+.label-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.label-chip {
+  background: #1a1d27;
+  color: #999;
+  border: 1px solid #2a2d37;
+  border-radius: 16px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.label-chip.active {
+  background: #3b82f6;
+  color: white;
+  border-color: #3b82f6;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.btn {
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: #3b82f6;
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.btn-secondary {
+  background: #1a1d27;
+  color: white;
+  border: 1px solid #2a2d37;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #2a2d37;
+}
+
+.error-message {
+  margin-top: 12px;
+  padding: 10px;
+  background: #dc2626;
+  color: white;
+  border-radius: 6px;
+  font-size: 13px;
+}
+</style>

@@ -8,7 +8,7 @@ export function useRenderService() {
   const error = ref<string | null>(null)
   const lastPreview = ref<string | null>(null)
 
-  const post = async (path: string, body: any) => {
+  const post = async (path: string, body: unknown) => {
     loading.value = true
     error.value = null
     try {
@@ -22,8 +22,9 @@ export function useRenderService() {
         throw new Error(`API ${path} failed (${res.status}): ${text || res.statusText}`)
       }
       return await res.json()
-    } catch (e: any) {
-      error.value = e?.message || `Request to ${path} failed`
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : `Request to ${path} failed`
+      error.value = message
       return null
     } finally {
       loading.value = false
@@ -89,7 +90,7 @@ export function useRenderService() {
     templateId?: string,
     presetId?: string
   ) => {
-    const payload: any = {
+    const payload: Record<string, unknown> = {
       ...basePayload(movie, bgUrl, logoUrl, templateId, presetId, options),
       rating_key: movie.key,
       send_to_plex: true

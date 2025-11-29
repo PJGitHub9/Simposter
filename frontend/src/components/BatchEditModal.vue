@@ -228,7 +228,7 @@ const sendBatch = async () => {
       throw new Error("Failed to send batch");
     }
 
-    const result = await response.json();
+    await response.json();
     success(
       `Successfully sent ${checkedMovies.value.size} movies to Plex!`
     );

@@ -10,7 +10,7 @@ type Entry = {
   key: string
 }
 
-const props = defineProps<{
+defineProps<{
   heading: string
   items: Entry[]
 }>()

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const props = defineProps<{
+defineProps<{
   title: string
   year?: string | number
   addedAt?: number

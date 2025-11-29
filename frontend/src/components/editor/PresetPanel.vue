@@ -12,7 +12,7 @@ const handleSave = async () => {
   if (optionsJson.value.trim()) {
     try {
       parsed = JSON.parse(optionsJson.value)
-    } catch (e) {
+    } catch {
       alert('Invalid JSON')
       return
     }
@@ -30,14 +30,14 @@ load()
     <div v-else>
       <label class="field">
         <span>Template</span>
-        <select v-model="selectedTemplate.value">
-          <option v-for="tpl in templates.value" :key="tpl" :value="tpl">{{ tpl }}</option>
+        <select v-model="selectedTemplate">
+          <option v-for="tpl in templates" :key="tpl" :value="tpl">{{ tpl }}</option>
         </select>
       </label>
       <label class="field">
         <span>Preset</span>
-        <select v-model="selectedPreset.value">
-          <option v-for="p in presets.value" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+        <select v-model="selectedPreset">
+          <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
         </select>
       </label>
       <label class="field">
@@ -45,8 +45,8 @@ load()
         <textarea v-model="optionsJson" rows="4" placeholder='{"poster_zoom":0.9}'></textarea>
       </label>
       <div class="actions">
-        <button :disabled="loading.value" @click="savePreset()">Save Current</button>
-        <button :disabled="loading.value" class="ghost" @click="handleSave">Save with JSON</button>
+        <button :disabled="loading" @click="savePreset()">Save Current</button>
+        <button :disabled="loading" class="ghost" @click="handleSave">Save with JSON</button>
       </div>
     </div>
   </div>

@@ -1,4 +1,4 @@
-export type PresetOptions = Record<string, any>
+export type PresetOptions = Record<string, unknown>
 
 export type MovieInput = {
   key: string
@@ -10,7 +10,7 @@ export type MovieInput = {
 export type Movie = {
   key: string
   title: string
-  year?: number
+  year?: number | string
   addedAt?: number
   poster?: string | null
 }
