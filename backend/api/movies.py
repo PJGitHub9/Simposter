@@ -104,3 +104,51 @@ def api_movies_tmdb():
         {"title": m.title, "year": m.year, "rating_key": m.key, "tmdb_id": None}
         for m in movies
     ]
+
+
+@router.post("/scan-library")
+def api_scan_library():
+    """Scan entire Plex library and return full data for caching."""
+    try:
+        movies = get_plex_movies()
+        logger.info(f"[SCAN] Starting library scan for {len(movies)} movies")
+
+        # Build complete response with posters and labels
+        result = {
+            "status": "ok",
+            "count": len(movies),
+            "movies": [],
+            "posters": {},
+            "labels": {}
+        }
+
+        for movie in movies:
+            # Add movie data
+            result["movies"].append({
+                "key": movie.key,
+                "title": movie.title,
+                "year": movie.year,
+                "addedAt": movie.addedAt
+            })
+
+            # Fetch poster URL
+            try:
+                poster_data = api_movie_poster(movie.key)
+                result["posters"][movie.key] = poster_data.get("url")
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch poster for {movie.key}: {e}")
+                result["posters"][movie.key] = None
+
+            # Fetch labels
+            try:
+                labels_data = api_movie_labels(movie.key)
+                result["labels"][movie.key] = labels_data.labels
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch labels for {movie.key}: {e}")
+                result["labels"][movie.key] = []
+
+        logger.info(f"[SCAN] Completed library scan - {len(movies)} movies, {len(result['posters'])} posters, {len(result['labels'])} label sets")
+        return result
+    except Exception as e:
+        logger.error(f"[SCAN] Failed to scan library: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to scan library: {e}")

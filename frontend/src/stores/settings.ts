@@ -10,6 +10,7 @@ export type UISettings = {
   autoSave: boolean
   posterDensity: number
   defaultLabelsToRemove?: string[]
+  saveLocation?: string
 }
 
 const theme = ref<Theme>('neon')
@@ -20,6 +21,7 @@ const defaultLabelsToRemove = ref<string[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 const loaded = ref(false)
+const saveLocation = ref<string>('/output')
 
 async function loadSettings() {
   loading.value = true
@@ -34,6 +36,8 @@ async function loadSettings() {
     posterDensity.value = Number(data.posterDensity) || 20
     defaultLabelsToRemove.value = data.defaultLabelsToRemove || []
     loaded.value = true
+    saveLocation.value = data.saveLocation ?? "/output"
+
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to load settings'
     error.value = message
@@ -51,7 +55,8 @@ async function saveSettings() {
       showBoundingBoxes: showBoundingBoxes.value,
       autoSave: autoSave.value,
       posterDensity: posterDensity.value,
-      defaultLabelsToRemove: defaultLabelsToRemove.value
+      defaultLabelsToRemove: defaultLabelsToRemove.value,
+      saveLocation: saveLocation.value
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -81,6 +86,7 @@ export function useSettingsStore() {
     loading,
     error,
     loaded,
+    saveLocation,
     load: loadSettings,
     save: saveSettings
   }

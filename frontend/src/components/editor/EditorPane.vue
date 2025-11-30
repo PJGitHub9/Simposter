@@ -24,6 +24,16 @@ const logoPreference = ref<'first' | 'white' | 'color'>('first')
 const logoMode = ref<'original' | 'match' | 'hex' | 'none'>('original')
 const logoHex = ref('#ffffff')
 
+const normalizeLogoMode = (mode: unknown): 'original' | 'match' | 'hex' | 'none' => {
+  if (typeof mode !== 'string') return 'original'
+  const m = mode.toLowerCase()
+  if (['original', 'stock', 'keep'].includes(m)) return 'original'
+  if (['match', 'color', 'colormatch', 'color-match'].includes(m)) return 'match'
+  if (['hex', 'custom'].includes(m)) return 'hex'
+  if (['none', 'off', 'no'].includes(m)) return 'none'
+  return 'original'
+}
+
 const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
 
@@ -65,6 +75,7 @@ const presets = presetService.presets
 const selectedTemplate = presetService.selectedTemplate
 const selectedPreset = presetService.selectedPreset
 const presetLoading = presetService.loading
+const newPresetId = ref('')
 
 const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 
@@ -209,10 +220,96 @@ const reloadPreset = () => {
     if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
       logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
     }
+    logoMode.value = normalizeLogoMode(o.logo_mode)
+    if (typeof o.logo_hex === 'string') {
+      logoHex.value = o.logo_hex
+    }
 
     applyPosterFilter()
     applyLogoPreference()
     success('Preset reloaded!')
+  }
+}
+
+const saveCurrentPreset = async () => {
+  if (!selectedTemplate.value || !selectedPreset.value) {
+    notifyError('Please select a template and preset')
+    return
+  }
+
+  // Convert frontend options to backend format
+  const backendOptions = {
+    poster_zoom: options.value.posterZoom / 100,
+    poster_shift_y: options.value.posterShiftY / 100,
+    matte_height_ratio: options.value.matteHeight / 100,
+    fade_height_ratio: options.value.fadeHeight / 100,
+    vignette_strength: options.value.vignette / 100,
+    grain_amount: options.value.grain / 100,
+    logo_scale: options.value.logoScale / 100,
+    logo_offset: options.value.logoOffset / 100,
+    uniform_logo_max_w: options.value.uniformLogoMaxW,
+    uniform_logo_max_h: options.value.uniformLogoMaxH,
+    uniform_logo_offset_x: options.value.uniformLogoOffsetX / 100,
+    uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
+    border_enabled: options.value.borderEnabled,
+    border_px: options.value.borderThickness,
+    border_color: options.value.borderColor,
+    overlay_file: options.value.overlayFile,
+    overlay_opacity: options.value.overlayOpacity / 100,
+    overlay_mode: options.value.overlayMode,
+    poster_filter: posterFilter.value,
+    logo_preference: logoPreference.value,
+    logo_mode: logoMode.value,
+    logo_hex: logoHex.value
+  }
+
+  await presetService.savePreset(backendOptions)
+  if (!presetService.error.value) {
+    success('Preset saved!')
+  } else {
+    notifyError(`Failed to save: ${presetService.error.value}`)
+  }
+}
+
+const saveAsNewPreset = async () => {
+  if (!newPresetId.value.trim()) {
+    notifyError('Enter a preset id to save as')
+    return
+  }
+
+  const backendOptions = {
+    poster_zoom: options.value.posterZoom / 100,
+    poster_shift_y: options.value.posterShiftY / 100,
+    matte_height_ratio: options.value.matteHeight / 100,
+    fade_height_ratio: options.value.fadeHeight / 100,
+    vignette_strength: options.value.vignette / 100,
+    grain_amount: options.value.grain / 100,
+    logo_scale: options.value.logoScale / 100,
+    logo_offset: options.value.logoOffset / 100,
+    uniform_logo_max_w: options.value.uniformLogoMaxW,
+    uniform_logo_max_h: options.value.uniformLogoMaxH,
+    uniform_logo_offset_x: options.value.uniformLogoOffsetX / 100,
+    uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
+    border_enabled: options.value.borderEnabled,
+    border_px: options.value.borderThickness,
+    border_color: options.value.borderColor,
+    overlay_file: options.value.overlayFile,
+    overlay_opacity: options.value.overlayOpacity / 100,
+    overlay_mode: options.value.overlayMode,
+    poster_filter: posterFilter.value,
+    logo_preference: logoPreference.value,
+    logo_mode: logoMode.value,
+    logo_hex: logoHex.value
+  }
+
+  const newId = newPresetId.value.trim()
+  await presetService.savePresetAs(newId, backendOptions)
+  if (!presetService.error.value) {
+    selectedPreset.value = newId
+    success('Preset saved as new!')
+    newPresetId.value = ''
+  } else {
+    notifyError(`Failed to save: ${presetService.error.value}`)
   }
 }
 
@@ -394,6 +491,10 @@ watch(selectedPreset, (id) => {
     if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
       logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
     }
+    logoMode.value = normalizeLogoMode(o.logo_mode)
+    if (typeof o.logo_hex === 'string') {
+      logoHex.value = o.logo_hex
+    }
 
     applyPosterFilter()
     applyLogoPreference()
@@ -449,6 +550,17 @@ watch(
                 <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
               </svg>
             </button>
+            <button class="save-preset-btn" @click="saveCurrentPreset" title="Save current settings to preset">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </button>
+          </div>
+          <div class="preset-row new-preset-row">
+            <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
+            <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
           </div>
         </div>
         
@@ -878,6 +990,80 @@ watch(
 .field-label input[type='color'] {
   height: 38px;
   cursor: pointer;
+}
+
+.preset-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.new-preset-row {
+  margin-top: 8px;
+}
+.new-preset-input {
+  flex: 1;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6edff;
+}
+.save-preset-btn.wide {
+  width: 120px;
+}
+
+.save-preset-btn {
+  flex: 0 0 auto;
+  min-width: 42px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(120deg, #3dd6b7, #5b8dee);
+  color: #fff;
+  font-weight: 600;
+  padding: 10px 14px;
+  box-shadow: 0 6px 18px rgba(61, 214, 183, 0.18);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.save-preset-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(61, 214, 183, 0.24);
+}
+
+.save-preset-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.preset-select {
+  flex: 1;
+}
+
+.reload-preset-btn {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #dce6ff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.reload-preset-btn:hover {
+  background: rgba(61, 214, 183, 0.1);
+  border-color: rgba(61, 214, 183, 0.3);
+  color: var(--accent);
 }
 
 .label-title {

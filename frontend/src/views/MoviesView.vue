@@ -14,14 +14,15 @@ type Movie = {
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
-const { movies: moviesCache } = useMovies()
+const { movies: moviesCache, moviesLoaded: moviesLoadedFlag } = useMovies()
 const posterCacheStore = ref<Record<string, string | null>>({})
 const labelCacheStore = ref<Record<string, string[]>>({})
 const posterInFlight = new Set<string>()
 const labelInFlight = new Set<string>()
-const moviesLoaded = ref(false)
+const moviesLoaded = moviesLoadedFlag
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 const LABELS_CACHE_KEY = 'simposter-labels-cache'
+const MOVIES_CACHE_KEY = 'simposter-movies-cache'
 
 const loadPosterCache = () => {
   if (typeof sessionStorage === 'undefined') return
@@ -65,8 +66,31 @@ const saveLabelCache = () => {
   }
 }
 
+const loadMoviesCache = () => {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    const raw = sessionStorage.getItem(MOVIES_CACHE_KEY)
+    if (raw) {
+      moviesCache.value = JSON.parse(raw)
+      moviesLoaded.value = true
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+const saveMoviesCache = () => {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    sessionStorage.setItem(MOVIES_CACHE_KEY, JSON.stringify(moviesCache.value))
+  } catch {
+    /* ignore */
+  }
+}
+
 loadPosterCache()
 loadLabelCache()
+loadMoviesCache()
 
 const props = defineProps<{
   search?: string
@@ -81,6 +105,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const page = ref(1)
 const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
+const sortOrder = ref<'asc' | 'desc'>('asc')
 const filterLabel = ref<string>('')
 const posterCache = posterCacheStore
 const labelCache = labelCacheStore
@@ -122,12 +147,14 @@ const filtered = computed(() => {
 
 const sorted = computed(() => {
   const list = [...filtered.value]
+  const multiplier = sortOrder.value === 'asc' ? 1 : -1
+
   if (sortBy.value === 'title') {
-    list.sort((a, b) => a.title.localeCompare(b.title))
+    list.sort((a, b) => multiplier * a.title.localeCompare(b.title))
   } else if (sortBy.value === 'year') {
-    list.sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0))
+    list.sort((a, b) => multiplier * ((Number(a.year) || 0) - (Number(b.year) || 0)))
   } else if (sortBy.value === 'addedAt') {
-    list.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))
+    list.sort((a, b) => multiplier * ((a.addedAt || 0) - (b.addedAt || 0)))
   }
   return list
 })
@@ -171,6 +198,7 @@ const fetchMovies = async () => {
       const data = (await res.json()) as Movie[]
       moviesCache.value = data
       moviesLoaded.value = true
+      saveMoviesCache()
     }
     movies.value = moviesCache.value
   } catch (err: unknown) {
@@ -245,6 +273,10 @@ const prevPage = () => {
 }
 
 onMounted(async () => {
+  // Reload caches from sessionStorage (in case they were updated by scan library)
+  loadPosterCache()
+  loadLabelCache()
+
   if (!settings.loaded.value && !settings.loading.value) {
     await settings.load()
   }
@@ -261,9 +293,16 @@ onMounted(async () => {
         <div class="control-group">
           <label for="sort-select">Sort by:</label>
           <select id="sort-select" v-model="sortBy" class="control-select">
-            <option value="title">Title (A-Z)</option>
-            <option value="year">Year (Newest)</option>
-            <option value="addedAt">Date Added (Newest)</option>
+            <option value="title">Title</option>
+            <option value="year">Year</option>
+            <option value="addedAt">Date Added</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="sort-order">Order:</label>
+          <select id="sort-order" v-model="sortOrder" class="control-select">
+            <option value="asc">{{ sortBy === 'title' ? 'A-Z' : 'Oldest First' }}</option>
+            <option value="desc">{{ sortBy === 'title' ? 'Z-A' : 'Newest First' }}</option>
           </select>
         </div>
         <div class="control-group">

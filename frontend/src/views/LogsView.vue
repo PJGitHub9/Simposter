@@ -8,7 +8,13 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const text = ref('')
 const logLevel = ref<LogLevel>('all')
+const searchQuery = ref('')
 const autoRefresh = ref(false)
+const logSettings = ref({
+  level: 'INFO',
+  maxSize: 20,
+  maxBackups: 7
+})
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 
 const fetchLogs = async () => {
@@ -31,24 +37,53 @@ const parsedLogs = computed(() => {
 
   const lines = text.value.split('\n').filter(line => line.trim())
   return lines.map((line, index) => {
-    // Try to parse log level from common patterns
+    // Try to parse timestamp, level, and message
     let level: LogLevel = 'info'
-    const lowerLine = line.toLowerCase()
+    let timestamp = ''
+    let message = line
 
-    if (lowerLine.includes('error') || lowerLine.includes('exception') || lowerLine.includes('failed')) {
-      level = 'error'
-    } else if (lowerLine.includes('warn') || lowerLine.includes('warning')) {
-      level = 'warning'
-    } else if (lowerLine.includes('debug')) {
-      level = 'debug'
+    // Match pattern: YYYY-MM-DD HH:MM:SS [LEVEL] message
+    const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/)
+    if (timestampMatch && timestampMatch[1]) {
+      timestamp = timestampMatch[1]
+      message = line.substring(timestampMatch[0].length).trim()
     }
 
-    return { index, line, level }
+    // Match [LEVEL] pattern
+    const levelMatch = message.match(/^\[(\w+)\]/)
+    if (levelMatch && levelMatch[1]) {
+      const detectedLevel = levelMatch[1].toLowerCase()
+      if (detectedLevel === 'error' || detectedLevel === 'err') level = 'error'
+      else if (detectedLevel === 'warn' || detectedLevel === 'warning') level = 'warning'
+      else if (detectedLevel === 'debug') level = 'debug'
+      else if (detectedLevel === 'info') level = 'info'
+
+      message = message.substring(levelMatch[0].length).trim()
+    } else {
+      // Fallback: detect by keywords
+      const lowerLine = line.toLowerCase()
+      if (lowerLine.includes('error') || lowerLine.includes('exception') || lowerLine.includes('failed')) {
+        level = 'error'
+      } else if (lowerLine.includes('warn')) {
+        level = 'warning'
+      } else if (lowerLine.includes('debug')) {
+        level = 'debug'
+      }
+    }
+
+    return { index, line, level, timestamp, message }
   })
 })
 
 const filteredLogs = computed(() => {
-  const logs = logLevel.value === 'all' ? parsedLogs.value : parsedLogs.value.filter(log => log.level === logLevel.value)
+  let logs = logLevel.value === 'all' ? parsedLogs.value : parsedLogs.value.filter(log => log.level === logLevel.value)
+
+  // Apply search filter
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.toLowerCase()
+    logs = logs.filter(log => log.message.toLowerCase().includes(query) || log.line.toLowerCase().includes(query))
+  }
+
   return logs.slice().reverse()
 })
 
@@ -65,7 +100,38 @@ const toggleAutoRefresh = () => {
   }
 }
 
-onMounted(fetchLogs)
+const fetchLogConfig = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/log-config`)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    logSettings.value = {
+      level: data.level || 'INFO',
+      maxSize: data.maxSize || 20,
+      maxBackups: data.maxBackups || 7
+    }
+  } catch (err) {
+    console.error('Failed to load log config:', err)
+  }
+}
+
+const saveLogSettings = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/log-config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(logSettings.value)
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+  } catch (err) {
+    console.error('Failed to save log config:', err)
+  }
+}
+
+onMounted(() => {
+  fetchLogs()
+  fetchLogConfig()
+})
 onUnmounted(() => {
   if (refreshInterval) {
     clearInterval(refreshInterval)
@@ -74,61 +140,99 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="view glass">
-    <div class="header">
-      <div>
-        <p class="label">Activity</p>
-        <h2>Render Logs</h2>
-      </div>
-      <div class="header-controls">
-        <div class="filter-group">
-          <label class="filter-label">Filter:</label>
-          <select v-model="logLevel" class="log-filter">
-            <option value="all">All Logs</option>
-            <option value="debug">Debug</option>
-            <option value="info">Info</option>
-            <option value="warning">Warning</option>
-            <option value="error">Error</option>
+  <div class="view">
+    <div class="config-panel glass">
+      <h3>Log Configuration</h3>
+      <p class="config-subtitle">Settings for log file management (does not affect logs displayed below)</p>
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label for="log-level">Log Level</label>
+          <select id="log-level" v-model="logSettings.level" class="setting-input">
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
           </select>
         </div>
-        <button :class="['auto-refresh-btn', { active: autoRefresh }]" @click="toggleAutoRefresh">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="23 4 23 10 17 10" />
-            <polyline points="1 20 1 14 7 14" />
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-          </svg>
-          Auto
-        </button>
-        <button class="ghost" @click="fetchLogs">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="23 4 23 10 17 10" />
-            <polyline points="1 20 1 14 7 14" />
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-          </svg>
-          Refresh
-        </button>
+        <div class="setting-item">
+          <label for="max-size">Max Size (MB)</label>
+          <input id="max-size" v-model.number="logSettings.maxSize" type="number" min="1" max="1000" class="setting-input" />
+        </div>
+        <div class="setting-item">
+          <label for="max-backups">Max Backups</label>
+          <input id="max-backups" v-model.number="logSettings.maxBackups" type="number" min="1" max="30" class="setting-input" />
+        </div>
+      </div>
+      <div class="settings-actions">
+        <button class="btn-save" @click="saveLogSettings">Save Settings</button>
       </div>
     </div>
 
-    <div v-if="error" class="callout error">
-      {{ error }}
-    </div>
-    <div v-else-if="loading" class="callout">Loading logs…</div>
-    <div v-else class="log-container">
-      <div v-if="!filteredLogs.length" class="empty-state">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <polyline points="14 2 14 8 20 8" />
-          <line x1="16" y1="13" x2="8" y2="13" />
-          <line x1="16" y1="17" x2="8" y2="17" />
-          <polyline points="10 9 9 9 8 9" />
-        </svg>
-        <p>No log entries yet.</p>
+    <div class="logs-panel glass">
+      <div class="header">
+        <div>
+          <p class="label">Activity</p>
+          <h2>Logs</h2>
+        </div>
+        <div class="header-controls">
+          <div class="filter-group">
+            <input
+              v-model="searchQuery"
+              type="text"
+              placeholder="Search logs..."
+              class="log-search"
+            />
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Level:</label>
+            <select v-model="logLevel" class="log-filter">
+              <option value="all">All</option>
+              <option value="debug">Debug</option>
+              <option value="info">Info</option>
+              <option value="warning">Warning</option>
+              <option value="error">Error</option>
+            </select>
+          </div>
+          <button :class="['auto-refresh-btn', { active: autoRefresh }]" @click="toggleAutoRefresh">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+            Auto
+          </button>
+          <button class="ghost" @click="fetchLogs">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+            Refresh
+          </button>
+        </div>
       </div>
-      <div v-else class="log-output">
-        <div v-for="log in filteredLogs" :key="log.index" :class="['log-line', log.level]">
-          <span class="log-level-badge">{{ log.level.toUpperCase() }}</span>
-          <span class="log-text">{{ log.line }}</span>
+
+      <div v-if="error" class="callout error">
+        {{ error }}
+      </div>
+      <div v-else-if="loading" class="callout">Loading logs…</div>
+      <div v-else class="log-container">
+        <div v-if="!filteredLogs.length" class="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <polyline points="10 9 9 9 8 9" />
+          </svg>
+          <p>No log entries yet.</p>
+        </div>
+        <div v-else class="log-output">
+          <div v-for="log in filteredLogs" :key="log.index" :class="['log-line', log.level]">
+            <span class="log-level-badge">{{ log.level.toUpperCase() }}</span>
+            <span v-if="log.timestamp" class="log-timestamp">{{ log.timestamp }}</span>
+            <span class="log-text">{{ log.message }}</span>
+          </div>
         </div>
       </div>
     </div>
@@ -138,6 +242,33 @@ onUnmounted(() => {
 <style scoped>
 .view {
   padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.config-panel {
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.config-panel h3 {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #eef2ff;
+}
+
+.config-subtitle {
+  margin: 0 0 16px 0;
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.logs-panel {
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .header {
@@ -178,6 +309,28 @@ onUnmounted(() => {
   font-size: 13px;
   color: var(--muted);
   font-weight: 500;
+}
+
+.log-search {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6edff;
+  font-size: 13px;
+  min-width: 200px;
+  transition: all 0.2s;
+}
+
+.log-search:focus {
+  outline: none;
+  border-color: rgba(61, 214, 183, 0.5);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.log-search::placeholder {
+  color: var(--muted);
+  opacity: 0.5;
 }
 
 .log-filter {
@@ -277,22 +430,47 @@ onUnmounted(() => {
 }
 
 .log-output {
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 0;
   max-height: 65vh;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+.log-output::-webkit-scrollbar {
+  width: 8px;
+}
+
+.log-output::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.log-output::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.log-output::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .log-line {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   transition: background 0.15s;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.log-line:nth-child(even) {
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .log-line:last-child {
@@ -300,17 +478,28 @@ onUnmounted(() => {
 }
 
 .log-line:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .log-level-badge {
   flex-shrink: 0;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.5px;
   text-transform: uppercase;
+  min-width: 50px;
+  text-align: center;
+}
+
+.log-timestamp {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  opacity: 0.7;
+  min-width: 130px;
 }
 
 .log-line.debug .log-level-badge {
@@ -339,10 +528,11 @@ onUnmounted(() => {
 
 .log-text {
   flex: 1;
-  font-size: 13px;
-  color: #e6edff;
-  line-height: 1.6;
-  word-break: break-all;
+  font-size: 12px;
+  color: #d4dde8;
+  line-height: 1.5;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
 
 .log-line.error .log-text {
@@ -351,5 +541,97 @@ onUnmounted(() => {
 
 .log-line.warning .log-text {
   color: #ffe4a3;
+}
+
+.log-line.debug .log-text {
+  color: #c4c8d8;
+  opacity: 0.9;
+}
+
+.settings-panel {
+  padding: 16px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-panel h3 {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #eef2ff;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.setting-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.setting-item label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.setting-input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6edff;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.setting-input:focus {
+  outline: none;
+  border-color: rgba(61, 214, 183, 0.5);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-save {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(61, 214, 183, 0.4);
+  background: rgba(61, 214, 183, 0.1);
+  color: #3dd6b7;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-save:hover {
+  background: rgba(61, 214, 183, 0.2);
+  border-color: rgba(61, 214, 183, 0.6);
+}
+
+.btn-cancel {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: #dce6ff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 </style>

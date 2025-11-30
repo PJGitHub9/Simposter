@@ -11,6 +11,8 @@ import requests
 
 from pydantic_settings import BaseSettings
 
+# Project base dir (repo root)
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ===============================
 #  Settings (loads .env properly)
@@ -40,6 +42,17 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# Normalize paths relative to repo root so npm/uvicorn cwd doesn't matter
+def _resolve_path(p: str) -> str:
+    path = Path(p)
+    if path.is_absolute():
+        return str(path)
+    return str((BASE_DIR / path).resolve())
+
+settings.CONFIG_DIR = _resolve_path(settings.CONFIG_DIR)
+settings.OUTPUT_ROOT = _resolve_path(settings.OUTPUT_ROOT)
+settings.UPLOAD_DIR = _resolve_path(settings.UPLOAD_DIR)
+settings.LOG_FILE = _resolve_path(settings.LOG_FILE)
 
 # Ensure folders exist
 Path(settings.CONFIG_DIR).mkdir(parents=True, exist_ok=True)

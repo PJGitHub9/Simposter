@@ -1,6 +1,10 @@
 {
-  "theme": "slate",
-  "showBoundingBoxes": false,
+  "theme": "oled",
+  "showBoundingBoxes": true,
   "autoSave": false,
-  "posterDensity": 50
+  "posterDensity": 50,
+  "saveLocation": "/output",
+  "defaultLabelsToRemove": [
+    "Overlay"
+  ]
 }

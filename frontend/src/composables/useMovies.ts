@@ -9,9 +9,11 @@ type Movie = {
 }
 
 const moviesCache = ref<Movie[]>([])
+const moviesLoaded = ref(false)
 
 export function useMovies() {
   return {
-    movies: moviesCache
+    movies: moviesCache,
+    moviesLoaded
   }
 }

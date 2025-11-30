@@ -14,7 +14,7 @@
     "type-check": "vue-tsc --build",
     "lint": "eslint . --fix --cache",
     "format": "prettier --write --experimental-cli src/",
-    "api": "python -m uvicorn backend.main:app --reload --port 8003 --app-dir ..",
+    "api": "python -m uvicorn backend.main:app --reload --port 8003 --app-dir .. --env-file ..\\.env",
     "dev:full": "npm-run-all -p api dev"
   },
   "dependencies": {

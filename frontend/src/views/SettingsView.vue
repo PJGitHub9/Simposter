@@ -1,14 +1,42 @@
 <script setup lang="ts">
-import { useSettingsStore } from '../stores/settings'
-import { ref, onMounted } from 'vue'
+import { useSettingsStore, type Theme } from '../stores/settings'
+import { useMovies } from '../composables/useMovies'
+import { ref, onMounted, watch } from 'vue'
 
 const settings = useSettingsStore()
 const saved = ref('')
 const allLabels = ref<string[]>([])
+const { movies: moviesCache, moviesLoaded } = useMovies()
 
-const saveSettings = () => {
-  settings.save()
-  saved.value = 'Saved'
+// Local state that will only be applied when save is clicked
+const localTheme = ref<Theme>('neon')
+const localPosterDensity = ref(20)
+const localAutoSave = ref(false)
+const localShowBoundingBoxes = ref(true)
+const localSaveLocation = ref('')
+const localDefaultLabelsToRemove = ref<string[]>([])
+
+const loadLocalSettings = () => {
+  localTheme.value = settings.theme.value
+  localPosterDensity.value = settings.posterDensity.value
+  localAutoSave.value = settings.autoSave.value
+  localShowBoundingBoxes.value = settings.showBoundingBoxes.value
+  localSaveLocation.value = settings.saveLocation.value
+  localDefaultLabelsToRemove.value = [...settings.defaultLabelsToRemove.value]
+}
+
+const saveSettings = async () => {
+  // Apply local settings to the store
+  settings.theme.value = localTheme.value
+  settings.posterDensity.value = localPosterDensity.value
+  settings.autoSave.value = localAutoSave.value
+  settings.showBoundingBoxes.value = localShowBoundingBoxes.value
+  settings.saveLocation.value = localSaveLocation.value
+  settings.defaultLabelsToRemove.value = [...localDefaultLabelsToRemove.value]
+
+  // Save to backend
+  await settings.save()
+  saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
 }
 
@@ -18,10 +46,57 @@ const clearCache = () => {
     sessionStorage.removeItem('simposter-poster-cache')
     // Clear label cache from localStorage
     sessionStorage.removeItem('simposter-labels-cache')
-    saved.value = 'Cache cleared'
+    saved.value = 'Cache cleared!'
     setTimeout(() => (saved.value = ''), 1500)
   } catch (e) {
     console.error('Failed to clear cache', e)
+  }
+}
+
+const scanLibrary = async () => {
+  try {
+    saved.value = 'Scanning library...'
+    const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+    const res = await fetch(`${apiBase}/api/scan-library`, { method: 'POST' })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+
+    // Cache movies
+    if (Array.isArray(data.movies)) {
+      moviesCache.value = data.movies
+      moviesLoaded.value = true
+      try {
+        sessionStorage.setItem('simposter-movies-cache', JSON.stringify(data.movies))
+      } catch (err) {
+        console.error('Failed to cache movies', err)
+      }
+    }
+
+    // Cache posters
+    if (data.posters && typeof sessionStorage !== 'undefined') {
+      try {
+        sessionStorage.setItem('simposter-poster-cache', JSON.stringify(data.posters))
+      } catch (err) {
+        console.error('Failed to cache posters', err)
+      }
+    }
+
+    // Cache labels
+    if (data.labels && typeof sessionStorage !== 'undefined') {
+      try {
+        sessionStorage.setItem('simposter-labels-cache', JSON.stringify(data.labels))
+      } catch (err) {
+        console.error('Failed to cache labels', err)
+      }
+    }
+
+    saved.value = `Scanned ${data.count || 0} items!`
+    setTimeout(() => (saved.value = ''), 2000)
+    // Refresh label cache after scan
+    await fetchAllLabels()
+  } catch (e) {
+    saved.value = `Scan failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+    setTimeout(() => (saved.value = ''), 2000)
   }
 }
 
@@ -44,32 +119,45 @@ const fetchAllLabels = async () => {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // Ensure settings are loaded from API before syncing local form state
+  if (!settings.loaded.value && !settings.loading.value) {
+    await settings.load()
+  }
+  loadLocalSettings()
   fetchAllLabels()
 })
 
+// If settings finish loading after initial render, sync the local form
+watch(
+  () => settings.loaded.value,
+  (val) => {
+    if (val) loadLocalSettings()
+  }
+)
+
 const toggleLabel = (label: string) => {
-  const set = new Set(settings.defaultLabelsToRemove.value)
+  const set = new Set(localDefaultLabelsToRemove.value)
   if (set.has(label)) {
     set.delete(label)
   } else {
     set.add(label)
   }
-  settings.defaultLabelsToRemove.value = Array.from(set)
+  localDefaultLabelsToRemove.value = Array.from(set)
 }
 
 const isLabelSelected = (label: string) => {
-  return settings.defaultLabelsToRemove.value.includes(label)
+  return localDefaultLabelsToRemove.value.includes(label)
 }
 </script>
 
 <template>
-  <div class="view glass">
+  <div class="view glass" @click.stop @mouseup.stop @mousedown.stop @select.stop @selectstart.stop>
     <h2>Settings</h2>
     <div class="grid">
       <label>
         <span>Theme</span>
-        <select v-model="settings.theme.value">
+        <select v-model="localTheme">
           <option value="neon">Neon</option>
           <option value="slate">Slate</option>
           <option value="dracula">Dracula</option>
@@ -80,14 +168,38 @@ const isLabelSelected = (label: string) => {
       </label>
       <label>
         <span>Movies per page</span>
-        <input v-model.number="settings.posterDensity.value" type="number" min="5" max="100" />
+        <input
+          v-model.number="localPosterDensity"
+          type="number"
+          min="5"
+          max="100"
+          @select.stop
+          @selectstart.stop
+        />
       </label>
       <label class="inline">
-        <input v-model="settings.autoSave.value" type="checkbox" />
+        <input v-model="localAutoSave" type="checkbox" />
         <span>Autosave renders</span>
       </label>
+      <label class="inline">
+        <input v-model="localShowBoundingBoxes" type="checkbox" />
+        <span>Show bounding boxes (debug)</span>
+      </label>
+      <label @mousedown.stop @click.stop>
+        <span>Save Location</span>
+        <input
+          v-model="localSaveLocation"
+          type="text"
+          placeholder="/output/{title} {year}/poster"
+          @mousedown.stop
+          @click.stop
+          @mouseup.stop
+          @select.stop
+          @selectstart.stop
+        />
+        <span class="help-text">Available variables: {title}, {year}, {key}</span>
+      </label>
     </div>
-
     <div v-if="allLabels.length > 0" class="labels-section">
       <h3>Default Labels to Remove</h3>
       <p class="section-subtitle">When sending to Plex, these labels will be removed by default</p>
@@ -102,6 +214,7 @@ const isLabelSelected = (label: string) => {
     <div class="actions">
       <button @click="saveSettings">Save</button>
       <button @click="clearCache" class="secondary">Clear Cache</button>
+      <button @click="scanLibrary" class="secondary">Scan Library</button>
       <span class="status">{{ saved }}</span>
     </div>
   </div>
@@ -232,4 +345,12 @@ button.secondary:hover {
 .status {
   color: #a9b4d6;
 }
+
+.help-text {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.7;
+  font-style: italic;
+}
+
 </style>

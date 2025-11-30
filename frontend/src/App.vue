@@ -26,6 +26,10 @@ const activeTab = computed<TabKey>(() => (route.name as TabKey) || 'movies')
 const showBackButton = computed(() => !!ui.selectedMovie.value)
 
 const handleSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null }) => {
+  // Guard against native DOM events being passed instead of movie objects
+  if (!movie || typeof movie !== 'object' || !movie.key || !movie.title) {
+    return
+  }
   ui.setSelectedMovie(movie)
 }
 
@@ -94,18 +98,22 @@ const handleSearchSelect = (movie: { key: string; title: string; year?: number |
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: calc(100vh - 24px);
 }
 
 .workspace {
   display: grid;
   grid-template-columns: 260px 1fr;
   gap: 14px;
+  flex: 1;
+  align-items: stretch;
 }
 
 .main-pane {
   padding: 16px;
   background: rgba(14, 16, 24, 0.75);
-  min-height: 60vh;
+  height: 100%;
+  overflow-y: auto;
 }
 
 @media (max-width: 900px) {

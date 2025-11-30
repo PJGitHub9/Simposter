@@ -60,5 +60,39 @@ export function usePresetService() {
     }
   }
 
-  return { templates, presets, selectedTemplate, selectedPreset, loading, error, load, savePreset }
+  const savePresetAs = async (presetId: string, options?: PresetOptions) => {
+    const targetId = presetId.trim()
+    if (!targetId) return
+
+    loading.value = true
+    error.value = null
+    try {
+      const payload = {
+        template_id: selectedTemplate.value || 'default',
+        preset_id: targetId,
+        options:
+          options ??
+          presets.value.find((p) => p.id === selectedPreset.value)?.options ??
+          {}
+      }
+      const res = await fetch(`${apiBase}/api/presets/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      if (!res.ok) throw new Error(`API error ${res.status}`)
+      await load()
+      // Select the newly created preset if it now exists
+      if (presets.value.find((p) => p.id === targetId)) {
+        selectedPreset.value = targetId
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to save preset'
+      error.value = message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { templates, presets, selectedTemplate, selectedPreset, loading, error, load, savePreset, savePresetAs }
 }

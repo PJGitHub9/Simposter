@@ -32,3 +32,5 @@ coverage/
 frontend/dist/
 frontend/node_modules/
 *.local
+.claude
+*/__pycache__
