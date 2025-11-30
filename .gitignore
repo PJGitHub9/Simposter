@@ -34,3 +34,5 @@ frontend/node_modules/
 *.local
 .claude
 */__pycache__
+config/ui_settings.json
+
