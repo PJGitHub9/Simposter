@@ -82,10 +82,16 @@ Modes:
 Stored per-template in:
 
 ```
-/config/presets.json
+/config/settings/presets.json
 ```
 
 Includes save, delete, JSON import/export.
+
+UI settings live alongside presets:
+
+```
+/config/settings/ui_settings.json
+```
 
 ---
 
@@ -94,6 +100,16 @@ Includes save, delete, JSON import/export.
 ```
 /config/output/Movie Title (Year)/poster.jpg
 ```
+
+---
+
+## 📝 Logs
+
+```
+/config/logs/simposter.log
+```
+
+Log configuration: `/config/settings/log_config.json`.
 
 ---
 

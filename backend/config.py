@@ -4,6 +4,7 @@ load_dotenv()
 import os
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
@@ -27,8 +28,10 @@ class Settings(BaseSettings):
 
     OUTPUT_ROOT: str = "./output"
     CONFIG_DIR: str = "./config"
+    SETTINGS_DIR: str = ""
     UPLOAD_DIR: str = "./uploads"
-    LOG_FILE: str = "./simposter.log"
+    LOG_DIR: str = ""
+    LOG_FILE: str = ""
 
     WEBHOOK_DEFAULT_PRESET: str = "default"
     WEBHOOK_AUTO_SEND: bool = True
@@ -50,14 +53,33 @@ def _resolve_path(p: str) -> str:
     return str((BASE_DIR / path).resolve())
 
 settings.CONFIG_DIR = _resolve_path(settings.CONFIG_DIR)
+settings.SETTINGS_DIR = _resolve_path(settings.SETTINGS_DIR or str(Path(settings.CONFIG_DIR) / "settings"))
 settings.OUTPUT_ROOT = _resolve_path(settings.OUTPUT_ROOT)
 settings.UPLOAD_DIR = _resolve_path(settings.UPLOAD_DIR)
-settings.LOG_FILE = _resolve_path(settings.LOG_FILE)
+settings.LOG_DIR = _resolve_path(settings.LOG_DIR or str(Path(settings.CONFIG_DIR) / "logs"))
+settings.LOG_FILE = _resolve_path(settings.LOG_FILE) if settings.LOG_FILE else str(Path(settings.LOG_DIR) / "simposter.log")
 
 # Ensure folders exist
 Path(settings.CONFIG_DIR).mkdir(parents=True, exist_ok=True)
+Path(settings.SETTINGS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.OUTPUT_ROOT).mkdir(parents=True, exist_ok=True)
+Path(settings.LOG_DIR).mkdir(parents=True, exist_ok=True)
+
+# Migrate legacy log locations into the dedicated config/logs folder
+preferred_log = Path(settings.LOG_FILE).resolve()
+legacy_log_in_config = (Path(settings.CONFIG_DIR) / "simposter.log").resolve()
+legacy_log_in_repo_logs = (BASE_DIR / "logs" / "simposter.log").resolve()
+for candidate in (legacy_log_in_config, legacy_log_in_repo_logs):
+    if candidate == preferred_log:
+        continue
+    if candidate.exists() and not preferred_log.exists():
+        try:
+            preferred_log.parent.mkdir(parents=True, exist_ok=True)
+            candidate.replace(preferred_log)
+        except OSError:
+            shutil.copy2(candidate, preferred_log)
+settings.LOG_FILE = str(preferred_log)
 
 
 # ==========================
@@ -87,7 +109,8 @@ if not logger.handlers:
 #  Presets
 # ==========================
 DEFAULT_PRESETS_PATH = os.path.join(os.path.dirname(__file__), "presets.json")
-USER_PRESETS_PATH = os.path.join(settings.CONFIG_DIR, "presets.json")
+LEGACY_PRESETS_PATH = os.path.join(settings.CONFIG_DIR, "presets.json")
+USER_PRESETS_PATH = os.path.join(settings.SETTINGS_DIR, "presets.json")
 
 
 # FRONTEND DIRECTORY (serve built dist if present; otherwise use source for dev)
@@ -98,6 +121,14 @@ FRONTEND_DIR = str(_frontend_dist if _frontend_dist.exists() else _frontend_base
 
 def load_presets() -> dict:
     """Load presets from config dir or fallback to defaults."""
+    # Migrate legacy location if present
+    if not os.path.exists(USER_PRESETS_PATH) and os.path.exists(LEGACY_PRESETS_PATH):
+        try:
+            Path(USER_PRESETS_PATH).parent.mkdir(parents=True, exist_ok=True)
+            Path(LEGACY_PRESETS_PATH).replace(USER_PRESETS_PATH)
+        except OSError:
+            shutil.copy2(LEGACY_PRESETS_PATH, USER_PRESETS_PATH)
+
     if not os.path.exists(USER_PRESETS_PATH):
         try:
             with open(DEFAULT_PRESETS_PATH, "r", encoding="utf-8") as f:

@@ -21,7 +21,8 @@ ENV PYTHONUNBUFFERED=1 \
     CONFIG_DIR=/config \
     OUTPUT_ROOT=/config/output \
     UPLOAD_DIR=/config/uploads \
-    LOG_FILE=/config/simposter.log
+    SETTINGS_DIR=/config/settings \
+    LOG_DIR=/config/logs
 
 WORKDIR /app
 
@@ -29,7 +30,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Ensure default folders exist in image (mount overrides are fine)
-RUN mkdir -p /config/output /config/uploads
+RUN mkdir -p /config/output /config/uploads /config/settings /config/logs
 
 # Copy backend code
 COPY backend ./backend

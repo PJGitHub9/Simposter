@@ -9,7 +9,8 @@ from ..schemas import UISettings
 
 router = APIRouter()
 
-_settings_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
+_settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
+_legacy_settings_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
 
 
 def _read_settings() -> UISettings:
@@ -18,6 +19,14 @@ def _read_settings() -> UISettings:
     Mirrors the simple JSON read/write pattern we use for presets.
     """
     try:
+        if not _settings_file.exists() and _legacy_settings_file.exists():
+            try:
+                _settings_file.parent.mkdir(parents=True, exist_ok=True)
+                _legacy_settings_file.replace(_settings_file)
+            except OSError:
+                data = json.loads(_legacy_settings_file.read_text(encoding="utf-8"))
+                _settings_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
         if not _settings_file.exists():
             defaults = UISettings().model_dump(
                 exclude_none=False, exclude_defaults=False, exclude_unset=False

@@ -11,11 +11,19 @@ class LogConfig(BaseModel):
     maxSize: int = 20  # MB
     maxBackups: int = 7
 
-_log_config_file = Path(settings.CONFIG_DIR) / "log_config.json"
+_log_config_file = Path(settings.SETTINGS_DIR) / "log_config.json"
+_legacy_log_config_file = Path(settings.CONFIG_DIR) / "log_config.json"
 
 def _read_log_config() -> LogConfig:
     """Read log configuration from disk, creating with defaults if missing."""
     try:
+        if not _log_config_file.exists() and _legacy_log_config_file.exists():
+            try:
+                _log_config_file.parent.mkdir(parents=True, exist_ok=True)
+                _legacy_log_config_file.replace(_log_config_file)
+            except OSError:
+                _log_config_file.write_text(_legacy_log_config_file.read_text(encoding="utf-8"), encoding="utf-8")
+
         if not _log_config_file.exists():
             defaults = LogConfig().model_dump()
             _log_config_file.parent.mkdir(parents=True, exist_ok=True)

@@ -3,6 +3,10 @@ output
 uploads
 *.log
 config/*.log
+config/logs/
+config/simposter.log
+config/presets.json
+config/log_config.json
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
@@ -35,4 +39,5 @@ frontend/node_modules/
 .claude
 */__pycache__
 config/ui_settings.json
-
+config/settings/
+config/ui_settings.json
