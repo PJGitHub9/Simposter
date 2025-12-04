@@ -24,6 +24,7 @@ def _default_ui_settings() -> UISettings:
         },
         tmdb={"apiKey": getattr(settings, "TMDB_API_KEY", "")},
         tvdb={"apiKey": "", "comingSoon": True},
+        saveBatchInSubfolder=False,
     )
 
 

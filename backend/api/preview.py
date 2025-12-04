@@ -25,11 +25,11 @@ def api_preview(req: PreviewRequest):
                 preset = next((p for p in preset_list if p["id"] == req.preset_id), None)
 
                 if preset:
-                    # Merge preset options (preset options take precedence over request options)
+                    # Merge preset options (request options take precedence so sliders work)
                     preset_options = preset.get("options", {})
-                    render_options = {**render_options, **preset_options}
-                    poster_filter = preset_options.get("poster_filter", "all")
-                    logo_preference = preset_options.get("logo_preference", "first")
+                    render_options = {**preset_options, **render_options}
+                    poster_filter = render_options.get("poster_filter", preset_options.get("poster_filter", "all"))
+                    logo_preference = render_options.get("logo_preference", preset_options.get("logo_preference", "first"))
                     logger.debug("[PREVIEW] Applied preset '%s' options: %s", req.preset_id, preset_options)
                 else:
                     logger.warning("[PREVIEW] Preset '%s' not found for template '%s'", req.preset_id, req.template_id)

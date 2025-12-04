@@ -12,6 +12,7 @@ const { movies: moviesCache, moviesLoaded } = useMovies()
 const localTheme = ref<Theme>('neon')
 const localPosterDensity = ref(20)
 const localSaveLocation = ref('')
+const localSaveBatch = ref(false)
 const localDefaultLabelsToRemove = ref<string[]>([])
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
@@ -28,11 +29,14 @@ const localConcurrentRenders = ref(2)
 const localTmdbRateLimit = ref(40)
 const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
+const scanOverlayVisible = ref(false)
+const scanOverlayLog = ref<string[]>([])
 
 const loadLocalSettings = () => {
   localTheme.value = settings.theme.value
   localPosterDensity.value = settings.posterDensity.value
   localSaveLocation.value = settings.saveLocation.value
+  localSaveBatch.value = settings.saveBatchInSubfolder.value
   localDefaultLabelsToRemove.value = [...settings.defaultLabelsToRemove.value]
   // Connection settings
   localPlexUrl.value = settings.plex.value.url
@@ -57,6 +61,7 @@ const saveSettings = async () => {
   settings.theme.value = localTheme.value
   settings.posterDensity.value = localPosterDensity.value
   settings.saveLocation.value = localSaveLocation.value
+  settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = [...localDefaultLabelsToRemove.value]
   settings.plex.value = {
     url: localPlexUrl.value,
@@ -125,6 +130,8 @@ const clearCache = () => {
 const scanLibrary = async () => {
   try {
     saved.value = 'Scanning library...'
+    scanOverlayVisible.value = true
+    scanOverlayLog.value = ['Scanning library...']
     const apiBase = import.meta.env.VITE_API_URL || window.location.origin
     const res = await fetch(`${apiBase}/api/scan-library`, { method: 'POST' })
     if (!res.ok) throw new Error(`API error ${res.status}`)
@@ -134,6 +141,10 @@ const scanLibrary = async () => {
     if (Array.isArray(data.movies)) {
       moviesCache.value = data.movies
       moviesLoaded.value = true
+      scanOverlayLog.value = data.movies.slice(0, 20).map((m: any) => `${m.title}${m.year ? ` (${m.year})` : ''}`)
+      if (data.movies.length > 20) {
+        scanOverlayLog.value.push(`...and ${data.movies.length - 20} more`)
+      }
       try {
         sessionStorage.setItem('simposter-movies-cache', JSON.stringify(data.movies))
       } catch (err) {
@@ -161,11 +172,16 @@ const scanLibrary = async () => {
 
     saved.value = `Scanned ${data.count || 0} items!`
     setTimeout(() => (saved.value = ''), 2000)
+    setTimeout(() => (scanOverlayVisible.value = false), 3000)
     // Refresh label cache after scan
     await fetchAllLabels()
   } catch (e) {
     saved.value = `Scan failed: ${e instanceof Error ? e.message : 'Unknown error'}`
-    setTimeout(() => (saved.value = ''), 2000)
+    scanOverlayLog.value = [`Scan failed: ${e instanceof Error ? e.message : 'Unknown error'}`]
+    setTimeout(() => {
+      saved.value = ''
+      scanOverlayVisible.value = false
+    }, 3000)
   }
 }
 
@@ -285,6 +301,10 @@ const isLabelSelected = (label: string) => {
             @selectstart.stop
           />
           <span class="help-text">Available variables: {title}, {year}, {key}</span>
+        </label>
+        <label class="inline">
+          <input type="checkbox" v-model="localSaveBatch" />
+          <span class="label-text">Save batch runs into subfolder (add /batch/ after output root)</span>
         </label>
       </div>
     </div>
@@ -535,6 +555,18 @@ const isLabelSelected = (label: string) => {
         Scan Library
       </button>
       <span v-if="saved" class="status">{{ saved }}</span>
+    </div>
+
+    <div v-if="scanOverlayVisible" class="scan-overlay">
+      <div class="scan-card">
+        <div class="spinner"></div>
+        <div>
+          <p class="scan-title">Scanning library...</p>
+          <ul class="scan-list">
+            <li v-for="line in scanOverlayLog" :key="line">{{ line }}</li>
+          </ul>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -790,6 +822,52 @@ button {
 
 button svg {
   flex-shrink: 0;
+}
+
+.scan-overlay {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 2000;
+}
+
+.scan-card {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: #eef2ff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-width: 320px;
+}
+
+.scan-title {
+  margin: 0 0 4px 0;
+  font-weight: 600;
+}
+
+.scan-list {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--accent, #3dd6b7);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 button.primary {

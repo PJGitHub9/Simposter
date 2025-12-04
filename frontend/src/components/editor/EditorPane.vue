@@ -281,10 +281,32 @@ const optionsPayload = computed(() => ({
 const bgUrl = computed(() => selectedPoster.value || '')
 const logoUrl = computed(() => (logoMode.value === 'none' ? '' : selectedLogo.value || ''))
 
-const reloadPreset = () => {
+const reloadPreset = async () => {
+  await presetService.load()
   const p = presets.value.find((x) => x.id === selectedPreset.value)
   if (p?.options) {
     const o = p.options
+    // Reset text overlay defaults first
+    textOverlayEnabled.value = false
+    customText.value = ''
+    fontFamily.value = 'Arial'
+    fontSize.value = 120
+    fontWeight.value = '700'
+    textColor.value = '#ffffff'
+    textAlign.value = 'center'
+    textTransform.value = 'uppercase'
+    letterSpacing.value = 2
+    lineHeight.value = 120
+    positionY.value = 75
+    shadowEnabled.value = true
+    shadowBlur.value = 10
+    shadowOffsetX.value = 0
+    shadowOffsetY.value = 4
+    shadowColor.value = '#000000'
+    shadowOpacity.value = 80
+    strokeEnabled.value = false
+    strokeWidth.value = 4
+    strokeColor.value = '#000000'
     options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
     options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
     options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
@@ -315,7 +337,7 @@ const reloadPreset = () => {
     }
 
     // Load text overlay settings
-    if (typeof o.text_overlay_enabled === 'boolean') textOverlayEnabled.value = o.text_overlay_enabled
+    textOverlayEnabled.value = !!o.text_overlay_enabled
     if (typeof o.custom_text === 'string') customText.value = o.custom_text
     if (typeof o.font_family === 'string') fontFamily.value = o.font_family
     if (typeof o.font_size === 'number') fontSize.value = o.font_size
@@ -653,6 +675,51 @@ const applyPresetOptions = (id: string) => {
   if (!p?.options) return
 
   const o = p.options
+
+  // Reset text overlay defaults before applying preset values
+  textOverlayEnabled.value = false
+  customText.value = ''
+  fontFamily.value = 'Arial'
+  fontSize.value = 120
+  fontWeight.value = '700'
+  textColor.value = '#ffffff'
+  textAlign.value = 'center'
+  textTransform.value = 'uppercase'
+  letterSpacing.value = 2
+  lineHeight.value = 120
+  positionY.value = 75
+  shadowEnabled.value = true
+  shadowBlur.value = 10
+  shadowOffsetX.value = 0
+  shadowOffsetY.value = 4
+  shadowColor.value = '#000000'
+  shadowOpacity.value = 80
+  strokeEnabled.value = false
+  strokeWidth.value = 4
+  strokeColor.value = '#000000'
+
+  // Reset text overlay defaults before applying preset values
+  textOverlayEnabled.value = false
+  customText.value = ''
+  fontFamily.value = 'Arial'
+  fontSize.value = 120
+  fontWeight.value = '700'
+  textColor.value = '#ffffff'
+  textAlign.value = 'center'
+  textTransform.value = 'uppercase'
+  letterSpacing.value = 2
+  lineHeight.value = 120
+  positionY.value = 75
+  shadowEnabled.value = true
+  shadowBlur.value = 10
+  shadowOffsetX.value = 0
+  shadowOffsetY.value = 4
+  shadowColor.value = '#000000'
+  shadowOpacity.value = 80
+  strokeEnabled.value = false
+  strokeWidth.value = 4
+  strokeColor.value = '#000000'
+
   options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
   options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
@@ -683,7 +750,7 @@ const applyPresetOptions = (id: string) => {
   }
 
   // Load text overlay settings (enable/disable + attributes)
-  if (typeof o.text_overlay_enabled === 'boolean') textOverlayEnabled.value = o.text_overlay_enabled
+  textOverlayEnabled.value = !!o.text_overlay_enabled
   if (typeof o.custom_text === 'string') customText.value = o.custom_text
   if (typeof o.font_family === 'string') fontFamily.value = o.font_family
   if (typeof o.font_size === 'number') fontSize.value = o.font_size

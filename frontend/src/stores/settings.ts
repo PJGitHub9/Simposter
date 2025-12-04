@@ -38,6 +38,7 @@ export type UISettings = {
   posterDensity: number
   defaultLabelsToRemove?: string[]
   saveLocation?: string
+  saveBatchInSubfolder?: boolean
   plex?: PlexSettings
   tmdb?: TMDBSettings
   tvdb?: TVDBSettings
@@ -52,6 +53,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const loaded = ref(false)
 const saveLocation = ref<string>('/output')
+const saveBatchInSubfolder = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '' })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: true })
@@ -70,6 +72,7 @@ async function loadSettings() {
     defaultLabelsToRemove.value = data.defaultLabelsToRemove || []
     loaded.value = true
     saveLocation.value = data.saveLocation ?? "/output"
+    saveBatchInSubfolder.value = !!data.saveBatchInSubfolder
     plex.value = {
       url: data.plex?.url ?? '',
       token: data.plex?.token ?? '',
@@ -107,6 +110,7 @@ async function saveSettings() {
       posterDensity: posterDensity.value,
       defaultLabelsToRemove: defaultLabelsToRemove.value,
       saveLocation: saveLocation.value,
+      saveBatchInSubfolder: saveBatchInSubfolder.value,
       plex: { ...plex.value },
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
@@ -145,6 +149,7 @@ export function useSettingsStore() {
     error,
     loaded,
     saveLocation,
+    saveBatchInSubfolder,
     load: loadSettings,
     save: saveSettings
   }

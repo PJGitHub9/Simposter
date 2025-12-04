@@ -77,6 +77,7 @@ class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
     saveLocation: str = "/output"
+    saveBatchInSubfolder: bool = False
     defaultLabelsToRemove: List[str] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)
     tmdb: TMDBSettings = Field(default_factory=TMDBSettings)

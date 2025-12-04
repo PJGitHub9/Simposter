@@ -70,6 +70,7 @@ const saveLocally = ref(false)
 const labelsToRemove = ref<Set<string>>(new Set())
 const processing = ref(false)
 const currentIndex = ref(0)
+const statusOverlay = ref<{ visible: boolean; message: string; detail?: string }>({ visible: false, message: '' })
 
 const apiBase = import.meta.env.VITE_API_URL || window.location.origin
 
@@ -172,7 +173,7 @@ const fetchMovies = async () => {
 
 const fetchPosters = async () => {
   const missing = filteredMovies.value.filter(
-    m => !(m.key in posterCache.value) && !posterInFlight.has(m.key)
+    m => (!posterCache.value[m.key]) && !posterInFlight.has(m.key)
   )
   if (!missing.length) return
 
@@ -305,18 +306,17 @@ const processBatch = async () => {
 
   processing.value = true
   currentIndex.value = 0
+  statusOverlay.value = { visible: true, message: 'Starting batch…' }
 
   try {
     const ratingKeys = Array.from(selectedMovies.value)
+    const selectedForStatus = selectedMoviesList.value
 
     const payload = {
       rating_keys: ratingKeys,
       template_id: selectedTemplate.value,
       preset_id: selectedPreset.value || undefined,
-      options: {
-        poster_filter: 'all',
-        logo_preference: 'first'
-      },
+      options: {},
       send_to_plex: sendToPlex.value,
       save_locally: saveLocally.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : []
@@ -324,6 +324,19 @@ const processBatch = async () => {
 
     // Simulate progress
     const progressInterval = setInterval(() => {
+      const idx = Math.min(currentIndex.value, selectedMovies.value.size - 1)
+      const movie = selectedForStatus[idx]
+      if (movie) {
+        statusOverlay.value = {
+          visible: true,
+          message: `Rendering ${movie.title}`,
+          detail: sendToPlex.value && saveLocally.value
+            ? 'Sending to Plex and saving locally'
+            : sendToPlex.value
+              ? 'Sending to Plex'
+              : 'Saving locally'
+        }
+      }
       currentIndex.value = Math.min(currentIndex.value + 1, selectedMovies.value.size)
       if (currentIndex.value >= selectedMovies.value.size) {
         clearInterval(progressInterval)
@@ -354,6 +367,7 @@ const processBatch = async () => {
       message += ' (saved locally)'
     }
     success(message)
+    statusOverlay.value = { visible: true, message }
 
     // Reset
     setTimeout(() => {
@@ -361,11 +375,13 @@ const processBatch = async () => {
       selectedMovies.value.clear()
       selectedTemplate.value = ''
       selectedPreset.value = ''
+      statusOverlay.value = { visible: false, message: '' }
     }, 1500)
   } catch (err) {
     showError(`Batch processing failed: ${err}`)
     console.error(err)
     processing.value = false
+    statusOverlay.value = { visible: false, message: '' }
   }
 }
 
@@ -408,10 +424,17 @@ watch(selectedMovies, () => {
 // Preview rendering
 const previewImage = ref<string | null>(null)
 const previewLoading = ref(false)
+const previewCache = ref<Record<string, string>>({})
 
 const fetchPreview = async () => {
   if (!currentPreviewMovie.value || !selectedTemplate.value || !selectedPreset.value) {
     previewImage.value = null
+    return
+  }
+
+  const cacheKey = `${currentPreviewMovie.value.key}|${selectedTemplate.value}|${selectedPreset.value}`
+  if (previewCache.value[cacheKey]) {
+    previewImage.value = previewCache.value[cacheKey]
     return
   }
 
@@ -446,7 +469,9 @@ const fetchPreview = async () => {
 
     if (response.ok) {
       const data = await response.json()
-      previewImage.value = `data:image/jpeg;base64,${data.image_base64}`
+      const img = `data:image/jpeg;base64,${data.image_base64}`
+      previewImage.value = img
+      previewCache.value[cacheKey] = img
     } else {
       console.error('Preview response not OK:', response.status)
       previewImage.value = null
@@ -468,11 +493,13 @@ watch(moviesWithPosters, (list) => {
 // Clear preset when template changes
 watch(selectedTemplate, () => {
   selectedPreset.value = ''
+  previewCache.value = {}
   fetchPreview()
 })
 
 // Update preview when preset or selected movie changes
 watch(selectedPreset, () => {
+  previewCache.value = {}
   fetchPreview()
 })
 
@@ -685,6 +712,16 @@ onMounted(async () => {
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="statusOverlay.visible" class="status-overlay">
+    <div class="status-card">
+      <div class="spinner"></div>
+      <div>
+        <p class="status-title">{{ statusOverlay.message }}</p>
+        <p v-if="statusOverlay.detail" class="status-detail">{{ statusOverlay.detail }}</p>
       </div>
     </div>
   </div>
@@ -1216,5 +1253,49 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.status-overlay {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 2000;
+}
+
+.status-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: #eef2ff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--accent, #3dd6b7);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+.status-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.status-detail {
+  margin: 2px 0 0 0;
+  font-size: 0.8rem;
+  color: #cdd4e0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>
