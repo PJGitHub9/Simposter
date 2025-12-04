@@ -7,6 +7,7 @@ import random
 import numpy as np
 import os
 from pathlib import Path
+from ..config import settings
 
 # ============================================================
 # Helpers
@@ -133,25 +134,36 @@ def _solid_color_logo(logo: Image.Image, color: tuple[int, int, int]) -> Image.I
     )
 
 
-def _load_font(font_family: str, font_size: int):
+def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     """
-    Load a font by name. First checks /config/fonts for custom fonts,
-    then falls back to system fonts.
+    Load a font by name. First checks /config/fonts (mounted volume),
+    then repo config/fonts, then system fonts with sensible fallbacks.
     """
-    # Try custom fonts folder first
-    custom_fonts_dir = Path(__file__).parent.parent / "config" / "fonts"
-    if custom_fonts_dir.exists():
-        # Look for font files with the given family name
-        font_extensions = ['.ttf', '.otf', '.TTF', '.OTF']
+    font_extensions = ['.ttf', '.otf', '.TTF', '.OTF']
+
+    def try_paths(base_dir: Path):
         for ext in font_extensions:
-            font_path = custom_fonts_dir / f"{font_family}{ext}"
+            font_path = base_dir / f"{font_family}{ext}"
             if font_path.exists():
                 try:
                     return ImageFont.truetype(str(font_path), font_size)
                 except Exception:
-                    pass
+                    continue
+        return None
 
-    # Common system font mappings for Windows/Linux/Mac
+    # 1) Mounted config volume fonts (/config/fonts by default)
+    volume_fonts_dir = Path(settings.CONFIG_DIR) / "fonts"
+    font_obj = try_paths(volume_fonts_dir)
+    if font_obj:
+        return font_obj
+
+    # 2) Repo config/fonts (for local dev)
+    repo_fonts_dir = Path(__file__).resolve().parent.parent / "config" / "fonts"
+    font_obj = try_paths(repo_fonts_dir)
+    if font_obj:
+        return font_obj
+
+    # 3) Common system font mappings for Windows/Linux/Mac
     system_font_map = {
         'Arial': ['arial.ttf', 'Arial.ttf', '/System/Library/Fonts/Supplemental/Arial.ttf'],
         'Helvetica': ['Helvetica.ttc', 'helvetica.ttf', '/System/Library/Fonts/Helvetica.ttc'],
@@ -160,21 +172,34 @@ def _load_font(font_family: str, font_size: int):
         'Verdana': ['verdana.ttf', 'Verdana.ttf', '/System/Library/Fonts/Supplemental/Verdana.ttf'],
         'Courier New': ['cour.ttf', 'Courier New.ttf', '/System/Library/Fonts/Supplemental/Courier New.ttf'],
         'Impact': ['impact.ttf', 'Impact.ttf', '/System/Library/Fonts/Supplemental/Impact.ttf'],
+        # Debian/Pillow bundled fonts
+        'DejaVu Sans': ['DejaVuSans.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'],
+        'DejaVu Sans Bold': ['DejaVuSans-Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'],
     }
 
-    # Try system fonts
-    font_names = system_font_map.get(font_family, [font_family + '.ttf'])
-    for font_name in font_names:
+    boldish = (font_weight or "").lower() in ("bold", "700", "800", "900")
+    candidates = []
+    candidates.extend(system_font_map.get(font_family, [font_family + '.ttf']))
+    if boldish:
+        candidates.extend([
+            font_family + '-Bold.ttf',
+            font_family + '-Bold.otf',
+            'DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        ])
+    candidates.extend([
+        'DejaVuSans.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    ])
+
+    for font_name in candidates:
         try:
             return ImageFont.truetype(font_name, font_size)
         except Exception:
-            pass
+            continue
 
-    # Final fallback to default font
-    try:
-        return ImageFont.load_default()
-    except Exception:
-        return ImageFont.load_default()
+    print("[DEBUG] Falling back to Pillow default font; text may render very small. Install fonts in /config/fonts or add fonts-dejavu to the image.")
+    return ImageFont.load_default()
 
 
 def _render_text_overlay(
@@ -235,11 +260,11 @@ def _render_text_overlay(
         text = text.title()
 
     # Load font
-    font = _load_font(font_family, font_size)
+    font = _load_font(font_family, font_size, font_weight)
     print(f"[DEBUG] Font loaded: {font_family} size {font_size}")
 
-    # Create a drawing context for text measurement
-    temp_img = Image.new("RGBA", (1, 1))
+    # Create a drawing context for text measurement (needs proper size for accurate bbox)
+    temp_img = Image.new("RGBA", (W, H))
     temp_draw = ImageDraw.Draw(temp_img)
 
     # Helper function to apply letter spacing

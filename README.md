@@ -244,28 +244,71 @@ simposter/
 
 ---
 
-# ⚙️ Environment Variables
+# ⚙️ Configuration
+
+Simposter supports **two configuration methods**:
+
+1. **GUI Settings (Recommended for most users)** - Configure via the Settings page in the web UI
+2. **Environment Variables** - Set via `.env` file or docker-compose (useful for automation)
+
+**Priority order**: Environment variables override GUI settings
 
 | Variable | Required |  Purpose | Example |
 |----------|----------|-------------|---------|
-| `PLEX_URL` | ✔ | Base Plex URL | `http://myplex:32400` |
-| `PLEX_TOKEN` | ✔ | Plex token | `xxxyyyzzz` |
-| `PLEX_MOVIE_LIBRARY_NAME` | ✔ | Movie library | `Movies` |
-| `TMDB_API_KEY` | ✔ | TMDb key |  `abcd1234` |
-| `CONFIG_DIR` | ✔ | Paths | `/config` |
+| `PLEX_URL` | * | Base Plex URL | `http://myplex:32400` |
+| `PLEX_TOKEN` | * | Plex token | `xxxyyyzzz` |
+| `PLEX_MOVIE_LIBRARY_NAME` | * | Movie library | `Movies` |
+| `TMDB_API_KEY` | * | TMDb key |  `abcd1234` |
+| `CONFIG_DIR` |  | Config path (Docker only) | `/config` |
+
+\* Can be set via GUI Settings OR environment variables
 
 ---
 
-# 🐳 Docker
+# 🐳 Docker Deployment
 
-## Build
+## Method 1: Simple Docker Run (GUI Configuration)
+
+**Easiest for most users** - Configure Plex/TMDB credentials via the Settings page after starting:
+
 ```bash
-docker build -t simposter:latest .
+docker run -d \
+  --name simposter \
+  -p 8003:8003 \
+  -v /path/to/config:/config \
+  simposter:latest
 ```
 
-## Run
+Then visit `http://localhost:8003` and configure your Plex/TMDB settings in the GUI.
+
+## Method 2: Docker Compose (Environment Variables)
+
+**Best for automation** - Credentials set in `.env` file or docker-compose:
+
 ```bash
-docker run -d   --name simposter   -p 8003:8003   -e PLEX_URL="http://<plex-ip>:32400"   -e PLEX_TOKEN="xxxx"   -e PLEX_MOVIE_LIBRARY_NAME="Movies"   -e TMDB_API_KEY="your_tmdb_key"   -v /mnt/user/appdata/simposter/config:/config   simposter:latest
+docker-compose up -d
+```
+
+Example `docker-compose.yml`:
+```yaml
+services:
+  simposter:
+    image: simposter:latest
+    ports:
+      - "8003:8003"
+    environment:
+      - PLEX_URL=http://your-plex:32400
+      - PLEX_TOKEN=your_token
+      - PLEX_MOVIE_LIBRARY_NAME=Movies
+      - TMDB_API_KEY=your_tmdb_key
+    volumes:
+      - ./config:/config
+```
+
+## Build Image
+
+```bash
+docker build -t simposter:latest .
 ```
 
 ---

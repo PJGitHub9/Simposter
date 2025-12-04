@@ -70,8 +70,12 @@ const loadMoviesCache = () => {
   try {
     const raw = sessionStorage.getItem(MOVIES_CACHE_KEY)
     if (raw) {
-      moviesCache.value = JSON.parse(raw)
-      moviesLoaded.value = true
+      const cached = JSON.parse(raw)
+      // Only use cache if it actually has movies
+      if (cached && cached.length > 0) {
+        moviesCache.value = cached
+        moviesLoaded.value = true
+      }
     }
   } catch {
     /* ignore */

@@ -84,6 +84,31 @@ const saveSettings = async () => {
   setTimeout(() => (saved.value = ''), 1500)
 }
 
+const testConnection = ref('')
+const testConnectionLoading = ref(false)
+
+const testPlexConnection = async () => {
+  testConnectionLoading.value = true
+  testConnection.value = 'Testing connection...'
+  try {
+    const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+    const res = await fetch(`${apiBase}/api/test-plex-connection`)
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      const sectionsList = data.sections.map((s: any) => s.title).join(', ')
+      testConnection.value = `✓ Connected! Found ${data.sections.length} libraries: ${sectionsList}`
+    } else {
+      testConnection.value = `✗ ${data.error}: ${data.message}`
+    }
+  } catch (e) {
+    testConnection.value = `✗ Connection failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testConnectionLoading.value = false
+    setTimeout(() => (testConnection.value = ''), 10000)
+  }
+}
+
 const clearCache = () => {
   try {
     // Clear poster cache from sessionStorage
@@ -313,6 +338,18 @@ const isLabelSelected = (label: string) => {
             @selectstart.stop
           />
         </label>
+        <div class="test-connection-wrapper">
+          <button
+            class="btn-test-connection"
+            @click="testPlexConnection"
+            :disabled="testConnectionLoading"
+          >
+            {{ testConnectionLoading ? 'Testing...' : 'Test Plex Connection' }}
+          </button>
+          <p v-if="testConnection" :class="['test-result', testConnection.startsWith('✓') ? 'success' : 'error']">
+            {{ testConnection }}
+          </p>
+        </div>
         <label>
           <span class="label-text">TMDb API Key</span>
           <input
@@ -826,5 +863,62 @@ button.secondary:hover {
     width: 100%;
     justify-content: center;
   }
+}
+
+/* Test Connection */
+.test-connection-wrapper {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--surface-alt, #1e2330);
+  border-radius: 8px;
+  border: 1px solid var(--border, #2a2f3e);
+}
+
+.btn-test-connection {
+  padding: 0.75rem 1.5rem;
+  background: var(--accent, #3dd6b7);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  align-self: flex-start;
+}
+
+.btn-test-connection:hover:not(:disabled) {
+  background: #2bc4a3;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(61, 214, 183, 0.3);
+}
+
+.btn-test-connection:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.test-result {
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.test-result.success {
+  background: rgba(61, 214, 183, 0.1);
+  color: var(--accent, #3dd6b7);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+}
+
+.test-result.error {
+  background: rgba(255, 107, 107, 0.1);
+  color: #ff6b6b;
+  border: 1px solid rgba(255, 107, 107, 0.3);
 }
 </style>

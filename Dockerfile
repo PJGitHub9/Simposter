@@ -28,6 +28,8 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# Ensure usable fonts for text overlay (DejaVu)
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 
 # Ensure default folders exist in image (mount overrides are fine)
 RUN mkdir -p /config/output /config/uploads /config/settings /config/logs

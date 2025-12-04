@@ -11,6 +11,60 @@ from ..tmdb_client import get_images_for_movie, TMDBError
 router = APIRouter()
 
 
+@router.get("/test-plex-connection")
+def test_plex_connection():
+    """Test Plex server connection and return diagnostics."""
+    try:
+        url = f"{settings.PLEX_URL}/library/sections"
+        logger.info(f"[TEST] Testing Plex connection to {settings.PLEX_URL}")
+        logger.info(f"[TEST] PLEX_VERIFY_TLS = {settings.PLEX_VERIFY_TLS}")
+
+        r = requests.get(url, headers=plex_headers(), timeout=10, verify=settings.PLEX_VERIFY_TLS)
+        r.raise_for_status()
+
+        root = ET.fromstring(r.text)
+        sections = []
+        for directory in root.findall(".//Directory"):
+            sections.append({
+                "title": directory.get("title"),
+                "key": directory.get("key"),
+                "type": directory.get("type")
+            })
+
+        return {
+            "status": "ok",
+            "plex_url": settings.PLEX_URL,
+            "has_token": bool(settings.PLEX_TOKEN),
+            "verify_tls": settings.PLEX_VERIFY_TLS,
+            "sections": sections
+        }
+    except requests.exceptions.SSLError as e:
+        logger.error(f"[TEST] SSL Error: {e}")
+        return {
+            "status": "error",
+            "error": "SSL Certificate Error",
+            "message": f"SSL verification failed. Try setting PLEX_VERIFY_TLS=false in your .env file. Error: {str(e)}",
+            "plex_url": settings.PLEX_URL,
+            "verify_tls": settings.PLEX_VERIFY_TLS
+        }
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"[TEST] Connection Error: {e}")
+        return {
+            "status": "error",
+            "error": "Connection Error",
+            "message": f"Could not connect to Plex server. Check PLEX_URL and network connectivity. Error: {str(e)}",
+            "plex_url": settings.PLEX_URL
+        }
+    except Exception as e:
+        logger.error(f"[TEST] Plex connection test failed: {e}")
+        return {
+            "status": "error",
+            "error": str(type(e).__name__),
+            "message": str(e),
+            "plex_url": settings.PLEX_URL
+        }
+
+
 @router.get("/movies", response_model=List[Movie])
 def api_movies():
     return get_plex_movies()
@@ -25,7 +79,7 @@ def api_movie_tmdb(rating_key: str):
 @router.get("/movie/{rating_key}/labels", response_model=LabelsResponse)
 def api_movie_labels(rating_key: str):
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-    r = requests.get(url, headers=plex_headers(), timeout=10)
+    r = requests.get(url, headers=plex_headers(), timeout=10, verify=settings.PLEX_VERIFY_TLS)
     r.raise_for_status()
 
     try:
@@ -75,7 +129,7 @@ def api_movie_poster(rating_key: str):
 
     # Try direct poster URL
     try:
-        r = requests.get(direct, timeout=5)
+        r = requests.get(direct, timeout=5, verify=settings.PLEX_VERIFY_TLS)
         if r.status_code == 200:
             return {"url": direct}
     except:
@@ -84,7 +138,7 @@ def api_movie_poster(rating_key: str):
     # Fallback: parse metadata for thumb
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=10)
+        r = requests.get(url, headers=plex_headers(), timeout=10, verify=settings.PLEX_VERIFY_TLS)
         r.raise_for_status()
         root = ET.fromstring(r.text)
         for video in root.findall(".//Video"):

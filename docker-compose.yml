@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  simposter:
+    build: .
+    container_name: simposter
+    ports:
+      - "8003:8003"
+    # Optional: Set environment variables here OR configure via GUI Settings
+    # If not set, Simposter will use values from the GUI Settings page
+    environment:
+      - PLEX_URL=${PLEX_URL:-}
+      - PLEX_TOKEN=${PLEX_TOKEN:-}
+      - PLEX_MOVIE_LIBRARY_NAME=${PLEX_MOVIE_LIBRARY_NAME:-}
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      - PLEX_VERIFY_TLS=${PLEX_VERIFY_TLS:-true}
+    volumes:
+      - ./config:/config
+    restart: unless-stopped

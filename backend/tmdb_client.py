@@ -1,12 +1,9 @@
 # backend/tmdb_client.py
-import os
 from typing import Dict, Any, List
 
 import requests
 
-from .config import logger
-
-TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
+from .config import logger, settings
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
 TMDB_IMG_BASE = "https://image.tmdb.org/t/p"
@@ -17,13 +14,13 @@ class TMDBError(Exception):
 
 
 def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    if not TMDB_API_KEY:
+    if not settings.TMDB_API_KEY:
         logger.error("[TMDB] TMDB_API_KEY not set")
         raise TMDBError("TMDB_API_KEY not set")
 
     url = f"{TMDB_API_BASE}{path}"
     params = dict(params)
-    params["api_key"] = TMDB_API_KEY
+    params["api_key"] = settings.TMDB_API_KEY
 
     try:
         r = requests.get(url, params=params, timeout=15)

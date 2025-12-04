@@ -1,6 +1,5 @@
 # backend/config.py
 from dotenv import load_dotenv
-load_dotenv()
 import os
 import json
 import logging
@@ -15,6 +14,19 @@ from pydantic_settings import BaseSettings
 # Project base dir (repo root)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load env files in order of priority:
+# 1) /config/.env (if CONFIG_DIR env is set, use that)
+# 2) repo root .env (BASE_DIR/.env)
+env_candidates = []
+config_dir_env = os.environ.get("CONFIG_DIR")
+if config_dir_env:
+    env_candidates.append(Path(config_dir_env) / ".env")
+else:
+    env_candidates.append(Path("/config/.env"))
+env_candidates.append(BASE_DIR / ".env")
+for env_path in env_candidates:
+    load_dotenv(env_path, override=True)
+
 # ===============================
 #  Settings (loads .env properly)
 # ===============================
@@ -22,6 +34,7 @@ class Settings(BaseSettings):
     PLEX_URL: str = "http://localhost:32400"
     PLEX_TOKEN: str = ""
     PLEX_MOVIE_LIBRARY_NAME: str = "1"
+    PLEX_VERIFY_TLS: bool = True
     LOG_LEVEL: str = "INFO"
 
     TMDB_API_KEY: str = ""
@@ -39,11 +52,67 @@ class Settings(BaseSettings):
     WEBHOOK_SECRET: str = ""
 
     class Config:
-        env_file = ".env"
+        env_file = str(BASE_DIR / ".env")
         env_file_encoding = "utf-8"
 
 
 settings = Settings()
+
+
+# ===============================
+#  Load from ui_settings.json as fallback
+# ===============================
+def _load_ui_settings_fallback():
+    """
+    Load Plex/TMDB credentials from ui_settings.json if they weren't provided via environment.
+    This allows users to configure via GUI without needing .env or docker-compose.
+
+    Priority order:
+    1. Environment variables (docker-compose/.env) - highest priority
+    2. ui_settings.json (GUI settings) - fallback
+    3. Defaults - lowest priority
+    """
+    # Only load from ui_settings if env vars are at default/empty values
+    needs_fallback = (
+        settings.PLEX_URL == "http://localhost:32400" and
+        settings.PLEX_TOKEN == "" and
+        settings.TMDB_API_KEY == ""
+    )
+
+    if not needs_fallback:
+        return  # Environment variables are set, no need for fallback
+
+    # Resolve settings path (needs CONFIG_DIR to be normalized first)
+    settings_dir = Path(settings.CONFIG_DIR) / "settings"
+    ui_settings_file = settings_dir / "ui_settings.json"
+
+    # Also check legacy location
+    legacy_ui_settings = Path(settings.CONFIG_DIR) / "ui_settings.json"
+
+    settings_file = ui_settings_file if ui_settings_file.exists() else legacy_ui_settings
+
+    if not settings_file.exists():
+        return  # No ui_settings.json to load from
+
+    try:
+        data = json.loads(settings_file.read_text(encoding="utf-8"))
+
+        # Load Plex settings
+        plex_data = data.get("plex", {})
+        if plex_data.get("url") and settings.PLEX_URL == "http://localhost:32400":
+            settings.PLEX_URL = plex_data["url"]
+        if plex_data.get("token") and settings.PLEX_TOKEN == "":
+            settings.PLEX_TOKEN = plex_data["token"]
+        if plex_data.get("movieLibraryName") and settings.PLEX_MOVIE_LIBRARY_NAME == "1":
+            settings.PLEX_MOVIE_LIBRARY_NAME = plex_data["movieLibraryName"]
+
+        # Load TMDB settings
+        tmdb_data = data.get("tmdb", {})
+        if tmdb_data.get("apiKey") and settings.TMDB_API_KEY == "":
+            settings.TMDB_API_KEY = tmdb_data["apiKey"]
+
+    except Exception:
+        pass  # Silently fail if ui_settings.json is malformed
 
 # Normalize paths relative to repo root so npm/uvicorn cwd doesn't matter
 def _resolve_path(p: str) -> str:
@@ -58,6 +127,9 @@ settings.OUTPUT_ROOT = _resolve_path(settings.OUTPUT_ROOT)
 settings.UPLOAD_DIR = _resolve_path(settings.UPLOAD_DIR)
 settings.LOG_DIR = _resolve_path(settings.LOG_DIR or str(Path(settings.CONFIG_DIR) / "logs"))
 settings.LOG_FILE = _resolve_path(settings.LOG_FILE) if settings.LOG_FILE else str(Path(settings.LOG_DIR) / "simposter.log")
+
+# Load from ui_settings.json if environment variables weren't provided
+_load_ui_settings_fallback()
 
 # Ensure folders exist
 Path(settings.CONFIG_DIR).mkdir(parents=True, exist_ok=True)
@@ -165,7 +237,7 @@ def resolve_library_id(name: str) -> str:
 
     url = f"{settings.PLEX_URL}/library/sections"
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=8)
+        r = requests.get(url, headers=plex_headers(), timeout=8, verify=settings.PLEX_VERIFY_TLS)
         r.raise_for_status()
         root = ET.fromstring(r.text)
         logger.debug("[PLEX] Resolved sections from %s", url)
@@ -190,7 +262,7 @@ def get_plex_movies():
     url = f"{settings.PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all?type=1"
 
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=6)
+        r = requests.get(url, headers=plex_headers(), timeout=6, verify=settings.PLEX_VERIFY_TLS)
         r.raise_for_status()
         logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
     except Exception as e:
@@ -233,7 +305,7 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
 
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=6)
+        r = requests.get(url, headers=plex_headers(), timeout=6, verify=settings.PLEX_VERIFY_TLS)
         r.raise_for_status()
         logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
     except Exception as e:
@@ -267,7 +339,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all"
         params = {"type": "1", "id": rating_key, "label[].tag.tag-": label}
-        r = requests.put(url, headers=plex_headers(), params=params, timeout=8)
+        r = requests.put(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via sections endpoint rating_key=%s label=%s", rating_key, label)
             return
@@ -278,7 +350,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/labels"
         params = {"tag.tag": label, "tag.type": "label"}
-        r = requests.delete(url, headers=plex_headers(), params=params, timeout=8)
+        r = requests.delete(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via metadata/labels rating_key=%s label=%s", rating_key, label)
             return
@@ -289,7 +361,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
         params = {"label[].tag.tag-": label, "type": "1"}
-        r = requests.put(url, headers=plex_headers(), params=params, timeout=8)
+        r = requests.put(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
         logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s status=%s", rating_key, label, r.status_code)
     except Exception:
         pass
