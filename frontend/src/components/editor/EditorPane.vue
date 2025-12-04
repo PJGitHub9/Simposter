@@ -24,6 +24,7 @@ const posterFilter = ref<'all' | 'textless' | 'text'>('all')
 const logoPreference = ref<'first' | 'white' | 'color'>('first')
 const logoMode = ref<'original' | 'match' | 'hex' | 'none'>('original')
 const logoHex = ref('#ffffff')
+const isLogoNone = computed(() => logoMode.value === 'none')
 
 const normalizeLogoMode = (mode: unknown): 'original' | 'match' | 'hex' | 'none' => {
   if (typeof mode !== 'string') return 'original'
@@ -822,7 +823,7 @@ watch(
             </div>
           </div>
 
-          <label v-if="logoMode !== 'none'" class="field-label">
+          <label v-if="!isLogoNone" class="field-label">
             Logo Preference
             <select v-model="logoPreference">
               <option value="first">First Available</option>
@@ -831,8 +832,8 @@ watch(
             </select>
           </label>
 
-          <div v-if="logoMode !== 'none'" class="label-title">TMDb Logos</div>
-          <div v-if="logoMode !== 'none'" class="thumb-strip logo-strip">
+          <div v-if="!isLogoNone" class="label-title">TMDb Logos</div>
+          <div v-if="!isLogoNone" class="thumb-strip logo-strip">
             <div
               v-for="l in filteredLogos"
               :key="l.url"
@@ -843,7 +844,7 @@ watch(
               <img :src="l.thumb || l.url" alt="" />
               <div class="source-badge">TMDb</div>
             </div>
-            <button class="no-logo-btn" :class="{ active: logoMode === 'none' }" @click="logoMode = 'none'">
+            <button class="no-logo-btn" :class="{ active: isLogoNone }" @click="logoMode = 'none'">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10" />
                 <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
