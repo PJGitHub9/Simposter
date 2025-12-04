@@ -14,10 +14,15 @@ router = APIRouter()
 
 def get_save_location_template() -> str:
     """Read save location template from UI settings."""
-    settings_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
+    # Prefer settings directory (config/settings/ui_settings.json), then legacy config root
+    settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
+    legacy_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
     try:
         if settings_file.exists():
             data = json.loads(settings_file.read_text(encoding="utf-8"))
+            return data.get("saveLocation", "/output")
+        if legacy_file.exists():
+            data = json.loads(legacy_file.read_text(encoding="utf-8"))
             return data.get("saveLocation", "/output")
     except Exception:
         pass
@@ -63,22 +68,34 @@ def api_save(req: SaveRequest):
         req.rating_key
     )
 
-    # Sanitize path components
-    safe_path = "".join(c for c in save_path if c.isalnum() or c in " _-/()")
+    # Sanitize path components (keep dots so we can detect filenames)
+    safe_path = "".join(c for c in save_path if c.isalnum() or c in " _-/().")
+    safe_path = safe_path.strip()
 
-    # If path is relative, join with OUTPUT_ROOT
-    if not os.path.isabs(safe_path):
-        out_dir = os.path.join(settings.OUTPUT_ROOT, safe_path.lstrip("/"))
+    # Determine if the template included a filename (suffix present)
+    candidate = Path(safe_path)
+    if candidate.suffix:  # treat as full file path
+        base_dir = candidate.parent
+        filename = candidate.name
     else:
-        out_dir = safe_path
+        base_dir = candidate
+        filename = req.filename or "poster.jpg"
 
-    os.makedirs(out_dir, exist_ok=True)
+    # Map explicit /output/* to configured OUTPUT_ROOT to respect template defaults
+    base_dir_str = str(base_dir).replace("\\", "/")
+    if base_dir.is_absolute() and base_dir_str.startswith("/output"):
+        # Strip leading /output and re-root under settings.OUTPUT_ROOT
+        tail = base_dir_str[len("/output"):].lstrip("/")
+        base_dir = Path(settings.OUTPUT_ROOT) / tail
 
-    # Use filename from request or default to poster.jpg
-    filename = req.filename or "poster.jpg"
-    out_path = os.path.join(out_dir, filename)
+    # If path is relative, anchor under OUTPUT_ROOT
+    if not base_dir.is_absolute():
+        base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")
+
+    os.makedirs(base_dir, exist_ok=True)
+    out_path = base_dir / filename
 
     img.convert("RGB").save(out_path, "JPEG", quality=95)
 
     logger.info("Saved poster to %s", out_path)
-    return {"status": "ok", "path": out_path}
+    return {"status": "ok", "saved_path": out_path}

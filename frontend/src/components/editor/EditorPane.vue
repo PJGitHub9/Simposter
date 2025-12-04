@@ -567,7 +567,12 @@ const doPreview = async () => {
 
 const doSave = async () => {
   if (!bgUrl.value) return
-  await render.save(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
+  const res = await render.save(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
+  if (res && typeof res.saved_path === 'string') {
+    success(`Saved to ${res.saved_path}`)
+  } else {
+    success('Saved to disk')
+  }
 }
 
 const doSend = async () => {
@@ -630,6 +635,7 @@ watch(
     await fetchLabels()
     await fetchExistingPoster()
     await presetService.load()
+    applyPresetOptions(selectedPreset.value)
   },
   { immediate: true }
 )
@@ -642,64 +648,68 @@ watch(logoPreference, () => {
   applyLogoPreference()
 })
 
-watch(selectedPreset, (id) => {
+const applyPresetOptions = (id: string) => {
   const p = presets.value.find((x) => x.id === id)
-  if (p?.options) {
-    const o = p.options
-    options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
-    options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
-    options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
-    options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
-    options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
-    options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
-    options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
-    options.value.logoOffset = Math.round((Number(o.logo_offset) || 0.75) * 100)
-    if (o.uniform_logo_max_w) options.value.uniformLogoMaxW = Number(o.uniform_logo_max_w)
-    if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
-    if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
-    if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
-    options.value.borderEnabled = !!o.border_enabled
-    options.value.borderThickness = Number(o.border_px) || 0
-    if (o.border_color) options.value.borderColor = String(o.border_color)
-    if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
-    if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
-    if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
-    if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
-      posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
-    }
-    if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
-      logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
-    }
-    logoMode.value = normalizeLogoMode(o.logo_mode)
-    if (typeof o.logo_hex === 'string') {
-      logoHex.value = o.logo_hex
-    }
+  if (!p?.options) return
 
-    // Load text overlay settings
-    if (typeof o.text_overlay_enabled === 'boolean') textOverlayEnabled.value = o.text_overlay_enabled
-    if (typeof o.custom_text === 'string') customText.value = o.custom_text
-    if (typeof o.font_family === 'string') fontFamily.value = o.font_family
-    if (typeof o.font_size === 'number') fontSize.value = o.font_size
-    if (typeof o.font_weight === 'string') fontWeight.value = o.font_weight
-    if (typeof o.text_color === 'string') textColor.value = o.text_color
-    if (typeof o.text_align === 'string') textAlign.value = o.text_align
-    if (typeof o.text_transform === 'string') textTransform.value = o.text_transform
-    if (typeof o.letter_spacing === 'number') letterSpacing.value = o.letter_spacing
-    if (typeof o.line_height === 'number') lineHeight.value = Math.round(o.line_height * 100)
-    if (typeof o.position_y === 'number') positionY.value = Math.round(o.position_y * 100)
-    if (typeof o.shadow_enabled === 'boolean') shadowEnabled.value = o.shadow_enabled
-    if (typeof o.shadow_blur === 'number') shadowBlur.value = o.shadow_blur
-    if (typeof o.shadow_offset_x === 'number') shadowOffsetX.value = o.shadow_offset_x
-    if (typeof o.shadow_offset_y === 'number') shadowOffsetY.value = o.shadow_offset_y
-    if (typeof o.shadow_color === 'string') shadowColor.value = o.shadow_color
-    if (typeof o.shadow_opacity === 'number') shadowOpacity.value = Math.round(o.shadow_opacity * 100)
-    if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
-    if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
-    if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
-
-    applyPosterFilter()
-    applyLogoPreference()
+  const o = p.options
+  options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
+  options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
+  options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
+  options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+  options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
+  options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
+  options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
+  options.value.logoOffset = Math.round((Number(o.logo_offset) || 0.75) * 100)
+  if (o.uniform_logo_max_w) options.value.uniformLogoMaxW = Number(o.uniform_logo_max_w)
+  if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
+  if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
+  if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
+  options.value.borderEnabled = !!o.border_enabled
+  options.value.borderThickness = Number(o.border_px) || 0
+  if (o.border_color) options.value.borderColor = String(o.border_color)
+  if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
+  if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
+  if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
+  if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
+    posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }
+  if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
+    logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
+  }
+  logoMode.value = normalizeLogoMode(o.logo_mode)
+  if (typeof o.logo_hex === 'string') {
+    logoHex.value = o.logo_hex
+  }
+
+  // Load text overlay settings (enable/disable + attributes)
+  if (typeof o.text_overlay_enabled === 'boolean') textOverlayEnabled.value = o.text_overlay_enabled
+  if (typeof o.custom_text === 'string') customText.value = o.custom_text
+  if (typeof o.font_family === 'string') fontFamily.value = o.font_family
+  if (typeof o.font_size === 'number') fontSize.value = o.font_size
+  if (typeof o.font_weight === 'string') fontWeight.value = o.font_weight
+  if (typeof o.text_color === 'string') textColor.value = o.text_color
+  if (typeof o.text_align === 'string') textAlign.value = o.text_align
+  if (typeof o.text_transform === 'string') textTransform.value = o.text_transform
+  if (typeof o.letter_spacing === 'number') letterSpacing.value = o.letter_spacing
+  if (typeof o.line_height === 'number') lineHeight.value = Math.round(o.line_height * 100)
+  if (typeof o.position_y === 'number') positionY.value = Math.round(o.position_y * 100)
+  if (typeof o.shadow_enabled === 'boolean') shadowEnabled.value = o.shadow_enabled
+  if (typeof o.shadow_blur === 'number') shadowBlur.value = o.shadow_blur
+  if (typeof o.shadow_offset_x === 'number') shadowOffsetX.value = o.shadow_offset_x
+  if (typeof o.shadow_offset_y === 'number') shadowOffsetY.value = o.shadow_offset_y
+  if (typeof o.shadow_color === 'string') shadowColor.value = o.shadow_color
+  if (typeof o.shadow_opacity === 'number') shadowOpacity.value = Math.round(o.shadow_opacity * 100)
+  if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
+  if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
+  if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
+
+  applyPosterFilter()
+  applyLogoPreference()
+}
+
+watch(selectedPreset, (id) => {
+  applyPresetOptions(id)
 })
 
 let previewTimer: ReturnType<typeof setTimeout> | null = null
