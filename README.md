@@ -2,7 +2,7 @@
 
 > **Simposter** is a fast, modern poster-generation tool for Plex users who want **clean, consistent, template-driven artwork** — now with a **completely redesigned UI**, **enhanced batch editing**, **real-time preview**, **TMDB-integrated rendering**, and **intelligent caching**.
 
-![Image](https://github.com/user-attachments/assets/cc986a6c-5177-4820-b418-b035b10af26f)
+![Image](https://github.com/user-attachments/assets/bc31ee99-0d68-4ba0-a54f-d6b4a1b119b7)
 ---
 
 ## ✨ What’s New in v1.4
@@ -86,6 +86,8 @@ Modes:
 Preference:
 - **White** or **Color** — Preferred logo type for bulk edits
 
+![Image](https://github.com/user-attachments/assets/10ba7d2f-0e1b-4ab7-b9cf-67651ec335e0)
+![Image](https://github.com/user-attachments/assets/9ebeed0c-5727-48f7-8be7-302d1f1d7b1c)
 ---
 
 ## 📝 Text Overlay (Experimental)
@@ -141,6 +143,8 @@ UI settings live alongside presets:
 
 Log configuration: `/config/settings/log_config.json`.
 
+![Image](https://github.com/user-attachments/assets/2e7b7b23-770e-463e-91e6-62f0d061fff1)
+
 ---
 
 ## 📡 Plex Upload
@@ -148,7 +152,7 @@ Log configuration: `/config/settings/log_config.json`.
 - Upload poster  
 - Remove labels  
 - Auto-refresh existing poster  
-![Image](https://github.com/user-attachments/assets/a7a2fcb5-da02-4d30-8373-deedb237b441)
+
 ---
 
 ## 📦 Batch Mode
@@ -179,7 +183,7 @@ Log configuration: `/config/settings/log_config.json`.
 - 🔄 **Shared cache** — Cache shared between main view and batch edit
 - 🚀 **Lazy loading** — Assets load on-demand
 
-![Image](https://github.com/user-attachments/assets/533217dc-3879-43c8-b3f9-2dafb0e18667)
+![Image](https://github.com/user-attachments/assets/e6e60d93-5913-4054-aa47-b38a04bd5435)
 ---
 
 ## 🔗 Radarr Webhook
