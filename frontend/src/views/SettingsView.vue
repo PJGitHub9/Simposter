@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useSettingsStore, type Theme } from '../stores/settings'
+import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
 import { ref, onMounted, watch } from 'vue'
 
@@ -239,8 +240,13 @@ const isLabelSelected = (label: string) => {
 <template>
   <div class="view" @click.stop @mouseup.stop @mousedown.stop @select.stop @selectstart.stop>
     <div class="settings-header">
-      <h2>Settings</h2>
-      <p class="header-subtitle">Customize your Simposter experience</p>
+      <div class="settings-title-row">
+        <div>
+          <h2>Settings</h2>
+          <p class="header-subtitle">Customize your Simposter experience</p>
+        </div>
+        <span class="version-chip">{{ APP_VERSION }}</span>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -585,6 +591,13 @@ const isLabelSelected = (label: string) => {
   margin-bottom: 8px;
 }
 
+.settings-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .settings-header h2 {
   margin: 0 0 8px 0;
   font-size: 28px;
@@ -901,6 +914,17 @@ button.secondary:hover {
   font-weight: 500;
   padding: 0 8px;
   animation: fadeIn 0.3s ease-in;
+}
+
+.version-chip {
+  align-self: flex-start;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: rgba(61, 214, 183, 0.12);
+  color: #a9f0dd;
+  border: 1px solid rgba(61, 214, 183, 0.35);
+  font-weight: 600;
+  font-size: 13px;
 }
 
 @keyframes fadeIn {

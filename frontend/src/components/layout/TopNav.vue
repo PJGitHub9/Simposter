@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { APP_VERSION } from '@/version'
 
 type Movie = { key: string; title: string; year?: number | string; poster?: string | null }
 
@@ -52,6 +53,7 @@ const handleBlur = () => {
       </button>
       <div class="logo">
         <span class="logo-text">Simposter</span>
+        <span class="version-badge">{{ APP_VERSION }}</span>
       </div>
     </div>
     <div class="search-container">
@@ -147,6 +149,15 @@ const handleBlur = () => {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+.version-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(61, 214, 183, 0.12);
+  color: #a9f0dd;
+  border: 1px solid rgba(61, 214, 183, 0.35);
 }
 
 .search-container {
