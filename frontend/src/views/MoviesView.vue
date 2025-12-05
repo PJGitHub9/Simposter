@@ -23,10 +23,20 @@ const moviesLoaded = moviesLoadedFlag
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 const LABELS_CACHE_KEY = 'simposter-labels-cache'
 const MOVIES_CACHE_KEY = 'simposter-movies-cache'
+const CACHE_VERSION_KEY = 'simposter-cache-version'
+const CURRENT_CACHE_VERSION = '2' // Increment this to invalidate all caches
 
 const loadPosterCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
+    // Check cache version - clear if outdated
+    const cachedVersion = sessionStorage.getItem(CACHE_VERSION_KEY)
+    if (cachedVersion !== CURRENT_CACHE_VERSION) {
+      clearAllCaches()
+      sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
+      return
+    }
+
     const raw = sessionStorage.getItem(POSTER_CACHE_KEY)
     if (raw) {
       posterCacheStore.value = JSON.parse(raw)
@@ -90,6 +100,30 @@ const saveMoviesCache = () => {
   } catch {
     /* ignore */
   }
+}
+
+const clearAllCaches = () => {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    sessionStorage.removeItem(POSTER_CACHE_KEY)
+    sessionStorage.removeItem(LABELS_CACHE_KEY)
+    sessionStorage.removeItem(MOVIES_CACHE_KEY)
+    posterCacheStore.value = {}
+    labelCacheStore.value = {}
+    moviesCache.value = []
+    moviesLoaded.value = false
+  } catch {
+    /* ignore */
+  }
+}
+
+const refreshData = async () => {
+  clearAllCaches()
+  sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
+  movies.value = []
+  await fetchMovies()
+  await fetchPosters(paged.value)
+  await fetchLabels(paged.value)
 }
 
 loadPosterCache()
@@ -218,9 +252,13 @@ const fetchPosters = async (list: Movie[]) => {
   const results = await Promise.all(
     missing.map(async (m) => {
       try {
-        const posterRes = await fetch(`${apiBase}/api/movie/${m.key}/poster`)
-        const posterData = await posterRes.json()
-        return { key: m.key, url: posterData.url || null }
+        const posterUrl = `${apiBase}/api/movie/${m.key}/poster`
+        const posterRes = await fetch(posterUrl)
+        if (posterRes.ok) {
+          // The endpoint now returns the image directly, so use the URL as-is
+          return { key: m.key, url: posterUrl }
+        }
+        return { key: m.key, url: null }
       } catch {
         return { key: m.key, url: null }
       }
@@ -307,6 +345,9 @@ onMounted(async () => {
             <option v-for="label in allLabels" :key="label" :value="label">{{ label }}</option>
           </select>
         </div>
+        <button @click="refreshData" class="refresh-btn" :disabled="loading">
+          {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
+        </button>
       </div>
     </div>
     <div v-if="error" class="callout error">
@@ -382,6 +423,29 @@ onMounted(async () => {
 
 .control-select:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+
+.refresh-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 14px;
+  background: rgba(61, 214, 183, 0.15);
+  color: #3dd6b7;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin: 0;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background: rgba(61, 214, 183, 0.25);
+  border-color: rgba(61, 214, 183, 0.5);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .pager {

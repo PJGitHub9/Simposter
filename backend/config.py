@@ -65,24 +65,17 @@ settings = Settings()
 # ===============================
 def _load_ui_settings_fallback():
     """
-    Load Plex/TMDB credentials from ui_settings.json if they weren't provided via environment.
+    Load Plex/TMDB credentials from ui_settings.json if they exist.
     This allows users to configure via GUI without needing .env or docker-compose.
 
     Priority order:
-    1. Environment variables (docker-compose/.env) - highest priority
-    2. ui_settings.json (GUI settings) - fallback
+    1. ui_settings.json (GUI settings) - highest priority for user-facing config
+    2. Environment variables (docker-compose/.env) - for container/deployment config
     3. Defaults - lowest priority
+
+    Note: ui_settings.json takes precedence to allow GUI configuration to work intuitively.
+    Users expect changes in the UI to be reflected immediately.
     """
-    # Only load from ui_settings if env vars are at default/empty values
-    needs_fallback = (
-        settings.PLEX_URL == "http://localhost:32400" and
-        settings.PLEX_TOKEN == "" and
-        settings.TMDB_API_KEY == ""
-    )
-
-    if not needs_fallback:
-        return  # Environment variables are set, no need for fallback
-
     # Resolve settings path (needs CONFIG_DIR to be normalized first)
     settings_dir = Path(settings.CONFIG_DIR) / "settings"
     ui_settings_file = settings_dir / "ui_settings.json"
@@ -98,18 +91,18 @@ def _load_ui_settings_fallback():
     try:
         data = json.loads(settings_file.read_text(encoding="utf-8"))
 
-        # Load Plex settings
+        # Load Plex settings - ui_settings.json takes priority over defaults
         plex_data = data.get("plex", {})
-        if plex_data.get("url") and settings.PLEX_URL == "http://localhost:32400":
+        if plex_data.get("url"):
             settings.PLEX_URL = plex_data["url"]
-        if plex_data.get("token") and settings.PLEX_TOKEN == "":
+        if plex_data.get("token"):
             settings.PLEX_TOKEN = plex_data["token"]
-        if plex_data.get("movieLibraryName") and settings.PLEX_MOVIE_LIBRARY_NAME == "1":
+        if plex_data.get("movieLibraryName"):
             settings.PLEX_MOVIE_LIBRARY_NAME = plex_data["movieLibraryName"]
 
         # Load TMDB settings
         tmdb_data = data.get("tmdb", {})
-        if tmdb_data.get("apiKey") and settings.TMDB_API_KEY == "":
+        if tmdb_data.get("apiKey"):
             settings.TMDB_API_KEY = tmdb_data["apiKey"]
 
     except Exception:
@@ -156,8 +149,21 @@ settings.LOG_FILE = str(preferred_log)
 
 
 # ==========================
-#  Logging
+#  Logging with sensitive data redaction
 # ==========================
+class RedactingFormatter(logging.Formatter):
+    """Custom formatter that redacts sensitive information from logs."""
+
+    def format(self, record):
+        original = super().format(record)
+        # Redact tokens and API keys
+        redacted = original
+        if settings.PLEX_TOKEN and len(settings.PLEX_TOKEN) > 4:
+            redacted = redacted.replace(settings.PLEX_TOKEN, settings.PLEX_TOKEN[:4] + "***REDACTED***")
+        if settings.TMDB_API_KEY and len(settings.TMDB_API_KEY) > 4:
+            redacted = redacted.replace(settings.TMDB_API_KEY, settings.TMDB_API_KEY[:4] + "***REDACTED***")
+        return redacted
+
 logger = logging.getLogger("simposter")
 level_name = settings.LOG_LEVEL.upper()
 level = getattr(logging, level_name, logging.INFO)
@@ -170,7 +176,7 @@ if not logger.handlers:
     fh = logging.FileHandler(settings.LOG_FILE, encoding="utf-8")
     sh = logging.StreamHandler()
 
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    fmt = RedactingFormatter("%(asctime)s [%(levelname)s] %(message)s")
     fh.setFormatter(fmt)
     sh.setFormatter(fmt)
 

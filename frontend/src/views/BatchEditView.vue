@@ -32,6 +32,7 @@ const error = ref<string | null>(null)
 const selectedMovies = ref<Set<string>>(new Set())
 const searchQuery = ref('')
 const filterLabel = ref<string>('')
+const posterLimit = ref<number>(50)
 
 // Label cache
 const LABELS_CACHE_KEY = 'simposter-labels-cache'
@@ -134,6 +135,10 @@ const filteredMovies = computed(() => {
   return result
 })
 
+const limitedMovies = computed(() => {
+  return filteredMovies.value.slice(0, posterLimit.value)
+})
+
 const progressPercent = computed(() => {
   if (selectedMovies.value.size === 0) return 0
   return (currentIndex.value / selectedMovies.value.size) * 100
@@ -141,7 +146,7 @@ const progressPercent = computed(() => {
 
 // Computed property to merge cached posters with movie data
 const moviesWithPosters = computed(() => {
-  return filteredMovies.value.map(m => ({
+  return limitedMovies.value.map(m => ({
     ...m,
     poster: posterCache.value[m.key] ?? m.poster ?? null
   }))
@@ -173,7 +178,7 @@ const fetchMovies = async () => {
 }
 
 const fetchPosters = async () => {
-  const missing = filteredMovies.value.filter(
+  const missing = limitedMovies.value.filter(
     m => (!posterCache.value[m.key]) && !posterInFlight.has(m.key)
   )
   if (!missing.length) return
@@ -182,9 +187,12 @@ const fetchPosters = async () => {
   const results = await Promise.all(
     missing.map(async m => {
       try {
-        const res = await fetch(`${apiBase}/api/movie/${m.key}/poster`)
-        const data = await res.json()
-        return { key: m.key, url: data.url || null }
+        const posterUrl = `${apiBase}/api/movie/${m.key}/poster`
+        const res = await fetch(posterUrl)
+        if (res.ok) {
+          return { key: m.key, url: posterUrl }
+        }
+        return { key: m.key, url: null }
       } catch {
         return { key: m.key, url: null }
       }
@@ -602,9 +610,23 @@ onMounted(async () => {
         <h3>{{ selectedMovies.size }} of {{ moviesWithPosters.length }} selected</h3>
         <button class="btn-small" @click="selectAll">Select All</button>
         <button class="btn-small" @click="deselectAll">Deselect All</button>
+        <span v-if="filteredMovies.length > posterLimit" class="limit-notice">
+          Showing {{ posterLimit }} of {{ filteredMovies.length }} movies
+        </span>
       </div>
 
       <div class="controls-right">
+        <div class="limit-control">
+          <label for="poster-limit">Show:</label>
+          <select id="poster-limit" v-model.number="posterLimit" class="filter-select">
+            <option :value="25">25 posters</option>
+            <option :value="50">50 posters</option>
+            <option :value="100">100 posters</option>
+            <option :value="200">200 posters</option>
+            <option :value="500">500 posters</option>
+            <option :value="9999">All posters</option>
+          </select>
+        </div>
         <select v-model="filterLabel" class="filter-select">
           <option value="">All Labels</option>
           <option v-for="label in allLabels" :key="label" :value="label">
@@ -901,6 +923,27 @@ onMounted(async () => {
   display: flex;
   gap: 0.75rem;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.limit-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.limit-control label {
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.limit-notice {
+  color: var(--accent, #3dd6b7);
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-left: 0.5rem;
 }
 
 .filter-select {

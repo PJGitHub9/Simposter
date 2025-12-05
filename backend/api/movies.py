@@ -3,6 +3,7 @@ from typing import List
 
 import requests
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
@@ -125,17 +126,20 @@ def api_tmdb_images(tmdb_id: int):
 
 @router.get("/movie/{rating_key}/poster")
 def api_movie_poster(rating_key: str):
-    direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb?X-Plex-Token={settings.PLEX_TOKEN}"
+    """Proxy poster images through the backend to avoid CORS issues."""
+    direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
 
     # Try direct poster URL
     try:
-        r = requests.get(direct, timeout=5, verify=settings.PLEX_VERIFY_TLS)
+        r = requests.get(direct, headers=plex_headers(), timeout=5, verify=settings.PLEX_VERIFY_TLS)
         if r.status_code == 200:
-            return {"url": direct}
-    except:
-        pass
+            # Return the image data directly instead of the URL
+            content_type = r.headers.get('content-type', 'image/jpeg')
+            return Response(content=r.content, media_type=content_type)
+    except Exception as e:
+        logger.debug(f"Failed to fetch poster directly for {rating_key}: {e}")
 
-    # Fallback: parse metadata for thumb
+    # Fallback: parse metadata for thumb path
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = requests.get(url, headers=plex_headers(), timeout=10, verify=settings.PLEX_VERIFY_TLS)
@@ -144,11 +148,16 @@ def api_movie_poster(rating_key: str):
         for video in root.findall(".//Video"):
             thumb = video.get("thumb")
             if thumb:
-                return {"url": f"{settings.PLEX_URL}{thumb}?X-Plex-Token={settings.PLEX_TOKEN}"}
-    except:
-        pass
+                thumb_url = f"{settings.PLEX_URL}{thumb}"
+                poster_r = requests.get(thumb_url, headers=plex_headers(), timeout=5, verify=settings.PLEX_VERIFY_TLS)
+                if poster_r.status_code == 200:
+                    content_type = poster_r.headers.get('content-type', 'image/jpeg')
+                    return Response(content=poster_r.content, media_type=content_type)
+    except Exception as e:
+        logger.debug(f"Failed to fetch poster via metadata for {rating_key}: {e}")
 
-    return {"url": None}
+    # Return 404 if no poster found
+    raise HTTPException(status_code=404, detail="Poster not found")
 
 
 @router.get("/movies/tmdb")
