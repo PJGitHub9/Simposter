@@ -14,6 +14,18 @@ from pydantic_settings import BaseSettings
 # Project base dir (repo root)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Simple docker/container detection for better guidance when connecting to Plex
+def _running_in_container() -> bool:
+    try:
+        if Path("/.dockerenv").exists():
+            return True
+        cgroup = Path("/proc/1/cgroup")
+        if cgroup.exists() and "docker" in cgroup.read_text():
+            return True
+    except Exception:
+        pass
+    return False
+
 # Load env files in order of priority:
 # 1) /config/.env (or ${CONFIG_DIR}/.env) if present
 # 2) repo root .env
@@ -69,13 +81,13 @@ def _load_ui_settings_fallback():
     This allows users to configure via GUI without needing .env or docker-compose.
 
     Priority order:
-    1. Database (simposter.db) - highest priority for user-facing config
-    2. ui_settings.json (legacy) - for backward compatibility
-    3. Environment variables (docker-compose/.env) - for container/deployment config
+    1. Explicit environment variables (docker-compose/.env) - highest priority
+    2. Database (simposter.db) - user-facing config
+    3. ui_settings.json (legacy) - backward compatibility
     4. Defaults - lowest priority
 
-    Note: Database settings take precedence to allow GUI configuration to work intuitively.
-    Users expect changes in the UI to be reflected immediately.
+    Note: Environment variables still override everything so docker deployments can force values,
+    while database/UI settings remain the primary interactive config.
     """
     data = None
 
@@ -127,6 +139,21 @@ def _load_ui_settings_fallback():
         tmdb_data = data.get("tmdb", {})
         if tmdb_data.get("apiKey"):
             settings.TMDB_API_KEY = tmdb_data["apiKey"]
+
+        # Explicit environment variables override database/JSON so docker-compose can force values
+        plex_url_env = os.getenv("PLEX_URL")
+        plex_token_env = os.getenv("PLEX_TOKEN")
+        plex_lib_env = os.getenv("PLEX_MOVIE_LIBRARY_NAME")
+        tmdb_key_env = os.getenv("TMDB_API_KEY")
+
+        if plex_url_env:
+            settings.PLEX_URL = plex_url_env
+        if plex_token_env:
+            settings.PLEX_TOKEN = plex_token_env
+        if plex_lib_env:
+            settings.PLEX_MOVIE_LIBRARY_NAME = plex_lib_env
+        if tmdb_key_env:
+            settings.TMDB_API_KEY = tmdb_key_env
 
     except Exception:
         pass  # Silently ignore errors during settings application
@@ -206,6 +233,17 @@ if not logger.handlers:
     logger.addHandler(fh)
     logger.addHandler(sh)
 
+# Warn early if Plex URL points to localhost inside a container (common unRAID/Docker pitfall)
+if _running_in_container():
+    plex_url_lower = settings.PLEX_URL.lower()
+    if "localhost" in plex_url_lower or "127.0.0.1" in plex_url_lower:
+        logger.warning(
+            "[PLEX] PLEX_URL is set to %s inside a container. "
+            "If Plex runs on the host, use the host IP (e.g. http://192.168.x.x:32400) "
+            "or run the container with host networking/extra_hosts so Plex is reachable.",
+            settings.PLEX_URL,
+        )
+
 
 # ==========================
 #  Presets
@@ -222,7 +260,30 @@ FRONTEND_DIR = str(_frontend_dist if _frontend_dist.exists() else _frontend_base
 
 
 def load_presets() -> dict:
-    """Load presets from config dir or fallback to defaults."""
+    """Load presets from database or fallback to defaults."""
+    try:
+        # Import database module dynamically to avoid circular import issues
+        import importlib
+        import sys
+
+        # Get the parent directory of this file (backend/)
+        backend_dir = Path(__file__).parent
+        if str(backend_dir.parent) not in sys.path:
+            sys.path.insert(0, str(backend_dir.parent))
+
+        db = importlib.import_module('backend.database')
+        presets = db.get_all_presets()
+
+        # If database has presets, return them
+        if presets:
+            logger.debug("[PRESETS] Loaded %d templates from database", len(presets))
+            return presets
+    except Exception as e:
+        logger.warning("[PRESETS] Failed to load from database: %s", e)
+
+    # Fallback to JSON file if database is empty or fails
+    logger.debug("[PRESETS] Falling back to JSON file")
+
     # Migrate legacy location if present
     if not os.path.exists(USER_PRESETS_PATH) and os.path.exists(LEGACY_PRESETS_PATH):
         try:

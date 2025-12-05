@@ -1,9 +1,12 @@
 import xml.etree.ElementTree as ET
 from typing import List
+from pathlib import Path
+import os
+from datetime import datetime
 
 import requests
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
 
 from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
@@ -13,14 +16,19 @@ router = APIRouter()
 
 
 @router.get("/test-plex-connection")
-def test_plex_connection():
+def test_plex_connection(plex_url: str = None, plex_token: str = None):
     """Test Plex server connection and return diagnostics."""
+    # Use provided parameters or fall back to settings
+    test_url = plex_url or settings.PLEX_URL
+    test_token = plex_token or settings.PLEX_TOKEN
+
     try:
-        url = f"{settings.PLEX_URL}/library/sections"
-        logger.info(f"[TEST] Testing Plex connection to {settings.PLEX_URL}")
+        url = f"{test_url}/library/sections"
+        logger.info(f"[TEST] Testing Plex connection to {test_url}")
         logger.info(f"[TEST] PLEX_VERIFY_TLS = {settings.PLEX_VERIFY_TLS}")
 
-        r = requests.get(url, headers=plex_headers(), timeout=10, verify=settings.PLEX_VERIFY_TLS)
+        headers = {"X-Plex-Token": test_token} if test_token else {}
+        r = requests.get(url, headers=headers, timeout=10, verify=settings.PLEX_VERIFY_TLS)
         r.raise_for_status()
 
         root = ET.fromstring(r.text)
@@ -34,8 +42,8 @@ def test_plex_connection():
 
         return {
             "status": "ok",
-            "plex_url": settings.PLEX_URL,
-            "has_token": bool(settings.PLEX_TOKEN),
+            "plex_url": test_url,
+            "has_token": bool(test_token),
             "verify_tls": settings.PLEX_VERIFY_TLS,
             "sections": sections
         }
@@ -45,16 +53,20 @@ def test_plex_connection():
             "status": "error",
             "error": "SSL Certificate Error",
             "message": f"SSL verification failed. Try setting PLEX_VERIFY_TLS=false in your .env file. Error: {str(e)}",
-            "plex_url": settings.PLEX_URL,
+            "plex_url": test_url,
             "verify_tls": settings.PLEX_VERIFY_TLS
         }
     except requests.exceptions.ConnectionError as e:
         logger.error(f"[TEST] Connection Error: {e}")
+        hint = ""
+        url_lower = test_url.lower()
+        if "localhost" in url_lower or "127.0.0.1" in url_lower:
+            hint = " (inside Docker containers localhost points to the container; use the host IP or host networking)"
         return {
             "status": "error",
             "error": "Connection Error",
-            "message": f"Could not connect to Plex server. Check PLEX_URL and network connectivity. Error: {str(e)}",
-            "plex_url": settings.PLEX_URL
+            "message": f"Could not connect to Plex server. Check PLEX_URL and network connectivity{hint}. Error: {str(e)}",
+            "plex_url": test_url
         }
     except Exception as e:
         logger.error(f"[TEST] Plex connection test failed: {e}")
@@ -62,7 +74,7 @@ def test_plex_connection():
             "status": "error",
             "error": str(type(e).__name__),
             "message": str(e),
-            "plex_url": settings.PLEX_URL
+            "plex_url": test_url
         }
 
 
@@ -215,3 +227,71 @@ def api_scan_library():
     except Exception as e:
         logger.error(f"[SCAN] Failed to scan library: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to scan library: {e}")
+
+
+@router.get("/local-assets")
+def api_local_assets():
+    """List all saved poster assets from the output folder."""
+    try:
+        output_root = Path(settings.OUTPUT_ROOT)
+        if not output_root.exists():
+            return {"assets": [], "count": 0, "output_path": str(output_root)}
+
+        assets = []
+        # Supported image extensions
+        image_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
+
+        # Walk through output directory
+        for root, dirs, files in os.walk(output_root):
+            for file in files:
+                file_path = Path(root) / file
+                if file_path.suffix.lower() in image_extensions:
+                    try:
+                        stat = file_path.stat()
+                        rel_path = file_path.relative_to(output_root)
+
+                        assets.append({
+                            "filename": file,
+                            "path": str(rel_path),
+                            "full_path": str(file_path),
+                            "size": stat.st_size,
+                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                            "folder": str(rel_path.parent) if rel_path.parent != Path('.') else ""
+                        })
+                    except Exception as e:
+                        logger.debug(f"[LOCAL_ASSETS] Failed to stat {file_path}: {e}")
+
+        # Sort by modified time (newest first)
+        assets.sort(key=lambda x: x['modified'], reverse=True)
+
+        logger.info(f"[LOCAL_ASSETS] Found {len(assets)} assets in {output_root}")
+        return {
+            "assets": assets,
+            "count": len(assets),
+            "output_path": str(output_root)
+        }
+    except Exception as e:
+        logger.error(f"[LOCAL_ASSETS] Failed to list assets: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list local assets: {e}")
+
+
+@router.get("/local-assets/{path:path}")
+def api_local_asset_file(path: str):
+    """Serve a local asset file."""
+    try:
+        output_root = Path(settings.OUTPUT_ROOT)
+        file_path = output_root / path
+
+        # Security check: ensure the resolved path is still within OUTPUT_ROOT
+        if not file_path.resolve().is_relative_to(output_root.resolve()):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        return FileResponse(file_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[LOCAL_ASSETS] Failed to serve file {path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to serve file: {e}")

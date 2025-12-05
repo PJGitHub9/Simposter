@@ -93,18 +93,28 @@ const saveSettings = async () => {
 
 const testConnection = ref('')
 const testConnectionLoading = ref(false)
+const plexLibraries = ref<Array<{ title: string; key: string; type: string }>>([])
 
 const testPlexConnection = async () => {
   testConnectionLoading.value = true
   testConnection.value = 'Testing connection...'
+  plexLibraries.value = []
+
   try {
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/test-plex-connection`)
+    // Send current input values as query parameters to test with them
+    const params = new URLSearchParams({
+      plex_url: localPlexUrl.value,
+      plex_token: localPlexToken.value
+    })
+    const res = await fetch(`${apiBase}/api/test-plex-connection?${params}`)
     const data = await res.json()
 
     if (data.status === 'ok') {
-      const sectionsList = data.sections.map((s: any) => s.title).join(', ')
-      testConnection.value = `✓ Connected! Found ${data.sections.length} libraries: ${sectionsList}`
+      plexLibraries.value = data.sections || []
+      const movieLibs = plexLibraries.value.filter(s => s.type === 'movie')
+      const sectionsList = movieLibs.map((s: any) => s.title).join(', ')
+      testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${sectionsList}`
     } else {
       testConnection.value = `✗ ${data.error}: ${data.message}`
     }
@@ -354,7 +364,22 @@ const isLabelSelected = (label: string) => {
         </label>
         <label>
           <span class="label-text">Plex Movie Library</span>
+          <select
+            v-if="plexLibraries.length > 0"
+            v-model="localPlexLibrary"
+            class="form-control"
+          >
+            <option value="">Select a library...</option>
+            <option
+              v-for="lib in plexLibraries.filter(s => s.type === 'movie')"
+              :key="lib.key"
+              :value="lib.title"
+            >
+              {{ lib.title }}
+            </option>
+          </select>
           <input
+            v-else
             v-model="localPlexLibrary"
             type="text"
             placeholder="Movies or 1"
@@ -364,6 +389,7 @@ const isLabelSelected = (label: string) => {
             @select.stop
             @selectstart.stop
           />
+          <span v-if="plexLibraries.length === 0" class="help-text">Test connection first to populate library dropdown</span>
         </label>
         <div class="test-connection-wrapper">
           <button

@@ -46,12 +46,18 @@ def api_preview(req: PreviewRequest):
         background_url = req.background_url
         logo_url = req.logo_url
 
-        # Check if this is a Plex URL - if so, extract rating key and fetch from TMDB
+        # Check if this is a Plex URL or API URL - if so, extract rating key and fetch from TMDB
+        rating_key = None
         if "/library/metadata/" in background_url and "/thumb" in background_url:
+            # Plex URL format
+            rating_key = background_url.split("/library/metadata/")[1].split("/")[0]
+        elif "/api/movie/" in background_url and "/poster" in background_url:
+            # API URL format: /api/movie/{rating_key}/poster
+            rating_key = background_url.split("/api/movie/")[1].split("/")[0]
+
+        if rating_key:
             try:
-                # Extract rating key from Plex URL
-                rating_key = background_url.split("/library/metadata/")[1].split("/")[0]
-                logger.debug("[PREVIEW] Detected Plex URL, extracting rating_key=%s", rating_key)
+                logger.debug("[PREVIEW] Detected rating_key=%s from URL", rating_key)
 
                 # Get TMDB ID
                 tmdb_id = get_movie_tmdb_id(rating_key)

@@ -14,7 +14,8 @@ const tabs: MenuItem[] = [
     key: 'movies',
     label: 'Movies',
     submenu: [
-      { key: 'batch-edit', label: 'Batch Edit' }
+      { key: 'batch-edit', label: 'Batch Edit' },
+      { key: 'local-assets', label: 'Local Assets' }
     ]
   },
   { key: 'settings', label: 'Settings' },
@@ -29,14 +30,15 @@ const { movies } = useMovies()
 const settings = useSettingsStore()
 
 const activeTab = computed<TabKey>(() => {
-  // Treat batch-edit as part of movies for sidebar highlighting
-  if (route.name === 'batch-edit') return 'movies'
+  // Treat batch-edit and local-assets as part of movies for sidebar highlighting
+  if (route.name === 'batch-edit' || route.name === 'local-assets') return 'movies'
   return (route.name as TabKey) || 'movies'
 })
 
 const activeSubmenu = computed<string>(() => {
   // Return the current route name if it's a submenu route
   if (route.name === 'batch-edit') return 'batch-edit'
+  if (route.name === 'local-assets') return 'local-assets'
   return ''
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
@@ -83,9 +85,12 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     ui.setSelectedMovie(null)
   }
 
-  if (parentKey === 'movies' && submenuKey === 'batch-edit') {
-    // Navigate to batch edit view
-    router.push({ name: 'batch-edit' })
+  if (parentKey === 'movies') {
+    if (submenuKey === 'batch-edit') {
+      router.push({ name: 'batch-edit' })
+    } else if (submenuKey === 'local-assets') {
+      router.push({ name: 'local-assets' })
+    }
   }
 }
 </script>

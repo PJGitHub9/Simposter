@@ -455,12 +455,12 @@ const previewLoading = ref(false)
 const previewCache = ref<Record<string, string>>({})
 
 const fetchPreview = async () => {
-  if (!currentPreviewMovie.value || !selectedTemplate.value || !selectedPreset.value) {
+  if (!currentPreviewMovie.value || !selectedTemplate.value) {
     previewImage.value = null
     return
   }
 
-  const cacheKey = `${currentPreviewMovie.value.key}|${selectedTemplate.value}|${selectedPreset.value}`
+  const cacheKey = `${currentPreviewMovie.value.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}`
   if (previewCache.value[cacheKey]) {
     previewImage.value = previewCache.value[cacheKey]
     return
@@ -484,7 +484,7 @@ const fetchPreview = async () => {
       background_url: posterUrl || '',
       logo_url: null,
       options: {},
-      preset_id: selectedPreset.value,
+      preset_id: selectedPreset.value || undefined,
       movie_title: movie.title,
       movie_year: movie.year ? Number(movie.year) : undefined
     }
@@ -762,7 +762,7 @@ onMounted(async () => {
           <p class="preview-title">{{ currentPreviewMovie.title }}</p>
           <p class="preview-year">{{ currentPreviewMovie.year }}</p>
           <p v-if="!selectedTemplate" class="preview-hint">Select a template to preview</p>
-          <p v-else-if="!selectedPreset" class="preview-hint">Select a preset to preview</p>
+          <p v-else-if="!selectedPreset" class="preview-hint">Preset optional - preview will use template defaults</p>
         </div>
 
         <!-- Movie List -->
