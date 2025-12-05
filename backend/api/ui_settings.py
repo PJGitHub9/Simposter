@@ -5,11 +5,13 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from ..config import settings
+from ..config import settings, logger
 from ..schemas import UISettings
+from .. import database as db
 
 router = APIRouter()
 
+# Legacy file paths for migration check
 _settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
 _legacy_settings_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
 
@@ -49,45 +51,54 @@ def _env_overrides() -> dict:
 
 def _read_settings(include_env: bool = True) -> UISettings:
     """
-    Read settings from disk, creating the file with defaults if missing.
-    Mirrors the simple JSON read/write pattern we use for presets.
+    Read settings from database, creating defaults if missing.
+    Falls back to JSON files for backward compatibility during migration.
     """
     try:
-        if not _settings_file.exists() and _legacy_settings_file.exists():
-            try:
-                _settings_file.parent.mkdir(parents=True, exist_ok=True)
-                _legacy_settings_file.replace(_settings_file)
-            except OSError:
-                data = json.loads(_legacy_settings_file.read_text(encoding="utf-8"))
-                _settings_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # Try reading from database first
+        data = db.get_ui_settings()
 
-        if not _settings_file.exists():
+        # If no database settings, try legacy JSON files
+        if data is None:
+            logger.info("[UI_SETTINGS] No database settings found, checking JSON files...")
+
+            if not _settings_file.exists() and _legacy_settings_file.exists():
+                try:
+                    _settings_file.parent.mkdir(parents=True, exist_ok=True)
+                    _legacy_settings_file.replace(_settings_file)
+                except OSError:
+                    data = json.loads(_legacy_settings_file.read_text(encoding="utf-8"))
+
+            if _settings_file.exists():
+                data = json.loads(_settings_file.read_text(encoding="utf-8"))
+                logger.info("[UI_SETTINGS] Loaded from JSON, will migrate to database on next save")
+
+        # If still no data, use defaults
+        if data is None:
+            logger.info("[UI_SETTINGS] No existing settings, using defaults")
             defaults = _default_ui_settings().model_dump(
                 exclude_none=False, exclude_defaults=False, exclude_unset=False
             )
-            _settings_file.parent.mkdir(parents=True, exist_ok=True)
-            _settings_file.write_text(json.dumps(defaults, indent=2), encoding="utf-8")
+            # Save defaults to database
+            db.save_ui_settings(defaults)
             return UISettings(**defaults)
 
-        data = json.loads(_settings_file.read_text(encoding="utf-8"))
-        # Merge with defaults so newly added fields are included (nested merge for settings groups)
+        # Merge with defaults so newly added fields are included
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False)
-        merged_file = {**defaults, **data}
-        for nested_key in ("plex", "tmdb", "tvdb"):
-            merged_file[nested_key] = {**defaults.get(nested_key, {}), **data.get(nested_key, {})}
+        merged = {**defaults, **data}
+        for nested_key in ("plex", "tmdb", "tvdb", "imageQuality", "performance"):
+            merged[nested_key] = {**defaults.get(nested_key, {}), **data.get(nested_key, {})}
 
-        if merged_file != data:
-            _settings_file.write_text(json.dumps(merged_file, indent=2), encoding="utf-8")
-
-        # Apply environment overrides on top of merged file values (do not persist them)
+        # Apply environment overrides on top of merged values (do not persist them)
         if include_env:
             env_overrides = _env_overrides()
             if env_overrides:
                 for nested_key, nested_values in env_overrides.items():
-                    merged_file[nested_key] = {**merged_file.get(nested_key, {}), **nested_values}
+                    merged[nested_key] = {**merged.get(nested_key, {}), **nested_values}
 
-        return UISettings(**merged_file)
+        return UISettings(**merged)
     except Exception as e:
+        logger.error(f"[UI_SETTINGS] Failed to read settings: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
 
 
@@ -98,10 +109,9 @@ def get_ui_settings():
 
 
 @router.post("/ui-settings")
-def save_ui_settings(payload: UISettings):
+def save_ui_settings_endpoint(payload: UISettings):
     try:
-        _settings_file.parent.mkdir(parents=True, exist_ok=True)
-        # Merge defaults + current file + incoming payload to avoid losing fields
+        # Merge defaults + current + incoming payload to avoid losing fields
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False)
         current = _read_settings(include_env=False).model_dump(
             exclude_none=False, exclude_defaults=False, exclude_unset=False
@@ -110,14 +120,27 @@ def save_ui_settings(payload: UISettings):
             exclude_none=False, exclude_defaults=False, exclude_unset=False
         )
         merged = {**defaults, **current, **incoming}
-        for nested_key in ("plex", "tmdb", "tvdb"):
+        for nested_key in ("plex", "tmdb", "tvdb", "imageQuality", "performance"):
             merged[nested_key] = {
                 **defaults.get(nested_key, {}),
                 **current.get(nested_key, {}),
                 **incoming.get(nested_key, {}),
             }
 
-        _settings_file.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+        # Save to database
+        db.save_ui_settings(merged)
+        logger.info("[UI_SETTINGS] Saved to database")
+
+        # Delete JSON files after successful migration
+        for json_file in [_settings_file, _legacy_settings_file]:
+            if json_file.exists():
+                try:
+                    backup_path = json_file.with_suffix(".json.migrated")
+                    json_file.rename(backup_path)
+                    logger.info(f"[UI_SETTINGS] Migrated {json_file} to database, backed up as .migrated")
+                except Exception as e:
+                    logger.warning(f"[UI_SETTINGS] Could not remove {json_file}: {e}")
+
         # Return merged view including environment overrides so UI reflects runtime values
         merged_with_env = merged.copy()
         env_overrides = _env_overrides()
@@ -125,4 +148,5 @@ def save_ui_settings(payload: UISettings):
             merged_with_env[nested_key] = {**merged_with_env.get(nested_key, {}), **nested_values}
         return merged_with_env
     except Exception as e:
+        logger.error(f"[UI_SETTINGS] Failed to save settings: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")

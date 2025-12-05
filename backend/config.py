@@ -65,33 +65,56 @@ settings = Settings()
 # ===============================
 def _load_ui_settings_fallback():
     """
-    Load Plex/TMDB credentials from ui_settings.json if they exist.
+    Load Plex/TMDB credentials from database or JSON fallback.
     This allows users to configure via GUI without needing .env or docker-compose.
 
     Priority order:
-    1. ui_settings.json (GUI settings) - highest priority for user-facing config
-    2. Environment variables (docker-compose/.env) - for container/deployment config
-    3. Defaults - lowest priority
+    1. Database (simposter.db) - highest priority for user-facing config
+    2. ui_settings.json (legacy) - for backward compatibility
+    3. Environment variables (docker-compose/.env) - for container/deployment config
+    4. Defaults - lowest priority
 
-    Note: ui_settings.json takes precedence to allow GUI configuration to work intuitively.
+    Note: Database settings take precedence to allow GUI configuration to work intuitively.
     Users expect changes in the UI to be reflected immediately.
     """
-    # Resolve settings path (needs CONFIG_DIR to be normalized first)
-    settings_dir = Path(settings.CONFIG_DIR) / "settings"
-    ui_settings_file = settings_dir / "ui_settings.json"
+    data = None
 
-    # Also check legacy location
-    legacy_ui_settings = Path(settings.CONFIG_DIR) / "ui_settings.json"
+    # Try loading from database first
+    try:
+        # Import database module dynamically to avoid circular import issues
+        import importlib
+        import sys
 
-    settings_file = ui_settings_file if ui_settings_file.exists() else legacy_ui_settings
+        # Get the parent directory of this file (backend/)
+        backend_dir = Path(__file__).parent
+        if str(backend_dir.parent) not in sys.path:
+            sys.path.insert(0, str(backend_dir.parent))
 
-    if not settings_file.exists():
-        return  # No ui_settings.json to load from
+        db = importlib.import_module('backend.database')
+        data = db.get_ui_settings()
+    except Exception:
+        # Silently ignore database errors during initial load
+        pass
+
+    # Fallback to JSON files if database is empty
+    if not data:
+        settings_dir = Path(settings.CONFIG_DIR) / "settings"
+        ui_settings_file = settings_dir / "ui_settings.json"
+        legacy_ui_settings = Path(settings.CONFIG_DIR) / "ui_settings.json"
+
+        settings_file = ui_settings_file if ui_settings_file.exists() else legacy_ui_settings
+
+        if settings_file.exists():
+            try:
+                data = json.loads(settings_file.read_text(encoding="utf-8"))
+            except Exception:
+                return
+
+    if not data:
+        return  # No settings to load
 
     try:
-        data = json.loads(settings_file.read_text(encoding="utf-8"))
-
-        # Load Plex settings - ui_settings.json takes priority over defaults
+        # Load Plex settings - database/JSON takes priority over defaults
         plex_data = data.get("plex", {})
         if plex_data.get("url"):
             settings.PLEX_URL = plex_data["url"]
@@ -106,7 +129,7 @@ def _load_ui_settings_fallback():
             settings.TMDB_API_KEY = tmdb_data["apiKey"]
 
     except Exception:
-        pass  # Silently fail if ui_settings.json is malformed
+        pass  # Silently ignore errors during settings application
 
 # Normalize paths relative to repo root so npm/uvicorn cwd doesn't matter
 def _resolve_path(p: str) -> str:

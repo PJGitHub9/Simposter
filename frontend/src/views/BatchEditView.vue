@@ -33,6 +33,7 @@ const selectedMovies = ref<Set<string>>(new Set())
 const searchQuery = ref('')
 const filterLabel = ref<string>('')
 const posterLimit = ref<number>(50)
+const currentPage = ref<number>(1)
 
 // Label cache
 const LABELS_CACHE_KEY = 'simposter-labels-cache'
@@ -135,9 +136,27 @@ const filteredMovies = computed(() => {
   return result
 })
 
-const limitedMovies = computed(() => {
-  return filteredMovies.value.slice(0, posterLimit.value)
+const totalPages = computed(() => {
+  return Math.ceil(filteredMovies.value.length / posterLimit.value)
 })
+
+const limitedMovies = computed(() => {
+  const start = (currentPage.value - 1) * posterLimit.value
+  const end = start + posterLimit.value
+  return filteredMovies.value.slice(start, end)
+})
+
+const nextPage = () => {
+  if (currentPage.value < totalPages.value) {
+    currentPage.value++
+  }
+}
+
+const prevPage = () => {
+  if (currentPage.value > 1) {
+    currentPage.value--
+  }
+}
 
 const progressPercent = computed(() => {
   if (selectedMovies.value.size === 0) return 0
@@ -499,6 +518,18 @@ watch(moviesWithPosters, (list) => {
   fetchLabels(list)
 })
 
+// Reset to page 1 when filters change
+watch([searchQuery, filterLabel, posterLimit], () => {
+  currentPage.value = 1
+})
+
+// Ensure current page doesn't exceed total pages
+watch(totalPages, () => {
+  if (currentPage.value > totalPages.value) {
+    currentPage.value = Math.max(1, totalPages.value)
+  }
+})
+
 // Clear preset when template changes
 watch(selectedTemplate, () => {
   selectedPreset.value = ''
@@ -624,7 +655,6 @@ onMounted(async () => {
             <option :value="100">100 posters</option>
             <option :value="200">200 posters</option>
             <option :value="500">500 posters</option>
-            <option :value="9999">All posters</option>
           </select>
         </div>
         <select v-model="filterLabel" class="filter-select">
@@ -644,36 +674,51 @@ onMounted(async () => {
 
     <!-- Content Area with Grid and Preview -->
     <div class="content-area">
-      <!-- Movie Grid -->
-      <div v-if="loading" class="loading">Loading movies...</div>
-      <div v-else-if="error" class="error">{{ error }}</div>
-      <div v-else class="movie-grid">
-        <div
-          v-for="movie in moviesWithPosters"
-          :key="movie.key"
-          class="movie-card"
-          :class="{ selected: selectedMovies.has(movie.key) }"
-          @click="toggleMovie(movie.key)"
-        >
-          <div class="checkbox-overlay">
-            <input
-              type="checkbox"
-              :checked="selectedMovies.has(movie.key)"
-              @click.stop="toggleMovie(movie.key)"
-              class="movie-checkbox"
-            />
+      <!-- Movie Grid Container -->
+      <div class="grid-container">
+        <div v-if="loading" class="loading">Loading movies...</div>
+        <div v-else-if="error" class="error">{{ error }}</div>
+        <div v-else class="movie-grid">
+          <div
+            v-for="movie in moviesWithPosters"
+            :key="movie.key"
+            class="movie-card"
+            :class="{ selected: selectedMovies.has(movie.key) }"
+            @click="toggleMovie(movie.key)"
+          >
+            <div class="checkbox-overlay">
+              <input
+                type="checkbox"
+                :checked="selectedMovies.has(movie.key)"
+                @click.stop="toggleMovie(movie.key)"
+                class="movie-checkbox"
+              />
+            </div>
+            <div class="poster">
+              <img
+                :src="movie.poster || `/api/movie/${movie.key}/poster?w=200`"
+                :alt="movie.title"
+                loading="lazy"
+              />
+            </div>
+            <div class="movie-info">
+              <p class="title">{{ movie.title }}</p>
+              <p class="year">{{ movie.year }}</p>
+            </div>
           </div>
-          <div class="poster">
-            <img
-              :src="movie.poster || `/api/movie/${movie.key}/poster?w=200`"
-              :alt="movie.title"
-              loading="lazy"
-            />
-          </div>
-          <div class="movie-info">
-            <p class="title">{{ movie.title }}</p>
-            <p class="year">{{ movie.year }}</p>
-          </div>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div v-if="!loading && !error && totalPages > 1" class="pagination-controls">
+          <button class="page-btn" @click="prevPage" :disabled="currentPage === 1">
+            ← Previous
+          </button>
+          <span class="page-info">
+            Page {{ currentPage }} of {{ totalPages }}
+          </span>
+          <button class="page-btn" @click="nextPage" :disabled="currentPage === totalPages">
+            Next →
+          </button>
         </div>
       </div>
 
@@ -994,10 +1039,60 @@ onMounted(async () => {
   gap: 1.5rem;
 }
 
+.grid-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
 .movie-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 1rem;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--surface, #1a1f2e);
+  border-radius: 8px;
+  border: 1px solid var(--border, #2a2f3e);
+}
+
+.page-btn {
+  padding: 0.6rem 1.2rem;
+  background: var(--accent, #3dd6b7);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 100px;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: #2bc4a3;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(61, 214, 183, 0.3);
+}
+
+.page-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.page-info {
+  color: var(--text-primary, #fff);
+  font-size: 0.95rem;
+  font-weight: 500;
+  min-width: 120px;
+  text-align: center;
 }
 
 .preview-sidebar {
