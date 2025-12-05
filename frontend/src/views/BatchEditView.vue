@@ -474,9 +474,11 @@ const fetchPreview = async () => {
     let posterUrl = movie.poster
     if (!posterUrl) {
       // Fetch the poster if not cached
-      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster`)
+      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster?meta=1`)
       const posterData = await posterRes.json()
-      posterUrl = posterData.url
+      if (posterData.url) {
+        posterUrl = posterData.url.startsWith('http') ? posterData.url : `${apiBase}${posterData.url}`
+      }
     }
 
     const payload = {

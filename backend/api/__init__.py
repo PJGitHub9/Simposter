@@ -12,6 +12,7 @@ from . import (
     logs,
     webhooks,
     ui_settings,
+    cache as cache_api,
 )
 
 router = APIRouter()
@@ -27,3 +28,4 @@ router.include_router(uploads.router)
 router.include_router(logs.router)
 router.include_router(webhooks.router)
 router.include_router(ui_settings.router)
+router.include_router(cache_api.router)

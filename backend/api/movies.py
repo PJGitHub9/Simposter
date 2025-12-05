@@ -1,18 +1,108 @@
 import xml.etree.ElementTree as ET
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response, FileResponse, JSONResponse
 
 import requests
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response, FileResponse
-
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR
+from .. import cache, database as db
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
 from ..tmdb_client import get_images_for_movie, TMDBError
 
 router = APIRouter()
+
+
+def _poster_cache_path(rating_key: str) -> Optional[Path]:
+    cache_dir = Path(POSTER_CACHE_DIR)
+    for ext in ("jpg", "jpeg", "png", "webp"):
+        candidate = cache_dir / f"{rating_key}.{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _save_poster_cache(rating_key: str, content: bytes, content_type: str) -> Optional[Path]:
+    cache_dir = Path(POSTER_CACHE_DIR)
+    ext = (content_type.split("/")[-1] if "/" in content_type else "jpg").lower()
+    if ext not in ("jpg", "jpeg", "png", "webp"):
+        ext = "jpg"
+    target = cache_dir / f"{rating_key}.{ext}"
+    try:
+        target.write_bytes(content)
+        return target
+    except Exception as e:
+        logger.debug("[CACHE] failed to write poster cache for %s: %s", rating_key, e)
+        return None
+
+
+def _remove_poster_cache(rating_key: str):
+    cache_dir = Path(POSTER_CACHE_DIR)
+    removed = False
+    for ext in ("jpg", "jpeg", "png", "webp"):
+        p = cache_dir / f"{rating_key}.{ext}"
+        if p.exists():
+            try:
+                p.unlink()
+                removed = True
+            except Exception:
+                pass
+    return removed
+
+
+def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
+    """
+    Fetch poster from cache or Plex and store it. Returns cached file path or None.
+    """
+    if force_refresh:
+        _remove_poster_cache(rating_key)
+
+    cached = _poster_cache_path(rating_key)
+    if cached:
+        return cached
+
+    direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
+
+    # Try direct poster URL
+    try:
+        r = plex_session.get(direct, headers=plex_headers(), timeout=5)
+        if r.status_code == 200:
+            content_type = r.headers.get('content-type', 'image/jpeg')
+            try:
+                cache.update_poster(rating_key, direct)
+            except Exception:
+                logger.debug("[CACHE] update_poster failed for %s", rating_key, exc_info=True)
+            saved = _save_poster_cache(rating_key, r.content, content_type)
+            return saved
+    except Exception as e:
+        logger.debug(f"Failed to fetch poster directly for {rating_key}: {e}")
+
+    # Fallback: parse metadata for thumb path
+    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+    try:
+        r = plex_session.get(url, headers=plex_headers(), timeout=10)
+        r.raise_for_status()
+        root = ET.fromstring(r.text)
+        for video in root.findall(".//Video"):
+            thumb = video.get("thumb")
+            if thumb:
+                thumb_url = f"{settings.PLEX_URL}{thumb}"
+                poster_r = plex_session.get(thumb_url, headers=plex_headers(), timeout=5)
+                if poster_r.status_code == 200:
+                    content_type = poster_r.headers.get('content-type', 'image/jpeg')
+                    try:
+                        cache.update_poster(rating_key, thumb_url)
+                    except Exception:
+                        logger.debug("[CACHE] update_poster failed for %s", rating_key, exc_info=True)
+                    saved = _save_poster_cache(rating_key, poster_r.content, content_type)
+                    return saved
+    except Exception as e:
+        logger.debug(f"Failed to fetch poster via metadata for {rating_key}: {e}")
+
+    return None
 
 
 @router.get("/test-plex-connection")
@@ -28,7 +118,7 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
         logger.info(f"[TEST] PLEX_VERIFY_TLS = {settings.PLEX_VERIFY_TLS}")
 
         headers = {"X-Plex-Token": test_token} if test_token else {}
-        r = requests.get(url, headers=headers, timeout=10, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.get(url, headers=headers, timeout=10)
         r.raise_for_status()
 
         root = ET.fromstring(r.text)
@@ -78,9 +168,48 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
         }
 
 
+def _cache_fresh(max_age_seconds: int) -> bool:
+    stats = db.get_movie_cache_stats()
+    if not stats.get("count"):
+        return False
+    ts = stats.get("max_updated")
+    if not ts:
+        return False
+    try:
+        last = datetime.fromisoformat(ts)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+    except Exception:
+        return False
+    age = (datetime.now(timezone.utc) - last).total_seconds()
+    return age <= max_age_seconds
+
+
 @router.get("/movies", response_model=List[Movie])
-def api_movies():
-    return get_plex_movies()
+def api_movies(force_refresh: bool = False, max_age: int = 900):
+    """
+    Return movies. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
+    """
+    if not force_refresh and _cache_fresh(max_age):
+        cached = cache.get_cached_movies()
+        if cached:
+            return [
+                {
+                    "key": m["rating_key"],
+                    "title": m["title"],
+                    "year": m["year"],
+                    "addedAt": m["addedAt"],
+                    "poster": m.get("poster_url"),
+                    "tmdb_id": m.get("tmdb_id"),
+                    "labels": m.get("labels") or [],
+                    "updated_at": m.get("updated_at"),
+                }
+                for m in cached
+            ]
+
+    # Otherwise hit Plex and refresh the cache
+    movies = get_plex_movies()
+    return [{**m.model_dump(), "poster": None} for m in movies]
 
 
 @router.get("/movie/{rating_key}/tmdb", response_model=MovieTMDbResponse)
@@ -92,7 +221,7 @@ def api_movie_tmdb(rating_key: str):
 @router.get("/movie/{rating_key}/labels", response_model=LabelsResponse)
 def api_movie_labels(rating_key: str):
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-    r = requests.get(url, headers=plex_headers(), timeout=10, verify=settings.PLEX_VERIFY_TLS)
+    r = plex_session.get(url, headers=plex_headers(), timeout=10)
     r.raise_for_status()
 
     try:
@@ -116,7 +245,12 @@ def api_movie_labels(rating_key: str):
         if name:
             labels.add(name)
 
-    return LabelsResponse(labels=sorted(labels))
+    labels_list = sorted(labels)
+    try:
+        cache.update_labels(rating_key, labels_list)
+    except Exception:
+        logger.debug("[CACHE] update_labels failed for %s", rating_key, exc_info=True)
+    return LabelsResponse(labels=labels_list)
 
 
 @router.post("/movie/{rating_key}/labels/remove")
@@ -137,38 +271,35 @@ def api_tmdb_images(tmdb_id: int):
 
 
 @router.get("/movie/{rating_key}/poster")
-def api_movie_poster(rating_key: str):
-    """Proxy poster images through the backend to avoid CORS issues."""
-    direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
+def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw: bool = False, force_refresh: bool = False):
+    """
+    Return Plex poster, cached on disk. If `meta=1` (or Accept: application/json),
+    returns {"url": "<cached endpoint>"} instead of bytes so the UI can show without re-download.
+    If force_refresh is true, it will re-fetch from Plex and overwrite cache.
+    """
 
-    # Try direct poster URL
-    try:
-        r = requests.get(direct, headers=plex_headers(), timeout=5, verify=settings.PLEX_VERIFY_TLS)
-        if r.status_code == 200:
-            # Return the image data directly instead of the URL
-            content_type = r.headers.get('content-type', 'image/jpeg')
-            return Response(content=r.content, media_type=content_type)
-    except Exception as e:
-        logger.debug(f"Failed to fetch poster directly for {rating_key}: {e}")
+    def _cached_url(candidate: Path) -> str:
+        ts = int(candidate.stat().st_mtime)
+        return f"/api/movie/{rating_key}/poster?raw=1&v={ts}"
 
-    # Fallback: parse metadata for thumb path
-    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-    try:
-        r = requests.get(url, headers=plex_headers(), timeout=10, verify=settings.PLEX_VERIFY_TLS)
-        r.raise_for_status()
-        root = ET.fromstring(r.text)
-        for video in root.findall(".//Video"):
-            thumb = video.get("thumb")
-            if thumb:
-                thumb_url = f"{settings.PLEX_URL}{thumb}"
-                poster_r = requests.get(thumb_url, headers=plex_headers(), timeout=5, verify=settings.PLEX_VERIFY_TLS)
-                if poster_r.status_code == 200:
-                    content_type = poster_r.headers.get('content-type', 'image/jpeg')
-                    return Response(content=poster_r.content, media_type=content_type)
-    except Exception as e:
-        logger.debug(f"Failed to fetch poster via metadata for {rating_key}: {e}")
+    def _return_file(candidate: Path, cache_header: str):
+        resp = FileResponse(candidate)
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        resp.headers["X-Poster-Cache"] = cache_header
+        return resp
 
-    # Return 404 if no poster found
+    wants_json = meta or "application/json" in (request.headers.get("accept") or "").lower()
+    cached = fetch_and_cache_poster(rating_key, force_refresh=force_refresh)
+    cache_header = "miss" if force_refresh else ("hit" if cached else "miss")
+
+    if cached:
+        if raw and not wants_json:
+            return _return_file(cached, cache_header)
+        if wants_json:
+            return JSONResponse({"url": _cached_url(cached)})
+        return _return_file(cached, cache_header)
+
+    # If still nothing, 404
     raise HTTPException(status_code=404, detail="Poster not found")
 
 

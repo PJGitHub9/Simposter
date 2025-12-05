@@ -10,13 +10,20 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: 'select'): void
+  (e: 'refresh'): void
 }>()
 </script>
 
 <template>
   <article class="card glass" @click="emit('select')">
     <div class="thumb" :style="{ backgroundImage: `url(${poster})` }">
-      <div class="badge">{{ status || 'Ready' }}</div>
+      <button class="refresh-btn" title="Refresh poster" @click.stop="emit('refresh')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="23 4 23 10 17 10" />
+          <polyline points="1 20 1 14 7 14" />
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+        </svg>
+      </button>
     </div>
     <div class="meta">
       <p class="title">{{ title }}</p>
@@ -54,20 +61,36 @@ const emit = defineEmits<{
   position: relative;
   overflow: hidden;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  position: relative;
 }
 
-.badge {
+.refresh-btn {
   position: absolute;
   top: 8px;
   right: 8px;
-  padding: 5px 9px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.6);
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(8px);
   color: #d7e6ff;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: all 0.18s ease;
+  cursor: pointer;
+}
+
+.refresh-btn:hover {
+  background: rgba(61, 214, 183, 0.18);
+  color: #3dd6b7;
+  border-color: rgba(61, 214, 183, 0.5);
+}
+
+.card:hover .refresh-btn {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .meta .title {

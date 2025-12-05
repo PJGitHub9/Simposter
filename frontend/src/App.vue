@@ -26,7 +26,7 @@ const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
 const searchQuery = ref('')
-const { movies } = useMovies()
+const { movies, hydratePostersFromSession } = useMovies()
 const settings = useSettingsStore()
 
 const activeTab = computed<TabKey>(() => {
@@ -72,6 +72,7 @@ onMounted(() => {
     () => settings.theme.value,
     (t) => applyTheme(t)
   )
+  hydratePostersFromSession()
 })
 
 const handleSearchSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null }) => {

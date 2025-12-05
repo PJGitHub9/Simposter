@@ -42,3 +42,4 @@ config/ui_settings.json
 config/settings/
 config/ui_settings.json
 */config/settings
+/config/*

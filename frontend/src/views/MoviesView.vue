@@ -14,7 +14,7 @@ type Movie = {
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
-const { movies: moviesCache, moviesLoaded: moviesLoadedFlag } = useMovies()
+const { movies: moviesCache, moviesLoaded: moviesLoadedFlag, setMoviePoster, hydratePostersFromSession } = useMovies()
 const posterCacheStore = ref<Record<string, string | null>>({})
 const labelCacheStore = ref<Record<string, string[]>>({})
 const posterInFlight = new Set<string>()
@@ -232,8 +232,21 @@ const fetchMovies = async () => {
     if (!moviesLoaded.value) {
       const res = await fetch(`${apiBase}/api/movies`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
-      const data = (await res.json()) as Movie[]
+      const data = (await res.json()) as (Movie & { labels?: string[] })[]
+      // Seed caches from server data when available
+      data.forEach((m) => {
+        if (m.poster && !(m.key in posterCacheStore.value)) {
+          posterCacheStore.value[m.key] = m.poster
+        }
+        if (m.labels && !(m.key in labelCacheStore.value)) {
+          labelCacheStore.value[m.key] = m.labels
+        }
+      })
+      savePosterCache()
+      saveLabelCache()
+
       moviesCache.value = data
+      hydratePostersFromSession() // reapply cached poster URLs after replacing movie list
       moviesLoaded.value = true
       saveMoviesCache()
     }
@@ -252,11 +265,12 @@ const fetchPosters = async (list: Movie[]) => {
   const results = await Promise.all(
     missing.map(async (m) => {
       try {
-        const posterUrl = `${apiBase}/api/movie/${m.key}/poster`
-        const posterRes = await fetch(posterUrl)
+        const posterMetaUrl = `${apiBase}/api/movie/${m.key}/poster?meta=1`
+        const posterRes = await fetch(posterMetaUrl)
         if (posterRes.ok) {
-          // The endpoint now returns the image directly, so use the URL as-is
-          return { key: m.key, url: posterUrl }
+          const data = await posterRes.json()
+          const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+          return { key: m.key, url }
         }
         return { key: m.key, url: null }
       } catch {
@@ -267,6 +281,8 @@ const fetchPosters = async (list: Movie[]) => {
   results.forEach((r) => {
     posterCache.value[r.key] = r.url
     posterInFlight.delete(r.key)
+    // Update global movies cache so search bar sees latest poster
+    setMoviePoster(r.key, r.url)
   })
   savePosterCache()
 }
@@ -303,6 +319,20 @@ const nextPage = () => {
 
 const prevPage = () => {
   if (page.value > 1) page.value -= 1
+}
+
+const handleRefreshPoster = async (ratingKey: string) => {
+  try {
+    const res = await fetch(`${apiBase}/api/movie/${ratingKey}/poster?meta=1&force_refresh=1`)
+    if (!res.ok) return
+    const data = await res.json()
+    const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+    posterCache.value[ratingKey] = url
+    setMoviePoster(ratingKey, url)
+    savePosterCache()
+  } catch {
+    /* ignore */
+  }
 }
 
 onMounted(async () => {
@@ -355,7 +385,7 @@ onMounted(async () => {
       <button @click="fetchMovies">Retry</button>
     </div>
     <div v-else-if="loading" class="callout">Loading movies…</div>
-    <MovieGrid v-else heading="Movies" :items="paged" @select="handleSelect" />
+    <MovieGrid v-else heading="Movies" :items="paged" @select="handleSelect" @refresh="handleRefreshPoster" />
     <div class="toolbar glass pagination">
       <div class="pager">
         <button @click="prevPage" :disabled="page === 1">Prev</button>

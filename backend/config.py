@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from pydantic_settings import BaseSettings
+from . import cache
 
 # Project base dir (repo root)
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -171,6 +174,7 @@ settings.OUTPUT_ROOT = _resolve_path(settings.OUTPUT_ROOT)
 settings.UPLOAD_DIR = _resolve_path(settings.UPLOAD_DIR)
 settings.LOG_DIR = _resolve_path(settings.LOG_DIR or str(Path(settings.CONFIG_DIR) / "logs"))
 settings.LOG_FILE = _resolve_path(settings.LOG_FILE) if settings.LOG_FILE else str(Path(settings.LOG_DIR) / "simposter.log")
+POSTER_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "posters")
 
 # Load from ui_settings.json if environment variables weren't provided
 _load_ui_settings_fallback()
@@ -181,6 +185,7 @@ Path(settings.SETTINGS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.OUTPUT_ROOT).mkdir(parents=True, exist_ok=True)
 Path(settings.LOG_DIR).mkdir(parents=True, exist_ok=True)
+Path(POSTER_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 
 # Migrate legacy log locations into the dedicated config/logs folder
 preferred_log = Path(settings.LOG_FILE).resolve()
@@ -243,6 +248,26 @@ if _running_in_container():
             "or run the container with host networking/extra_hosts so Plex is reachable.",
             settings.PLEX_URL,
         )
+
+
+def _build_plex_session() -> requests.Session:
+    """
+    Shared requests session for Plex calls with connection pooling and light retries.
+    This keeps sockets open so we can handle many concurrent label/poster lookups faster.
+    """
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=32,
+        pool_maxsize=64,
+        max_retries=Retry(total=2, backoff_factor=0.2, status_forcelist=[502, 503, 504]),
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.verify = settings.PLEX_VERIFY_TLS
+    return session
+
+
+plex_session = _build_plex_session()
 
 
 # ==========================
@@ -328,7 +353,7 @@ def resolve_library_id(name: str) -> str:
 
     url = f"{settings.PLEX_URL}/library/sections"
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=8, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.get(url, headers=plex_headers(), timeout=8)
         r.raise_for_status()
         root = ET.fromstring(r.text)
         logger.debug("[PLEX] Resolved sections from %s", url)
@@ -353,7 +378,7 @@ def get_plex_movies():
     url = f"{settings.PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all?type=1"
 
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=6, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
         r.raise_for_status()
         logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
     except Exception as e:
@@ -371,6 +396,10 @@ def get_plex_movies():
         out.append(Movie(key=key, title=title, year=int(year) if year else None, addedAt=int(added_at) if added_at else None))
 
     logger.info("[PLEX] Loaded %d movies from library %s", len(out), PLEX_MOVIE_LIB_ID)
+    try:
+        cache.refresh_from_list(out)
+    except Exception:
+        logger.debug("[CACHE] refresh_from_list failed", exc_info=True)
     return out
 
 
@@ -396,14 +425,19 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
 
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=6, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
         r.raise_for_status()
         logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
     except Exception as e:
         logger.warning("[PLEX] Failed to fetch metadata for %s: %s", rating_key, e)
         return None
 
-    return extract_tmdb_id_from_metadata(r.text)
+    tmdb_id = extract_tmdb_id_from_metadata(r.text)
+    try:
+        cache.update_tmdb(rating_key, tmdb_id)
+    except Exception:
+        logger.debug("[CACHE] update_tmdb failed", exc_info=True)
+    return tmdb_id
 
 
 def find_rating_key_by_title_year(title: str, year: Optional[int]):
@@ -430,7 +464,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all"
         params = {"type": "1", "id": rating_key, "label[].tag.tag-": label}
-        r = requests.put(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via sections endpoint rating_key=%s label=%s", rating_key, label)
             return
@@ -441,7 +475,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/labels"
         params = {"tag.tag": label, "tag.type": "label"}
-        r = requests.delete(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.delete(url, headers=plex_headers(), params=params, timeout=8)
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via metadata/labels rating_key=%s label=%s", rating_key, label)
             return
@@ -452,7 +486,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
         params = {"label[].tag.tag-": label, "type": "1"}
-        r = requests.put(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
         logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s status=%s", rating_key, label, r.status_code)
     except Exception:
         pass

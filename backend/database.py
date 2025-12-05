@@ -36,12 +36,20 @@ def _get_db_path():
 DB_PATH = _get_db_path()
 
 
+def _configure_conn(conn: sqlite3.Connection):
+    """Set safe defaults for concurrency on SQLite."""
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")  # 5s wait if locked
+    conn.row_factory = sqlite3.Row
+
+
 def init_database():
     """Initialize the database with required tables."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-    conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(DB_PATH, timeout=10.0, check_same_thread=False)
+    _configure_conn(conn)
     cursor = conn.cursor()
 
     try:
@@ -138,6 +146,28 @@ def init_database():
             ON presets(template_id)
         """)
 
+        # Cache table for Plex movies (metadata + labels/poster/tmdb)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS movie_cache (
+                rating_key TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                year INTEGER,
+                added_at INTEGER,
+                tmdb_id INTEGER,
+                poster_url TEXT,
+                labels_json TEXT DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_movie_cache_updated
+            ON movie_cache(updated_at)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_movie_cache_title
+            ON movie_cache(title)
+        """)
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
     except Exception as e:
@@ -151,8 +181,8 @@ def init_database():
 @contextmanager
 def get_db():
     """Context manager for database connections."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = sqlite3.connect(DB_PATH, timeout=10.0, check_same_thread=False)
+    _configure_conn(conn)
     try:
         yield conn
         conn.commit()
@@ -413,6 +443,155 @@ def get_presets_for_template(template_id: str) -> List[Dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+# ============================================
+#  Movie Cache Operations
+# ============================================
+
+def upsert_movie_cache(
+    rating_key: str,
+    title: str,
+    year: Optional[int],
+    added_at: Optional[int],
+    tmdb_id: Optional[int] = None,
+    poster_url: Optional[str] = None,
+    labels: Optional[List[str]] = None,
+) -> None:
+    """Insert or update cached movie metadata."""
+    labels_json = json.dumps(labels or [])
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(rating_key) DO UPDATE SET
+                title = excluded.title,
+                year = excluded.year,
+                added_at = excluded.added_at,
+                tmdb_id = COALESCE(excluded.tmdb_id, movie_cache.tmdb_id),
+                poster_url = COALESCE(excluded.poster_url, movie_cache.poster_url),
+                labels_json = CASE
+                    WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
+                    ELSE movie_cache.labels_json
+                END,
+                updated_at = CURRENT_TIMESTAMP
+        """, (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json))
+
+
+def update_movie_labels(rating_key: str, labels: List[str]) -> None:
+    """Update labels for a cached movie."""
+    labels_json = json.dumps(labels)
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE movie_cache
+            SET labels_json = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE rating_key = ?
+        """, (labels_json, rating_key))
+
+
+def update_movie_tmdb(rating_key: str, tmdb_id: Optional[int]) -> None:
+    """Update TMDB id for a cached movie."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE movie_cache
+            SET tmdb_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE rating_key = ?
+        """, (tmdb_id, rating_key))
+
+
+def update_movie_poster(rating_key: str, poster_url: Optional[str]) -> None:
+    """Update poster url for a cached movie."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE movie_cache
+            SET poster_url = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE rating_key = ?
+        """, (poster_url, rating_key))
+
+
+def bulk_refresh_cache(movies: List[Dict[str, Any]]) -> None:
+    """
+    Replace cache entries to match the provided movies list.
+    Each movie dict should include rating_key, title, year, added_at, tmdb_id?, poster_url?, labels?.
+    """
+    keys = [m["rating_key"] for m in movies]
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for m in movies:
+            labels_json = json.dumps(m.get("labels") or [])
+            cursor.execute("""
+                INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(rating_key) DO UPDATE SET
+                    title = excluded.title,
+                    year = excluded.year,
+                    added_at = excluded.added_at,
+                    tmdb_id = COALESCE(excluded.tmdb_id, movie_cache.tmdb_id),
+                    poster_url = COALESCE(excluded.poster_url, movie_cache.poster_url),
+                    labels_json = CASE
+                        WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
+                        ELSE movie_cache.labels_json
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                m["rating_key"],
+                m["title"],
+                m.get("year"),
+                m.get("added_at"),
+                m.get("tmdb_id"),
+                m.get("poster_url"),
+                labels_json,
+            ))
+
+        # Drop entries that are no longer present
+        if keys:
+            cursor.execute(f"""
+                DELETE FROM movie_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) 
+            """, keys)
+
+
+def get_cached_movies() -> List[Dict[str, Any]]:
+    """Return cached movies with labels/poster/tmdb if known."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at
+            FROM movie_cache
+            ORDER BY COALESCE(updated_at, added_at) DESC
+        """)
+        rows = cursor.fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            labels = json.loads(row["labels_json"]) if row["labels_json"] else []
+        except json.JSONDecodeError:
+            labels = []
+        out.append({
+            "rating_key": row["rating_key"],
+            "title": row["title"],
+            "year": row["year"],
+            "addedAt": row["added_at"],
+            "tmdb_id": row["tmdb_id"],
+            "poster_url": row["poster_url"],
+            "labels": labels,
+            "updated_at": row["updated_at"],
+        })
+    return out
+
+
+def get_movie_cache_stats() -> Dict[str, Any]:
+    """Return count and last updated timestamp for movie_cache."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as cnt, MAX(updated_at) as max_updated FROM movie_cache")
+        row = cursor.fetchone()
+    return {"count": row["cnt"] if row else 0, "max_updated": row["max_updated"] if row else None}
 
 
 # Initialize database on module import

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.4.2
+- Added SQLite-backed cache for Plex movies (labels/tmdb/poster metadata) with new `/api/cache/*` endpoints and incremental updates from live calls.
+- Improved concurrency by pooling Plex HTTP connections (faster label/poster fetches on unRAID).
+- Batch edit tab updates and local asset tab improvements.
+- Settings persistence now centralized in the SQL db (legacy JSON migrated automatically).
+- Version badge bumped to v1.4.2.
+
 ## v1.4.1
 - Added visible version badge (top nav and Settings) and centralized version constant.
 - Fixed presets: text overlay state and fields now reset/apply correctly; reload pulls fresh values.
