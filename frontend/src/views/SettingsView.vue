@@ -3,6 +3,7 @@ import { useSettingsStore, type Theme } from '../stores/settings'
 import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
 import { ref, onMounted, watch } from 'vue'
+import { getApiBase } from '@/services/apiBase'
 
 const settings = useSettingsStore()
 const saved = ref('')
@@ -97,7 +98,7 @@ const testPlexConnection = async () => {
   testConnectionLoading.value = true
   testConnection.value = 'Testing connection...'
   try {
-    const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+    const apiBase = getApiBase()
     const res = await fetch(`${apiBase}/api/test-plex-connection`)
     const data = await res.json()
 
@@ -133,7 +134,7 @@ const scanLibrary = async () => {
     saved.value = 'Scanning library...'
     scanOverlayVisible.value = true
     scanOverlayLog.value = ['Scanning library...']
-    const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+    const apiBase = getApiBase()
     const res = await fetch(`${apiBase}/api/scan-library`, { method: 'POST' })
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()

@@ -1,7 +1,8 @@
 import { ref } from 'vue'
 import type { PresetOptions } from './types'
+import { getApiBase } from './apiBase'
 
-const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+const apiBase = getApiBase()
 
 export function usePresetService() {
   const templates = ref<string[]>(['default'])

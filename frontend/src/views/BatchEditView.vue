@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useMovies } from '../composables/useMovies'
 
@@ -72,7 +73,7 @@ const processing = ref(false)
 const currentIndex = ref(0)
 const statusOverlay = ref<{ visible: boolean; message: string; detail?: string }>({ visible: false, message: '' })
 
-const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+const apiBase = getApiBase()
 
 // Poster cache - shared with MoviesView via sessionStorage
 const POSTER_CACHE_KEY = 'simposter-poster-cache'

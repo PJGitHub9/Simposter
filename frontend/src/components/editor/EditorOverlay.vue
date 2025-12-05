@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import type { MovieInput } from '../../services/types'
 import { useRenderService } from '../../services/render'
 import { usePresetService } from '../../services/presets'
+import { getApiBase } from '../../services/apiBase'
 
 type Poster = { url: string; thumb?: string; has_text?: boolean }
 type Logo = { url: string; thumb?: string; color?: string }
@@ -11,7 +12,7 @@ type Logo = { url: string; thumb?: string; color?: string }
 const props = defineProps<{ movie: MovieInput }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
-const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+const apiBase = getApiBase()
 
 const tmdbId = ref<number | null>(null)
 const posters = ref<Poster[]>([])

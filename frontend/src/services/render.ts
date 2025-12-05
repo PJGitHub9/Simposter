@@ -1,7 +1,8 @@
 import { ref } from 'vue'
 import type { MovieInput, PresetOptions } from './types'
+import { getApiBase } from './apiBase'
 
-const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+const apiBase = getApiBase()
 
 export function useRenderService() {
   const loading = ref(false)

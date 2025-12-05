@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
 import { useMovies } from '../composables/useMovies'
+import { getApiBase } from '@/services/apiBase'
 
 type Movie = {
   key: string
@@ -113,7 +114,7 @@ const filterLabel = ref<string>('')
 const posterCache = posterCacheStore
 const labelCache = labelCacheStore
 
-const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+const apiBase = getApiBase()
 const settings = useSettingsStore()
 
 const pageSize = computed(() => settings.posterDensity.value || 20)

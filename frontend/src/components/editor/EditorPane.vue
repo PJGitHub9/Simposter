@@ -6,12 +6,13 @@ import { usePresetService } from '../../services/presets'
 import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 import TextOverlayPanel from './TextOverlayPanel.vue'
+import { getApiBase } from '../../services/apiBase'
 
 const props = defineProps<{ movie: MovieInput }>()
 
 const settings = useSettingsStore()
 
-const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+const apiBase = getApiBase()
 
 const tmdbId = ref<number | null>(null)
 const posters = ref<{ url: string; thumb?: string; has_text?: boolean }[]>([])

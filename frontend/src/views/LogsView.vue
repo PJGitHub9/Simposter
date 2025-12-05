@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, onUnmounted } from 'vue'
+import { getApiBase } from '@/services/apiBase'
 
 type LogLevel = 'all' | 'debug' | 'info' | 'warning' | 'error'
 
-const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+const apiBase = getApiBase()
 const loading = ref(false)
 const error = ref<string | null>(null)
 const text = ref('')

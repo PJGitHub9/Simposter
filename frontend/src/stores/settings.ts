@@ -1,6 +1,7 @@
 import { ref } from 'vue'
+import { getApiBase } from '../services/apiBase'
 
-const apiBase = import.meta.env.VITE_API_URL || window.location.origin
+const apiBase = getApiBase()
 
 export type Theme = 'neon' | 'slate' | 'dracula' | 'nord' | 'oled' | 'light'
 
