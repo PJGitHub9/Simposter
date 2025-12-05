@@ -15,8 +15,9 @@ from pydantic_settings import BaseSettings
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load env files in order of priority:
-# 1) /config/.env (if CONFIG_DIR env is set, use that)
-# 2) repo root .env (BASE_DIR/.env)
+# 1) /config/.env (or ${CONFIG_DIR}/.env) if present
+# 2) repo root .env
+# Use override=False so container ENV (e.g., CONFIG_DIR=/config) is not clobbered by .env defaults.
 env_candidates = []
 config_dir_env = os.environ.get("CONFIG_DIR")
 if config_dir_env:
@@ -25,7 +26,7 @@ else:
     env_candidates.append(Path("/config/.env"))
 env_candidates.append(BASE_DIR / ".env")
 for env_path in env_candidates:
-    load_dotenv(env_path, override=True)
+    load_dotenv(env_path, override=False)
 
 # ===============================
 #  Settings (loads .env properly)

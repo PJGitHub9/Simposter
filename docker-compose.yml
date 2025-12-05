@@ -14,6 +14,10 @@ services:
       - PLEX_MOVIE_LIBRARY_NAME=${PLEX_MOVIE_LIBRARY_NAME:-}
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       - PLEX_VERIFY_TLS=${PLEX_VERIFY_TLS:-true}
+      # Persist settings/output/logs in the mounted /config volume
+      - CONFIG_DIR=/config
+      - OUTPUT_ROOT=/config/output
+      - LOG_DIR=/config/logs
     volumes:
       - ./config:/config
     restart: unless-stopped

@@ -275,6 +275,8 @@ Simposter supports **two configuration methods**:
 docker run -d \
   --name simposter \
   -p 8003:8003 \
+  -e CONFIG_DIR=/config \
+  -e OUTPUT_ROOT=/config/output \
   -v /path/to/config:/config \
   simposter:latest
 ```
@@ -301,6 +303,8 @@ services:
       - PLEX_TOKEN=your_token
       - PLEX_MOVIE_LIBRARY_NAME=Movies
       - TMDB_API_KEY=your_tmdb_key
+      - CONFIG_DIR=/config
+      - OUTPUT_ROOT=/config/output
     volumes:
       - ./config:/config
 ```
