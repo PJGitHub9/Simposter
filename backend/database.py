@@ -40,40 +40,112 @@ def init_database():
     """Initialize the database with required tables."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    # UI Settings table - stores single row of JSON settings
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ui_settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            settings_json TEXT NOT NULL,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+    try:
+        # Check if old ui_settings table exists (needs migration)
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ui_settings'")
+        has_old_table = cursor.fetchone() is not None
 
-    # Presets table - stores preset configurations per template
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS presets (
-            id TEXT PRIMARY KEY,
-            template_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            options_json TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(template_id, id)
-        )
-    """)
+        # Check if new settings table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")
+        has_new_table = cursor.fetchone() is not None
 
-    # Create indexes for better query performance
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_presets_template
-        ON presets(template_id)
-    """)
+        if has_old_table and not has_new_table:
+            logger.info("[DB] Migrating from old ui_settings table to normalized settings table...")
+            # Get old settings
+            cursor.execute("SELECT settings_json FROM ui_settings WHERE id = 1")
+            row = cursor.fetchone()
+            if row:
+                settings_data = json.loads(row["settings_json"])
 
-    conn.commit()
-    conn.close()
-    logger.info(f"[DB] Initialized database at {DB_PATH}")
+                # Create new settings table
+                cursor.execute("""
+                    CREATE TABLE settings (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        category TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                # Migrate data
+                for key, value in settings_data.items():
+                    if isinstance(value, dict):
+                        category = key
+                        for sub_key, sub_value in value.items():
+                            full_key = f"{category}.{sub_key}"
+                            if isinstance(sub_value, (dict, list)):
+                                str_value = json.dumps(sub_value)
+                            elif isinstance(sub_value, bool):
+                                str_value = 'true' if sub_value else 'false'
+                            else:
+                                str_value = str(sub_value)
+                            cursor.execute("""
+                                INSERT INTO settings (key, value, category, updated_at)
+                                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                            """, (full_key, str_value, category))
+                    else:
+                        if isinstance(value, (dict, list)):
+                            str_value = json.dumps(value)
+                        elif isinstance(value, bool):
+                            str_value = 'true' if value else 'false'
+                        else:
+                            str_value = str(value)
+                        cursor.execute("""
+                            INSERT INTO settings (key, value, category, updated_at)
+                            VALUES (?, ?, NULL, CURRENT_TIMESTAMP)
+                        """, (key, str_value))
+
+                # Drop old table
+                cursor.execute("DROP TABLE ui_settings")
+                logger.info("[DB] Migration complete - dropped old ui_settings table")
+
+        # Settings table - normalized key-value storage
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                category TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Create index on category for faster lookups
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_settings_category
+            ON settings(category)
+        """)
+
+        # Presets table - stores preset configurations per template
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS presets (
+                id TEXT PRIMARY KEY,
+                template_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                options_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(template_id, id)
+            )
+        """)
+
+        # Create indexes for better query performance
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_presets_template
+            ON presets(template_id)
+        """)
+
+        conn.commit()
+        logger.info(f"[DB] Initialized database at {DB_PATH}")
+    except Exception as e:
+        logger.error(f"[DB] Initialization/migration failed: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @contextmanager
@@ -92,33 +164,143 @@ def get_db():
 
 
 # ============================================
-#  UI Settings Operations
+#  Settings Operations
 # ============================================
 
-def get_ui_settings() -> Optional[Dict[str, Any]]:
-    """Get UI settings from database."""
+def get_setting(key: str) -> Optional[str]:
+    """Get a single setting value by key."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT settings_json FROM ui_settings WHERE id = 1")
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
         row = cursor.fetchone()
         if row:
-            return json.loads(row["settings_json"])
+            return row["value"]
         return None
 
 
-def save_ui_settings(settings_data: Dict[str, Any]) -> None:
-    """Save UI settings to database."""
+def set_setting(key: str, value: str, category: Optional[str] = None) -> None:
+    """Set a single setting value."""
     with get_db() as conn:
         cursor = conn.cursor()
-        settings_json = json.dumps(settings_data, indent=2)
-
         cursor.execute("""
-            INSERT INTO ui_settings (id, settings_json, updated_at)
-            VALUES (1, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(id) DO UPDATE SET
-                settings_json = excluded.settings_json,
+            INSERT INTO settings (key, value, category, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                category = excluded.category,
                 updated_at = CURRENT_TIMESTAMP
-        """, (settings_json,))
+        """, (key, value, category))
+    logger.debug(f"[DB] Set setting {key}")
+
+
+def get_settings_by_category(category: str) -> Dict[str, str]:
+    """Get all settings in a category."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM settings WHERE category = ?", (category,))
+        rows = cursor.fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+
+def get_all_settings() -> Dict[str, str]:
+    """Get all settings as a flat key-value dict."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM settings")
+        rows = cursor.fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+
+def get_ui_settings() -> Optional[Dict[str, Any]]:
+    """
+    Get UI settings organized in the legacy JSON structure.
+    This maintains compatibility with existing code.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value, category FROM settings")
+        rows = cursor.fetchall()
+
+    if not rows:
+        return None
+
+    # Build nested structure
+    result: Dict[str, Any] = {}
+
+    for row in rows:
+        key = row["key"]
+        value = row["value"]
+        category = row["category"]
+
+        # Parse JSON values if they look like JSON
+        try:
+            if value and (value.startswith('{') or value.startswith('[')):
+                parsed_value = json.loads(value)
+            elif value and value.isdigit():
+                parsed_value = int(value)
+            elif value in ('true', 'false'):
+                parsed_value = value == 'true'
+            else:
+                parsed_value = value
+        except (json.JSONDecodeError, ValueError):
+            parsed_value = value
+
+        if category:
+            # Nested setting (e.g., category="plex", key="url")
+            if category not in result:
+                result[category] = {}
+            # Remove category prefix from key if present
+            setting_key = key.replace(f"{category}.", "", 1) if key.startswith(f"{category}.") else key
+            result[category][setting_key] = parsed_value
+        else:
+            # Top-level setting
+            result[key] = parsed_value
+
+    return result
+
+
+def save_ui_settings(settings_data: Dict[str, Any]) -> None:
+    """
+    Save UI settings from the legacy JSON structure.
+    Converts nested structure to flat key-value pairs.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Clear existing settings
+        cursor.execute("DELETE FROM settings")
+
+        # Flatten and save
+        for key, value in settings_data.items():
+            if isinstance(value, dict):
+                # Nested object - store each sub-key with category
+                category = key
+                for sub_key, sub_value in value.items():
+                    full_key = f"{category}.{sub_key}"
+                    if isinstance(sub_value, (dict, list)):
+                        str_value = json.dumps(sub_value)
+                    elif isinstance(sub_value, bool):
+                        str_value = 'true' if sub_value else 'false'
+                    else:
+                        str_value = str(sub_value)
+
+                    cursor.execute("""
+                        INSERT INTO settings (key, value, category, updated_at)
+                        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (full_key, str_value, category))
+            else:
+                # Top-level value
+                if isinstance(value, (dict, list)):
+                    str_value = json.dumps(value)
+                elif isinstance(value, bool):
+                    str_value = 'true' if value else 'false'
+                else:
+                    str_value = str(value)
+
+                cursor.execute("""
+                    INSERT INTO settings (key, value, category, updated_at)
+                    VALUES (?, ?, NULL, CURRENT_TIMESTAMP)
+                """, (key, str_value))
 
     logger.debug("[DB] Saved UI settings")
 
