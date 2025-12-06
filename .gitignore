@@ -41,3 +41,5 @@ frontend/node_modules/
 config/ui_settings.json
 config/settings/
 config/ui_settings.json
+*/config/settings
+/config/*

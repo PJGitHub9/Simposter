@@ -17,6 +17,7 @@ defineProps<{
 
 const emit = defineEmits<{
   (e: 'select', movie: Entry): void
+  (e: 'refresh', key: string): void
 }>()
 </script>
 
@@ -35,7 +36,9 @@ const emit = defineEmits<{
         :addedAt="item.addedAt"
         :poster="item.poster"
         :status="item.status"
+        :ratingKey="item.key"
         @select="emit('select', item)"
+        @refresh="emit('refresh', item.key)"
       />
     </div>
   </section>

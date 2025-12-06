@@ -4,11 +4,13 @@ import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
 import { ref, onMounted, watch } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import { useScanStore } from '@/stores/scan'
 
 const settings = useSettingsStore()
 const saved = ref('')
 const allLabels = ref<string[]>([])
 const { movies: moviesCache, moviesLoaded } = useMovies()
+const scan = useScanStore()
 
 // Local state that will only be applied when save is clicked
 const localTheme = ref<Theme>('neon')
@@ -31,8 +33,7 @@ const localConcurrentRenders = ref(2)
 const localTmdbRateLimit = ref(40)
 const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
-const scanOverlayVisible = ref(false)
-const scanOverlayLog = ref<string[]>([])
+let scanPoller: number | null = null
 
 const loadLocalSettings = () => {
   localTheme.value = settings.theme.value
@@ -93,18 +94,28 @@ const saveSettings = async () => {
 
 const testConnection = ref('')
 const testConnectionLoading = ref(false)
+const plexLibraries = ref<Array<{ title: string; key: string; type: string }>>([])
 
 const testPlexConnection = async () => {
   testConnectionLoading.value = true
   testConnection.value = 'Testing connection...'
+  plexLibraries.value = []
+
   try {
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/test-plex-connection`)
+    // Send current input values as query parameters to test with them
+    const params = new URLSearchParams({
+      plex_url: localPlexUrl.value,
+      plex_token: localPlexToken.value
+    })
+    const res = await fetch(`${apiBase}/api/test-plex-connection?${params}`)
     const data = await res.json()
 
     if (data.status === 'ok') {
-      const sectionsList = data.sections.map((s: any) => s.title).join(', ')
-      testConnection.value = `✓ Connected! Found ${data.sections.length} libraries: ${sectionsList}`
+      plexLibraries.value = data.sections || []
+      const movieLibs = plexLibraries.value.filter(s => s.type === 'movie')
+      const sectionsList = movieLibs.map((s: any) => s.title).join(', ')
+      testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${sectionsList}`
     } else {
       testConnection.value = `✗ ${data.error}: ${data.message}`
     }
@@ -117,12 +128,21 @@ const testPlexConnection = async () => {
 }
 
 const clearCache = () => {
+  if (scan.running.value) {
+    saved.value = 'Scan in progress - cannot clear session cache'
+    setTimeout(() => (saved.value = ''), 2000)
+    return
+  }
+  if (!window.confirm('This will clear cached movies/posters/labels from this browser session. Continue?')) {
+    return
+  }
   try {
     // Clear poster cache from sessionStorage
     sessionStorage.removeItem('simposter-poster-cache')
     // Clear label cache from localStorage
     sessionStorage.removeItem('simposter-labels-cache')
-    saved.value = 'Cache cleared!'
+    sessionStorage.removeItem('simposter-movies-cache')
+    saved.value = 'Session cache cleared!'
     setTimeout(() => (saved.value = ''), 1500)
   } catch (e) {
     console.error('Failed to clear cache', e)
@@ -130,10 +150,19 @@ const clearCache = () => {
 }
 
 const scanLibrary = async () => {
+  if (scan.running.value || scan.checking.value) {
+    saved.value = 'Scan already in progress'
+    setTimeout(() => (saved.value = ''), 2000)
+    return
+  }
   try {
-    saved.value = 'Scanning library...'
-    scanOverlayVisible.value = true
-    scanOverlayLog.value = ['Scanning library...']
+    saved.value = 'Rescanning library...'
+    scan.visible.value = true
+    scan.log.value = ['Starting rescan...']
+    scan.progress.value = { processed: 0, total: 0 }
+    scan.current.value = ''
+    scan.running.value = true
+    startScanPolling()
     const apiBase = getApiBase()
     const res = await fetch(`${apiBase}/api/scan-library`, { method: 'POST' })
     if (!res.ok) throw new Error(`API error ${res.status}`)
@@ -143,9 +172,10 @@ const scanLibrary = async () => {
     if (Array.isArray(data.movies)) {
       moviesCache.value = data.movies
       moviesLoaded.value = true
-      scanOverlayLog.value = data.movies.slice(0, 20).map((m: any) => `${m.title}${m.year ? ` (${m.year})` : ''}`)
+      scan.progress.value = { processed: data.movies.length, total: data.movies.length }
+      scan.log.value = data.movies.slice(0, 20).map((m: any) => `${m.title}${m.year ? ` (${m.year})` : ''}`)
       if (data.movies.length > 20) {
-        scanOverlayLog.value.push(`...and ${data.movies.length - 20} more`)
+        scan.log.value.push(`...and ${data.movies.length - 20} more`)
       }
       try {
         sessionStorage.setItem('simposter-movies-cache', JSON.stringify(data.movies))
@@ -172,18 +202,54 @@ const scanLibrary = async () => {
       }
     }
 
-    saved.value = `Scanned ${data.count || 0} items!`
+    saved.value = `Rescanned ${data.count || 0} items`
     setTimeout(() => (saved.value = ''), 2000)
-    setTimeout(() => (scanOverlayVisible.value = false), 3000)
     // Refresh label cache after scan
     await fetchAllLabels()
+    // Mark scan done; overlay will auto-hide via scan store
+    scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
+    scan.running.value = false
+    // Ensure overlay hides even if no further poll events arrive
+    setTimeout(() => {
+      scan.visible.value = false
+      scan.log.value = []
+      scan.current.value = ''
+    }, 2000)
   } catch (e) {
     saved.value = `Scan failed: ${e instanceof Error ? e.message : 'Unknown error'}`
-    scanOverlayLog.value = [`Scan failed: ${e instanceof Error ? e.message : 'Unknown error'}`]
+    scan.log.value = [`Scan failed: ${e instanceof Error ? e.message : 'Unknown error'}`]
     setTimeout(() => {
       saved.value = ''
-      scanOverlayVisible.value = false
+      scan.visible.value = false
     }, 3000)
+  }
+  stopScanPolling()
+  scan.running.value = false
+}
+
+const clearBackendCache = async () => {
+  if (scan.running.value || scan.checking.value) {
+    saved.value = 'Scan in progress - cannot clear cache'
+    setTimeout(() => (saved.value = ''), 2000)
+    return
+  }
+  if (!window.confirm('⚠️ This will delete backend cache (posters + DB cache). Continue?')) {
+    return
+  }
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/cache`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    saved.value = `Backend cache cleared (${data.removed_posters || 0} poster files removed)`
+    // Also clear browser caches
+    sessionStorage.removeItem('simposter-poster-cache')
+    sessionStorage.removeItem('simposter-labels-cache')
+    sessionStorage.removeItem('simposter-movies-cache')
+  } catch (e) {
+    saved.value = `Failed to clear backend cache: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    setTimeout(() => (saved.value = ''), 2500)
   }
 }
 
@@ -235,6 +301,43 @@ const toggleLabel = (label: string) => {
 
 const isLabelSelected = (label: string) => {
   return localDefaultLabelsToRemove.value.includes(label)
+}
+
+const startScanPolling = () => {
+  stopScanPolling()
+  const apiBase = getApiBase()
+  scanPoller = window.setInterval(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/scan-progress`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.total) {
+        scan.progress.value = { processed: data.processed || 0, total: data.total || 0 }
+      }
+      if (data.current) {
+        scan.current.value = data.current
+      }
+      if (scan.progress.value.total) {
+        const pct = Math.min(100, Math.round((scan.progress.value.processed / scan.progress.value.total) * 100))
+        const line = `${scan.progress.value.processed}/${scan.progress.value.total} (${pct}%) ${scan.current.value || ''}`
+        scan.log.value = [line]
+      }
+      if (data.state && data.state !== 'running') {
+        stopScanPolling()
+        scan.running.value = false
+        scan.visible.value = false
+      }
+    } catch {
+      // ignore polling errors
+    }
+  }, 1000)
+}
+
+const stopScanPolling = () => {
+  if (scanPoller !== null) {
+    clearInterval(scanPoller)
+    scanPoller = null
+  }
 }
 </script>
 
@@ -354,7 +457,22 @@ const isLabelSelected = (label: string) => {
         </label>
         <label>
           <span class="label-text">Plex Movie Library</span>
+          <select
+            v-if="plexLibraries.length > 0"
+            v-model="localPlexLibrary"
+            class="form-control"
+          >
+            <option value="">Select a library...</option>
+            <option
+              v-for="lib in plexLibraries.filter(s => s.type === 'movie')"
+              :key="lib.key"
+              :value="lib.title"
+            >
+              {{ lib.title }}
+            </option>
+          </select>
           <input
+            v-else
             v-model="localPlexLibrary"
             type="text"
             placeholder="Movies or 1"
@@ -364,6 +482,7 @@ const isLabelSelected = (label: string) => {
             @select.stop
             @selectstart.stop
           />
+          <span v-if="plexLibraries.length === 0" class="help-text">Test connection first to populate library dropdown</span>
         </label>
         <div class="test-connection-wrapper">
           <button
@@ -547,34 +666,24 @@ const isLabelSelected = (label: string) => {
         </svg>
         Save Settings
       </button>
-      <button @click="clearCache" class="secondary">
+      <button @click="clearCache" class="secondary" :disabled="scan.running.value || scan.checking.value">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="1 4 1 10 7 10"/>
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
         </svg>
-        Clear Cache
+        Clear Session Cache
       </button>
-      <button @click="scanLibrary" class="secondary">
+      <button @click="scanLibrary" class="secondary" :disabled="scan.running.value || scan.checking.value">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>
         </svg>
-        Scan Library
+        Rescan Library
       </button>
       <span v-if="saved" class="status">{{ saved }}</span>
     </div>
 
-    <div v-if="scanOverlayVisible" class="scan-overlay">
-      <div class="scan-card">
-        <div class="spinner"></div>
-        <div>
-          <p class="scan-title">Scanning library...</p>
-          <ul class="scan-list">
-            <li v-for="line in scanOverlayLog" :key="line">{{ line }}</li>
-          </ul>
-        </div>
-      </div>
-    </div>
+    <!-- Overlay now global in App.vue -->
   </div>
 </template>
 
@@ -840,8 +949,8 @@ button svg {
 
 .scan-overlay {
   position: fixed;
-  bottom: 20px;
-  left: 20px;
+  top: 20px;
+  right: 20px;
   z-index: 2000;
 }
 
@@ -862,12 +971,48 @@ button svg {
   font-weight: 600;
 }
 
+.scan-current {
+  margin: 2px 0 6px;
+  font-size: 13px;
+  color: #dbe4ff;
+  opacity: 0.9;
+}
+
 .scan-list {
   margin: 0;
   padding-left: 18px;
   max-height: 200px;
   overflow-y: auto;
   font-size: 13px;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 8px;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3dd6b7, #5b8dee);
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+
+.progress-text {
+  font-size: 12px;
+  color: #dbe4ff;
+  min-width: 80px;
+  text-align: right;
 }
 
 .spinner {

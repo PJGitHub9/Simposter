@@ -32,6 +32,10 @@ const error = ref<string | null>(null)
 const selectedMovies = ref<Set<string>>(new Set())
 const searchQuery = ref('')
 const filterLabel = ref<string>('')
+const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
+const sortOrder = ref<'asc' | 'desc'>('asc')
+const posterLimit = ref<number>(50)
+const currentPage = ref<number>(1)
 
 // Label cache
 const LABELS_CACHE_KEY = 'simposter-labels-cache'
@@ -134,6 +138,43 @@ const filteredMovies = computed(() => {
   return result
 })
 
+const sortedMovies = computed(() => {
+  const list = [...filteredMovies.value]
+  const multiplier = sortOrder.value === 'asc' ? 1 : -1
+
+  if (sortBy.value === 'title') {
+    list.sort((a, b) => multiplier * a.title.localeCompare(b.title))
+  } else if (sortBy.value === 'year') {
+    list.sort((a, b) => multiplier * ((Number(a.year) || 0) - (Number(b.year) || 0)))
+  } else if (sortBy.value === 'addedAt') {
+    list.sort((a, b) => multiplier * ((a.addedAt || 0) - (b.addedAt || 0)))
+  }
+
+  return list
+})
+
+const totalPages = computed(() => {
+  return Math.ceil(sortedMovies.value.length / posterLimit.value)
+})
+
+const limitedMovies = computed(() => {
+  const start = (currentPage.value - 1) * posterLimit.value
+  const end = start + posterLimit.value
+  return sortedMovies.value.slice(start, end)
+})
+
+const nextPage = () => {
+  if (currentPage.value < totalPages.value) {
+    currentPage.value++
+  }
+}
+
+const prevPage = () => {
+  if (currentPage.value > 1) {
+    currentPage.value--
+  }
+}
+
 const progressPercent = computed(() => {
   if (selectedMovies.value.size === 0) return 0
   return (currentIndex.value / selectedMovies.value.size) * 100
@@ -141,7 +182,7 @@ const progressPercent = computed(() => {
 
 // Computed property to merge cached posters with movie data
 const moviesWithPosters = computed(() => {
-  return filteredMovies.value.map(m => ({
+  return limitedMovies.value.map(m => ({
     ...m,
     poster: posterCache.value[m.key] ?? m.poster ?? null
   }))
@@ -173,7 +214,7 @@ const fetchMovies = async () => {
 }
 
 const fetchPosters = async () => {
-  const missing = filteredMovies.value.filter(
+  const missing = limitedMovies.value.filter(
     m => (!posterCache.value[m.key]) && !posterInFlight.has(m.key)
   )
   if (!missing.length) return
@@ -182,9 +223,12 @@ const fetchPosters = async () => {
   const results = await Promise.all(
     missing.map(async m => {
       try {
-        const res = await fetch(`${apiBase}/api/movie/${m.key}/poster`)
-        const data = await res.json()
-        return { key: m.key, url: data.url || null }
+        const posterUrl = `${apiBase}/api/movie/${m.key}/poster`
+        const res = await fetch(posterUrl)
+        if (res.ok) {
+          return { key: m.key, url: posterUrl }
+        }
+        return { key: m.key, url: null }
       } catch {
         return { key: m.key, url: null }
       }
@@ -428,12 +472,12 @@ const previewLoading = ref(false)
 const previewCache = ref<Record<string, string>>({})
 
 const fetchPreview = async () => {
-  if (!currentPreviewMovie.value || !selectedTemplate.value || !selectedPreset.value) {
+  if (!currentPreviewMovie.value || !selectedTemplate.value) {
     previewImage.value = null
     return
   }
 
-  const cacheKey = `${currentPreviewMovie.value.key}|${selectedTemplate.value}|${selectedPreset.value}`
+  const cacheKey = `${currentPreviewMovie.value.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}`
   if (previewCache.value[cacheKey]) {
     previewImage.value = previewCache.value[cacheKey]
     return
@@ -447,9 +491,11 @@ const fetchPreview = async () => {
     let posterUrl = movie.poster
     if (!posterUrl) {
       // Fetch the poster if not cached
-      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster`)
+      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster?meta=1`)
       const posterData = await posterRes.json()
-      posterUrl = posterData.url
+      if (posterData.url) {
+        posterUrl = posterData.url.startsWith('http') ? posterData.url : `${apiBase}${posterData.url}`
+      }
     }
 
     const payload = {
@@ -457,7 +503,7 @@ const fetchPreview = async () => {
       background_url: posterUrl || '',
       logo_url: null,
       options: {},
-      preset_id: selectedPreset.value,
+      preset_id: selectedPreset.value || undefined,
       movie_title: movie.title,
       movie_year: movie.year ? Number(movie.year) : undefined
     }
@@ -489,6 +535,18 @@ const fetchPreview = async () => {
 watch(moviesWithPosters, (list) => {
   fetchPosters()
   fetchLabels(list)
+})
+
+// Reset to page 1 when filters change
+watch([searchQuery, filterLabel, sortBy, sortOrder, posterLimit], () => {
+  currentPage.value = 1
+})
+
+// Ensure current page doesn't exceed total pages
+watch(totalPages, () => {
+  if (currentPage.value > totalPages.value) {
+    currentPage.value = Math.max(1, totalPages.value)
+  }
 })
 
 // Clear preset when template changes
@@ -598,19 +656,40 @@ onMounted(async () => {
 
     <!-- Movie Selection Controls -->
     <div class="movie-controls">
-      <div class="controls-left">
-        <h3>{{ selectedMovies.size }} of {{ moviesWithPosters.length }} selected</h3>
-        <button class="btn-small" @click="selectAll">Select All</button>
-        <button class="btn-small" @click="deselectAll">Deselect All</button>
-      </div>
-
-      <div class="controls-right">
-        <select v-model="filterLabel" class="filter-select">
-          <option value="">All Labels</option>
-          <option v-for="label in allLabels" :key="label" :value="label">
-            {{ label }}
-          </option>
-        </select>
+      <div class="filter-row">
+        <div class="filter-groups">
+          <div class="limit-control">
+            <label for="poster-limit">Show:</label>
+            <select id="poster-limit" v-model.number="posterLimit" class="filter-select">
+              <option :value="25">25 posters</option>
+              <option :value="50">50 posters</option>
+              <option :value="100">100 posters</option>
+              <option :value="200">200 posters</option>
+              <option :value="500">500 posters</option>
+            </select>
+          </div>
+          <div class="sort-control">
+            <label for="sort-by">Sort by:</label>
+            <select id="sort-by" v-model="sortBy" class="filter-select">
+              <option value="title">Title</option>
+              <option value="year">Year</option>
+              <option value="addedAt">Date Added</option>
+            </select>
+          </div>
+          <div class="sort-control">
+            <label for="sort-order">Order:</label>
+            <select id="sort-order" v-model="sortOrder" class="filter-select">
+              <option value="asc">{{ sortBy === 'title' ? 'A-Z' : 'Oldest First' }}</option>
+              <option value="desc">{{ sortBy === 'title' ? 'Z-A' : 'Newest First' }}</option>
+            </select>
+          </div>
+          <select v-model="filterLabel" class="filter-select">
+            <option value="">All Labels</option>
+            <option v-for="label in allLabels" :key="label" :value="label">
+              {{ label }}
+            </option>
+          </select>
+        </div>
         <input
           v-model="searchQuery"
           type="text"
@@ -618,40 +697,68 @@ onMounted(async () => {
           class="filter-input"
         />
       </div>
+
+      <div class="selection-row">
+        <div class="selection-summary">
+          <h3>{{ selectedMovies.size }} of {{ moviesWithPosters.length }} selected</h3>
+          <span v-if="filteredMovies.length > posterLimit" class="limit-notice">
+            Showing {{ posterLimit }} of {{ filteredMovies.length }} movies
+          </span>
+        </div>
+        <div class="selection-actions">
+          <button class="btn-small" @click="selectAll">Select All</button>
+          <button class="btn-small" @click="deselectAll">Deselect All</button>
+        </div>
+      </div>
     </div>
 
     <!-- Content Area with Grid and Preview -->
     <div class="content-area">
-      <!-- Movie Grid -->
-      <div v-if="loading" class="loading">Loading movies...</div>
-      <div v-else-if="error" class="error">{{ error }}</div>
-      <div v-else class="movie-grid">
-        <div
-          v-for="movie in moviesWithPosters"
-          :key="movie.key"
-          class="movie-card"
-          :class="{ selected: selectedMovies.has(movie.key) }"
-          @click="toggleMovie(movie.key)"
-        >
-          <div class="checkbox-overlay">
-            <input
-              type="checkbox"
-              :checked="selectedMovies.has(movie.key)"
-              @click.stop="toggleMovie(movie.key)"
-              class="movie-checkbox"
-            />
+      <!-- Movie Grid Container -->
+      <div class="grid-container">
+        <div v-if="loading" class="loading">Loading movies...</div>
+        <div v-else-if="error" class="error">{{ error }}</div>
+        <div v-else class="movie-grid">
+          <div
+            v-for="movie in moviesWithPosters"
+            :key="movie.key"
+            class="movie-card"
+            :class="{ selected: selectedMovies.has(movie.key) }"
+            @click="toggleMovie(movie.key)"
+          >
+            <div class="checkbox-overlay">
+              <input
+                type="checkbox"
+                :checked="selectedMovies.has(movie.key)"
+                @click.stop="toggleMovie(movie.key)"
+                class="movie-checkbox"
+              />
+            </div>
+            <div class="poster">
+              <img
+                :src="movie.poster || `/api/movie/${movie.key}/poster?w=200`"
+                :alt="movie.title"
+                loading="lazy"
+              />
+            </div>
+            <div class="movie-info">
+              <p class="title">{{ movie.title }}</p>
+              <p class="year">{{ movie.year }}</p>
+            </div>
           </div>
-          <div class="poster">
-            <img
-              :src="movie.poster || `/api/movie/${movie.key}/poster?w=200`"
-              :alt="movie.title"
-              loading="lazy"
-            />
-          </div>
-          <div class="movie-info">
-            <p class="title">{{ movie.title }}</p>
-            <p class="year">{{ movie.year }}</p>
-          </div>
+        </div>
+
+        <!-- Pagination Controls -->
+        <div v-if="!loading && !error && totalPages > 1" class="pagination-controls">
+          <button class="page-btn" @click="prevPage" :disabled="currentPage === 1">
+            ← Previous
+          </button>
+          <span class="page-info">
+            Page {{ currentPage }} of {{ totalPages }}
+          </span>
+          <button class="page-btn" @click="nextPage" :disabled="currentPage === totalPages">
+            Next →
+          </button>
         </div>
       </div>
 
@@ -695,7 +802,7 @@ onMounted(async () => {
           <p class="preview-title">{{ currentPreviewMovie.title }}</p>
           <p class="preview-year">{{ currentPreviewMovie.year }}</p>
           <p v-if="!selectedTemplate" class="preview-hint">Select a template to preview</p>
-          <p v-else-if="!selectedPreset" class="preview-hint">Select a preset to preview</p>
+          <p v-else-if="!selectedPreset" class="preview-hint">Preset optional - preview will use template defaults</p>
         </div>
 
         <!-- Movie List -->
@@ -859,8 +966,8 @@ onMounted(async () => {
 
 .movie-controls {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 0.75rem;
   margin-bottom: 1.5rem;
   padding: 1rem;
   background: var(--surface, #1a1f2e);
@@ -868,16 +975,19 @@ onMounted(async () => {
   border: 1px solid var(--border, #2a2f3e);
 }
 
-.controls-left {
+.filter-row {
   display: flex;
-  align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
 }
 
-.controls-left h3 {
-  margin: 0;
-  color: var(--text-primary, #fff);
-  font-size: 1rem;
+.filter-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
 }
 
 .btn-small {
@@ -897,10 +1007,64 @@ onMounted(async () => {
   border-color: var(--accent, #3dd6b7);
 }
 
-.controls-right {
+.limit-control {
   display: flex;
-  gap: 0.75rem;
   align-items: center;
+  gap: 0.5rem;
+}
+
+.sort-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sort-control label {
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.selection-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.selection-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.selection-summary h3 {
+  margin: 0;
+  color: var(--text-primary, #fff);
+  font-size: 1rem;
+}
+
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.limit-control label {
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.limit-notice {
+  color: var(--accent, #3dd6b7);
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-left: 0.5rem;
 }
 
 .filter-select {
@@ -925,7 +1089,8 @@ onMounted(async () => {
   border: 1px solid var(--border, #2a2f3e);
   border-radius: 4px;
   font-size: 0.9rem;
-  min-width: 300px;
+  min-width: 260px;
+  flex: 1;
 }
 
 .filter-input:focus {
@@ -951,10 +1116,60 @@ onMounted(async () => {
   gap: 1.5rem;
 }
 
+.grid-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
 .movie-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 1rem;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--surface, #1a1f2e);
+  border-radius: 8px;
+  border: 1px solid var(--border, #2a2f3e);
+}
+
+.page-btn {
+  padding: 0.6rem 1.2rem;
+  background: var(--accent, #3dd6b7);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-width: 100px;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: #2bc4a3;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(61, 214, 183, 0.3);
+}
+
+.page-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.page-info {
+  color: var(--text-primary, #fff);
+  font-size: 0.95rem;
+  font-weight: 500;
+  min-width: 120px;
+  text-align: center;
 }
 
 .preview-sidebar {

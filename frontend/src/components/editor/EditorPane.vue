@@ -5,12 +5,14 @@ import { useRenderService } from '../../services/render'
 import { usePresetService } from '../../services/presets'
 import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
+import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import { getApiBase } from '../../services/apiBase'
 
 const props = defineProps<{ movie: MovieInput }>()
 
 const settings = useSettingsStore()
+const { movies: globalMovies, setMoviePoster } = useMovies()
 
 const apiBase = getApiBase()
 
@@ -39,6 +41,7 @@ const normalizeLogoMode = (mode: unknown): 'original' | 'match' | 'hex' | 'none'
 
 const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
+const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
 const showBoundingBox = ref(false)
 const previewImgRef = ref<HTMLImageElement | null>(null)
@@ -553,26 +556,48 @@ const fetchLabels = async () => {
   }
 }
 
-const fetchExistingPoster = async () => {
+const updateGlobalPosterCache = (key: string, url: string | null) => {
+  if (typeof sessionStorage === 'undefined') return
   try {
-    const res = await fetch(`${apiBase}/api/movie/${props.movie.key}/poster`)
+    const raw = sessionStorage.getItem(POSTER_CACHE_KEY)
+    const cache = raw ? JSON.parse(raw) : {}
+    cache[key] = url
+    sessionStorage.setItem(POSTER_CACHE_KEY, JSON.stringify(cache))
+    // Update shared movies list so search/header reflect the new poster immediately
+    setMoviePoster(key, url)
+  } catch {
+    /* ignore */
+  }
+}
+
+const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
+  try {
+    const refreshFlag = typeof forceRefresh === 'boolean'
+      ? forceRefresh
+      : false
+    const res = await fetch(`${apiBase}/api/movie/${props.movie.key}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
     if (!res.ok) {
       existingPoster.value = null
+      updateGlobalPosterCache(props.movie.key, null)
       return
     }
     const data = await res.json()
     if (data.url) {
-      // Add cache-busting parameter to force fresh image load
-      const separator = data.url.includes('?') ? '&' : '?'
-      existingPoster.value = `${data.url}${separator}v=${Date.now()}`
+      // Use absolute URL so it works when API is on another host/port
+      existingPoster.value = data.url.startsWith('http')
+        ? data.url
+        : `${apiBase}${data.url}`
+      updateGlobalPosterCache(props.movie.key, existingPoster.value)
     } else {
       existingPoster.value = null
+      updateGlobalPosterCache(props.movie.key, null)
     }
     // Force re-render by toggling key
     posterRefreshKey.value += 1
   } catch (err) {
     console.error('Failed to fetch existing poster:', err)
     existingPoster.value = null
+    updateGlobalPosterCache(props.movie.key, null)
   }
 }
 
@@ -605,7 +630,7 @@ const doSend = async () => {
     success('Successfully sent poster to Plex!')
     // Wait 600ms for Plex to process, then refresh poster and labels
     await new Promise(resolve => setTimeout(resolve, 600))
-    await fetchExistingPoster()
+    await fetchExistingPoster(true)
     await fetchLabels()
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to send poster to Plex'

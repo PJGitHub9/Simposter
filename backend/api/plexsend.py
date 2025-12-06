@@ -5,6 +5,7 @@ from io import BytesIO
 from ..config import settings, plex_headers, plex_remove_label, logger
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest
+from .movies import fetch_and_cache_poster
 
 router = APIRouter()
 
@@ -53,6 +54,12 @@ def api_plex_send(req: PlexSendRequest):
     # Remove labels if requested
     for label in req.labels or []:
         plex_remove_label(req.rating_key, label)
+
+    # Refresh cached poster so future calls use the updated image
+    try:
+        fetch_and_cache_poster(req.rating_key, force_refresh=True)
+    except Exception as e:
+        logger.debug("[CACHE] poster refresh after send failed for %s: %s", req.rating_key, e)
 
     logger.info(f"Sent poster to Plex for ratingKey={req.rating_key}")
     return {"status": "ok"}

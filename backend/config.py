@@ -3,16 +3,32 @@ from dotenv import load_dotenv
 import os
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from pydantic_settings import BaseSettings
+from . import cache
 
 # Project base dir (repo root)
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Simple docker/container detection for better guidance when connecting to Plex
+def _running_in_container() -> bool:
+    try:
+        if Path("/.dockerenv").exists():
+            return True
+        cgroup = Path("/proc/1/cgroup")
+        if cgroup.exists() and "docker" in cgroup.read_text():
+            return True
+    except Exception:
+        pass
+    return False
 
 # Load env files in order of priority:
 # 1) /config/.env (or ${CONFIG_DIR}/.env) if present
@@ -65,55 +81,86 @@ settings = Settings()
 # ===============================
 def _load_ui_settings_fallback():
     """
-    Load Plex/TMDB credentials from ui_settings.json if they weren't provided via environment.
+    Load Plex/TMDB credentials from database or JSON fallback.
     This allows users to configure via GUI without needing .env or docker-compose.
 
     Priority order:
-    1. Environment variables (docker-compose/.env) - highest priority
-    2. ui_settings.json (GUI settings) - fallback
-    3. Defaults - lowest priority
+    1. Explicit environment variables (docker-compose/.env) - highest priority
+    2. Database (simposter.db) - user-facing config
+    3. ui_settings.json (legacy) - backward compatibility
+    4. Defaults - lowest priority
+
+    Note: Environment variables still override everything so docker deployments can force values,
+    while database/UI settings remain the primary interactive config.
     """
-    # Only load from ui_settings if env vars are at default/empty values
-    needs_fallback = (
-        settings.PLEX_URL == "http://localhost:32400" and
-        settings.PLEX_TOKEN == "" and
-        settings.TMDB_API_KEY == ""
-    )
+    data = None
 
-    if not needs_fallback:
-        return  # Environment variables are set, no need for fallback
+    # Try loading from database first
+    try:
+        # Import database module dynamically to avoid circular import issues
+        import importlib
+        import sys
 
-    # Resolve settings path (needs CONFIG_DIR to be normalized first)
-    settings_dir = Path(settings.CONFIG_DIR) / "settings"
-    ui_settings_file = settings_dir / "ui_settings.json"
+        # Get the parent directory of this file (backend/)
+        backend_dir = Path(__file__).parent
+        if str(backend_dir.parent) not in sys.path:
+            sys.path.insert(0, str(backend_dir.parent))
 
-    # Also check legacy location
-    legacy_ui_settings = Path(settings.CONFIG_DIR) / "ui_settings.json"
+        db = importlib.import_module('backend.database')
+        data = db.get_ui_settings()
+    except Exception:
+        # Silently ignore database errors during initial load
+        pass
 
-    settings_file = ui_settings_file if ui_settings_file.exists() else legacy_ui_settings
+    # Fallback to JSON files if database is empty
+    if not data:
+        settings_dir = Path(settings.CONFIG_DIR) / "settings"
+        ui_settings_file = settings_dir / "ui_settings.json"
+        legacy_ui_settings = Path(settings.CONFIG_DIR) / "ui_settings.json"
 
-    if not settings_file.exists():
-        return  # No ui_settings.json to load from
+        settings_file = ui_settings_file if ui_settings_file.exists() else legacy_ui_settings
+
+        if settings_file.exists():
+            try:
+                data = json.loads(settings_file.read_text(encoding="utf-8"))
+            except Exception:
+                return
+
+    if not data:
+        return  # No settings to load
 
     try:
-        data = json.loads(settings_file.read_text(encoding="utf-8"))
-
-        # Load Plex settings
+        # Load Plex settings - database/JSON takes priority over defaults
         plex_data = data.get("plex", {})
-        if plex_data.get("url") and settings.PLEX_URL == "http://localhost:32400":
+        if plex_data.get("url"):
             settings.PLEX_URL = plex_data["url"]
-        if plex_data.get("token") and settings.PLEX_TOKEN == "":
+        if plex_data.get("token"):
             settings.PLEX_TOKEN = plex_data["token"]
-        if plex_data.get("movieLibraryName") and settings.PLEX_MOVIE_LIBRARY_NAME == "1":
+        if plex_data.get("movieLibraryName"):
             settings.PLEX_MOVIE_LIBRARY_NAME = plex_data["movieLibraryName"]
 
         # Load TMDB settings
         tmdb_data = data.get("tmdb", {})
-        if tmdb_data.get("apiKey") and settings.TMDB_API_KEY == "":
+        if tmdb_data.get("apiKey"):
             settings.TMDB_API_KEY = tmdb_data["apiKey"]
 
+        # Explicit environment variables override database/JSON so docker-compose can force values
+        plex_url_env = os.getenv("PLEX_URL")
+        plex_token_env = os.getenv("PLEX_TOKEN")
+        plex_lib_env = os.getenv("PLEX_MOVIE_LIBRARY_NAME")
+        tmdb_key_env = os.getenv("TMDB_API_KEY")
+
+        if plex_url_env:
+            settings.PLEX_URL = plex_url_env
+        if plex_token_env:
+            settings.PLEX_TOKEN = plex_token_env
+        if plex_lib_env:
+            settings.PLEX_MOVIE_LIBRARY_NAME = plex_lib_env
+        if tmdb_key_env:
+            settings.TMDB_API_KEY = tmdb_key_env
+
     except Exception:
-        pass  # Silently fail if ui_settings.json is malformed
+        pass  # Silently ignore errors during settings application
 
 # Normalize paths relative to repo root so npm/uvicorn cwd doesn't matter
 def _resolve_path(p: str) -> str:
@@ -128,6 +175,7 @@ settings.OUTPUT_ROOT = _resolve_path(settings.OUTPUT_ROOT)
 settings.UPLOAD_DIR = _resolve_path(settings.UPLOAD_DIR)
 settings.LOG_DIR = _resolve_path(settings.LOG_DIR or str(Path(settings.CONFIG_DIR) / "logs"))
 settings.LOG_FILE = _resolve_path(settings.LOG_FILE) if settings.LOG_FILE else str(Path(settings.LOG_DIR) / "simposter.log")
+POSTER_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "posters")
 
 # Load from ui_settings.json if environment variables weren't provided
 _load_ui_settings_fallback()
@@ -138,6 +186,7 @@ Path(settings.SETTINGS_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.OUTPUT_ROOT).mkdir(parents=True, exist_ok=True)
 Path(settings.LOG_DIR).mkdir(parents=True, exist_ok=True)
+Path(POSTER_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 
 # Migrate legacy log locations into the dedicated config/logs folder
 preferred_log = Path(settings.LOG_FILE).resolve()
@@ -156,8 +205,36 @@ settings.LOG_FILE = str(preferred_log)
 
 
 # ==========================
-#  Logging
+#  Logging with sensitive data redaction
 # ==========================
+class RedactingFormatter(logging.Formatter):
+    """Custom formatter that redacts sensitive information from logs."""
+
+    def format(self, record):
+        # Tag API (uvicorn*) logs - keep original level but add API tag
+        if record.name.startswith("uvicorn"):
+            record.api_tag = "[API] "
+        else:
+            record.api_tag = ""
+
+        original = super().format(record)
+        # Redact tokens and API keys
+        redacted = original
+        if settings.PLEX_TOKEN and len(settings.PLEX_TOKEN) > 4:
+            redacted = redacted.replace(settings.PLEX_TOKEN, settings.PLEX_TOKEN[:4] + "***REDACTED***")
+        if settings.TMDB_API_KEY and len(settings.TMDB_API_KEY) > 4:
+            redacted = redacted.replace(settings.TMDB_API_KEY, settings.TMDB_API_KEY[:4] + "***REDACTED***")
+        return redacted
+
+class APILogDowngradeFilter(logging.Filter):
+    """Force uvicorn access logs to DEBUG level so they don't spam INFO."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name.startswith("uvicorn"):
+            record.levelname = "DEBUG"
+            record.levelno = logging.DEBUG
+        return True
+
 logger = logging.getLogger("simposter")
 level_name = settings.LOG_LEVEL.upper()
 level = getattr(logging, level_name, logging.INFO)
@@ -167,15 +244,82 @@ if not logger.handlers:
     log_dir = os.path.dirname(settings.LOG_FILE)
     os.makedirs(log_dir, exist_ok=True)
 
-    fh = logging.FileHandler(settings.LOG_FILE, encoding="utf-8")
+    def _rotate_namer(default_name: str) -> str:
+        """Rename uvicorn rotation file to simposter-YYYYMMDD.log style."""
+        p = Path(default_name)
+        # default_name ends with .YYYY-MM-DD; normalize to YYYYMMDD
+        date_part = p.name.split(".")[-1].replace("-", "")
+        base_stem = Path(settings.LOG_FILE).stem
+        return str(p.with_name(f"{base_stem}-{date_part}.log"))
+
+    fh = TimedRotatingFileHandler(
+        settings.LOG_FILE,
+        when="midnight",
+        interval=1,
+        backupCount=14,
+        encoding="utf-8",
+        utc=False,
+    )
+    fh.suffix = "%Y-%m-%d"
+    fh.namer = _rotate_namer
     sh = logging.StreamHandler()
 
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    fmt = RedactingFormatter("%(asctime)s %(api_tag)s[%(levelname)s] %(message)s")
     fh.setFormatter(fmt)
     sh.setFormatter(fmt)
+    downgrade_filter = APILogDowngradeFilter()
+    fh.addFilter(downgrade_filter)
+    sh.addFilter(downgrade_filter)
 
     logger.addHandler(fh)
     logger.addHandler(sh)
+
+# Attach handlers to uvicorn loggers so access logs land in our file too, labeled as [API] at DEBUG.
+api_formatter = RedactingFormatter("%(asctime)s %(api_tag)s[%(levelname)s] %(message)s")
+for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"):
+    uv_logger = logging.getLogger(name)
+    uv_logger.handlers = []
+    for h in logger.handlers:
+        clone = h
+        # Only adjust formatter on the clone if it's a Stream/FileHandler
+        try:
+            clone.setFormatter(api_formatter)
+        except Exception:
+            pass
+        uv_logger.addHandler(clone)
+    uv_logger.setLevel(logging.DEBUG)
+    uv_logger.propagate = False
+
+# Warn early if Plex URL points to localhost inside a container (common unRAID/Docker pitfall)
+if _running_in_container():
+    plex_url_lower = settings.PLEX_URL.lower()
+    if "localhost" in plex_url_lower or "127.0.0.1" in plex_url_lower:
+        logger.warning(
+            "[PLEX] PLEX_URL is set to %s inside a container. "
+            "If Plex runs on the host, use the host IP (e.g. http://192.168.x.x:32400) "
+            "or run the container with host networking/extra_hosts so Plex is reachable.",
+            settings.PLEX_URL,
+        )
+
+
+def _build_plex_session() -> requests.Session:
+    """
+    Shared requests session for Plex calls with connection pooling and light retries.
+    This keeps sockets open so we can handle many concurrent label/poster lookups faster.
+    """
+    session = requests.Session()
+    adapter = HTTPAdapter(
+        pool_connections=32,
+        pool_maxsize=64,
+        max_retries=Retry(total=2, backoff_factor=0.2, status_forcelist=[502, 503, 504]),
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    session.verify = settings.PLEX_VERIFY_TLS
+    return session
+
+
+plex_session = _build_plex_session()
 
 
 # ==========================
@@ -193,7 +337,30 @@ FRONTEND_DIR = str(_frontend_dist if _frontend_dist.exists() else _frontend_base
 
 
 def load_presets() -> dict:
-    """Load presets from config dir or fallback to defaults."""
+    """Load presets from database or fallback to defaults."""
+    try:
+        # Import database module dynamically to avoid circular import issues
+        import importlib
+        import sys
+
+        # Get the parent directory of this file (backend/)
+        backend_dir = Path(__file__).parent
+        if str(backend_dir.parent) not in sys.path:
+            sys.path.insert(0, str(backend_dir.parent))
+
+        db = importlib.import_module('backend.database')
+        presets = db.get_all_presets()
+
+        # If database has presets, return them
+        if presets:
+            logger.debug("[PRESETS] Loaded %d templates from database", len(presets))
+            return presets
+    except Exception as e:
+        logger.warning("[PRESETS] Failed to load from database: %s", e)
+
+    # Fallback to JSON file if database is empty or fails
+    logger.debug("[PRESETS] Falling back to JSON file")
+
     # Migrate legacy location if present
     if not os.path.exists(USER_PRESETS_PATH) and os.path.exists(LEGACY_PRESETS_PATH):
         try:
@@ -238,7 +405,7 @@ def resolve_library_id(name: str) -> str:
 
     url = f"{settings.PLEX_URL}/library/sections"
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=8, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.get(url, headers=plex_headers(), timeout=8)
         r.raise_for_status()
         root = ET.fromstring(r.text)
         logger.debug("[PLEX] Resolved sections from %s", url)
@@ -263,7 +430,7 @@ def get_plex_movies():
     url = f"{settings.PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all?type=1"
 
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=6, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
         r.raise_for_status()
         logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
     except Exception as e:
@@ -281,6 +448,10 @@ def get_plex_movies():
         out.append(Movie(key=key, title=title, year=int(year) if year else None, addedAt=int(added_at) if added_at else None))
 
     logger.info("[PLEX] Loaded %d movies from library %s", len(out), PLEX_MOVIE_LIB_ID)
+    try:
+        cache.refresh_from_list(out)
+    except Exception:
+        logger.debug("[CACHE] refresh_from_list failed", exc_info=True)
     return out
 
 
@@ -306,14 +477,19 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
 
     try:
-        r = requests.get(url, headers=plex_headers(), timeout=6, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
         r.raise_for_status()
         logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
     except Exception as e:
         logger.warning("[PLEX] Failed to fetch metadata for %s: %s", rating_key, e)
         return None
 
-    return extract_tmdb_id_from_metadata(r.text)
+    tmdb_id = extract_tmdb_id_from_metadata(r.text)
+    try:
+        cache.update_tmdb(rating_key, tmdb_id)
+    except Exception:
+        logger.debug("[CACHE] update_tmdb failed", exc_info=True)
+    return tmdb_id
 
 
 def find_rating_key_by_title_year(title: str, year: Optional[int]):
@@ -340,7 +516,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all"
         params = {"type": "1", "id": rating_key, "label[].tag.tag-": label}
-        r = requests.put(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via sections endpoint rating_key=%s label=%s", rating_key, label)
             return
@@ -351,7 +527,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/labels"
         params = {"tag.tag": label, "tag.type": "label"}
-        r = requests.delete(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.delete(url, headers=plex_headers(), params=params, timeout=8)
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via metadata/labels rating_key=%s label=%s", rating_key, label)
             return
@@ -362,7 +538,7 @@ def plex_remove_label(rating_key: str, label: str):
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
         params = {"label[].tag.tag-": label, "type": "1"}
-        r = requests.put(url, headers=plex_headers(), params=params, timeout=8, verify=settings.PLEX_VERIFY_TLS)
+        r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
         logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s status=%s", rating_key, label, r.status_code)
     except Exception:
         pass

@@ -7,57 +7,91 @@
       </div>
 
       <div class="modal-body">
-        <!-- Movies Selection -->
-        <div class="section">
-          <div class="section-header">
-            <h3>Movies ({{ checkedMovies.size }} of {{ filteredMovies.length }} selected)</h3>
-            <div class="selection-controls">
-              <button class="btn-small" @click="selectAll">Select All</button>
-              <button class="btn-small" @click="deselectAll">Deselect All</button>
+        <div class="two-column-layout">
+          <!-- Left Column: Movies Selection -->
+          <div class="section">
+            <div class="section-header">
+              <h3>All Movies ({{ checkedMovies.size }} selected)</h3>
+              <div class="selection-controls">
+                <button class="btn-small" @click="selectAllFiltered">Select Filtered</button>
+                <button class="btn-small" @click="deselectAll">Deselect All</button>
+              </div>
             </div>
-          </div>
 
-          <!-- Filter -->
-          <div class="filter-bar">
-            <input
-              v-model="searchQuery"
-              type="text"
-              placeholder="Filter movies..."
-              class="filter-input"
-            />
-          </div>
-
-          <!-- Movies List -->
-          <div class="movies-list">
-            <div
-              v-for="movie in filteredMovies"
-              :key="movie.key"
-              class="movie-row"
-              :class="{ selected: checkedMovies.has(movie.key) }"
-              @click="toggleMovie(movie.key)"
-            >
+            <!-- Filter and Sort -->
+            <div class="filter-bar">
               <input
-                type="checkbox"
-                :checked="checkedMovies.has(movie.key)"
-                @click.stop="toggleMovie(movie.key)"
-                class="movie-checkbox"
+                v-model="searchQuery"
+                type="text"
+                placeholder="Filter movies..."
+                class="filter-input"
               />
-              <div class="movie-thumbnail-small">
-                <img
-                  :src="`/api/movie/${movie.key}/poster?w=30&h=45`"
-                  :alt="movie.title"
-                  loading="lazy"
+              <select v-model="sortBy" class="sort-select">
+                <option value="title-asc">Title (A-Z)</option>
+                <option value="title-desc">Title (Z-A)</option>
+                <option value="year-asc">Year (Oldest)</option>
+                <option value="year-desc">Year (Newest)</option>
+              </select>
+            </div>
+
+            <!-- Movies List -->
+            <div class="movies-list">
+              <div
+                v-for="movie in filteredMovies"
+                :key="movie.key"
+                class="movie-row"
+                :class="{ selected: checkedMovies.has(movie.key) }"
+                @click="toggleMovie(movie.key)"
+              >
+                <input
+                  type="checkbox"
+                  :checked="checkedMovies.has(movie.key)"
+                  @click.stop="toggleMovie(movie.key)"
+                  class="movie-checkbox"
                 />
-              </div>
-              <div class="movie-details">
-                <p class="movie-title">{{ movie.title }}</p>
-                <p class="movie-year">{{ movie.year }}</p>
+                <div class="movie-thumbnail-small">
+                  <img
+                    :src="`/api/movie/${movie.key}/poster?w=30&h=45`"
+                    :alt="movie.title"
+                    loading="lazy"
+                  />
+                </div>
+                <div class="movie-details">
+                  <p class="movie-title">{{ movie.title }}</p>
+                  <p class="movie-year">{{ movie.year }}</p>
+                </div>
               </div>
             </div>
+            <p v-if="checkedMovies.size === 0" class="warning">
+              Please select at least one movie
+            </p>
           </div>
-          <p v-if="checkedMovies.size === 0" class="warning">
-            Please select at least one movie
-          </p>
+
+          <!-- Right Column: Selected Movies Preview -->
+          <div class="section selected-preview">
+            <h3>Selected Movies ({{ checkedMovies.size }})</h3>
+            <div class="selected-list">
+              <div
+                v-for="movie in selectedMoviesPreview"
+                :key="movie.key"
+                class="selected-movie-item"
+              >
+                <div class="movie-thumbnail-small">
+                  <img
+                    :src="`/api/movie/${movie.key}/poster?w=30&h=45`"
+                    :alt="movie.title"
+                    loading="lazy"
+                  />
+                </div>
+                <div class="movie-details">
+                  <p class="movie-title">{{ movie.title }}</p>
+                  <p class="movie-year">{{ movie.year }}</p>
+                </div>
+                <button class="remove-btn" @click="toggleMovie(movie.key)">✕</button>
+              </div>
+              <p v-if="checkedMovies.size === 0" class="empty-state">No movies selected</p>
+            </div>
+          </div>
         </div>
 
         <!-- Template Selection -->
@@ -162,22 +196,56 @@ const autoRemoveLabels = ref(false);
 const sendToPlex = ref(true);
 const saveLocally = ref(false);
 const searchQuery = ref("");
+const sortBy = ref("title-asc");
 
 const filteredMovies = computed(() => {
-  if (!searchQuery.value.trim()) {
-    return props.movies;
+  // Filter first
+  let movies = props.movies;
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.toLowerCase();
+    movies = movies.filter(
+      (m) =>
+        m.title.toLowerCase().includes(query) ||
+        (m.year && m.year.toString().includes(query))
+    );
   }
-  const query = searchQuery.value.toLowerCase();
-  return props.movies.filter(
-    (m) =>
-      m.title.toLowerCase().includes(query) ||
-      (m.year && m.year.toString().includes(query))
-  );
+
+  // Then sort
+  const sorted = [...movies];
+  switch (sortBy.value) {
+    case "title-asc":
+      sorted.sort((a, b) => a.title.localeCompare(b.title));
+      break;
+    case "title-desc":
+      sorted.sort((a, b) => b.title.localeCompare(a.title));
+      break;
+    case "year-asc":
+      sorted.sort((a, b) => {
+        const yearA = typeof a.year === 'number' ? a.year : parseInt(String(a.year || 0));
+        const yearB = typeof b.year === 'number' ? b.year : parseInt(String(b.year || 0));
+        return yearA - yearB;
+      });
+      break;
+    case "year-desc":
+      sorted.sort((a, b) => {
+        const yearA = typeof a.year === 'number' ? a.year : parseInt(String(a.year || 0));
+        const yearB = typeof b.year === 'number' ? b.year : parseInt(String(b.year || 0));
+        return yearB - yearA;
+      });
+      break;
+  }
+
+  return sorted;
 });
 
 const progressPercent = computed(() => {
   if (checkedMovies.value.size === 0) return 0;
   return (currentIndex.value / checkedMovies.value.size) * 100;
+});
+
+const selectedMoviesPreview = computed(() => {
+  // Get all movies that are checked
+  return props.movies.filter((m) => checkedMovies.value.has(m.key));
 });
 
 watch(
@@ -203,8 +271,11 @@ const toggleMovie = (key: string) => {
   }
 };
 
-const selectAll = () => {
-  checkedMovies.value = new Set(filteredMovies.value.map((m) => m.key));
+const selectAllFiltered = () => {
+  // Add all filtered movies to the existing selection
+  filteredMovies.value.forEach((m) => {
+    checkedMovies.value.add(m.key);
+  });
 };
 
 const deselectAll = () => {
@@ -258,6 +329,11 @@ const processBatch = async () => {
         ? ["old_poster", "temp", "edited"] // Common labels to remove
         : [],
     };
+
+    // Start batch progress polling in App.vue
+    if ((window as any).startBatchPolling) {
+      (window as any).startBatchPolling();
+    }
 
     // Simulate progress updates
     const progressInterval = setInterval(() => {
@@ -373,6 +449,13 @@ const processBatch = async () => {
   padding: 1.5rem;
 }
 
+.two-column-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
 .section {
   margin-bottom: 1.5rem;
 }
@@ -425,10 +508,12 @@ const processBatch = async () => {
 
 .filter-bar {
   margin-bottom: 1rem;
+  display: flex;
+  gap: 0.75rem;
 }
 
 .filter-input {
-  width: 100%;
+  flex: 1;
   padding: 0.6rem;
   background: var(--input-bg, #242933);
   color: var(--text-primary, #fff);
@@ -438,6 +523,22 @@ const processBatch = async () => {
 }
 
 .filter-input:focus {
+  outline: none;
+  border-color: var(--accent, #3dd6b7);
+}
+
+.sort-select {
+  padding: 0.6rem;
+  background: var(--input-bg, #242933);
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  min-width: 150px;
+}
+
+.sort-select:focus {
   outline: none;
   border-color: var(--accent, #3dd6b7);
 }
@@ -635,5 +736,65 @@ const processBatch = async () => {
   color: var(--text-secondary, #aaa);
   margin: 0;
   font-size: 0.9rem;
+}
+
+.selected-preview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.selected-list {
+  flex: 1;
+  max-height: 660px;
+  overflow-y: auto;
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 6px;
+  background: var(--surface-alt, #242933);
+  padding: 0.5rem;
+}
+
+.selected-movie-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border, #2a2f3e);
+  background: rgba(61, 214, 183, 0.05);
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  transition: background 0.2s;
+}
+
+.selected-movie-item:hover {
+  background: rgba(61, 214, 183, 0.1);
+}
+
+.selected-movie-item:last-child {
+  margin-bottom: 0;
+}
+
+.remove-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-secondary, #aaa);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.remove-btn:hover {
+  background: rgba(255, 107, 107, 0.2);
+  color: #ff6b6b;
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--text-secondary, #aaa);
+  padding: 2rem;
+  margin: 0;
 }
 </style>

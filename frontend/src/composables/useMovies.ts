@@ -10,10 +10,43 @@ type Movie = {
 
 const moviesCache = ref<Movie[]>([])
 const moviesLoaded = ref(false)
+const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
 export function useMovies() {
+  const setMoviePoster = (key: string, url: string | null) => {
+    if (!key) return
+    const idx = moviesCache.value.findIndex((m) => m.key === key)
+    if (idx === -1) return
+    const current = moviesCache.value[idx]
+    if (!current) return
+    // Preserve required fields; fallback to empty title if missing to satisfy type
+    moviesCache.value[idx] = {
+      key: current.key || key,
+      title: current.title || '',
+      year: current.year,
+      addedAt: current.addedAt,
+      poster: url
+    }
+  }
+
+  const hydratePostersFromSession = () => {
+    if (typeof sessionStorage === 'undefined') return
+    try {
+      const raw = sessionStorage.getItem(POSTER_CACHE_KEY)
+      if (!raw) return
+      const cache = JSON.parse(raw)
+      Object.entries(cache).forEach(([key, url]) => {
+        setMoviePoster(key, url as string | null)
+      })
+    } catch {
+      /* ignore */
+    }
+  }
+
   return {
     movies: moviesCache,
-    moviesLoaded
+    moviesLoaded,
+    setMoviePoster,
+    hydratePostersFromSession
   }
 }

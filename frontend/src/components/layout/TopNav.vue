@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { APP_VERSION } from '@/version'
+import { getApiBase } from '@/services/apiBase'
 
 type Movie = { key: string; title: string; year?: number | string; poster?: string | null }
 
@@ -17,6 +18,31 @@ const emit = defineEmits<{
 }>()
 
 const searchFocused = ref(false)
+const posterCache = ref<Record<string, string | null>>({})
+const apiBase = getApiBase()
+
+const normalizePoster = (url: string | null | undefined) => {
+  if (!url) return null
+  return url.startsWith('http') ? url : `${apiBase}${url}`
+}
+
+const getPosterFor = (movie: Movie) => {
+  const direct = normalizePoster(movie.poster)
+  if (direct) return direct
+  const cached = posterCache.value[movie.key]
+  return normalizePoster(cached)
+}
+
+const loadPosterCache = () => {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    const raw = sessionStorage.getItem('simposter-poster-cache')
+    if (!raw) return
+    posterCache.value = JSON.parse(raw) || {}
+  } catch {
+    /* ignore */
+  }
+}
 
 const searchResults = computed(() => {
   if (!props.search || !props.movies) return []
@@ -41,6 +67,10 @@ const handleBlur = () => {
     searchFocused.value = false
   }, 200)
 }
+
+onMounted(() => {
+  loadPosterCache()
+})
 </script>
 
 <template>
@@ -79,8 +109,8 @@ const handleBlur = () => {
           class="search-result"
           @click="handleSelectMovie(movie)"
         >
-          <div class="result-poster" :style="{ backgroundImage: movie.poster ? `url(${movie.poster})` : 'none' }">
-            <div v-if="!movie.poster" class="result-poster-placeholder">
+          <div class="result-poster" :style="{ backgroundImage: getPosterFor(movie) ? `url(${getPosterFor(movie)})` : 'none' }">
+            <div v-if="!getPosterFor(movie)" class="result-poster-placeholder">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                 <circle cx="8.5" cy="8.5" r="1.5" />

@@ -14,7 +14,7 @@ type Movie = {
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
-const { movies: moviesCache, moviesLoaded: moviesLoadedFlag } = useMovies()
+const { movies: moviesCache, moviesLoaded: moviesLoadedFlag, setMoviePoster, hydratePostersFromSession } = useMovies()
 const posterCacheStore = ref<Record<string, string | null>>({})
 const labelCacheStore = ref<Record<string, string[]>>({})
 const posterInFlight = new Set<string>()
@@ -23,10 +23,20 @@ const moviesLoaded = moviesLoadedFlag
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 const LABELS_CACHE_KEY = 'simposter-labels-cache'
 const MOVIES_CACHE_KEY = 'simposter-movies-cache'
+const CACHE_VERSION_KEY = 'simposter-cache-version'
+const CURRENT_CACHE_VERSION = '2' // Increment this to invalidate all caches
 
 const loadPosterCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
+    // Check cache version - clear if outdated
+    const cachedVersion = sessionStorage.getItem(CACHE_VERSION_KEY)
+    if (cachedVersion !== CURRENT_CACHE_VERSION) {
+      clearAllCaches()
+      sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
+      return
+    }
+
     const raw = sessionStorage.getItem(POSTER_CACHE_KEY)
     if (raw) {
       posterCacheStore.value = JSON.parse(raw)
@@ -90,6 +100,30 @@ const saveMoviesCache = () => {
   } catch {
     /* ignore */
   }
+}
+
+const clearAllCaches = () => {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    sessionStorage.removeItem(POSTER_CACHE_KEY)
+    sessionStorage.removeItem(LABELS_CACHE_KEY)
+    sessionStorage.removeItem(MOVIES_CACHE_KEY)
+    posterCacheStore.value = {}
+    labelCacheStore.value = {}
+    moviesCache.value = []
+    moviesLoaded.value = false
+  } catch {
+    /* ignore */
+  }
+}
+
+const refreshData = async () => {
+  clearAllCaches()
+  sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
+  movies.value = []
+  await fetchMovies()
+  await fetchPosters(paged.value)
+  await fetchLabels(paged.value)
 }
 
 loadPosterCache()
@@ -198,8 +232,21 @@ const fetchMovies = async () => {
     if (!moviesLoaded.value) {
       const res = await fetch(`${apiBase}/api/movies`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
-      const data = (await res.json()) as Movie[]
+      const data = (await res.json()) as (Movie & { labels?: string[] })[]
+      // Seed caches from server data when available
+      data.forEach((m) => {
+        if (m.poster && !(m.key in posterCacheStore.value)) {
+          posterCacheStore.value[m.key] = m.poster
+        }
+        if (m.labels && !(m.key in labelCacheStore.value)) {
+          labelCacheStore.value[m.key] = m.labels
+        }
+      })
+      savePosterCache()
+      saveLabelCache()
+
       moviesCache.value = data
+      hydratePostersFromSession() // reapply cached poster URLs after replacing movie list
       moviesLoaded.value = true
       saveMoviesCache()
     }
@@ -218,9 +265,14 @@ const fetchPosters = async (list: Movie[]) => {
   const results = await Promise.all(
     missing.map(async (m) => {
       try {
-        const posterRes = await fetch(`${apiBase}/api/movie/${m.key}/poster`)
-        const posterData = await posterRes.json()
-        return { key: m.key, url: posterData.url || null }
+        const posterMetaUrl = `${apiBase}/api/movie/${m.key}/poster?meta=1`
+        const posterRes = await fetch(posterMetaUrl)
+        if (posterRes.ok) {
+          const data = await posterRes.json()
+          const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+          return { key: m.key, url }
+        }
+        return { key: m.key, url: null }
       } catch {
         return { key: m.key, url: null }
       }
@@ -229,6 +281,8 @@ const fetchPosters = async (list: Movie[]) => {
   results.forEach((r) => {
     posterCache.value[r.key] = r.url
     posterInFlight.delete(r.key)
+    // Update global movies cache so search bar sees latest poster
+    setMoviePoster(r.key, r.url)
   })
   savePosterCache()
 }
@@ -265,6 +319,20 @@ const nextPage = () => {
 
 const prevPage = () => {
   if (page.value > 1) page.value -= 1
+}
+
+const handleRefreshPoster = async (ratingKey: string) => {
+  try {
+    const res = await fetch(`${apiBase}/api/movie/${ratingKey}/poster?meta=1&force_refresh=1`)
+    if (!res.ok) return
+    const data = await res.json()
+    const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+    posterCache.value[ratingKey] = url
+    setMoviePoster(ratingKey, url)
+    savePosterCache()
+  } catch {
+    /* ignore */
+  }
 }
 
 onMounted(async () => {
@@ -307,6 +375,9 @@ onMounted(async () => {
             <option v-for="label in allLabels" :key="label" :value="label">{{ label }}</option>
           </select>
         </div>
+        <button @click="refreshData" class="refresh-btn" :disabled="loading">
+          {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
+        </button>
       </div>
     </div>
     <div v-if="error" class="callout error">
@@ -314,7 +385,7 @@ onMounted(async () => {
       <button @click="fetchMovies">Retry</button>
     </div>
     <div v-else-if="loading" class="callout">Loading movies…</div>
-    <MovieGrid v-else heading="Movies" :items="paged" @select="handleSelect" />
+    <MovieGrid v-else heading="Movies" :items="paged" @select="handleSelect" @refresh="handleRefreshPoster" />
     <div class="toolbar glass pagination">
       <div class="pager">
         <button @click="prevPage" :disabled="page === 1">Prev</button>
@@ -382,6 +453,29 @@ onMounted(async () => {
 
 .control-select:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+
+.refresh-btn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 14px;
+  background: rgba(61, 214, 183, 0.15);
+  color: #3dd6b7;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin: 0;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  background: rgba(61, 214, 183, 0.25);
+  border-color: rgba(61, 214, 183, 0.5);
+}
+
+.refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .pager {

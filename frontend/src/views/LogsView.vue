@@ -9,6 +9,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const text = ref('')
 const logLevel = ref<LogLevel>('all')
+const categoryFilter = ref<string>('all')
 const searchQuery = ref('')
 const autoRefresh = ref(false)
 const logSettings = ref({
@@ -16,16 +17,50 @@ const logSettings = ref({
   maxSize: 20,
   maxBackups: 7
 })
+const isCurrentView = computed(() => !selectedDate.value)
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 
-const fetchLogs = async () => {
+type LogFile = {
+  name: string
+  size: number
+  mtime: number
+  current: boolean
+}
+
+const logFiles = ref<LogFile[]>([])
+const selectedDate = ref<string | null>(null) // YYYYMMDD or null for current
+
+const fetchLogFiles = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/log-files`)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    logFiles.value = data.files || []
+    // Ensure selected date is valid
+    const hasSelected = selectedDate.value
+      ? logFiles.value.some(f => !f.current && f.name.includes(selectedDate.value as string))
+      : logFiles.value.some(f => f.current)
+    if (!hasSelected) {
+      selectedDate.value = null
+    }
+  } catch (err) {
+    console.error('Failed to load log files:', err)
+  }
+}
+
+const fetchLogs = async (date?: string | null) => {
   loading.value = true
   error.value = null
   try {
-    const res = await fetch(`${apiBase}/api/logs`)
+    const params = date ? `?date=${date}` : ''
+    const res = await fetch(`${apiBase}/api/logs${params}`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     text.value = data.text || ''
+    // If current view is empty but API returned lines count, try refetching latest file list
+    if (!text.value && (data.lines || 0) === 0) {
+      await fetchLogFiles()
+    }
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'Failed to load logs'
   } finally {
@@ -38,46 +73,91 @@ const parsedLogs = computed(() => {
 
   const lines = text.value.split('\n').filter(line => line.trim())
   return lines.map((line, index) => {
-    // Try to parse timestamp, level, and message
+    // Try to parse timestamp, level, category, and message
     let level: LogLevel = 'info'
     let timestamp = ''
+    let category = ''
     let message = line
 
-    // Match pattern: YYYY-MM-DD HH:MM:SS [LEVEL] message
-    const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/)
+    // Match pattern: YYYY-MM-DD HH:MM:SS,mmm [API] [LEVEL] message or YYYY-MM-DD HH:MM:SS,mmm [LEVEL] [CATEGORY] message
+    const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:,\d{3})?)/)
     if (timestampMatch && timestampMatch[1]) {
       timestamp = timestampMatch[1]
       message = line.substring(timestampMatch[0].length).trim()
     }
 
-    // Match [LEVEL] pattern
-    const levelMatch = message.match(/^\[(\w+)\]/)
-    if (levelMatch && levelMatch[1]) {
-      const detectedLevel = levelMatch[1].toLowerCase()
+    // Match [API] [LEVEL] pattern (API logs)
+    const apiLevelMatch = message.match(/^\[API\]\s*\[(\w+)\]/)
+    if (apiLevelMatch && apiLevelMatch[1]) {
+      category = 'API'
+      const detectedLevel = apiLevelMatch[1].toLowerCase()
       if (detectedLevel === 'error' || detectedLevel === 'err') level = 'error'
       else if (detectedLevel === 'warn' || detectedLevel === 'warning') level = 'warning'
       else if (detectedLevel === 'debug') level = 'debug'
       else if (detectedLevel === 'info') level = 'info'
-
-      message = message.substring(levelMatch[0].length).trim()
+      message = message.substring(apiLevelMatch[0].length).trim()
     } else {
-      // Fallback: detect by keywords
-      const lowerLine = line.toLowerCase()
-      if (lowerLine.includes('error') || lowerLine.includes('exception') || lowerLine.includes('failed')) {
-        level = 'error'
-      } else if (lowerLine.includes('warn')) {
-        level = 'warning'
-      } else if (lowerLine.includes('debug')) {
-        level = 'debug'
+      // Match old format [API LEVEL] for backwards compatibility
+      const oldApiMatch = message.match(/^\[API\s+(\w+)\]/)
+      if (oldApiMatch && oldApiMatch[1]) {
+        category = 'API'
+        const detectedLevel = oldApiMatch[1].toLowerCase()
+        if (detectedLevel === 'error' || detectedLevel === 'err') level = 'error'
+        else if (detectedLevel === 'warn' || detectedLevel === 'warning') level = 'warning'
+        else if (detectedLevel === 'debug') level = 'debug'
+        else if (detectedLevel === 'info') level = 'info'
+        message = message.substring(oldApiMatch[0].length).trim()
+      } else {
+        // Match [LEVEL] [CATEGORY] pattern (normal logs)
+        const levelMatch = message.match(/^\[(\w+)\]/)
+        if (levelMatch && levelMatch[1]) {
+          const detectedLevel = levelMatch[1].toLowerCase()
+          if (detectedLevel === 'error' || detectedLevel === 'err') level = 'error'
+          else if (detectedLevel === 'warn' || detectedLevel === 'warning') level = 'warning'
+          else if (detectedLevel === 'debug') level = 'debug'
+          else if (detectedLevel === 'info') level = 'info'
+
+          message = message.substring(levelMatch[0].length).trim()
+
+          // Extract category from message if present (e.g., [PLEX], [TMDB], etc.)
+          const categoryMatch = message.match(/^\[(\w+)\]/)
+          if (categoryMatch && categoryMatch[1]) {
+            category = categoryMatch[1]
+            message = message.substring(categoryMatch[0].length).trim()
+          }
+        } else {
+          // Fallback: detect by keywords
+          const lowerLine = line.toLowerCase()
+          if (lowerLine.includes('error') || lowerLine.includes('exception') || lowerLine.includes('failed')) {
+            level = 'error'
+          } else if (lowerLine.includes('warn')) {
+            level = 'warning'
+          } else if (lowerLine.includes('debug')) {
+            level = 'debug'
+          }
+        }
       }
     }
 
-    return { index, line, level, timestamp, message }
+    return { index, line, level, timestamp, category, message }
   })
+})
+
+const uniqueCategories = computed(() => {
+  const cats = new Set<string>()
+  parsedLogs.value.forEach(log => {
+    if (log.category) cats.add(log.category)
+  })
+  return Array.from(cats).sort()
 })
 
 const filteredLogs = computed(() => {
   let logs = logLevel.value === 'all' ? parsedLogs.value : parsedLogs.value.filter(log => log.level === logLevel.value)
+
+  // Apply category filter
+  if (categoryFilter.value !== 'all') {
+    logs = logs.filter(log => log.category === categoryFilter.value)
+  }
 
   // Apply search filter
   if (searchQuery.value.trim()) {
@@ -89,11 +169,15 @@ const filteredLogs = computed(() => {
 })
 
 const toggleAutoRefresh = () => {
+  if (!isCurrentView.value) {
+    autoRefresh.value = false
+    return
+  }
   autoRefresh.value = !autoRefresh.value
 
   if (autoRefresh.value) {
     refreshInterval = setInterval(() => {
-      fetchLogs()
+      fetchLogs(selectedDate.value)
     }, 5000)
   } else if (refreshInterval) {
     clearInterval(refreshInterval)
@@ -130,7 +214,7 @@ const saveLogSettings = async () => {
 }
 
 onMounted(() => {
-  fetchLogs()
+  fetchLogFiles().then(() => fetchLogs(selectedDate.value))
   fetchLogConfig()
 })
 onUnmounted(() => {
@@ -138,6 +222,29 @@ onUnmounted(() => {
     clearInterval(refreshInterval)
   }
 })
+
+const selectLog = (file: LogFile) => {
+  selectedDate.value = file.current ? null : file.name.match(/(\d{8})/)?.[1] || null
+  if (!file.current && refreshInterval) {
+    clearInterval(refreshInterval)
+    refreshInterval = null
+    autoRefresh.value = false
+  }
+  fetchLogs(selectedDate.value)
+}
+
+const clearLogs = async () => {
+  if (!window.confirm('⚠️ Clear all backend log files?')) return
+  try {
+    const res = await fetch(`${apiBase}/api/logs/clear`, { method: 'POST' })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    await fetchLogFiles()
+    await fetchLogs(selectedDate.value)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to clear logs'
+    setTimeout(() => (error.value = null), 3000)
+  }
+}
 </script>
 
 <template>
@@ -177,12 +284,31 @@ onUnmounted(() => {
         </div>
         <div class="header-controls">
           <div class="filter-group">
+            <div class="log-tabs">
+              <button
+                v-for="file in logFiles"
+                :key="file.name"
+                :class="['log-tab', { active: file.current ? !selectedDate : selectedDate && file.name.includes(selectedDate) }]"
+                @click="selectLog(file)"
+              >
+                {{ file.current ? 'Today' : file.name.replace(/\D/g, '') }}
+              </button>
+            </div>
+          </div>
+          <div class="filter-group">
             <input
               v-model="searchQuery"
               type="text"
               placeholder="Search logs..."
               class="log-search"
             />
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Category:</label>
+            <select v-model="categoryFilter" class="log-filter">
+              <option value="all">All</option>
+              <option v-for="cat in uniqueCategories" :key="cat" :value="cat">{{ cat }}</option>
+            </select>
           </div>
           <div class="filter-group">
             <label class="filter-label">Level:</label>
@@ -202,13 +328,16 @@ onUnmounted(() => {
             </svg>
             Auto
           </button>
-          <button class="ghost" @click="fetchLogs">
+          <button class="ghost" @click="fetchLogs(selectedDate)">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 4 23 10 17 10" />
               <polyline points="1 20 1 14 7 14" />
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
             </svg>
             Refresh
+          </button>
+          <button class="ghost danger" @click="clearLogs">
+            Clear Logs
           </button>
         </div>
       </div>
@@ -231,6 +360,7 @@ onUnmounted(() => {
         <div v-else class="log-output">
           <div v-for="log in filteredLogs" :key="log.index" :class="['log-line', log.level]">
             <span class="log-level-badge">{{ log.level.toUpperCase() }}</span>
+            <span v-if="log.category" class="log-category-badge">{{ log.category }}</span>
             <span v-if="log.timestamp" class="log-timestamp">{{ log.timestamp }}</span>
             <span class="log-text">{{ log.message }}</span>
           </div>
@@ -459,6 +589,42 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.15);
 }
 
+.log-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.log-tab {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: #dce6ff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.log-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.log-tab.active {
+  border-color: rgba(61, 214, 183, 0.5);
+  background: rgba(61, 214, 183, 0.12);
+  color: #3dd6b7;
+}
+
+.ghost.danger {
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.4);
+}
+
+.ghost.danger:hover {
+  background: rgba(255, 107, 107, 0.1);
+}
+
 .log-line {
   display: flex;
   align-items: flex-start;
@@ -492,6 +658,21 @@ onUnmounted(() => {
   text-transform: uppercase;
   min-width: 50px;
   text-align: center;
+}
+
+.log-category-badge {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  min-width: 45px;
+  text-align: center;
+  background: rgba(139, 92, 246, 0.12);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.25);
 }
 
 .log-timestamp {
