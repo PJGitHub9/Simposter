@@ -9,6 +9,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const text = ref('')
 const logLevel = ref<LogLevel>('all')
+const categoryFilter = ref<string>('all')
 const searchQuery = ref('')
 const autoRefresh = ref(false)
 const logSettings = ref({
@@ -72,46 +73,91 @@ const parsedLogs = computed(() => {
 
   const lines = text.value.split('\n').filter(line => line.trim())
   return lines.map((line, index) => {
-    // Try to parse timestamp, level, and message
+    // Try to parse timestamp, level, category, and message
     let level: LogLevel = 'info'
     let timestamp = ''
+    let category = ''
     let message = line
 
-    // Match pattern: YYYY-MM-DD HH:MM:SS [LEVEL] message
-    const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/)
+    // Match pattern: YYYY-MM-DD HH:MM:SS,mmm [API] [LEVEL] message or YYYY-MM-DD HH:MM:SS,mmm [LEVEL] [CATEGORY] message
+    const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:,\d{3})?)/)
     if (timestampMatch && timestampMatch[1]) {
       timestamp = timestampMatch[1]
       message = line.substring(timestampMatch[0].length).trim()
     }
 
-    // Match [LEVEL] pattern
-    const levelMatch = message.match(/^\[(\w+)\]/)
-    if (levelMatch && levelMatch[1]) {
-      const detectedLevel = levelMatch[1].toLowerCase()
+    // Match [API] [LEVEL] pattern (API logs)
+    const apiLevelMatch = message.match(/^\[API\]\s*\[(\w+)\]/)
+    if (apiLevelMatch && apiLevelMatch[1]) {
+      category = 'API'
+      const detectedLevel = apiLevelMatch[1].toLowerCase()
       if (detectedLevel === 'error' || detectedLevel === 'err') level = 'error'
       else if (detectedLevel === 'warn' || detectedLevel === 'warning') level = 'warning'
       else if (detectedLevel === 'debug') level = 'debug'
       else if (detectedLevel === 'info') level = 'info'
-
-      message = message.substring(levelMatch[0].length).trim()
+      message = message.substring(apiLevelMatch[0].length).trim()
     } else {
-      // Fallback: detect by keywords
-      const lowerLine = line.toLowerCase()
-      if (lowerLine.includes('error') || lowerLine.includes('exception') || lowerLine.includes('failed')) {
-        level = 'error'
-      } else if (lowerLine.includes('warn')) {
-        level = 'warning'
-      } else if (lowerLine.includes('debug')) {
-        level = 'debug'
+      // Match old format [API LEVEL] for backwards compatibility
+      const oldApiMatch = message.match(/^\[API\s+(\w+)\]/)
+      if (oldApiMatch && oldApiMatch[1]) {
+        category = 'API'
+        const detectedLevel = oldApiMatch[1].toLowerCase()
+        if (detectedLevel === 'error' || detectedLevel === 'err') level = 'error'
+        else if (detectedLevel === 'warn' || detectedLevel === 'warning') level = 'warning'
+        else if (detectedLevel === 'debug') level = 'debug'
+        else if (detectedLevel === 'info') level = 'info'
+        message = message.substring(oldApiMatch[0].length).trim()
+      } else {
+        // Match [LEVEL] [CATEGORY] pattern (normal logs)
+        const levelMatch = message.match(/^\[(\w+)\]/)
+        if (levelMatch && levelMatch[1]) {
+          const detectedLevel = levelMatch[1].toLowerCase()
+          if (detectedLevel === 'error' || detectedLevel === 'err') level = 'error'
+          else if (detectedLevel === 'warn' || detectedLevel === 'warning') level = 'warning'
+          else if (detectedLevel === 'debug') level = 'debug'
+          else if (detectedLevel === 'info') level = 'info'
+
+          message = message.substring(levelMatch[0].length).trim()
+
+          // Extract category from message if present (e.g., [PLEX], [TMDB], etc.)
+          const categoryMatch = message.match(/^\[(\w+)\]/)
+          if (categoryMatch && categoryMatch[1]) {
+            category = categoryMatch[1]
+            message = message.substring(categoryMatch[0].length).trim()
+          }
+        } else {
+          // Fallback: detect by keywords
+          const lowerLine = line.toLowerCase()
+          if (lowerLine.includes('error') || lowerLine.includes('exception') || lowerLine.includes('failed')) {
+            level = 'error'
+          } else if (lowerLine.includes('warn')) {
+            level = 'warning'
+          } else if (lowerLine.includes('debug')) {
+            level = 'debug'
+          }
+        }
       }
     }
 
-    return { index, line, level, timestamp, message }
+    return { index, line, level, timestamp, category, message }
   })
+})
+
+const uniqueCategories = computed(() => {
+  const cats = new Set<string>()
+  parsedLogs.value.forEach(log => {
+    if (log.category) cats.add(log.category)
+  })
+  return Array.from(cats).sort()
 })
 
 const filteredLogs = computed(() => {
   let logs = logLevel.value === 'all' ? parsedLogs.value : parsedLogs.value.filter(log => log.level === logLevel.value)
+
+  // Apply category filter
+  if (categoryFilter.value !== 'all') {
+    logs = logs.filter(log => log.category === categoryFilter.value)
+  }
 
   // Apply search filter
   if (searchQuery.value.trim()) {
@@ -245,7 +291,7 @@ const clearLogs = async () => {
                 :class="['log-tab', { active: file.current ? !selectedDate : selectedDate && file.name.includes(selectedDate) }]"
                 @click="selectLog(file)"
               >
-                {{ file.current ? 'Today' : file.name.replace(/\\D/g, '') }}
+                {{ file.current ? 'Today' : file.name.replace(/\D/g, '') }}
               </button>
             </div>
           </div>
@@ -256,6 +302,13 @@ const clearLogs = async () => {
               placeholder="Search logs..."
               class="log-search"
             />
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Category:</label>
+            <select v-model="categoryFilter" class="log-filter">
+              <option value="all">All</option>
+              <option v-for="cat in uniqueCategories" :key="cat" :value="cat">{{ cat }}</option>
+            </select>
           </div>
           <div class="filter-group">
             <label class="filter-label">Level:</label>
@@ -307,6 +360,7 @@ const clearLogs = async () => {
         <div v-else class="log-output">
           <div v-for="log in filteredLogs" :key="log.index" :class="['log-line', log.level]">
             <span class="log-level-badge">{{ log.level.toUpperCase() }}</span>
+            <span v-if="log.category" class="log-category-badge">{{ log.category }}</span>
             <span v-if="log.timestamp" class="log-timestamp">{{ log.timestamp }}</span>
             <span class="log-text">{{ log.message }}</span>
           </div>
@@ -604,6 +658,21 @@ const clearLogs = async () => {
   text-transform: uppercase;
   min-width: 50px;
   text-align: center;
+}
+
+.log-category-badge {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  min-width: 45px;
+  text-align: center;
+  background: rgba(139, 92, 246, 0.12);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.25);
 }
 
 .log-timestamp {

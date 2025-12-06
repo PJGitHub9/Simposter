@@ -646,5 +646,13 @@ def get_movie_cache_stats() -> Dict[str, Any]:
     return {"count": row["cnt"] if row else 0, "max_updated": row["max_updated"] if row else None}
 
 
+def clear_movie_cache() -> None:
+    """Delete all rows from movie_cache."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM movie_cache")
+    logger.info("[DB] Cleared movie_cache")
+
+
 # Initialize database on module import
 init_database()

@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -210,6 +211,12 @@ class RedactingFormatter(logging.Formatter):
     """Custom formatter that redacts sensitive information from logs."""
 
     def format(self, record):
+        # Tag API (uvicorn*) logs - keep original level but add API tag
+        if record.name.startswith("uvicorn"):
+            record.api_tag = "[API] "
+        else:
+            record.api_tag = ""
+
         original = super().format(record)
         # Redact tokens and API keys
         redacted = original
@@ -218,6 +225,15 @@ class RedactingFormatter(logging.Formatter):
         if settings.TMDB_API_KEY and len(settings.TMDB_API_KEY) > 4:
             redacted = redacted.replace(settings.TMDB_API_KEY, settings.TMDB_API_KEY[:4] + "***REDACTED***")
         return redacted
+
+class APILogDowngradeFilter(logging.Filter):
+    """Force uvicorn access logs to DEBUG level so they don't spam INFO."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name.startswith("uvicorn"):
+            record.levelname = "DEBUG"
+            record.levelno = logging.DEBUG
+        return True
 
 logger = logging.getLogger("simposter")
 level_name = settings.LOG_LEVEL.upper()
@@ -228,15 +244,51 @@ if not logger.handlers:
     log_dir = os.path.dirname(settings.LOG_FILE)
     os.makedirs(log_dir, exist_ok=True)
 
-    fh = logging.FileHandler(settings.LOG_FILE, encoding="utf-8")
+    def _rotate_namer(default_name: str) -> str:
+        """Rename uvicorn rotation file to simposter-YYYYMMDD.log style."""
+        p = Path(default_name)
+        # default_name ends with .YYYY-MM-DD; normalize to YYYYMMDD
+        date_part = p.name.split(".")[-1].replace("-", "")
+        base_stem = Path(settings.LOG_FILE).stem
+        return str(p.with_name(f"{base_stem}-{date_part}.log"))
+
+    fh = TimedRotatingFileHandler(
+        settings.LOG_FILE,
+        when="midnight",
+        interval=1,
+        backupCount=14,
+        encoding="utf-8",
+        utc=False,
+    )
+    fh.suffix = "%Y-%m-%d"
+    fh.namer = _rotate_namer
     sh = logging.StreamHandler()
 
-    fmt = RedactingFormatter("%(asctime)s [%(levelname)s] %(message)s")
+    fmt = RedactingFormatter("%(asctime)s %(api_tag)s[%(levelname)s] %(message)s")
     fh.setFormatter(fmt)
     sh.setFormatter(fmt)
+    downgrade_filter = APILogDowngradeFilter()
+    fh.addFilter(downgrade_filter)
+    sh.addFilter(downgrade_filter)
 
     logger.addHandler(fh)
     logger.addHandler(sh)
+
+# Attach handlers to uvicorn loggers so access logs land in our file too, labeled as [API] at DEBUG.
+api_formatter = RedactingFormatter("%(asctime)s %(api_tag)s[%(levelname)s] %(message)s")
+for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"):
+    uv_logger = logging.getLogger(name)
+    uv_logger.handlers = []
+    for h in logger.handlers:
+        clone = h
+        # Only adjust formatter on the clone if it's a Stream/FileHandler
+        try:
+            clone.setFormatter(api_formatter)
+        except Exception:
+            pass
+        uv_logger.addHandler(clone)
+    uv_logger.setLevel(logging.DEBUG)
+    uv_logger.propagate = False
 
 # Warn early if Plex URL points to localhost inside a container (common unRAID/Docker pitfall)
 if _running_in_container():

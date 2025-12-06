@@ -227,6 +227,32 @@ const scanLibrary = async () => {
   scan.running.value = false
 }
 
+const clearBackendCache = async () => {
+  if (scan.running.value || scan.checking.value) {
+    saved.value = 'Scan in progress - cannot clear cache'
+    setTimeout(() => (saved.value = ''), 2000)
+    return
+  }
+  if (!window.confirm('⚠️ This will delete backend cache (posters + DB cache). Continue?')) {
+    return
+  }
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/cache`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    saved.value = `Backend cache cleared (${data.removed_posters || 0} poster files removed)`
+    // Also clear browser caches
+    sessionStorage.removeItem('simposter-poster-cache')
+    sessionStorage.removeItem('simposter-labels-cache')
+    sessionStorage.removeItem('simposter-movies-cache')
+  } catch (e) {
+    saved.value = `Failed to clear backend cache: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    setTimeout(() => (saved.value = ''), 2500)
+  }
+}
+
 // Fetch all available labels from movies
 const fetchAllLabels = async () => {
   try {

@@ -227,6 +227,31 @@ def api_movies(force_refresh: bool = False, max_age: int = 900):
     return [{**m.model_dump(), "poster": None} for m in movies]
 
 
+@router.delete("/cache")
+def api_clear_cache():
+    """Clear backend cache: DB movie_cache and on-disk poster cache."""
+    try:
+        # Clear DB cache
+        db.clear_movie_cache()
+
+        # Clear poster cache on disk
+        poster_dir = Path(POSTER_CACHE_DIR)
+        removed_files = 0
+        if poster_dir.exists():
+            for child in poster_dir.iterdir():
+                if child.is_file():
+                    try:
+                        child.unlink()
+                        removed_files += 1
+                    except Exception:
+                        pass
+        logger.info("[CACHE] Cleared movie_cache table and removed %d poster files", removed_files)
+        return {"status": "ok", "removed_posters": removed_files}
+    except Exception as e:
+        logger.error(f"[CACHE] Failed to clear cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear cache: {e}")
+
+
 @router.get("/scan-progress")
 def api_scan_progress():
     """Return last known scan progress."""
