@@ -267,8 +267,12 @@ def api_movie_tmdb(rating_key: str):
 @router.get("/movie/{rating_key}/labels", response_model=LabelsResponse)
 def api_movie_labels(rating_key: str):
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-    r = plex_session.get(url, headers=plex_headers(), timeout=10)
-    r.raise_for_status()
+    try:
+        r = plex_session.get(url, headers=plex_headers(), timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        logger.warning("[PLEX] Failed to fetch labels for %s: %s", rating_key, e)
+        return LabelsResponse(labels=[])
 
     try:
         root = ET.fromstring(r.text)
