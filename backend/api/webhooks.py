@@ -26,6 +26,17 @@ def api_webhook_radarr(template_id: str, preset_id: str, req: RadarrWebhook):
 
     # 1) TMDb ID
     if not req.movie.tmdbId:
+        # Radarr's built-in test payload often omits tmdbId; allow the test to pass with a no-op render.
+        if str(req.eventType).lower() == "test":
+            return {
+                "status": "ok",
+                "poster_used": None,
+                "logo_used": None,
+                "image_bytes": 0,
+                "sent_to_plex": False,
+                "rating_key": None,
+                "plex_error": "tmdbId missing in test payload (skipped render)",
+            }
         raise HTTPException(400, "TMDb ID missing in Radarr payload")
 
     tmdb_id = req.movie.tmdbId
