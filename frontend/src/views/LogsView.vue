@@ -16,16 +16,50 @@ const logSettings = ref({
   maxSize: 20,
   maxBackups: 7
 })
+const isCurrentView = computed(() => !selectedDate.value)
 let refreshInterval: ReturnType<typeof setInterval> | null = null
 
-const fetchLogs = async () => {
+type LogFile = {
+  name: string
+  size: number
+  mtime: number
+  current: boolean
+}
+
+const logFiles = ref<LogFile[]>([])
+const selectedDate = ref<string | null>(null) // YYYYMMDD or null for current
+
+const fetchLogFiles = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/log-files`)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    logFiles.value = data.files || []
+    // Ensure selected date is valid
+    const hasSelected = selectedDate.value
+      ? logFiles.value.some(f => !f.current && f.name.includes(selectedDate.value as string))
+      : logFiles.value.some(f => f.current)
+    if (!hasSelected) {
+      selectedDate.value = null
+    }
+  } catch (err) {
+    console.error('Failed to load log files:', err)
+  }
+}
+
+const fetchLogs = async (date?: string | null) => {
   loading.value = true
   error.value = null
   try {
-    const res = await fetch(`${apiBase}/api/logs`)
+    const params = date ? `?date=${date}` : ''
+    const res = await fetch(`${apiBase}/api/logs${params}`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     text.value = data.text || ''
+    // If current view is empty but API returned lines count, try refetching latest file list
+    if (!text.value && (data.lines || 0) === 0) {
+      await fetchLogFiles()
+    }
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'Failed to load logs'
   } finally {
@@ -89,11 +123,15 @@ const filteredLogs = computed(() => {
 })
 
 const toggleAutoRefresh = () => {
+  if (!isCurrentView.value) {
+    autoRefresh.value = false
+    return
+  }
   autoRefresh.value = !autoRefresh.value
 
   if (autoRefresh.value) {
     refreshInterval = setInterval(() => {
-      fetchLogs()
+      fetchLogs(selectedDate.value)
     }, 5000)
   } else if (refreshInterval) {
     clearInterval(refreshInterval)
@@ -130,7 +168,7 @@ const saveLogSettings = async () => {
 }
 
 onMounted(() => {
-  fetchLogs()
+  fetchLogFiles().then(() => fetchLogs(selectedDate.value))
   fetchLogConfig()
 })
 onUnmounted(() => {
@@ -138,6 +176,29 @@ onUnmounted(() => {
     clearInterval(refreshInterval)
   }
 })
+
+const selectLog = (file: LogFile) => {
+  selectedDate.value = file.current ? null : file.name.match(/(\d{8})/)?.[1] || null
+  if (!file.current && refreshInterval) {
+    clearInterval(refreshInterval)
+    refreshInterval = null
+    autoRefresh.value = false
+  }
+  fetchLogs(selectedDate.value)
+}
+
+const clearLogs = async () => {
+  if (!window.confirm('⚠️ Clear all backend log files?')) return
+  try {
+    const res = await fetch(`${apiBase}/api/logs/clear`, { method: 'POST' })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    await fetchLogFiles()
+    await fetchLogs(selectedDate.value)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Failed to clear logs'
+    setTimeout(() => (error.value = null), 3000)
+  }
+}
 </script>
 
 <template>
@@ -177,6 +238,18 @@ onUnmounted(() => {
         </div>
         <div class="header-controls">
           <div class="filter-group">
+            <div class="log-tabs">
+              <button
+                v-for="file in logFiles"
+                :key="file.name"
+                :class="['log-tab', { active: file.current ? !selectedDate : selectedDate && file.name.includes(selectedDate) }]"
+                @click="selectLog(file)"
+              >
+                {{ file.current ? 'Today' : file.name.replace(/\\D/g, '') }}
+              </button>
+            </div>
+          </div>
+          <div class="filter-group">
             <input
               v-model="searchQuery"
               type="text"
@@ -202,13 +275,16 @@ onUnmounted(() => {
             </svg>
             Auto
           </button>
-          <button class="ghost" @click="fetchLogs">
+          <button class="ghost" @click="fetchLogs(selectedDate)">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 4 23 10 17 10" />
               <polyline points="1 20 1 14 7 14" />
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
             </svg>
             Refresh
+          </button>
+          <button class="ghost danger" @click="clearLogs">
+            Clear Logs
           </button>
         </div>
       </div>
@@ -457,6 +533,42 @@ onUnmounted(() => {
 
 .log-output::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.15);
+}
+
+.log-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.log-tab {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: #dce6ff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.log-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.log-tab.active {
+  border-color: rgba(61, 214, 183, 0.5);
+  background: rgba(61, 214, 183, 0.12);
+  color: #3dd6b7;
+}
+
+.ghost.danger {
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.4);
+}
+
+.ghost.danger:hover {
+  background: rgba(255, 107, 107, 0.1);
 }
 
 .log-line {
