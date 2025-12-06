@@ -32,6 +32,8 @@ const error = ref<string | null>(null)
 const selectedMovies = ref<Set<string>>(new Set())
 const searchQuery = ref('')
 const filterLabel = ref<string>('')
+const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
+const sortOrder = ref<'asc' | 'desc'>('asc')
 const posterLimit = ref<number>(50)
 const currentPage = ref<number>(1)
 
@@ -136,14 +138,29 @@ const filteredMovies = computed(() => {
   return result
 })
 
+const sortedMovies = computed(() => {
+  const list = [...filteredMovies.value]
+  const multiplier = sortOrder.value === 'asc' ? 1 : -1
+
+  if (sortBy.value === 'title') {
+    list.sort((a, b) => multiplier * a.title.localeCompare(b.title))
+  } else if (sortBy.value === 'year') {
+    list.sort((a, b) => multiplier * ((Number(a.year) || 0) - (Number(b.year) || 0)))
+  } else if (sortBy.value === 'addedAt') {
+    list.sort((a, b) => multiplier * ((a.addedAt || 0) - (b.addedAt || 0)))
+  }
+
+  return list
+})
+
 const totalPages = computed(() => {
-  return Math.ceil(filteredMovies.value.length / posterLimit.value)
+  return Math.ceil(sortedMovies.value.length / posterLimit.value)
 })
 
 const limitedMovies = computed(() => {
   const start = (currentPage.value - 1) * posterLimit.value
   const end = start + posterLimit.value
-  return filteredMovies.value.slice(start, end)
+  return sortedMovies.value.slice(start, end)
 })
 
 const nextPage = () => {
@@ -521,7 +538,7 @@ watch(moviesWithPosters, (list) => {
 })
 
 // Reset to page 1 when filters change
-watch([searchQuery, filterLabel, posterLimit], () => {
+watch([searchQuery, filterLabel, sortBy, sortOrder, posterLimit], () => {
   currentPage.value = 1
 })
 
@@ -639,38 +656,59 @@ onMounted(async () => {
 
     <!-- Movie Selection Controls -->
     <div class="movie-controls">
-      <div class="controls-left">
-        <h3>{{ selectedMovies.size }} of {{ moviesWithPosters.length }} selected</h3>
-        <button class="btn-small" @click="selectAll">Select All</button>
-        <button class="btn-small" @click="deselectAll">Deselect All</button>
-        <span v-if="filteredMovies.length > posterLimit" class="limit-notice">
-          Showing {{ posterLimit }} of {{ filteredMovies.length }} movies
-        </span>
-      </div>
-
-      <div class="controls-right">
-        <div class="limit-control">
-          <label for="poster-limit">Show:</label>
-          <select id="poster-limit" v-model.number="posterLimit" class="filter-select">
-            <option :value="25">25 posters</option>
-            <option :value="50">50 posters</option>
-            <option :value="100">100 posters</option>
-            <option :value="200">200 posters</option>
-            <option :value="500">500 posters</option>
+      <div class="filter-row">
+        <div class="filter-groups">
+          <div class="limit-control">
+            <label for="poster-limit">Show:</label>
+            <select id="poster-limit" v-model.number="posterLimit" class="filter-select">
+              <option :value="25">25 posters</option>
+              <option :value="50">50 posters</option>
+              <option :value="100">100 posters</option>
+              <option :value="200">200 posters</option>
+              <option :value="500">500 posters</option>
+            </select>
+          </div>
+          <div class="sort-control">
+            <label for="sort-by">Sort by:</label>
+            <select id="sort-by" v-model="sortBy" class="filter-select">
+              <option value="title">Title</option>
+              <option value="year">Year</option>
+              <option value="addedAt">Date Added</option>
+            </select>
+          </div>
+          <div class="sort-control">
+            <label for="sort-order">Order:</label>
+            <select id="sort-order" v-model="sortOrder" class="filter-select">
+              <option value="asc">{{ sortBy === 'title' ? 'A-Z' : 'Oldest First' }}</option>
+              <option value="desc">{{ sortBy === 'title' ? 'Z-A' : 'Newest First' }}</option>
+            </select>
+          </div>
+          <select v-model="filterLabel" class="filter-select">
+            <option value="">All Labels</option>
+            <option v-for="label in allLabels" :key="label" :value="label">
+              {{ label }}
+            </option>
           </select>
         </div>
-        <select v-model="filterLabel" class="filter-select">
-          <option value="">All Labels</option>
-          <option v-for="label in allLabels" :key="label" :value="label">
-            {{ label }}
-          </option>
-        </select>
         <input
           v-model="searchQuery"
           type="text"
           placeholder="Filter movies..."
           class="filter-input"
         />
+      </div>
+
+      <div class="selection-row">
+        <div class="selection-summary">
+          <h3>{{ selectedMovies.size }} of {{ moviesWithPosters.length }} selected</h3>
+          <span v-if="filteredMovies.length > posterLimit" class="limit-notice">
+            Showing {{ posterLimit }} of {{ filteredMovies.length }} movies
+          </span>
+        </div>
+        <div class="selection-actions">
+          <button class="btn-small" @click="selectAll">Select All</button>
+          <button class="btn-small" @click="deselectAll">Deselect All</button>
+        </div>
       </div>
     </div>
 
@@ -928,8 +966,8 @@ onMounted(async () => {
 
 .movie-controls {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 0.75rem;
   margin-bottom: 1.5rem;
   padding: 1rem;
   background: var(--surface, #1a1f2e);
@@ -937,16 +975,19 @@ onMounted(async () => {
   border: 1px solid var(--border, #2a2f3e);
 }
 
-.controls-left {
+.filter-row {
   display: flex;
-  align-items: center;
-  gap: 1rem;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
 }
 
-.controls-left h3 {
-  margin: 0;
-  color: var(--text-primary, #fff);
-  font-size: 1rem;
+.filter-groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
 }
 
 .btn-small {
@@ -966,17 +1007,50 @@ onMounted(async () => {
   border-color: var(--accent, #3dd6b7);
 }
 
-.controls-right {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
 .limit-control {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.sort-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sort-control label {
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.selection-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.selection-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.selection-summary h3 {
+  margin: 0;
+  color: var(--text-primary, #fff);
+  font-size: 1rem;
+}
+
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .limit-control label {
@@ -1015,7 +1089,8 @@ onMounted(async () => {
   border: 1px solid var(--border, #2a2f3e);
   border-radius: 4px;
   font-size: 0.9rem;
-  min-width: 300px;
+  min-width: 260px;
+  flex: 1;
 }
 
 .filter-input:focus {

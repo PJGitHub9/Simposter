@@ -8,14 +8,44 @@ from io import BytesIO
 import requests
 from backend.assets.selection import pick_poster, pick_logo
 from .save import apply_save_location_variables, get_save_location_template
+from datetime import datetime, timezone
 
 router = APIRouter()
+
+batch_status = {
+    "state": "idle",
+    "total": 0,
+    "processed": 0,
+    "current_movie": "",
+    "current_step": "",
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+}
+
+
+@router.get("/batch-progress")
+def api_batch_progress():
+    """Return current batch operation progress."""
+    return batch_status
 
 
 @router.post("/batch")
 def api_batch(req: BatchRequest):
 
     results = []
+
+    # Initialize batch status
+    batch_status.update({
+        "state": "running",
+        "total": len(req.rating_keys),
+        "processed": 0,
+        "current_movie": "",
+        "current_step": "",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "error": None,
+    })
 
     # Load preset options if provided
     poster_filter = req.options.get("poster_filter", "all")
@@ -39,13 +69,21 @@ def api_batch(req: BatchRequest):
         else:
             logger.warning("[BATCH] Template '%s' not found in presets", req.template_id)
 
-    for rating_key in req.rating_keys:
+    for idx, rating_key in enumerate(req.rating_keys, start=1):
         try:
             logger.info("[BATCH] Start rating_key=%s template=%s", rating_key, req.template_id)
 
             # ---------------------------
             # TMDb Fetch
             # ---------------------------
+            batch_status.update({
+                "current_movie": rating_key,
+                "current_step": "Fetching TMDb data",
+                "processed": idx - 1,
+            })
+            import time
+            time.sleep(0.1)  # Small delay so UI can update
+
             tmdb_id = get_movie_tmdb_id(rating_key)
             if not tmdb_id:
                 raise Exception("No TMDb ID found.")
@@ -67,6 +105,12 @@ def api_batch(req: BatchRequest):
             movie_details = get_movie_details(tmdb_id)
             logger.debug("[BATCH] Movie details: title='%s' year=%s", movie_details.get("title"), movie_details.get("year"))
 
+            batch_status.update({
+                "current_movie": movie_details.get("title", rating_key),
+                "current_step": "Selecting assets",
+            })
+            time.sleep(0.1)  # Small delay so UI can update
+
             # ---------------------------
             # Auto-select assets
             # ---------------------------
@@ -84,6 +128,11 @@ def api_batch(req: BatchRequest):
             # ---------------------------
             # Render for EACH MOVIE
             # ---------------------------
+            batch_status.update({
+                "current_step": "Rendering poster",
+            })
+            time.sleep(0.1)  # Small delay so UI can update
+
             # Add movie details to options for template variable substitution
             render_options = dict(render_options_base)
             render_options["movie_title"] = movie_details.get("title", "")
@@ -101,6 +150,10 @@ def api_batch(req: BatchRequest):
             # ---------------------------
             save_path = None
             if req.save_locally:
+                batch_status.update({
+                    "current_step": "Saving locally",
+                })
+                time.sleep(0.1)  # Small delay so UI can update
                 import os
                 from pathlib import Path
                 import json
@@ -131,6 +184,7 @@ def api_batch(req: BatchRequest):
                 )
 
                 # Sanitize path components (keep dots for filenames)
+                # Remove colons and other special characters (similar to Kometa's structure)
                 safe_path = "".join(c for c in save_path_template if c.isalnum() or c in " _-/().")
                 safe_path = safe_path.strip()
 
@@ -140,7 +194,10 @@ def api_batch(req: BatchRequest):
                     filename = candidate.name
                 else:
                     base_dir = candidate
-                    filename = f"{movie_details.get('title', rating_key)}"
+                    # Sanitize the title for filename
+                    title = movie_details.get('title', rating_key)
+                    safe_title = "".join(c for c in title if c.isalnum() or c in " _-().")
+                    filename = safe_title.strip()
                     yr = movie_details.get("year", "")
                     if yr:
                         filename += f" ({yr})"
@@ -148,12 +205,14 @@ def api_batch(req: BatchRequest):
 
                 # Map explicit /output to configured OUTPUT_ROOT
                 base_dir_str = str(base_dir).replace("\\", "/")
-                if base_dir.is_absolute() and base_dir_str.startswith("/output"):
+                mapped_output = False
+                if base_dir_str.startswith("/output"):
                     tail = base_dir_str[len("/output"):].lstrip("/")
-                    base_dir = Path(settings.OUTPUT_ROOT) / tail
+                    base_dir = Path(settings.OUTPUT_ROOT) / tail if tail else Path(settings.OUTPUT_ROOT)
+                    mapped_output = True
 
-                # Anchor relative paths
-                if not base_dir.is_absolute():
+                # Anchor relative paths (skip if we already mapped /output)
+                if not base_dir.is_absolute() and not mapped_output:
                     base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")
 
                 # Optional batch subfolder (insert after output root)
@@ -174,6 +233,10 @@ def api_batch(req: BatchRequest):
             # Upload to Plex (if requested)
             # ---------------------------
             if req.send_to_plex:
+                batch_status.update({
+                    "current_step": "Sending to Plex",
+                })
+                time.sleep(0.1)  # Small delay so UI can update
                 buf = BytesIO()
                 img.convert("RGB").save(buf, "JPEG", quality=95)
                 payload = buf.getvalue()
@@ -200,8 +263,14 @@ def api_batch(req: BatchRequest):
                 "status": "ok",
             }
             if save_path:
-                result["save_path"] = save_path
+                result["save_path"] = str(save_path)
             results.append(result)
+
+            # Update progress after successful processing
+            batch_status.update({
+                "processed": idx,
+                "current_step": "Complete",
+            })
 
         except Exception as e:
             logger.error(f"[BATCH] Error for {rating_key}\n{e}")
@@ -210,5 +279,16 @@ def api_batch(req: BatchRequest):
                 "status": "error",
                 "error": str(e),
             })
+            # Still count as processed even if failed
+            batch_status.update({
+                "processed": idx,
+            })
+
+    # Mark batch as complete
+    batch_status.update({
+        "state": "done",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "current_step": "Finished",
+    })
 
     return {"results": results}
