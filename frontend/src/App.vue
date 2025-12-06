@@ -161,9 +161,10 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       @select-movie="handleSearchSelect"
     />
     <div v-if="scan.visible.value" class="global-scan-overlay glass">
-      <div class="spinner"></div>
+      <div v-if="scan.running.value" class="spinner"></div>
+      <div v-else class="checkmark">✓</div>
       <div class="scan-body">
-        <p class="title">Rescanning library...</p>
+        <p class="title">{{ scan.running.value ? 'Rescanning library...' : 'Completed library scan!' }}</p>
         <p v-if="scan.current.value" class="current">Now: {{ scan.current.value }}</p>
         <div v-if="scan.progress.value.total" class="progress-row">
           <div class="progress-bar">
@@ -245,6 +246,20 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   border-top-color: var(--accent, #3dd6b7);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+.global-scan-overlay .checkmark {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent, #3dd6b7);
+  color: #0b0d14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
   flex-shrink: 0;
 }
 

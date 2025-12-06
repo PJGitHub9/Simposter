@@ -141,7 +141,7 @@ UI settings live alongside presets:
 /config/logs/simposter.log
 ```
 
-Log configuration: `/config/settings/log_config.json`.
+Log preferences are stored in the database (auto-migrated from `/config/settings/log_config.json` if present).
 
 ![Image](https://github.com/user-attachments/assets/2e7b7b23-770e-463e-91e6-62f0d061fff1)
 

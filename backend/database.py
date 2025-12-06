@@ -335,6 +335,58 @@ def save_ui_settings(settings_data: Dict[str, Any]) -> None:
     logger.debug("[DB] Saved UI settings")
 
 
+def get_log_config() -> Optional[Dict[str, Any]]:
+    """Get log configuration stored in the database."""
+    rows = get_settings_by_category("logs")
+    if not rows:
+        return None
+
+    def _parse_int(value: Optional[str], default: int) -> int:
+        try:
+            return int(value) if value is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    # Keys may be stored with or without the logs. prefix depending on legacy data
+    level = rows.get("logs.level") or rows.get("level")
+    max_size = rows.get("logs.maxSize") or rows.get("maxSize")
+    max_backups = rows.get("logs.maxBackups") or rows.get("maxBackups")
+
+    return {
+        "level": level or "INFO",
+        "maxSize": _parse_int(max_size, 20),
+        "maxBackups": _parse_int(max_backups, 7),
+    }
+
+
+def save_log_config(config: Dict[str, Any]) -> None:
+    """Persist log configuration in the database."""
+    normalized = {
+        "logs.level": str(config.get("level", "INFO")),
+        "logs.maxSize": str(config.get("maxSize", 20)),
+        "logs.maxBackups": str(config.get("maxBackups", 7)),
+    }
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM settings WHERE category = ?", ("logs",))
+
+        for key, value in normalized.items():
+            cursor.execute(
+                """
+                INSERT INTO settings (key, value, category, updated_at)
+                VALUES (?, ?, 'logs', CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    category = excluded.category,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (key, value),
+            )
+
+    logger.debug("[DB] Saved log configuration to database")
+
+
 # ============================================
 #  Presets Operations
 # ============================================

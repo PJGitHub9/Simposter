@@ -133,6 +133,9 @@ const clearCache = () => {
     setTimeout(() => (saved.value = ''), 2000)
     return
   }
+  if (!window.confirm('This will clear cached movies/posters/labels from this browser session. Continue?')) {
+    return
+  }
   try {
     // Clear poster cache from sessionStorage
     sessionStorage.removeItem('simposter-poster-cache')
@@ -147,7 +150,7 @@ const clearCache = () => {
 }
 
 const scanLibrary = async () => {
-  if (scan.running.value) {
+  if (scan.running.value || scan.checking.value) {
     saved.value = 'Scan already in progress'
     setTimeout(() => (saved.value = ''), 2000)
     return
@@ -203,6 +206,15 @@ const scanLibrary = async () => {
     setTimeout(() => (saved.value = ''), 2000)
     // Refresh label cache after scan
     await fetchAllLabels()
+    // Mark scan done; overlay will auto-hide via scan store
+    scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
+    scan.running.value = false
+    // Ensure overlay hides even if no further poll events arrive
+    setTimeout(() => {
+      scan.visible.value = false
+      scan.log.value = []
+      scan.current.value = ''
+    }, 2000)
   } catch (e) {
     saved.value = `Scan failed: ${e instanceof Error ? e.message : 'Unknown error'}`
     scan.log.value = [`Scan failed: ${e instanceof Error ? e.message : 'Unknown error'}`]

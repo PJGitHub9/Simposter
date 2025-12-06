@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 
 from .config import settings, logger
-from .database import save_ui_settings, save_preset, DB_PATH
+from .database import save_log_config, save_ui_settings, save_preset, DB_PATH
 
 
 def migrate_ui_settings():
@@ -85,6 +85,36 @@ def migrate_presets():
         return False
 
 
+def migrate_log_config():
+    """Migrate log_config.json to database."""
+    settings_dir = Path(settings.SETTINGS_DIR)
+    log_config_file = settings_dir / "log_config.json"
+    legacy_log_config = Path(settings.CONFIG_DIR) / "log_config.json"
+
+    log_file = log_config_file if log_config_file.exists() else legacy_log_config
+
+    if not log_file.exists():
+        logger.info("[MIGRATE] No log_config.json found to migrate")
+        return False
+
+    try:
+        with open(log_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        save_log_config(data)
+
+        backup_path = log_file.with_suffix(".json.backup")
+        shutil.copy2(log_file, backup_path)
+        logger.info(f"[MIGRATE] Backed up log_config.json to {backup_path}")
+
+        log_file.unlink()
+        logger.info("[MIGRATE] Migrated log_config.json to database")
+        return True
+    except Exception as e:
+        logger.error(f"[MIGRATE] Failed to migrate log_config.json: {e}")
+        return False
+
+
 def run_migration():
     """Run all migrations."""
     logger.info("[MIGRATE] Starting migration to database...")
@@ -95,8 +125,9 @@ def run_migration():
 
     ui_migrated = migrate_ui_settings()
     presets_migrated = migrate_presets()
+    logs_migrated = migrate_log_config()
 
-    if ui_migrated or presets_migrated:
+    if ui_migrated or presets_migrated or logs_migrated:
         logger.info("[MIGRATE] Migration complete! JSON files have been backed up with .backup extension")
     else:
         logger.info("[MIGRATE] No files to migrate")
