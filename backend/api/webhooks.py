@@ -13,6 +13,7 @@ from ..rendering import render_poster_image
 from io import BytesIO
 import requests
 from .presets import load_presets
+import time
 
 router = APIRouter()
 
@@ -119,7 +120,15 @@ def api_webhook_radarr(template_id: str, preset_id: str, req: RadarrWebhook):
     # Optional auto-send to Plex (best-effort)
     if settings.WEBHOOK_AUTO_SEND:
         try:
-            rating_key = find_rating_key_by_title_year(req.movie.title, req.movie.year)
+            attempts = 0
+            max_attempts = 6  # initial try + 5 retries = up to ~25s
+            rating_key = None
+            while attempts < max_attempts and not rating_key:
+                if attempts > 0:
+                    time.sleep(5)
+                rating_key = find_rating_key_by_title_year(req.movie.title, req.movie.year)
+                attempts += 1
+
             if rating_key:
                 plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
                 headers = {
@@ -138,7 +147,7 @@ def api_webhook_radarr(template_id: str, preset_id: str, req: RadarrWebhook):
                 sent_to_plex = True
                 logger.info(f"[RADARR] Sent poster to Plex ratingKey={rating_key}")
             else:
-                plex_error = "Could not resolve rating_key from Plex by title/year"
+                plex_error = f"Could not resolve rating_key from Plex by title/year after {max_attempts} attempts"
                 logger.warning(f"[RADARR] {plex_error}")
         except Exception as e:
             plex_error = str(e)
