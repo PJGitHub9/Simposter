@@ -25,6 +25,11 @@ def _poster_cache_path(rating_key: str) -> Optional[Path]:
     return None
 
 
+def _poster_cache_url(rating_key: str, cached: Path) -> str:
+    ts = int(cached.stat().st_mtime)
+    return f"/api/movie/{rating_key}/poster?raw=1&v={ts}"
+
+
 def _save_poster_cache(rating_key: str, content: bytes, content_type: str) -> Optional[Path]:
     cache_dir = Path(POSTER_CACHE_DIR)
     ext = (content_type.split("/")[-1] if "/" in content_type else "jpg").lower()
@@ -339,8 +344,11 @@ def api_scan_library():
 
             # Fetch poster URL
             try:
-                poster_data = api_movie_poster(movie.key)
-                result["posters"][movie.key] = poster_data.get("url")
+                poster_path = fetch_and_cache_poster(movie.key, force_refresh=False)
+                if poster_path:
+                    result["posters"][movie.key] = _poster_cache_url(movie.key, poster_path)
+                else:
+                    result["posters"][movie.key] = None
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch poster for {movie.key}: {e}")
                 result["posters"][movie.key] = None
