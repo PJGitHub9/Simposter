@@ -15,6 +15,16 @@ from ..tmdb_client import get_images_for_movie, TMDBError
 
 router = APIRouter()
 
+scan_status = {
+    "state": "idle",
+    "total": 0,
+    "processed": 0,
+    "current": "",
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+}
+
 
 def _poster_cache_path(rating_key: str) -> Optional[Path]:
     cache_dir = Path(POSTER_CACHE_DIR)
@@ -217,6 +227,12 @@ def api_movies(force_refresh: bool = False, max_age: int = 900):
     return [{**m.model_dump(), "poster": None} for m in movies]
 
 
+@router.get("/scan-progress")
+def api_scan_progress():
+    """Return last known scan progress."""
+    return scan_status
+
+
 @router.get("/movie/{rating_key}/tmdb", response_model=MovieTMDbResponse)
 def api_movie_tmdb(rating_key: str):
     tmdb_id = get_movie_tmdb_id(rating_key)
@@ -323,6 +339,15 @@ def api_scan_library():
     try:
         movies = get_plex_movies()
         logger.info(f"[SCAN] Starting library scan for {len(movies)} movies")
+        scan_status.update({
+            "state": "running",
+            "total": len(movies),
+            "processed": 0,
+            "current": "",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "error": None,
+        })
 
         # Build complete response with posters and labels
         result = {
@@ -333,7 +358,12 @@ def api_scan_library():
             "labels": {}
         }
 
-        for movie in movies:
+        total = len(movies)
+        for idx, movie in enumerate(movies, start=1):
+            title_for_log = (movie.title or "").strip()
+            if len(title_for_log) > 60:
+                title_for_log = title_for_log[:57] + "..."
+            logger.debug("[SCAN] %d/%d %s", idx, total, title_for_log or "(untitled)")
             # Add movie data
             result["movies"].append({
                 "key": movie.key,
@@ -361,10 +391,26 @@ def api_scan_library():
                 logger.debug(f"[SCAN] Failed to fetch labels for {movie.key}: {e}")
                 result["labels"][movie.key] = []
 
+            if idx % 50 == 0 or idx == total:
+                logger.info("[SCAN] Progress %d/%d (posters=%d labels=%d)", idx, total, len(result["posters"]), len(result["labels"]))
+            scan_status.update({
+                "processed": idx,
+                "current": movie.title or "",
+            })
+
         logger.info(f"[SCAN] Completed library scan - {len(movies)} movies, {len(result['posters'])} posters, {len(result['labels'])} label sets")
+        scan_status.update({
+            "state": "done",
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
         return result
     except Exception as e:
         logger.error(f"[SCAN] Failed to scan library: {e}")
+        scan_status.update({
+            "state": "error",
+            "error": str(e),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
         raise HTTPException(status_code=500, detail=f"Failed to scan library: {e}")
 
 

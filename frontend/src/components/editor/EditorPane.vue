@@ -570,9 +570,12 @@ const updateGlobalPosterCache = (key: string, url: string | null) => {
   }
 }
 
-const fetchExistingPoster = async (forceRefresh = false) => {
+const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
   try {
-    const res = await fetch(`${apiBase}/api/movie/${props.movie.key}/poster?meta=1${forceRefresh ? '&force_refresh=1' : ''}`)
+    const refreshFlag = typeof forceRefresh === 'boolean'
+      ? forceRefresh
+      : false
+    const res = await fetch(`${apiBase}/api/movie/${props.movie.key}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
     if (!res.ok) {
       existingPoster.value = null
       updateGlobalPosterCache(props.movie.key, null)

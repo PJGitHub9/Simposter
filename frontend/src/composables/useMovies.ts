@@ -14,9 +14,18 @@ const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
 export function useMovies() {
   const setMoviePoster = (key: string, url: string | null) => {
+    if (!key) return
     const idx = moviesCache.value.findIndex((m) => m.key === key)
-    if (idx !== -1) {
-      moviesCache.value[idx] = { ...moviesCache.value[idx], poster: url }
+    if (idx === -1) return
+    const current = moviesCache.value[idx]
+    if (!current) return
+    // Preserve required fields; fallback to empty title if missing to satisfy type
+    moviesCache.value[idx] = {
+      key: current.key || key,
+      title: current.title || '',
+      year: current.year,
+      addedAt: current.addedAt,
+      poster: url
     }
   }
 
