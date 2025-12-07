@@ -29,12 +29,13 @@ def get_save_location_template() -> str:
     return "/output"
 
 
-def apply_save_location_variables(template: str, title: str, year: Optional[int], key: Optional[str]) -> str:
+def apply_save_location_variables(template: str, title: str, year: Optional[int], key: Optional[str], library: Optional[str] = None) -> str:
     """Replace variables in save location template with actual values."""
     # Replace variables
     result = template.replace("{title}", title)
     result = result.replace("{year}", str(year) if year else "")
     result = result.replace("{key}", key if key else "")
+    result = result.replace("{library}", library if library else "")
 
     # Clean up any double slashes or trailing spaces
     result = result.replace("//", "/")
@@ -65,7 +66,8 @@ def api_save(req: SaveRequest):
         save_template,
         req.movie_title,
         req.movie_year,
-        req.rating_key
+        req.rating_key,
+        req.library_id
     )
 
     # Sanitize path components (keep dots so we can detect filenames)

@@ -32,6 +32,7 @@ class SaveRequest(PreviewRequest):
     movie_year: Optional[int] = None
     rating_key: Optional[str] = None
     filename: Optional[str] = "poster.jpg"
+    library_id: Optional[str] = None
 
 
 class PresetSaveRequest(BaseModel):
@@ -116,6 +117,7 @@ class BatchRequest(BaseModel):
     send_to_plex: bool = False
     save_locally: bool = False
     labels: List[str] = []
+    library_id: Optional[str] = None
 
 
 

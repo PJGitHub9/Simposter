@@ -181,6 +181,7 @@ def api_batch(req: BatchRequest):
                     movie_details.get("title", rating_key),
                     movie_details.get("year", ""),
                     rating_key,
+                    req.library_id
                 )
 
                 # Sanitize path components (keep dots for filenames)

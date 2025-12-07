@@ -595,7 +595,16 @@ onMounted(async () => {
   // Wait for route to be ready and load caches with correct library ID
   await new Promise(resolve => setTimeout(resolve, 0))
 
+  // Ensure we have a library ID before loading caches
   if (currentLibrary.value) {
+    // Clear any generic/fallback cache to prevent cross-library contamination
+    if (typeof sessionStorage !== 'undefined') {
+      const genericLabelCache = sessionStorage.getItem('simposter-labels-cache')
+      const genericPosterCache = sessionStorage.getItem('simposter-poster-cache')
+      if (genericLabelCache) sessionStorage.removeItem('simposter-labels-cache')
+      if (genericPosterCache) sessionStorage.removeItem('simposter-poster-cache')
+    }
+
     loadLabelCache()
     loadPosterCache()
   }

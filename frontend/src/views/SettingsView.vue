@@ -295,6 +295,24 @@ const fetchAllLabels = async () => {
     const libs = settings.plex.value.libraryMappings || []
     const labelsByLibrary: Record<string, string[]> = {}
 
+    // Get all valid library IDs
+    const validLibIds = new Set(libs.map(l => l.id).filter(Boolean))
+
+    // Clear stale caches that don't correspond to current libraries
+    if (typeof sessionStorage !== 'undefined') {
+      const keysToRemove: string[] = []
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i)
+        if (key && key.startsWith('simposter-labels-cache-')) {
+          const libId = key.replace('simposter-labels-cache-', '')
+          if (libId !== 'default' && !validLibIds.has(libId)) {
+            keysToRemove.push(key)
+          }
+        }
+      }
+      keysToRemove.forEach(key => sessionStorage.removeItem(key))
+    }
+
     for (const lib of libs) {
       const libId = lib.id || 'default'
       const labelCacheKey = `simposter-labels-cache-${libId}`
@@ -325,11 +343,14 @@ const fetchAllLabels = async () => {
 
 onMounted(async () => {
   // Ensure settings are loaded from API before syncing local form state
-  if (!settings.loaded.value && !settings.loading.value) {
+  if (!settings.loaded.value) {
     await settings.load()
   }
+
+  // Only load local settings and labels after settings are confirmed loaded
   loadLocalSettings()
   fetchAllLabels()
+
   // Auto-load Plex libraries if we have credentials
   if (settings.plex.value.url && settings.plex.value.token) {
     await testPlexConnection()
@@ -340,8 +361,20 @@ onMounted(async () => {
 watch(
   () => settings.loaded.value,
   (val) => {
-    if (val) loadLocalSettings()
+    if (val) {
+      loadLocalSettings()
+      fetchAllLabels()
+    }
   }
+)
+
+// Refetch labels when library mappings change
+watch(
+  () => settings.plex.value.libraryMappings,
+  () => {
+    fetchAllLabels()
+  },
+  { deep: true }
 )
 
 const toggleLabel = (libraryId: string, label: string) => {
@@ -461,14 +494,14 @@ const stopScanPolling = () => {
           <input
             v-model="localSaveLocation"
             type="text"
-            placeholder="/output/{title} {year}/poster"
+            placeholder="/output/{library}/{title}.jpg"
             @mousedown.stop
             @click.stop
             @mouseup.stop
             @select.stop
             @selectstart.stop
           />
-          <span class="help-text">Available variables: {title}, {year}, {key}</span>
+          <span class="help-text">Available variables: {library}, {title}, {year}, {key}</span>
         </label>
         <label class="inline">
           <input type="checkbox" v-model="localSaveBatch" />
@@ -526,6 +559,8 @@ const stopScanPolling = () => {
             <select
               v-model="lib.id"
               class="form-control"
+              :class="{ 'locked': !!lib.id }"
+              :disabled="!!lib.id"
               @change="(e) => {
                 const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
                 if (selected && !lib.displayName) {
@@ -1317,6 +1352,18 @@ button.secondary:hover {
   color: #a9f0dd;
   border: 1px solid rgba(61, 214, 183, 0.3);
   font-weight: 500;
+}
+
+/* Locked library dropdown */
+.library-row select.locked {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.library-row select.locked:hover {
+  border-color: rgba(255, 255, 255, 0.05);
 }
 
 .secondary.small {
