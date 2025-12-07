@@ -8,7 +8,7 @@ import { useScanStore } from '@/stores/scan'
 
 const settings = useSettingsStore()
 const saved = ref('')
-const allLabels = ref<string[]>([])
+const allLabels = ref<Record<string, string[]>>({})
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
 
@@ -17,10 +17,11 @@ const localTheme = ref<Theme>('neon')
 const localPosterDensity = ref(20)
 const localSaveLocation = ref('')
 const localSaveBatch = ref(false)
-const localDefaultLabelsToRemove = ref<string[]>([])
+const localDefaultLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
+const localLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 // Image Quality
@@ -40,11 +41,23 @@ const loadLocalSettings = () => {
   localPosterDensity.value = settings.posterDensity.value
   localSaveLocation.value = settings.saveLocation.value
   localSaveBatch.value = settings.saveBatchInSubfolder.value
-  localDefaultLabelsToRemove.value = [...settings.defaultLabelsToRemove.value]
+  localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
   // Connection settings
   localPlexUrl.value = settings.plex.value.url
   localPlexToken.value = settings.plex.value.token
   localPlexLibrary.value = settings.plex.value.movieLibraryName
+  // Deep clone library mappings to prevent real-time updates
+  const libraryMappings = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length > 0
+    ? settings.plex.value.libraryMappings
+    : (settings.plex.value.movieLibraryNames || settings.plex.value.movieLibraryName
+        ? (settings.plex.value.movieLibraryNames || [settings.plex.value.movieLibraryName]).map((n: string, idx: number) => ({
+            id: n,
+            title: n,
+            displayName: n || `Library ${idx + 1}`
+          }))
+        : [{ id: '', title: '', displayName: '' }]
+      )
+  localLibraries.value = JSON.parse(JSON.stringify(libraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
   localTmdbApiKey.value = settings.tmdb.value.apiKey
   localTvdbApiKey.value = settings.tvdb.value.apiKey
   // Image Quality
@@ -65,11 +78,18 @@ const saveSettings = async () => {
   settings.posterDensity.value = localPosterDensity.value
   settings.saveLocation.value = localSaveLocation.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
-  settings.defaultLabelsToRemove.value = [...localDefaultLabelsToRemove.value]
+  settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
+  const libs = localLibraries.value.filter(l => l.id || l.title)
   settings.plex.value = {
     url: localPlexUrl.value,
     token: localPlexToken.value,
-    movieLibraryName: localPlexLibrary.value
+    movieLibraryName: libs[0]?.id || localPlexLibrary.value || '',
+    movieLibraryNames: libs.length > 0 ? libs.map(l => l.id) : undefined,
+    libraryMappings: libs.map(l => ({
+      id: l.id || '',
+      title: l.title || l.id || '',
+      displayName: l.displayName || l.title || l.id || '',
+    }))
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }
   settings.tvdb.value = { apiKey: localTvdbApiKey.value, comingSoon: settings.tvdb.value.comingSoon }
@@ -95,6 +115,12 @@ const saveSettings = async () => {
 const testConnection = ref('')
 const testConnectionLoading = ref(false)
 const plexLibraries = ref<Array<{ title: string; key: string; type: string }>>([])
+const addLibrary = () => {
+  localLibraries.value = [...localLibraries.value, { id: '', title: '', displayName: '' }]
+}
+const removeLibrary = (idx: number) => {
+  localLibraries.value = localLibraries.value.filter((_, i) => i !== idx)
+}
 
 const testPlexConnection = async () => {
   testConnectionLoading.value = true
@@ -116,6 +142,16 @@ const testPlexConnection = async () => {
       const movieLibs = plexLibraries.value.filter(s => s.type === 'movie')
       const sectionsList = movieLibs.map((s: any) => s.title).join(', ')
       testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${sectionsList}`
+      if (movieLibs.length > 0) {
+        // Seed libraries if none configured yet
+        if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
+          localLibraries.value = movieLibs.map((s: any, idx: number) => ({
+            id: s.key,
+            title: s.title,
+            displayName: s.title || `Library ${idx + 1}`,
+          }))
+        }
+      }
     } else {
       testConnection.value = `✗ ${data.error}: ${data.message}`
     }
@@ -253,20 +289,35 @@ const clearBackendCache = async () => {
   }
 }
 
-// Fetch all available labels from movies
+// Fetch all available labels from movies per library
 const fetchAllLabels = async () => {
   try {
-    const labelCache = sessionStorage.getItem('simposter-labels-cache')
-    if (labelCache) {
-      const cache = JSON.parse(labelCache) as Record<string, string[]>
-      const labels = new Set<string>()
-      Object.values(cache).forEach((movieLabels) => {
-        if (Array.isArray(movieLabels)) {
-          movieLabels.forEach((label) => labels.add(label))
-        }
-      })
-      allLabels.value = Array.from(labels).sort()
+    const libs = settings.plex.value.libraryMappings || []
+    const labelsByLibrary: Record<string, string[]> = {}
+
+    for (const lib of libs) {
+      const libId = lib.id || 'default'
+      const labelCacheKey = `simposter-labels-cache-${libId}`
+      const labelCache = sessionStorage.getItem(labelCacheKey)
+
+      if (labelCache) {
+        const cache = JSON.parse(labelCache) as Record<string, string[]>
+        const labels = new Set<string>()
+        Object.values(cache).forEach((movieLabels) => {
+          if (Array.isArray(movieLabels)) {
+            movieLabels.forEach((label) => labels.add(label))
+          }
+        })
+        labelsByLibrary[libId] = Array.from(labels).sort()
+      }
+
+      // Initialize empty labels if library not in settings yet
+      if (!localDefaultLabelsToRemove.value[libId]) {
+        localDefaultLabelsToRemove.value[libId] = []
+      }
     }
+
+    allLabels.value = labelsByLibrary
   } catch (e) {
     console.error('Failed to fetch labels', e)
   }
@@ -279,6 +330,10 @@ onMounted(async () => {
   }
   loadLocalSettings()
   fetchAllLabels()
+  // Auto-load Plex libraries if we have credentials
+  if (settings.plex.value.url && settings.plex.value.token) {
+    await testPlexConnection()
+  }
 })
 
 // If settings finish loading after initial render, sync the local form
@@ -289,18 +344,21 @@ watch(
   }
 )
 
-const toggleLabel = (label: string) => {
-  const set = new Set(localDefaultLabelsToRemove.value)
+const toggleLabel = (libraryId: string, label: string) => {
+  if (!localDefaultLabelsToRemove.value[libraryId]) {
+    localDefaultLabelsToRemove.value[libraryId] = []
+  }
+  const set = new Set(localDefaultLabelsToRemove.value[libraryId])
   if (set.has(label)) {
     set.delete(label)
   } else {
     set.add(label)
   }
-  localDefaultLabelsToRemove.value = Array.from(set)
+  localDefaultLabelsToRemove.value[libraryId] = Array.from(set)
 }
 
-const isLabelSelected = (label: string) => {
-  return localDefaultLabelsToRemove.value.includes(label)
+const isLabelSelected = (libraryId: string, label: string) => {
+  return localDefaultLabelsToRemove.value[libraryId]?.includes(label) || false
 }
 
 const startScanPolling = () => {
@@ -455,35 +513,51 @@ const stopScanPolling = () => {
           />
           <span class="help-text">Use the Plex token or future auto-discovery once available.</span>
         </label>
-        <label>
-          <span class="label-text">Plex Movie Library</span>
-          <select
-            v-if="plexLibraries.length > 0"
-            v-model="localPlexLibrary"
-            class="form-control"
+        <div class="library-list">
+          <div
+            v-for="(lib, idx) in localLibraries"
+            :key="idx"
+            class="library-row"
           >
-            <option value="">Select a library...</option>
-            <option
-              v-for="lib in plexLibraries.filter(s => s.type === 'movie')"
-              :key="lib.key"
-              :value="lib.title"
+            <div class="library-header">
+              <span class="label-text">{{ lib.displayName || lib.title || `Library ${idx + 1}` }}</span>
+              <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
+            </div>
+            <select
+              v-model="lib.id"
+              class="form-control"
+              @change="(e) => {
+                const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
+                if (selected && !lib.displayName) {
+                  lib.title = selected.title
+                  lib.displayName = selected.title
+                }
+              }"
             >
-              {{ lib.title }}
-            </option>
-          </select>
-          <input
-            v-else
-            v-model="localPlexLibrary"
-            type="text"
-            placeholder="Movies or 1"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-          <span v-if="plexLibraries.length === 0" class="help-text">Test connection first to populate library dropdown</span>
-        </label>
+              <option value="">Select a library...</option>
+              <option
+                v-for="p in plexLibraries.filter(s => s.type === 'movie')"
+                :key="p.key"
+                :value="p.key"
+              >
+                {{ p.title }} (ID: {{ p.key }})
+              </option>
+            </select>
+            <input
+              v-model="lib.displayName"
+              type="text"
+              placeholder="Display name (e.g., 4K Movies)"
+              @mousedown.stop
+              @click.stop
+              @mouseup.stop
+              @select.stop
+              @selectstart.stop
+            />
+            <button class="secondary small" type="button" @click="removeLibrary(idx)" :disabled="localLibraries.length <= 1">Remove</button>
+          </div>
+          <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
+          <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
+        </div>
         <div class="test-connection-wrapper">
           <button
             class="btn-test-connection"
@@ -640,7 +714,7 @@ const stopScanPolling = () => {
       </div>
     </div>
 
-    <div v-if="allLabels.length > 0" class="settings-section labels-section">
+    <div v-if="Object.keys(allLabels).length > 0" class="settings-section labels-section">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
@@ -648,12 +722,20 @@ const stopScanPolling = () => {
         </svg>
         Default Labels to Remove
       </h3>
-      <p class="section-subtitle">When sending to Plex, these labels will be removed by default</p>
-      <div class="labels-grid">
-        <label v-for="label in allLabels" :key="label" class="label-checkbox">
-          <input type="checkbox" :checked="isLabelSelected(label)" @change="toggleLabel(label)" />
-          <span>{{ label }}</span>
-        </label>
+      <p class="section-subtitle">When sending to Plex, these labels will be removed by default for each library</p>
+
+      <!-- Library-specific label sections -->
+      <div v-for="(labels, libId) in allLabels" :key="libId" class="library-labels-section">
+        <h4 class="library-labels-title">
+          {{ localLibraries.find(l => l.id === libId)?.displayName || localLibraries.find(l => l.id === libId)?.title || libId }}
+        </h4>
+        <div v-if="labels.length > 0" class="labels-grid">
+          <label v-for="label in labels" :key="`${libId}-${label}`" class="label-checkbox">
+            <input type="checkbox" :checked="isLabelSelected(libId, label)" @change="toggleLabel(libId, label)" />
+            <span>{{ label }}</span>
+          </label>
+        </div>
+        <p v-else class="no-labels-message">No labels found for this library yet. Scan the library to discover labels.</p>
       </div>
     </div>
 
@@ -804,7 +886,8 @@ label.full-width {
 }
 
 input,
-select {
+select,
+textarea {
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 10px 12px;
@@ -881,6 +964,39 @@ input[type="checkbox"] {
   font-size: 13px;
   color: var(--muted);
   font-weight: 400;
+}
+
+.library-labels-section {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.library-labels-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.library-labels-title {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #eef2ff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.no-labels-message {
+  margin: 0;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
 }
 
 .labels-grid {
@@ -1168,5 +1284,44 @@ button.secondary:hover {
   background: rgba(255, 107, 107, 0.1);
   color: #ff6b6b;
   border: 1px solid rgba(255, 107, 107, 0.3);
+}
+
+.library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.library-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.library-id-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(61, 214, 183, 0.15);
+  color: #a9f0dd;
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  font-weight: 500;
+}
+
+.secondary.small {
+  padding: 8px 10px;
+  font-size: 12px;
+  align-self: flex-start;
 }
 </style>

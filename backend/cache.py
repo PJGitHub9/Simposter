@@ -19,6 +19,7 @@ def upsert_movie(movie: Movie, tmdb_id: Optional[int] = None, poster_url: Option
             tmdb_id=tmdb_id,
             poster_url=poster_url,
             labels=labels,
+            library_id=getattr(movie, "library_id", None) or "default",
         )
     except Exception as e:
         log.debug("[CACHE] failed to upsert %s: %s", movie.key, e, exc_info="database is locked" not in str(e).lower())
@@ -55,12 +56,18 @@ def refresh_from_list(movies: List[Movie]):
                 "title": m.title,
                 "year": m.year,
                 "added_at": m.addedAt,
+                "library_id": getattr(m, "library_id", None) or "default",
             })
-        db.bulk_refresh_cache(payload)
-        log.info("[CACHE] refreshed %d movies", len(payload))
+        # Refresh per library to avoid deleting other libraries
+        by_lib = {}
+        for m in payload:
+            by_lib.setdefault(m["library_id"], []).append(m)
+        for lib_id, items in by_lib.items():
+            db.bulk_refresh_cache(items, library_id=lib_id)
+            log.info("[CACHE] refreshed %d movies for library %s", len(items), lib_id)
     except Exception as e:
         log.warning("[CACHE] refresh failed: %s", e)
 
 
-def get_cached_movies() -> List[Dict]:
-    return db.get_cached_movies()
+def get_cached_movies(library_id: Optional[str] = None) -> List[Dict]:
+    return db.get_cached_movies(library_id=library_id)

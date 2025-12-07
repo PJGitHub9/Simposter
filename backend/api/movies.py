@@ -183,8 +183,8 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
         }
 
 
-def _cache_fresh(max_age_seconds: int) -> bool:
-    stats = db.get_movie_cache_stats()
+def _cache_fresh(max_age_seconds: int, library_id: Optional[str] = None) -> bool:
+    stats = db.get_movie_cache_stats(library_id=library_id)
     if not stats.get("count"):
         return False
     ts = stats.get("max_updated")
@@ -201,12 +201,12 @@ def _cache_fresh(max_age_seconds: int) -> bool:
 
 
 @router.get("/movies", response_model=List[Movie])
-def api_movies(force_refresh: bool = False, max_age: int = 900):
+def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
     """
     Return movies. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
     """
-    if not force_refresh and _cache_fresh(max_age):
-        cached = cache.get_cached_movies()
+    if not force_refresh and _cache_fresh(max_age, library_id=library_id):
+        cached = cache.get_cached_movies(library_id=library_id)
         if cached:
             return [
                 {
@@ -218,12 +218,14 @@ def api_movies(force_refresh: bool = False, max_age: int = 900):
                     "tmdb_id": m.get("tmdb_id"),
                     "labels": m.get("labels") or [],
                     "updated_at": m.get("updated_at"),
+                    "library_id": m.get("library_id"),
                 }
                 for m in cached
             ]
 
     # Otherwise hit Plex and refresh the cache
-    movies = get_plex_movies()
+    lib_ids = [library_id] if library_id else None
+    movies = get_plex_movies(lib_ids)
     return [{**m.model_dump(), "poster": None} for m in movies]
 
 

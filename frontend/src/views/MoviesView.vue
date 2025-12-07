@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
 import { useMovies } from '../composables/useMovies'
@@ -20,9 +21,11 @@ const labelCacheStore = ref<Record<string, string[]>>({})
 const posterInFlight = new Set<string>()
 const labelInFlight = new Set<string>()
 const moviesLoaded = moviesLoadedFlag
-const POSTER_CACHE_KEY = 'simposter-poster-cache'
-const LABELS_CACHE_KEY = 'simposter-labels-cache'
-const MOVIES_CACHE_KEY = 'simposter-movies-cache'
+const route = useRoute()
+const currentLibrary = computed(() => (route.query.library as string) || 'default')
+const POSTER_CACHE_KEY = computed(() => `simposter-poster-cache-${currentLibrary.value}`)
+const LABELS_CACHE_KEY = computed(() => `simposter-labels-cache-${currentLibrary.value}`)
+const MOVIES_CACHE_KEY = computed(() => `simposter-movies-cache-${currentLibrary.value}`)
 const CACHE_VERSION_KEY = 'simposter-cache-version'
 const CURRENT_CACHE_VERSION = '2' // Increment this to invalidate all caches
 
@@ -37,7 +40,7 @@ const loadPosterCache = () => {
       return
     }
 
-    const raw = sessionStorage.getItem(POSTER_CACHE_KEY)
+    const raw = sessionStorage.getItem(POSTER_CACHE_KEY.value)
     if (raw) {
       posterCacheStore.value = JSON.parse(raw)
     }
@@ -49,7 +52,7 @@ const loadPosterCache = () => {
 const savePosterCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    sessionStorage.setItem(POSTER_CACHE_KEY, JSON.stringify(posterCacheStore.value))
+    sessionStorage.setItem(POSTER_CACHE_KEY.value, JSON.stringify(posterCacheStore.value))
   } catch {
     /* ignore */
   }
@@ -58,7 +61,7 @@ const savePosterCache = () => {
 const loadLabelCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    const raw = sessionStorage.getItem(LABELS_CACHE_KEY)
+    const raw = sessionStorage.getItem(LABELS_CACHE_KEY.value)
     if (raw) {
       labelCacheStore.value = JSON.parse(raw)
     }
@@ -70,7 +73,7 @@ const loadLabelCache = () => {
 const saveLabelCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    sessionStorage.setItem(LABELS_CACHE_KEY, JSON.stringify(labelCacheStore.value))
+    sessionStorage.setItem(LABELS_CACHE_KEY.value, JSON.stringify(labelCacheStore.value))
   } catch {
     /* ignore */
   }
@@ -79,7 +82,7 @@ const saveLabelCache = () => {
 const loadMoviesCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    const raw = sessionStorage.getItem(MOVIES_CACHE_KEY)
+    const raw = sessionStorage.getItem(MOVIES_CACHE_KEY.value)
     if (raw) {
       const cached = JSON.parse(raw)
       // Only use cache if it actually has movies
@@ -96,7 +99,7 @@ const loadMoviesCache = () => {
 const saveMoviesCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    sessionStorage.setItem(MOVIES_CACHE_KEY, JSON.stringify(moviesCache.value))
+    sessionStorage.setItem(MOVIES_CACHE_KEY.value, JSON.stringify(moviesCache.value))
   } catch {
     /* ignore */
   }
@@ -105,9 +108,9 @@ const saveMoviesCache = () => {
 const clearAllCaches = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    sessionStorage.removeItem(POSTER_CACHE_KEY)
-    sessionStorage.removeItem(LABELS_CACHE_KEY)
-    sessionStorage.removeItem(MOVIES_CACHE_KEY)
+    sessionStorage.removeItem(POSTER_CACHE_KEY.value)
+    sessionStorage.removeItem(LABELS_CACHE_KEY.value)
+    sessionStorage.removeItem(MOVIES_CACHE_KEY.value)
     posterCacheStore.value = {}
     labelCacheStore.value = {}
     moviesCache.value = []
@@ -129,6 +132,18 @@ const refreshData = async () => {
 loadPosterCache()
 loadLabelCache()
 loadMoviesCache()
+// Reload caches when library changes
+watch(currentLibrary, () => {
+  clearAllCaches()
+  loadPosterCache()
+  loadLabelCache()
+  loadMoviesCache()
+  moviesLoaded.value = false
+  fetchMovies().then(() => {
+    fetchPosters(paged.value)
+    fetchLabels(paged.value)
+  })
+})
 
 const props = defineProps<{
   search?: string
@@ -230,7 +245,7 @@ const fetchMovies = async () => {
   error.value = null
   try {
     if (!moviesLoaded.value) {
-      const res = await fetch(`${apiBase}/api/movies`)
+      const res = await fetch(`${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = (await res.json()) as (Movie & { labels?: string[] })[]
       // Seed caches from server data when available
@@ -265,7 +280,7 @@ const fetchPosters = async (list: Movie[]) => {
   const results = await Promise.all(
     missing.map(async (m) => {
       try {
-        const posterMetaUrl = `${apiBase}/api/movie/${m.key}/poster?meta=1`
+        const posterMetaUrl = `${apiBase}/api/movie/${m.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
         const posterRes = await fetch(posterMetaUrl)
         if (posterRes.ok) {
           const data = await posterRes.json()
@@ -294,7 +309,7 @@ const fetchLabels = async (list: Movie[]) => {
   const results = await Promise.all(
     missing.map(async (m) => {
       try {
-        const labelsRes = await fetch(`${apiBase}/api/movie/${m.key}/labels`)
+        const labelsRes = await fetch(`${apiBase}/api/movie/${m.key}/labels${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
         const labelsData = await labelsRes.json()
         return { key: m.key, labels: labelsData.labels || [] }
       } catch {

@@ -9,6 +9,7 @@ class Movie(BaseModel):
     title: str
     year: Optional[int] = None
     addedAt: Optional[int] = None
+    library_id: Optional[str] = None
 
 
 class MovieTMDbResponse(BaseModel):
@@ -48,6 +49,8 @@ class PlexSettings(BaseModel):
     url: str = ""
     token: str = ""
     movieLibraryName: str = ""
+    movieLibraryNames: List[str] = Field(default_factory=list)
+    libraryMappings: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class TMDBSettings(BaseModel):

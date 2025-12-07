@@ -23,6 +23,17 @@ def _default_ui_settings() -> UISettings:
             "url": settings.PLEX_URL,
             "token": settings.PLEX_TOKEN,
             "movieLibraryName": settings.PLEX_MOVIE_LIBRARY_NAME,
+            "movieLibraryNames": getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", []) or [settings.PLEX_MOVIE_LIBRARY_NAME],
+            "libraryMappings": [
+                {
+                    "id": lid,
+                    "title": getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", [settings.PLEX_MOVIE_LIBRARY_NAME])[idx]
+                    if idx < len(getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", [])) else settings.PLEX_MOVIE_LIBRARY_NAME,
+                    "displayName": getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", [settings.PLEX_MOVIE_LIBRARY_NAME])[idx]
+                    if idx < len(getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", [])) else settings.PLEX_MOVIE_LIBRARY_NAME,
+                }
+                for idx, lid in enumerate(getattr(settings, "PLEX_MOVIE_LIB_IDS", []))
+            ],
         },
         tmdb={"apiKey": getattr(settings, "TMDB_API_KEY", "")},
         tvdb={"apiKey": "", "comingSoon": True},
@@ -36,6 +47,7 @@ def _env_overrides() -> dict:
     plex_url = os.getenv("PLEX_URL")
     plex_token = os.getenv("PLEX_TOKEN")
     plex_lib = os.getenv("PLEX_MOVIE_LIBRARY_NAME")
+    plex_libs = os.getenv("PLEX_MOVIE_LIBRARY_NAMES")
     tmdb_key = os.getenv("TMDB_API_KEY")
 
     if plex_url:
@@ -44,6 +56,8 @@ def _env_overrides() -> dict:
         out.setdefault("plex", {})["token"] = plex_token
     if plex_lib:
         out.setdefault("plex", {})["movieLibraryName"] = plex_lib
+    if plex_libs:
+        out.setdefault("plex", {})["movieLibraryNames"] = [s.strip() for s in plex_libs.split(",") if s.strip()]
     if tmdb_key:
         out.setdefault("tmdb", {})["apiKey"] = tmdb_key
     return out

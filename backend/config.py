@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     PLEX_URL: str = "http://localhost:32400"
     PLEX_TOKEN: str = ""
     PLEX_MOVIE_LIBRARY_NAME: str = "1"
+    PLEX_MOVIE_LIBRARY_NAMES: List[str] = []
     PLEX_VERIFY_TLS: bool = True
     LOG_LEVEL: str = "INFO"
 
@@ -138,6 +139,9 @@ def _load_ui_settings_fallback():
             settings.PLEX_TOKEN = plex_data["token"]
         if plex_data.get("movieLibraryName"):
             settings.PLEX_MOVIE_LIBRARY_NAME = plex_data["movieLibraryName"]
+        movie_libs = plex_data.get("movieLibraryNames") or []
+        if movie_libs:
+            settings.PLEX_MOVIE_LIBRARY_NAMES = [str(x).strip() for x in movie_libs if str(x).strip()]
 
         # Load TMDB settings
         tmdb_data = data.get("tmdb", {})
@@ -148,6 +152,7 @@ def _load_ui_settings_fallback():
         plex_url_env = os.getenv("PLEX_URL")
         plex_token_env = os.getenv("PLEX_TOKEN")
         plex_lib_env = os.getenv("PLEX_MOVIE_LIBRARY_NAME")
+        plex_libs_env = os.getenv("PLEX_MOVIE_LIBRARY_NAMES")
         tmdb_key_env = os.getenv("TMDB_API_KEY")
 
         if plex_url_env:
@@ -156,6 +161,8 @@ def _load_ui_settings_fallback():
             settings.PLEX_TOKEN = plex_token_env
         if plex_lib_env:
             settings.PLEX_MOVIE_LIBRARY_NAME = plex_lib_env
+        if plex_libs_env:
+            settings.PLEX_MOVIE_LIBRARY_NAMES = [s.strip() for s in plex_libs_env.split(",") if s.strip()]
         if tmdb_key_env:
             settings.TMDB_API_KEY = tmdb_key_env
 
@@ -179,6 +186,22 @@ POSTER_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "posters")
 
 # Load from ui_settings.json if environment variables weren't provided
 _load_ui_settings_fallback()
+
+# Normalize movie library names list (support legacy single value and new list)
+def _normalize_movie_libraries():
+    names = []
+    # Prefer explicit list
+    if settings.PLEX_MOVIE_LIBRARY_NAMES:
+        names = [str(n).strip() for n in settings.PLEX_MOVIE_LIBRARY_NAMES if str(n).strip()]
+    # Fallback to single legacy name
+    if not names and settings.PLEX_MOVIE_LIBRARY_NAME:
+        names = [str(settings.PLEX_MOVIE_LIBRARY_NAME).strip()]
+    # Final fallback to "1"
+    if not names:
+        names = ["1"]
+    settings.PLEX_MOVIE_LIBRARY_NAMES = names
+
+_normalize_movie_libraries()
 
 # Ensure folders exist
 Path(settings.CONFIG_DIR).mkdir(parents=True, exist_ok=True)
@@ -398,7 +421,7 @@ def plex_headers() -> Dict[str, str]:
 
 
 def resolve_library_id(name: str) -> str:
-    """Resolve library section name → id (Plex)"""
+    """Resolve library section name to id (Plex)"""
     name = name.strip()
     if name.isdigit():
         return name
@@ -420,34 +443,55 @@ def resolve_library_id(name: str) -> str:
     return "1"
 
 
-PLEX_MOVIE_LIB_ID = resolve_library_id(settings.PLEX_MOVIE_LIBRARY_NAME)
+def resolve_library_ids(names: List[str]) -> List[str]:
+    ids = []
+    seen = set()
+    for n in names:
+        lib_id = resolve_library_id(n)
+        if lib_id not in seen:
+            ids.append(lib_id)
+            seen.add(lib_id)
+    return ids
+
+
+PLEX_MOVIE_LIB_IDS = resolve_library_ids(settings.PLEX_MOVIE_LIBRARY_NAMES)
+PLEX_DEFAULT_MOVIE_LIB_ID = PLEX_MOVIE_LIB_IDS[0] if PLEX_MOVIE_LIB_IDS else "1"
 
 
 # --- Fetch Plex Movies ---
-def get_plex_movies():
+def get_plex_movies(library_ids: Optional[List[str]] = None):
     from .schemas import Movie
 
-    url = f"{settings.PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all?type=1"
+    lib_ids = library_ids or PLEX_MOVIE_LIB_IDS
+    out: List[Movie] = []
 
-    try:
-        r = plex_session.get(url, headers=plex_headers(), timeout=6)
-        r.raise_for_status()
-        logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
-    except Exception as e:
-        logger.warning("[PLEX] Unreachable while listing movies: %s", e)
-        return []
+    for lib_id in lib_ids:
+        url = f"{settings.PLEX_URL}/library/sections/{lib_id}/all?type=1"
+        try:
+            r = plex_session.get(url, headers=plex_headers(), timeout=6)
+            r.raise_for_status()
+            logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
+        except Exception as e:
+            logger.warning("[PLEX] Unreachable while listing movies for library %s: %s", lib_id, e)
+            continue
 
-    root = ET.fromstring(r.text)
-    out = []
+        root = ET.fromstring(r.text)
+        for video in root.findall(".//Video"):
+            key = video.get("ratingKey")
+            title = video.get("title") or ""
+            year = video.get("year")
+            added_at = video.get("addedAt")
+            out.append(
+                Movie(
+                    key=key,
+                    title=title,
+                    year=int(year) if year else None,
+                    addedAt=int(added_at) if added_at else None,
+                    library_id=lib_id,
+                )
+            )
 
-    for video in root.findall(".//Video"):
-        key = video.get("ratingKey")
-        title = video.get("title") or ""
-        year = video.get("year")
-        added_at = video.get("addedAt")
-        out.append(Movie(key=key, title=title, year=int(year) if year else None, addedAt=int(added_at) if added_at else None))
-
-    logger.info("[PLEX] Loaded %d movies from library %s", len(out), PLEX_MOVIE_LIB_ID)
+    logger.info("[PLEX] Loaded %d movies from %d libraries (%s)", len(out), len(lib_ids), ",".join(lib_ids))
     try:
         cache.refresh_from_list(out)
     except Exception:
@@ -492,8 +536,27 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     return tmdb_id
 
 
-def find_rating_key_by_title_year(title: str, year: Optional[int]):
-    movies = get_plex_movies()
+def get_library_section_id(rating_key: str) -> Optional[str]:
+    """
+    Fetch metadata for a rating_key and return the librarySectionID if present.
+    """
+    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+    try:
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
+        r.raise_for_status()
+        root = ET.fromstring(r.text)
+        video = root.find(".//Video")
+        if video is not None:
+            lib_id = video.get("librarySectionID") or video.get("librarySectionId")
+            if lib_id:
+                return lib_id
+    except Exception as e:
+        logger.debug("[PLEX] Failed to resolve librarySectionID for %s: %s", rating_key, e)
+    return None
+
+
+def find_rating_key_by_title_year(title: str, year: Optional[int], library_ids: Optional[List[str]] = None):
+    movies = get_plex_movies(library_ids=library_ids)
     title_norm = title.lower().strip()
 
     for m in movies:
@@ -512,9 +575,12 @@ def plex_remove_label(rating_key: str, label: str):
     if not label:
         return
 
+    # Resolve library for this item (fallback to default)
+    lib_id = get_library_section_id(rating_key) or PLEX_DEFAULT_MOVIE_LIB_ID
+
     # Method 1
     try:
-        url = f"{settings.PLEX_URL}/library/sections/{PLEX_MOVIE_LIB_ID}/all"
+        url = f"{settings.PLEX_URL}/library/sections/{lib_id}/all"
         params = {"type": "1", "id": rating_key, "label[].tag.tag-": label}
         r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
         if r.status_code in (200, 204):

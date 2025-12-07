@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useMovies } from '../composables/useMovies'
@@ -37,15 +38,21 @@ const sortOrder = ref<'asc' | 'desc'>('asc')
 const posterLimit = ref<number>(50)
 const currentPage = ref<number>(1)
 
-// Label cache
-const LABELS_CACHE_KEY = 'simposter-labels-cache'
+// Get current library from route query params
+const route = useRoute()
+const currentLibrary = computed(() => (route.query.library as string) || '')
+
+// Label cache (library-specific)
+const getLabelsCacheKey = () => {
+  return currentLibrary.value ? `simposter-labels-cache-${currentLibrary.value}` : 'simposter-labels-cache'
+}
 const labelCache = ref<Record<string, string[]>>({})
 const labelInFlight = new Set<string>()
 
 const loadLabelCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    const raw = sessionStorage.getItem(LABELS_CACHE_KEY)
+    const raw = sessionStorage.getItem(getLabelsCacheKey())
     if (raw) {
       labelCache.value = JSON.parse(raw)
     }
@@ -56,14 +63,20 @@ const loadLabelCache = () => {
 
 const saveLabelCache = () => {
   if (typeof sessionStorage === 'undefined') return
+  // Only save if we have a valid library ID
+  if (!currentLibrary.value) return
   try {
-    sessionStorage.setItem(LABELS_CACHE_KEY, JSON.stringify(labelCache.value))
+    sessionStorage.setItem(getLabelsCacheKey(), JSON.stringify(labelCache.value))
   } catch {
     /* ignore */
   }
 }
 
-loadLabelCache()
+// Reload label cache when library changes
+watch(currentLibrary, () => {
+  labelCache.value = {}
+  loadLabelCache()
+})
 
 // Template/preset selection
 const templates = ref<Template[]>([])
@@ -79,15 +92,17 @@ const statusOverlay = ref<{ visible: boolean; message: string; detail?: string }
 
 const apiBase = getApiBase()
 
-// Poster cache - shared with MoviesView via sessionStorage
-const POSTER_CACHE_KEY = 'simposter-poster-cache'
+// Poster cache - library-specific
+const getPosterCacheKey = () => {
+  return currentLibrary.value ? `simposter-poster-cache-${currentLibrary.value}` : 'simposter-poster-cache'
+}
 const posterCache = ref<Record<string, string | null>>({})
 const posterInFlight = new Set<string>()
 
 const loadPosterCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    const raw = sessionStorage.getItem(POSTER_CACHE_KEY)
+    const raw = sessionStorage.getItem(getPosterCacheKey())
     if (raw) {
       posterCache.value = JSON.parse(raw)
     }
@@ -98,14 +113,23 @@ const loadPosterCache = () => {
 
 const savePosterCache = () => {
   if (typeof sessionStorage === 'undefined') return
+  // Only save if we have a valid library ID
+  if (!currentLibrary.value) return
   try {
-    sessionStorage.setItem(POSTER_CACHE_KEY, JSON.stringify(posterCache.value))
+    sessionStorage.setItem(getPosterCacheKey(), JSON.stringify(posterCache.value))
   } catch {
     /* ignore */
   }
 }
 
-loadPosterCache()
+// Reload poster cache when library changes
+watch(currentLibrary, () => {
+  posterCache.value = {}
+  loadPosterCache()
+  // Refetch movies for new library
+  moviesLoadedFlag.value = false
+  fetchMovies()
+})
 
 // Get all unique labels from cache
 const allLabels = computed(() => {
@@ -199,7 +223,7 @@ const fetchMovies = async () => {
   error.value = null
   try {
     if (!moviesLoadedFlag.value) {
-      const res = await fetch(`${apiBase}/api/movies`)
+      const res = await fetch(`${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = (await res.json()) as Movie[]
       moviesCache.value = data
@@ -223,7 +247,7 @@ const fetchPosters = async () => {
   const results = await Promise.all(
     missing.map(async m => {
       try {
-        const posterUrl = `${apiBase}/api/movie/${m.key}/poster`
+        const posterUrl = `${apiBase}/api/movie/${m.key}/poster${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
         const res = await fetch(posterUrl)
         if (res.ok) {
           return { key: m.key, url: posterUrl }
@@ -249,7 +273,7 @@ const fetchLabels = async (list: Movie[]) => {
   const results = await Promise.all(
     missing.map(async m => {
       try {
-        const labelsRes = await fetch(`${apiBase}/api/movie/${m.key}/labels`)
+        const labelsRes = await fetch(`${apiBase}/api/movie/${m.key}/labels${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
         const labelsData = await labelsRes.json()
         return { key: m.key, labels: labelsData.labels || [] }
       } catch {
@@ -364,7 +388,8 @@ const processBatch = async () => {
       options: {},
       send_to_plex: sendToPlex.value,
       save_locally: saveLocally.value,
-      labels: sendToPlex.value ? Array.from(labelsToRemove.value) : []
+      labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
+      library_id: currentLibrary.value || undefined
     }
 
     // Simulate progress
@@ -491,7 +516,7 @@ const fetchPreview = async () => {
     let posterUrl = movie.poster
     if (!posterUrl) {
       // Fetch the poster if not cached
-      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster?meta=1`)
+      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
       const posterData = await posterRes.json()
       if (posterData.url) {
         posterUrl = posterData.url.startsWith('http') ? posterData.url : `${apiBase}${posterData.url}`
@@ -567,6 +592,14 @@ watch(currentPreviewMovie, () => {
 })
 
 onMounted(async () => {
+  // Wait for route to be ready and load caches with correct library ID
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  if (currentLibrary.value) {
+    loadLabelCache()
+    loadPosterCache()
+  }
+
   await Promise.all([fetchMovies(), loadTemplatesAndPresets()])
   fetchPosters()
   fetchLabels(movies.value)
@@ -736,7 +769,7 @@ onMounted(async () => {
             </div>
             <div class="poster">
               <img
-                :src="movie.poster || `/api/movie/${movie.key}/poster?w=200`"
+                :src="movie.poster || `/api/movie/${movie.key}/poster?w=200${currentLibrary ? `&library_id=${encodeURIComponent(currentLibrary)}` : ''}`"
                 :alt="movie.title"
                 loading="lazy"
               />
@@ -774,7 +807,7 @@ onMounted(async () => {
           />
           <img
             v-else
-            :src="currentPreviewMovie.poster || `/api/movie/${currentPreviewMovie.key}/poster`"
+            :src="currentPreviewMovie.poster || `/api/movie/${currentPreviewMovie.key}/poster${currentLibrary ? `?library_id=${encodeURIComponent(currentLibrary)}` : ''}`"
             :alt="currentPreviewMovie.title"
           />
         </div>
@@ -857,7 +890,7 @@ onMounted(async () => {
 .selection-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 1rem;
+  gap: 0.5rem;
   margin-bottom: 1rem;
 }
 
