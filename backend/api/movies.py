@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Body
 from fastapi.responses import Response, FileResponse, JSONResponse
 
 import requests
@@ -364,6 +364,39 @@ def api_movies_tmdb():
     ]
 
 
+@router.post("/movies/labels/bulk")
+def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
+    """Get labels for multiple movies at once."""
+    try:
+        results = {}
+        
+        # Batch process the labels to avoid individual API calls
+        for movie_key in movie_keys:
+            try:
+                # Direct label fetching without going through the API endpoint
+                url = f"{settings.PLEX_URL}/library/metadata/{movie_key}"
+                r = plex_session.get(url, headers=plex_headers(), timeout=10)
+                r.raise_for_status()
+                
+                root = ET.fromstring(r.text)
+                labels_list = []
+                for label in root.findall(".//Label"):
+                    tag = label.get('tag', '').strip()
+                    if tag:
+                        labels_list.append(tag)
+                
+                results[movie_key] = labels_list
+            except Exception as e:
+                logger.debug(f"[BULK LABELS] Failed to fetch labels for {movie_key}: {e}")
+                results[movie_key] = []
+                
+        logger.info(f"[BULK LABELS] Successfully fetched labels for {len(results)} movies")
+        return {"labels": results}
+    except Exception as e:
+        logger.error(f"[BULK LABELS] Failed to fetch bulk labels: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch bulk labels: {e}")
+
+
 @router.post("/scan-library")
 def api_scan_library():
     """Scan entire Plex library and return full data for caching."""
@@ -418,6 +451,19 @@ def api_scan_library():
             try:
                 labels_data = api_movie_labels(movie.key)
                 result["labels"][movie.key] = labels_data.labels
+                
+                # Also update the backend cache with this data
+                try:
+                    poster_url = result["posters"].get(movie.key)
+                    cache.upsert_movie(
+                        movie,
+                        tmdb_id=None,
+                        poster_url=poster_url,
+                        labels=labels_data.labels
+                    )
+                except Exception as cache_err:
+                    logger.debug(f"[SCAN] Failed to cache data for {movie.key}: {cache_err}")
+                    
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch labels for {movie.key}: {e}")
                 result["labels"][movie.key] = []

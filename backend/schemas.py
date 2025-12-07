@@ -1,5 +1,5 @@
 # backend/schemas.py
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -82,7 +82,7 @@ class UISettings(BaseModel):
     posterDensity: int = 20
     saveLocation: str = "/output"
     saveBatchInSubfolder: bool = False
-    defaultLabelsToRemove: List[str] = Field(default_factory=list)
+    defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)
     tmdb: TMDBSettings = Field(default_factory=TMDBSettings)
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)

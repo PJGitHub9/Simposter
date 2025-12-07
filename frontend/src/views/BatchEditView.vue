@@ -44,7 +44,7 @@ const currentLibrary = computed(() => (route.query.library as string) || '')
 
 // Label cache (library-specific)
 const getLabelsCacheKey = () => {
-  return currentLibrary.value ? `simposter-labels-cache-${currentLibrary.value}` : 'simposter-labels-cache'
+  return `simposter-labels-cache-${currentLibrary.value || 'default'}`
 }
 const labelCache = ref<Record<string, string[]>>({})
 const labelInFlight = new Set<string>()
@@ -54,7 +54,18 @@ const loadLabelCache = () => {
   try {
     const raw = sessionStorage.getItem(getLabelsCacheKey())
     if (raw) {
-      labelCache.value = JSON.parse(raw)
+      const cachedLabels = JSON.parse(raw)
+      // Only load labels for movies that are actually in the current library
+      const currentMovieKeys = new Set(movies.value.map(m => m.key))
+      const filteredLabels: Record<string, string[]> = {}
+      
+      Object.entries(cachedLabels).forEach(([movieKey, labels]) => {
+        if (currentMovieKeys.has(movieKey)) {
+          filteredLabels[movieKey] = labels as string[]
+        }
+      })
+      
+      labelCache.value = filteredLabels
     }
   } catch {
     /* ignore */
@@ -73,9 +84,32 @@ const saveLabelCache = () => {
 }
 
 // Reload label cache when library changes
-watch(currentLibrary, () => {
+watch(currentLibrary, async (newLib, oldLib) => {
+  if (newLib === oldLib) return // Avoid unnecessary reloads
+  
+  // Clear all library-specific state completely
   labelCache.value = {}
-  loadLabelCache()
+  movies.value = []
+  selectedMovies.value.clear()
+  currentPage.value = 1
+  posterCache.value = {}
+  moviesLoadedFlag.value = false
+  
+  // Clear any stale data from previous library to prevent contamination
+  if (oldLib && typeof sessionStorage !== 'undefined') {
+    const oldLabelKey = `simposter-labels-cache-${oldLib}`
+    const oldPosterKey = `simposter-poster-cache-${oldLib}`
+    // Don't remove from sessionStorage, but clear from memory
+  }
+  
+  // Load caches for new library only if we have a valid library ID
+  if (newLib) {
+    await fetchMovies()
+    // Use efficient bulk cache loading first
+    await fetchLabelsFromCache()
+    loadLabelCache()
+    loadPosterCache()
+  }
 })
 
 // Template/preset selection
@@ -94,7 +128,7 @@ const apiBase = getApiBase()
 
 // Poster cache - library-specific
 const getPosterCacheKey = () => {
-  return currentLibrary.value ? `simposter-poster-cache-${currentLibrary.value}` : 'simposter-poster-cache'
+  return `simposter-poster-cache-${currentLibrary.value || 'default'}`
 }
 const posterCache = ref<Record<string, string | null>>({})
 const posterInFlight = new Set<string>()
@@ -104,7 +138,18 @@ const loadPosterCache = () => {
   try {
     const raw = sessionStorage.getItem(getPosterCacheKey())
     if (raw) {
-      posterCache.value = JSON.parse(raw)
+      const cachedPosters = JSON.parse(raw)
+      // Only load posters for movies that are actually in the current library
+      const currentMovieKeys = new Set(movies.value.map(m => m.key))
+      const filteredPosters: Record<string, string | null> = {}
+      
+      Object.entries(cachedPosters).forEach(([movieKey, posterUrl]) => {
+        if (currentMovieKeys.has(movieKey)) {
+          filteredPosters[movieKey] = posterUrl as string | null
+        }
+      })
+      
+      posterCache.value = filteredPosters
     }
   } catch {
     /* ignore */
@@ -121,15 +166,6 @@ const savePosterCache = () => {
     /* ignore */
   }
 }
-
-// Reload poster cache when library changes
-watch(currentLibrary, () => {
-  posterCache.value = {}
-  loadPosterCache()
-  // Refetch movies for new library
-  moviesLoadedFlag.value = false
-  fetchMovies()
-})
 
 // Get all unique labels from cache
 const allLabels = computed(() => {
@@ -265,27 +301,83 @@ const fetchPosters = async () => {
   savePosterCache()
 }
 
+const fetchLabelsFromCache = async () => {
+  try {
+    // First, try to get labels from backend cache for the current library
+    const cacheUrl = `${apiBase}/api/cache/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
+    const cacheRes = await fetch(cacheUrl)
+    if (cacheRes.ok) {
+      const cacheData = await cacheRes.json()
+      const cachedMovies = cacheData.movies || []
+      
+      let labelsFound = 0
+      cachedMovies.forEach((movie: any) => {
+        if (movie.labels && movie.labels.length > 0) {
+          labelCache.value[movie.rating_key] = movie.labels
+          labelsFound++
+        }
+      })
+      
+      console.log(`[BatchEdit] Loaded ${labelsFound} label sets from backend cache for library ${currentLibrary.value}`)
+      saveLabelCache()
+    }
+  } catch (e) {
+    console.warn('[BatchEdit] Failed to load labels from cache:', e)
+  }
+}
+
 const fetchLabels = async (list: Movie[]) => {
   const missing = list.filter(m => !(m.key in labelCache.value) && !labelInFlight.has(m.key))
   if (!missing.length) return
 
+  // Mark all missing movies as in flight
   missing.forEach(m => labelInFlight.add(m.key))
-  const results = await Promise.all(
-    missing.map(async m => {
-      try {
-        const labelsRes = await fetch(`${apiBase}/api/movie/${m.key}/labels${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
-        const labelsData = await labelsRes.json()
-        return { key: m.key, labels: labelsData.labels || [] }
-      } catch {
-        return { key: m.key, labels: [] }
+
+  try {
+    // Use bulk endpoint for efficiency if we have many movies
+    if (missing.length > 5) {
+      const bulkRes = await fetch(`${apiBase}/api/movies/labels/bulk`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(missing.map(m => m.key))
+      })
+      
+      if (bulkRes.ok) {
+        const bulkData = await bulkRes.json()
+        Object.entries(bulkData.labels || {}).forEach(([movieKey, labels]) => {
+          labelCache.value[movieKey] = labels as string[]
+          labelInFlight.delete(movieKey)
+        })
+        saveLabelCache()
+        console.log(`[BatchEdit] Loaded ${Object.keys(bulkData.labels || {}).length} label sets via bulk endpoint`)
+        return
       }
+    }
+
+    // Fall back to individual requests for smaller sets or if bulk fails
+    const results = await Promise.all(
+      missing.map(async m => {
+        try {
+          const labelsRes = await fetch(`${apiBase}/api/movie/${m.key}/labels${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+          const labelsData = await labelsRes.json()
+          return { key: m.key, labels: labelsData.labels || [] }
+        } catch {
+          return { key: m.key, labels: [] }
+        }
+      })
+    )
+    results.forEach(r => {
+      labelCache.value[r.key] = r.labels
+      labelInFlight.delete(r.key)
     })
-  )
-  results.forEach(r => {
-    labelCache.value[r.key] = r.labels
-    labelInFlight.delete(r.key)
-  })
-  saveLabelCache()
+    saveLabelCache()
+  } catch (error) {
+    // Clean up in flight status on any error
+    missing.forEach(m => labelInFlight.delete(m.key))
+    console.error('Failed to fetch labels:', error)
+  }
 }
 
 const loadTemplatesAndPresets = async () => {
@@ -557,8 +649,9 @@ const fetchPreview = async () => {
 }
 
 // Watch for changes to fetch posters and labels
-watch(moviesWithPosters, (list) => {
+watch(moviesWithPosters, async (list) => {
   fetchPosters()
+  // Only fetch individual labels for movies not already cached
   fetchLabels(list)
 })
 
@@ -592,26 +685,34 @@ watch(currentPreviewMovie, () => {
 })
 
 onMounted(async () => {
-  // Wait for route to be ready and load caches with correct library ID
+  // Wait for route to be ready 
   await new Promise(resolve => setTimeout(resolve, 0))
 
-  // Ensure we have a library ID before loading caches
+  // Clear any stale cache data first to prevent cross-library contamination on page load
+  labelCache.value = {}
+  posterCache.value = {}
+  movies.value = []
+  selectedMovies.value.clear()
+  
+  // Only proceed if we have a valid library context
   if (currentLibrary.value) {
-    // Clear any generic/fallback cache to prevent cross-library contamination
-    if (typeof sessionStorage !== 'undefined') {
-      const genericLabelCache = sessionStorage.getItem('simposter-labels-cache')
-      const genericPosterCache = sessionStorage.getItem('simposter-poster-cache')
-      if (genericLabelCache) sessionStorage.removeItem('simposter-labels-cache')
-      if (genericPosterCache) sessionStorage.removeItem('simposter-poster-cache')
-    }
-
+    // Load templates/presets first
+    await loadTemplatesAndPresets()
+    
+    // Then fetch fresh data
+    await fetchMovies()
+    
+    // Try to load labels from backend cache first (much faster for bulk)
+    await fetchLabelsFromCache()
+    
+    // Load any additional cached data from sessionStorage for this specific library
     loadLabelCache()
     loadPosterCache()
+    
+    // Fetch fresh posters and any missing labels for the loaded movies
+    fetchPosters()
+    fetchLabels(movies.value) // This will only fetch labels for movies not already in cache
   }
-
-  await Promise.all([fetchMovies(), loadTemplatesAndPresets()])
-  fetchPosters()
-  fetchLabels(movies.value)
 })
 </script>
 
