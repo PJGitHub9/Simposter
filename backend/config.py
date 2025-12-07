@@ -138,7 +138,8 @@ def _load_ui_settings_fallback():
         if plex_data.get("token"):
             settings.PLEX_TOKEN = plex_data["token"]
         if plex_data.get("movieLibraryName"):
-            settings.PLEX_MOVIE_LIBRARY_NAME = plex_data["movieLibraryName"]
+            # Convert to string in case it's stored as an integer
+            settings.PLEX_MOVIE_LIBRARY_NAME = str(plex_data["movieLibraryName"])
         movie_libs = plex_data.get("movieLibraryNames") or []
         if movie_libs:
             settings.PLEX_MOVIE_LIBRARY_NAMES = [str(x).strip() for x in movie_libs if str(x).strip()]
@@ -422,7 +423,8 @@ def plex_headers() -> Dict[str, str]:
 
 def resolve_library_id(name: str) -> str:
     """Resolve library section name to id (Plex)"""
-    name = name.strip()
+    # Convert to string in case an integer library ID was passed
+    name = str(name).strip()
     if name.isdigit():
         return name
 
