@@ -549,7 +549,17 @@ const fetchLabels = async () => {
     const data = await res.json()
     labels.value = data.labels || []
     // Apply default labels to remove from settings
-    const defaultToRemove = settings.defaultLabelsToRemove.value || []
+    const defaultLabelsConfig = settings.defaultLabelsToRemove.value || {}
+    let defaultToRemove: string[] = []
+
+    // Handle both legacy array format and new Record format
+    if (Array.isArray(defaultLabelsConfig)) {
+      defaultToRemove = defaultLabelsConfig
+    } else {
+      // Get labels from all libraries (since we don't have library context here)
+      defaultToRemove = Object.values(defaultLabelsConfig).flat()
+    }
+
     selectedLabels.value = new Set(defaultToRemove.filter((label: string) => labels.value.includes(label)))
   } catch (e) {
     console.error(e)
