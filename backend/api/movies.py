@@ -401,6 +401,11 @@ def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
 def api_scan_library():
     """Scan entire Plex library and return full data for caching."""
     try:
+        # Prevent multiple simultaneous scans
+        if scan_status.get("state") == "running":
+            logger.warning("[SCAN] Scan already in progress, rejecting new scan request")
+            raise HTTPException(status_code=409, detail="Scan already in progress")
+        
         movies = get_plex_movies()
         logger.info(f"[SCAN] Starting library scan for {len(movies)} movies")
         scan_status.update({

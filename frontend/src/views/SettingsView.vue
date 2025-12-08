@@ -2,7 +2,7 @@
 import { useSettingsStore, type Theme } from '../stores/settings'
 import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 
@@ -11,6 +11,12 @@ const saved = ref('')
 const allLabels = ref<Record<string, string[]>>({})
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
+
+// Cooldown state to prevent rapid clicking
+const scanCooldown = ref(false)
+
+// Computed property to ensure button disable state is reactive
+const isScanInProgress = computed(() => scan.running.value || scan.checking.value || scanCooldown.value)
 
 // Local state that will only be applied when save is clicked
 const localTheme = ref<Theme>('neon')
@@ -191,17 +197,49 @@ const scanLibrary = async () => {
     setTimeout(() => (saved.value = ''), 2000)
     return
   }
+
+  if (scanCooldown.value) {
+    saved.value = 'Please wait before starting another scan'
+    setTimeout(() => (saved.value = ''), 2000)
+    return
+  }
+  
   try {
+    // Set scan state immediately to prevent double-clicks
+    scan.running.value = true
+    // Enable cooldown for 10 seconds
+    scanCooldown.value = true
+    setTimeout(() => {
+      // Only disable cooldown if scan is not still running
+      if (!scan.running.value && !scan.checking.value) {
+        scanCooldown.value = false
+      } else {
+        // If scan is still running, check again in 5 seconds
+        const checkScanStatus = () => {
+          if (!scan.running.value && !scan.checking.value) {
+            scanCooldown.value = false
+          } else {
+            setTimeout(checkScanStatus, 5000)
+          }
+        }
+        setTimeout(checkScanStatus, 5000)
+      }
+    }, 10000)
     saved.value = 'Rescanning library...'
     scan.visible.value = true
     scan.log.value = ['Starting rescan...']
     scan.progress.value = { processed: 0, total: 0 }
     scan.current.value = ''
-    scan.running.value = true
     startScanPolling()
+    
     const apiBase = getApiBase()
     const res = await fetch(`${apiBase}/api/scan-library`, { method: 'POST' })
-    if (!res.ok) throw new Error(`API error ${res.status}`)
+    if (!res.ok) {
+      if (res.status === 409) {
+        throw new Error('Scan already in progress on server')
+      }
+      throw new Error(`API error ${res.status}`)
+    }
     const data = await res.json()
 
     // Cache movies
@@ -245,6 +283,8 @@ const scanLibrary = async () => {
     // Mark scan done; overlay will auto-hide via scan store
     scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
     scan.running.value = false
+    // Clear cooldown when scan completes
+    scanCooldown.value = false
     // Ensure overlay hides even if no further poll events arrive
     setTimeout(() => {
       scan.visible.value = false
@@ -261,6 +301,8 @@ const scanLibrary = async () => {
   }
   stopScanPolling()
   scan.running.value = false
+  // Clear cooldown when function exits
+  scanCooldown.value = false
 }
 
 const clearBackendCache = async () => {
@@ -351,7 +393,7 @@ onMounted(async () => {
   loadLocalSettings()
   fetchAllLabels()
 
-  // Auto-load Plex libraries if we have credentials
+  // Load Plex libraries if credentials exist to populate dropdowns
   if (settings.plex.value.url && settings.plex.value.token) {
     await testPlexConnection()
   }
@@ -546,6 +588,28 @@ const stopScanPolling = () => {
           />
           <span class="help-text">Use the Plex token or future auto-discovery once available.</span>
         </label>
+        <div class="test-connection-wrapper">
+          <button
+            class="btn-test-connection"
+            @click="testPlexConnection"
+            :disabled="testConnectionLoading"
+          >
+            {{ testConnectionLoading ? 'Testing...' : 'Test Plex Connection' }}
+          </button>
+          <p v-if="testConnection" :class="['test-result', testConnection.startsWith('✓') ? 'success' : 'error']">
+            {{ testConnection }}
+          </p>
+        </div>
+      </div>
+      
+      <div class="movie-libraries-subsection">
+        <h4 class="subsection-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+          </svg>
+          Movie Libraries
+        </h4>
         <div class="library-list">
           <div
             v-for="(lib, idx) in localLibraries"
@@ -593,18 +657,9 @@ const stopScanPolling = () => {
           <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
           <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
         </div>
-        <div class="test-connection-wrapper">
-          <button
-            class="btn-test-connection"
-            @click="testPlexConnection"
-            :disabled="testConnectionLoading"
-          >
-            {{ testConnectionLoading ? 'Testing...' : 'Test Plex Connection' }}
-          </button>
-          <p v-if="testConnection" :class="['test-result', testConnection.startsWith('✓') ? 'success' : 'error']">
-            {{ testConnection }}
-          </p>
-        </div>
+      </div>
+
+      <div class="api-keys-section">
         <label>
           <span class="label-text">TMDb API Key</span>
           <input
@@ -783,19 +838,27 @@ const stopScanPolling = () => {
         </svg>
         Save Settings
       </button>
-      <button @click="clearCache" class="secondary" :disabled="scan.running.value || scan.checking.value">
+      <button @click="clearCache" class="secondary" :disabled="isScanInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="1 4 1 10 7 10"/>
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
         </svg>
         Clear Session Cache
       </button>
-      <button @click="scanLibrary" class="secondary" :disabled="scan.running.value || scan.checking.value">
+      <button @click="clearBackendCache" class="secondary" :disabled="isScanInProgress">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+          <polyline points="18 9 12 15"/>
+          <polyline points="12 9 18 15"/>
+        </svg>
+        Clear Backend Cache
+      </button>
+      <button @click="scanLibrary" class="secondary" :disabled="isScanInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>
         </svg>
-        Rescan Library
+        {{ scanCooldown ? 'Please Wait...' : scan.running.value ? 'Scanning...' : 'Rescan Library' }}
       </button>
       <span v-if="saved" class="status">{{ saved }}</span>
     </div>
@@ -877,7 +940,27 @@ const stopScanPolling = () => {
 }
 
 .connections {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  max-width: 600px;
+}
+
+.movie-libraries-subsection {
+  margin-top: 24px;
+}
+
+.subsection-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #3dd6b7;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.subsection-title svg {
+  width: 16px;
+  height: 16px;
 }
 
 label {
@@ -1370,5 +1453,12 @@ button.secondary:hover {
   padding: 8px 10px;
   font-size: 12px;
   align-self: flex-start;
+}
+
+.api-keys-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-top: 20px;
 }
 </style>
