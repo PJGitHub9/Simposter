@@ -56,6 +56,8 @@ def _normalize_plex_payload(data: dict) -> dict:
 def _apply_runtime_settings(merged: dict):
     """Update global settings with latest UI settings so runtime calls use fresh values."""
     plex_data = merged.get("plex", {}) or {}
+    tmdb_data = merged.get("tmdb", {}) or {}
+    library_mappings = plex_data.get("libraryMappings") or []
     url = plex_data.get("url") or ""
     token = plex_data.get("token") or ""
     names = plex_data.get("movieLibraryNames") or []
@@ -80,6 +82,13 @@ def _apply_runtime_settings(merged: dict):
 
     default_id = ids[0] if ids else "1"
     object.__setattr__(settings, "PLEX_DEFAULT_MOVIE_LIB_ID", default_id)
+
+    # TMDB runtime key
+    tmdb_key = tmdb_data.get("apiKey") or ""
+    object.__setattr__(settings, "TMDB_API_KEY", tmdb_key)
+
+    # Library mappings for name/id resolution
+    object.__setattr__(settings, "PLEX_LIBRARY_MAPPINGS", library_mappings)
 
 
 def _default_ui_settings() -> UISettings:

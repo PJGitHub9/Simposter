@@ -559,10 +559,6 @@ const stopScanPolling = () => {
           />
           <span class="help-text">Available variables: {library}, {title}, {year}, {key}</span>
         </label>
-        <label class="inline">
-          <input type="checkbox" v-model="localSaveBatch" />
-          <span class="label-text">Save batch runs into subfolder (add /batch/ after output root)</span>
-        </label>
       </div>
     </div>
 

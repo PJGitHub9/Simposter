@@ -12,21 +12,83 @@ from ..schemas import SaveRequest
 router = APIRouter()
 
 
+DEFAULT_SAVE_TEMPLATE = "/config/output/{library}/{title}.jpg"
+
+
+def resolve_library_label(library_id: Optional[str]) -> str:
+    """Return a human-friendly library label (display name/title) given an id."""
+    mappings = getattr(settings, "PLEX_LIBRARY_MAPPINGS", []) or []
+    label: Optional[str] = None
+
+    # Normalize incoming id so any accidental path-like strings are reduced to the last segment
+    normalized_id = None
+    if library_id:
+        normalized_id = str(library_id).replace("\\", "/").rstrip("/")
+        if "/" in normalized_id:
+            normalized_id = normalized_id.split("/")[-1] or normalized_id
+    lib_id = normalized_id or library_id
+
+    # If no id provided, fall back to first mapping/display name
+    if not lib_id:
+        if mappings:
+            first = mappings[0]
+            label = first.get("displayName") or first.get("title") or str(first.get("id") or "default")
+        else:
+            names = getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", []) or []
+            label = str(names[0]) if names else "default"
+    else:
+        mappings = getattr(settings, "PLEX_LIBRARY_MAPPINGS", []) or []
+        for m in mappings:
+            mid = str(m.get("id", ""))
+            if mid == str(lib_id):
+                label = m.get("displayName") or m.get("title") or mid
+                break
+
+        # Fallback to configured names list if it contains the id or a name
+        if not label:
+            names = getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", []) or []
+            for n in names:
+                if str(n) == str(lib_id):
+                    label = str(n)
+                    break
+
+    # Final fallback
+    label = label or str(lib_id or "default")
+
+    # If the label looks like a path (e.g., "config/output/Movies"), use only the trailing segment
+    cleaned = label.replace("\\", "/").rstrip("/")
+    if "/" in cleaned:
+        cleaned = cleaned.split("/")[-1] or cleaned
+
+    return cleaned
+
+
 def get_save_location_template() -> str:
     """Read save location template from UI settings."""
+    # First try database (source of truth after migration)
+    try:
+        from .. import database as db  # local import to avoid circular
+        data = db.get_ui_settings()
+        if data:
+            tmpl = data.get("saveLocation")
+            if tmpl:
+                return tmpl
+    except Exception:
+        pass
+
     # Prefer settings directory (config/settings/ui_settings.json), then legacy config root
     settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
     legacy_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
     try:
         if settings_file.exists():
             data = json.loads(settings_file.read_text(encoding="utf-8"))
-            return data.get("saveLocation", "/config/output/{library}/{title}.jpg")
+            return data.get("saveLocation") or DEFAULT_SAVE_TEMPLATE
         if legacy_file.exists():
             data = json.loads(legacy_file.read_text(encoding="utf-8"))
-            return data.get("saveLocation", "/config/output/{library}/{title}.jpg")
+            return data.get("saveLocation") or DEFAULT_SAVE_TEMPLATE
     except Exception:
         pass
-    return "/config/output/{library}/{title}.jpg"
+    return DEFAULT_SAVE_TEMPLATE
 
 
 def apply_save_location_variables(template: str, title: str, year: Optional[int], key: Optional[str], library: Optional[str] = None) -> str:
@@ -61,13 +123,16 @@ def api_save(req: SaveRequest):
     # Get save location template from UI settings
     save_template = get_save_location_template()
 
+    # Resolve library label for template substitution (prefer display name/title over id)
+    library_label = resolve_library_label(req.library_id)
+
     # Apply variable substitution
     save_path = apply_save_location_variables(
         save_template,
         req.movie_title,
         req.movie_year,
         req.rating_key,
-        req.library_id
+        library_label
     )
 
     # Sanitize path components (keep dots so we can detect filenames)
@@ -98,7 +163,17 @@ def api_save(req: SaveRequest):
 
     # If path is relative, anchor under OUTPUT_ROOT
     if not base_dir.is_absolute():
-        base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")
+        lower_path = base_dir_str.lower()
+        # If user supplied "config/..." without leading slash, respect CONFIG_DIR
+        if lower_path.startswith("config/"):
+            tail = base_dir_str.split("/", 1)[1] if "/" in base_dir_str else ""
+            base_dir = Path(settings.CONFIG_DIR) / tail
+        # If user supplied "output/..." without leading slash, respect OUTPUT_ROOT
+        elif lower_path.startswith("output/"):
+            tail = base_dir_str.split("/", 1)[1] if "/" in base_dir_str else ""
+            base_dir = Path(settings.OUTPUT_ROOT) / tail
+        else:
+            base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")
 
     os.makedirs(base_dir, exist_ok=True)
     out_path = base_dir / filename

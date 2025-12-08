@@ -57,7 +57,7 @@ class Settings(BaseSettings):
 
     TMDB_API_KEY: str = ""
 
-    OUTPUT_ROOT: str = "./config/output"
+    OUTPUT_ROOT: str = ""
     CONFIG_DIR: str = "./config"
     SETTINGS_DIR: str = ""
     UPLOAD_DIR: str = "./uploads"

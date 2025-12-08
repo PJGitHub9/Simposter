@@ -7,7 +7,7 @@ from ..rendering import render_poster_image
 from io import BytesIO
 import requests
 from backend.assets.selection import pick_poster, pick_logo
-from .save import apply_save_location_variables, get_save_location_template
+from .save import apply_save_location_variables, get_save_location_template, resolve_library_label
 from datetime import datetime, timezone
 
 router = APIRouter()
@@ -170,18 +170,21 @@ def api_batch(req: BatchRequest):
                     elif legacy_file.exists():
                         data = json.loads(legacy_file.read_text(encoding="utf-8"))
                     if data:
-                        save_template = data.get("saveLocation", save_template)
+                        save_template = data.get("saveLocation") or save_template
                         save_batch = bool(data.get("saveBatchInSubfolder", False))
                 except Exception:
                     pass
 
                 # Apply variable substitution
+                # Use library display name/title when available
+                library_label = resolve_library_label(req.library_id)
+
                 save_path_template = apply_save_location_variables(
                     save_template,
                     movie_details.get("title", rating_key),
                     movie_details.get("year", ""),
                     rating_key,
-                    req.library_id
+                    library_label
                 )
 
                 # Sanitize path components (keep dots for filenames)
@@ -218,9 +221,17 @@ def api_batch(req: BatchRequest):
                     base_dir = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
                     mapped_output = True
 
-                # Anchor relative paths (skip if we already mapped /output)
-                if not base_dir.is_absolute() and not mapped_output:
-                    base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")
+                # Anchor relative paths (skip if we already mapped /output or /config)
+                if not base_dir.is_absolute():
+                    lower_path = base_dir_str.lower()
+                    if lower_path.startswith("config/"):
+                        tail = base_dir_str.split("/", 1)[1] if "/" in base_dir_str else ""
+                        base_dir = Path(settings.CONFIG_DIR) / tail
+                    elif lower_path.startswith("output/"):
+                        tail = base_dir_str.split("/", 1)[1] if "/" in base_dir_str else ""
+                        base_dir = Path(settings.OUTPUT_ROOT) / tail
+                    elif not mapped_output:
+                        base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")
 
                 # Optional batch subfolder (insert after output root)
                 if save_batch:

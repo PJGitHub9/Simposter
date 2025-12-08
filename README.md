@@ -276,7 +276,6 @@ docker run -d \
   --name simposter \
   -p 8003:8003 \
   -e CONFIG_DIR=/config \
-  -e OUTPUT_ROOT=/config/output \
   -v /path/to/config:/config \
   simposter:latest
 ```
@@ -298,13 +297,6 @@ services:
     image: simposter:latest
     ports:
       - "8003:8003"
-    environment:
-      - PLEX_URL=http://your-plex:32400
-      - PLEX_TOKEN=your_token
-      - PLEX_MOVIE_LIBRARY_NAME=Movies
-      - TMDB_API_KEY=your_tmdb_key
-      - CONFIG_DIR=/config
-      - OUTPUT_ROOT=/config/output
     volumes:
       - ./config:/config
 ```
