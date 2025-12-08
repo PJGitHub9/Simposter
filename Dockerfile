@@ -17,6 +17,9 @@ FROM python:3.10-slim
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=8003 \
+    PUID=1000 \
+    PGID=1000 \
+    UMASK=0000 \
     # Force paths under /config
     CONFIG_DIR=/config \
     OUTPUT_ROOT=/config/output \
@@ -28,8 +31,8 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-# Ensure usable fonts for text overlay (DejaVu)
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+# Ensure usable fonts for text overlay (DejaVu) and gosu for PUID/PGID drop
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core gosu && rm -rf /var/lib/apt/lists/*
 
 # Ensure default folders exist in image (mount overrides are fine)
 RUN mkdir -p /config/output /config/uploads /config/settings /config/logs
@@ -40,7 +43,12 @@ COPY backend ./backend
 # Copy built frontend assets
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
+# Runtime entrypoint to apply PUID/PGID/UMASK and permissions
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 VOLUME ["/config"]
 EXPOSE 8003
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8003"]
