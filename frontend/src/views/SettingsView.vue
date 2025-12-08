@@ -536,7 +536,7 @@ const stopScanPolling = () => {
           <input
             v-model="localSaveLocation"
             type="text"
-            placeholder="/output/{library}/{title}.jpg"
+            placeholder="config/output/{library}/{title}.jpg"
             @mousedown.stop
             @click.stop
             @mouseup.stop

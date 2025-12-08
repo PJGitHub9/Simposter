@@ -16,8 +16,8 @@ services:
       - PLEX_VERIFY_TLS=${PLEX_VERIFY_TLS:-true}
       # Persist settings/output/logs in the mounted /config volume
       - CONFIG_DIR=/config
-      - OUTPUT_ROOT=/config/output
-      - LOG_DIR=/config/logs
+      #- OUTPUT_ROOT=/config/output
+      #- LOG_DIR=/config/logs
     volumes:
       - ./config:/config
     restart: unless-stopped

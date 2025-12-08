@@ -421,12 +421,14 @@ def plex_headers() -> Dict[str, str]:
     return {"X-Plex-Token": settings.PLEX_TOKEN} if settings.PLEX_TOKEN else {}
 
 
-def resolve_library_id(name: str) -> str:
+def resolve_library_id(name) -> str:
     """Resolve library section name to id (Plex)"""
-    # Convert to string in case an integer library ID was passed
-    name = str(name).strip()
-    if name.isdigit():
-        return name
+    # Be defensive: allow int/None/empty and normalize to a string
+    name_str = str(name).strip() if name is not None else ""
+    if not name_str:
+        return "1"
+    if name_str.isdigit():
+        return name_str
 
     url = f"{settings.PLEX_URL}/library/sections"
     try:
@@ -439,7 +441,7 @@ def resolve_library_id(name: str) -> str:
         return "1"
 
     for directory in root.findall(".//Directory"):
-        if (directory.get("title") or "").strip().lower() == name.lower():
+        if (directory.get("title") or "").strip().lower() == name_str.lower():
             return directory.get("key")
 
     return "1"

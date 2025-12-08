@@ -16,6 +16,43 @@ _settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
 _legacy_settings_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
 
 
+def _normalize_plex_payload(data: dict) -> dict:
+    """
+    Normalize plex-related fields to strings/lists of strings.
+    Prevents pydantic validation errors when older data stored ints or missing lists.
+    """
+    if not isinstance(data, dict):
+        return {}
+
+    plex = data.get("plex", {}) or {}
+    normalized = plex.copy()
+
+    if "movieLibraryName" in normalized:
+        normalized["movieLibraryName"] = str(normalized["movieLibraryName"])
+    # Ensure list exists and is stringified
+    if "movieLibraryNames" in normalized and isinstance(normalized["movieLibraryNames"], list):
+        normalized["movieLibraryNames"] = [str(x) for x in normalized["movieLibraryNames"]]
+    elif normalized.get("movieLibraryName"):
+        normalized["movieLibraryNames"] = [str(normalized["movieLibraryName"])]
+    else:
+        normalized["movieLibraryNames"] = []
+
+    # Normalize library mappings if present
+    if "libraryMappings" in normalized and isinstance(normalized["libraryMappings"], list):
+        normalized["libraryMappings"] = [
+            {
+                "id": str(m.get("id", "")),
+                "title": str(m.get("title", "")),
+                "displayName": str(m.get("displayName", "")),
+            }
+            for m in normalized["libraryMappings"]
+            if isinstance(m, dict)
+        ]
+
+    data["plex"] = normalized
+    return data
+
+
 def _default_ui_settings() -> UISettings:
     """Defaults seeded from environment to make docker-compose setup easier."""
     return UISettings(
@@ -100,6 +137,9 @@ def _read_settings(include_env: bool = True) -> UISettings:
             db.save_ui_settings(defaults)
             return UISettings(**defaults)
 
+        # Normalize legacy values before merging
+        data = _normalize_plex_payload(data)
+
         # Merge with defaults so newly added fields are included
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False)
         merged = {**defaults, **data}
@@ -129,6 +169,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
                 else:
                     logger.debug("[UI_SETTINGS] Database has user settings, ENV overrides disabled")
 
+        merged = _normalize_plex_payload(merged)
         return UISettings(**merged)
     except Exception as e:
         logger.error(f"[UI_SETTINGS] Failed to read settings: {e}")
@@ -159,6 +200,8 @@ def save_ui_settings_endpoint(payload: UISettings):
                 **current.get(nested_key, {}),
                 **incoming.get(nested_key, {}),
             }
+
+        merged = _normalize_plex_payload(merged)
 
         # Save to database
         db.save_ui_settings(merged)
