@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.4.3
+- **Multiple Library Support**: Enhanced UI with separate movie libraries subsection in Settings, improved library mapping management
+- **Scanning Improvements**: Added 10-second cooldown to prevent multiple scan button clicks, backend protection against duplicate simultaneous scans
+- **Cache Management**: Added "Clear Backend Cache" button with proper scan state protection, improved cache clearing UX
+- **Docker Environment**: Environment variables now copy to database on container startup for initial setup, users can modify via UI afterwards
+- **Performance**: Bulk API optimization for movie labels (50% reduction in API calls), better session storage caching
+- **UI Polish**: Reorganized Settings page structure, improved button disable states, better visual feedback during operations
+
 ## v1.4.2
 - Added SQLite-backed cache for Plex movies (labels/tmdb/poster metadata) with new `/api/cache/*` endpoints and incremental updates from live calls.
 - Improved concurrency by pooling Plex HTTP connections (faster label/poster fetches on unRAID).
