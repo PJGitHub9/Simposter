@@ -424,7 +424,9 @@ def plex_headers() -> Dict[str, str]:
 def resolve_library_id(name) -> str:
     """Resolve library section name to id (Plex)"""
     # Be defensive: allow int/None/empty and normalize to a string
-    name_str = str(name).strip() if name is not None else ""
+    if name is None or name == "":
+        return "1"
+    name_str = str(name).strip()
     if not name_str:
         return "1"
     if name_str.isdigit():
