@@ -685,5 +685,88 @@ def clear_movie_cache(library_id: Optional[str] = None) -> None:
             logger.info("[DB] Cleared movie_cache")
 
 
+def copy_env_to_ui_settings():
+    """
+    Copy environment variables to UI settings in the database on container startup.
+    This allows ENV vars to be the initial values that users can then modify via the UI.
+    
+    Only copies ENV vars on first run or when settings are still at default values.
+    If admins want to force ENV values, they will still override via the normal ENV override mechanism.
+    """
+    import os
+    
+    # Check if we should skip ENV copying (e.g., if settings already exist and are non-default)
+    existing_settings = get_ui_settings()
+    
+    if existing_settings:
+        # Check if this looks like a fresh container by seeing if critical settings are still defaults
+        plex_data = existing_settings.get("plex", {})
+        existing_url = plex_data.get("url", "")
+        existing_token = plex_data.get("token", "")
+        
+        # If URL and token are already set to non-default values, skip ENV copying
+        # This prevents overwriting user-configured settings on container restart
+        if (existing_url and existing_url != "http://localhost:32400" and 
+            existing_token and existing_token != ""):
+            logger.debug("[DB] UI settings already configured, skipping ENV copy")
+            return
+        
+        # Also check if we have any non-default TMDB key
+        tmdb_data = existing_settings.get("tmdb", {})
+        if tmdb_data.get("apiKey"):
+            logger.debug("[DB] TMDB API key already configured, skipping ENV copy")
+            return
+    
+    env_mappings = [
+        ("PLEX_URL", "plex.url"),
+        ("PLEX_TOKEN", "plex.token"), 
+        ("PLEX_MOVIE_LIBRARY_NAME", "plex.movieLibraryName"),
+        ("PLEX_MOVIE_LIBRARY_NAMES", "plex.movieLibraryNames"),
+        ("TMDB_API_KEY", "tmdb.apiKey"),
+    ]
+    
+    updates_made = []
+    conn = sqlite3.connect(DB_PATH, timeout=10.0, check_same_thread=False)
+    _configure_conn(conn)
+    cursor = conn.cursor()
+    
+    try:
+        for env_var, setting_key in env_mappings:
+            env_value = os.getenv(env_var)
+            if env_value:
+                # Special handling for comma-separated library names
+                if env_var == "PLEX_MOVIE_LIBRARY_NAMES":
+                    env_value = json.dumps([s.strip() for s in env_value.split(",") if s.strip()])
+                elif env_var in ("PLEX_URL", "PLEX_TOKEN", "PLEX_MOVIE_LIBRARY_NAME", "TMDB_API_KEY"):
+                    env_value = str(env_value)
+                
+                category = setting_key.split(".")[0]
+                
+                # Insert or update setting (upsert)
+                cursor.execute("""
+                    INSERT INTO settings (key, value, category, updated_at) 
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (setting_key, env_value, category))
+                updates_made.append(f"{env_var} -> {setting_key}")
+        
+        conn.commit()
+        
+        if updates_made:
+            logger.info(f"[DB] Copied ENV variables to UI settings: {', '.join(updates_made)}")
+        else:
+            logger.debug("[DB] No ENV variables to copy to UI settings")
+            
+    except Exception as e:
+        logger.error(f"[DB] Failed to copy ENV variables to UI settings: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
 # Initialize database on module import
 init_database()
+# Copy environment variables to UI settings on startup
+copy_env_to_ui_settings()

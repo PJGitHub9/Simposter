@@ -67,6 +67,9 @@ def _read_settings(include_env: bool = True) -> UISettings:
     """
     Read settings from database, creating defaults if missing.
     Falls back to JSON files for backward compatibility during migration.
+    
+    Note: include_env is now primarily for backward compatibility.
+    ENV variables are copied to DB on startup, so DB values should take precedence.
     """
     try:
         # Try reading from database first
@@ -103,12 +106,28 @@ def _read_settings(include_env: bool = True) -> UISettings:
         for nested_key in ("plex", "tmdb", "tvdb", "imageQuality", "performance"):
             merged[nested_key] = {**defaults.get(nested_key, {}), **data.get(nested_key, {})}
 
-        # Apply environment overrides on top of merged values (do not persist them)
+        # ENV variables are now copied to DB on container startup instead of runtime overrides
+        # This allows users to modify the values via UI after initial setup
+        # Only apply ENV overrides for completely fresh/default databases
         if include_env:
             env_overrides = _env_overrides()
             if env_overrides:
-                for nested_key, nested_values in env_overrides.items():
-                    merged[nested_key] = {**merged.get(nested_key, {}), **nested_values}
+                # Check if database has any non-default values
+                plex_data = merged.get("plex", {})
+                tmdb_data = merged.get("tmdb", {})
+                
+                has_configured_settings = (
+                    (plex_data.get("url") and plex_data.get("url") != "http://localhost:32400") or
+                    (plex_data.get("token") and plex_data.get("token") != "") or
+                    (tmdb_data.get("apiKey") and tmdb_data.get("apiKey") != "")
+                )
+                
+                if not has_configured_settings:
+                    logger.debug("[UI_SETTINGS] Database appears empty, applying ENV overrides")
+                    for nested_key, nested_values in env_overrides.items():
+                        merged[nested_key] = {**merged.get(nested_key, {}), **nested_values}
+                else:
+                    logger.debug("[UI_SETTINGS] Database has user settings, ENV overrides disabled")
 
         return UISettings(**merged)
     except Exception as e:
