@@ -46,7 +46,13 @@ const getIcon = (key: TabKey | string) => {
     'batch-edit': `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M9 14l2 2 4-4"/></svg>`,
     'local-assets': `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>`
   }
-  return icons[key] || ''
+  // Check for exact match first
+  if (icons[key]) return icons[key]
+  // Check for pattern matches (e.g., movies-1, movies-2 should use the movies icon)
+  if (key.startsWith('movies-')) return icons.movies
+  if (key.startsWith('batch-')) return icons['batch-edit']
+  if (key.startsWith('assets-')) return icons['local-assets']
+  return ''
 }
 </script>
 

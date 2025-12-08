@@ -156,9 +156,16 @@ def init_database():
                 tmdb_id INTEGER,
                 poster_url TEXT,
                 labels_json TEXT DEFAULT '[]',
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                library_id TEXT DEFAULT 'default'
             )
         """)
+        # Migration: ensure library_id column exists before creating indexes that depend on it
+        cursor.execute("PRAGMA table_info(movie_cache)")
+        cols = [row["name"] for row in cursor.fetchall()]
+        if "library_id" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN library_id TEXT DEFAULT 'default'")
+
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_movie_cache_updated
             ON movie_cache(updated_at)
@@ -166,6 +173,10 @@ def init_database():
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_movie_cache_title
             ON movie_cache(title)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_movie_cache_library
+            ON movie_cache(library_id)
         """)
 
         conn.commit()
@@ -509,14 +520,15 @@ def upsert_movie_cache(
     tmdb_id: Optional[int] = None,
     poster_url: Optional[str] = None,
     labels: Optional[List[str]] = None,
+    library_id: str = "default",
 ) -> None:
     """Insert or update cached movie metadata."""
     labels_json = json.dumps(labels or [])
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at, library_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
             ON CONFLICT(rating_key) DO UPDATE SET
                 title = excluded.title,
                 year = excluded.year,
@@ -527,11 +539,12 @@ def upsert_movie_cache(
                     WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                     ELSE movie_cache.labels_json
                 END,
+                library_id = COALESCE(excluded.library_id, movie_cache.library_id),
                 updated_at = CURRENT_TIMESTAMP
-        """, (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json))
+        """, (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, library_id))
 
 
-def update_movie_labels(rating_key: str, labels: List[str]) -> None:
+def update_movie_labels(rating_key: str, labels: List[str], library_id: str = "default") -> None:
     """Update labels for a cached movie."""
     labels_json = json.dumps(labels)
     with get_db() as conn:
@@ -539,33 +552,33 @@ def update_movie_labels(rating_key: str, labels: List[str]) -> None:
         cursor.execute("""
             UPDATE movie_cache
             SET labels_json = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE rating_key = ?
-        """, (labels_json, rating_key))
+            WHERE rating_key = ? AND library_id = COALESCE(library_id, ?)
+        """, (labels_json, rating_key, library_id))
 
 
-def update_movie_tmdb(rating_key: str, tmdb_id: Optional[int]) -> None:
+def update_movie_tmdb(rating_key: str, tmdb_id: Optional[int], library_id: str = "default") -> None:
     """Update TMDB id for a cached movie."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE movie_cache
             SET tmdb_id = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE rating_key = ?
-        """, (tmdb_id, rating_key))
+            WHERE rating_key = ? AND library_id = COALESCE(library_id, ?)
+        """, (tmdb_id, rating_key, library_id))
 
 
-def update_movie_poster(rating_key: str, poster_url: Optional[str]) -> None:
+def update_movie_poster(rating_key: str, poster_url: Optional[str], library_id: str = "default") -> None:
     """Update poster url for a cached movie."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE movie_cache
             SET poster_url = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE rating_key = ?
-        """, (poster_url, rating_key))
+            WHERE rating_key = ? AND library_id = COALESCE(library_id, ?)
+        """, (poster_url, rating_key, library_id))
 
 
-def bulk_refresh_cache(movies: List[Dict[str, Any]]) -> None:
+def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default") -> None:
     """
     Replace cache entries to match the provided movies list.
     Each movie dict should include rating_key, title, year, added_at, tmdb_id?, poster_url?, labels?.
@@ -576,8 +589,8 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]]) -> None:
         for m in movies:
             labels_json = json.dumps(m.get("labels") or [])
             cursor.execute("""
-                INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at, library_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
                 ON CONFLICT(rating_key) DO UPDATE SET
                     title = excluded.title,
                     year = excluded.year,
@@ -588,6 +601,7 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]]) -> None:
                         WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                         ELSE movie_cache.labels_json
                     END,
+                    library_id = COALESCE(excluded.library_id, movie_cache.library_id),
                     updated_at = CURRENT_TIMESTAMP
             """, (
                 m["rating_key"],
@@ -597,25 +611,34 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]]) -> None:
                 m.get("tmdb_id"),
                 m.get("poster_url"),
                 labels_json,
+                library_id,
             ))
 
         # Drop entries that are no longer present
         if keys:
             cursor.execute(f"""
                 DELETE FROM movie_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) 
-            """, keys)
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+            """, keys + [library_id])
 
 
-def get_cached_movies() -> List[Dict[str, Any]]:
-    """Return cached movies with labels/poster/tmdb if known."""
+def get_cached_movies(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return cached movies with labels/poster/tmdb if known. Optionally filter by library."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at
-            FROM movie_cache
-            ORDER BY COALESCE(updated_at, added_at) DESC
-        """)
+        if library_id:
+            cursor.execute("""
+                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at, library_id
+                FROM movie_cache
+                WHERE library_id = ?
+                ORDER BY COALESCE(updated_at, added_at) DESC
+            """, (library_id,))
+        else:
+            cursor.execute("""
+                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, updated_at, library_id
+                FROM movie_cache
+                ORDER BY COALESCE(updated_at, added_at) DESC
+            """)
         rows = cursor.fetchall()
 
     out: List[Dict[str, Any]] = []
@@ -633,26 +656,117 @@ def get_cached_movies() -> List[Dict[str, Any]]:
             "poster_url": row["poster_url"],
             "labels": labels,
             "updated_at": row["updated_at"],
+            "library_id": row["library_id"] if "library_id" in row.keys() else None,
         })
     return out
 
 
-def get_movie_cache_stats() -> Dict[str, Any]:
+def get_movie_cache_stats(library_id: Optional[str] = None) -> Dict[str, Any]:
     """Return count and last updated timestamp for movie_cache."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) as cnt, MAX(updated_at) as max_updated FROM movie_cache")
+        if library_id:
+            cursor.execute("SELECT COUNT(*) as cnt, MAX(updated_at) as max_updated FROM movie_cache WHERE library_id = ?", (library_id,))
+        else:
+            cursor.execute("SELECT COUNT(*) as cnt, MAX(updated_at) as max_updated FROM movie_cache")
         row = cursor.fetchone()
     return {"count": row["cnt"] if row else 0, "max_updated": row["max_updated"] if row else None}
 
 
-def clear_movie_cache() -> None:
-    """Delete all rows from movie_cache."""
+def clear_movie_cache(library_id: Optional[str] = None) -> None:
+    """Delete rows from movie_cache. If library_id provided, only clear that library."""
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM movie_cache")
-    logger.info("[DB] Cleared movie_cache")
+        if library_id:
+            cursor.execute("DELETE FROM movie_cache WHERE library_id = ?", (library_id,))
+            logger.info("[DB] Cleared movie_cache for library %s", library_id)
+        else:
+            cursor.execute("DELETE FROM movie_cache")
+            logger.info("[DB] Cleared movie_cache")
+
+
+def copy_env_to_ui_settings():
+    """
+    Copy environment variables to UI settings in the database on container startup.
+    This allows ENV vars to be the initial values that users can then modify via the UI.
+    
+    Only copies ENV vars on first run or when settings are still at default values.
+    If admins want to force ENV values, they will still override via the normal ENV override mechanism.
+    """
+    import os
+    
+    # Check if we should skip ENV copying (e.g., if settings already exist and are non-default)
+    existing_settings = get_ui_settings()
+    
+    if existing_settings:
+        # Check if this looks like a fresh container by seeing if critical settings are still defaults
+        plex_data = existing_settings.get("plex", {})
+        existing_url = plex_data.get("url", "")
+        existing_token = plex_data.get("token", "")
+        
+        # If URL and token are already set to non-default values, skip ENV copying
+        # This prevents overwriting user-configured settings on container restart
+        if (existing_url and existing_url != "http://localhost:32400" and 
+            existing_token and existing_token != ""):
+            logger.debug("[DB] UI settings already configured, skipping ENV copy")
+            return
+        
+        # Also check if we have any non-default TMDB key
+        tmdb_data = existing_settings.get("tmdb", {})
+        if tmdb_data.get("apiKey"):
+            logger.debug("[DB] TMDB API key already configured, skipping ENV copy")
+            return
+    
+    env_mappings = [
+        ("PLEX_URL", "plex.url"),
+        ("PLEX_TOKEN", "plex.token"), 
+        ("PLEX_MOVIE_LIBRARY_NAME", "plex.movieLibraryName"),
+        ("PLEX_MOVIE_LIBRARY_NAMES", "plex.movieLibraryNames"),
+        ("TMDB_API_KEY", "tmdb.apiKey"),
+    ]
+    
+    updates_made = []
+    conn = sqlite3.connect(DB_PATH, timeout=10.0, check_same_thread=False)
+    _configure_conn(conn)
+    cursor = conn.cursor()
+    
+    try:
+        for env_var, setting_key in env_mappings:
+            env_value = os.getenv(env_var)
+            if env_value:
+                # Special handling for comma-separated library names
+                if env_var == "PLEX_MOVIE_LIBRARY_NAMES":
+                    env_value = json.dumps([s.strip() for s in env_value.split(",") if s.strip()])
+                elif env_var in ("PLEX_URL", "PLEX_TOKEN", "PLEX_MOVIE_LIBRARY_NAME", "TMDB_API_KEY"):
+                    env_value = str(env_value)
+                
+                category = setting_key.split(".")[0]
+                
+                # Insert or update setting (upsert)
+                cursor.execute("""
+                    INSERT INTO settings (key, value, category, updated_at) 
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (setting_key, env_value, category))
+                updates_made.append(f"{env_var} -> {setting_key}")
+        
+        conn.commit()
+        
+        if updates_made:
+            logger.info(f"[DB] Copied ENV variables to UI settings: {', '.join(updates_made)}")
+        else:
+            logger.debug("[DB] No ENV variables to copy to UI settings")
+            
+    except Exception as e:
+        logger.error(f"[DB] Failed to copy ENV variables to UI settings: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 # Initialize database on module import
 init_database()
+# Copy environment variables to UI settings on startup
+copy_env_to_ui_settings()

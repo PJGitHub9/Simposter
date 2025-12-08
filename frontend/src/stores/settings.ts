@@ -9,6 +9,8 @@ export type PlexSettings = {
   url: string
   token: string
   movieLibraryName: string
+  movieLibraryNames?: string[]
+  libraryMappings?: Array<{ id: string; title?: string; displayName?: string }>
 }
 
 export type TMDBSettings = {
@@ -37,7 +39,7 @@ export type PerformanceSettings = {
 export type UISettings = {
   theme: Theme
   posterDensity: number
-  defaultLabelsToRemove?: string[]
+  defaultLabelsToRemove?: string[] | Record<string, string[]>
   saveLocation?: string
   saveBatchInSubfolder?: boolean
   plex?: PlexSettings
@@ -49,13 +51,13 @@ export type UISettings = {
 
 const theme = ref<Theme>('neon')
 const posterDensity = ref(20)
-const defaultLabelsToRemove = ref<string[]>([])
+const defaultLabelsToRemove = ref<Record<string, string[]>>({})
 const loading = ref(false)
 const error = ref<string | null>(null)
 const loaded = ref(false)
 const saveLocation = ref<string>('/output')
 const saveBatchInSubfolder = ref<boolean>(false)
-const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '' })
+const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [] })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: true })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
@@ -70,14 +72,22 @@ async function loadSettings() {
     const data = (await res.json()) as UISettings
     theme.value = data.theme || 'neon'
     posterDensity.value = Number(data.posterDensity) || 20
-    defaultLabelsToRemove.value = data.defaultLabelsToRemove || []
+    // Handle both legacy array format and new Record format
+    if (Array.isArray(data.defaultLabelsToRemove)) {
+      // Legacy format: convert to new format using first library as default
+      defaultLabelsToRemove.value = { 'default': data.defaultLabelsToRemove }
+    } else {
+      defaultLabelsToRemove.value = data.defaultLabelsToRemove || {}
+    }
     loaded.value = true
     saveLocation.value = data.saveLocation ?? "/output"
     saveBatchInSubfolder.value = !!data.saveBatchInSubfolder
     plex.value = {
       url: data.plex?.url ?? '',
       token: data.plex?.token ?? '',
-      movieLibraryName: data.plex?.movieLibraryName ?? ''
+      movieLibraryName: data.plex?.movieLibraryName ?? '',
+      movieLibraryNames: data.plex?.movieLibraryNames ?? (data.plex?.movieLibraryName ? [data.plex.movieLibraryName] : []),
+      libraryMappings: data.plex?.libraryMappings ?? []
     }
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }

@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Body
 from fastapi.responses import Response, FileResponse, JSONResponse
 
 import requests
@@ -183,8 +183,8 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
         }
 
 
-def _cache_fresh(max_age_seconds: int) -> bool:
-    stats = db.get_movie_cache_stats()
+def _cache_fresh(max_age_seconds: int, library_id: Optional[str] = None) -> bool:
+    stats = db.get_movie_cache_stats(library_id=library_id)
     if not stats.get("count"):
         return False
     ts = stats.get("max_updated")
@@ -201,12 +201,12 @@ def _cache_fresh(max_age_seconds: int) -> bool:
 
 
 @router.get("/movies", response_model=List[Movie])
-def api_movies(force_refresh: bool = False, max_age: int = 900):
+def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
     """
     Return movies. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
     """
-    if not force_refresh and _cache_fresh(max_age):
-        cached = cache.get_cached_movies()
+    if not force_refresh and _cache_fresh(max_age, library_id=library_id):
+        cached = cache.get_cached_movies(library_id=library_id)
         if cached:
             return [
                 {
@@ -218,12 +218,14 @@ def api_movies(force_refresh: bool = False, max_age: int = 900):
                     "tmdb_id": m.get("tmdb_id"),
                     "labels": m.get("labels") or [],
                     "updated_at": m.get("updated_at"),
+                    "library_id": m.get("library_id"),
                 }
                 for m in cached
             ]
 
     # Otherwise hit Plex and refresh the cache
-    movies = get_plex_movies()
+    lib_ids = [library_id] if library_id else None
+    movies = get_plex_movies(lib_ids)
     return [{**m.model_dump(), "poster": None} for m in movies]
 
 
@@ -362,10 +364,48 @@ def api_movies_tmdb():
     ]
 
 
+@router.post("/movies/labels/bulk")
+def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
+    """Get labels for multiple movies at once."""
+    try:
+        results = {}
+        
+        # Batch process the labels to avoid individual API calls
+        for movie_key in movie_keys:
+            try:
+                # Direct label fetching without going through the API endpoint
+                url = f"{settings.PLEX_URL}/library/metadata/{movie_key}"
+                r = plex_session.get(url, headers=plex_headers(), timeout=10)
+                r.raise_for_status()
+                
+                root = ET.fromstring(r.text)
+                labels_list = []
+                for label in root.findall(".//Label"):
+                    tag = label.get('tag', '').strip()
+                    if tag:
+                        labels_list.append(tag)
+                
+                results[movie_key] = labels_list
+            except Exception as e:
+                logger.debug(f"[BULK LABELS] Failed to fetch labels for {movie_key}: {e}")
+                results[movie_key] = []
+                
+        logger.info(f"[BULK LABELS] Successfully fetched labels for {len(results)} movies")
+        return {"labels": results}
+    except Exception as e:
+        logger.error(f"[BULK LABELS] Failed to fetch bulk labels: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch bulk labels: {e}")
+
+
 @router.post("/scan-library")
 def api_scan_library():
     """Scan entire Plex library and return full data for caching."""
     try:
+        # Prevent multiple simultaneous scans
+        if scan_status.get("state") == "running":
+            logger.warning("[SCAN] Scan already in progress, rejecting new scan request")
+            raise HTTPException(status_code=409, detail="Scan already in progress")
+        
         movies = get_plex_movies()
         logger.info(f"[SCAN] Starting library scan for {len(movies)} movies")
         scan_status.update({
@@ -416,6 +456,19 @@ def api_scan_library():
             try:
                 labels_data = api_movie_labels(movie.key)
                 result["labels"][movie.key] = labels_data.labels
+                
+                # Also update the backend cache with this data
+                try:
+                    poster_url = result["posters"].get(movie.key)
+                    cache.upsert_movie(
+                        movie,
+                        tmdb_id=None,
+                        poster_url=poster_url,
+                        labels=labels_data.labels
+                    )
+                except Exception as cache_err:
+                    logger.debug(f"[SCAN] Failed to cache data for {movie.key}: {cache_err}")
+                    
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch labels for {movie.key}: {e}")
                 result["labels"][movie.key] = []

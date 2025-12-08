@@ -2,25 +2,33 @@
 import { useSettingsStore, type Theme } from '../stores/settings'
 import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 
 const settings = useSettingsStore()
 const saved = ref('')
-const allLabels = ref<string[]>([])
+const allLabels = ref<Record<string, string[]>>({})
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
+
+// Cooldown state to prevent rapid clicking
+const scanCooldown = ref(false)
+
+// Computed property to ensure button disable state is reactive
+const isScanInProgress = computed(() => scan.running.value || scan.checking.value || scanCooldown.value)
 
 // Local state that will only be applied when save is clicked
 const localTheme = ref<Theme>('neon')
 const localPosterDensity = ref(20)
 const localSaveLocation = ref('')
 const localSaveBatch = ref(false)
-const localDefaultLabelsToRemove = ref<string[]>([])
+const localDefaultLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
+const localLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
+const savedLibraryIds = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 // Image Quality
@@ -40,11 +48,34 @@ const loadLocalSettings = () => {
   localPosterDensity.value = settings.posterDensity.value
   localSaveLocation.value = settings.saveLocation.value
   localSaveBatch.value = settings.saveBatchInSubfolder.value
-  localDefaultLabelsToRemove.value = [...settings.defaultLabelsToRemove.value]
+  localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
   // Connection settings
   localPlexUrl.value = settings.plex.value.url
   localPlexToken.value = settings.plex.value.token
   localPlexLibrary.value = settings.plex.value.movieLibraryName
+  // Deep clone library mappings to prevent real-time updates
+  const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: any) => l && l.id)
+  const libraryMappings = hasPersistedLibraries
+    ? settings.plex.value.libraryMappings
+    : (settings.plex.value.movieLibraryNames || settings.plex.value.movieLibraryName
+        ? (settings.plex.value.movieLibraryNames || [settings.plex.value.movieLibraryName]).map((n: string, idx: number) => ({
+            id: n,
+            title: n,
+            displayName: n || `Library ${idx + 1}`
+          }))
+        : [{ id: '', title: '', displayName: '' }]
+      )
+
+  localLibraries.value = JSON.parse(JSON.stringify(libraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
+
+  // Lock only if libraries were already persisted (not the first-run fallback)
+  savedLibraryIds.value = hasPersistedLibraries
+    ? new Set(
+        (libraryMappings || [])
+          .map((l: any) => (l && l.id ? String(l.id) : ''))
+          .filter(Boolean)
+      )
+    : new Set()
   localTmdbApiKey.value = settings.tmdb.value.apiKey
   localTvdbApiKey.value = settings.tvdb.value.apiKey
   // Image Quality
@@ -65,11 +96,18 @@ const saveSettings = async () => {
   settings.posterDensity.value = localPosterDensity.value
   settings.saveLocation.value = localSaveLocation.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
-  settings.defaultLabelsToRemove.value = [...localDefaultLabelsToRemove.value]
+  settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
+  const libs = localLibraries.value.filter(l => l.id || l.title)
   settings.plex.value = {
     url: localPlexUrl.value,
     token: localPlexToken.value,
-    movieLibraryName: localPlexLibrary.value
+    movieLibraryName: libs[0]?.id || localPlexLibrary.value || '',
+    movieLibraryNames: libs.length > 0 ? libs.map(l => l.id) : undefined,
+    libraryMappings: libs.map(l => ({
+      id: l.id || '',
+      title: l.title || l.id || '',
+      displayName: l.displayName || l.title || l.id || '',
+    }))
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }
   settings.tvdb.value = { apiKey: localTvdbApiKey.value, comingSoon: settings.tvdb.value.comingSoon }
@@ -90,11 +128,19 @@ const saveSettings = async () => {
   await settings.save()
   saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
+  // After save, lock current library selections
+  savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
 }
 
 const testConnection = ref('')
 const testConnectionLoading = ref(false)
 const plexLibraries = ref<Array<{ title: string; key: string; type: string }>>([])
+const addLibrary = () => {
+  localLibraries.value = [...localLibraries.value, { id: '', title: '', displayName: '' }]
+}
+const removeLibrary = (idx: number) => {
+  localLibraries.value = localLibraries.value.filter((_, i) => i !== idx)
+}
 
 const testPlexConnection = async () => {
   testConnectionLoading.value = true
@@ -116,6 +162,16 @@ const testPlexConnection = async () => {
       const movieLibs = plexLibraries.value.filter(s => s.type === 'movie')
       const sectionsList = movieLibs.map((s: any) => s.title).join(', ')
       testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${sectionsList}`
+      if (movieLibs.length > 0) {
+        // Seed libraries if none configured yet
+        if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
+          localLibraries.value = movieLibs.map((s: any, idx: number) => ({
+            id: s.key,
+            title: s.title,
+            displayName: s.title || `Library ${idx + 1}`,
+          }))
+        }
+      }
     } else {
       testConnection.value = `✗ ${data.error}: ${data.message}`
     }
@@ -155,17 +211,49 @@ const scanLibrary = async () => {
     setTimeout(() => (saved.value = ''), 2000)
     return
   }
+
+  if (scanCooldown.value) {
+    saved.value = 'Please wait before starting another scan'
+    setTimeout(() => (saved.value = ''), 2000)
+    return
+  }
+  
   try {
+    // Set scan state immediately to prevent double-clicks
+    scan.running.value = true
+    // Enable cooldown for 10 seconds
+    scanCooldown.value = true
+    setTimeout(() => {
+      // Only disable cooldown if scan is not still running
+      if (!scan.running.value && !scan.checking.value) {
+        scanCooldown.value = false
+      } else {
+        // If scan is still running, check again in 5 seconds
+        const checkScanStatus = () => {
+          if (!scan.running.value && !scan.checking.value) {
+            scanCooldown.value = false
+          } else {
+            setTimeout(checkScanStatus, 5000)
+          }
+        }
+        setTimeout(checkScanStatus, 5000)
+      }
+    }, 10000)
     saved.value = 'Rescanning library...'
     scan.visible.value = true
     scan.log.value = ['Starting rescan...']
     scan.progress.value = { processed: 0, total: 0 }
     scan.current.value = ''
-    scan.running.value = true
     startScanPolling()
+    
     const apiBase = getApiBase()
     const res = await fetch(`${apiBase}/api/scan-library`, { method: 'POST' })
-    if (!res.ok) throw new Error(`API error ${res.status}`)
+    if (!res.ok) {
+      if (res.status === 409) {
+        throw new Error('Scan already in progress on server')
+      }
+      throw new Error(`API error ${res.status}`)
+    }
     const data = await res.json()
 
     // Cache movies
@@ -209,6 +297,8 @@ const scanLibrary = async () => {
     // Mark scan done; overlay will auto-hide via scan store
     scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
     scan.running.value = false
+    // Clear cooldown when scan completes
+    scanCooldown.value = false
     // Ensure overlay hides even if no further poll events arrive
     setTimeout(() => {
       scan.visible.value = false
@@ -225,6 +315,8 @@ const scanLibrary = async () => {
   }
   stopScanPolling()
   scan.running.value = false
+  // Clear cooldown when function exits
+  scanCooldown.value = false
 }
 
 const clearBackendCache = async () => {
@@ -253,20 +345,53 @@ const clearBackendCache = async () => {
   }
 }
 
-// Fetch all available labels from movies
+// Fetch all available labels from movies per library
 const fetchAllLabels = async () => {
   try {
-    const labelCache = sessionStorage.getItem('simposter-labels-cache')
-    if (labelCache) {
-      const cache = JSON.parse(labelCache) as Record<string, string[]>
-      const labels = new Set<string>()
-      Object.values(cache).forEach((movieLabels) => {
-        if (Array.isArray(movieLabels)) {
-          movieLabels.forEach((label) => labels.add(label))
+    const libs = settings.plex.value.libraryMappings || []
+    const labelsByLibrary: Record<string, string[]> = {}
+
+    // Get all valid library IDs
+    const validLibIds = new Set(libs.map(l => l.id).filter(Boolean))
+
+    // Clear stale caches that don't correspond to current libraries
+    if (typeof sessionStorage !== 'undefined') {
+      const keysToRemove: string[] = []
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i)
+        if (key && key.startsWith('simposter-labels-cache-')) {
+          const libId = key.replace('simposter-labels-cache-', '')
+          if (libId !== 'default' && !validLibIds.has(libId)) {
+            keysToRemove.push(key)
+          }
         }
-      })
-      allLabels.value = Array.from(labels).sort()
+      }
+      keysToRemove.forEach(key => sessionStorage.removeItem(key))
     }
+
+    for (const lib of libs) {
+      const libId = lib.id || 'default'
+      const labelCacheKey = `simposter-labels-cache-${libId}`
+      const labelCache = sessionStorage.getItem(labelCacheKey)
+
+      if (labelCache) {
+        const cache = JSON.parse(labelCache) as Record<string, string[]>
+        const labels = new Set<string>()
+        Object.values(cache).forEach((movieLabels) => {
+          if (Array.isArray(movieLabels)) {
+            movieLabels.forEach((label) => labels.add(label))
+          }
+        })
+        labelsByLibrary[libId] = Array.from(labels).sort()
+      }
+
+      // Initialize empty labels if library not in settings yet
+      if (!localDefaultLabelsToRemove.value[libId]) {
+        localDefaultLabelsToRemove.value[libId] = []
+      }
+    }
+
+    allLabels.value = labelsByLibrary
   } catch (e) {
     console.error('Failed to fetch labels', e)
   }
@@ -274,33 +399,55 @@ const fetchAllLabels = async () => {
 
 onMounted(async () => {
   // Ensure settings are loaded from API before syncing local form state
-  if (!settings.loaded.value && !settings.loading.value) {
+  if (!settings.loaded.value) {
     await settings.load()
   }
+
+  // Only load local settings and labels after settings are confirmed loaded
   loadLocalSettings()
   fetchAllLabels()
+
+  // Load Plex libraries if credentials exist to populate dropdowns
+  if (settings.plex.value.url && settings.plex.value.token) {
+    await testPlexConnection()
+  }
 })
 
 // If settings finish loading after initial render, sync the local form
 watch(
   () => settings.loaded.value,
   (val) => {
-    if (val) loadLocalSettings()
+    if (val) {
+      loadLocalSettings()
+      fetchAllLabels()
+    }
   }
 )
 
-const toggleLabel = (label: string) => {
-  const set = new Set(localDefaultLabelsToRemove.value)
+// Refetch labels when library mappings change
+watch(
+  () => settings.plex.value.libraryMappings,
+  () => {
+    fetchAllLabels()
+  },
+  { deep: true }
+)
+
+const toggleLabel = (libraryId: string, label: string) => {
+  if (!localDefaultLabelsToRemove.value[libraryId]) {
+    localDefaultLabelsToRemove.value[libraryId] = []
+  }
+  const set = new Set(localDefaultLabelsToRemove.value[libraryId])
   if (set.has(label)) {
     set.delete(label)
   } else {
     set.add(label)
   }
-  localDefaultLabelsToRemove.value = Array.from(set)
+  localDefaultLabelsToRemove.value[libraryId] = Array.from(set)
 }
 
-const isLabelSelected = (label: string) => {
-  return localDefaultLabelsToRemove.value.includes(label)
+const isLabelSelected = (libraryId: string, label: string) => {
+  return localDefaultLabelsToRemove.value[libraryId]?.includes(label) || false
 }
 
 const startScanPolling = () => {
@@ -403,18 +550,14 @@ const stopScanPolling = () => {
           <input
             v-model="localSaveLocation"
             type="text"
-            placeholder="/output/{title} {year}/poster"
+            placeholder="config/output/{library}/{title}.jpg"
             @mousedown.stop
             @click.stop
             @mouseup.stop
             @select.stop
             @selectstart.stop
           />
-          <span class="help-text">Available variables: {title}, {year}, {key}</span>
-        </label>
-        <label class="inline">
-          <input type="checkbox" v-model="localSaveBatch" />
-          <span class="label-text">Save batch runs into subfolder (add /batch/ after output root)</span>
+          <span class="help-text">Available variables: {library}, {title}, {year}, {key}</span>
         </label>
       </div>
     </div>
@@ -455,35 +598,6 @@ const stopScanPolling = () => {
           />
           <span class="help-text">Use the Plex token or future auto-discovery once available.</span>
         </label>
-        <label>
-          <span class="label-text">Plex Movie Library</span>
-          <select
-            v-if="plexLibraries.length > 0"
-            v-model="localPlexLibrary"
-            class="form-control"
-          >
-            <option value="">Select a library...</option>
-            <option
-              v-for="lib in plexLibraries.filter(s => s.type === 'movie')"
-              :key="lib.key"
-              :value="lib.title"
-            >
-              {{ lib.title }}
-            </option>
-          </select>
-          <input
-            v-else
-            v-model="localPlexLibrary"
-            type="text"
-            placeholder="Movies or 1"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-          <span v-if="plexLibraries.length === 0" class="help-text">Test connection first to populate library dropdown</span>
-        </label>
         <div class="test-connection-wrapper">
           <button
             class="btn-test-connection"
@@ -496,6 +610,66 @@ const stopScanPolling = () => {
             {{ testConnection }}
           </p>
         </div>
+      </div>
+      
+      <div class="movie-libraries-subsection">
+        <h4 class="subsection-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+          </svg>
+          Movie Libraries
+        </h4>
+        <div class="library-list">
+          <div
+            v-for="(lib, idx) in localLibraries"
+            :key="idx"
+            class="library-row"
+          >
+            <div class="library-header">
+              <span class="label-text">{{ lib.displayName || lib.title || `Library ${idx + 1}` }}</span>
+              <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
+            </div>
+            <select
+              v-model="lib.id"
+              class="form-control"
+              :class="{ 'locked': savedLibraryIds.has(lib.id) }"
+              :disabled="savedLibraryIds.has(lib.id)"
+              @change="(e) => {
+                const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
+                if (selected && !lib.displayName) {
+                  lib.title = selected.title
+                  lib.displayName = selected.title
+                }
+              }"
+            >
+              <option value="">Select a library...</option>
+              <option
+                v-for="p in plexLibraries.filter(s => s.type === 'movie')"
+                :key="p.key"
+                :value="p.key"
+              >
+                {{ p.title }} (ID: {{ p.key }})
+              </option>
+            </select>
+            <input
+              v-model="lib.displayName"
+              type="text"
+              placeholder="Display name (e.g., 4K Movies)"
+              @mousedown.stop
+              @click.stop
+              @mouseup.stop
+              @select.stop
+              @selectstart.stop
+            />
+            <button class="secondary small" type="button" @click="removeLibrary(idx)" :disabled="localLibraries.length <= 1">Remove</button>
+          </div>
+          <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
+          <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
+        </div>
+      </div>
+
+      <div class="api-keys-section">
         <label>
           <span class="label-text">TMDb API Key</span>
           <input
@@ -640,7 +814,7 @@ const stopScanPolling = () => {
       </div>
     </div>
 
-    <div v-if="allLabels.length > 0" class="settings-section labels-section">
+    <div v-if="Object.keys(allLabels).length > 0" class="settings-section labels-section">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
@@ -648,12 +822,20 @@ const stopScanPolling = () => {
         </svg>
         Default Labels to Remove
       </h3>
-      <p class="section-subtitle">When sending to Plex, these labels will be removed by default</p>
-      <div class="labels-grid">
-        <label v-for="label in allLabels" :key="label" class="label-checkbox">
-          <input type="checkbox" :checked="isLabelSelected(label)" @change="toggleLabel(label)" />
-          <span>{{ label }}</span>
-        </label>
+      <p class="section-subtitle">When sending to Plex, these labels will be removed by default for each library</p>
+
+      <!-- Library-specific label sections -->
+      <div v-for="(labels, libId) in allLabels" :key="libId" class="library-labels-section">
+        <h4 class="library-labels-title">
+          {{ localLibraries.find(l => l.id === libId)?.displayName || localLibraries.find(l => l.id === libId)?.title || libId }}
+        </h4>
+        <div v-if="labels.length > 0" class="labels-grid">
+          <label v-for="label in labels" :key="`${libId}-${label}`" class="label-checkbox">
+            <input type="checkbox" :checked="isLabelSelected(libId, label)" @change="toggleLabel(libId, label)" />
+            <span>{{ label }}</span>
+          </label>
+        </div>
+        <p v-else class="no-labels-message">No labels found for this library yet. Scan the library to discover labels.</p>
       </div>
     </div>
 
@@ -666,19 +848,27 @@ const stopScanPolling = () => {
         </svg>
         Save Settings
       </button>
-      <button @click="clearCache" class="secondary" :disabled="scan.running.value || scan.checking.value">
+      <button @click="clearCache" class="secondary" :disabled="isScanInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="1 4 1 10 7 10"/>
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
         </svg>
         Clear Session Cache
       </button>
-      <button @click="scanLibrary" class="secondary" :disabled="scan.running.value || scan.checking.value">
+      <button @click="clearBackendCache" class="secondary" :disabled="isScanInProgress">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
+          <polyline points="18 9 12 15"/>
+          <polyline points="12 9 18 15"/>
+        </svg>
+        Clear Backend Cache
+      </button>
+      <button @click="scanLibrary" class="secondary" :disabled="isScanInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>
         </svg>
-        Rescan Library
+        {{ scanCooldown ? 'Please Wait...' : scan.running.value ? 'Scanning...' : 'Rescan Library' }}
       </button>
       <span v-if="saved" class="status">{{ saved }}</span>
     </div>
@@ -760,7 +950,27 @@ const stopScanPolling = () => {
 }
 
 .connections {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  max-width: 600px;
+}
+
+.movie-libraries-subsection {
+  margin-top: 24px;
+}
+
+.subsection-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #3dd6b7;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.subsection-title svg {
+  width: 16px;
+  height: 16px;
 }
 
 label {
@@ -804,7 +1014,8 @@ label.full-width {
 }
 
 input,
-select {
+select,
+textarea {
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 10px 12px;
@@ -881,6 +1092,39 @@ input[type="checkbox"] {
   font-size: 13px;
   color: var(--muted);
   font-weight: 400;
+}
+
+.library-labels-section {
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.library-labels-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.library-labels-title {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #eef2ff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.no-labels-message {
+  margin: 0;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
 }
 
 .labels-grid {
@@ -1168,5 +1412,63 @@ button.secondary:hover {
   background: rgba(255, 107, 107, 0.1);
   color: #ff6b6b;
   border: 1px solid rgba(255, 107, 107, 0.3);
+}
+
+.library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.library-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.library-id-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(61, 214, 183, 0.15);
+  color: #a9f0dd;
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  font-weight: 500;
+}
+
+/* Locked library dropdown */
+.library-row select.locked {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.library-row select.locked:hover {
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.secondary.small {
+  padding: 8px 10px;
+  font-size: 12px;
+  align-self: flex-start;
+}
+
+.api-keys-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-top: 20px;
 }
 </style>

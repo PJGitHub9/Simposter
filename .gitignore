@@ -43,3 +43,5 @@ config/settings/
 config/ui_settings.json
 */config/settings
 /config/*
+.*/docker-compose.yml
+

@@ -12,18 +12,26 @@ import { useScanStore } from './stores/scan'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
 
-const tabs: MenuItem[] = [
-  {
-    key: 'movies',
-    label: 'Movies',
+const tabs = computed<MenuItem[]>(() => {
+  const libs = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length
+    ? settings.plex.value.libraryMappings
+    : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
+
+  const movieTabs: MenuItem[] = libs.map((lib, idx) => ({
+    key: `movies-${lib.id || idx}`,
+    label: lib.displayName || lib.title || `Library ${idx + 1}`,
     submenu: [
-      { key: 'batch-edit', label: 'Batch Edit' },
-      { key: 'local-assets', label: 'Local Assets' }
+      { key: `batch-${lib.id || idx}`, label: 'Batch Edit' },
+      { key: `assets-${lib.id || idx}`, label: 'Local Assets' }
     ]
-  },
-  { key: 'settings', label: 'Settings' },
-  { key: 'logs', label: 'Logs' }
-]
+  }))
+
+  return [
+    ...movieTabs,
+    { key: 'settings', label: 'Settings' },
+    { key: 'logs', label: 'Logs' }
+  ]
+})
 
 const ui = useUiStore()
 const route = useRoute()
@@ -37,15 +45,20 @@ let scanPoller: number | null = null
 let batchPoller: number | null = null
 
 const activeTab = computed<TabKey>(() => {
-  // Treat batch-edit and local-assets as part of movies for sidebar highlighting
-  if (route.name === 'batch-edit' || route.name === 'local-assets') return 'movies'
+  const libQuery = (route.query.library as string) || ''
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies') {
+    if (libQuery) return `movies-${libQuery}`
+    // fallback to first lib key
+    const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
+    return `movies-${firstLib?.id || 'default'}`
+  }
   return (route.name as TabKey) || 'movies'
 })
 
 const activeSubmenu = computed<string>(() => {
-  // Return the current route name if it's a submenu route
-  if (route.name === 'batch-edit') return 'batch-edit'
-  if (route.name === 'local-assets') return 'local-assets'
+  const libQuery = (route.query.library as string) || ''
+  if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
+  if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   return ''
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
@@ -63,7 +76,12 @@ const handleTabSelect = (tab: TabKey) => {
   if (ui.selectedMovie.value) {
     ui.setSelectedMovie(null)
   }
-  router.push({ name: tab })
+  if (tab.startsWith('movies-')) {
+    const libId = tab.replace('movies-', '')
+    router.push({ name: 'movies', query: { library: libId } })
+  } else {
+    router.push({ name: tab })
+  }
 }
 
 const handleBack = () => {
@@ -195,11 +213,12 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     ui.setSelectedMovie(null)
   }
 
-  if (parentKey === 'movies') {
-    if (submenuKey === 'batch-edit') {
-      router.push({ name: 'batch-edit' })
-    } else if (submenuKey === 'local-assets') {
-      router.push({ name: 'local-assets' })
+  if (parentKey.startsWith('movies-')) {
+    const libId = parentKey.replace('movies-', '')
+    if (submenuKey.startsWith('batch-')) {
+      router.push({ name: 'batch-edit', query: { library: libId } })
+    } else if (submenuKey.startsWith('assets-')) {
+      router.push({ name: 'local-assets', query: { library: libId } })
     }
   }
 }

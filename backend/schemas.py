@@ -1,5 +1,5 @@
 # backend/schemas.py
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,7 @@ class Movie(BaseModel):
     title: str
     year: Optional[int] = None
     addedAt: Optional[int] = None
+    library_id: Optional[str] = None
 
 
 class MovieTMDbResponse(BaseModel):
@@ -31,6 +32,7 @@ class SaveRequest(PreviewRequest):
     movie_year: Optional[int] = None
     rating_key: Optional[str] = None
     filename: Optional[str] = "poster.jpg"
+    library_id: Optional[str] = None
 
 
 class PresetSaveRequest(BaseModel):
@@ -48,6 +50,8 @@ class PlexSettings(BaseModel):
     url: str = ""
     token: str = ""
     movieLibraryName: str = ""
+    movieLibraryNames: List[str] = Field(default_factory=list)
+    libraryMappings: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class TMDBSettings(BaseModel):
@@ -76,9 +80,9 @@ class PerformanceSettings(BaseModel):
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
-    saveLocation: str = "/output"
+    saveLocation: str = "/config/output/{library}/{title}.jpg"
     saveBatchInSubfolder: bool = False
-    defaultLabelsToRemove: List[str] = Field(default_factory=list)
+    defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)
     tmdb: TMDBSettings = Field(default_factory=TMDBSettings)
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)
@@ -113,6 +117,7 @@ class BatchRequest(BaseModel):
     send_to_plex: bool = False
     save_locally: bool = False
     labels: List[str] = []
+    library_id: Optional[str] = None
 
 
 
