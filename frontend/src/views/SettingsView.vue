@@ -28,6 +28,7 @@ const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
 const localLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
+const savedLibraryIds = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 // Image Quality
@@ -53,7 +54,8 @@ const loadLocalSettings = () => {
   localPlexToken.value = settings.plex.value.token
   localPlexLibrary.value = settings.plex.value.movieLibraryName
   // Deep clone library mappings to prevent real-time updates
-  const libraryMappings = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length > 0
+  const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: any) => l && l.id)
+  const libraryMappings = hasPersistedLibraries
     ? settings.plex.value.libraryMappings
     : (settings.plex.value.movieLibraryNames || settings.plex.value.movieLibraryName
         ? (settings.plex.value.movieLibraryNames || [settings.plex.value.movieLibraryName]).map((n: string, idx: number) => ({
@@ -63,7 +65,17 @@ const loadLocalSettings = () => {
           }))
         : [{ id: '', title: '', displayName: '' }]
       )
+
   localLibraries.value = JSON.parse(JSON.stringify(libraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
+
+  // Lock only if libraries were already persisted (not the first-run fallback)
+  savedLibraryIds.value = hasPersistedLibraries
+    ? new Set(
+        (libraryMappings || [])
+          .map((l: any) => (l && l.id ? String(l.id) : ''))
+          .filter(Boolean)
+      )
+    : new Set()
   localTmdbApiKey.value = settings.tmdb.value.apiKey
   localTvdbApiKey.value = settings.tvdb.value.apiKey
   // Image Quality
@@ -116,6 +128,8 @@ const saveSettings = async () => {
   await settings.save()
   saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
+  // After save, lock current library selections
+  savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
 }
 
 const testConnection = ref('')
@@ -623,8 +637,8 @@ const stopScanPolling = () => {
             <select
               v-model="lib.id"
               class="form-control"
-              :class="{ 'locked': !!lib.id }"
-              :disabled="!!lib.id"
+              :class="{ 'locked': savedLibraryIds.has(lib.id) }"
+              :disabled="savedLibraryIds.has(lib.id)"
               @change="(e) => {
                 const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
                 if (selected && !lib.displayName) {

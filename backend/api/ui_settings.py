@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from ..config import settings, logger
+from ..config import settings, logger, resolve_library_ids
 from ..schemas import UISettings
 from .. import database as db
 
@@ -51,6 +51,35 @@ def _normalize_plex_payload(data: dict) -> dict:
 
     data["plex"] = normalized
     return data
+
+
+def _apply_runtime_settings(merged: dict):
+    """Update global settings with latest UI settings so runtime calls use fresh values."""
+    plex_data = merged.get("plex", {}) or {}
+    url = plex_data.get("url") or ""
+    token = plex_data.get("token") or ""
+    names = plex_data.get("movieLibraryNames") or []
+    if not names and plex_data.get("movieLibraryName"):
+        names = [plex_data.get("movieLibraryName")]
+    names = [str(n) for n in names if str(n).strip()]
+
+    # Use object.__setattr__ to avoid pydantic field restrictions
+    object.__setattr__(settings, "PLEX_URL", url)
+    object.__setattr__(settings, "PLEX_TOKEN", token)
+    object.__setattr__(settings, "PLEX_MOVIE_LIBRARY_NAMES", names or ["1"])
+    object.__setattr__(settings, "PLEX_MOVIE_LIBRARY_NAME", (names or ["1"])[0])
+
+    # Resolve IDs from names or IDs (passes through numeric IDs)
+    try:
+        ids = resolve_library_ids(settings.PLEX_MOVIE_LIBRARY_NAMES)
+    except Exception:
+        ids = settings.PLEX_MOVIE_LIBRARY_NAMES
+
+    # Persist resolved IDs back on settings for downstream use
+    object.__setattr__(settings, "PLEX_MOVIE_LIB_IDS", ids)
+
+    default_id = ids[0] if ids else "1"
+    object.__setattr__(settings, "PLEX_DEFAULT_MOVIE_LIB_ID", default_id)
 
 
 def _default_ui_settings() -> UISettings:
@@ -110,7 +139,19 @@ def _read_settings(include_env: bool = True) -> UISettings:
     """
     try:
         # Try reading from database first
-        data = db.get_ui_settings()
+        try:
+            data = db.get_ui_settings()
+        except Exception as db_err:
+            # Initialize database if missing table, then retry once
+            if "no such table: settings" in str(db_err):
+                logger.warning("[DB] Settings table missing; initializing database...")
+                try:
+                    db.init_database()
+                    data = db.get_ui_settings()
+                except Exception:
+                    data = None
+            else:
+                raise
 
         # If no database settings, try legacy JSON files
         if data is None:
@@ -170,6 +211,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
                     logger.debug("[UI_SETTINGS] Database has user settings, ENV overrides disabled")
 
         merged = _normalize_plex_payload(merged)
+        _apply_runtime_settings(merged)
         return UISettings(**merged)
     except Exception as e:
         logger.error(f"[UI_SETTINGS] Failed to read settings: {e}")
@@ -202,9 +244,18 @@ def save_ui_settings_endpoint(payload: UISettings):
             }
 
         merged = _normalize_plex_payload(merged)
+        _apply_runtime_settings(merged)
 
-        # Save to database
-        db.save_ui_settings(merged)
+        # Save to database (ensure DB exists)
+        try:
+            db.save_ui_settings(merged)
+        except Exception as db_err:
+            if "no such table: settings" in str(db_err):
+                logger.warning("[DB] Settings table missing; initializing database before save...")
+                db.init_database()
+                db.save_ui_settings(merged)
+            else:
+                raise
         logger.info("[UI_SETTINGS] Saved to database")
 
         # Delete JSON files after successful migration

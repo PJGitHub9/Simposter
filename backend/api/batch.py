@@ -212,6 +212,12 @@ def api_batch(req: BatchRequest):
                     base_dir = Path(settings.OUTPUT_ROOT) / tail if tail else Path(settings.OUTPUT_ROOT)
                     mapped_output = True
 
+                # Map explicit /config to configured CONFIG_DIR so default template lands in config volume
+                if base_dir_str.startswith("/config"):
+                    tail = base_dir_str[len("/config"):].lstrip("/")
+                    base_dir = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
+                    mapped_output = True
+
                 # Anchor relative paths (skip if we already mapped /output)
                 if not base_dir.is_absolute() and not mapped_output:
                     base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")

@@ -20,13 +20,13 @@ def get_save_location_template() -> str:
     try:
         if settings_file.exists():
             data = json.loads(settings_file.read_text(encoding="utf-8"))
-            return data.get("saveLocation", "/output")
+            return data.get("saveLocation", "/config/output/{library}/{title}.jpg")
         if legacy_file.exists():
             data = json.loads(legacy_file.read_text(encoding="utf-8"))
-            return data.get("saveLocation", "/output")
+            return data.get("saveLocation", "/config/output/{library}/{title}.jpg")
     except Exception:
         pass
-    return "/output"
+    return "/config/output/{library}/{title}.jpg"
 
 
 def apply_save_location_variables(template: str, title: str, year: Optional[int], key: Optional[str], library: Optional[str] = None) -> str:
@@ -89,6 +89,12 @@ def api_save(req: SaveRequest):
         # Strip leading /output and re-root under settings.OUTPUT_ROOT
         tail = base_dir_str[len("/output"):].lstrip("/")
         base_dir = Path(settings.OUTPUT_ROOT) / tail
+
+    # Map explicit /config/* to configured CONFIG_DIR so the default template lands in the config volume
+    base_dir_str = str(base_dir).replace("\\", "/")
+    if base_dir.is_absolute() and base_dir_str.startswith("/config"):
+        tail = base_dir_str[len("/config"):].lstrip("/")
+        base_dir = Path(settings.CONFIG_DIR) / tail
 
     # If path is relative, anchor under OUTPUT_ROOT
     if not base_dir.is_absolute():

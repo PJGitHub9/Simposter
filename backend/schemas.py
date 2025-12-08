@@ -80,7 +80,7 @@ class PerformanceSettings(BaseModel):
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
-    saveLocation: str = "/output"
+    saveLocation: str = "/config/output/{library}/{title}.jpg"
     saveBatchInSubfolder: bool = False
     defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)
