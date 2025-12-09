@@ -399,6 +399,57 @@ const clearBackendCache = async () => {
   }
 }
 
+const handlePresetExport = async () => {
+  presetExporting.value = true
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/presets/export`)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    a.download = `simposter-presets-${stamp}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    saved.value = 'Presets exported'
+  } catch (e) {
+    saved.value = `Export failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    presetExporting.value = false
+    setTimeout(() => (saved.value = ''), 2000)
+  }
+}
+
+const handlePresetImport = async () => {
+  if (!presetImportText.value.trim()) {
+    saved.value = 'Paste preset JSON to import'
+    setTimeout(() => (saved.value = ''), 2000)
+    return
+  }
+  presetImporting.value = true
+  try {
+    const json = JSON.parse(presetImportText.value)
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/presets/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(json)
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    saved.value = 'Presets imported'
+    showPresetImportModal.value = false
+    presetImportText.value = ''
+  } catch (e) {
+    saved.value = `Import failed: ${e instanceof Error ? e.message : 'Invalid JSON'}`
+  } finally {
+    presetImporting.value = false
+    setTimeout(() => (saved.value = ''), 2500)
+  }
+}
+
 // Fetch all available labels from movies per library
 const fetchAllLabels = async () => {
   try {
@@ -926,6 +977,7 @@ const stopScanPolling = () => {
         </label>
       </div>
     </div>
+
 
     <div v-if="Object.keys(allLabels).length > 0" class="settings-section labels-section">
       <h3 class="section-title">
@@ -1600,6 +1652,75 @@ button.secondary:hover {
   padding: 8px 10px;
   font-size: 12px;
   align-self: flex-start;
+}
+
+.upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.upload-button input {
+  display: none;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 1rem;
+}
+
+.modal {
+  background: var(--surface, #1a1f2e);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 10px;
+  padding: 1rem;
+  max-width: 600px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.modal textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 200px;
+  background: var(--input-bg, #111623);
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: monospace;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #98a1b3);
+  cursor: pointer;
+  font-size: 20px;
 }
 
 .api-keys-section {

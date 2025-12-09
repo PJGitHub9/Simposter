@@ -1,7 +1,7 @@
 # backend/api/presets.py
 from pathlib import Path
 import json
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 
 from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger
 from ..schemas import PresetDeleteRequest, PresetSaveRequest
@@ -51,6 +51,37 @@ def api_presets():
         logger.error(f"[PRESETS] Error loading presets: {e}")
         # Fallback to JSON-based loading
         return load_presets()
+
+
+@router.get("/presets/export")
+def api_presets_export():
+    """Export all presets as JSON."""
+    try:
+        data = db.get_all_presets()
+        return data
+    except Exception as e:
+        logger.error(f"[PRESETS] Error exporting presets: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to export presets: {e}")
+
+
+@router.post("/presets/import")
+async def api_presets_import(payload: dict = Body(...)):
+    """
+    Import presets from JSON.
+    Expected shape matches /presets: { template_id: { presets: [{id,name,options}, ...] } }
+    """
+    try:
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+        db.replace_all_presets(payload)
+        logger.info("[PRESETS] Imported presets from JSON")
+        return {"message": "Presets imported"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[PRESETS] Error importing presets: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to import presets: {e}")
 
 
 @router.post("/presets/save")

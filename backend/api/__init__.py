@@ -13,6 +13,7 @@ from . import (
     webhooks,
     ui_settings,
     history,
+    template_manager,
     cache as cache_api,
 )
 
@@ -30,4 +31,5 @@ router.include_router(logs.router)
 router.include_router(webhooks.router)
 router.include_router(ui_settings.router)
 router.include_router(history.router)
+router.include_router(template_manager.router)
 router.include_router(cache_api.router)

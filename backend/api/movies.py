@@ -12,7 +12,7 @@ import requests
 from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR
 from .. import cache, database as db
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
-from ..tmdb_client import get_images_for_movie, TMDBError
+from ..tmdb_client import get_images_for_movie, get_movie_details, TMDBError
 
 router = APIRouter()
 
@@ -396,7 +396,8 @@ def api_movie_labels_remove(rating_key: str, req: LabelsRemoveRequest):
 @router.get("/tmdb/{tmdb_id}/images")
 def api_tmdb_images(tmdb_id: int):
     try:
-        return get_images_for_movie(tmdb_id)
+        details = get_movie_details(tmdb_id)
+        return get_images_for_movie(tmdb_id, details.get("original_language"))
     except TMDBError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

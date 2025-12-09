@@ -43,7 +43,8 @@ def api_webhook_radarr(template_id: str, preset_id: str, req: RadarrWebhook):
     tmdb_id = req.movie.tmdbId
 
     # 2) Fetch images and movie details from TMDb
-    imgs = get_images_for_movie(tmdb_id)
+    movie_details = get_movie_details(tmdb_id)
+    imgs = get_images_for_movie(tmdb_id, movie_details.get("original_language"))
     posters = imgs.get("posters", [])
     logos = imgs.get("logos", [])
 
