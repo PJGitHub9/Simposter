@@ -354,11 +354,11 @@ onMounted(async () => {
               <span class="label-text">Default logo selection</span>
               <select v-model="fallbackLogoMode">
                 <option value="first">First available logo</option>
-                <option value="en">English logo preferred</option>
-                <option value="original">Original language logo</option>
+                <option value="white">White/light logo (low saturation)</option>
+                <option value="color">Colored logo (high saturation)</option>
                 <option value="none">No logo</option>
               </select>
-              <span class="help small">How to select logos when not specified in preset.</span>
+              <span class="help small">Logo color detection uses HSV analysis for accurate selection.</span>
             </label>
           </div>
           <div class="actions" style="justify-content: flex-end;">
