@@ -25,6 +25,10 @@ export type TVDBSettings = {
   comingSoon?: boolean
 }
 
+export type FanartSettings = {
+  apiKey: string
+}
+
 export type ImageQualitySettings = {
   outputFormat: string
   jpgQuality: number
@@ -48,6 +52,7 @@ export type UISettings = {
   plex?: PlexSettings
   tmdb?: TMDBSettings
   tvdb?: TVDBSettings
+  fanart?: FanartSettings
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
 }
@@ -63,6 +68,7 @@ const saveBatchInSubfolder = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: true })
+const fanart = ref<FanartSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048 })
 
@@ -97,6 +103,7 @@ async function loadSettings() {
     }
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }
+    fanart.value = { apiKey: data.fanart?.apiKey ?? '' }
     imageQuality.value = {
       outputFormat: data.imageQuality?.outputFormat ?? 'jpg',
       jpgQuality: data.imageQuality?.jpgQuality ?? 95,
@@ -131,6 +138,7 @@ async function saveSettings() {
       plex: { ...plex.value },
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
+      fanart: { ...fanart.value },
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value }
     }
@@ -160,6 +168,7 @@ export function useSettingsStore() {
     plex,
     tmdb,
     tvdb,
+    fanart,
     imageQuality,
     performance,
     loading,

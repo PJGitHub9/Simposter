@@ -12,6 +12,7 @@ type PresetFallback = {
   fallbackLogoAction?: 'continue' | 'skip' | 'template'
   fallbackLogoTemplate?: string
   fallbackLogoPreset?: string
+  logoSource?: string
 }
 
 const apiBase = getApiBase()
@@ -25,6 +26,7 @@ const importText = ref('')
 const fallbackPosterFilter = ref('all')
 const fallbackLogoMode = ref('first')
 const languagePreference = ref('en')
+const logoSource = ref('tmdb_fanart')
 const languageOptions = [
   { code: 'en', label: 'English' },
   { code: 'es', label: 'Spanish' },
@@ -50,7 +52,8 @@ const modalFallback = ref<PresetFallback>({
   fallbackPosterPreset: '',
   fallbackLogoAction: 'continue',
   fallbackLogoTemplate: '',
-  fallbackLogoPreset: ''
+  fallbackLogoPreset: '',
+  logoSource: ''
 })
 
 // Preview state
@@ -118,7 +121,8 @@ const openFallbackModal = (templateId: string, preset: Preset) => {
     fallbackPosterPreset: opts.fallbackPosterPreset || '',
     fallbackLogoAction: opts.fallbackLogoAction || 'continue',
     fallbackLogoTemplate: opts.fallbackLogoTemplate || '',
-    fallbackLogoPreset: opts.fallbackLogoPreset || ''
+    fallbackLogoPreset: opts.fallbackLogoPreset || '',
+    logoSource: opts.logoSource || ''
   }
   showFallbackModal.value = true
 }
@@ -228,6 +232,7 @@ const fetchFallback = async () => {
     fallbackPosterFilter.value = data.poster_filter || 'all'
     fallbackLogoMode.value = data.logo_mode || 'first'
     languagePreference.value = data.language_preference || 'en'
+    logoSource.value = data.logo_source || 'tmdb_fanart'
   } catch (e) {
     showError(e instanceof Error ? e.message : 'Failed to load fallback settings')
   }
@@ -242,7 +247,8 @@ const saveFallback = async () => {
       body: JSON.stringify({
         poster_filter: fallbackPosterFilter.value,
         logo_mode: fallbackLogoMode.value,
-        language_preference: languagePreference.value
+        language_preference: languagePreference.value,
+        logo_source: logoSource.value
       })
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
@@ -359,6 +365,17 @@ onMounted(async () => {
                 <option value="none">No logo</option>
               </select>
               <span class="help small">Logo color detection uses HSV analysis for accurate selection.</span>
+            </label>
+            <label>
+              <span class="label-text">Logo source priority</span>
+              <select v-model="logoSource">
+                <option value="tmdb">TMDB only</option>
+                <option value="fanart">Fanart.tv only</option>
+                <option value="tmdb_fanart">TMDB first, Fanart fallback (recommended)</option>
+                <option value="fanart_tmdb">Fanart first, TMDB fallback</option>
+                <option value="both">Both merged (all results)</option>
+              </select>
+              <span class="help small">Fanart.tv provides high-quality clearlogos for better coverage.</span>
             </label>
           </div>
           <div class="actions" style="justify-content: flex-end;">
@@ -497,6 +514,22 @@ onMounted(async () => {
           <button class="icon-btn" @click="showFallbackModal = false">×</button>
         </div>
         <div class="modal-body">
+          <h5>Logo source (optional override)</h5>
+          <div class="grid">
+            <label>
+              <span class="label-text">Logo source priority</span>
+              <select v-model="modalFallback.logoSource">
+                <option value="">Use global setting</option>
+                <option value="tmdb">TMDB only</option>
+                <option value="fanart">Fanart.tv only</option>
+                <option value="tmdb_fanart">TMDB first, Fanart fallback</option>
+                <option value="fanart_tmdb">Fanart first, TMDB fallback</option>
+                <option value="both">Both merged</option>
+              </select>
+              <span class="help small">Leave blank to use global preference.</span>
+            </label>
+          </div>
+
           <h5>Poster fallback</h5>
           <div class="grid">
             <label>
@@ -646,7 +679,7 @@ onMounted(async () => {
   align-items: flex-end;
 }
 .grid.preferences-grid {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 .grid.subgrid {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

@@ -56,7 +56,7 @@ def _build_image_entry(p: Dict[str, Any], kind: str) -> Dict[str, Any]:
     else:
         thumb_size = "w342"
 
-    return {
+    entry = {
         "url": _make_img_url(path, "original"),
         "thumb": _make_img_url(path, thumb_size),
         "width": width,
@@ -64,6 +64,10 @@ def _build_image_entry(p: Dict[str, Any], kind: str) -> Dict[str, Any]:
         "language": lang,
         "has_text": bool(lang),
     }
+    if kind == "logo":
+        entry["source"] = "tmdb"
+        entry["type"] = "logo"
+    return entry
 
 
 def _build_lang_param(language_preference: Optional[str], original_language: Optional[str]) -> str:

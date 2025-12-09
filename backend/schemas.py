@@ -63,6 +63,10 @@ class TVDBSettings(BaseModel):
     comingSoon: bool = True
 
 
+class FanartSettings(BaseModel):
+    apiKey: str = ""
+
+
 class ImageQualitySettings(BaseModel):
     outputFormat: str = "jpg"  # jpg, png, webp
     jpgQuality: int = 95
@@ -86,6 +90,7 @@ class UISettings(BaseModel):
     plex: PlexSettings = Field(default_factory=PlexSettings)
     tmdb: TMDBSettings = Field(default_factory=TMDBSettings)
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)
+    fanart: FanartSettings = Field(default_factory=FanartSettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
 

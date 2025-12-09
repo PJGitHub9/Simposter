@@ -7,6 +7,7 @@ from ..rendering import render_poster_image
 from io import BytesIO
 import requests
 from backend.assets.selection import pick_poster, pick_logo
+from backend.logo_sources import get_logos_merged
 from .save import apply_save_location_variables, get_save_location_template, resolve_library_label, embed_library_metadata
 from datetime import datetime, timezone
 from PIL import PngImagePlugin
@@ -103,7 +104,10 @@ def api_batch(req: BatchRequest):
             # Fetch images honoring preferred languages (fallback to movie original language)
             imgs = get_images_for_movie(tmdb_id, movie_details.get("original_language"))
             posters = imgs.get("posters", [])
-            logos = imgs.get("logos", [])
+
+            # Get logos using merged sources based on preference
+            logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
+            logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"))
             logger.debug(
                 "[BATCH] rating_key=%s posters=%d logos=%d filter=%s logo_pref=%s",
                 rating_key,

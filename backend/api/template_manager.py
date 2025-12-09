@@ -10,6 +10,7 @@ FALLBACK_KEYS = {
     "fallback.poster_filter": "all",
     "fallback.logo_mode": "first",
     "pref.language": "en",
+    "pref.logo_source": "tmdb_fanart",
 }
 
 
@@ -22,6 +23,7 @@ def _get_fallback_settings() -> Dict[str, Any]:
         "poster_filter": data["fallback.poster_filter"],
         "logo_mode": data["fallback.logo_mode"],
         "language_preference": data["pref.language"],
+        "logo_source": data["pref.logo_source"],
     }
 
 
@@ -42,9 +44,11 @@ def api_set_template_fallback(payload: Dict[str, Any]):
         poster_filter = str(payload.get("poster_filter") or FALLBACK_KEYS["fallback.poster_filter"])
         logo_mode = str(payload.get("logo_mode") or FALLBACK_KEYS["fallback.logo_mode"])
         language_preference = str(payload.get("language_preference") or FALLBACK_KEYS["pref.language"])
+        logo_source = str(payload.get("logo_source") or FALLBACK_KEYS["pref.logo_source"])
         db.set_setting("fallback.poster_filter", poster_filter)
         db.set_setting("fallback.logo_mode", logo_mode)
         db.set_setting("pref.language", language_preference)
+        db.set_setting("pref.logo_source", logo_source)
         return _get_fallback_settings()
     except Exception as e:
         logger.error(f"[TEMPLATE_FALLBACK] Failed to save: {e}")

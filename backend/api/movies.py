@@ -13,6 +13,7 @@ from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_
 from .. import cache, database as db
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details, TMDBError
+from ..fanart_client import get_images_for_movie as get_fanart_images
 
 router = APIRouter()
 
@@ -397,7 +398,29 @@ def api_movie_labels_remove(rating_key: str, req: LabelsRemoveRequest):
 def api_tmdb_images(tmdb_id: int):
     try:
         details = get_movie_details(tmdb_id)
-        return get_images_for_movie(tmdb_id, details.get("original_language"))
+        tmdb_imgs = get_images_for_movie(tmdb_id, details.get("original_language"))
+        fanart_imgs = get_fanart_images(tmdb_id)
+
+        # Merge logos (Fanart first so HD clearlogos/clearart show up prominently)
+        merged_logos = (fanart_imgs.get("logos") or []) + (tmdb_imgs.get("logos") or [])
+        # Posters: Fanart first so language-specific posters can surface; then TMDB
+        merged_posters = (fanart_imgs.get("posters") or []) + (tmdb_imgs.get("posters") or [])
+        merged_backdrops = (fanart_imgs.get("backdrops") or []) + (tmdb_imgs.get("backdrops") or [])
+
+        logger.info(
+            "[IMAGES] tmdb_id=%s posters=%d backdrops=%d logos_tmdb=%d logos_fanart=%d",
+            tmdb_id,
+            len(merged_posters),
+            len(merged_backdrops),
+            len(tmdb_imgs.get("logos") or []),
+            len(fanart_imgs.get("logos") or []),
+        )
+
+        return {
+            "posters": merged_posters,
+            "backdrops": merged_backdrops,
+            "logos": merged_logos,
+        }
     except TMDBError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

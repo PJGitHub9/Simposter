@@ -33,6 +33,7 @@ const localTvShowLibraries = ref<Array<{ id: string; title?: string; displayName
 const savedTvShowLibraryIds = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
+const localFanartApiKey = ref('')
 // Image Quality
 const localOutputFormat = ref('jpg')
 const localJpgQuality = ref(95)
@@ -44,6 +45,14 @@ const localTmdbRateLimit = ref(40)
 const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
 let scanPoller: number | null = null
+
+// API key test states
+const testTmdbLoading = ref(false)
+const testTmdbResult = ref('')
+const testTvdbLoading = ref(false)
+const testTvdbResult = ref('')
+const testFanartLoading = ref(false)
+const testFanartResult = ref('')
 
 const loadLocalSettings = () => {
   localTheme.value = settings.theme.value
@@ -105,6 +114,7 @@ const loadLocalSettings = () => {
 
   localTmdbApiKey.value = settings.tmdb.value.apiKey
   localTvdbApiKey.value = settings.tvdb.value.apiKey
+  localFanartApiKey.value = settings.fanart.value.apiKey
   // Image Quality
   localOutputFormat.value = settings.imageQuality.value.outputFormat
   localJpgQuality.value = settings.imageQuality.value.jpgQuality
@@ -146,6 +156,7 @@ const saveSettings = async () => {
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }
   settings.tvdb.value = { apiKey: localTvdbApiKey.value, comingSoon: settings.tvdb.value.comingSoon }
+  settings.fanart.value = { apiKey: localFanartApiKey.value }
   settings.imageQuality.value = {
     outputFormat: localOutputFormat.value,
     jpgQuality: localJpgQuality.value,
@@ -591,6 +602,94 @@ const stopScanPolling = () => {
     scanPoller = null
   }
 }
+
+const testTmdbApiKey = async () => {
+  if (!localTmdbApiKey.value.trim()) {
+    testTmdbResult.value = 'Please enter a TMDb API key'
+    setTimeout(() => (testTmdbResult.value = ''), 3000)
+    return
+  }
+
+  testTmdbLoading.value = true
+  testTmdbResult.value = 'Testing...'
+
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/test-tmdb?api_key=${encodeURIComponent(localTmdbApiKey.value)}`)
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      testTmdbResult.value = `✓ Valid! Found movie: ${data.example || 'API key works'}`
+    } else {
+      testTmdbResult.value = `✗ ${data.error || 'Invalid API key'}`
+    }
+  } catch (e) {
+    testTmdbResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testTmdbLoading.value = false
+    setTimeout(() => (testTmdbResult.value = ''), 10000)
+  }
+}
+
+const testTvdbApiKey = async () => {
+  if (!localTvdbApiKey.value.trim()) {
+    testTvdbResult.value = 'Please enter a TVDB API key'
+    setTimeout(() => (testTvdbResult.value = ''), 3000)
+    return
+  }
+
+  testTvdbLoading.value = true
+  testTvdbResult.value = 'Testing...'
+
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/test-tvdb?api_key=${encodeURIComponent(localTvdbApiKey.value)}`)
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      testTvdbResult.value = `✓ Valid! ${data.message || 'API key works'}`
+    } else {
+      testTvdbResult.value = `✗ ${data.error || 'Invalid API key'}`
+    }
+  } catch (e) {
+    testTvdbResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testTvdbLoading.value = false
+    setTimeout(() => (testTvdbResult.value = ''), 10000)
+  }
+}
+
+const testFanartApiKey = async () => {
+  if (!localFanartApiKey.value.trim()) {
+    testFanartResult.value = 'Please enter a Fanart.tv API key'
+    setTimeout(() => (testFanartResult.value = ''), 3000)
+    return
+  }
+
+  testFanartLoading.value = true
+  testFanartResult.value = 'Testing...'
+
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/test-fanart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: localFanartApiKey.value })
+    })
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      testFanartResult.value = `✓ Valid! Found ${data.logo_count || 0} logos for test movie`
+    } else {
+      testFanartResult.value = `✗ ${data.error || 'Invalid API key'}`
+    }
+  } catch (e) {
+    testFanartResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testFanartLoading.value = false
+    setTimeout(() => (testFanartResult.value = ''), 10000)
+  }
+}
 </script>
 
 <template>
@@ -834,33 +933,85 @@ const stopScanPolling = () => {
       </div>
 
       <div class="api-keys-section">
-        <label>
-          <span class="label-text">TMDb API Key</span>
-          <input
-            v-model="localTmdbApiKey"
-            type="password"
-            placeholder="TMDb API key"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-        </label>
-        <label>
-          <span class="label-text">TVDB API Key</span>
-          <input
-            v-model="localTvdbApiKey"
-            type="password"
-            placeholder="TVDB API key (coming soon)"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">Coming soon—value is saved for future use.</span>
-        </label>
+        <div class="api-key-row">
+          <label class="api-key-input">
+            <span class="label-text">TMDb API Key</span>
+            <input
+              v-model="localTmdbApiKey"
+              type="password"
+              placeholder="TMDb API key"
+              @mousedown.stop
+              @click.stop
+              @mouseup.stop
+              @select.stop
+              @selectstart.stop
+            />
+          </label>
+          <button
+            class="btn-test-api secondary small"
+            @click="testTmdbApiKey"
+            :disabled="testTmdbLoading || !localTmdbApiKey.trim()"
+          >
+            {{ testTmdbLoading ? 'Testing...' : 'Test' }}
+          </button>
+        </div>
+        <p v-if="testTmdbResult" :class="['api-test-result', testTmdbResult.startsWith('✓') ? 'success' : 'error']">
+          {{ testTmdbResult }}
+        </p>
+
+        <div class="api-key-row">
+          <label class="api-key-input">
+            <span class="label-text">TVDB API Key</span>
+            <input
+              v-model="localTvdbApiKey"
+              type="password"
+              placeholder="TVDB API key (coming soon)"
+              @mousedown.stop
+              @click.stop
+              @mouseup.stop
+              @select.stop
+              @selectstart.stop
+            />
+            <span class="help-text">Coming soon—value is saved for future use.</span>
+          </label>
+          <button
+            class="btn-test-api secondary small"
+            @click="testTvdbApiKey"
+            :disabled="testTvdbLoading || !localTvdbApiKey.trim()"
+          >
+            {{ testTvdbLoading ? 'Testing...' : 'Test' }}
+          </button>
+        </div>
+        <p v-if="testTvdbResult" :class="['api-test-result', testTvdbResult.startsWith('✓') ? 'success' : 'error']">
+          {{ testTvdbResult }}
+        </p>
+
+        <div class="api-key-row">
+          <label class="api-key-input">
+            <span class="label-text">Fanart.tv API Key</span>
+            <input
+              v-model="localFanartApiKey"
+              type="password"
+              placeholder="Fanart.tv API key"
+              @mousedown.stop
+              @click.stop
+              @mouseup.stop
+              @select.stop
+              @selectstart.stop
+            />
+            <span class="help-text">Optional: For high-quality clearlogos as alternative logo source.</span>
+          </label>
+          <button
+            class="btn-test-api secondary small"
+            @click="testFanartApiKey"
+            :disabled="testFanartLoading || !localFanartApiKey.trim()"
+          >
+            {{ testFanartLoading ? 'Testing...' : 'Test' }}
+          </button>
+        </div>
+        <p v-if="testFanartResult" :class="['api-test-result', testFanartResult.startsWith('✓') ? 'success' : 'error']">
+          {{ testFanartResult }}
+        </p>
       </div>
     </div>
 
@@ -1728,5 +1879,42 @@ button.secondary:hover {
   flex-direction: column;
   gap: 20px;
   margin-top: 20px;
+}
+
+.api-key-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.api-key-input {
+  flex: 1;
+}
+
+.btn-test-api {
+  margin-top: 28px;
+  white-space: nowrap;
+  min-width: 80px;
+  justify-content: center;
+}
+
+.api-test-result {
+  margin: -8px 0 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.api-test-result.success {
+  background: rgba(61, 214, 183, 0.1);
+  color: var(--accent, #3dd6b7);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+}
+
+.api-test-result.error {
+  background: rgba(255, 107, 107, 0.1);
+  color: #ff6b6b;
+  border: 1px solid rgba(255, 107, 107, 0.3);
 }
 </style>

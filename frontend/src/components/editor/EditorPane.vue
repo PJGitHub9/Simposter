@@ -24,7 +24,14 @@ const selectedLabels = ref<Set<string>>(new Set())
 const existingPoster = ref<string | null>(null)
 
 const posterFilter = ref<'all' | 'textless' | 'text'>('all')
+const posterLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
+const showTmdbPosters = ref(true)
+const showFanartPosters = ref(true)
 const logoPreference = ref<'first' | 'white' | 'color'>('first')
+const logoLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
+const showTmdbLogos = ref(true)
+const showFanartLogos = ref(true)
+const showClearArt = ref(true)
 const logoMode = ref<'original' | 'match' | 'hex' | 'none'>('original')
 const logoHex = ref('#ffffff')
 const isLogoNone = computed(() => logoMode.value === 'none')
@@ -118,7 +125,14 @@ const saveEditorState = () => {
       selectedTemplate: selectedTemplate.value,
       selectedPreset: selectedPreset.value,
       posterFilter: posterFilter.value,
+      posterLanguageFilter: posterLanguageFilter.value,
+      showTmdbPosters: showTmdbPosters.value,
+      showFanartPosters: showFanartPosters.value,
       logoPreference: logoPreference.value,
+      logoLanguageFilter: logoLanguageFilter.value,
+      showTmdbLogos: showTmdbLogos.value,
+      showFanartLogos: showFanartLogos.value,
+      showClearArt: showClearArt.value,
       logoMode: logoMode.value,
       logoHex: logoHex.value,
       textOverlay: {
@@ -159,7 +173,14 @@ const loadEditorState = () => {
     if (state.selectedTemplate) selectedTemplate.value = state.selectedTemplate
     if (state.selectedPreset) selectedPreset.value = state.selectedPreset
     if (state.posterFilter) posterFilter.value = state.posterFilter
+    if (state.posterLanguageFilter) posterLanguageFilter.value = state.posterLanguageFilter
+    if (typeof state.showTmdbPosters === 'boolean') showTmdbPosters.value = state.showTmdbPosters
+    if (typeof state.showFanartPosters === 'boolean') showFanartPosters.value = state.showFanartPosters
     if (state.logoPreference) logoPreference.value = state.logoPreference
+    if (state.logoLanguageFilter) logoLanguageFilter.value = state.logoLanguageFilter
+    if (typeof state.showTmdbLogos === 'boolean') showTmdbLogos.value = state.showTmdbLogos
+    if (typeof state.showFanartLogos === 'boolean') showFanartLogos.value = state.showFanartLogos
+    if (typeof state.showClearArt === 'boolean') showClearArt.value = state.showClearArt
     if (state.logoMode) logoMode.value = state.logoMode
     if (state.logoHex) logoHex.value = state.logoHex
     if (state.textOverlay) {
@@ -230,12 +251,53 @@ const boundingBoxStyle = computed(() => {
 })
 
 const filteredPosters = computed(() => {
-  if (posterFilter.value === 'textless') return posters.value.filter((p) => p.has_text === false)
-  if (posterFilter.value === 'text') return posters.value.filter((p) => p.has_text === true)
-  return posters.value
+  let items = posters.value
+  if (posterFilter.value === 'textless') {
+    items = items.filter((p) => p.has_text === false)
+  } else if (posterFilter.value === 'text') {
+    items = items.filter((p) => p.has_text === true)
+  }
+
+  if (posterLanguageFilter.value === 'en') {
+    items = items.filter((p) => (p.language || '').toLowerCase() === 'en')
+  } else if (posterLanguageFilter.value === 'with_lang') {
+    items = items.filter((p) => !!p.language)
+  }
+
+  items = items.filter((p) => {
+    const src = (p.source || 'tmdb').toLowerCase()
+    if (src === 'fanart') return showFanartPosters.value
+    return showTmdbPosters.value
+  })
+
+  return items
 })
 
-const filteredLogos = computed(() => logos.value)
+const filteredLogos = computed(() => {
+  let items = logos.value
+  if (logoLanguageFilter.value === 'en') {
+    items = items.filter((l) => (l.language || '').toLowerCase() === 'en')
+  } else if (logoLanguageFilter.value === 'with_lang') {
+    items = items.filter((l) => !!l.language)
+  }
+  if (!showClearArt.value) {
+    items = items.filter((l) => (l.type || 'logo') === 'logo')
+  }
+  items = items.filter((l) => {
+    const src = (l.source || 'tmdb').toLowerCase()
+    if (src === 'fanart') return showFanartLogos.value
+    return showTmdbLogos.value
+  })
+  const scoreLogo = (l: any) => {
+    const url = (l.url || '').toLowerCase()
+    const likes = Number(l.likes || 0)
+    const isWhite = url.includes('white') || url.includes('_w') || url.includes('-w') || url.includes('light')
+    if (logoPreference.value === 'white') return (isWhite ? 1000 : 0) + likes
+    if (logoPreference.value === 'color') return (isWhite ? -100 : 0) + likes
+    return likes
+  }
+  return [...items].sort((a, b) => scoreLogo(b) - scoreLogo(a))
+})
 
 const optionsPayload = computed(() => ({
   poster_zoom: options.value.posterZoom / 100,
@@ -493,16 +555,9 @@ const saveAsNewPreset = async () => {
 const applyLogoPreference = () => {
   if (!logos.value.length) return
   if (logoMode.value === 'none') return
-  if (logoPreference.value === 'first') {
-    const firstLogo = logos.value[0]
-    if (firstLogo) selectedLogo.value = firstLogo.url
-    return
-  }
-  const target = logoPreference.value === 'white' ? 'white' : 'color'
-  const match = logos.value.find((l) => (l.thumb || l.url).toLowerCase().includes(target))
-  const fallback = logos.value[0]
-  if (match) selectedLogo.value = match.url
-  else if (fallback) selectedLogo.value = fallback.url
+  const ordered = filteredLogos.value
+  if (!ordered.length) return
+  selectedLogo.value = ordered[0].url
 }
 
 const applyPosterFilter = () => {
@@ -922,7 +977,25 @@ watch(
           </label>
           
 
-          <div class="label-title">TMDb Posters</div>
+          <div class="label-title">Posters</div>
+          <div class="inline-controls">
+            <label class="inline-field" v-if="posterFilter !== 'textless'">
+              <span>Language</span>
+              <select v-model="posterLanguageFilter">
+                <option value="all">All</option>
+                <option value="en">English</option>
+                <option value="with_lang">With language tag</option>
+              </select>
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showTmdbPosters" />
+              <span>TMDb</span>
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showFanartPosters" />
+              <span>Fanart</span>
+            </label>
+          </div>
           <div class="thumb-strip">
             <div
               v-for="p in filteredPosters"
@@ -932,7 +1005,7 @@ watch(
               @click="selectedPoster = p.url"
             >
               <img :src="p.thumb || p.url" alt="" />
-              <div class="source-badge">TMDb</div>
+              <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
             </div>
           </div>
 
@@ -945,7 +1018,29 @@ watch(
             </select>
           </label>
 
-          <div v-if="!isLogoNone" class="label-title">TMDb Logos</div>
+          <div v-if="!isLogoNone" class="label-title">Logos (TMDb / Fanart)</div>
+          <div v-if="!isLogoNone" class="inline-controls">
+            <label class="inline-field">
+              <span>Language</span>
+              <select v-model="logoLanguageFilter">
+                <option value="all">All</option>
+                <option value="en">English</option>
+                <option value="with_lang">With language tag</option>
+              </select>
+            </label>
+            <label class="inline-field">
+              <span>Include clearart</span>
+              <input type="checkbox" v-model="showClearArt" />
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showTmdbLogos" />
+              <span>TMDb</span>
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showFanartLogos" />
+              <span>Fanart</span>
+            </label>
+          </div>
           <div v-if="!isLogoNone" class="thumb-strip logo-strip">
             <div
               v-for="l in filteredLogos"
@@ -955,7 +1050,8 @@ watch(
               @click="selectedLogo = l.url"
             >
               <img :src="l.thumb || l.url" alt="" />
-              <div class="source-badge">TMDb</div>
+              <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
+              <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
             </div>
             <button class="no-logo-btn" :class="{ active: isLogoNone }" @click="logoMode = 'none'">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1487,9 +1583,23 @@ watch(
   letter-spacing: 0.3px;
 }
 
+.type-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
 .poster-thumb {
-  width: 70px;
-  height: 105px;
+  width: 80px;
+  height: 120px;
 }
 
 .poster-thumb img {
@@ -1503,10 +1613,10 @@ watch(
 }
 
 .logo-thumb {
-  min-width: 80px;
-  max-width: 140px;
-  height: 50px;
-  padding: 6px;
+  min-width: 110px;
+  max-width: 160px;
+  height: 70px;
+  padding: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1520,8 +1630,8 @@ watch(
 
 .no-logo-btn {
   flex: 0 0 auto;
-  min-width: 100px;
-  height: 50px;
+  min-width: 110px;
+  height: 70px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1553,6 +1663,33 @@ watch(
 .no-logo-btn.active {
   border-color: var(--accent);
   background: rgba(61, 214, 183, 0.08);
+}
+
+.inline-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 6px 0 10px;
+}
+.inline-field {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: #dce6ff;
+}
+.inline-field select {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: #dce6ff;
+}
+.inline-field.checkbox {
+  gap: 4px;
+}
+.inline-field.checkbox input[type='checkbox'] {
+  accent-color: var(--accent, #3dd6b7);
 }
 
 .sliders .slider {

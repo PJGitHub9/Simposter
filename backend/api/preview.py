@@ -6,6 +6,7 @@ from ..rendering import render_poster_image
 from ..schemas import PreviewRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details
 from ..assets.selection import pick_poster, pick_logo
+from ..logo_sources import get_logos_merged
 
 router = APIRouter()
 
@@ -68,7 +69,10 @@ def api_preview(req: PreviewRequest):
                     movie_details = get_movie_details(tmdb_id)
                     imgs = get_images_for_movie(tmdb_id, movie_details.get("original_language"))
                     posters = imgs.get("posters", [])
-                    logos = imgs.get("logos", [])
+
+                    # Get logos using merged sources based on preference
+                    logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
+                    logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"))
 
                     # Pick poster based on filter
                     poster = pick_poster(posters, poster_filter)
