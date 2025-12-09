@@ -11,6 +11,9 @@ export type PlexSettings = {
   movieLibraryName: string
   movieLibraryNames?: string[]
   libraryMappings?: Array<{ id: string; title?: string; displayName?: string }>
+  tvShowLibraryName?: string
+  tvShowLibraryNames?: string[]
+  tvShowLibraryMappings?: Array<{ id: string; title?: string; displayName?: string }>
 }
 
 export type TMDBSettings = {
@@ -57,7 +60,7 @@ const error = ref<string | null>(null)
 const loaded = ref(false)
 const saveLocation = ref<string>('/output')
 const saveBatchInSubfolder = ref<boolean>(false)
-const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [] })
+const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: true })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
@@ -87,7 +90,10 @@ async function loadSettings() {
       token: data.plex?.token ?? '',
       movieLibraryName: data.plex?.movieLibraryName ?? '',
       movieLibraryNames: data.plex?.movieLibraryNames ?? (data.plex?.movieLibraryName ? [data.plex.movieLibraryName] : []),
-      libraryMappings: data.plex?.libraryMappings ?? []
+      libraryMappings: data.plex?.libraryMappings ?? [],
+      tvShowLibraryName: data.plex?.tvShowLibraryName ?? '',
+      tvShowLibraryNames: data.plex?.tvShowLibraryNames ?? (data.plex?.tvShowLibraryName ? [data.plex.tvShowLibraryName] : []),
+      tvShowLibraryMappings: data.plex?.tvShowLibraryMappings ?? []
     }
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }

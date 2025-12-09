@@ -29,6 +29,8 @@ const localPlexToken = ref('')
 const localPlexLibrary = ref('')
 const localLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
 const savedLibraryIds = ref<Set<string>>(new Set())
+const localTvShowLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
+const savedTvShowLibraryIds = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 // Image Quality
@@ -76,6 +78,31 @@ const loadLocalSettings = () => {
           .filter(Boolean)
       )
     : new Set()
+
+  // Load TV show libraries
+  const hasPersistedTvShowLibraries = (settings.plex.value.tvShowLibraryMappings || []).some((l: any) => l && l.id)
+  const tvShowLibraryMappings = hasPersistedTvShowLibraries
+    ? settings.plex.value.tvShowLibraryMappings
+    : (settings.plex.value.tvShowLibraryNames || settings.plex.value.tvShowLibraryName
+        ? (settings.plex.value.tvShowLibraryNames || [settings.plex.value.tvShowLibraryName]).map((n: string, idx: number) => ({
+            id: n,
+            title: n,
+            displayName: n || `TV Library ${idx + 1}`
+          }))
+        : [{ id: '', title: '', displayName: '' }]
+      )
+
+  localTvShowLibraries.value = JSON.parse(JSON.stringify(tvShowLibraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
+
+  // Lock only if TV show libraries were already persisted
+  savedTvShowLibraryIds.value = hasPersistedTvShowLibraries
+    ? new Set(
+        (tvShowLibraryMappings || [])
+          .map((l: any) => (l && l.id ? String(l.id) : ''))
+          .filter(Boolean)
+      )
+    : new Set()
+
   localTmdbApiKey.value = settings.tmdb.value.apiKey
   localTvdbApiKey.value = settings.tvdb.value.apiKey
   // Image Quality
@@ -98,12 +125,20 @@ const saveSettings = async () => {
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
   const libs = localLibraries.value.filter(l => l.id || l.title)
+  const tvShowLibs = localTvShowLibraries.value.filter(l => l.id || l.title)
   settings.plex.value = {
     url: localPlexUrl.value,
     token: localPlexToken.value,
     movieLibraryName: libs[0]?.id || localPlexLibrary.value || '',
     movieLibraryNames: libs.length > 0 ? libs.map(l => l.id) : undefined,
     libraryMappings: libs.map(l => ({
+      id: l.id || '',
+      title: l.title || l.id || '',
+      displayName: l.displayName || l.title || l.id || '',
+    })),
+    tvShowLibraryName: tvShowLibs[0]?.id || '',
+    tvShowLibraryNames: tvShowLibs.length > 0 ? tvShowLibs.map(l => l.id) : undefined,
+    tvShowLibraryMappings: tvShowLibs.map(l => ({
       id: l.id || '',
       title: l.title || l.id || '',
       displayName: l.displayName || l.title || l.id || '',
@@ -130,6 +165,7 @@ const saveSettings = async () => {
   setTimeout(() => (saved.value = ''), 1500)
   // After save, lock current library selections
   savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
+  savedTvShowLibraryIds.value = new Set(localTvShowLibraries.value.filter(l => l.id).map(l => String(l.id)))
 }
 
 const testConnection = ref('')
@@ -140,6 +176,12 @@ const addLibrary = () => {
 }
 const removeLibrary = (idx: number) => {
   localLibraries.value = localLibraries.value.filter((_, i) => i !== idx)
+}
+const addTvShowLibrary = () => {
+  localTvShowLibraries.value = [...localTvShowLibraries.value, { id: '', title: '', displayName: '' }]
+}
+const removeTvShowLibrary = (idx: number) => {
+  localTvShowLibraries.value = localTvShowLibraries.value.filter((_, i) => i !== idx)
 }
 
 const testPlexConnection = async () => {
@@ -160,8 +202,10 @@ const testPlexConnection = async () => {
     if (data.status === 'ok') {
       plexLibraries.value = data.sections || []
       const movieLibs = plexLibraries.value.filter(s => s.type === 'movie')
-      const sectionsList = movieLibs.map((s: any) => s.title).join(', ')
-      testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${sectionsList}`
+      const tvShowLibs = plexLibraries.value.filter(s => s.type === 'show')
+      const movieSectionsList = movieLibs.map((s: any) => s.title).join(', ')
+      const tvShowSectionsList = tvShowLibs.map((s: any) => s.title).join(', ')
+      testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${movieSectionsList}${tvShowLibs.length > 0 ? ` and ${tvShowLibs.length} TV show libraries: ${tvShowSectionsList}` : ''}`
       if (movieLibs.length > 0) {
         // Seed libraries if none configured yet
         if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
@@ -169,6 +213,16 @@ const testPlexConnection = async () => {
             id: s.key,
             title: s.title,
             displayName: s.title || `Library ${idx + 1}`,
+          }))
+        }
+      }
+      if (tvShowLibs.length > 0) {
+        // Seed TV show libraries if none configured yet
+        if (!localTvShowLibraries.value.length || localTvShowLibraries.value.every(l => !l.id)) {
+          localTvShowLibraries.value = tvShowLibs.map((s: any, idx: number) => ({
+            id: s.key,
+            title: s.title,
+            displayName: s.title || `TV Library ${idx + 1}`,
           }))
         }
       }
@@ -570,7 +624,7 @@ const stopScanPolling = () => {
         </svg>
         Connections
       </h3>
-      <div class="grid connections">
+      <div class="plex-connection-grid">
         <label>
           <span class="label-text">Plex URL</span>
           <input
@@ -598,7 +652,7 @@ const stopScanPolling = () => {
           />
           <span class="help-text">Use the Plex token or future auto-discovery once available.</span>
         </label>
-        <div class="test-connection-wrapper">
+        <div class="test-button-wrapper">
           <button
             class="btn-test-connection"
             @click="testPlexConnection"
@@ -606,66 +660,125 @@ const stopScanPolling = () => {
           >
             {{ testConnectionLoading ? 'Testing...' : 'Test Plex Connection' }}
           </button>
-          <p v-if="testConnection" :class="['test-result', testConnection.startsWith('✓') ? 'success' : 'error']">
-            {{ testConnection }}
-          </p>
         </div>
+        <p v-if="testConnection" :class="['test-result', testConnection.startsWith('✓') ? 'success' : 'error']">
+          {{ testConnection }}
+        </p>
       </div>
       
-      <div class="movie-libraries-subsection">
-        <h4 class="subsection-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-          </svg>
-          Movie Libraries
-        </h4>
-        <div class="library-list">
-          <div
-            v-for="(lib, idx) in localLibraries"
-            :key="idx"
-            class="library-row"
-          >
-            <div class="library-header">
-              <span class="label-text">{{ lib.displayName || lib.title || `Library ${idx + 1}` }}</span>
-              <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
-            </div>
-            <select
-              v-model="lib.id"
-              class="form-control"
-              :class="{ 'locked': savedLibraryIds.has(lib.id) }"
-              :disabled="savedLibraryIds.has(lib.id)"
-              @change="(e) => {
-                const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
-                if (selected && !lib.displayName) {
-                  lib.title = selected.title
-                  lib.displayName = selected.title
-                }
-              }"
+      <div class="libraries-container">
+        <div class="library-section">
+          <h4 class="subsection-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+            </svg>
+            Movie Libraries
+          </h4>
+          <div class="library-list">
+            <div
+              v-for="(lib, idx) in localLibraries"
+              :key="idx"
+              class="library-row"
             >
-              <option value="">Select a library...</option>
-              <option
-                v-for="p in plexLibraries.filter(s => s.type === 'movie')"
-                :key="p.key"
-                :value="p.key"
+              <div class="library-header">
+                <span class="label-text">{{ lib.displayName || lib.title || `Library ${idx + 1}` }}</span>
+                <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
+              </div>
+              <select
+                v-model="lib.id"
+                class="form-control"
+                :class="{ 'locked': savedLibraryIds.has(lib.id) }"
+                :disabled="savedLibraryIds.has(lib.id)"
+                @change="(e) => {
+                  const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
+                  if (selected && !lib.displayName) {
+                    lib.title = selected.title
+                    lib.displayName = selected.title
+                  }
+                }"
               >
-                {{ p.title }} (ID: {{ p.key }})
-              </option>
-            </select>
-            <input
-              v-model="lib.displayName"
-              type="text"
-              placeholder="Display name (e.g., 4K Movies)"
-              @mousedown.stop
-              @click.stop
-              @mouseup.stop
-              @select.stop
-              @selectstart.stop
-            />
-            <button class="secondary small" type="button" @click="removeLibrary(idx)" :disabled="localLibraries.length <= 1">Remove</button>
+                <option value="">Select a library...</option>
+                <option
+                  v-for="p in plexLibraries.filter(s => s.type === 'movie')"
+                  :key="p.key"
+                  :value="p.key"
+                >
+                  {{ p.title }} (ID: {{ p.key }})
+                </option>
+              </select>
+              <input
+                v-model="lib.displayName"
+                type="text"
+                placeholder="Display name (e.g., 4K Movies)"
+                @mousedown.stop
+                @click.stop
+                @mouseup.stop
+                @select.stop
+                @selectstart.stop
+              />
+              <button class="secondary small" type="button" @click="removeLibrary(idx)">Remove</button>
+            </div>
+            <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
+            <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
           </div>
-          <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
-          <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
+        </div>
+
+        <div class="library-section">
+          <h4 class="subsection-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
+              <polyline points="17 2 12 7 7 2"/>
+            </svg>
+            TV Show Libraries (Coming Soon)
+          </h4>
+          <div class="library-list">
+            <div
+              v-for="(lib, idx) in localTvShowLibraries"
+              :key="idx"
+              class="library-row"
+            >
+              <div class="library-header">
+                <span class="label-text">{{ lib.displayName || lib.title || `TV Library ${idx + 1}` }}</span>
+                <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
+              </div>
+              <select
+                v-model="lib.id"
+                class="form-control"
+                :class="{ 'locked': savedTvShowLibraryIds.has(lib.id) }"
+                :disabled="savedTvShowLibraryIds.has(lib.id)"
+                @change="(e) => {
+                  const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
+                  if (selected && !lib.displayName) {
+                    lib.title = selected.title
+                    lib.displayName = selected.title
+                  }
+                }"
+              >
+                <option value="">Select a library...</option>
+                <option
+                  v-for="p in plexLibraries.filter(s => s.type === 'show')"
+                  :key="p.key"
+                  :value="p.key"
+                >
+                  {{ p.title }} (ID: {{ p.key }})
+                </option>
+              </select>
+              <input
+                v-model="lib.displayName"
+                type="text"
+                placeholder="Display name (e.g., 4K TV Shows)"
+                @mousedown.stop
+                @click.stop
+                @mouseup.stop
+                @select.stop
+                @selectstart.stop
+              />
+              <button class="secondary small" type="button" @click="removeTvShowLibrary(idx)">Remove</button>
+            </div>
+            <button class="secondary small" type="button" @click="addTvShowLibrary">+ Add Library</button>
+            <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
+          </div>
         </div>
       </div>
 
@@ -949,13 +1062,24 @@ const stopScanPolling = () => {
   gap: 14px;
 }
 
-.connections {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  max-width: 600px;
+.plex-connection-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 14px;
+  align-items: start;
 }
 
-.movie-libraries-subsection {
+.libraries-container {
   margin-top: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.library-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .subsection-title {
@@ -1341,8 +1465,24 @@ button.secondary:hover {
     padding: 16px;
   }
 
-  .grid,
-  .connections {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .plex-connection-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .test-button-wrapper {
+    align-items: flex-start;
+    padding-bottom: 0;
+  }
+
+  .btn-test-connection {
+    width: 100%;
+  }
+
+  .libraries-container {
     grid-template-columns: 1fr;
   }
 
@@ -1357,34 +1497,30 @@ button.secondary:hover {
   }
 }
 
-/* Test Connection */
-.test-connection-wrapper {
-  grid-column: 1 / -1;
+/* Plex Connection Test */
+.test-button-wrapper {
   display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  padding: 1rem;
-  background: var(--surface-alt, #1e2330);
-  border-radius: 8px;
-  border: 1px solid var(--border, #2a2f3e);
+  align-items: flex-end;
+  padding-bottom: 12px;
 }
 
 .btn-test-connection {
-  padding: 0.75rem 1.5rem;
+  padding: 10px 18px;
   background: var(--accent, #3dd6b7);
   color: #000;
   border: none;
-  border-radius: 6px;
-  font-size: 0.95rem;
+  border-radius: 8px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
-  align-self: flex-start;
+  white-space: nowrap;
+  height: 42px;
 }
 
 .btn-test-connection:hover:not(:disabled) {
   background: #2bc4a3;
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(61, 214, 183, 0.3);
 }
 
@@ -1395,10 +1531,11 @@ button.secondary:hover {
 }
 
 .test-result {
+  grid-column: 1 / -1;
   margin: 0;
-  padding: 0.75rem;
-  border-radius: 6px;
-  font-size: 0.9rem;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
