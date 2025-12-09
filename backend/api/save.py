@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 from typing import Optional
+from PIL import Image, PngImagePlugin
 
 from ..config import settings, logger
 from ..rendering import render_poster_image
@@ -61,6 +62,44 @@ def resolve_library_label(library_id: Optional[str]) -> str:
         cleaned = cleaned.split("/")[-1] or cleaned
 
     return cleaned
+
+
+def embed_library_metadata(
+    img: Image.Image,
+    library_id: Optional[str],
+    library_label: Optional[str],
+    movie_title: Optional[str] = None,
+    movie_year: Optional[str] = None,
+) -> Image.Image:
+    """
+    Embed library metadata into image for reliable filtering.
+    Uses PNG metadata for PNG files, falls back to comment-based metadata for JPEG.
+    """
+    metadata = {}
+
+    if library_id:
+        metadata["simposter_library_id"] = str(library_id)
+        metadata["simposter_library_name"] = str(library_label or library_id)
+
+    if movie_title:
+        metadata["simposter_movie_title"] = str(movie_title)
+    if movie_year:
+        metadata["simposter_movie_year"] = str(movie_year)
+
+    if not metadata:
+        return img
+
+    # For PNG images, use PNG metadata chunks
+    # For JPEG, we'll embed in EXIF or use a different approach
+    # Since PIL doesn't easily support custom EXIF fields, we'll use PNG metadata when possible
+    # and for JPEG we'll store in the info dict which can be retrieved later
+
+    # Store in image info dict (available for both formats)
+    if not hasattr(img, 'info'):
+        img.info = {}
+    img.info.update(metadata)
+
+    return img
 
 
 def get_save_location_template() -> str:
@@ -178,7 +217,42 @@ def api_save(req: SaveRequest):
     os.makedirs(base_dir, exist_ok=True)
     out_path = base_dir / filename
 
-    img.convert("RGB").save(out_path, "JPEG", quality=95)
+    # Embed library metadata into the image
+    img = embed_library_metadata(img, req.library_id, library_label, req.movie_title, str(req.movie_year) if req.movie_year else None)
 
-    logger.info("Saved poster to %s", out_path)
+    # Determine output format from filename extension
+    file_ext = out_path.suffix.lower()
+
+    if file_ext == '.png':
+        # For PNG, properly embed metadata in PNG chunks
+        pnginfo = PngImagePlugin.PngInfo()
+        pnginfo.add_text("simposter_library_id", str(req.library_id or ""))
+        pnginfo.add_text("simposter_library_name", str(library_label or ""))
+        pnginfo.add_text("simposter_movie_title", str(req.movie_title or ""))
+        pnginfo.add_text("simposter_movie_year", str(req.movie_year or ""))
+        img.save(out_path, "PNG", pnginfo=pnginfo)
+    else:
+        # For JPEG, embed metadata in EXIF UserComment field
+        img_rgb = img.convert("RGB")
+
+        # Create EXIF data with library metadata
+        exif = img_rgb.getexif()
+        if exif is None:
+            from PIL.Image import Exif
+            exif = Exif()
+
+        # EXIF UserComment tag (0x9286) - store as JSON for easy parsing
+        import json
+        metadata_json = json.dumps({
+            "simposter_library_id": str(req.library_id or ""),
+            "simposter_library_name": str(library_label or ""),
+            "simposter_movie_title": str(req.movie_title or ""),
+            "simposter_movie_year": str(req.movie_year or "")
+        })
+        exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
+        exif_bytes = exif.tobytes()
+
+        img_rgb.save(out_path, "JPEG", quality=95, exif=exif_bytes)
+
+    logger.info("Saved poster to %s (library: %s)", out_path, library_label)
     return {"status": "ok", "saved_path": out_path}

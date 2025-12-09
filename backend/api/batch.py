@@ -7,8 +7,9 @@ from ..rendering import render_poster_image
 from io import BytesIO
 import requests
 from backend.assets.selection import pick_poster, pick_logo
-from .save import apply_save_location_variables, get_save_location_template, resolve_library_label
+from .save import apply_save_location_variables, get_save_location_template, resolve_library_label, embed_library_metadata
 from datetime import datetime, timezone
+from PIL import PngImagePlugin
 
 router = APIRouter()
 
@@ -244,8 +245,50 @@ def api_batch(req: BatchRequest):
                 os.makedirs(base_dir, exist_ok=True)
                 save_path = base_dir / filename
 
-                img.convert("RGB").save(save_path, "JPEG", quality=95)
-                logger.info(f"[BATCH] Saved locally: {save_path}")
+                # Embed library metadata into the image
+                img = embed_library_metadata(
+                    img,
+                    req.library_id,
+                    library_label,
+                    movie_details.get("title", ""),
+                    str(movie_details.get("year", "")) if movie_details.get("year") else None,
+                )
+
+                # Determine output format from filename extension
+                file_ext = save_path.suffix.lower()
+
+                if file_ext == '.png':
+                    # For PNG, properly embed metadata in PNG chunks
+                    pnginfo = PngImagePlugin.PngInfo()
+                    pnginfo.add_text("simposter_library_id", str(req.library_id or ""))
+                    pnginfo.add_text("simposter_library_name", str(library_label or ""))
+                    pnginfo.add_text("simposter_movie_title", str(movie_details.get("title", "")))
+                    pnginfo.add_text("simposter_movie_year", str(movie_details.get("year", "")))
+                    img.save(save_path, "PNG", pnginfo=pnginfo)
+                else:
+                    # For JPEG, embed metadata in EXIF UserComment field
+                    img_rgb = img.convert("RGB")
+
+                    # Create EXIF data with library metadata
+                    exif = img_rgb.getexif()
+                    if exif is None:
+                        from PIL.Image import Exif
+                        exif = Exif()
+
+                    # EXIF UserComment tag (0x9286) - store as JSON for easy parsing
+                    import json
+                    metadata_json = json.dumps({
+                        "simposter_library_id": str(req.library_id or ""),
+                        "simposter_library_name": str(library_label or ""),
+                        "simposter_movie_title": str(movie_details.get("title", "")),
+                        "simposter_movie_year": str(movie_details.get("year", ""))
+                    })
+                    exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
+                    exif_bytes = exif.tobytes()
+
+                    img_rgb.save(save_path, "JPEG", quality=95, exif=exif_bytes)
+
+                logger.info(f"[BATCH] Saved locally: {save_path} (library: {library_label})")
 
             # ---------------------------
             # Upload to Plex (if requested)

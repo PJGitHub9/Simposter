@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Body
 from fastapi.responses import Response, FileResponse, JSONResponse
+from PIL import Image
 
 import requests
 from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR
@@ -24,6 +25,84 @@ scan_status = {
     "finished_at": None,
     "error": None,
 }
+
+
+def _read_image_metadata(file_path: Path) -> dict:
+    """
+    Read library metadata from image file.
+    Returns dict with library_id, library_name, movie_title, and movie_year if found.
+    """
+    try:
+        img = Image.open(file_path)
+
+        # Try to extract from PNG metadata first
+        if hasattr(img, 'text'):
+            library_id = img.text.get('simposter_library_id')
+            library_name = img.text.get('simposter_library_name')
+            movie_title = img.text.get('simposter_movie_title')
+            movie_year = img.text.get('simposter_movie_year')
+            if library_id or movie_title:
+                result = {}
+                if library_id:
+                    result['library_id'] = library_id
+                    result['library_name'] = library_name or library_id
+                if movie_title:
+                    result['movie_title'] = movie_title
+                if movie_year:
+                    result['movie_year'] = movie_year
+                return result
+
+        # Try from EXIF data (for JPEG files)
+        try:
+            exif = img.getexif()
+            if exif and 0x9286 in exif:  # UserComment field
+                import json
+                user_comment = exif[0x9286]
+                # Handle both bytes and string
+                if isinstance(user_comment, bytes):
+                    user_comment = user_comment.decode('utf-8', errors='ignore')
+                try:
+                    metadata = json.loads(user_comment)
+                    library_id = metadata.get('simposter_library_id')
+                    library_name = metadata.get('simposter_library_name')
+                    movie_title = metadata.get('simposter_movie_title')
+                    movie_year = metadata.get('simposter_movie_year')
+                    if library_id or movie_title:
+                        result = {}
+                        if library_id:
+                            result['library_id'] = library_id
+                            result['library_name'] = library_name or library_id
+                        if movie_title:
+                            result['movie_title'] = movie_title
+                        if movie_year:
+                            result['movie_year'] = movie_year
+                        return result
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        except Exception:
+            pass
+
+        # Try from img.info dict (fallback)
+        if hasattr(img, 'info'):
+            library_id = img.info.get('simposter_library_id')
+            library_name = img.info.get('simposter_library_name')
+            movie_title = img.info.get('simposter_movie_title')
+            movie_year = img.info.get('simposter_movie_year')
+            if library_id or movie_title:
+                result = {}
+                if library_id:
+                    result['library_id'] = library_id
+                    result['library_name'] = library_name or library_id
+                if movie_title:
+                    result['movie_title'] = movie_title
+                if movie_year:
+                    result['movie_year'] = movie_year
+                return result
+
+        return {}
+    except Exception as e:
+        logger.debug(f"[METADATA] Failed to read metadata from {file_path}: {e}")
+        return {}
 
 
 def _poster_cache_path(rating_key: str) -> Optional[Path]:
@@ -498,9 +577,39 @@ def api_scan_library():
 
 @router.get("/local-assets")
 def api_local_assets():
-    """List all saved poster assets from the output folder."""
+    """List all saved poster assets from the output folder defined in UI settings."""
     try:
-        output_root = Path(settings.OUTPUT_ROOT)
+        # Get save location from UI settings
+        from ..api.ui_settings import _read_settings
+        ui_settings = _read_settings()
+        save_location = ui_settings.saveLocation or "/output"
+
+        # Resolve the save location path (strip {library}, {title}, {year}, {key} template variables)
+        base_path = save_location.split("{")[0].rstrip("/")
+
+        if base_path.startswith("/output"):
+            # Map /output to OUTPUT_ROOT if configured, otherwise use CONFIG_DIR/output
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            tail = base_path[len("/output"):].lstrip("/")
+            output_root = Path(output_base) / tail if tail else Path(output_base)
+        elif base_path.startswith("/config"):
+            # Map /config to CONFIG_DIR
+            tail = base_path[len("/config"):].lstrip("/")
+            output_root = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
+        elif base_path.startswith("config/"):
+            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
+            output_root = Path(settings.CONFIG_DIR) / tail
+        elif base_path.startswith("output/"):
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
+            output_root = Path(output_base) / tail
+        else:
+            # Relative path - anchor under CONFIG_DIR/output
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            output_root = Path(output_base) / base_path.lstrip("/\\")
+
+        output_root = output_root.resolve()
+
         if not output_root.exists():
             return {"assets": [], "count": 0, "output_path": str(output_root)}
 
@@ -517,14 +626,26 @@ def api_local_assets():
                         stat = file_path.stat()
                         rel_path = file_path.relative_to(output_root)
 
-                        assets.append({
+                        # Read library metadata from the image
+                        metadata = _read_image_metadata(file_path)
+
+                        asset = {
                             "filename": file,
                             "path": str(rel_path),
                             "full_path": str(file_path),
                             "size": stat.st_size,
                             "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                             "folder": str(rel_path.parent) if rel_path.parent != Path('.') else ""
-                        })
+                        }
+
+                        # Add library metadata if available
+                        if metadata:
+                            asset["library_id"] = metadata.get("library_id")
+                            asset["library_name"] = metadata.get("library_name")
+                            asset["movie_title"] = metadata.get("movie_title")
+                            asset["movie_year"] = metadata.get("movie_year")
+
+                        assets.append(asset)
                     except Exception as e:
                         logger.debug(f"[LOCAL_ASSETS] Failed to stat {file_path}: {e}")
 
@@ -546,10 +667,36 @@ def api_local_assets():
 def api_local_asset_file(path: str):
     """Serve a local asset file."""
     try:
-        output_root = Path(settings.OUTPUT_ROOT)
+        # Get save location from UI settings
+        from ..api.ui_settings import _read_settings
+        ui_settings = _read_settings()
+        save_location = ui_settings.saveLocation or "/output"
+
+        # Resolve the save location path (strip template variables)
+        base_path = save_location.split("{")[0].rstrip("/")
+
+        if base_path.startswith("/output"):
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            tail = base_path[len("/output"):].lstrip("/")
+            output_root = Path(output_base) / tail if tail else Path(output_base)
+        elif base_path.startswith("/config"):
+            tail = base_path[len("/config"):].lstrip("/")
+            output_root = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
+        elif base_path.startswith("config/"):
+            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
+            output_root = Path(settings.CONFIG_DIR) / tail
+        elif base_path.startswith("output/"):
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
+            output_root = Path(output_base) / tail
+        else:
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            output_root = Path(output_base) / base_path.lstrip("/\\")
+
+        output_root = output_root.resolve()
         file_path = output_root / path
 
-        # Security check: ensure the resolved path is still within OUTPUT_ROOT
+        # Security check: ensure the resolved path is still within output_root
         if not file_path.resolve().is_relative_to(output_root.resolve()):
             raise HTTPException(status_code=403, detail="Access denied")
 
@@ -562,3 +709,76 @@ def api_local_asset_file(path: str):
     except Exception as e:
         logger.error(f"[LOCAL_ASSETS] Failed to serve file {path}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to serve file: {e}")
+
+
+@router.delete("/local-assets/{path:path}")
+def api_delete_local_asset(path: str):
+    """Delete a local asset file."""
+    try:
+        # Get save location from UI settings
+        from ..api.ui_settings import _read_settings
+        ui_settings = _read_settings()
+        save_location = ui_settings.saveLocation or "/output"
+
+        # Resolve the save location path (strip template variables)
+        base_path = save_location.split("{")[0].rstrip("/")
+
+        if base_path.startswith("/output"):
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            tail = base_path[len("/output"):].lstrip("/")
+            output_root = Path(output_base) / tail if tail else Path(output_base)
+        elif base_path.startswith("/config"):
+            tail = base_path[len("/config"):].lstrip("/")
+            output_root = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
+        elif base_path.startswith("config/"):
+            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
+            output_root = Path(settings.CONFIG_DIR) / tail
+        elif base_path.startswith("output/"):
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
+            output_root = Path(output_base) / tail
+        else:
+            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
+            output_root = Path(output_base) / base_path.lstrip("/\\")
+
+        output_root = output_root.resolve()
+        file_path = output_root / path
+
+        # Security check: ensure the resolved path is still within output_root
+        if not file_path.resolve().is_relative_to(output_root.resolve()):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Delete the file
+        file_path.unlink()
+        logger.info(f"[LOCAL_ASSETS] Deleted file: {file_path}")
+
+        # Clean up empty parent folders
+        deleted_folders = []
+        parent_dir = file_path.parent
+        while parent_dir != output_root and parent_dir > output_root:
+            try:
+                # Check if directory is empty
+                if not any(parent_dir.iterdir()):
+                    parent_dir.rmdir()
+                    deleted_folders.append(str(parent_dir.relative_to(output_root)))
+                    logger.info(f"[LOCAL_ASSETS] Deleted empty folder: {parent_dir}")
+                    parent_dir = parent_dir.parent
+                else:
+                    # Directory not empty, stop cleanup
+                    break
+            except Exception as e:
+                logger.debug(f"[LOCAL_ASSETS] Could not delete folder {parent_dir}: {e}")
+                break
+
+        result = {"success": True, "message": f"Deleted {path}"}
+        if deleted_folders:
+            result["deleted_folders"] = deleted_folders
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[LOCAL_ASSETS] Failed to delete file {path}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
