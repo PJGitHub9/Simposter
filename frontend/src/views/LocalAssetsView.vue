@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -21,12 +22,12 @@ const localAssetsLoading = ref(false)
 const localAssetsError = ref<string | null>(null)
 const assetSearchQuery = ref('')
 const assetFolderFilter = ref('')
-const assetLibraryFilter = ref('')
 const selectedAsset = ref<LocalAsset | null>(null)
 const showModal = ref(false)
 const deletingAsset = ref(false)
 const showMovieTitles = ref(false)
 
+const route = useRoute()
 const apiBase = getApiBase()
 const settings = useSettingsStore()
 
@@ -39,20 +40,6 @@ const fetchLocalAssets = async () => {
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     localAssets.value = data.assets || []
-
-    // If no library selected yet, try to auto-select based on first asset
-    if (!assetLibraryFilter.value && localAssets.value.length > 0) {
-      const first = localAssets.value[0]
-      if (first.library_id) {
-        assetLibraryFilter.value = String(first.library_id)
-      } else if (first.folder) {
-        // Match folder name to a library display name if possible
-        const match = allLibraries.value.find(lib => first.folder.toLowerCase().includes(String(lib.displayName || lib.id).toLowerCase()))
-        if (match) {
-          assetLibraryFilter.value = String(match.id)
-        }
-      }
-    }
   } catch (err: unknown) {
     localAssetsError.value = err instanceof Error ? err.message : 'Failed to load local assets'
   } finally {
@@ -110,6 +97,14 @@ const getDisplayName = (asset: LocalAsset): string => {
   return asset.filename
 }
 
+const activeLibraryId = computed(() => {
+  const fromRoute = (route.query.library as string) || ''
+  if (fromRoute) return String(fromRoute)
+  const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
+  if (firstLib?.id) return String(firstLib.id)
+  return settings.plex.value.movieLibraryName ? String(settings.plex.value.movieLibraryName) : ''
+})
+
 // Filter assets by search, folder, and library
 const filteredAssets = computed(() => {
   let result = localAssets.value
@@ -125,8 +120,8 @@ const filteredAssets = computed(() => {
   }
 
   // Filter by library (using embedded metadata when available)
-  if (assetLibraryFilter.value) {
-    const selectedLibrary = allLibraries.value.find(lib => String(lib.id) === String(assetLibraryFilter.value))
+  if (activeLibraryId.value) {
+    const selectedLibrary = allLibraries.value.find(lib => String(lib.id) === String(activeLibraryId.value))
     if (selectedLibrary) {
       result = result.filter(asset => assetBelongsToLibrary(asset, selectedLibrary.id, selectedLibrary.displayName))
     }
@@ -191,17 +186,7 @@ const deleteAsset = async (asset: LocalAsset) => {
   }
 }
 
-watch(allLibraries, libs => {
-  if (!assetLibraryFilter.value && libs.length > 0) {
-    assetLibraryFilter.value = String(libs[0].id)
-  }
-})
-
 onMounted(() => {
-  // Default to first library if available
-  if (allLibraries.value.length > 0) {
-    assetLibraryFilter.value = String(allLibraries.value[0].id)
-  }
   fetchLocalAssets()
 })
 </script>
@@ -243,11 +228,6 @@ onMounted(() => {
           {{ showMovieTitles ? 'Show movie titles' : 'Show filenames' }}
         </span>
       </label>
-      <select v-model="assetLibraryFilter" class="filter-select">
-        <option v-for="library in allLibraries" :key="library.id" :value="library.id">
-          {{ library.displayName }} ({{ library.type === 'movie' ? 'Movies' : 'TV Shows' }})
-        </option>
-      </select>
       <select v-model="assetFolderFilter" class="filter-select">
         <option value="">All Folders</option>
         <option v-for="folder in assetFolders" :key="folder" :value="folder">
