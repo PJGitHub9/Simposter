@@ -10,6 +10,7 @@ from backend.assets.selection import pick_poster, pick_logo
 from .save import apply_save_location_variables, get_save_location_template, resolve_library_label, embed_library_metadata
 from datetime import datetime, timezone
 from PIL import PngImagePlugin
+from .. import database as db
 
 router = APIRouter()
 
@@ -289,6 +290,20 @@ def api_batch(req: BatchRequest):
                     img_rgb.save(save_path, "JPEG", quality=95, exif=exif_bytes)
 
                 logger.info(f"[BATCH] Saved locally: {save_path} (library: {library_label})")
+                # Record history entry for local save
+                try:
+                    db.record_poster_history(
+                        rating_key=rating_key,
+                        library_id=str(req.library_id or ""),
+                        title=movie_details.get("title"),
+                        year=movie_details.get("year"),
+                        template_id=req.template_id,
+                        preset_id=req.preset_id,
+                        action="saved_local",
+                        save_path=str(save_path),
+                    )
+                except Exception as history_err:
+                    logger.debug(f"[BATCH] Failed to record history for local save: {history_err}")
 
             # ---------------------------
             # Upload to Plex (if requested)
@@ -316,6 +331,19 @@ def api_batch(req: BatchRequest):
                     plex_remove_label(rating_key, label)
 
                 logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
+                try:
+                    db.record_poster_history(
+                        rating_key=rating_key,
+                        library_id=str(req.library_id or ""),
+                        title=movie_details.get("title"),
+                        year=movie_details.get("year"),
+                        template_id=req.template_id,
+                        preset_id=req.preset_id,
+                        action="sent_to_plex",
+                        save_path=str(save_path) if save_path else None,
+                    )
+                except Exception as history_err:
+                    logger.debug(f"[BATCH] Failed to record history for plex send: {history_err}")
 
             result = {
                 "rating_key": rating_key,

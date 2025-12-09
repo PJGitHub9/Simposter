@@ -179,6 +179,34 @@ def init_database():
             ON movie_cache(library_id)
         """)
 
+        # Poster history table - track poster actions (local save / send to Plex)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rating_key TEXT NOT NULL,
+                library_id TEXT,
+                title TEXT,
+                year INTEGER,
+                template_id TEXT,
+                preset_id TEXT,
+                action TEXT NOT NULL, -- saved_local | sent_to_plex
+                save_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_poster_history_rating
+            ON poster_history(rating_key)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_poster_history_library
+            ON poster_history(library_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_poster_history_created
+            ON poster_history(created_at DESC)
+        """)
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
     except Exception as e:
@@ -764,6 +792,91 @@ def copy_env_to_ui_settings():
         conn.rollback()
     finally:
         conn.close()
+
+
+# ============================================
+#  Poster History Operations
+# ============================================
+
+def record_poster_history(
+    rating_key: str,
+    library_id: Optional[str],
+    title: Optional[str],
+    year: Optional[int],
+    template_id: Optional[str],
+    preset_id: Optional[str],
+    action: str,
+    save_path: Optional[str] = None,
+) -> None:
+    """Record a poster-related action for tracking."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO poster_history
+            (rating_key, library_id, title, year, template_id, preset_id, action, save_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                rating_key,
+                library_id,
+                title,
+                year if year is not None else None,
+                template_id,
+                preset_id,
+                action,
+                save_path,
+            ),
+        )
+
+
+def get_poster_history(
+    library_id: Optional[str] = None,
+    template_id: Optional[str] = None,
+    action: Optional[str] = None,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """Fetch poster history records with optional filters."""
+    query = "SELECT * FROM poster_history"
+    clauses = []
+    params: List[Any] = []
+
+    if library_id:
+        clauses.append("library_id = ?")
+        params.append(library_id)
+    if template_id:
+        clauses.append("template_id = ?")
+        params.append(template_id)
+    if action:
+        clauses.append("action = ?")
+        params.append(action)
+
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+
+    query += " ORDER BY datetime(created_at) DESC LIMIT ?"
+    params.append(limit)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        out.append({
+            "id": row["id"],
+            "rating_key": row["rating_key"],
+            "library_id": row["library_id"],
+            "title": row["title"],
+            "year": row["year"],
+            "template_id": row["template_id"],
+            "preset_id": row["preset_id"],
+            "action": row["action"],
+            "save_path": row["save_path"],
+            "created_at": row["created_at"],
+        })
+    return out
 
 
 # Initialize database on module import

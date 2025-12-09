@@ -1,10 +1,10 @@
 ## v1.4.4 (Planned)
 - [ ] Template manager section (UI/Backend)
 - [ ] TV show library support investigation
-- [ ] Asset manager tweaks (delete assets, re-render new assets)
+- [x] Asset manager tweaks (delete assets, re-render new assets)
 
 ## Docker
-- [ ] Support GUID/PUID env variables
+- [x] Support GUID/PUID env variables
 
 ## Roadmap
 - [ ] TV show library

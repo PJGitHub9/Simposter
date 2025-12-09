@@ -22,6 +22,7 @@ const tabs = computed<MenuItem[]>(() => {
     label: lib.displayName || lib.title || `Library ${idx + 1}`,
     submenu: [
       { key: `batch-${lib.id || idx}`, label: 'Batch Edit' },
+      { key: `batch-test-${lib.id || idx}`, label: 'Batch Edit (test)' },
       { key: `assets-${lib.id || idx}`, label: 'Local Assets' }
     ]
   }))
@@ -46,7 +47,7 @@ let batchPoller: number | null = null
 
 const activeTab = computed<TabKey>(() => {
   const libQuery = (route.query.library as string) || ''
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies') {
+  if (route.name === 'batch-edit' || route.name === 'batch-edit-test' || route.name === 'local-assets' || route.name === 'movies') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
@@ -58,6 +59,7 @@ const activeTab = computed<TabKey>(() => {
 const activeSubmenu = computed<string>(() => {
   const libQuery = (route.query.library as string) || ''
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
+  if (route.name === 'batch-edit-test') return `batch-test-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   return ''
 })
@@ -215,7 +217,9 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
   if (parentKey.startsWith('movies-')) {
     const libId = parentKey.replace('movies-', '')
-    if (submenuKey.startsWith('batch-')) {
+    if (submenuKey.startsWith('batch-test-')) {
+      router.push({ name: 'batch-edit-test', query: { library: libId } })
+    } else if (submenuKey.startsWith('batch-')) {
       router.push({ name: 'batch-edit', query: { library: libId } })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: { library: libId } })

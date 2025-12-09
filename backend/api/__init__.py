@@ -12,6 +12,7 @@ from . import (
     logs,
     webhooks,
     ui_settings,
+    history,
     cache as cache_api,
 )
 
@@ -28,4 +29,5 @@ router.include_router(uploads.router)
 router.include_router(logs.router)
 router.include_router(webhooks.router)
 router.include_router(ui_settings.router)
+router.include_router(history.router)
 router.include_router(cache_api.router)
