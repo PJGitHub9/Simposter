@@ -44,6 +44,76 @@ def _configure_conn(conn: sqlite3.Connection):
     conn.row_factory = sqlite3.Row
 
 
+def get_db_version() -> Optional[str]:
+    """Get the current database version."""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = 'app.version'")
+            row = cursor.fetchone()
+            if row:
+                return row["value"]
+    except Exception:
+        # Table might not exist yet
+        pass
+    return None
+
+
+def set_db_version(version: str) -> None:
+    """Set the database version."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO settings (key, value, category, updated_at)
+            VALUES ('app.version', ?, 'app', CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+        """, (version,))
+    logger.info(f"[DB] Set database version to {version}")
+
+
+def get_app_version() -> str:
+    """Get the current application version from the frontend version file."""
+    try:
+        # Read version from the frontend version file
+        version_file = Path(__file__).parent.parent / "frontend" / "src" / "version.ts"
+        if version_file.exists():
+            content = version_file.read_text()
+            # Parse: export const APP_VERSION = 'v1.4.4'
+            for line in content.split('\n'):
+                if 'APP_VERSION' in line and '=' in line:
+                    # Extract version between quotes
+                    version = line.split('=')[1].strip().strip("'\"")
+                    return version
+    except Exception as e:
+        logger.warning(f"[DB] Could not read app version from version.ts: {e}")
+
+    # Fallback version
+    return "v1.0.0"
+
+
+def check_and_update_version() -> None:
+    """
+    Check the database version against the current app version.
+    Log version changes and update the database version.
+    This allows future migration logic based on version differences.
+    """
+    current_app_version = get_app_version()
+    db_version = get_db_version()
+
+    if db_version is None:
+        logger.info(f"[DB] New database - setting initial version to {current_app_version}")
+        set_db_version(current_app_version)
+    elif db_version != current_app_version:
+        logger.info(f"[DB] Version change detected: {db_version} -> {current_app_version}")
+        # Future: Add migration logic here based on version comparison
+        # For now, just update the version
+        set_db_version(current_app_version)
+    else:
+        logger.debug(f"[DB] Database version {db_version} matches app version")
+
+
 def init_database():
     """Initialize the database with required tables."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -215,6 +285,9 @@ def init_database():
         raise
     finally:
         conn.close()
+
+    # Check and update database version
+    check_and_update_version()
 
 
 @contextmanager
