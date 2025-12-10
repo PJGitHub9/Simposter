@@ -401,15 +401,36 @@ def api_tmdb_images(tmdb_id: int):
         tmdb_imgs = get_images_for_movie(tmdb_id, details.get("original_language"))
         fanart_imgs = get_fanart_images(tmdb_id)
 
-        # Merge logos (Fanart first so HD clearlogos/clearart show up prominently)
-        merged_logos = (fanart_imgs.get("logos") or []) + (tmdb_imgs.get("logos") or [])
-        # Posters: Fanart first so language-specific posters can surface; then TMDB
-        merged_posters = (fanart_imgs.get("posters") or []) + (tmdb_imgs.get("posters") or [])
-        merged_backdrops = (fanart_imgs.get("backdrops") or []) + (tmdb_imgs.get("backdrops") or [])
+        # Get API order from settings
+        from ..api.ui_settings import _read_settings
+        try:
+            ui_settings = _read_settings(include_env=False)
+            api_order = ui_settings.apiOrder or ["tmdb", "fanart", "tvdb"]
+        except Exception:
+            api_order = ["tmdb", "fanart", "tvdb"]
+
+        # Build image sources dictionary
+        image_sources = {
+            "tmdb": {"logos": tmdb_imgs.get("logos") or [], "posters": tmdb_imgs.get("posters") or [], "backdrops": tmdb_imgs.get("backdrops") or []},
+            "fanart": {"logos": fanart_imgs.get("logos") or [], "posters": fanart_imgs.get("posters") or [], "backdrops": fanart_imgs.get("backdrops") or []},
+            "tvdb": {"logos": [], "posters": [], "backdrops": []}  # TVDB not yet implemented
+        }
+
+        # Merge images based on API order
+        merged_logos = []
+        merged_posters = []
+        merged_backdrops = []
+
+        for source in api_order:
+            if source in image_sources:
+                merged_logos.extend(image_sources[source]["logos"])
+                merged_posters.extend(image_sources[source]["posters"])
+                merged_backdrops.extend(image_sources[source]["backdrops"])
 
         logger.info(
-            "[IMAGES] tmdb_id=%s posters=%d backdrops=%d logos_tmdb=%d logos_fanart=%d",
+            "[IMAGES] tmdb_id=%s order=%s posters=%d backdrops=%d logos_tmdb=%d logos_fanart=%d",
             tmdb_id,
+            api_order,
             len(merged_posters),
             len(merged_backdrops),
             len(tmdb_imgs.get("logos") or []),

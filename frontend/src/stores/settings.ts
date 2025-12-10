@@ -55,6 +55,7 @@ export type UISettings = {
   fanart?: FanartSettings
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
+  apiOrder?: string[]
 }
 
 const theme = ref<Theme>('neon')
@@ -71,6 +72,7 @@ const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: true })
 const fanart = ref<FanartSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048 })
+const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 
 async function loadSettings() {
   loading.value = true
@@ -116,6 +118,7 @@ async function loadSettings() {
       tvdbRateLimit: data.performance?.tvdbRateLimit ?? 20,
       memoryLimit: data.performance?.memoryLimit ?? 2048
     }
+    apiOrder.value = data.apiOrder ?? ['tmdb', 'fanart', 'tvdb']
 
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to load settings'
@@ -140,7 +143,8 @@ async function saveSettings() {
       tvdb: { ...tvdb.value },
       fanart: { ...fanart.value },
       imageQuality: { ...imageQuality.value },
-      performance: { ...performance.value }
+      performance: { ...performance.value },
+      apiOrder: apiOrder.value
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -171,6 +175,7 @@ export function useSettingsStore() {
     fanart,
     imageQuality,
     performance,
+    apiOrder,
     loading,
     error,
     loaded,

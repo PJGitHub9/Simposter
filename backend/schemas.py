@@ -93,6 +93,7 @@ class UISettings(BaseModel):
     fanart: FanartSettings = Field(default_factory=FanartSettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
+    apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
 
 class PlexSendRequest(BaseModel):
     template_id: str

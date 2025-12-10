@@ -2,15 +2,31 @@
 import { useSettingsStore, type Theme } from '../stores/settings'
 import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
+import { onBeforeRouteLeave } from 'vue-router'
 
 const settings = useSettingsStore()
 const saved = ref('')
 const allLabels = ref<Record<string, string[]>>({})
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
+
+// Track unsaved changes
+const hasUnsavedChanges = ref(false)
+const initialSettingsSnapshot = ref('')
+const watchersEnabled = ref(false) // Flag to control when change detection is active
+
+// Track which sections have unsaved changes
+const sectionsWithChanges = ref({
+  appearance: false,
+  output: false,
+  connections: false,
+  apiKeys: false,
+  imageQuality: false,
+  performance: false
+})
 
 // Cooldown state to prevent rapid clicking
 const scanCooldown = ref(false)
@@ -113,12 +129,17 @@ const onApiDragEnd = () => {
   draggingSource.value = null
 }
 
-const loadLocalSettings = () => {
+const loadLocalSettings = async () => {
+  // Disable watchers during load
+  watchersEnabled.value = false
+
   localTheme.value = settings.theme.value
   localPosterDensity.value = settings.posterDensity.value
   localSaveLocation.value = settings.saveLocation.value
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
+  // API order
+  apiOrder.value = [...(settings.apiOrder.value || ['tmdb', 'fanart', 'tvdb'])]
   // Connection settings
   localPlexUrl.value = settings.plex.value.url
   localPlexToken.value = settings.plex.value.token
@@ -184,6 +205,112 @@ const loadLocalSettings = () => {
   localTmdbRateLimit.value = settings.performance.value.tmdbRateLimit
   localTvdbRateLimit.value = settings.performance.value.tvdbRateLimit
   localMemoryLimit.value = settings.performance.value.memoryLimit
+
+  // Wait for next tick to ensure all reactive updates are complete
+  await nextTick()
+}
+
+const captureSettingsSnapshot = () => {
+  initialSettingsSnapshot.value = JSON.stringify({
+    theme: localTheme.value,
+    posterDensity: localPosterDensity.value,
+    saveLocation: localSaveLocation.value,
+    saveBatch: localSaveBatch.value,
+    defaultLabelsToRemove: localDefaultLabelsToRemove.value,
+    plexUrl: localPlexUrl.value,
+    plexToken: localPlexToken.value,
+    libraries: localLibraries.value,
+    tvShowLibraries: localTvShowLibraries.value,
+    tmdbApiKey: localTmdbApiKey.value,
+    tvdbApiKey: localTvdbApiKey.value,
+    fanartApiKey: localFanartApiKey.value,
+    apiOrder: apiOrder.value,
+    outputFormat: localOutputFormat.value,
+    jpgQuality: localJpgQuality.value,
+    pngCompression: localPngCompression.value,
+    webpQuality: localWebpQuality.value,
+    concurrentRenders: localConcurrentRenders.value,
+    tmdbRateLimit: localTmdbRateLimit.value,
+    tvdbRateLimit: localTvdbRateLimit.value,
+    memoryLimit: localMemoryLimit.value
+  })
+  hasUnsavedChanges.value = false
+
+  // Reset all section flags
+  sectionsWithChanges.value.appearance = false
+  sectionsWithChanges.value.output = false
+  sectionsWithChanges.value.connections = false
+  sectionsWithChanges.value.apiKeys = false
+  sectionsWithChanges.value.imageQuality = false
+  sectionsWithChanges.value.performance = false
+
+  // Enable watchers after a small delay to ensure all async updates have completed
+  setTimeout(() => {
+    watchersEnabled.value = true
+  }, 100)
+}
+
+const checkForChanges = () => {
+  const currentSnapshot = JSON.stringify({
+    theme: localTheme.value,
+    posterDensity: localPosterDensity.value,
+    saveLocation: localSaveLocation.value,
+    saveBatch: localSaveBatch.value,
+    defaultLabelsToRemove: localDefaultLabelsToRemove.value,
+    plexUrl: localPlexUrl.value,
+    plexToken: localPlexToken.value,
+    libraries: localLibraries.value,
+    tvShowLibraries: localTvShowLibraries.value,
+    tmdbApiKey: localTmdbApiKey.value,
+    tvdbApiKey: localTvdbApiKey.value,
+    fanartApiKey: localFanartApiKey.value,
+    apiOrder: apiOrder.value,
+    outputFormat: localOutputFormat.value,
+    jpgQuality: localJpgQuality.value,
+    pngCompression: localPngCompression.value,
+    webpQuality: localWebpQuality.value,
+    concurrentRenders: localConcurrentRenders.value,
+    tmdbRateLimit: localTmdbRateLimit.value,
+    tvdbRateLimit: localTvdbRateLimit.value,
+    memoryLimit: localMemoryLimit.value
+  })
+  hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
+
+  // Check individual sections
+  if (!initialSettingsSnapshot.value) return
+  const initial = JSON.parse(initialSettingsSnapshot.value)
+
+  sectionsWithChanges.value.appearance =
+    localTheme.value !== initial.theme ||
+    localPosterDensity.value !== initial.posterDensity
+
+  sectionsWithChanges.value.output =
+    localSaveLocation.value !== initial.saveLocation ||
+    localSaveBatch.value !== initial.saveBatch
+
+  sectionsWithChanges.value.connections =
+    localPlexUrl.value !== initial.plexUrl ||
+    localPlexToken.value !== initial.plexToken ||
+    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries) ||
+    JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries)
+
+  sectionsWithChanges.value.apiKeys =
+    localTmdbApiKey.value !== initial.tmdbApiKey ||
+    localTvdbApiKey.value !== initial.tvdbApiKey ||
+    localFanartApiKey.value !== initial.fanartApiKey ||
+    JSON.stringify(apiOrder.value) !== JSON.stringify(initial.apiOrder)
+
+  sectionsWithChanges.value.imageQuality =
+    localOutputFormat.value !== initial.outputFormat ||
+    localJpgQuality.value !== initial.jpgQuality ||
+    localPngCompression.value !== initial.pngCompression ||
+    localWebpQuality.value !== initial.webpQuality
+
+  sectionsWithChanges.value.performance =
+    localConcurrentRenders.value !== initial.concurrentRenders ||
+    localTmdbRateLimit.value !== initial.tmdbRateLimit ||
+    localTvdbRateLimit.value !== initial.tvdbRateLimit ||
+    localMemoryLimit.value !== initial.memoryLimit
 }
 
 const saveSettings = async () => {
@@ -193,6 +320,7 @@ const saveSettings = async () => {
   settings.saveLocation.value = localSaveLocation.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
+  settings.apiOrder.value = [...apiOrder.value]
   const libs = localLibraries.value.filter(l => l.id || l.title)
   const tvShowLibs = localTvShowLibraries.value.filter(l => l.id || l.title)
   settings.plex.value = {
@@ -236,6 +364,12 @@ const saveSettings = async () => {
   // After save, lock current library selections
   savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
   savedTvShowLibraryIds.value = new Set(localTvShowLibraries.value.filter(l => l.id).map(l => String(l.id)))
+
+  // Reset unsaved changes flag after successful save
+  // Temporarily disable watchers while we reset the snapshot
+  watchersEnabled.value = false
+  await nextTick()
+  captureSettingsSnapshot()
 }
 
 const testConnection = ref('')
@@ -573,28 +707,50 @@ const fetchAllLabels = async () => {
 }
 
 onMounted(async () => {
+  // Explicitly disable watchers at the start
+  watchersEnabled.value = false
+
   // Ensure settings are loaded from API before syncing local form state
   if (!settings.loaded.value) {
     await settings.load()
   }
 
-  // Only load local settings and labels after settings are confirmed loaded
-  loadLocalSettings()
-  fetchAllLabels()
+  // Load local settings first
+  await loadLocalSettings()
 
   // Load Plex libraries if credentials exist to populate dropdowns
+  // Do this BEFORE capturing snapshot since it modifies localLibraries
   if (settings.plex.value.url && settings.plex.value.token) {
     await testPlexConnection()
   }
+
+  // Fetch labels
+  fetchAllLabels()
+
+  // Now capture the snapshot after everything has loaded
+  await nextTick()
+  captureSettingsSnapshot()
 })
 
 // If settings finish loading after initial render, sync the local form
 watch(
   () => settings.loaded.value,
-  (val) => {
+  async (val) => {
     if (val) {
-      loadLocalSettings()
+      // Disable watchers before reloading
+      watchersEnabled.value = false
+      await loadLocalSettings()
+
+      // Load Plex libraries if credentials exist
+      if (settings.plex.value.url && settings.plex.value.token) {
+        await testPlexConnection()
+      }
+
       fetchAllLabels()
+
+      // Recapture snapshot after reload
+      await nextTick()
+      captureSettingsSnapshot()
     }
   }
 )
@@ -607,6 +763,68 @@ watch(
   },
   { deep: true }
 )
+
+// Watch all local settings for changes
+watch([
+  localTheme,
+  localPosterDensity,
+  localSaveLocation,
+  localSaveBatch,
+  localDefaultLabelsToRemove,
+  localPlexUrl,
+  localPlexToken,
+  localLibraries,
+  localTvShowLibraries,
+  localTmdbApiKey,
+  localTvdbApiKey,
+  localFanartApiKey,
+  apiOrder,
+  localOutputFormat,
+  localJpgQuality,
+  localPngCompression,
+  localWebpQuality,
+  localConcurrentRenders,
+  localTmdbRateLimit,
+  localTvdbRateLimit,
+  localMemoryLimit
+], () => {
+  // Only check for changes if watchers are enabled (after initial load)
+  if (watchersEnabled.value) {
+    checkForChanges()
+  }
+}, {
+  deep: true,
+  flush: 'post'
+})
+
+// Navigation guard - warn before leaving with unsaved changes
+onBeforeRouteLeave((_to, _from, next) => {
+  if (hasUnsavedChanges.value) {
+    const answer = window.confirm('You have unsaved changes. Are you sure you want to leave?')
+    if (answer) {
+      next()
+    } else {
+      next(false)
+    }
+  } else {
+    next()
+  }
+})
+
+// Warn before closing/refreshing page with unsaved changes
+onMounted(() => {
+  const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (hasUnsavedChanges.value) {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+  }
+  window.addEventListener('beforeunload', handleBeforeUnload)
+
+  onBeforeUnmount(() => {
+    window.removeEventListener('beforeunload', handleBeforeUnload)
+  })
+})
 
 const toggleLabel = (libraryId: string, label: string) => {
   if (!localDefaultLabelsToRemove.value[libraryId]) {
@@ -759,11 +977,14 @@ const testFanartApiKey = async () => {
           <h2>Settings</h2>
           <p class="header-subtitle">Customize your Simposter experience</p>
         </div>
-        <span class="version-chip">{{ APP_VERSION }}</span>
+        <div class="header-status">
+          <span v-if="hasUnsavedChanges" class="unsaved-badge">Unsaved Changes</span>
+          <span class="version-chip">{{ APP_VERSION }}</span>
+        </div>
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.appearance }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 2L2 7l10 5 10-5-10-5z"/>
@@ -798,7 +1019,7 @@ const testFanartApiKey = async () => {
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.output }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
@@ -825,7 +1046,7 @@ const testFanartApiKey = async () => {
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.connections }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -993,7 +1214,7 @@ const testFanartApiKey = async () => {
 
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.apiKeys }">
       <div class="section-title-row">
         <h3 class="section-title">
           <svg class="key-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1067,7 +1288,7 @@ const testFanartApiKey = async () => {
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.imageQuality }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
@@ -1121,7 +1342,7 @@ const testFanartApiKey = async () => {
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.performance }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
@@ -1208,13 +1429,13 @@ const testFanartApiKey = async () => {
     </div>
 
     <div class="actions">
-      <button @click="saveSettings" class="primary">
+      <button @click="saveSettings" class="primary" :class="{ 'has-changes': hasUnsavedChanges }">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
           <polyline points="17 21 17 13 7 13 7 21"/>
           <polyline points="7 3 7 8 15 8"/>
         </svg>
-        Save Settings
+        {{ hasUnsavedChanges ? 'Save Changes' : 'Save Settings' }}
       </button>
       <button @click="clearCache" class="secondary" :disabled="isScanInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1283,12 +1504,43 @@ const testFanartApiKey = async () => {
   font-weight: 400;
 }
 
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.unsaved-badge {
+  padding: 6px 12px;
+  background: rgba(255, 193, 7, 0.15);
+  border: 1px solid rgba(255, 193, 7, 0.4);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffc107;
+  animation: pulse-warning 2s ease-in-out infinite;
+}
+
+@keyframes pulse-warning {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 193, 7, 0);
+  }
+}
+
 .settings-section {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 20px;
   transition: all 0.2s;
+}
+
+.settings-section.has-unsaved-changes {
+  border-color: rgba(255, 193, 7, 0.3);
+  background: rgba(255, 193, 7, 0.03);
 }
 .section-title-row {
   display: flex;
@@ -1679,6 +1931,27 @@ button.primary:hover {
   border-color: rgba(61, 214, 183, 0.6);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(61, 214, 183, 0.15);
+}
+
+button.primary.has-changes {
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.25), rgba(255, 152, 0, 0.2));
+  border-color: rgba(255, 193, 7, 0.5);
+  animation: pulse-button 2s ease-in-out infinite;
+}
+
+button.primary.has-changes:hover {
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.35), rgba(255, 152, 0, 0.3));
+  border-color: rgba(255, 193, 7, 0.7);
+  box-shadow: 0 4px 12px rgba(255, 193, 7, 0.3);
+}
+
+@keyframes pulse-button {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(255, 193, 7, 0);
+  }
 }
 
 button.secondary {
