@@ -171,6 +171,7 @@ const handleExportSelected = () => {
   const map: TemplatePresets = {}
   selectedPresets.value.forEach((key) => {
     const [tpl, pid] = key.split('::')
+    if (!tpl || !pid) return
     const preset = presets.value[tpl]?.presets.find((p) => p.id === pid)
     if (!preset) return
     if (!map[tpl]) map[tpl] = { presets: [] }
@@ -283,10 +284,10 @@ const fetchMovies = async () => {
   }
 }
 
-const pickRandomMovie = () => {
+const pickRandomMovie = (): { key: string; title: string } | null => {
   if (!movies.value.length) return null
   const random = movies.value[Math.floor(Math.random() * movies.value.length)]
-  return random
+  return random || null
 }
 
 const resolvePreviewMovie = () => {
@@ -640,7 +641,7 @@ onMounted(async () => {
                 <select v-model="modalFallback.fallbackPosterPreset" :disabled="!modalFallback.fallbackPosterTemplate">
                   <option value="">Use default / first preset</option>
                   <option
-                    v-for="p in (presets[modalFallback.fallbackPosterTemplate]?.presets || [])"
+                    v-for="p in (modalFallback.fallbackPosterTemplate ? presets[modalFallback.fallbackPosterTemplate]?.presets || [] : [])"
                     :key="p.id"
                     :value="p.id"
                   >
@@ -674,7 +675,7 @@ onMounted(async () => {
                 <select v-model="modalFallback.fallbackLogoPreset" :disabled="!modalFallback.fallbackLogoTemplate">
                   <option value="">Use default / first preset</option>
                   <option
-                    v-for="p in (presets[modalFallback.fallbackLogoTemplate]?.presets || [])"
+                    v-for="p in (modalFallback.fallbackLogoTemplate ? presets[modalFallback.fallbackLogoTemplate]?.presets || [] : [])"
                     :key="p.id"
                     :value="p.id"
                   >

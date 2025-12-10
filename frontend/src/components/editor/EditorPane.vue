@@ -17,8 +17,8 @@ const { movies: globalMovies, setMoviePoster } = useMovies()
 const apiBase = getApiBase()
 
 const tmdbId = ref<number | null>(null)
-const posters = ref<{ url: string; thumb?: string; has_text?: boolean }[]>([])
-const logos = ref<{ url: string; thumb?: string; color?: string }[]>([])
+const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
+const logos = ref<{ url: string; thumb?: string; color?: string; language?: string; source?: string; type?: string }[]>([])
 const labels = ref<string[]>([])
 const selectedLabels = ref<Set<string>>(new Set())
 const existingPoster = ref<string | null>(null)
@@ -557,7 +557,7 @@ const applyLogoPreference = () => {
   if (logoMode.value === 'none') return
   const ordered = filteredLogos.value
   if (!ordered.length) return
-  selectedLogo.value = ordered[0].url
+  selectedLogo.value = ordered[0]?.url || null
 }
 
 const applyPosterFilter = () => {

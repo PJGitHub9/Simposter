@@ -65,6 +65,12 @@ const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
 let scanPoller: number | null = null
 
+// Preset import/export states
+const presetExporting = ref(false)
+const presetImporting = ref(false)
+const presetImportText = ref('')
+const showPresetImportModal = ref(false)
+
 // API key test states
 const testTmdbLoading = ref(false)
 const testTmdbResult = ref('')
@@ -104,7 +110,7 @@ const apiSources = computed(() => [
     placeholder: 'TVDB API key'
   }
 ])
-const orderedApiSources = computed(() => apiOrder.value.map((id) => apiSources.value.find((s) => s.id === id)).filter(Boolean))
+const orderedApiSources = computed(() => apiOrder.value.map((id) => apiSources.value.find((s) => s.id === id)).filter((s): s is NonNullable<typeof s> => !!s))
 
 const onApiDragStart = (id: string) => {
   if (apiOrderLocked.value) return
@@ -117,7 +123,8 @@ const onApiDragOver = (targetId: string) => {
   const from = order.indexOf(draggingSource.value)
   const to = order.indexOf(targetId)
   if (from === -1 || to === -1) return
-  order.splice(to, 0, order.splice(from, 1)[0])
+  const [removed] = order.splice(from, 1)
+  if (removed) order.splice(to, 0, removed)
   apiOrder.value = order
 }
 
@@ -173,9 +180,9 @@ const loadLocalSettings = async () => {
   const tvShowLibraryMappings = hasPersistedTvShowLibraries
     ? settings.plex.value.tvShowLibraryMappings
     : (settings.plex.value.tvShowLibraryNames || settings.plex.value.tvShowLibraryName
-        ? (settings.plex.value.tvShowLibraryNames || [settings.plex.value.tvShowLibraryName]).map((n: string, idx: number) => ({
-            id: n,
-            title: n,
+        ? (settings.plex.value.tvShowLibraryNames || [settings.plex.value.tvShowLibraryName]).map((n: string | undefined, idx: number) => ({
+            id: n || '',
+            title: n || '',
             displayName: n || `TV Library ${idx + 1}`
           }))
         : [{ id: '', title: '', displayName: '' }]
