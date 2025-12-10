@@ -63,6 +63,14 @@ const previewError = ref('')
 const previewMovie = ref<{ key: string; title: string } | null>(null)
 const previewTemplate = ref<{ templateId: string; presetName: string } | null>(null)
 const movies = ref<{ key: string; title: string }[]>([])
+const selectedPreviewMovie = ref<{ key: string; title: string } | null>(null)
+const showMovieSearch = ref(false)
+const movieSearchTerm = ref('')
+const movieSearchResults = computed(() => {
+  const query = movieSearchTerm.value.trim().toLowerCase()
+  if (!query) return movies.value.slice(0, 25)
+  return movies.value.filter((m) => (m.title || '').toLowerCase().includes(query)).slice(0, 25)
+})
 
 const presetCount = computed(() =>
   Object.values(presets.value).reduce((acc, tpl) => acc + (tpl.presets?.length || 0), 0)
@@ -264,7 +272,11 @@ const fetchMovies = async () => {
     const res = await fetch(`${apiBase}/api/movies`)
     if (res.ok) {
       const data = await res.json()
-      movies.value = Array.isArray(data) ? data.map((m: any) => ({ key: m.key, title: m.title })) : []
+      const list = Array.isArray(data) ? data.map((m: any) => ({ key: m.key, title: m.title })) : []
+      movies.value = list
+      if (selectedPreviewMovie.value && !list.some((m) => m.key === selectedPreviewMovie.value?.key)) {
+        selectedPreviewMovie.value = null
+      }
     }
   } catch {
     /* ignore */
@@ -277,8 +289,37 @@ const pickRandomMovie = () => {
   return random
 }
 
+const resolvePreviewMovie = () => {
+  if (selectedPreviewMovie.value) {
+    const match = movies.value.find((m) => m.key === selectedPreviewMovie.value?.key)
+    if (match) return match
+    selectedPreviewMovie.value = null
+  }
+  return pickRandomMovie()
+}
+
+const selectPreviewMovie = (movie: { key: string; title: string }) => {
+  selectedPreviewMovie.value = movie
+  previewMovie.value = movie
+  previewUrl.value = ''
+  previewError.value = ''
+  showMovieSearch.value = false
+  movieSearchTerm.value = ''
+}
+
+const clearSelectedPreviewMovie = () => {
+  selectedPreviewMovie.value = null
+}
+
+const useRandomPreviewMovie = () => {
+  selectedPreviewMovie.value = null
+  previewMovie.value = pickRandomMovie()
+  previewUrl.value = ''
+  previewError.value = ''
+}
+
 const previewPreset = async (templateId: string, preset: Preset) => {
-  const movie = pickRandomMovie()
+  const movie = resolvePreviewMovie()
   if (!movie) {
     previewError.value = 'No movies available to preview'
     return
@@ -472,6 +513,23 @@ onMounted(async () => {
           <h3>Preview</h3>
           <span class="help">Click any preset to render</span>
         </div>
+        <div class="preview-controls">
+          <div class="actions">
+            <button class="secondary tiny" @click="movieSearchTerm = ''; showMovieSearch = true" :disabled="movies.length === 0">
+              Search movie
+            </button>
+            <button class="secondary tiny" @click="useRandomPreviewMovie" :disabled="movies.length === 0">
+              Random movie
+            </button>
+          </div>
+          <div v-if="selectedPreviewMovie" class="selected-movie-chip">
+            <span class="chip-label">Using</span>
+            <span class="chip-title">{{ selectedPreviewMovie.title }}</span>
+            <button class="icon-btn tiny" @click="clearSelectedPreviewMovie" title="Clear movie">
+              A-
+            </button>
+          </div>
+        </div>
         <div class="preview-box">
           <div v-if="previewLoading" class="loading-state">
             <div class="spinner"></div>
@@ -489,8 +547,8 @@ onMounted(async () => {
                 </p>
                 <p class="preview-movie" v-if="previewMovie">{{ previewMovie.title }}</p>
               </div>
-              <button class="secondary tiny" @click="previewMovie = pickRandomMovie(); previewUrl = ''">
-                Change Movie
+              <button class="secondary tiny" @click="useRandomPreviewMovie">
+                Random movie
               </button>
             </div>
           </div>
@@ -501,6 +559,35 @@ onMounted(async () => {
               <polyline points="21 15 16 10 5 21"></polyline>
             </svg>
             <p>Click a preset to preview</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showMovieSearch" class="modal-overlay" @click="showMovieSearch = false">
+      <div class="modal search-modal" @click.stop>
+        <div class="modal-header">
+          <h4>Select a movie to preview</h4>
+          <button class="icon-btn" @click="showMovieSearch = false">A-</button>
+        </div>
+        <div class="modal-body">
+          <input
+            type="text"
+            v-model="movieSearchTerm"
+            placeholder="Search by title..."
+            autofocus
+          />
+          <div class="search-results">
+            <button
+              v-for="movie in movieSearchResults"
+              :key="movie.key"
+              class="search-result"
+              @click="selectPreviewMovie(movie)"
+            >
+              <span class="title">{{ movie.title }}</span>
+              <span class="meta">Key: {{ movie.key }}</span>
+            </button>
+            <p v-if="!movieSearchResults.length" class="help small">No movies match that search.</p>
           </div>
         </div>
       </div>
@@ -855,6 +942,10 @@ input:focus {
   font-size: 1rem;
   line-height: 1;
 }
+.icon-btn.tiny {
+  padding: 4px 8px;
+  font-size: 0.85rem;
+}
 .icon-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text-primary, #fff);
@@ -890,6 +981,31 @@ input:focus {
   position: sticky;
   top: 24px;
   align-self: flex-start;
+}
+.preview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.selected-movie-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 10px;
+  background: rgba(61, 214, 183, 0.08);
+}
+.chip-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #9aa4b5);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.chip-title {
+  font-weight: 600;
 }
 .preview-box {
   min-height: 400px;
@@ -1012,6 +1128,9 @@ input:focus {
   gap: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
+.modal.search-modal {
+  width: 520px;
+}
 .modal-header {
   display: flex;
   align-items: center;
@@ -1031,5 +1150,38 @@ input:focus {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 8px;
+}
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 320px;
+  overflow: auto;
+}
+.search-result {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.2s;
+}
+.search-result:hover {
+  border-color: rgba(61, 214, 183, 0.4);
+  background: rgba(61, 214, 183, 0.06);
+  transform: translateY(-1px);
+}
+.search-result .title {
+  font-weight: 600;
+  display: block;
+}
+.search-result .meta {
+  display: block;
+  color: var(--text-secondary, #9aa4b5);
+  font-size: 0.8rem;
 }
 </style>
