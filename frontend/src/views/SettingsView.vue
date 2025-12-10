@@ -34,6 +34,9 @@ const savedTvShowLibraryIds = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 const localFanartApiKey = ref('')
+const apiOrderLocked = ref(true)
+const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
+const draggingSource = ref<string | null>(null)
 // Image Quality
 const localOutputFormat = ref('jpg')
 const localJpgQuality = ref(95)
@@ -53,6 +56,62 @@ const testTvdbLoading = ref(false)
 const testTvdbResult = ref('')
 const testFanartLoading = ref(false)
 const testFanartResult = ref('')
+const apiSources = computed(() => [
+  {
+    id: 'tmdb',
+    label: 'TMDb',
+    description: 'Primary posters, backdrops, and metadata.',
+    keyRef: localTmdbApiKey,
+    testLoading: testTmdbLoading,
+    testResult: testTmdbResult,
+    testHandler: testTmdbApiKey,
+    placeholder: 'TMDb API key'
+  },
+  {
+    id: 'fanart',
+    label: 'Fanart.tv',
+    description: 'High-quality clearlogos and alternate posters.',
+    keyRef: localFanartApiKey,
+    testLoading: testFanartLoading,
+    testResult: testFanartResult,
+    testHandler: testFanartApiKey,
+    placeholder: 'Fanart.tv API key'
+  },
+  {
+    id: 'tvdb',
+    label: 'TVDB (coming soon)',
+    description: 'Saved for future TV metadata and images.',
+    keyRef: localTvdbApiKey,
+    testLoading: testTvdbLoading,
+    testResult: testTvdbResult,
+    testHandler: testTvdbApiKey,
+    placeholder: 'TVDB API key'
+  }
+])
+const orderedApiSources = computed(() => apiOrder.value.map((id) => apiSources.value.find((s) => s.id === id)).filter(Boolean))
+
+const onApiDragStart = (id: string) => {
+  if (apiOrderLocked.value) return
+  draggingSource.value = id
+}
+
+const onApiDragOver = (targetId: string) => {
+  if (apiOrderLocked.value || !draggingSource.value || draggingSource.value === targetId) return
+  const order = [...apiOrder.value]
+  const from = order.indexOf(draggingSource.value)
+  const to = order.indexOf(targetId)
+  if (from === -1 || to === -1) return
+  order.splice(to, 0, order.splice(from, 1)[0])
+  apiOrder.value = order
+}
+
+const onApiDrop = () => {
+  draggingSource.value = null
+}
+
+const onApiDragEnd = () => {
+  draggingSource.value = null
+}
 
 const loadLocalSettings = () => {
   localTheme.value = settings.theme.value
@@ -932,86 +991,79 @@ const testFanartApiKey = async () => {
         </div>
       </div>
 
+    </div>
+
+    <div class="settings-section">
+      <div class="section-title-row">
+        <h3 class="section-title">
+          <svg class="key-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+          </svg>
+          API Keys / Poster & Logo Sources
+        </h3>
+        <button class="icon-btn lock-btn" type="button" @click="apiOrderLocked = !apiOrderLocked" :aria-pressed="!apiOrderLocked" :class="{ 'unlocked': !apiOrderLocked }">
+          <svg v-if="apiOrderLocked" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+          </svg>
+          <span>{{ apiOrderLocked ? 'Locked order' : 'Drag to reorder' }}</span>
+        </button>
+      </div>
+      <p class="section-subtitle">Drag sources to reorder when unlocked. This order is used for poster/logo selection.</p>
       <div class="api-keys-section">
-        <div class="api-key-row">
-          <label class="api-key-input">
-            <span class="label-text">TMDb API Key</span>
-            <input
-              v-model="localTmdbApiKey"
-              type="password"
-              placeholder="TMDb API key"
-              @mousedown.stop
-              @click.stop
-              @mouseup.stop
-              @select.stop
-              @selectstart.stop
-            />
-          </label>
-          <button
-            class="btn-test-api secondary small"
-            @click="testTmdbApiKey"
-            :disabled="testTmdbLoading || !localTmdbApiKey.trim()"
-          >
-            {{ testTmdbLoading ? 'Testing...' : 'Test' }}
-          </button>
+        <div
+          v-for="source in orderedApiSources"
+          :key="source.id"
+          class="api-card"
+          :draggable="!apiOrderLocked"
+          @dragstart="onApiDragStart(source.id)"
+          @dragover.prevent="onApiDragOver(source.id)"
+          @drop.prevent="onApiDrop"
+          @dragend="onApiDragEnd"
+        >
+          <div class="api-card-header">
+            <span class="drag-handle" v-if="!apiOrderLocked">⠿</span>
+            <div class="api-card-title">
+              <span class="api-name">{{ source.label }}</span>
+              <span class="api-desc">{{ source.description }}</span>
+            </div>
+            <span class="order-badge">#{{ apiOrder.indexOf(source.id) + 1 }}</span>
+          </div>
+          <div class="api-card-body">
+            <label class="api-key-input">
+              <span class="label-text">{{ source.label }} API Key</span>
+              <input
+                v-model="source.keyRef.value"
+                type="password"
+                :placeholder="source.placeholder"
+                @mousedown.stop
+                @click.stop
+                @mouseup.stop
+                @select.stop
+                @selectstart.stop
+              />
+            </label>
+            <div class="api-actions">
+              <button
+                class="btn-test-api secondary small"
+                @click="source.testHandler"
+                :disabled="source.testLoading.value || !source.keyRef.value.trim()"
+              >
+                {{ source.testLoading.value ? 'Testing...' : 'Test' }}
+              </button>
+              <span
+                v-if="source.testResult.value"
+                :class="['api-test-result', source.testResult.value.startsWith('✓') ? 'success' : 'error']"
+              >
+                {{ source.testResult.value }}
+              </span>
+            </div>
+          </div>
         </div>
-        <p v-if="testTmdbResult" :class="['api-test-result', testTmdbResult.startsWith('✓') ? 'success' : 'error']">
-          {{ testTmdbResult }}
-        </p>
-
-        <div class="api-key-row">
-          <label class="api-key-input">
-            <span class="label-text">TVDB API Key</span>
-            <input
-              v-model="localTvdbApiKey"
-              type="password"
-              placeholder="TVDB API key (coming soon)"
-              @mousedown.stop
-              @click.stop
-              @mouseup.stop
-              @select.stop
-              @selectstart.stop
-            />
-            <span class="help-text">Coming soon—value is saved for future use.</span>
-          </label>
-          <button
-            class="btn-test-api secondary small"
-            @click="testTvdbApiKey"
-            :disabled="testTvdbLoading || !localTvdbApiKey.trim()"
-          >
-            {{ testTvdbLoading ? 'Testing...' : 'Test' }}
-          </button>
-        </div>
-        <p v-if="testTvdbResult" :class="['api-test-result', testTvdbResult.startsWith('✓') ? 'success' : 'error']">
-          {{ testTvdbResult }}
-        </p>
-
-        <div class="api-key-row">
-          <label class="api-key-input">
-            <span class="label-text">Fanart.tv API Key</span>
-            <input
-              v-model="localFanartApiKey"
-              type="password"
-              placeholder="Fanart.tv API key"
-              @mousedown.stop
-              @click.stop
-              @mouseup.stop
-              @select.stop
-              @selectstart.stop
-            />
-            <span class="help-text">Optional: For high-quality clearlogos as alternative logo source.</span>
-          </label>
-          <button
-            class="btn-test-api secondary small"
-            @click="testFanartApiKey"
-            :disabled="testFanartLoading || !localFanartApiKey.trim()"
-          >
-            {{ testFanartLoading ? 'Testing...' : 'Test' }}
-          </button>
-        </div>
-        <p v-if="testFanartResult" :class="['api-test-result', testFanartResult.startsWith('✓') ? 'success' : 'error']">
-          {{ testFanartResult }}
-        </p>
       </div>
     </div>
 
@@ -1238,6 +1290,12 @@ const testFanartApiKey = async () => {
   padding: 20px;
   transition: all 0.2s;
 }
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
 
 .settings-section:hover {
   background: rgba(255, 255, 255, 0.04);
@@ -1257,6 +1315,16 @@ const testFanartApiKey = async () => {
 .section-title svg {
   color: var(--accent);
   flex-shrink: 0;
+}
+
+.section-title .key-icon {
+  filter: drop-shadow(0 0 8px rgba(61, 214, 183, 0.4));
+  transition: all 0.3s ease;
+}
+
+.settings-section:hover .key-icon {
+  filter: drop-shadow(0 0 12px rgba(61, 214, 183, 0.6));
+  transform: rotate(-5deg);
 }
 
 .grid {
@@ -1877,44 +1945,130 @@ button.secondary:hover {
 .api-keys-section {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  margin-top: 20px;
-}
-
-.api-key-row {
-  display: flex;
   gap: 12px;
-  align-items: flex-start;
+  margin-top: 12px;
 }
-
-.api-key-input {
+.api-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.api-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.drag-handle {
+  font-size: 18px;
+  cursor: grab;
+  color: var(--muted);
+  user-select: none;
+}
+.api-card-title {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-
+.api-name {
+  font-weight: 600;
+  color: #eef2ff;
+}
+.api-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+.order-badge {
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(61, 214, 183, 0.12);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  color: #a9f0dd;
+  font-weight: 600;
+  font-size: 12px;
+}
+.api-card-body {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+.api-key-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.api-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
 .btn-test-api {
-  margin-top: 28px;
   white-space: nowrap;
   min-width: 80px;
   justify-content: center;
 }
-
 .api-test-result {
-  margin: -8px 0 0 0;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.4;
 }
-
 .api-test-result.success {
   background: rgba(61, 214, 183, 0.1);
   color: var(--accent, #3dd6b7);
   border: 1px solid rgba(61, 214, 183, 0.3);
 }
-
 .api-test-result.error {
   background: rgba(255, 107, 107, 0.1);
   color: #ff6b6b;
   border: 1px solid rgba(255, 107, 107, 0.3);
+}
+.lock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  transition: all 0.3s ease;
+}
+.lock-btn svg {
+  flex-shrink: 0;
+  color: #ff6b6b;
+  transition: all 0.3s ease;
+}
+.lock-btn span {
+  font-size: 12px;
+  color: #ff9999;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+.lock-btn:hover {
+  background: rgba(255, 107, 107, 0.15);
+  border-color: rgba(255, 107, 107, 0.5);
+  transform: translateY(-1px);
+}
+
+/* Unlocked state - green/cyan */
+.lock-btn.unlocked {
+  background: rgba(61, 214, 183, 0.1);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+}
+.lock-btn.unlocked svg {
+  color: #3dd6b7;
+}
+.lock-btn.unlocked span {
+  color: #6ee7d3;
+}
+.lock-btn.unlocked:hover {
+  background: rgba(61, 214, 183, 0.15);
+  border-color: rgba(61, 214, 183, 0.5);
 }
 </style>
