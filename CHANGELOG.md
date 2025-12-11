@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.4.4
+- **Database Tweaks**: Optimized the SQLite settings/presets path (initial migration landed in 1.4.2) for smoother reads/writes.
+- **Template Manager**: New UI to manage presets plus poster/logo fallback logic (currently in testing).
+- **Fanart Integration**: Added Fanart.tv logo source option and merge/fallback behavior alongside TMDB logos.
+- **Batch Edit History**: Recorded actions/history groundwork to surface within batch edit (iterating on UI merge next).
+- **Settings UI Cleanup**: Reorganized sections, clearer controls, better state handling.
+- **Logo Selection Tweaks**: Improved white-logo preference and selection heuristics for clearer marks.
+
 ## v1.4.3
 - **Multiple Library Support**: Enhanced UI with separate movie libraries subsection in Settings, improved library mapping management
 - **Scanning Improvements**: Added 10-second cooldown to prevent multiple scan button clicks, backend protection against duplicate simultaneous scans

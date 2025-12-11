@@ -1,13 +1,40 @@
 # backend/api/presets.py
 from pathlib import Path
-import json
 from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 
 from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger
 from ..schemas import PresetDeleteRequest, PresetSaveRequest
 from .. import database as db
+from .template_manager import _get_fallback_settings
 
 router = APIRouter()
+
+
+def _apply_global_template_defaults(options: dict) -> dict:
+    """
+    Fill missing template selection defaults (poster_filter, logo_mode, logo source)
+    from the global template preferences. Does not override values that are already set.
+    """
+    opts = dict(options or {})
+    try:
+        global_defaults = _get_fallback_settings()
+    except Exception as e:
+        logger.warning("[PRESETS] Could not load global template defaults: %s", e)
+        global_defaults = {}
+
+    poster_filter = global_defaults.get("poster_filter")
+    logo_mode = global_defaults.get("logo_mode")
+    logo_source = global_defaults.get("logo_source")
+
+    if poster_filter is not None and "poster_filter" not in opts:
+        opts["poster_filter"] = poster_filter
+    if logo_mode is not None and "logo_mode" not in opts:
+        opts["logo_mode"] = logo_mode
+    # Support both camelCase and snake_case; prefer camelCase used in existing options
+    if logo_source is not None and "logoSource" not in opts and "logo_source" not in opts:
+        opts["logoSource"] = logo_source
+
+    return opts
 
 
 @router.get("/presets")
@@ -89,7 +116,7 @@ def api_save_preset(req: PresetSaveRequest):
     """Save a preset to the database."""
     template_id = req.template_id or "default"
     preset_id = req.preset_id
-    options = req.options
+    options = _apply_global_template_defaults(req.options)
 
     try:
         # Save to database
