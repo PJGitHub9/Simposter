@@ -81,6 +81,11 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         raise TMDBError(f"TMDb request failed: {e}") from e
 
 
+def get_tv_external_ids(tmdb_id: int) -> Dict[str, Any]:
+    """Get external IDs (including TVDB) for a TV show."""
+    return _tmdb_get(f"/tv/{tmdb_id}/external_ids", {})
+
+
 def _make_img_url(file_path: str, size: str = "original") -> str:
     return f"{TMDB_IMG_BASE}/{size}{file_path}"
 

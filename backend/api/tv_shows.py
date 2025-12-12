@@ -1,14 +1,16 @@
 import xml.etree.ElementTree as ET
 from typing import List, Optional
 from pathlib import Path
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from ..config import settings, plex_headers, logger, plex_session, POSTER_CACHE_DIR, extract_tmdb_id_from_metadata
+from ..config import settings, plex_headers, logger, plex_session, POSTER_CACHE_DIR, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
 from ..schemas import LabelsResponse
-from ..tmdb_client import get_images_for_tv_show, get_tv_show_details, get_tv_season_images, TMDBError
+from ..tmdb_client import get_images_for_tv_show, get_tv_show_details, get_tv_season_images, TMDBError, get_tv_external_ids
 from ..fanart_client import get_images_for_movie as get_fanart_images
+from .. import cache, database as db, tvdb_client
 
 router = APIRouter()
 
@@ -51,6 +53,23 @@ def _get_plex_tv_shows(lib_ids: Optional[List[str]] = None) -> List[dict]:
             logger.error(f"Failed to fetch TV shows from library {lib_id}: {e}")
 
     return shows
+
+
+def _tv_cache_fresh(max_age_seconds: int, library_id: Optional[str] = None) -> bool:
+    stats = db.get_tv_cache_stats(library_id=library_id)
+    if not stats.get("count"):
+        return False
+    ts = stats.get("max_updated")
+    if not ts:
+        return False
+    try:
+        last = datetime.fromisoformat(ts)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+    except Exception:
+        return False
+    age = (datetime.now(timezone.utc) - last).total_seconds()
+    return age <= max_age_seconds
 
 
 def _poster_cache_path(rating_key: str, prefix: str = "tv") -> Optional[Path]:
@@ -140,13 +159,34 @@ def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> O
 
 
 @router.get("/tv-shows")
-def api_tv_shows(library_id: str = None):
+def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
     """
-    Return TV shows from Plex.
+    Return TV shows from Plex. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
     """
     try:
+        if not force_refresh and _tv_cache_fresh(max_age, library_id=library_id):
+            cached = cache.get_cached_tv_shows(library_id=library_id)
+            if cached:
+                return [
+                    {
+                        "key": s["rating_key"],
+                        "title": s["title"],
+                        "year": s["year"],
+                        "addedAt": s["addedAt"],
+                        "poster": s.get("poster_url"),
+                        "tmdb_id": s.get("tmdb_id"),
+                        "tvdb_id": s.get("tvdb_id"),
+                        "labels": s.get("labels") or [],
+                        "seasons": s.get("seasons") or [],
+                        "updated_at": s.get("updated_at"),
+                        "library_id": s.get("library_id"),
+                    }
+                    for s in cached
+                ]
+
         lib_ids = [library_id] if library_id else None
         shows = _get_plex_tv_shows(lib_ids)
+        cache.refresh_tv_from_list(shows)
         return shows
     except Exception as e:
         logger.error(f"Failed to fetch TV shows: {e}")
@@ -176,6 +216,10 @@ def api_tv_show_poster(rating_key: str, request: Request, meta: bool = False, ra
     cache_header = "miss" if force_refresh else ("hit" if cached else "miss")
 
     if cached:
+        try:
+            cache.update_tv_poster(rating_key, _cached_url(cached))
+        except Exception:
+            pass
         if raw and not wants_json:
             return _return_file(cached, cache_header)
         if wants_json:
@@ -217,7 +261,9 @@ def api_tv_show_labels(rating_key: str):
         if name:
             labels.add(name)
 
-    return LabelsResponse(labels=sorted(labels))
+    labels_sorted = sorted(labels)
+    cache.update_tv_labels(rating_key, labels_sorted)
+    return LabelsResponse(labels=labels_sorted)
 
 
 @router.get("/tv-show/{rating_key}/tmdb")
@@ -231,15 +277,24 @@ def api_tv_show_tmdb(rating_key: str):
         logger.debug("[PLEX] GET %s -> %s", url, r.status_code)
     except Exception as e:
         logger.warning("[PLEX] Failed to fetch metadata for TV show %s: %s", rating_key, e)
-        return {"tmdb_id": None}
+        return {"tmdb_id": None, "tvdb_id": None}
 
     tmdb_id = extract_tmdb_id_from_metadata(r.text)
-    return {"tmdb_id": tmdb_id}
+    tvdb_id = extract_tvdb_id_from_metadata(r.text)
+    cache.update_tv_tmdb(rating_key, tmdb_id)
+    if tvdb_id:
+        cache.update_tv_tvdb(rating_key, tvdb_id)
+    return {"tmdb_id": tmdb_id, "tvdb_id": tvdb_id}
 
 
 @router.get("/tv-show/{rating_key}/seasons")
-def api_tv_show_seasons(rating_key: str):
-    """Get seasons for a TV show from Plex."""
+def api_tv_show_seasons(rating_key: str, force_refresh: bool = False):
+    """Get seasons for a TV show from Plex (cached if available)."""
+    if not force_refresh:
+        cached = db.get_cached_tv_show(rating_key)
+        if cached and cached.get("seasons"):
+            return {"seasons": cached["seasons"]}
+
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
 
     try:
@@ -265,6 +320,7 @@ def api_tv_show_seasons(rating_key: str):
         # Sort by season index
         seasons.sort(key=lambda s: s["index"])
 
+        cache.update_tv_seasons(rating_key, seasons)
         logger.debug("[PLEX] TV show %s has %d seasons", rating_key, len(seasons))
         return {"seasons": seasons}
     except Exception as e:
@@ -292,6 +348,19 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
             # Get show-level images
             details = get_tv_show_details(tmdb_id)
             tv_imgs = get_images_for_tv_show(tmdb_id, details.get("original_language"))
+            tvdb_imgs = {"posters": [], "backdrops": [], "logos": []}
+            tvdb_id: Optional[int] = None
+            try:
+                external_ids = get_tv_external_ids(tmdb_id)
+                tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+            except Exception:
+                tvdb_id = None
+
+            if tvdb_id:
+                try:
+                    tvdb_imgs = tvdb_client.get_series_images(tvdb_id)
+                except Exception as tvdb_err:
+                    logger.debug("[TVDB] Failed to fetch images for tvdb_id=%s: %s", tvdb_id, tvdb_err)
 
             # Get API order from settings
             from ..api.ui_settings import _read_settings
@@ -301,11 +370,11 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
             except Exception:
                 api_order = ["tmdb", "fanart", "tvdb"]
 
-            # Build image sources dictionary (fanart doesn't have TV show support yet)
+            # Build image sources dictionary
             image_sources = {
                 "tmdb": {"logos": tv_imgs.get("logos") or [], "posters": tv_imgs.get("posters") or [], "backdrops": tv_imgs.get("backdrops") or []},
                 "fanart": {"logos": [], "posters": [], "backdrops": []},
-                "tvdb": {"logos": [], "posters": [], "backdrops": []}
+                "tvdb": tvdb_imgs,
             }
 
             # Merge images based on API order

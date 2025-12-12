@@ -101,8 +101,8 @@ const apiSources = computed(() => [
   },
   {
     id: 'tvdb',
-    label: 'TVDB (coming soon)',
-    description: 'Saved for future TV metadata and images.',
+    label: 'TVDB',
+    description: 'Extra TV metadata and posters.',
     keyRef: localTvdbApiKey,
     testLoading: testTvdbLoading,
     testResult: testTvdbResult,

@@ -315,6 +315,7 @@ def api_clear_cache():
     try:
         # Clear DB cache
         db.clear_movie_cache()
+        db.clear_tv_cache()
 
         # Clear poster cache on disk
         poster_dir = Path(POSTER_CACHE_DIR)
@@ -327,7 +328,7 @@ def api_clear_cache():
                         removed_files += 1
                     except Exception:
                         pass
-        logger.info("[CACHE] Cleared movie_cache table and removed %d poster files", removed_files)
+        logger.info("[CACHE] Cleared movie_cache/tv_cache tables and removed %d poster files", removed_files)
         return {"status": "ok", "removed_posters": removed_files}
     except Exception as e:
         logger.error(f"[CACHE] Failed to clear cache: {e}")

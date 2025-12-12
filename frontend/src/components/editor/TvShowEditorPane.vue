@@ -31,6 +31,7 @@ const logoPreference = ref<'first' | 'white' | 'color'>('first')
 const logoLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
 const showTmdbLogos = ref(true)
 const showFanartLogos = ref(true)
+const showTvdbLogos = ref(true)
 const showClearArt = ref(true)
 const logoMode = ref<'original' | 'match' | 'hex' | 'none'>('original')
 const logoHex = ref('#ffffff')
@@ -60,6 +61,8 @@ type Season = {
   title: string
   index: number
   thumb?: string
+  isSeries?: boolean
+  poster?: string
 }
 type RenderedPreview = {
   seasonKey: string
@@ -79,6 +82,57 @@ const currentSeason = computed(() => {
 // Rendered preview carousel
 const renderedPreviews = ref<RenderedPreview[]>([])
 const activePreviewIndex = ref(0)
+
+// Simple session cache for seasons per show to avoid refetching on each open
+const SEASONS_CACHE_KEY = 'simposter-tv-seasons-cache'
+const seasonsCache = ref<Record<string, Season[]>>({})
+
+const loadSeasonsCache = () => {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    const raw = sessionStorage.getItem(SEASONS_CACHE_KEY)
+    if (raw) seasonsCache.value = JSON.parse(raw)
+  } catch {
+    /* ignore */
+  }
+}
+
+const saveSeasonsCache = () => {
+  if (typeof sessionStorage === 'undefined') return
+  try {
+    sessionStorage.setItem(SEASONS_CACHE_KEY, JSON.stringify(seasonsCache.value))
+  } catch {
+    /* ignore */
+  }
+}
+
+const posterUrlForRatingKey = (ratingKey?: string | null) => {
+  if (!ratingKey) return undefined
+  return `${apiBase}/api/movie/${ratingKey}/poster?raw=1`
+}
+const toPlexPosterUrl = (path?: string | null) => {
+  if (!path) return undefined
+  const url = String(path)
+  if (url.startsWith('http')) return url
+  return `${apiBase}/api/plex-poster?path=${encodeURIComponent(url)}`
+}
+
+const seriesPosterUrl = computed(() => {
+  if (existingPoster.value) return existingPoster.value
+  if (props.movie.poster) {
+    const maybeUrl = toPlexPosterUrl(props.movie.poster)
+    if (maybeUrl) return maybeUrl
+  }
+  return posterUrlForRatingKey(props.movie.key) || null
+})
+
+const buildSeriesEntry = (): Season => ({
+  key: props.movie.key,
+  title: `${props.movie.title} (Series)`,
+  index: -1,
+  thumb: seriesPosterUrl.value || posterUrlForRatingKey(props.movie.key),
+  isSeries: true
+})
 
 const options = ref({
   posterZoom: 100,
@@ -160,11 +214,26 @@ function switchToRenderedPreview(index: number) {
 
   const preview = renderedPreviews.value[index]
   if (preview) {
+    lastPreview.value = preview.imageUrl
     const seasonIndex = Array.from(selectedSeasons.value).findIndex(key => key === preview.seasonKey)
     if (seasonIndex >= 0) {
       currentSeasonIndex.value = seasonIndex
     }
   }
+}
+
+function cycleRenderedPreviews(direction: 1 | -1) {
+  const total = renderedPreviews.value.length
+  if (!total) return
+  const nextIndex = (activePreviewIndex.value + direction + total) % total
+  switchToRenderedPreview(nextIndex)
+}
+
+function onPreviewWheel(event: WheelEvent) {
+  if (!renderedPreviews.value.length) return
+  event.preventDefault()
+  const direction: 1 | -1 = event.deltaY > 0 ? 1 : -1
+  cycleRenderedPreviews(direction)
 }
 
 const presetService = usePresetService()
@@ -194,6 +263,7 @@ const saveEditorState = () => {
       logoLanguageFilter: logoLanguageFilter.value,
       showTmdbLogos: showTmdbLogos.value,
       showFanartLogos: showFanartLogos.value,
+      showTvdbLogos: showTvdbLogos.value,
       showClearArt: showClearArt.value,
       logoMode: logoMode.value,
       logoHex: logoHex.value,
@@ -235,16 +305,17 @@ const loadEditorState = () => {
     if (state.selectedTemplate) selectedTemplate.value = state.selectedTemplate
     if (state.selectedPreset) selectedPreset.value = state.selectedPreset
     if (state.posterFilter) posterFilter.value = state.posterFilter
-    if (state.posterLanguageFilter) posterLanguageFilter.value = state.posterLanguageFilter
-    if (typeof state.showTmdbPosters === 'boolean') showTmdbPosters.value = state.showTmdbPosters
-    if (typeof state.showFanartPosters === 'boolean') showFanartPosters.value = state.showFanartPosters
-    if (state.logoPreference) logoPreference.value = state.logoPreference
-    if (state.logoLanguageFilter) logoLanguageFilter.value = state.logoLanguageFilter
-    if (typeof state.showTmdbLogos === 'boolean') showTmdbLogos.value = state.showTmdbLogos
-    if (typeof state.showFanartLogos === 'boolean') showFanartLogos.value = state.showFanartLogos
-    if (typeof state.showClearArt === 'boolean') showClearArt.value = state.showClearArt
-    if (state.logoMode) logoMode.value = state.logoMode
-    if (state.logoHex) logoHex.value = state.logoHex
+  if (state.posterLanguageFilter) posterLanguageFilter.value = state.posterLanguageFilter
+  if (typeof state.showTmdbPosters === 'boolean') showTmdbPosters.value = state.showTmdbPosters
+  if (typeof state.showFanartPosters === 'boolean') showFanartPosters.value = state.showFanartPosters
+  if (state.logoPreference) logoPreference.value = state.logoPreference
+  if (state.logoLanguageFilter) logoLanguageFilter.value = state.logoLanguageFilter
+  if (typeof state.showTmdbLogos === 'boolean') showTmdbLogos.value = state.showTmdbLogos
+  if (typeof state.showFanartLogos === 'boolean') showFanartLogos.value = state.showFanartLogos
+  if (typeof state.showTvdbLogos === 'boolean') showTvdbLogos.value = state.showTvdbLogos
+  if (typeof state.showClearArt === 'boolean') showClearArt.value = state.showClearArt
+  if (state.logoMode) logoMode.value = state.logoMode
+  if (state.logoHex) logoHex.value = state.logoHex
     if (state.textOverlay) {
       textOverlayEnabled.value = state.textOverlay.enabled ?? false
       customText.value = state.textOverlay.customText ?? ''
@@ -348,6 +419,7 @@ const filteredLogos = computed(() => {
   items = items.filter((l) => {
     const src = (l.source || 'tmdb').toLowerCase()
     if (src === 'fanart') return showFanartLogos.value
+    if (src === 'tvdb') return showTvdbLogos.value
     return showTmdbLogos.value
   })
   const scoreLogo = (l: any) => {
@@ -827,16 +899,30 @@ const doSend = async () => {
 async function fetchSeasons() {
   if (!props.movie?.key) return
 
+  const cached = seasonsCache.value[props.movie.key]
+  if (cached && cached.length) {
+    seasons.value = [buildSeriesEntry(), ...cached]
+    selectedSeasons.value = new Set(seasons.value.map(s => s.key))
+    currentSeasonIndex.value = 0
+    return
+  }
+
   try {
     const response = await fetch(`${apiBase}/api/tv-show/${props.movie.key}/seasons`)
     if (!response.ok) throw new Error('Failed to fetch seasons')
     const data = await response.json()
 
-    // Convert Plex thumb URLs to full URLs
-    seasons.value = (data.seasons || []).map((s: Season) => ({
+    // Convert Plex thumb URLs to full URLs and prepend a series-level entry
+    const mappedSeasons = (data.seasons || []).map((s: Season) => ({
       ...s,
-      thumb: s.thumb ? `${apiBase}/api/plex-poster?path=${encodeURIComponent(s.thumb)}` : undefined
+      thumb: posterUrlForRatingKey(s.key) || toPlexPosterUrl(s.poster || s.thumb)
     }))
+
+    seasons.value = [buildSeriesEntry(), ...mappedSeasons]
+
+    // Cache for subsequent opens
+    seasonsCache.value[props.movie.key] = mappedSeasons
+    saveSeasonsCache()
 
     // Auto-select all seasons by default
     selectedSeasons.value = new Set(seasons.value.map(s => s.key))
@@ -860,6 +946,9 @@ function toggleSeasonSelection(seasonKey: string) {
   // Reset to first selected season if current one was deselected
   if (!newSet.has(seasonKey) && currentSeasonIndex.value >= newSet.size) {
     currentSeasonIndex.value = 0
+  } else if (newSet.has(seasonKey)) {
+    const index = Array.from(newSet).findIndex(key => key === seasonKey)
+    if (index >= 0) currentSeasonIndex.value = index
   }
 }
 
@@ -874,6 +963,15 @@ function deselectAllSeasons() {
   selectedSeasons.value = new Set()
   currentSeasonIndex.value = 0
 }
+
+// Keep the series entry poster updated when the Plex poster refreshes
+watch(seriesPosterUrl, (url) => {
+  const idx = seasons.value.findIndex(s => s.isSeries)
+  if (idx === -1) return
+  seasons.value = seasons.value.map((s, i) =>
+    i === idx ? { ...s, thumb: url || s.thumb } : s
+  )
+})
 
 // Cycle to next season in preview
 function nextSeason() {
@@ -892,6 +990,7 @@ function prevSeason() {
 // Load saved state on mount
 onMounted(() => {
   loadEditorState()
+  loadSeasonsCache()
   fetchSeasons()
 })
 
@@ -904,6 +1003,12 @@ watch([
   logoPreference,
   logoMode,
   logoHex,
+  showTmdbPosters,
+  showFanartPosters,
+  showTmdbLogos,
+  showFanartLogos,
+  showTvdbLogos,
+  showClearArt,
   textOverlayEnabled,
   customText,
   fontFamily,
@@ -1228,6 +1333,10 @@ watch(
               <input type="checkbox" v-model="showFanartLogos" />
               <span>Fanart</span>
             </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showTvdbLogos" />
+              <span>TVDB</span>
+            </label>
           </div>
           <div v-if="!isLogoNone" class="thumb-strip logo-strip">
             <div
@@ -1513,21 +1622,26 @@ watch(
           :class="{ selected: selectedSeasons.has(season.key) }"
           @click="toggleSeasonSelection(season.key)"
         >
-          <img
-            v-if="season.thumb"
-            :src="season.thumb"
-            :alt="season.title"
-            class="season-thumb"
-          />
-          <div v-else class="season-thumb-placeholder">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-              <circle cx="8.5" cy="8.5" r="1.5" />
-              <polyline points="21 15 16 10 5 21" />
-            </svg>
+          <div class="season-thumb-wrap">
+            <img
+              v-if="season.thumb"
+              :src="season.thumb"
+              :alt="season.title"
+              class="season-thumb"
+            />
+            <div v-else class="season-thumb-placeholder">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <polyline points="21 15 16 10 5 21" />
+              </svg>
+            </div>
           </div>
           <div class="season-info">
-            <div class="season-name">{{ season.title }}</div>
+            <div class="season-name-row">
+              <div class="season-name">{{ season.title }}</div>
+              <span v-if="season.isSeries" class="season-badge">Series</span>
+            </div>
           </div>
           <div class="season-checkbox">
             <input
@@ -1563,15 +1677,10 @@ watch(
           <div v-else class="empty-preview">No poster</div>
         </div>
 
-        <div class="preview-main">
+        <div class="preview-main" @wheel.prevent="onPreviewWheel">
           <div class="preview-label">
             <div class="preview-title-row">
               <span>Preview</span>
-              <div v-if="selectedSeasons.size > 1" class="season-nav">
-                <button @click="prevSeason" class="season-nav-btn" title="Previous Season">◀</button>
-                <span class="season-counter">{{ currentSeasonIndex + 1 }} / {{ selectedSeasons.size }}</span>
-                <button @click="nextSeason" class="season-nav-btn" title="Next Season">▶</button>
-              </div>
             </div>
             <div v-if="currentSeason" class="current-season-label">{{ currentSeason.title }}</div>
             <span v-if="loading" class="status-badge">Rendering...</span>
@@ -1608,7 +1717,10 @@ watch(
 
           <!-- Rendered Preview Carousel -->
           <div v-if="renderedPreviews.length > 0" class="preview-carousel">
-            <div class="carousel-label">Rendered Previews ({{ renderedPreviews.length }})</div>
+            <div class="carousel-label">
+              Rendered Previews ({{ renderedPreviews.length }})
+              <span class="carousel-hint">Scroll to cycle • Click to load</span>
+            </div>
             <div class="carousel-scroll">
               <div
                 v-for="(preview, index) in renderedPreviews"
@@ -2246,23 +2358,29 @@ button:disabled {
   border-color: rgba(99, 102, 241, 0.5);
 }
 
-.season-thumb {
-  width: 40px;
-  height: 60px;
-  object-fit: cover;
-  border-radius: 4px;
+.season-thumb-wrap {
+  width: 48px;
+  height: 72px;
   flex-shrink: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.season-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .season-thumb-placeholder {
-  width: 40px;
-  height: 60px;
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, 0.05);
-  border-radius: 4px;
-  flex-shrink: 0;
   color: var(--muted);
 }
 
@@ -2271,12 +2389,29 @@ button:disabled {
   min-width: 0;
 }
 
+.season-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .season-name {
   font-size: 12px;
   color: #e6edff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.season-badge {
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  border-radius: 6px;
+  background: rgba(61, 214, 183, 0.18);
+  color: #a4f5de;
+  border: 1px solid rgba(61, 214, 183, 0.35);
 }
 
 .season-checkbox {
@@ -2432,14 +2567,14 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 500px;
+  min-height: 360px;
   background: rgba(0, 0, 0, 0.3);
   border-radius: 12px;
   border: 1px solid var(--border);
 }
 
 .preview-img {
-  max-height: 80vh;
+  max-height: 65vh;
   max-width: 100%;
   width: auto;
   border-radius: 10px;
@@ -2456,7 +2591,7 @@ button:disabled {
 .placeholder-img {
   opacity: 0.2;
   filter: blur(3px);
-  max-height: 80vh;
+  max-height: 65vh;
   max-width: 100%;
   border-radius: 10px;
 }
@@ -2521,6 +2656,16 @@ button:disabled {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.carousel-hint {
+  font-size: 10px;
+  font-weight: 500;
+  color: #8ea0c8;
+  text-transform: none;
 }
 
 .carousel-scroll {

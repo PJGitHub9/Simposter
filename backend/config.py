@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     TMDB_API_KEY: str = ""
+    TVDB_API_KEY: str = ""
+    TVDB_PIN: str = ""
     FANART_API_KEY: str = ""
 
     OUTPUT_ROOT: str = ""
@@ -519,6 +521,24 @@ def extract_tmdb_id_from_metadata(xml_text: str) -> Optional[int]:
     for g in root.findall(".//Guid"):
         gid = g.get("id") or ""
         match = re.search(r"(?:tmdb|themoviedb)://(\d+)", gid)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def extract_tvdb_id_from_metadata(xml_text: str) -> Optional[int]:
+    import re
+    if xml_text.startswith("<html"):
+        return None
+
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return None
+
+    for g in root.findall(".//Guid"):
+        gid = g.get("id") or ""
+        match = re.search(r"(?:tvdb|thetvdb)://(\\d+)", gid)
         if match:
             return int(match.group(1))
     return None

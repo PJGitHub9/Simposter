@@ -80,6 +80,7 @@ def _apply_runtime_settings(merged: dict):
     """Update global settings with latest UI settings so runtime calls use fresh values."""
     plex_data = merged.get("plex", {}) or {}
     tmdb_data = merged.get("tmdb", {}) or {}
+    tvdb_data = merged.get("tvdb", {}) or {}
     fanart_data = merged.get("fanart", {}) or {}
     library_mappings = plex_data.get("libraryMappings") or []
     url = plex_data.get("url") or ""
@@ -111,6 +112,10 @@ def _apply_runtime_settings(merged: dict):
     tmdb_key = tmdb_data.get("apiKey") or ""
     object.__setattr__(settings, "TMDB_API_KEY", tmdb_key)
 
+    # TVDB runtime key
+    tvdb_key = tvdb_data.get("apiKey") or ""
+    object.__setattr__(settings, "TVDB_API_KEY", tvdb_key)
+
     # Fanart runtime key
     fanart_key = fanart_data.get("apiKey") or ""
     object.__setattr__(settings, "FANART_API_KEY", fanart_key)
@@ -139,7 +144,7 @@ def _default_ui_settings() -> UISettings:
             ],
         },
         tmdb={"apiKey": getattr(settings, "TMDB_API_KEY", "")},
-        tvdb={"apiKey": "", "comingSoon": True},
+        tvdb={"apiKey": getattr(settings, "TVDB_API_KEY", ""), "comingSoon": False},
         fanart={"apiKey": getattr(settings, "FANART_API_KEY", "")},
         saveBatchInSubfolder=False,
     )
@@ -153,6 +158,7 @@ def _env_overrides() -> dict:
     plex_lib = os.getenv("PLEX_MOVIE_LIBRARY_NAME")
     plex_libs = os.getenv("PLEX_MOVIE_LIBRARY_NAMES")
     tmdb_key = os.getenv("TMDB_API_KEY")
+    tvdb_key = os.getenv("TVDB_API_KEY")
     fanart_key = os.getenv("FANART_API_KEY")
 
     if plex_url:
@@ -165,6 +171,8 @@ def _env_overrides() -> dict:
         out.setdefault("plex", {})["movieLibraryNames"] = [s.strip() for s in plex_libs.split(",") if s.strip()]
     if tmdb_key:
         out.setdefault("tmdb", {})["apiKey"] = tmdb_key
+    if tvdb_key:
+        out.setdefault("tvdb", {})["apiKey"] = tvdb_key
     if fanart_key:
         out.setdefault("fanart", {})["apiKey"] = fanart_key
     return out
