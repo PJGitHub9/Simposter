@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import MoviesView from './views/MoviesView.vue'
+import TvShowsView from './views/TvShowsView.vue'
 import SettingsView from './views/SettingsView.vue'
 import LogsView from './views/LogsView.vue'
 import BatchEditView from './views/BatchEditView.vue'
@@ -15,6 +16,7 @@ export const router = createRouter({
     { path: '/movies/batch-edit', name: 'batch-edit', component: BatchEditView },
     { path: '/movies/batch-edit-test', name: 'batch-edit-test', component: BatchEditTestView },
     { path: '/movies/local-assets', name: 'local-assets', component: LocalAssetsView },
+    { path: '/tv-shows', name: 'tv-shows', component: TvShowsView },
     { path: '/templates', name: 'template-manager', component: TemplateManagerView },
     { path: '/settings', name: 'settings', component: SettingsView },
     { path: '/logs', name: 'logs', component: LogsView }

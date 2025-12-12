@@ -27,8 +27,19 @@ const tabs = computed<MenuItem[]>(() => {
     ]
   }))
 
+  const tvLibs = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings.length
+    ? settings.plex.value.tvShowLibraryMappings
+    : []
+
+  const tvShowTabs: MenuItem[] = tvLibs.length > 0 ? tvLibs.map((lib, idx) => ({
+    key: `tv-shows-${lib.id || idx}`,
+    label: lib.displayName || lib.title || `TV Library ${idx + 1}`,
+    submenu: []
+  })) : []
+
   return [
     ...movieTabs,
+    ...tvShowTabs,
     { key: 'template-manager', label: 'Template Manager' },
     { key: 'settings', label: 'Settings' },
     { key: 'logs', label: 'Logs' }
@@ -54,6 +65,12 @@ const activeTab = computed<TabKey>(() => {
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
+  if (route.name === 'tv-shows') {
+    if (libQuery) return `tv-shows-${libQuery}`
+    // fallback to first TV lib key
+    const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
+    return `tv-shows-${firstTvLib?.id || 'default'}`
+  }
   return (route.name as TabKey) || 'movies'
 })
 
@@ -71,7 +88,9 @@ const handleSelect = (movie: { key: string; title: string; year?: number | strin
   if (!movie || typeof movie !== 'object' || !movie.key || !movie.title) {
     return
   }
-  ui.setSelectedMovie(movie)
+  // Detect media type based on current route
+  const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
+  ui.setSelectedMovie({ ...movie, mediaType })
 }
 
 const handleTabSelect = (tab: TabKey) => {
@@ -82,6 +101,9 @@ const handleTabSelect = (tab: TabKey) => {
   if (tab.startsWith('movies-')) {
     const libId = tab.replace('movies-', '')
     router.push({ name: 'movies', query: { library: libId } })
+  } else if (tab.startsWith('tv-shows-')) {
+    const libId = tab.replace('tv-shows-', '')
+    router.push({ name: 'tv-shows', query: { library: libId } })
   } else {
     router.push({ name: tab })
   }

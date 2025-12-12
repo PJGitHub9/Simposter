@@ -3,10 +3,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
-import { useMovies } from '../composables/useMovies'
+import { useTvShows } from '../composables/useTvShows'
 import { getApiBase } from '@/services/apiBase'
 
-type Movie = {
+type TvShow = {
   key: string
   title: string
   year?: number | string
@@ -16,19 +16,19 @@ type Movie = {
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
-const { movies: moviesCache, moviesLoaded: moviesLoadedFlag, setMoviePoster, hydratePostersFromSession } = useMovies()
+const { tvShows: tvShowsCache, tvShowsLoaded: tvShowsLoadedFlag, setTvShowPoster, hydratePostersFromSession } = useTvShows()
 const posterCacheStore = ref<Record<string, string | null>>({})
 const labelCacheStore = ref<Record<string, string[]>>({})
 const posterInFlight = new Set<string>()
 const labelInFlight = new Set<string>()
-const moviesLoaded = moviesLoadedFlag
+const tvShowsLoaded = tvShowsLoadedFlag
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || 'default')
-const POSTER_CACHE_KEY = computed(() => `simposter-poster-cache-${currentLibrary.value}`)
-const LABELS_CACHE_KEY = computed(() => `simposter-labels-cache-${currentLibrary.value}`)
-const MOVIES_CACHE_KEY = computed(() => `simposter-movies-cache-${currentLibrary.value}`)
-const CACHE_VERSION_KEY = 'simposter-cache-version'
-const CURRENT_CACHE_VERSION = '2' // Increment this to invalidate all caches
+const POSTER_CACHE_KEY = computed(() => `simposter-tv-poster-cache-${currentLibrary.value}`)
+const LABELS_CACHE_KEY = computed(() => `simposter-tv-labels-cache-${currentLibrary.value}`)
+const TVSHOWS_CACHE_KEY = computed(() => `simposter-tv-shows-cache-${currentLibrary.value}`)
+const CACHE_VERSION_KEY = 'simposter-tv-cache-version'
+const CURRENT_CACHE_VERSION = '1' // Increment this to invalidate all caches
 
 const loadPosterCache = () => {
   if (typeof sessionStorage === 'undefined') return
@@ -80,16 +80,16 @@ const saveLabelCache = () => {
   }
 }
 
-const loadMoviesCache = () => {
+const loadTvShowsCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    const raw = sessionStorage.getItem(MOVIES_CACHE_KEY.value)
+    const raw = sessionStorage.getItem(TVSHOWS_CACHE_KEY.value)
     if (raw) {
       const cached = JSON.parse(raw)
-      // Only use cache if it actually has movies
+      // Only use cache if it actually has TV shows
       if (cached && cached.length > 0) {
-        moviesCache.value = cached
-        moviesLoaded.value = true
+        tvShowsCache.value = cached
+        tvShowsLoaded.value = true
       }
     }
   } catch {
@@ -97,10 +97,10 @@ const loadMoviesCache = () => {
   }
 }
 
-const saveMoviesCache = () => {
+const saveTvShowsCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
-    sessionStorage.setItem(MOVIES_CACHE_KEY.value, JSON.stringify(moviesCache.value))
+    sessionStorage.setItem(TVSHOWS_CACHE_KEY.value, JSON.stringify(tvShowsCache.value))
   } catch {
     /* ignore */
   }
@@ -111,11 +111,11 @@ const clearAllCaches = () => {
   try {
     sessionStorage.removeItem(POSTER_CACHE_KEY.value)
     sessionStorage.removeItem(LABELS_CACHE_KEY.value)
-    sessionStorage.removeItem(MOVIES_CACHE_KEY.value)
+    sessionStorage.removeItem(TVSHOWS_CACHE_KEY.value)
     posterCacheStore.value = {}
     labelCacheStore.value = {}
-    moviesCache.value = []
-    moviesLoaded.value = false
+    tvShowsCache.value = []
+    tvShowsLoaded.value = false
   } catch {
     /* ignore */
   }
@@ -124,23 +124,23 @@ const clearAllCaches = () => {
 const refreshData = async () => {
   clearAllCaches()
   sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
-  movies.value = []
-  await fetchMovies()
+  tvShows.value = []
+  await fetchTvShows()
   await fetchPosters(paged.value)
   await fetchLabels(paged.value)
 }
 
 loadPosterCache()
 loadLabelCache()
-loadMoviesCache()
+loadTvShowsCache()
 // Reload caches when library changes
 watch(currentLibrary, () => {
   clearAllCaches()
   loadPosterCache()
   loadLabelCache()
-  loadMoviesCache()
-  moviesLoaded.value = false
-  fetchMovies().then(() => {
+  loadTvShowsCache()
+  tvShowsLoaded.value = false
+  fetchTvShows().then(() => {
     fetchPosters(paged.value)
     fetchLabels(paged.value)
   })
@@ -151,10 +151,10 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'select', movie: Movie): void
+  (e: 'select', tvShow: TvShow): void
 }>()
 
-const movies = ref<Movie[]>(moviesCache.value)
+const tvShows = ref<TvShow[]>(tvShowsCache.value)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const page = ref(1)
@@ -172,29 +172,29 @@ const pageSize = computed(() => settings.posterDensity.value || 20)
 // Get all unique labels from cache
 const allLabels = computed(() => {
   const labels = new Set<string>()
-  Object.values(labelCache.value).forEach(movieLabels => {
-    movieLabels.forEach(label => labels.add(label))
+  Object.values(labelCache.value).forEach(showLabels => {
+    showLabels.forEach(label => labels.add(label))
   })
   return Array.from(labels).sort()
 })
 
 const filtered = computed(() => {
   const term = (props.search || '').trim().toLowerCase()
-  let result = movies.value
-  
+  let result = tvShows.value
+
   // Filter by search term
   if (term) {
-    result = result.filter((m) => m.title.toLowerCase().includes(term))
+    result = result.filter((s) => s.title.toLowerCase().includes(term))
   }
-  
+
   // Filter by label
   if (filterLabel.value) {
-    result = result.filter(m => {
-      const labels = labelCache.value[m.key] || []
+    result = result.filter(s => {
+      const labels = labelCache.value[s.key] || []
       return labels.includes(filterLabel.value)
     })
   }
-  
+
   return result
 })
 
@@ -217,7 +217,7 @@ const totalPages = computed(() => Math.max(1, Math.ceil(sorted.value.length / pa
 const paged = computed(() => {
   const start = (page.value - 1) * pageSize.value
   const slice = sorted.value.slice(start, start + pageSize.value)
-  return slice.map((m) => ({ ...m, poster: posterCache.value[m.key] ?? m.poster ?? null }))
+  return slice.map((s) => ({ ...s, poster: posterCache.value[s.key] ?? s.poster ?? null }))
 })
 
 watch(pageSize, () => {
@@ -241,80 +241,80 @@ watch(paged, (list) => {
   fetchLabels(list)
 })
 
-const fetchMovies = async () => {
+const fetchTvShows = async () => {
   loading.value = true
   error.value = null
   try {
-    if (!moviesLoaded.value) {
-      const res = await fetch(`${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+    if (!tvShowsLoaded.value) {
+      const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
-      const data = (await res.json()) as (Movie & { labels?: string[] })[]
+      const data = (await res.json()) as (TvShow & { labels?: string[] })[]
       // Seed caches from server data when available
-      data.forEach((m) => {
-        if (m.poster && !(m.key in posterCacheStore.value)) {
-          posterCacheStore.value[m.key] = m.poster
+      data.forEach((s) => {
+        if (s.poster && !(s.key in posterCacheStore.value)) {
+          posterCacheStore.value[s.key] = s.poster
         }
-        if (m.labels && !(m.key in labelCacheStore.value)) {
-          labelCacheStore.value[m.key] = m.labels
+        if (s.labels && !(s.key in labelCacheStore.value)) {
+          labelCacheStore.value[s.key] = s.labels
         }
       })
       savePosterCache()
       saveLabelCache()
 
-      moviesCache.value = data
-      hydratePostersFromSession() // reapply cached poster URLs after replacing movie list
-      moviesLoaded.value = true
-      saveMoviesCache()
+      tvShowsCache.value = data
+      hydratePostersFromSession() // reapply cached poster URLs after replacing TV show list
+      tvShowsLoaded.value = true
+      saveTvShowsCache()
     }
-    movies.value = moviesCache.value
+    tvShows.value = tvShowsCache.value
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to load movies'
+    error.value = err instanceof Error ? err.message : 'Failed to load TV shows'
   } finally {
     loading.value = false
   }
 }
 
-const fetchPosters = async (list: Movie[]) => {
-  const missing = list.filter((m) => !(m.key in posterCache.value) && !posterInFlight.has(m.key))
+const fetchPosters = async (list: TvShow[]) => {
+  const missing = list.filter((s) => !(s.key in posterCache.value) && !posterInFlight.has(s.key))
   if (!missing.length) return
-  missing.forEach((m) => posterInFlight.add(m.key))
+  missing.forEach((s) => posterInFlight.add(s.key))
   const results = await Promise.all(
-    missing.map(async (m) => {
+    missing.map(async (s) => {
       try {
-        const posterMetaUrl = `${apiBase}/api/movie/${m.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
+        const posterMetaUrl = `${apiBase}/api/tv-show/${s.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
         const posterRes = await fetch(posterMetaUrl)
         if (posterRes.ok) {
           const data = await posterRes.json()
           const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
-          return { key: m.key, url }
+          return { key: s.key, url }
         }
-        return { key: m.key, url: null }
+        return { key: s.key, url: null }
       } catch {
-        return { key: m.key, url: null }
+        return { key: s.key, url: null }
       }
     })
   )
   results.forEach((r) => {
     posterCache.value[r.key] = r.url
     posterInFlight.delete(r.key)
-    // Update global movies cache so search bar sees latest poster
-    setMoviePoster(r.key, r.url)
+    // Update global TV shows cache so search bar sees latest poster
+    setTvShowPoster(r.key, r.url)
   })
   savePosterCache()
 }
 
-const fetchLabels = async (list: Movie[]) => {
-  const missing = list.filter((m) => !(m.key in labelCache.value) && !labelInFlight.has(m.key))
+const fetchLabels = async (list: TvShow[]) => {
+  const missing = list.filter((s) => !(s.key in labelCache.value) && !labelInFlight.has(s.key))
   if (!missing.length) return
-  missing.forEach((m) => labelInFlight.add(m.key))
+  missing.forEach((s) => labelInFlight.add(s.key))
   const results = await Promise.all(
-    missing.map(async (m) => {
+    missing.map(async (s) => {
       try {
-        const labelsRes = await fetch(`${apiBase}/api/movie/${m.key}/labels${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+        const labelsRes = await fetch(`${apiBase}/api/tv-show/${s.key}/labels${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
         const labelsData = await labelsRes.json()
-        return { key: m.key, labels: labelsData.labels || [] }
+        return { key: s.key, labels: labelsData.labels || [] }
       } catch {
-        return { key: m.key, labels: [] }
+        return { key: s.key, labels: [] }
       }
     })
   )
@@ -325,8 +325,8 @@ const fetchLabels = async (list: Movie[]) => {
   saveLabelCache()
 }
 
-const handleSelect = (movie: Movie) => {
-  emit('select', { ...movie, mediaType: 'movie' as const })
+const handleSelect = (tvShow: TvShow) => {
+  emit('select', { ...tvShow, mediaType: 'tv-show' as const })
 }
 
 const nextPage = () => {
@@ -339,12 +339,12 @@ const prevPage = () => {
 
 const handleRefreshPoster = async (ratingKey: string) => {
   try {
-    const res = await fetch(`${apiBase}/api/movie/${ratingKey}/poster?meta=1&force_refresh=1`)
+    const res = await fetch(`${apiBase}/api/tv-show/${ratingKey}/poster?meta=1&force_refresh=1`)
     if (!res.ok) return
     const data = await res.json()
     const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
     posterCache.value[ratingKey] = url
-    setMoviePoster(ratingKey, url)
+    setTvShowPoster(ratingKey, url)
     savePosterCache()
   } catch {
     /* ignore */
@@ -359,7 +359,7 @@ onMounted(async () => {
   if (!settings.loaded.value && !settings.loading.value) {
     await settings.load()
   }
-  await fetchMovies()
+  await fetchTvShows()
   await fetchPosters(paged.value)
   await fetchLabels(paged.value)
 })
@@ -398,10 +398,10 @@ onMounted(async () => {
     </div>
     <div v-if="error" class="callout error">
       <p>{{ error }}</p>
-      <button @click="fetchMovies">Retry</button>
+      <button @click="fetchTvShows">Retry</button>
     </div>
-    <div v-else-if="loading" class="callout">Loading movies…</div>
-    <MovieGrid v-else heading="Movies" :items="paged" @select="handleSelect" @refresh="handleRefreshPoster" />
+    <div v-else-if="loading" class="callout">Loading TV shows…</div>
+    <MovieGrid v-else heading="TV Shows" :items="paged" @select="handleSelect" @refresh="handleRefreshPoster" />
     <div class="toolbar glass pagination">
       <div class="pager">
         <button @click="prevPage" :disabled="page === 1">Prev</button>

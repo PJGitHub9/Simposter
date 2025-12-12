@@ -974,6 +974,35 @@ const testFanartApiKey = async () => {
     setTimeout(() => (testFanartResult.value = ''), 10000)
   }
 }
+
+// Backend health check
+const backendStatus = ref('')
+const checkBackendHealth = async () => {
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/ping`)
+
+    // Check if response is OK first
+    if (!res.ok) {
+      const text = await res.text()
+      backendStatus.value = `✗ Backend error ${res.status}: ${text.substring(0, 100)}`
+      setTimeout(() => (backendStatus.value = ''), 8000)
+      return
+    }
+
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      backendStatus.value = `✓ Backend healthy! App: v${data.app_version}, DB: v${data.db_version}`
+    } else {
+      backendStatus.value = '✗ Backend returned unexpected status'
+    }
+  } catch (e) {
+    backendStatus.value = `✗ Backend unreachable: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    setTimeout(() => (backendStatus.value = ''), 8000)
+  }
+}
 </script>
 
 <template>
@@ -986,7 +1015,12 @@ const testFanartApiKey = async () => {
         </div>
         <div class="header-status">
           <span v-if="hasUnsavedChanges" class="unsaved-badge">Unsaved Changes</span>
-          <span class="version-chip">{{ APP_VERSION }}</span>
+          <span class="version-chip clickable" @click="checkBackendHealth" :title="'Click to check backend status'">
+            {{ APP_VERSION }}
+          </span>
+          <span v-if="backendStatus" :class="['backend-status', backendStatus.startsWith('✓') ? 'success' : 'error']">
+            {{ backendStatus }}
+          </span>
         </div>
       </div>
     </div>
@@ -1167,7 +1201,7 @@ const testFanartApiKey = async () => {
               <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
               <polyline points="17 2 12 7 7 2"/>
             </svg>
-            TV Show Libraries (Coming Soon)
+            TV Show Libraries
           </h4>
           <div class="library-list">
             <div
@@ -1990,6 +2024,38 @@ button.secondary:hover {
   border: 1px solid rgba(61, 214, 183, 0.35);
   font-weight: 600;
   font-size: 13px;
+}
+
+.version-chip.clickable {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.version-chip.clickable:hover {
+  background: rgba(61, 214, 183, 0.2);
+  border-color: rgba(61, 214, 183, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(61, 214, 183, 0.2);
+}
+
+.backend-status {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  animation: fadeIn 0.3s ease-in;
+}
+
+.backend-status.success {
+  background: rgba(61, 214, 183, 0.1);
+  color: #3dd6b7;
+  border: 1px solid rgba(61, 214, 183, 0.3);
+}
+
+.backend-status.error {
+  background: rgba(255, 107, 107, 0.1);
+  color: #ff6b6b;
+  border: 1px solid rgba(255, 107, 107, 0.3);
 }
 
 @keyframes fadeIn {

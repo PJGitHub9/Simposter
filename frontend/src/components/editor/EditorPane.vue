@@ -582,11 +582,26 @@ const fetchTmdbAssets = async () => {
   selectedPoster.value = null
   selectedLogo.value = null
   try {
-    const tmdbRes = await fetch(`${apiBase}/api/movie/${props.movie.key}/tmdb`)
+    // Detect media type (movie or TV show)
+    const mediaType = props.movie.mediaType || 'movie'
+    const isTvShow = mediaType === 'tv-show'
+
+    // Use appropriate endpoint for TMDB ID lookup
+    const tmdbEndpoint = isTvShow
+      ? `${apiBase}/api/tv-show/${props.movie.key}/tmdb`
+      : `${apiBase}/api/movie/${props.movie.key}/tmdb`
+
+    const tmdbRes = await fetch(tmdbEndpoint)
     const tmdb = await tmdbRes.json()
     tmdbId.value = tmdb.tmdb_id || null
     if (!tmdbId.value) return
-    const imgRes = await fetch(`${apiBase}/api/tmdb/${tmdbId.value}/images`)
+
+    // Use appropriate endpoint for images
+    const imagesEndpoint = isTvShow
+      ? `${apiBase}/api/tmdb/tv/${tmdbId.value}/images`
+      : `${apiBase}/api/tmdb/${tmdbId.value}/images`
+
+    const imgRes = await fetch(imagesEndpoint)
     const imgs = await imgRes.json()
     posters.value = imgs.posters || []
     logos.value = imgs.logos || []
@@ -599,7 +614,14 @@ const fetchTmdbAssets = async () => {
 
 const fetchLabels = async () => {
   try {
-    const res = await fetch(`${apiBase}/api/movie/${props.movie.key}/labels`)
+    // Use appropriate endpoint based on media type
+    const mediaType = props.movie.mediaType || 'movie'
+    const isTvShow = mediaType === 'tv-show'
+    const labelsEndpoint = isTvShow
+      ? `${apiBase}/api/tv-show/${props.movie.key}/labels`
+      : `${apiBase}/api/movie/${props.movie.key}/labels`
+
+    const res = await fetch(labelsEndpoint)
     if (!res.ok) return
     const data = await res.json()
     labels.value = data.labels || []

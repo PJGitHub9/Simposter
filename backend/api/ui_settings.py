@@ -49,6 +49,29 @@ def _normalize_plex_payload(data: dict) -> dict:
             if isinstance(m, dict)
         ]
 
+    # Normalize TV show library settings
+    if "tvShowLibraryName" in normalized:
+        normalized["tvShowLibraryName"] = str(normalized["tvShowLibraryName"])
+    # Ensure list exists and is stringified
+    if "tvShowLibraryNames" in normalized and isinstance(normalized["tvShowLibraryNames"], list):
+        normalized["tvShowLibraryNames"] = [str(x) for x in normalized["tvShowLibraryNames"]]
+    elif normalized.get("tvShowLibraryName"):
+        normalized["tvShowLibraryNames"] = [str(normalized["tvShowLibraryName"])]
+    else:
+        normalized["tvShowLibraryNames"] = []
+
+    # Normalize TV show library mappings if present
+    if "tvShowLibraryMappings" in normalized and isinstance(normalized["tvShowLibraryMappings"], list):
+        normalized["tvShowLibraryMappings"] = [
+            {
+                "id": str(m.get("id", "")),
+                "title": str(m.get("title", "")),
+                "displayName": str(m.get("displayName", "")),
+            }
+            for m in normalized["tvShowLibraryMappings"]
+            if isinstance(m, dict)
+        ]
+
     data["plex"] = normalized
     return data
 
@@ -240,6 +263,14 @@ def _read_settings(include_env: bool = True) -> UISettings:
 def get_ui_settings():
     settings_obj = _read_settings()
     return JSONResponse(content=settings_obj.model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False))
+
+@router.get("/ping")
+def api_ping():
+    return {
+        "status": "ok",
+        "app_version": db.get_app_version(),
+        "db_version": db.get_db_version()
+    }
 
 
 @router.post("/ui-settings")
