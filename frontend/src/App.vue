@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Sidebar, { type MenuItem } from './components/layout/Sidebar.vue'
 import TopNav from './components/layout/TopNav.vue'
 import EditorPane from './components/editor/EditorPane.vue'
+import TvShowEditorPane from './components/editor/TvShowEditorPane.vue'
 import NotificationContainer from './components/NotificationContainer.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
@@ -344,7 +345,16 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <div v-else class="workspace">
       <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" @select="handleTabSelect" @submenu-click="handleSubmenuClick" />
       <section class="main-pane glass">
-        <EditorPane :movie="ui.selectedMovie.value" @close="ui.setSelectedMovie(null)" />
+        <TvShowEditorPane
+          v-if="ui.selectedMovie.value.mediaType === 'tv-show'"
+          :movie="ui.selectedMovie.value"
+          @close="ui.setSelectedMovie(null)"
+        />
+        <EditorPane
+          v-else
+          :movie="ui.selectedMovie.value"
+          @close="ui.setSelectedMovie(null)"
+        />
       </section>
     </div>
   </div>
