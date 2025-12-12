@@ -4,6 +4,7 @@ import json
 import logging
 import sqlite3
 import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
@@ -59,6 +60,37 @@ def get_db_version() -> Optional[str]:
     return None
 
 
+def _backup_database(db_version: str) -> None:
+    """
+    Create a versioned backup of the current database before migrations.
+    Output file example: simposter_v1.4.3.db.bak
+    """
+    try:
+        db_file = Path(DB_PATH)
+        if not db_file.exists():
+            logger.info("[DB] Skip backup: database file does not exist yet")
+            return
+
+        safe_version = (db_version or "unknown").replace(" ", "_")
+        backup_name = f"simposter_{safe_version}.db.bak"
+        backup_path = db_file.parent / backup_name
+
+        # Avoid overwriting an existing backup: append numeric suffix if needed
+        if backup_path.exists():
+            idx = 1
+            while True:
+                candidate = db_file.parent / f"{backup_name}.{idx}"
+                if not candidate.exists():
+                    backup_path = candidate
+                    break
+                idx += 1
+
+        shutil.copy2(db_file, backup_path)
+        logger.info("[DB] Backed up database to %s", backup_path)
+    except Exception as e:
+        logger.warning("[DB] Failed to back up database before migration: %s", e)
+
+
 def set_db_version(version: str) -> None:
     """Set the database version."""
     with get_db() as conn:
@@ -107,6 +139,7 @@ def check_and_update_version() -> None:
         set_db_version(current_app_version)
     elif db_version != current_app_version:
         logger.info(f"[DB] Version change detected: {db_version} -> {current_app_version}")
+        _backup_database(db_version)
         # Future: Add migration logic here based on version comparison
         # For now, just update the version
         set_db_version(current_app_version)
