@@ -7,8 +7,11 @@ from ..rendering import render_poster_image
 from io import BytesIO
 import requests
 from backend.assets.selection import pick_poster, pick_logo
-from .save import apply_save_location_variables, get_save_location_template, resolve_library_label
+from backend.logo_sources import get_logos_merged
+from .save import apply_save_location_variables, get_save_location_template, resolve_library_label, embed_library_metadata
 from datetime import datetime, timezone
+from PIL import PngImagePlugin
+from .. import database as db
 
 router = APIRouter()
 
@@ -48,21 +51,21 @@ def api_batch(req: BatchRequest):
     })
 
     # Load preset options if provided
-    poster_filter = req.options.get("poster_filter", "all")
-    logo_preference = req.options.get("logo_preference", "first")
-    logo_mode = req.options.get("logo_mode", "stock")
-    render_options_base = dict(req.options or {})
+    presets_data = load_presets() or {}
+    base_options = dict(req.options or {})
+    base_poster_filter = base_options.get("poster_filter", "all")
+    base_logo_preference = base_options.get("logo_preference", "first")
+    base_logo_mode = base_options.get("logo_mode", "stock")
     if req.preset_id:
-        presets = load_presets()
-        if req.template_id in presets:
-            preset_list = presets[req.template_id]["presets"]
+        if req.template_id in presets_data:
+            preset_list = presets_data[req.template_id]["presets"]
             preset = next((p for p in preset_list if p["id"] == req.preset_id), None)
             if preset:
                 preset_opts = preset.get("options", {})
-                render_options_base = {**preset_opts, **render_options_base}
-                poster_filter = render_options_base.get("poster_filter", poster_filter)
-                logo_preference = render_options_base.get("logo_preference", logo_preference)
-                logo_mode = render_options_base.get("logo_mode", logo_mode)
+                base_options = {**preset_opts, **base_options}
+                base_poster_filter = base_options.get("poster_filter", base_poster_filter)
+                base_logo_preference = base_options.get("logo_preference", base_logo_preference)
+                base_logo_mode = base_options.get("logo_mode", base_logo_mode)
                 logger.debug("[BATCH] Applied preset '%s' options for template '%s'", req.preset_id, req.template_id)
             else:
                 logger.warning("[BATCH] Preset '%s' not found for template '%s'", req.preset_id, req.template_id)
@@ -71,7 +74,14 @@ def api_batch(req: BatchRequest):
 
     for idx, rating_key in enumerate(req.rating_keys, start=1):
         try:
-            logger.info("[BATCH] Start rating_key=%s template=%s", rating_key, req.template_id)
+            template_id = req.template_id
+            preset_id = req.preset_id
+            render_options_base = dict(base_options)
+            poster_filter = base_poster_filter
+            logo_preference = base_logo_preference
+            logo_mode = base_logo_mode
+
+            logger.info("[BATCH] Start rating_key=%s template=%s", rating_key, template_id)
 
             # ---------------------------
             # TMDb Fetch
@@ -89,9 +99,15 @@ def api_batch(req: BatchRequest):
                 raise Exception("No TMDb ID found.")
             logger.debug("[BATCH] rating_key=%s tmdb_id=%s", rating_key, tmdb_id)
 
-            imgs = get_images_for_movie(tmdb_id)
+            # Fetch movie details for template variables
+            movie_details = get_movie_details(tmdb_id)
+            # Fetch images honoring preferred languages (fallback to movie original language)
+            imgs = get_images_for_movie(tmdb_id, movie_details.get("original_language"))
             posters = imgs.get("posters", [])
-            logos = imgs.get("logos", [])
+
+            # Get logos using merged sources based on preference
+            logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
+            logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"))
             logger.debug(
                 "[BATCH] rating_key=%s posters=%d logos=%d filter=%s logo_pref=%s",
                 rating_key,
@@ -100,9 +116,6 @@ def api_batch(req: BatchRequest):
                 poster_filter,
                 logo_preference,
             )
-
-            # Fetch movie details for template variables
-            movie_details = get_movie_details(tmdb_id)
             logger.debug("[BATCH] Movie details: title='%s' year=%s", movie_details.get("title"), movie_details.get("year"))
 
             batch_status.update({
@@ -116,11 +129,69 @@ def api_batch(req: BatchRequest):
             # ---------------------------
             poster = pick_poster(posters, poster_filter)
             logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference)
-            
+
+            # Fallback handling for poster preference
             if not poster:
-                raise Exception("No valid poster found.")
+                fallback_action = render_options_base.get("fallbackPosterAction") or "continue"
+                fallback_template = render_options_base.get("fallbackPosterTemplate")
+                fallback_preset = render_options_base.get("fallbackPosterPreset")
+                if fallback_action == "template" and fallback_template:
+                    template_id = fallback_template
+                    if fallback_preset:
+                        tpl_presets = presets_data.get(fallback_template, {}).get("presets", [])
+                        fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None)
+                        if fpreset:
+                            fp_opts = fpreset.get("options", {})
+                            render_options_base = {**fp_opts, **render_options_base}
+                            poster_filter = render_options_base.get("poster_filter", poster_filter)
+                            logo_preference = render_options_base.get("logo_preference", logo_preference)
+                            logo_mode = render_options_base.get("logo_mode", logo_mode)
+                            preset_id = fallback_preset
+                        else:
+                            logger.warning("[BATCH] Fallback preset '%s' not found for template '%s'", fallback_preset, fallback_template)
+                    poster = posters[0] if posters else None
+                elif fallback_action == "skip":
+                    results.append({
+                        "rating_key": rating_key,
+                        "status": "skipped_no_poster"
+                    })
+                    batch_status.update({"processed": idx, "current_step": "Skipped (no poster)"})
+                    continue
+                else:  # continue
+                    poster = posters[0] if posters else None
+
+            if not poster:
+                raise Exception("No valid poster found (even after fallback).")
 
             poster_url = poster.get("url")
+            # Logo fallback handling
+            if not logo and logo_mode != "none":
+                fallback_logo_action = render_options_base.get("fallbackLogoAction") or "continue"
+                fallback_logo_template = render_options_base.get("fallbackLogoTemplate")
+                fallback_logo_preset = render_options_base.get("fallbackLogoPreset")
+                if fallback_logo_action == "template" and fallback_logo_template:
+                    template_id = fallback_logo_template
+                    if fallback_logo_preset:
+                        tpl_presets = presets_data.get(fallback_logo_template, {}).get("presets", [])
+                        fpreset = next((p for p in tpl_presets if p.get("id") == fallback_logo_preset), None)
+                        if fpreset:
+                            fp_opts = fpreset.get("options", {})
+                            render_options_base = {**fp_opts, **render_options_base}
+                            poster_filter = render_options_base.get("poster_filter", poster_filter)
+                            logo_preference = render_options_base.get("logo_preference", logo_preference)
+                            logo_mode = render_options_base.get("logo_mode", logo_mode)
+                            preset_id = fallback_logo_preset
+                        else:
+                            logger.warning("[BATCH] Fallback logo preset '%s' not found for template '%s'", fallback_logo_preset, fallback_logo_template)
+                elif fallback_logo_action == "skip":
+                    results.append({
+                        "rating_key": rating_key,
+                        "status": "skipped_no_logo"
+                    })
+                    batch_status.update({"processed": idx, "current_step": "Skipped (no logo)"})
+                    continue
+                # else continue without logo
+
             logo_url = logo.get("url") if logo else None
             logger.info(f"[BATCH] Picked logo pref={logo_preference}")
             logger.info(f"[BATCH] Picked poster={poster_url}")
@@ -139,7 +210,7 @@ def api_batch(req: BatchRequest):
             render_options["movie_year"] = movie_details.get("year", "")
 
             img = render_poster_image(
-                req.template_id,
+                template_id,
                 poster_url,
                 logo_url if logo_mode != "none" else None,
                 render_options,
@@ -244,8 +315,64 @@ def api_batch(req: BatchRequest):
                 os.makedirs(base_dir, exist_ok=True)
                 save_path = base_dir / filename
 
-                img.convert("RGB").save(save_path, "JPEG", quality=95)
-                logger.info(f"[BATCH] Saved locally: {save_path}")
+                # Embed library metadata into the image
+                img = embed_library_metadata(
+                    img,
+                    req.library_id,
+                    library_label,
+                    movie_details.get("title", ""),
+                    str(movie_details.get("year", "")) if movie_details.get("year") else None,
+                )
+
+                # Determine output format from filename extension
+                file_ext = save_path.suffix.lower()
+
+                if file_ext == '.png':
+                    # For PNG, properly embed metadata in PNG chunks
+                    pnginfo = PngImagePlugin.PngInfo()
+                    pnginfo.add_text("simposter_library_id", str(req.library_id or ""))
+                    pnginfo.add_text("simposter_library_name", str(library_label or ""))
+                    pnginfo.add_text("simposter_movie_title", str(movie_details.get("title", "")))
+                    pnginfo.add_text("simposter_movie_year", str(movie_details.get("year", "")))
+                    img.save(save_path, "PNG", pnginfo=pnginfo)
+                else:
+                    # For JPEG, embed metadata in EXIF UserComment field
+                    img_rgb = img.convert("RGB")
+
+                    # Create EXIF data with library metadata
+                    exif = img_rgb.getexif()
+                    if exif is None:
+                        from PIL.Image import Exif
+                        exif = Exif()
+
+                    # EXIF UserComment tag (0x9286) - store as JSON for easy parsing
+                    import json
+                    metadata_json = json.dumps({
+                        "simposter_library_id": str(req.library_id or ""),
+                        "simposter_library_name": str(library_label or ""),
+                        "simposter_movie_title": str(movie_details.get("title", "")),
+                        "simposter_movie_year": str(movie_details.get("year", ""))
+                    })
+                    exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
+                    exif_bytes = exif.tobytes()
+
+                    img_rgb.save(save_path, "JPEG", quality=95, exif=exif_bytes)
+
+                logger.info(f"[BATCH] Saved locally: {save_path} (library: {library_label})")
+                # Record history entry for local save
+                try:
+                    db.record_poster_history(
+                        rating_key=rating_key,
+                        library_id=str(req.library_id or ""),
+                        title=movie_details.get("title"),
+                        year=movie_details.get("year"),
+                        template_id=template_id,
+                        preset_id=preset_id,
+                        action="saved_local",
+                        save_path=str(save_path),
+                    )
+                except Exception as history_err:
+                    logger.debug(f"[BATCH] Failed to record history for local save: {history_err}")
 
             # ---------------------------
             # Upload to Plex (if requested)
@@ -273,6 +400,19 @@ def api_batch(req: BatchRequest):
                     plex_remove_label(rating_key, label)
 
                 logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
+                try:
+                    db.record_poster_history(
+                        rating_key=rating_key,
+                        library_id=str(req.library_id or ""),
+                        title=movie_details.get("title"),
+                        year=movie_details.get("year"),
+                        template_id=template_id,
+                        preset_id=preset_id,
+                        action="sent_to_plex",
+                        save_path=str(save_path) if save_path else None,
+                    )
+                except Exception as history_err:
+                    logger.debug(f"[BATCH] Failed to record history for plex send: {history_err}")
 
             result = {
                 "rating_key": rating_key,

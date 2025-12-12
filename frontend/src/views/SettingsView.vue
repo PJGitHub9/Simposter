@@ -2,15 +2,31 @@
 import { useSettingsStore, type Theme } from '../stores/settings'
 import { APP_VERSION } from '@/version'
 import { useMovies } from '../composables/useMovies'
-import { ref, onMounted, watch, computed } from 'vue'
+import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
+import { onBeforeRouteLeave } from 'vue-router'
 
 const settings = useSettingsStore()
 const saved = ref('')
 const allLabels = ref<Record<string, string[]>>({})
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
+
+// Track unsaved changes
+const hasUnsavedChanges = ref(false)
+const initialSettingsSnapshot = ref('')
+const watchersEnabled = ref(false) // Flag to control when change detection is active
+
+// Track which sections have unsaved changes
+const sectionsWithChanges = ref({
+  appearance: false,
+  output: false,
+  connections: false,
+  apiKeys: false,
+  imageQuality: false,
+  performance: false
+})
 
 // Cooldown state to prevent rapid clicking
 const scanCooldown = ref(false)
@@ -29,8 +45,14 @@ const localPlexToken = ref('')
 const localPlexLibrary = ref('')
 const localLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
 const savedLibraryIds = ref<Set<string>>(new Set())
+const localTvShowLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
+const savedTvShowLibraryIds = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
+const localFanartApiKey = ref('')
+const apiOrderLocked = ref(true)
+const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
+const draggingSource = ref<string | null>(null)
 // Image Quality
 const localOutputFormat = ref('jpg')
 const localJpgQuality = ref(95)
@@ -43,12 +65,88 @@ const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
 let scanPoller: number | null = null
 
-const loadLocalSettings = () => {
+// Preset import/export states
+const presetExporting = ref(false)
+const presetImporting = ref(false)
+const presetImportText = ref('')
+const showPresetImportModal = ref(false)
+
+// API key test states
+const testTmdbLoading = ref(false)
+const testTmdbResult = ref('')
+const testTvdbLoading = ref(false)
+const testTvdbResult = ref('')
+const testFanartLoading = ref(false)
+const testFanartResult = ref('')
+const apiSources = computed(() => [
+  {
+    id: 'tmdb',
+    label: 'TMDb',
+    description: 'Primary posters, backdrops, and metadata.',
+    keyRef: localTmdbApiKey,
+    testLoading: testTmdbLoading,
+    testResult: testTmdbResult,
+    testHandler: testTmdbApiKey,
+    placeholder: 'TMDb API key'
+  },
+  {
+    id: 'fanart',
+    label: 'Fanart.tv',
+    description: 'High-quality clearlogos and alternate posters.',
+    keyRef: localFanartApiKey,
+    testLoading: testFanartLoading,
+    testResult: testFanartResult,
+    testHandler: testFanartApiKey,
+    placeholder: 'Fanart.tv API key'
+  },
+  {
+    id: 'tvdb',
+    label: 'TVDB (coming soon)',
+    description: 'Saved for future TV metadata and images.',
+    keyRef: localTvdbApiKey,
+    testLoading: testTvdbLoading,
+    testResult: testTvdbResult,
+    testHandler: testTvdbApiKey,
+    placeholder: 'TVDB API key'
+  }
+])
+const orderedApiSources = computed(() => apiOrder.value.map((id) => apiSources.value.find((s) => s.id === id)).filter((s): s is NonNullable<typeof s> => !!s))
+
+const onApiDragStart = (id: string) => {
+  if (apiOrderLocked.value) return
+  draggingSource.value = id
+}
+
+const onApiDragOver = (targetId: string) => {
+  if (apiOrderLocked.value || !draggingSource.value || draggingSource.value === targetId) return
+  const order = [...apiOrder.value]
+  const from = order.indexOf(draggingSource.value)
+  const to = order.indexOf(targetId)
+  if (from === -1 || to === -1) return
+  const [removed] = order.splice(from, 1)
+  if (removed) order.splice(to, 0, removed)
+  apiOrder.value = order
+}
+
+const onApiDrop = () => {
+  draggingSource.value = null
+}
+
+const onApiDragEnd = () => {
+  draggingSource.value = null
+}
+
+const loadLocalSettings = async () => {
+  // Disable watchers during load
+  watchersEnabled.value = false
+
   localTheme.value = settings.theme.value
   localPosterDensity.value = settings.posterDensity.value
   localSaveLocation.value = settings.saveLocation.value
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
+  // API order
+  apiOrder.value = [...(settings.apiOrder.value || ['tmdb', 'fanart', 'tvdb'])]
   // Connection settings
   localPlexUrl.value = settings.plex.value.url
   localPlexToken.value = settings.plex.value.token
@@ -76,8 +174,34 @@ const loadLocalSettings = () => {
           .filter(Boolean)
       )
     : new Set()
+
+  // Load TV show libraries
+  const hasPersistedTvShowLibraries = (settings.plex.value.tvShowLibraryMappings || []).some((l: any) => l && l.id)
+  const tvShowLibraryMappings = hasPersistedTvShowLibraries
+    ? settings.plex.value.tvShowLibraryMappings
+    : (settings.plex.value.tvShowLibraryNames || settings.plex.value.tvShowLibraryName
+        ? (settings.plex.value.tvShowLibraryNames || [settings.plex.value.tvShowLibraryName]).map((n: string | undefined, idx: number) => ({
+            id: n || '',
+            title: n || '',
+            displayName: n || `TV Library ${idx + 1}`
+          }))
+        : [{ id: '', title: '', displayName: '' }]
+      )
+
+  localTvShowLibraries.value = JSON.parse(JSON.stringify(tvShowLibraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
+
+  // Lock only if TV show libraries were already persisted
+  savedTvShowLibraryIds.value = hasPersistedTvShowLibraries
+    ? new Set(
+        (tvShowLibraryMappings || [])
+          .map((l: any) => (l && l.id ? String(l.id) : ''))
+          .filter(Boolean)
+      )
+    : new Set()
+
   localTmdbApiKey.value = settings.tmdb.value.apiKey
   localTvdbApiKey.value = settings.tvdb.value.apiKey
+  localFanartApiKey.value = settings.fanart.value.apiKey
   // Image Quality
   localOutputFormat.value = settings.imageQuality.value.outputFormat
   localJpgQuality.value = settings.imageQuality.value.jpgQuality
@@ -88,6 +212,112 @@ const loadLocalSettings = () => {
   localTmdbRateLimit.value = settings.performance.value.tmdbRateLimit
   localTvdbRateLimit.value = settings.performance.value.tvdbRateLimit
   localMemoryLimit.value = settings.performance.value.memoryLimit
+
+  // Wait for next tick to ensure all reactive updates are complete
+  await nextTick()
+}
+
+const captureSettingsSnapshot = () => {
+  initialSettingsSnapshot.value = JSON.stringify({
+    theme: localTheme.value,
+    posterDensity: localPosterDensity.value,
+    saveLocation: localSaveLocation.value,
+    saveBatch: localSaveBatch.value,
+    defaultLabelsToRemove: localDefaultLabelsToRemove.value,
+    plexUrl: localPlexUrl.value,
+    plexToken: localPlexToken.value,
+    libraries: localLibraries.value,
+    tvShowLibraries: localTvShowLibraries.value,
+    tmdbApiKey: localTmdbApiKey.value,
+    tvdbApiKey: localTvdbApiKey.value,
+    fanartApiKey: localFanartApiKey.value,
+    apiOrder: apiOrder.value,
+    outputFormat: localOutputFormat.value,
+    jpgQuality: localJpgQuality.value,
+    pngCompression: localPngCompression.value,
+    webpQuality: localWebpQuality.value,
+    concurrentRenders: localConcurrentRenders.value,
+    tmdbRateLimit: localTmdbRateLimit.value,
+    tvdbRateLimit: localTvdbRateLimit.value,
+    memoryLimit: localMemoryLimit.value
+  })
+  hasUnsavedChanges.value = false
+
+  // Reset all section flags
+  sectionsWithChanges.value.appearance = false
+  sectionsWithChanges.value.output = false
+  sectionsWithChanges.value.connections = false
+  sectionsWithChanges.value.apiKeys = false
+  sectionsWithChanges.value.imageQuality = false
+  sectionsWithChanges.value.performance = false
+
+  // Enable watchers after a small delay to ensure all async updates have completed
+  setTimeout(() => {
+    watchersEnabled.value = true
+  }, 100)
+}
+
+const checkForChanges = () => {
+  const currentSnapshot = JSON.stringify({
+    theme: localTheme.value,
+    posterDensity: localPosterDensity.value,
+    saveLocation: localSaveLocation.value,
+    saveBatch: localSaveBatch.value,
+    defaultLabelsToRemove: localDefaultLabelsToRemove.value,
+    plexUrl: localPlexUrl.value,
+    plexToken: localPlexToken.value,
+    libraries: localLibraries.value,
+    tvShowLibraries: localTvShowLibraries.value,
+    tmdbApiKey: localTmdbApiKey.value,
+    tvdbApiKey: localTvdbApiKey.value,
+    fanartApiKey: localFanartApiKey.value,
+    apiOrder: apiOrder.value,
+    outputFormat: localOutputFormat.value,
+    jpgQuality: localJpgQuality.value,
+    pngCompression: localPngCompression.value,
+    webpQuality: localWebpQuality.value,
+    concurrentRenders: localConcurrentRenders.value,
+    tmdbRateLimit: localTmdbRateLimit.value,
+    tvdbRateLimit: localTvdbRateLimit.value,
+    memoryLimit: localMemoryLimit.value
+  })
+  hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
+
+  // Check individual sections
+  if (!initialSettingsSnapshot.value) return
+  const initial = JSON.parse(initialSettingsSnapshot.value)
+
+  sectionsWithChanges.value.appearance =
+    localTheme.value !== initial.theme ||
+    localPosterDensity.value !== initial.posterDensity
+
+  sectionsWithChanges.value.output =
+    localSaveLocation.value !== initial.saveLocation ||
+    localSaveBatch.value !== initial.saveBatch
+
+  sectionsWithChanges.value.connections =
+    localPlexUrl.value !== initial.plexUrl ||
+    localPlexToken.value !== initial.plexToken ||
+    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries) ||
+    JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries)
+
+  sectionsWithChanges.value.apiKeys =
+    localTmdbApiKey.value !== initial.tmdbApiKey ||
+    localTvdbApiKey.value !== initial.tvdbApiKey ||
+    localFanartApiKey.value !== initial.fanartApiKey ||
+    JSON.stringify(apiOrder.value) !== JSON.stringify(initial.apiOrder)
+
+  sectionsWithChanges.value.imageQuality =
+    localOutputFormat.value !== initial.outputFormat ||
+    localJpgQuality.value !== initial.jpgQuality ||
+    localPngCompression.value !== initial.pngCompression ||
+    localWebpQuality.value !== initial.webpQuality
+
+  sectionsWithChanges.value.performance =
+    localConcurrentRenders.value !== initial.concurrentRenders ||
+    localTmdbRateLimit.value !== initial.tmdbRateLimit ||
+    localTvdbRateLimit.value !== initial.tvdbRateLimit ||
+    localMemoryLimit.value !== initial.memoryLimit
 }
 
 const saveSettings = async () => {
@@ -97,7 +327,9 @@ const saveSettings = async () => {
   settings.saveLocation.value = localSaveLocation.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
+  settings.apiOrder.value = [...apiOrder.value]
   const libs = localLibraries.value.filter(l => l.id || l.title)
+  const tvShowLibs = localTvShowLibraries.value.filter(l => l.id || l.title)
   settings.plex.value = {
     url: localPlexUrl.value,
     token: localPlexToken.value,
@@ -107,10 +339,18 @@ const saveSettings = async () => {
       id: l.id || '',
       title: l.title || l.id || '',
       displayName: l.displayName || l.title || l.id || '',
+    })),
+    tvShowLibraryName: tvShowLibs[0]?.id || '',
+    tvShowLibraryNames: tvShowLibs.length > 0 ? tvShowLibs.map(l => l.id) : undefined,
+    tvShowLibraryMappings: tvShowLibs.map(l => ({
+      id: l.id || '',
+      title: l.title || l.id || '',
+      displayName: l.displayName || l.title || l.id || '',
     }))
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }
   settings.tvdb.value = { apiKey: localTvdbApiKey.value, comingSoon: settings.tvdb.value.comingSoon }
+  settings.fanart.value = { apiKey: localFanartApiKey.value }
   settings.imageQuality.value = {
     outputFormat: localOutputFormat.value,
     jpgQuality: localJpgQuality.value,
@@ -130,6 +370,13 @@ const saveSettings = async () => {
   setTimeout(() => (saved.value = ''), 1500)
   // After save, lock current library selections
   savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
+  savedTvShowLibraryIds.value = new Set(localTvShowLibraries.value.filter(l => l.id).map(l => String(l.id)))
+
+  // Reset unsaved changes flag after successful save
+  // Temporarily disable watchers while we reset the snapshot
+  watchersEnabled.value = false
+  await nextTick()
+  captureSettingsSnapshot()
 }
 
 const testConnection = ref('')
@@ -140,6 +387,12 @@ const addLibrary = () => {
 }
 const removeLibrary = (idx: number) => {
   localLibraries.value = localLibraries.value.filter((_, i) => i !== idx)
+}
+const addTvShowLibrary = () => {
+  localTvShowLibraries.value = [...localTvShowLibraries.value, { id: '', title: '', displayName: '' }]
+}
+const removeTvShowLibrary = (idx: number) => {
+  localTvShowLibraries.value = localTvShowLibraries.value.filter((_, i) => i !== idx)
 }
 
 const testPlexConnection = async () => {
@@ -160,8 +413,10 @@ const testPlexConnection = async () => {
     if (data.status === 'ok') {
       plexLibraries.value = data.sections || []
       const movieLibs = plexLibraries.value.filter(s => s.type === 'movie')
-      const sectionsList = movieLibs.map((s: any) => s.title).join(', ')
-      testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${sectionsList}`
+      const tvShowLibs = plexLibraries.value.filter(s => s.type === 'show')
+      const movieSectionsList = movieLibs.map((s: any) => s.title).join(', ')
+      const tvShowSectionsList = tvShowLibs.map((s: any) => s.title).join(', ')
+      testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${movieSectionsList}${tvShowLibs.length > 0 ? ` and ${tvShowLibs.length} TV show libraries: ${tvShowSectionsList}` : ''}`
       if (movieLibs.length > 0) {
         // Seed libraries if none configured yet
         if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
@@ -169,6 +424,16 @@ const testPlexConnection = async () => {
             id: s.key,
             title: s.title,
             displayName: s.title || `Library ${idx + 1}`,
+          }))
+        }
+      }
+      if (tvShowLibs.length > 0) {
+        // Seed TV show libraries if none configured yet
+        if (!localTvShowLibraries.value.length || localTvShowLibraries.value.every(l => !l.id)) {
+          localTvShowLibraries.value = tvShowLibs.map((s: any, idx: number) => ({
+            id: s.key,
+            title: s.title,
+            displayName: s.title || `TV Library ${idx + 1}`,
           }))
         }
       }
@@ -345,6 +610,57 @@ const clearBackendCache = async () => {
   }
 }
 
+const handlePresetExport = async () => {
+  presetExporting.value = true
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/presets/export`)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    a.download = `simposter-presets-${stamp}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    saved.value = 'Presets exported'
+  } catch (e) {
+    saved.value = `Export failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    presetExporting.value = false
+    setTimeout(() => (saved.value = ''), 2000)
+  }
+}
+
+const handlePresetImport = async () => {
+  if (!presetImportText.value.trim()) {
+    saved.value = 'Paste preset JSON to import'
+    setTimeout(() => (saved.value = ''), 2000)
+    return
+  }
+  presetImporting.value = true
+  try {
+    const json = JSON.parse(presetImportText.value)
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/presets/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(json)
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    saved.value = 'Presets imported'
+    showPresetImportModal.value = false
+    presetImportText.value = ''
+  } catch (e) {
+    saved.value = `Import failed: ${e instanceof Error ? e.message : 'Invalid JSON'}`
+  } finally {
+    presetImporting.value = false
+    setTimeout(() => (saved.value = ''), 2500)
+  }
+}
+
 // Fetch all available labels from movies per library
 const fetchAllLabels = async () => {
   try {
@@ -398,28 +714,50 @@ const fetchAllLabels = async () => {
 }
 
 onMounted(async () => {
+  // Explicitly disable watchers at the start
+  watchersEnabled.value = false
+
   // Ensure settings are loaded from API before syncing local form state
   if (!settings.loaded.value) {
     await settings.load()
   }
 
-  // Only load local settings and labels after settings are confirmed loaded
-  loadLocalSettings()
-  fetchAllLabels()
+  // Load local settings first
+  await loadLocalSettings()
 
   // Load Plex libraries if credentials exist to populate dropdowns
+  // Do this BEFORE capturing snapshot since it modifies localLibraries
   if (settings.plex.value.url && settings.plex.value.token) {
     await testPlexConnection()
   }
+
+  // Fetch labels
+  fetchAllLabels()
+
+  // Now capture the snapshot after everything has loaded
+  await nextTick()
+  captureSettingsSnapshot()
 })
 
 // If settings finish loading after initial render, sync the local form
 watch(
   () => settings.loaded.value,
-  (val) => {
+  async (val) => {
     if (val) {
-      loadLocalSettings()
+      // Disable watchers before reloading
+      watchersEnabled.value = false
+      await loadLocalSettings()
+
+      // Load Plex libraries if credentials exist
+      if (settings.plex.value.url && settings.plex.value.token) {
+        await testPlexConnection()
+      }
+
       fetchAllLabels()
+
+      // Recapture snapshot after reload
+      await nextTick()
+      captureSettingsSnapshot()
     }
   }
 )
@@ -432,6 +770,68 @@ watch(
   },
   { deep: true }
 )
+
+// Watch all local settings for changes
+watch([
+  localTheme,
+  localPosterDensity,
+  localSaveLocation,
+  localSaveBatch,
+  localDefaultLabelsToRemove,
+  localPlexUrl,
+  localPlexToken,
+  localLibraries,
+  localTvShowLibraries,
+  localTmdbApiKey,
+  localTvdbApiKey,
+  localFanartApiKey,
+  apiOrder,
+  localOutputFormat,
+  localJpgQuality,
+  localPngCompression,
+  localWebpQuality,
+  localConcurrentRenders,
+  localTmdbRateLimit,
+  localTvdbRateLimit,
+  localMemoryLimit
+], () => {
+  // Only check for changes if watchers are enabled (after initial load)
+  if (watchersEnabled.value) {
+    checkForChanges()
+  }
+}, {
+  deep: true,
+  flush: 'post'
+})
+
+// Navigation guard - warn before leaving with unsaved changes
+onBeforeRouteLeave((_to, _from, next) => {
+  if (hasUnsavedChanges.value) {
+    const answer = window.confirm('You have unsaved changes. Are you sure you want to leave?')
+    if (answer) {
+      next()
+    } else {
+      next(false)
+    }
+  } else {
+    next()
+  }
+})
+
+// Warn before closing/refreshing page with unsaved changes
+onMounted(() => {
+  const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (hasUnsavedChanges.value) {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+  }
+  window.addEventListener('beforeunload', handleBeforeUnload)
+
+  onBeforeUnmount(() => {
+    window.removeEventListener('beforeunload', handleBeforeUnload)
+  })
+})
 
 const toggleLabel = (libraryId: string, label: string) => {
   if (!localDefaultLabelsToRemove.value[libraryId]) {
@@ -486,6 +886,94 @@ const stopScanPolling = () => {
     scanPoller = null
   }
 }
+
+const testTmdbApiKey = async () => {
+  if (!localTmdbApiKey.value.trim()) {
+    testTmdbResult.value = 'Please enter a TMDb API key'
+    setTimeout(() => (testTmdbResult.value = ''), 3000)
+    return
+  }
+
+  testTmdbLoading.value = true
+  testTmdbResult.value = 'Testing...'
+
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/test-tmdb?api_key=${encodeURIComponent(localTmdbApiKey.value)}`)
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      testTmdbResult.value = `✓ Valid! Found movie: ${data.example || 'API key works'}`
+    } else {
+      testTmdbResult.value = `✗ ${data.error || 'Invalid API key'}`
+    }
+  } catch (e) {
+    testTmdbResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testTmdbLoading.value = false
+    setTimeout(() => (testTmdbResult.value = ''), 10000)
+  }
+}
+
+const testTvdbApiKey = async () => {
+  if (!localTvdbApiKey.value.trim()) {
+    testTvdbResult.value = 'Please enter a TVDB API key'
+    setTimeout(() => (testTvdbResult.value = ''), 3000)
+    return
+  }
+
+  testTvdbLoading.value = true
+  testTvdbResult.value = 'Testing...'
+
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/test-tvdb?api_key=${encodeURIComponent(localTvdbApiKey.value)}`)
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      testTvdbResult.value = `✓ Valid! ${data.message || 'API key works'}`
+    } else {
+      testTvdbResult.value = `✗ ${data.error || 'Invalid API key'}`
+    }
+  } catch (e) {
+    testTvdbResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testTvdbLoading.value = false
+    setTimeout(() => (testTvdbResult.value = ''), 10000)
+  }
+}
+
+const testFanartApiKey = async () => {
+  if (!localFanartApiKey.value.trim()) {
+    testFanartResult.value = 'Please enter a Fanart.tv API key'
+    setTimeout(() => (testFanartResult.value = ''), 3000)
+    return
+  }
+
+  testFanartLoading.value = true
+  testFanartResult.value = 'Testing...'
+
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/test-fanart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: localFanartApiKey.value })
+    })
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      testFanartResult.value = `✓ Valid! Found ${data.logo_count || 0} logos for test movie`
+    } else {
+      testFanartResult.value = `✗ ${data.error || 'Invalid API key'}`
+    }
+  } catch (e) {
+    testFanartResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testFanartLoading.value = false
+    setTimeout(() => (testFanartResult.value = ''), 10000)
+  }
+}
 </script>
 
 <template>
@@ -496,11 +984,14 @@ const stopScanPolling = () => {
           <h2>Settings</h2>
           <p class="header-subtitle">Customize your Simposter experience</p>
         </div>
-        <span class="version-chip">{{ APP_VERSION }}</span>
+        <div class="header-status">
+          <span v-if="hasUnsavedChanges" class="unsaved-badge">Unsaved Changes</span>
+          <span class="version-chip">{{ APP_VERSION }}</span>
+        </div>
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.appearance }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 2L2 7l10 5 10-5-10-5z"/>
@@ -535,7 +1026,7 @@ const stopScanPolling = () => {
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.output }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
@@ -562,7 +1053,7 @@ const stopScanPolling = () => {
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.connections }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
@@ -570,7 +1061,7 @@ const stopScanPolling = () => {
         </svg>
         Connections
       </h3>
-      <div class="grid connections">
+      <div class="plex-connection-grid">
         <label>
           <span class="label-text">Plex URL</span>
           <input
@@ -598,7 +1089,7 @@ const stopScanPolling = () => {
           />
           <span class="help-text">Use the Plex token or future auto-discovery once available.</span>
         </label>
-        <div class="test-connection-wrapper">
+        <div class="test-button-wrapper">
           <button
             class="btn-test-connection"
             @click="testPlexConnection"
@@ -606,101 +1097,205 @@ const stopScanPolling = () => {
           >
             {{ testConnectionLoading ? 'Testing...' : 'Test Plex Connection' }}
           </button>
-          <p v-if="testConnection" :class="['test-result', testConnection.startsWith('✓') ? 'success' : 'error']">
-            {{ testConnection }}
-          </p>
         </div>
+        <p v-if="testConnection" :class="['test-result', testConnection.startsWith('✓') ? 'success' : 'error']">
+          {{ testConnection }}
+        </p>
       </div>
       
-      <div class="movie-libraries-subsection">
-        <h4 class="subsection-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-          </svg>
-          Movie Libraries
-        </h4>
-        <div class="library-list">
-          <div
-            v-for="(lib, idx) in localLibraries"
-            :key="idx"
-            class="library-row"
-          >
-            <div class="library-header">
-              <span class="label-text">{{ lib.displayName || lib.title || `Library ${idx + 1}` }}</span>
-              <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
-            </div>
-            <select
-              v-model="lib.id"
-              class="form-control"
-              :class="{ 'locked': savedLibraryIds.has(lib.id) }"
-              :disabled="savedLibraryIds.has(lib.id)"
-              @change="(e) => {
-                const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
-                if (selected && !lib.displayName) {
-                  lib.title = selected.title
-                  lib.displayName = selected.title
-                }
-              }"
+      <div class="libraries-container">
+        <div class="library-section">
+          <h4 class="subsection-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+            </svg>
+            Movie Libraries
+          </h4>
+          <div class="library-list">
+            <div
+              v-for="(lib, idx) in localLibraries"
+              :key="idx"
+              class="library-row"
             >
-              <option value="">Select a library...</option>
-              <option
-                v-for="p in plexLibraries.filter(s => s.type === 'movie')"
-                :key="p.key"
-                :value="p.key"
+              <div class="library-header">
+                <span class="label-text">{{ lib.displayName || lib.title || `Library ${idx + 1}` }}</span>
+                <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
+              </div>
+              <select
+                v-model="lib.id"
+                class="form-control"
+                :class="{ 'locked': savedLibraryIds.has(lib.id) }"
+                :disabled="savedLibraryIds.has(lib.id)"
+                @change="(e) => {
+                  const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
+                  if (selected && !lib.displayName) {
+                    lib.title = selected.title
+                    lib.displayName = selected.title
+                  }
+                }"
               >
-                {{ p.title }} (ID: {{ p.key }})
-              </option>
-            </select>
-            <input
-              v-model="lib.displayName"
-              type="text"
-              placeholder="Display name (e.g., 4K Movies)"
-              @mousedown.stop
-              @click.stop
-              @mouseup.stop
-              @select.stop
-              @selectstart.stop
-            />
-            <button class="secondary small" type="button" @click="removeLibrary(idx)" :disabled="localLibraries.length <= 1">Remove</button>
+                <option value="">Select a library...</option>
+                <option
+                  v-for="p in plexLibraries.filter(s => s.type === 'movie')"
+                  :key="p.key"
+                  :value="p.key"
+                >
+                  {{ p.title }} (ID: {{ p.key }})
+                </option>
+              </select>
+              <input
+                v-model="lib.displayName"
+                type="text"
+                placeholder="Display name (e.g., 4K Movies)"
+                @mousedown.stop
+                @click.stop
+                @mouseup.stop
+                @select.stop
+                @selectstart.stop
+              />
+              <button class="secondary small" type="button" @click="removeLibrary(idx)">Remove</button>
+            </div>
+            <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
+            <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
           </div>
-          <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
-          <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
+        </div>
+
+        <div class="library-section">
+          <h4 class="subsection-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
+              <polyline points="17 2 12 7 7 2"/>
+            </svg>
+            TV Show Libraries (Coming Soon)
+          </h4>
+          <div class="library-list">
+            <div
+              v-for="(lib, idx) in localTvShowLibraries"
+              :key="idx"
+              class="library-row"
+            >
+              <div class="library-header">
+                <span class="label-text">{{ lib.displayName || lib.title || `TV Library ${idx + 1}` }}</span>
+                <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
+              </div>
+              <select
+                v-model="lib.id"
+                class="form-control"
+                :class="{ 'locked': savedTvShowLibraryIds.has(lib.id) }"
+                :disabled="savedTvShowLibraryIds.has(lib.id)"
+                @change="(e) => {
+                  const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
+                  if (selected && !lib.displayName) {
+                    lib.title = selected.title
+                    lib.displayName = selected.title
+                  }
+                }"
+              >
+                <option value="">Select a library...</option>
+                <option
+                  v-for="p in plexLibraries.filter(s => s.type === 'show')"
+                  :key="p.key"
+                  :value="p.key"
+                >
+                  {{ p.title }} (ID: {{ p.key }})
+                </option>
+              </select>
+              <input
+                v-model="lib.displayName"
+                type="text"
+                placeholder="Display name (e.g., 4K TV Shows)"
+                @mousedown.stop
+                @click.stop
+                @mouseup.stop
+                @select.stop
+                @selectstart.stop
+              />
+              <button class="secondary small" type="button" @click="removeTvShowLibrary(idx)">Remove</button>
+            </div>
+            <button class="secondary small" type="button" @click="addTvShowLibrary">+ Add Library</button>
+            <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
+          </div>
         </div>
       </div>
 
+    </div>
+
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.apiKeys }">
+      <div class="section-title-row">
+        <h3 class="section-title">
+          <svg class="key-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+          </svg>
+          API Keys / Poster & Logo Sources
+        </h3>
+        <button class="icon-btn lock-btn" type="button" @click="apiOrderLocked = !apiOrderLocked" :aria-pressed="!apiOrderLocked" :class="{ 'unlocked': !apiOrderLocked }">
+          <svg v-if="apiOrderLocked" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+          </svg>
+          <span>{{ apiOrderLocked ? 'Locked order' : 'Drag to reorder' }}</span>
+        </button>
+      </div>
+      <p class="section-subtitle">Drag sources to reorder when unlocked. This order is used for poster/logo selection.</p>
       <div class="api-keys-section">
-        <label>
-          <span class="label-text">TMDb API Key</span>
-          <input
-            v-model="localTmdbApiKey"
-            type="password"
-            placeholder="TMDb API key"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-        </label>
-        <label>
-          <span class="label-text">TVDB API Key</span>
-          <input
-            v-model="localTvdbApiKey"
-            type="password"
-            placeholder="TVDB API key (coming soon)"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">Coming soon—value is saved for future use.</span>
-        </label>
+        <div
+          v-for="source in orderedApiSources"
+          :key="source.id"
+          class="api-card"
+          :draggable="!apiOrderLocked"
+          @dragstart="onApiDragStart(source.id)"
+          @dragover.prevent="onApiDragOver(source.id)"
+          @drop.prevent="onApiDrop"
+          @dragend="onApiDragEnd"
+        >
+          <div class="api-card-header">
+            <span class="drag-handle" v-if="!apiOrderLocked">⠿</span>
+            <div class="api-card-title">
+              <span class="api-name">{{ source.label }}</span>
+              <span class="api-desc">{{ source.description }}</span>
+            </div>
+            <span class="order-badge">#{{ apiOrder.indexOf(source.id) + 1 }}</span>
+          </div>
+          <div class="api-card-body">
+            <label class="api-key-input">
+              <span class="label-text">{{ source.label }} API Key</span>
+              <input
+                v-model="source.keyRef.value"
+                type="password"
+                :placeholder="source.placeholder"
+                @mousedown.stop
+                @click.stop
+                @mouseup.stop
+                @select.stop
+                @selectstart.stop
+              />
+            </label>
+            <div class="api-actions">
+              <button
+                class="btn-test-api secondary small"
+                @click="source.testHandler"
+                :disabled="source.testLoading.value || !source.keyRef.value.trim()"
+              >
+                {{ source.testLoading.value ? 'Testing...' : 'Test' }}
+              </button>
+              <span
+                v-if="source.testResult.value"
+                :class="['api-test-result', source.testResult.value.startsWith('✓') ? 'success' : 'error']"
+              >
+                {{ source.testResult.value }}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.imageQuality }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
@@ -754,7 +1349,7 @@ const stopScanPolling = () => {
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.performance }">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
@@ -814,6 +1409,7 @@ const stopScanPolling = () => {
       </div>
     </div>
 
+
     <div v-if="Object.keys(allLabels).length > 0" class="settings-section labels-section">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -840,13 +1436,13 @@ const stopScanPolling = () => {
     </div>
 
     <div class="actions">
-      <button @click="saveSettings" class="primary">
+      <button @click="saveSettings" class="primary" :class="{ 'has-changes': hasUnsavedChanges }">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
           <polyline points="17 21 17 13 7 13 7 21"/>
           <polyline points="7 3 7 8 15 8"/>
         </svg>
-        Save Settings
+        {{ hasUnsavedChanges ? 'Save Changes' : 'Save Settings' }}
       </button>
       <button @click="clearCache" class="secondary" :disabled="isScanInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -915,12 +1511,49 @@ const stopScanPolling = () => {
   font-weight: 400;
 }
 
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.unsaved-badge {
+  padding: 6px 12px;
+  background: rgba(255, 193, 7, 0.15);
+  border: 1px solid rgba(255, 193, 7, 0.4);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffc107;
+  animation: pulse-warning 2s ease-in-out infinite;
+}
+
+@keyframes pulse-warning {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 193, 7, 0);
+  }
+}
+
 .settings-section {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 20px;
   transition: all 0.2s;
+}
+
+.settings-section.has-unsaved-changes {
+  border-color: rgba(255, 193, 7, 0.3);
+  background: rgba(255, 193, 7, 0.03);
+}
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .settings-section:hover {
@@ -943,19 +1576,40 @@ const stopScanPolling = () => {
   flex-shrink: 0;
 }
 
+.section-title .key-icon {
+  filter: drop-shadow(0 0 8px rgba(61, 214, 183, 0.4));
+  transition: all 0.3s ease;
+}
+
+.settings-section:hover .key-icon {
+  filter: drop-shadow(0 0 12px rgba(61, 214, 183, 0.6));
+  transform: rotate(-5deg);
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 14px;
 }
 
-.connections {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  max-width: 600px;
+.plex-connection-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 14px;
+  align-items: start;
 }
 
-.movie-libraries-subsection {
+.libraries-container {
   margin-top: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.library-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .subsection-title {
@@ -1286,6 +1940,27 @@ button.primary:hover {
   box-shadow: 0 4px 12px rgba(61, 214, 183, 0.15);
 }
 
+button.primary.has-changes {
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.25), rgba(255, 152, 0, 0.2));
+  border-color: rgba(255, 193, 7, 0.5);
+  animation: pulse-button 2s ease-in-out infinite;
+}
+
+button.primary.has-changes:hover {
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.35), rgba(255, 152, 0, 0.3));
+  border-color: rgba(255, 193, 7, 0.7);
+  box-shadow: 0 4px 12px rgba(255, 193, 7, 0.3);
+}
+
+@keyframes pulse-button {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(255, 193, 7, 0);
+  }
+}
+
 button.secondary {
   background: rgba(255, 255, 255, 0.02);
   color: #b8c5e0;
@@ -1341,8 +2016,24 @@ button.secondary:hover {
     padding: 16px;
   }
 
-  .grid,
-  .connections {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .plex-connection-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .test-button-wrapper {
+    align-items: flex-start;
+    padding-bottom: 0;
+  }
+
+  .btn-test-connection {
+    width: 100%;
+  }
+
+  .libraries-container {
     grid-template-columns: 1fr;
   }
 
@@ -1357,34 +2048,30 @@ button.secondary:hover {
   }
 }
 
-/* Test Connection */
-.test-connection-wrapper {
-  grid-column: 1 / -1;
+/* Plex Connection Test */
+.test-button-wrapper {
   display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  padding: 1rem;
-  background: var(--surface-alt, #1e2330);
-  border-radius: 8px;
-  border: 1px solid var(--border, #2a2f3e);
+  align-items: flex-end;
+  padding-bottom: 12px;
 }
 
 .btn-test-connection {
-  padding: 0.75rem 1.5rem;
+  padding: 10px 18px;
   background: var(--accent, #3dd6b7);
   color: #000;
   border: none;
-  border-radius: 6px;
-  font-size: 0.95rem;
+  border-radius: 8px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
-  align-self: flex-start;
+  white-space: nowrap;
+  height: 42px;
 }
 
 .btn-test-connection:hover:not(:disabled) {
   background: #2bc4a3;
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(61, 214, 183, 0.3);
 }
 
@@ -1395,10 +2082,11 @@ button.secondary:hover {
 }
 
 .test-result {
+  grid-column: 1 / -1;
   margin: 0;
-  padding: 0.75rem;
-  border-radius: 6px;
-  font-size: 0.9rem;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -1465,10 +2153,202 @@ button.secondary:hover {
   align-self: flex-start;
 }
 
+.upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.upload-button input {
+  display: none;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 1rem;
+}
+
+.modal {
+  background: var(--surface, #1a1f2e);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 10px;
+  padding: 1rem;
+  max-width: 600px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.modal textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 200px;
+  background: var(--input-bg, #111623);
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: monospace;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #98a1b3);
+  cursor: pointer;
+  font-size: 20px;
+}
+
 .api-keys-section {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  margin-top: 20px;
+  gap: 12px;
+  margin-top: 12px;
+}
+.api-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.api-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.drag-handle {
+  font-size: 18px;
+  cursor: grab;
+  color: var(--muted);
+  user-select: none;
+}
+.api-card-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.api-name {
+  font-weight: 600;
+  color: #eef2ff;
+}
+.api-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+.order-badge {
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(61, 214, 183, 0.12);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  color: #a9f0dd;
+  font-weight: 600;
+  font-size: 12px;
+}
+.api-card-body {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+.api-key-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.api-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.btn-test-api {
+  white-space: nowrap;
+  min-width: 80px;
+  justify-content: center;
+}
+.api-test-result {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.api-test-result.success {
+  background: rgba(61, 214, 183, 0.1);
+  color: var(--accent, #3dd6b7);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+}
+.api-test-result.error {
+  background: rgba(255, 107, 107, 0.1);
+  color: #ff6b6b;
+  border: 1px solid rgba(255, 107, 107, 0.3);
+}
+.lock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  transition: all 0.3s ease;
+}
+.lock-btn svg {
+  flex-shrink: 0;
+  color: #ff6b6b;
+  transition: all 0.3s ease;
+}
+.lock-btn span {
+  font-size: 12px;
+  color: #ff9999;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+.lock-btn:hover {
+  background: rgba(255, 107, 107, 0.15);
+  border-color: rgba(255, 107, 107, 0.5);
+  transform: translateY(-1px);
+}
+
+/* Unlocked state - green/cyan */
+.lock-btn.unlocked {
+  background: rgba(61, 214, 183, 0.1);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+}
+.lock-btn.unlocked svg {
+  color: #3dd6b7;
+}
+.lock-btn.unlocked span {
+  color: #6ee7d3;
+}
+.lock-btn.unlocked:hover {
+  background: rgba(61, 214, 183, 0.15);
+  border-color: rgba(61, 214, 183, 0.5);
 }
 </style>

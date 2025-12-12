@@ -11,6 +11,9 @@ export type PlexSettings = {
   movieLibraryName: string
   movieLibraryNames?: string[]
   libraryMappings?: Array<{ id: string; title?: string; displayName?: string }>
+  tvShowLibraryName?: string
+  tvShowLibraryNames?: string[]
+  tvShowLibraryMappings?: Array<{ id: string; title?: string; displayName?: string }>
 }
 
 export type TMDBSettings = {
@@ -20,6 +23,10 @@ export type TMDBSettings = {
 export type TVDBSettings = {
   apiKey: string
   comingSoon?: boolean
+}
+
+export type FanartSettings = {
+  apiKey: string
 }
 
 export type ImageQualitySettings = {
@@ -45,8 +52,10 @@ export type UISettings = {
   plex?: PlexSettings
   tmdb?: TMDBSettings
   tvdb?: TVDBSettings
+  fanart?: FanartSettings
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
+  apiOrder?: string[]
 }
 
 const theme = ref<Theme>('neon')
@@ -57,11 +66,13 @@ const error = ref<string | null>(null)
 const loaded = ref(false)
 const saveLocation = ref<string>('/output')
 const saveBatchInSubfolder = ref<boolean>(false)
-const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [] })
+const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: true })
+const fanart = ref<FanartSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048 })
+const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 
 async function loadSettings() {
   loading.value = true
@@ -87,10 +98,14 @@ async function loadSettings() {
       token: data.plex?.token ?? '',
       movieLibraryName: data.plex?.movieLibraryName ?? '',
       movieLibraryNames: data.plex?.movieLibraryNames ?? (data.plex?.movieLibraryName ? [data.plex.movieLibraryName] : []),
-      libraryMappings: data.plex?.libraryMappings ?? []
+      libraryMappings: data.plex?.libraryMappings ?? [],
+      tvShowLibraryName: data.plex?.tvShowLibraryName ?? '',
+      tvShowLibraryNames: data.plex?.tvShowLibraryNames ?? (data.plex?.tvShowLibraryName ? [data.plex.tvShowLibraryName] : []),
+      tvShowLibraryMappings: data.plex?.tvShowLibraryMappings ?? []
     }
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }
+    fanart.value = { apiKey: data.fanart?.apiKey ?? '' }
     imageQuality.value = {
       outputFormat: data.imageQuality?.outputFormat ?? 'jpg',
       jpgQuality: data.imageQuality?.jpgQuality ?? 95,
@@ -103,6 +118,7 @@ async function loadSettings() {
       tvdbRateLimit: data.performance?.tvdbRateLimit ?? 20,
       memoryLimit: data.performance?.memoryLimit ?? 2048
     }
+    apiOrder.value = data.apiOrder ?? ['tmdb', 'fanart', 'tvdb']
 
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to load settings'
@@ -125,8 +141,10 @@ async function saveSettings() {
       plex: { ...plex.value },
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
+      fanart: { ...fanart.value },
       imageQuality: { ...imageQuality.value },
-      performance: { ...performance.value }
+      performance: { ...performance.value },
+      apiOrder: apiOrder.value
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -154,8 +172,10 @@ export function useSettingsStore() {
     plex,
     tmdb,
     tvdb,
+    fanart,
     imageQuality,
     performance,
+    apiOrder,
     loading,
     error,
     loaded,

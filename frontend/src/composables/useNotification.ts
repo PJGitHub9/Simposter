@@ -30,9 +30,9 @@ export function useNotification() {
     }
   }
 
-  const success = (message: string, duration = 3000) => show(message, 'success', duration)
-  const error = (message: string, duration = 4000) => show(message, 'error', duration)
-  const info = (message: string, duration = 3000) => show(message, 'info', duration)
+  const success = (message: string, duration = 7000) => show(message, 'success', duration)
+  const error = (message: string, duration = 8000) => show(message, 'error', duration)
+  const info = (message: string, duration = 6000) => show(message, 'info', duration)
 
   return {
     notifications,

@@ -4,6 +4,7 @@ import json
 import logging
 import sqlite3
 import os
+import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
@@ -42,6 +43,108 @@ def _configure_conn(conn: sqlite3.Connection):
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA busy_timeout=5000;")  # 5s wait if locked
     conn.row_factory = sqlite3.Row
+
+
+def get_db_version() -> Optional[str]:
+    """Get the current database version."""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM settings WHERE key = 'app.version'")
+            row = cursor.fetchone()
+            if row:
+                return row["value"]
+    except Exception:
+        # Table might not exist yet
+        pass
+    return None
+
+
+def _backup_database(db_version: str) -> None:
+    """
+    Create a versioned backup of the current database before migrations.
+    Output file example: simposter_v1.4.3.db.bak
+    """
+    try:
+        db_file = Path(DB_PATH)
+        if not db_file.exists():
+            logger.info("[DB] Skip backup: database file does not exist yet")
+            return
+
+        safe_version = (db_version or "unknown").replace(" ", "_")
+        backup_name = f"simposter_{safe_version}.db.bak"
+        backup_path = db_file.parent / backup_name
+
+        # Avoid overwriting an existing backup: append numeric suffix if needed
+        if backup_path.exists():
+            idx = 1
+            while True:
+                candidate = db_file.parent / f"{backup_name}.{idx}"
+                if not candidate.exists():
+                    backup_path = candidate
+                    break
+                idx += 1
+
+        shutil.copy2(db_file, backup_path)
+        logger.info("[DB] Backed up database to %s", backup_path)
+    except Exception as e:
+        logger.warning("[DB] Failed to back up database before migration: %s", e)
+
+
+def set_db_version(version: str) -> None:
+    """Set the database version."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO settings (key, value, category, updated_at)
+            VALUES ('app.version', ?, 'app', CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+        """, (version,))
+    logger.info(f"[DB] Set database version to {version}")
+
+
+def get_app_version() -> str:
+    """Get the current application version from the frontend version file."""
+    try:
+        # Read version from the frontend version file
+        version_file = Path(__file__).parent.parent / "frontend" / "src" / "version.ts"
+        if version_file.exists():
+            content = version_file.read_text()
+            # Parse: export const APP_VERSION = 'v1.4.4'
+            for line in content.split('\n'):
+                if 'APP_VERSION' in line and '=' in line:
+                    # Extract version between quotes
+                    version = line.split('=')[1].strip().strip("'\"")
+                    return version
+    except Exception as e:
+        logger.warning(f"[DB] Could not read app version from version.ts: {e}")
+
+    # Fallback version
+    return "v1.0.0"
+
+
+def check_and_update_version() -> None:
+    """
+    Check the database version against the current app version.
+    Log version changes and update the database version.
+    This allows future migration logic based on version differences.
+    """
+    current_app_version = get_app_version()
+    db_version = get_db_version()
+
+    if db_version is None:
+        logger.info(f"[DB] New database - setting initial version to {current_app_version}")
+        set_db_version(current_app_version)
+    elif db_version != current_app_version:
+        logger.info(f"[DB] Version change detected: {db_version} -> {current_app_version}")
+        _backup_database(db_version)
+        # Future: Add migration logic here based on version comparison
+        # For now, just update the version
+        set_db_version(current_app_version)
+    else:
+        logger.debug(f"[DB] Database version {db_version} matches app version")
 
 
 def init_database():
@@ -179,6 +282,34 @@ def init_database():
             ON movie_cache(library_id)
         """)
 
+        # Poster history table - track poster actions (local save / send to Plex)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rating_key TEXT NOT NULL,
+                library_id TEXT,
+                title TEXT,
+                year INTEGER,
+                template_id TEXT,
+                preset_id TEXT,
+                action TEXT NOT NULL, -- saved_local | sent_to_plex
+                save_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_poster_history_rating
+            ON poster_history(rating_key)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_poster_history_library
+            ON poster_history(library_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_poster_history_created
+            ON poster_history(created_at DESC)
+        """)
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
     except Exception as e:
@@ -187,6 +318,9 @@ def init_database():
         raise
     finally:
         conn.close()
+
+    # Check and update database version
+    check_and_update_version()
 
 
 @contextmanager
@@ -487,6 +621,31 @@ def delete_preset(template_id: str, preset_id: str) -> bool:
     return deleted
 
 
+def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
+    """
+    Replace all presets in the database with the provided structure.
+    Expected shape: { template_id: { presets: [ {id,name,options}, ... ] } }
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM presets")
+
+        for template_id, tpl_data in (preset_data or {}).items():
+            presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
+            for preset in presets_list:
+                pid = preset.get("id")
+                name = preset.get("name") or pid
+                options = preset.get("options") or {}
+                if not pid:
+                    continue
+                options_json = json.dumps(options)
+                cursor.execute("""
+                    INSERT INTO presets (id, template_id, name, options_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, (pid, template_id, name, options_json))
+    logger.info("[DB] Replaced all presets from import")
+
+
 def get_presets_for_template(template_id: str) -> List[Dict[str, Any]]:
     """Get all presets for a specific template."""
     with get_db() as conn:
@@ -764,6 +923,91 @@ def copy_env_to_ui_settings():
         conn.rollback()
     finally:
         conn.close()
+
+
+# ============================================
+#  Poster History Operations
+# ============================================
+
+def record_poster_history(
+    rating_key: str,
+    library_id: Optional[str],
+    title: Optional[str],
+    year: Optional[int],
+    template_id: Optional[str],
+    preset_id: Optional[str],
+    action: str,
+    save_path: Optional[str] = None,
+) -> None:
+    """Record a poster-related action for tracking."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO poster_history
+            (rating_key, library_id, title, year, template_id, preset_id, action, save_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                rating_key,
+                library_id,
+                title,
+                year if year is not None else None,
+                template_id,
+                preset_id,
+                action,
+                save_path,
+            ),
+        )
+
+
+def get_poster_history(
+    library_id: Optional[str] = None,
+    template_id: Optional[str] = None,
+    action: Optional[str] = None,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """Fetch poster history records with optional filters."""
+    query = "SELECT * FROM poster_history"
+    clauses = []
+    params: List[Any] = []
+
+    if library_id:
+        clauses.append("library_id = ?")
+        params.append(library_id)
+    if template_id:
+        clauses.append("template_id = ?")
+        params.append(template_id)
+    if action:
+        clauses.append("action = ?")
+        params.append(action)
+
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+
+    query += " ORDER BY datetime(created_at) DESC LIMIT ?"
+    params.append(limit)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        out.append({
+            "id": row["id"],
+            "rating_key": row["rating_key"],
+            "library_id": row["library_id"],
+            "title": row["title"],
+            "year": row["year"],
+            "template_id": row["template_id"],
+            "preset_id": row["preset_id"],
+            "action": row["action"],
+            "save_path": row["save_path"],
+            "created_at": row["created_at"],
+        })
+    return out
 
 
 # Initialize database on module import

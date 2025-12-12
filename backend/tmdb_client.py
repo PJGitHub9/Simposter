@@ -1,9 +1,10 @@
 # backend/tmdb_client.py
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import requests
 
 from .config import logger, settings
+from . import database as db
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
 TMDB_IMG_BASE = "https://image.tmdb.org/t/p"
@@ -55,7 +56,7 @@ def _build_image_entry(p: Dict[str, Any], kind: str) -> Dict[str, Any]:
     else:
         thumb_size = "w342"
 
-    return {
+    entry = {
         "url": _make_img_url(path, "original"),
         "thumb": _make_img_url(path, thumb_size),
         "width": width,
@@ -63,14 +64,42 @@ def _build_image_entry(p: Dict[str, Any], kind: str) -> Dict[str, Any]:
         "language": lang,
         "has_text": bool(lang),
     }
+    if kind == "logo":
+        entry["source"] = "tmdb"
+        entry["type"] = "logo"
+    return entry
 
 
-def get_images_for_movie(tmdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
+def _build_lang_param(language_preference: Optional[str], original_language: Optional[str]) -> str:
+    """Build TMDB include_image_language parameter honoring prefs + null."""
+    langs = []
+    if language_preference:
+        langs.append(language_preference)
+    if original_language and original_language not in langs:
+        langs.append(original_language)
+    if "en" not in langs:
+        langs.append("en")
+    if "null" not in langs:
+        langs.append("null")
+    # Deduplicate preserving order
+    seen = set()
+    ordered = []
+    for lang in langs:
+        if lang in seen:
+            continue
+        seen.add(lang)
+        ordered.append(lang)
+    return ",".join(ordered)
+
+
+def get_images_for_movie(tmdb_id: int, original_language: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
     logger.info("[TMDB] Fetching images tmdb_id=%s", tmdb_id)
+    language_pref = db.get_setting("pref.language") or "en"
+    include_lang = _build_lang_param(language_pref, original_language)
     data = _tmdb_get(
         f"/movie/{tmdb_id}/images",
         {
-            "include_image_language": "en,null",
+            "include_image_language": include_lang,
         },
     )
 
@@ -116,6 +145,7 @@ def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
 
     title = data.get("title", "")
     original_title = data.get("original_title", "")
+    original_language = data.get("original_language", "")
     release_date = data.get("release_date", "")  # Format: YYYY-MM-DD
     year = release_date.split("-")[0] if release_date else ""
 
@@ -124,6 +154,7 @@ def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
     return {
         "title": title,
         "original_title": original_title,
+        "original_language": original_language,
         "year": year,
         "release_date": release_date,
     }

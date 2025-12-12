@@ -30,6 +30,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+.aiChanges
 .cache/
 .parcel-cache/
 coverage/
@@ -44,4 +45,3 @@ config/ui_settings.json
 */config/settings
 /config/*
 .*/docker-compose.yml
-

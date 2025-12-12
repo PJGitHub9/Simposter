@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     TMDB_API_KEY: str = ""
+    FANART_API_KEY: str = ""
 
     OUTPUT_ROOT: str = ""
     CONFIG_DIR: str = "./config"
