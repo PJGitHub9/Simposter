@@ -86,6 +86,11 @@ def get_tv_external_ids(tmdb_id: int) -> Dict[str, Any]:
     return _tmdb_get(f"/tv/{tmdb_id}/external_ids", {})
 
 
+def get_movie_external_ids(tmdb_id: int) -> Dict[str, Any]:
+    """Get external IDs (including IMDB) for a movie."""
+    return _tmdb_get(f"/movie/{tmdb_id}/external_ids", {})
+
+
 def _make_img_url(file_path: str, size: str = "original") -> str:
     return f"{TMDB_IMG_BASE}/{size}{file_path}"
 

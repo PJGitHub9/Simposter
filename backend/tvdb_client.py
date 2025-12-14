@@ -86,14 +86,19 @@ def _tvdb_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
     url = f"{TVDB_API_BASE}{path}"
     try:
         r = requests.get(url, headers=headers, params=params or {}, timeout=12)
+        logger.debug("[TVDB] GET %s -> status=%d", url, r.status_code)
         r.raise_for_status()
-        logger.debug("[TVDB] GET %s params=%s", url, params)
-        return r.json()
-    except Exception as e:
+        json_data = r.json()
+        logger.debug("[TVDB] Response keys: %s", list(json_data.keys()) if isinstance(json_data, dict) else type(json_data))
+        return json_data
+    except requests.exceptions.HTTPError as e:
         text = ""
         if hasattr(e, "response") and e.response is not None:
-            text = str(e.response.text)[:200]
-        logger.warning("[TVDB] Request failed url=%s err=%s body=%s", url, e, text)
+            text = str(e.response.text)[:500]
+        logger.warning("[TVDB] HTTP error url=%s status=%s body=%s", url, e.response.status_code if e.response else "unknown", text)
+        raise TVDBError(f"TVDB HTTP {e.response.status_code if e.response else 'error'}: {text}")
+    except Exception as e:
+        logger.warning("[TVDB] Request failed url=%s err=%s type=%s", url, e, type(e).__name__)
         raise TVDBError(f"TVDB request failed: {e}")
 
 
@@ -101,32 +106,149 @@ def get_series_images(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
     """
     Fetch posters/backdrops/logos for a TV series from TVDB.
     """
-    data = _tvdb_get(f"/series/{tvdb_id}/artworks")
-    artworks = data.get("data") or []
+    # TVDB v4 uses /series/{id}/extended with meta=translations to get all artworks
+    data = _tvdb_get(f"/series/{tvdb_id}/extended", params={"meta": "translations"})
+
+    # Artworks are nested under data.artworks in the extended response
+    series_data = data.get("data") or {}
+    artworks = series_data.get("artworks") or []
+
+    logger.debug("[TVDB] Series %d: received %d artworks", tvdb_id, len(artworks))
+    if artworks and len(artworks) > 0:
+        logger.debug("[TVDB] Sample artwork: %s", artworks[0])
 
     posters: List[Dict[str, Any]] = []
     backdrops: List[Dict[str, Any]] = []
     logos: List[Dict[str, Any]] = []
 
     for art in artworks:
-        atype = (art.get("type") or "").lower()
+        type_id = art.get("type")  # In TVDB v4, "type" contains the numeric ID
         image_url = art.get("image")
         thumb_url = art.get("thumbnail")
+
         if not image_url:
             continue
+
         mapped = {
             "url": image_url,
             "thumb": thumb_url or image_url,
             "source": "tvdb",
             "language": art.get("language"),
-            "type": atype,
+            "type": f"type_{type_id}",
         }
-        if "poster" in atype:
+
+        # Match by type ID: 2=poster, 3=background/fanart, 5=clearlogo, 14=clearlogo
+        if type_id == 2:
             posters.append(mapped)
-        elif any(x in atype for x in ["fanart", "background", "backdrop"]):
+        elif type_id == 3:
             backdrops.append(mapped)
-        elif "logo" in atype or "clearlogo" in atype:
+        elif type_id in [14, 5]:
             logos.append(mapped)
+
+    logger.debug("[TVDB] Series %d images: %d posters, %d backdrops, %d logos",
+                 tvdb_id, len(posters), len(backdrops), len(logos))
+
+    return {"posters": posters, "backdrops": backdrops, "logos": logos}
+
+
+def get_season_images(tvdb_id: int, season_number: int) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Fetch season-specific posters from TVDB.
+    Returns posters filtered to the specific season, plus series-level logos/backdrops.
+    """
+    # Get all artworks for the series using the extended endpoint
+    data = _tvdb_get(f"/series/{tvdb_id}/extended", params={"meta": "translations"})
+
+    # Artworks are nested under data.artworks in the extended response
+    series_data = data.get("data") or {}
+    artworks = series_data.get("artworks") or []
+
+    logger.debug("[TVDB] Season %d search: received %d total artworks", season_number, len(artworks))
+
+    posters: List[Dict[str, Any]] = []
+    backdrops: List[Dict[str, Any]] = []
+    logos: List[Dict[str, Any]] = []
+
+    for art in artworks:
+        type_id = art.get("type")  # In TVDB v4, "type" contains the numeric ID
+        image_url = art.get("image")
+        thumb_url = art.get("thumbnail")
+        season_num = art.get("seasonId")
+
+        if not image_url:
+            continue
+
+        mapped = {
+            "url": image_url,
+            "thumb": thumb_url or image_url,
+            "source": "tvdb",
+            "language": art.get("language"),
+            "type": f"type_{type_id}",
+        }
+
+        # Season posters: only include if they match the season number
+        if type_id == 2 and season_num is not None:
+            if int(season_num) == season_number:
+                posters.append(mapped)
+                logger.debug("[TVDB] Found season %d poster: %s", season_number, image_url[:50])
+        # Series-level backdrops and logos (no season filtering)
+        elif type_id == 3 and season_num is None:
+            backdrops.append(mapped)
+        elif type_id in [14, 5] and season_num is None:
+            logos.append(mapped)
+
+    logger.debug("[TVDB] Season %d images: %d posters, %d backdrops, %d logos",
+                 season_number, len(posters), len(backdrops), len(logos))
+
+    return {"posters": posters, "backdrops": backdrops, "logos": logos}
+
+
+def get_movie_images(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Fetch posters/backdrops/logos for a movie from TVDB.
+    Uses the same structure as series images.
+    """
+    # TVDB v4 uses /movies/{id}/extended for movie artworks
+    data = _tvdb_get(f"/movies/{tvdb_id}/extended", params={"meta": "translations"})
+
+    # Artworks are nested under data.artworks in the extended response
+    movie_data = data.get("data") or {}
+    artworks = movie_data.get("artworks") or []
+
+    logger.debug("[TVDB] Movie %d: received %d artworks", tvdb_id, len(artworks))
+    if artworks and len(artworks) > 0:
+        logger.debug("[TVDB] Sample artwork: %s", artworks[0])
+
+    posters: List[Dict[str, Any]] = []
+    backdrops: List[Dict[str, Any]] = []
+    logos: List[Dict[str, Any]] = []
+
+    for art in artworks:
+        type_id = art.get("type")  # In TVDB v4, "type" contains the numeric ID
+        image_url = art.get("image")
+        thumb_url = art.get("thumbnail")
+
+        if not image_url:
+            continue
+
+        mapped = {
+            "url": image_url,
+            "thumb": thumb_url or image_url,
+            "source": "tvdb",
+            "language": art.get("language"),
+            "type": f"type_{type_id}",
+        }
+
+        # Match by type ID: 2=poster, 3=background/fanart, 5=clearlogo, 14=clearlogo
+        if type_id == 2:
+            posters.append(mapped)
+        elif type_id == 3:
+            backdrops.append(mapped)
+        elif type_id in [14, 5]:
+            logos.append(mapped)
+
+    logger.debug("[TVDB] Movie %d images: %d posters, %d backdrops, %d logos",
+                 tvdb_id, len(posters), len(backdrops), len(logos))
 
     return {"posters": posters, "backdrops": backdrops, "logos": logos}
 

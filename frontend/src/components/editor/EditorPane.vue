@@ -164,6 +164,31 @@ const saveEditorState = () => {
   }
 }
 
+const loadGlobalFallbackSettings = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/template-fallback`)
+    if (!res.ok) return
+    const data = await res.json()
+
+    // Map API filter values to UI filter values
+    const mapFilterValue = (apiValue: string): 'all' | 'en' | 'with_lang' => {
+      if (apiValue === 'en') return 'en'
+      if (apiValue === 'original') return 'with_lang'
+      return 'all'
+    }
+
+    // Only set if not already saved in local state
+    if (data.poster_filter) {
+      posterLanguageFilter.value = mapFilterValue(data.poster_filter)
+    }
+    if (data.logo_filter) {
+      logoLanguageFilter.value = mapFilterValue(data.logo_filter)
+    }
+  } catch (e) {
+    console.warn('Failed to load global fallback settings:', e)
+  }
+}
+
 const loadEditorState = () => {
   try {
     const saved = localStorage.getItem(EDITOR_STATE_KEY)
@@ -173,11 +198,13 @@ const loadEditorState = () => {
     if (state.selectedTemplate) selectedTemplate.value = state.selectedTemplate
     if (state.selectedPreset) selectedPreset.value = state.selectedPreset
     if (state.posterFilter) posterFilter.value = state.posterFilter
-    if (state.posterLanguageFilter) posterLanguageFilter.value = state.posterLanguageFilter
+    // Only restore language filters if they're not set to default 'all' (prefer global settings)
+    if (state.posterLanguageFilter && state.posterLanguageFilter !== 'all') posterLanguageFilter.value = state.posterLanguageFilter
     if (typeof state.showTmdbPosters === 'boolean') showTmdbPosters.value = state.showTmdbPosters
     if (typeof state.showFanartPosters === 'boolean') showFanartPosters.value = state.showFanartPosters
     if (state.logoPreference) logoPreference.value = state.logoPreference
-    if (state.logoLanguageFilter) logoLanguageFilter.value = state.logoLanguageFilter
+    // Only restore language filters if they're not set to default 'all' (prefer global settings)
+    if (state.logoLanguageFilter && state.logoLanguageFilter !== 'all') logoLanguageFilter.value = state.logoLanguageFilter
     if (typeof state.showTmdbLogos === 'boolean') showTmdbLogos.value = state.showTmdbLogos
     if (typeof state.showFanartLogos === 'boolean') showFanartLogos.value = state.showFanartLogos
     if (typeof state.showClearArt === 'boolean') showClearArt.value = state.showClearArt
@@ -726,7 +753,8 @@ const doSend = async () => {
 }
 
 // Load saved state on mount
-onMounted(() => {
+onMounted(async () => {
+  await loadGlobalFallbackSettings()
   loadEditorState()
 })
 

@@ -281,6 +281,14 @@ def api_tv_show_tmdb(rating_key: str):
 
     tmdb_id = extract_tmdb_id_from_metadata(r.text)
     tvdb_id = extract_tvdb_id_from_metadata(r.text)
+
+    if tmdb_id and not tvdb_id:
+        try:
+            external_ids = get_tv_external_ids(tmdb_id)
+            tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+        except Exception:
+            tvdb_id = tvdb_id
+
     cache.update_tv_tmdb(rating_key, tmdb_id)
     if tvdb_id:
         cache.update_tv_tvdb(rating_key, tvdb_id)
@@ -338,16 +346,7 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
             season_imgs = get_tv_season_images(tmdb_id, season, details.get("original_language"))
             tv_imgs = get_images_for_tv_show(tmdb_id, details.get("original_language"))
 
-            # For seasons, we want season posters but show-level backdrops and logos
-            return {
-                "posters": season_imgs.get("posters") or [],
-                "backdrops": tv_imgs.get("backdrops") or [],
-                "logos": tv_imgs.get("logos") or []
-            }
-        else:
-            # Get show-level images
-            details = get_tv_show_details(tmdb_id)
-            tv_imgs = get_images_for_tv_show(tmdb_id, details.get("original_language"))
+            # TVDB images (season-specific if available)
             tvdb_imgs = {"posters": [], "backdrops": [], "logos": []}
             tvdb_id: Optional[int] = None
             try:
@@ -355,12 +354,81 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
                 tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
             except Exception:
                 tvdb_id = None
-
-            if tvdb_id:
+            if tvdb_id and settings.TVDB_API_KEY:
                 try:
-                    tvdb_imgs = tvdb_client.get_series_images(tvdb_id)
+                    logger.debug("[TVDB] Fetching season %d images for tvdb_id=%s", season, tvdb_id)
+                    # Fetch season-specific images from TVDB
+                    tvdb_imgs = tvdb_client.get_season_images(int(tvdb_id), season)
+                    logger.debug("[TVDB] Season %d result: %d posters, %d logos, %d backdrops",
+                                season,
+                                len(tvdb_imgs.get("posters", [])),
+                                len(tvdb_imgs.get("logos", [])),
+                                len(tvdb_imgs.get("backdrops", [])))
                 except Exception as tvdb_err:
-                    logger.debug("[TVDB] Failed to fetch images for tvdb_id=%s: %s", tvdb_id, tvdb_err)
+                    logger.warning("[TVDB] Failed to fetch season %d images for tvdb_id=%s: %s", season, tvdb_id, tvdb_err)
+            else:
+                if not tvdb_id:
+                    logger.debug("[TVDB] No TVDB ID found for tmdb_id=%s", tmdb_id)
+                if not settings.TVDB_API_KEY:
+                    logger.debug("[TVDB] TVDB_API_KEY not configured")
+
+            # Get API order from settings
+            from ..api.ui_settings import _read_settings
+            try:
+                ui_settings = _read_settings(include_env=False)
+                api_order = ui_settings.apiOrder or ["tmdb", "fanart", "tvdb"]
+            except Exception:
+                api_order = ["tmdb", "fanart", "tvdb"]
+
+            image_sources = {
+                "tmdb": {"logos": tv_imgs.get("logos") or [], "posters": season_imgs.get("posters") or [], "backdrops": tv_imgs.get("backdrops") or []},
+                "fanart": {"logos": [], "posters": [], "backdrops": []},
+                "tvdb": tvdb_imgs,
+            }
+
+            merged_logos: List[dict] = []
+            merged_posters: List[dict] = []
+            merged_backdrops: List[dict] = []
+            for source in api_order:
+                if source in image_sources:
+                    merged_logos.extend(image_sources[source]["logos"])
+                    merged_posters.extend(image_sources[source]["posters"])
+                    merged_backdrops.extend(image_sources[source]["backdrops"])
+
+            return {
+                "posters": merged_posters,
+                "backdrops": merged_backdrops,
+                "logos": merged_logos
+            }
+        else:
+            # Get show-level images
+            details = get_tv_show_details(tmdb_id)
+            tv_imgs = get_images_for_tv_show(tmdb_id, details.get("original_language"))
+            tvdb_imgs = {"posters": [], "backdrops": [], "logos": []}
+            tvdb_id: Optional[int] = None
+
+            try:
+                external_ids = get_tv_external_ids(tmdb_id)
+                tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+            except Exception:
+                tvdb_id = None
+
+            # Only call TVDB if key is set and we have an id
+            if tvdb_id and settings.TVDB_API_KEY:
+                try:
+                    logger.debug("[TVDB] Fetching series images for tvdb_id=%s", tvdb_id)
+                    tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
+                    logger.debug("[TVDB] Series images result: %d posters, %d logos, %d backdrops",
+                                len(tvdb_imgs.get("posters", [])),
+                                len(tvdb_imgs.get("logos", [])),
+                                len(tvdb_imgs.get("backdrops", [])))
+                except Exception as tvdb_err:
+                    logger.warning("[TVDB] Failed to fetch images for tvdb_id=%s: %s", tvdb_id, tvdb_err)
+            else:
+                if not tvdb_id:
+                    logger.debug("[TVDB] No TVDB ID found for tmdb_id=%s", tmdb_id)
+                if not settings.TVDB_API_KEY:
+                    logger.debug("[TVDB] TVDB_API_KEY not configured")
 
             # Get API order from settings
             from ..api.ui_settings import _read_settings

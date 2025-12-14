@@ -27,6 +27,7 @@ const posterFilter = ref<'all' | 'textless' | 'text'>('all')
 const posterLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
 const showTmdbPosters = ref(true)
 const showFanartPosters = ref(true)
+const showTvdbPosters = ref(true)
 const logoPreference = ref<'first' | 'white' | 'color'>('first')
 const logoLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
 const showTmdbLogos = ref(true)
@@ -82,6 +83,10 @@ const currentSeason = computed(() => {
 // Rendered preview carousel
 const renderedPreviews = ref<RenderedPreview[]>([])
 const activePreviewIndex = ref(0)
+
+// Cache assets per season to avoid re-fetching when switching
+const seasonAssetsCache = ref<Record<string, { posters: any[]; logos: any[]; backdrops?: any[] }>>({})
+const showLevelAssets = ref<{ posters: any[]; logos: any[]; backdrops?: any[] }>({ posters: [], logos: [], backdrops: [] })
 
 // Simple session cache for seasons per show to avoid refetching on each open
 const SEASONS_CACHE_KEY = 'simposter-tv-seasons-cache'
@@ -208,7 +213,7 @@ watch(lastPreview, (newPreview) => {
 })
 
 // Switch to a rendered preview
-function switchToRenderedPreview(index: number) {
+async function switchToRenderedPreview(index: number) {
   if (index < 0 || index >= renderedPreviews.value.length) return
   activePreviewIndex.value = index
 
@@ -218,7 +223,30 @@ function switchToRenderedPreview(index: number) {
     const seasonIndex = Array.from(selectedSeasons.value).findIndex(key => key === preview.seasonKey)
     if (seasonIndex >= 0) {
       currentSeasonIndex.value = seasonIndex
+      // Load season-specific assets when switching to this preview
+      await fetchImagesForCurrentSeason()
     }
+  }
+}
+
+function syncRenderedPlaceholders() {
+  const selectedKeys = new Set(selectedSeasons.value)
+  // Drop previews for deselected seasons
+  renderedPreviews.value = renderedPreviews.value.filter(p => selectedKeys.has(p.seasonKey))
+  // Add placeholders for newly selected seasons
+  selectedKeys.forEach((key) => {
+    const exists = renderedPreviews.value.some(p => p.seasonKey === key)
+    if (!exists) {
+      const season = seasons.value.find(s => s.key === key)
+      renderedPreviews.value.push({
+        seasonKey: key,
+        seasonTitle: season?.title || 'Season',
+        imageUrl: ''
+      })
+    }
+  })
+  if (activePreviewIndex.value >= renderedPreviews.value.length) {
+    activePreviewIndex.value = Math.max(0, renderedPreviews.value.length - 1)
   }
 }
 
@@ -259,6 +287,7 @@ const saveEditorState = () => {
       posterLanguageFilter: posterLanguageFilter.value,
       showTmdbPosters: showTmdbPosters.value,
       showFanartPosters: showFanartPosters.value,
+      showTvdbPosters: showTvdbPosters.value,
       logoPreference: logoPreference.value,
       logoLanguageFilter: logoLanguageFilter.value,
       showTmdbLogos: showTmdbLogos.value,
@@ -296,6 +325,31 @@ const saveEditorState = () => {
   }
 }
 
+const loadGlobalFallbackSettings = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/template-fallback`)
+    if (!res.ok) return
+    const data = await res.json()
+
+    // Map API filter values to UI filter values
+    const mapFilterValue = (apiValue: string): 'all' | 'en' | 'with_lang' => {
+      if (apiValue === 'en') return 'en'
+      if (apiValue === 'original') return 'with_lang'
+      return 'all'
+    }
+
+    // Only set if not already saved in local state
+    if (data.poster_filter) {
+      posterLanguageFilter.value = mapFilterValue(data.poster_filter)
+    }
+    if (data.logo_filter) {
+      logoLanguageFilter.value = mapFilterValue(data.logo_filter)
+    }
+  } catch (e) {
+    console.warn('Failed to load global fallback settings:', e)
+  }
+}
+
 const loadEditorState = () => {
   try {
     const saved = localStorage.getItem(EDITOR_STATE_KEY)
@@ -305,11 +359,14 @@ const loadEditorState = () => {
     if (state.selectedTemplate) selectedTemplate.value = state.selectedTemplate
     if (state.selectedPreset) selectedPreset.value = state.selectedPreset
     if (state.posterFilter) posterFilter.value = state.posterFilter
-  if (state.posterLanguageFilter) posterLanguageFilter.value = state.posterLanguageFilter
+  // Only restore language filters if they're not set to default 'all' (prefer global settings)
+  if (state.posterLanguageFilter && state.posterLanguageFilter !== 'all') posterLanguageFilter.value = state.posterLanguageFilter
   if (typeof state.showTmdbPosters === 'boolean') showTmdbPosters.value = state.showTmdbPosters
   if (typeof state.showFanartPosters === 'boolean') showFanartPosters.value = state.showFanartPosters
+  if (typeof state.showTvdbPosters === 'boolean') showTvdbPosters.value = state.showTvdbPosters
   if (state.logoPreference) logoPreference.value = state.logoPreference
-  if (state.logoLanguageFilter) logoLanguageFilter.value = state.logoLanguageFilter
+  // Only restore language filters if they're not set to default 'all' (prefer global settings)
+  if (state.logoLanguageFilter && state.logoLanguageFilter !== 'all') logoLanguageFilter.value = state.logoLanguageFilter
   if (typeof state.showTmdbLogos === 'boolean') showTmdbLogos.value = state.showTmdbLogos
   if (typeof state.showFanartLogos === 'boolean') showFanartLogos.value = state.showFanartLogos
   if (typeof state.showTvdbLogos === 'boolean') showTvdbLogos.value = state.showTvdbLogos
@@ -400,6 +457,7 @@ const filteredPosters = computed(() => {
   items = items.filter((p) => {
     const src = (p.source || 'tmdb').toLowerCase()
     if (src === 'fanart') return showFanartPosters.value
+    if (src === 'tvdb') return showTvdbPosters.value
     return showTmdbPosters.value
   })
 
@@ -715,6 +773,8 @@ const fetchTmdbAssets = async () => {
   logos.value = []
   selectedPoster.value = null
   selectedLogo.value = null
+  seasonAssetsCache.value = {}
+  showLevelAssets.value = { posters: [], logos: [], backdrops: [] }
   try {
     // Detect media type (movie or TV show)
     const mediaType = props.movie.mediaType || 'movie'
@@ -739,10 +799,57 @@ const fetchTmdbAssets = async () => {
     const imgs = await imgRes.json()
     posters.value = imgs.posters || []
     logos.value = imgs.logos || []
+    showLevelAssets.value = {
+      posters: imgs.posters || [],
+      logos: imgs.logos || [],
+      backdrops: imgs.backdrops || []
+    }
     applyPosterFilter()
     applyLogoPreference()
   } catch (e) {
     console.error(e)
+  }
+}
+
+const fetchImagesForCurrentSeason = async () => {
+  const season = currentSeason.value
+  if (!season) return
+  if (!tmdbId.value) return
+
+  // Series entry uses show-level assets
+  if (season.isSeries) {
+    posters.value = showLevelAssets.value.posters || []
+    logos.value = showLevelAssets.value.logos || []
+    applyPosterFilter()
+    applyLogoPreference()
+    return
+  }
+
+  // Use cached assets if available
+  const cached = seasonAssetsCache.value[season.key]
+  if (cached) {
+    posters.value = cached.posters || []
+    logos.value = cached.logos || []
+    applyPosterFilter()
+    applyLogoPreference()
+    return
+  }
+
+  try {
+    const imgRes = await fetch(`${apiBase}/api/tmdb/tv/${tmdbId.value}/images?season=${season.index}`)
+    if (!imgRes.ok) throw new Error('Failed to fetch season images')
+    const imgs = await imgRes.json()
+    seasonAssetsCache.value[season.key] = {
+      posters: imgs.posters || [],
+      logos: imgs.logos || [],
+      backdrops: imgs.backdrops || []
+    }
+    posters.value = imgs.posters || []
+    logos.value = imgs.logos || []
+    applyPosterFilter()
+    applyLogoPreference()
+  } catch (err) {
+    console.error('Failed to fetch season images:', err)
   }
 }
 
@@ -901,9 +1008,12 @@ async function fetchSeasons() {
 
   const cached = seasonsCache.value[props.movie.key]
   if (cached && cached.length) {
-    seasons.value = [buildSeriesEntry(), ...cached]
-    selectedSeasons.value = new Set(seasons.value.map(s => s.key))
+    const seriesEntry = buildSeriesEntry()
+    seasons.value = [seriesEntry, ...cached]
+    // Only select the series poster by default
+    selectedSeasons.value = new Set([seriesEntry.key])
     currentSeasonIndex.value = 0
+    syncRenderedPlaceholders()
     return
   }
 
@@ -918,15 +1028,17 @@ async function fetchSeasons() {
       thumb: posterUrlForRatingKey(s.key) || toPlexPosterUrl(s.poster || s.thumb)
     }))
 
-    seasons.value = [buildSeriesEntry(), ...mappedSeasons]
+    const seriesEntry = buildSeriesEntry()
+    seasons.value = [seriesEntry, ...mappedSeasons]
 
     // Cache for subsequent opens
     seasonsCache.value[props.movie.key] = mappedSeasons
     saveSeasonsCache()
 
-    // Auto-select all seasons by default
-    selectedSeasons.value = new Set(seasons.value.map(s => s.key))
+    // Only select the series poster by default
+    selectedSeasons.value = new Set([seriesEntry.key])
     currentSeasonIndex.value = 0
+    syncRenderedPlaceholders()
   } catch (err) {
     console.error('Failed to fetch seasons:', err)
     notifyError('Failed to load TV show seasons')
@@ -934,34 +1046,55 @@ async function fetchSeasons() {
 }
 
 // Toggle season selection
-function toggleSeasonSelection(seasonKey: string) {
+async function toggleSeasonSelection(seasonKey: string) {
   const newSet = new Set(selectedSeasons.value)
-  if (newSet.has(seasonKey)) {
+  const wasSelected = newSet.has(seasonKey)
+
+  if (wasSelected) {
     newSet.delete(seasonKey)
   } else {
     newSet.add(seasonKey)
   }
+
   selectedSeasons.value = newSet
 
-  // Reset to first selected season if current one was deselected
-  if (!newSet.has(seasonKey) && currentSeasonIndex.value >= newSet.size) {
-    currentSeasonIndex.value = 0
-  } else if (newSet.has(seasonKey)) {
+  // When a season is clicked, make it the current season for editing
+  if (newSet.has(seasonKey)) {
     const index = Array.from(newSet).findIndex(key => key === seasonKey)
-    if (index >= 0) currentSeasonIndex.value = index
+    if (index >= 0) {
+      currentSeasonIndex.value = index
+    }
+
+    // Fetch season-specific images (will use cache if already loaded)
+    await fetchImagesForCurrentSeason()
+
+    // Auto-select first poster and logo
+    if (posters.value.length > 0 && posters.value[0]) {
+      selectedPoster.value = posters.value[0].url
+    }
+    if (logos.value.length > 0 && logos.value[0]) {
+      selectedLogo.value = logos.value[0].url
+    }
+  } else if (wasSelected) {
+    // If we just deselected the current season, move to the first available
+    currentSeasonIndex.value = 0
   }
+
+  syncRenderedPlaceholders()
 }
 
 // Select all seasons
 function selectAllSeasons() {
   selectedSeasons.value = new Set(seasons.value.map(s => s.key))
   currentSeasonIndex.value = 0
+  syncRenderedPlaceholders()
 }
 
 // Deselect all seasons
 function deselectAllSeasons() {
   selectedSeasons.value = new Set()
   currentSeasonIndex.value = 0
+  syncRenderedPlaceholders()
 }
 
 // Keep the series entry poster updated when the Plex poster refreshes
@@ -988,7 +1121,8 @@ function prevSeason() {
 }
 
 // Load saved state on mount
-onMounted(() => {
+onMounted(async () => {
+  await loadGlobalFallbackSettings()
   loadEditorState()
   loadSeasonsCache()
   fetchSeasons()
@@ -1038,6 +1172,7 @@ watch(
   async () => {
     await fetchSeasons()
     await fetchTmdbAssets()
+    await fetchImagesForCurrentSeason()
     await fetchLabels()
     await fetchExistingPoster()
     await presetService.load()
@@ -1194,7 +1329,8 @@ watch(
     shadowOpacity,
     strokeEnabled,
     strokeWidth,
-    strokeColor
+    strokeColor,
+    currentSeason
   ],
   () => {
     if (previewTimer) clearTimeout(previewTimer)
@@ -1204,6 +1340,15 @@ watch(
   },
   { deep: true }
 )
+
+watch(currentSeason, () => {
+  fetchImagesForCurrentSeason()
+  syncRenderedPlaceholders()
+})
+
+watch(tmdbId, () => {
+  fetchImagesForCurrentSeason()
+})
 </script>
 
 <template>
@@ -1287,6 +1432,10 @@ watch(
             <label class="inline-field checkbox">
               <input type="checkbox" v-model="showFanartPosters" />
               <span>Fanart</span>
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showTvdbPosters" />
+              <span>TVDB</span>
             </label>
           </div>
           <div class="thumb-strip">
@@ -1614,12 +1763,41 @@ watch(
         </div>
       </div>
 
+      <!-- Current Season Indicator -->
+      <div v-if="currentSeason" class="current-season-banner">
+        <div class="banner-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+            <circle cx="12" cy="13" r="3" />
+          </svg>
+        </div>
+        <div class="banner-text">
+          <div class="banner-label">Editing Posters For</div>
+          <div class="banner-title">{{ currentSeason.title }}</div>
+        </div>
+        <div class="banner-nav">
+          <button @click="prevSeason" class="nav-btn" title="Previous Season">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+          <button @click="nextSeason" class="nav-btn" title="Next Season">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
       <div class="season-list">
         <div
           v-for="season in seasons"
           :key="season.key"
           class="season-item"
-          :class="{ selected: selectedSeasons.has(season.key) }"
+          :class="{
+            selected: selectedSeasons.has(season.key),
+            active: currentSeason && currentSeason.key === season.key
+          }"
           @click="toggleSeasonSelection(season.key)"
         >
           <div class="season-thumb-wrap">
@@ -1636,12 +1814,16 @@ watch(
                 <polyline points="21 15 16 10 5 21" />
               </svg>
             </div>
-          </div>
-          <div class="season-info">
-            <div class="season-name-row">
-              <div class="season-name">{{ season.title }}</div>
-              <span v-if="season.isSeries" class="season-badge">Series</span>
+            <!-- Active indicator -->
+            <div v-if="currentSeason && currentSeason.key === season.key" class="active-indicator">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+                <circle cx="12" cy="13" r="3" />
+              </svg>
             </div>
+          </div>
+          <div class="season-label">
+            {{ season.isSeries ? '' : 'S' + String(season.index).padStart(2, '0') }}
           </div>
           <div class="season-checkbox">
             <input
@@ -1730,7 +1912,14 @@ watch(
                 @click="switchToRenderedPreview(index)"
                 :title="preview.seasonTitle"
               >
-                <img :src="preview.imageUrl" :alt="preview.seasonTitle" class="carousel-thumb" />
+                <template v-if="preview.imageUrl">
+                  <img :src="preview.imageUrl" :alt="preview.seasonTitle" class="carousel-thumb" />
+                </template>
+                <template v-else>
+                  <div class="carousel-thumb placeholder">
+                    <span>No render yet</span>
+                  </div>
+                </template>
                 <div class="carousel-item-label">{{ preview.seasonTitle }}</div>
               </div>
             </div>
@@ -2329,6 +2518,79 @@ button:disabled {
   border-color: rgba(99, 102, 241, 0.5);
 }
 
+/* Current Season Banner */
+.current-season-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, rgba(61, 214, 183, 0.12), rgba(91, 141, 238, 0.12));
+  border-bottom: 1px solid rgba(61, 214, 183, 0.25);
+  border-top: 1px solid rgba(61, 214, 183, 0.15);
+}
+
+.banner-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(61, 214, 183, 0.15);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  border-radius: 6px;
+  color: var(--accent);
+}
+
+.banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner-label {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #a4d9cf;
+  margin-bottom: 2px;
+}
+
+.banner-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e6edff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.banner-nav {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.nav-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(61, 214, 183, 0.1);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  border-radius: 4px;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.nav-btn:hover {
+  background: rgba(61, 214, 183, 0.2);
+  border-color: rgba(61, 214, 183, 0.5);
+  transform: scale(1.05);
+}
+
 .season-list {
   flex: 1;
   overflow-y: auto;
@@ -2338,8 +2600,8 @@ button:disabled {
 .season-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
+  gap: 6px;
+  padding: 4px 8px;
   margin-bottom: 4px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid transparent;
@@ -2358,14 +2620,51 @@ button:disabled {
   border-color: rgba(99, 102, 241, 0.5);
 }
 
+.season-item.active {
+  background: rgba(61, 214, 183, 0.2);
+  border-color: rgba(61, 214, 183, 0.6);
+  box-shadow: 0 0 0 1px rgba(61, 214, 183, 0.3);
+}
+
+.season-item.active:hover {
+  background: rgba(61, 214, 183, 0.25);
+}
+
 .season-thumb-wrap {
-  width: 48px;
-  height: 72px;
+  width: 40px;
+  height: 60px;
   flex-shrink: 0;
   border-radius: 4px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
+  position: relative;
+}
+
+.active-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 28px;
+  height: 28px;
+  background: rgba(61, 214, 183, 0.95);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0a0d14;
+  box-shadow: 0 2px 8px rgba(61, 214, 183, 0.4);
+  animation: pulse-indicator 2s ease-in-out infinite;
+}
+
+@keyframes pulse-indicator {
+  0%, 100% {
+    box-shadow: 0 2px 8px rgba(61, 214, 183, 0.4);
+  }
+  50% {
+    box-shadow: 0 2px 12px rgba(61, 214, 183, 0.7);
+  }
 }
 
 .season-thumb {
@@ -2384,20 +2683,13 @@ button:disabled {
   color: var(--muted);
 }
 
-.season-info {
+.season-label {
   flex: 1;
   min-width: 0;
-}
-
-.season-name-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.season-name {
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
   color: #e6edff;
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2723,6 +3015,15 @@ button:disabled {
   height: 150px;
   object-fit: cover;
   display: block;
+}
+.carousel-thumb.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
 }
 
 .carousel-item-label {
