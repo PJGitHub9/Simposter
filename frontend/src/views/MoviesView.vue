@@ -125,9 +125,29 @@ const refreshData = async () => {
   clearAllCaches()
   sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
   movies.value = []
+  moviesLoaded.value = false
   await fetchMovies()
   await fetchPosters(paged.value)
   await fetchLabels(paged.value)
+}
+
+const forceRefreshingPosters = ref(false)
+const forcePosterRefresh = async () => {
+  if (forceRefreshingPosters.value || loading.value) return
+  forceRefreshingPosters.value = true
+  try {
+    await fetch(`${apiBase}/api/cache`, { method: 'DELETE' })
+  } catch {
+    /* ignore errors; proceed to refetch */
+  }
+  clearAllCaches()
+  sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
+  movies.value = []
+  moviesLoaded.value = false
+  await fetchMovies(true)
+  await fetchPosters(paged.value)
+  await fetchLabels(paged.value)
+  forceRefreshingPosters.value = false
 }
 
 loadPosterCache()
@@ -241,12 +261,13 @@ watch(paged, (list) => {
   fetchLabels(list)
 })
 
-const fetchMovies = async () => {
+const fetchMovies = async (forceRefresh = false) => {
   loading.value = true
   error.value = null
   try {
-    if (!moviesLoaded.value) {
-      const res = await fetch(`${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+    if (!moviesLoaded.value || forceRefresh) {
+      const url = `${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}${forceRefresh ? `${currentLibrary.value ? '&' : '?'}force_refresh=true` : ''}`
+      const res = await fetch(url)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = (await res.json()) as (Movie & { labels?: string[] })[]
       // Seed caches from server data when available
@@ -394,6 +415,9 @@ onMounted(async () => {
         <button @click="refreshData" class="refresh-btn" :disabled="loading">
           {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
         </button>
+        <button @click="forcePosterRefresh" class="refresh-btn danger" :disabled="loading || forceRefreshingPosters">
+          {{ forceRefreshingPosters ? 'Forcing...' : 'Force Poster Refresh' }}
+        </button>
       </div>
     </div>
     <div v-if="error" class="callout error">
@@ -492,6 +516,17 @@ onMounted(async () => {
 .refresh-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.refresh-btn.danger {
+  border-color: rgba(255, 107, 107, 0.5);
+  background: rgba(255, 107, 107, 0.12);
+  color: #ffb3b3;
+}
+
+.refresh-btn.danger:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.65);
 }
 
 .pager {
