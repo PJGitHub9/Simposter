@@ -17,7 +17,11 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
 
     if logo is None:
         return canvas
-    logo = logo.convert("RGBA")
+    # Normalize SVG to raster if needed
+    if logo.format == "SVG" or (hasattr(logo, "mode") and logo.mode == "P") or logo.mode == "LA":
+        logo = logo.convert("RGBA")
+    else:
+        logo = logo.convert("RGBA")
 
     logo_mode = str(options.get("logo_mode", "stock") or "stock")
     logo_hex = str(options.get("logo_hex", "#FFFFFF") or "#FFFFFF")

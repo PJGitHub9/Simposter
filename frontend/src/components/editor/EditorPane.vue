@@ -280,15 +280,18 @@ const boundingBoxStyle = computed(() => {
 const filteredPosters = computed(() => {
   let items = posters.value
   if (posterFilter.value === 'textless') {
-    items = items.filter((p) => p.has_text === false)
+    items = items.filter((p) => p.has_text === false || !p.language)
   } else if (posterFilter.value === 'text') {
     items = items.filter((p) => p.has_text === true)
   }
 
-  if (posterLanguageFilter.value === 'en') {
-    items = items.filter((p) => (p.language || '').toLowerCase() === 'en')
-  } else if (posterLanguageFilter.value === 'with_lang') {
-    items = items.filter((p) => !!p.language)
+  // Skip language filter when showing textless posters
+  if (posterFilter.value !== 'textless') {
+    if (posterLanguageFilter.value === 'en') {
+      items = items.filter((p) => (p.language || '').toLowerCase() === 'en' || (p.language || '').toLowerCase() === 'eng')
+    } else if (posterLanguageFilter.value === 'with_lang') {
+      items = items.filter((p) => !!p.language)
+    }
   }
 
   items = items.filter((p) => {
@@ -303,7 +306,7 @@ const filteredPosters = computed(() => {
 const filteredLogos = computed(() => {
   let items = logos.value
   if (logoLanguageFilter.value === 'en') {
-    items = items.filter((l) => (l.language || '').toLowerCase() === 'en')
+    items = items.filter((l) => (l.language || '').toLowerCase() === 'en' || (l.language || '').toLowerCase() === 'eng' || !l.language)
   } else if (logoLanguageFilter.value === 'with_lang') {
     items = items.filter((l) => !!l.language)
   }

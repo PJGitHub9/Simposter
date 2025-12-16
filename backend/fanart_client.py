@@ -5,29 +5,30 @@ import requests
 
 from .config import logger, settings
 
-FANART_API_BASE = "https://webservice.fanart.tv/v3/movies"
+FANART_MOVIE_API_BASE = "https://webservice.fanart.tv/v3/movies"
+FANART_TV_API_BASE = "https://webservice.fanart.tv/v3/tv"
 
 
 class FanartError(Exception):
     pass
 
 
-def _fanart_get(tmdb_id: int) -> Dict[str, Any]:
+def _fanart_get(base_url: str, lookup_id: int) -> Dict[str, Any]:
     """
-    Fetch movie data from Fanart.tv API.
+    Fetch media data from Fanart.tv API.
     Returns raw API response with all artwork types.
     """
     if not settings.FANART_API_KEY:
         logger.warning("[FANART] FANART_API_KEY not set - please save your API key in Settings")
         return {}
 
-    url = f"{FANART_API_BASE}/{tmdb_id}"
+    url = f"{base_url}/{lookup_id}"
     # Redact API key in logs
     api_key_redacted = settings.FANART_API_KEY[:8] + "..." if len(settings.FANART_API_KEY) > 8 else "***"
     params = {"api_key": settings.FANART_API_KEY}
 
     try:
-        logger.info("[FANART] Fetching artwork for tmdb_id=%s (key: %s)", tmdb_id, api_key_redacted)
+        logger.info("[FANART] Fetching artwork for id=%s (key: %s)", lookup_id, api_key_redacted)
         r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
@@ -38,8 +39,8 @@ def _fanart_get(tmdb_id: int) -> Dict[str, Any]:
         clearlogo_count = len(data.get("clearlogo", []))
         total_logos = hdmovielogo_count + movielogo_count + clearlogo_count
 
-        logger.info("[FANART] tmdb_id=%s: Found %d logos (HD: %d, Standard: %d, Clear: %d)",
-                   tmdb_id, total_logos, hdmovielogo_count, movielogo_count, clearlogo_count)
+        logger.info("[FANART] id=%s: Found %d logos (HD: %d, Standard: %d, Clear: %d)",
+                   lookup_id, total_logos, hdmovielogo_count, movielogo_count, clearlogo_count)
 
         if total_logos > 0:
             # Log first logo URL for debugging
@@ -57,12 +58,12 @@ def _fanart_get(tmdb_id: int) -> Dict[str, Any]:
         return data
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
-            logger.info("[FANART] No artwork found for tmdb_id=%s (404)", tmdb_id)
+            logger.info("[FANART] No artwork found for id=%s (404)", lookup_id)
             return {}
-        logger.warning("[FANART] HTTP %s error for tmdb_id=%s: %s", e.response.status_code, tmdb_id, e)
+        logger.warning("[FANART] HTTP %s error for id=%s: %s", e.response.status_code, lookup_id, e)
         return {}
     except Exception as e:
-        logger.warning("[FANART] Request failed for tmdb_id=%s: %s", tmdb_id, e)
+        logger.warning("[FANART] Request failed for id=%s: %s", lookup_id, e)
         return {}
 
 
@@ -121,7 +122,7 @@ def get_logos_for_movie(tmdb_id: int) -> List[Dict[str, Any]]:
     }
     """
     logger.info("[FANART] Fetching logos for tmdb_id=%s", tmdb_id)
-    data = _fanart_get(tmdb_id)
+    data = _fanart_get(FANART_MOVIE_API_BASE, tmdb_id)
 
     if not data:
         return []
@@ -178,7 +179,7 @@ def get_images_for_movie(tmdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
         "logos": [...]
     }
     """
-    data = _fanart_get(tmdb_id)
+    data = _fanart_get(FANART_MOVIE_API_BASE, tmdb_id)
     logos = get_logos_for_movie(tmdb_id)
 
     posters: List[Dict[str, Any]] = []
@@ -192,6 +193,49 @@ def get_images_for_movie(tmdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
     backdrops: List[Dict[str, Any]] = []
     if data:
         for bg in (data.get("moviebackground") or []):
+            entry = _build_entry(bg, "backdrop")
+            if entry:
+                backdrops.append(entry)
+
+    return {
+        "posters": posters,
+        "backdrops": backdrops,
+        "logos": logos,
+    }
+
+
+def get_images_for_tv_show(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Fetch all images from Fanart.tv for a TV show (requires TVDB ID).
+    Returns logos + clearart (merged into logos), posters, and backdrops.
+    """
+    data = _fanart_get(FANART_TV_API_BASE, tvdb_id)
+
+    logos: List[Dict[str, Any]] = []
+    if data:
+        for logo in (data.get("hdtvlogo") or []):
+            entry = _build_entry(logo, "logo")
+            if entry:
+                logos.append(entry)
+        for logo in (data.get("clearlogo") or []):
+            entry = _build_entry(logo, "logo")
+            if entry:
+                logos.append(entry)
+        for art in (data.get("tvclearart") or []):
+            entry = _build_entry(art, "clearart")
+            if entry:
+                logos.append(entry)
+
+    posters: List[Dict[str, Any]] = []
+    if data:
+        for poster in (data.get("tvposter") or []):
+            entry = _build_entry(poster, "poster")
+            if entry:
+                posters.append(entry)
+
+    backdrops: List[Dict[str, Any]] = []
+    if data:
+        for bg in (data.get("showbackground") or []):
             entry = _build_entry(bg, "backdrop")
             if entry:
                 backdrops.append(entry)

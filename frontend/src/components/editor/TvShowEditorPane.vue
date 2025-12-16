@@ -17,6 +17,7 @@ const { movies: globalMovies, setMoviePoster } = useMovies()
 const apiBase = getApiBase()
 
 const tmdbId = ref<number | null>(null)
+const tvdbId = ref<number | null>(null)
 const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
 const logos = ref<{ url: string; thumb?: string; color?: string; language?: string; source?: string; type?: string }[]>([])
 const labels = ref<string[]>([])
@@ -187,6 +188,18 @@ const render = useRenderService()
 const loading = render.loading
 const error = render.error
 const lastPreview = render.lastPreview
+
+const ensurePosterSelected = () => {
+  if (selectedPoster.value) return
+  const first = posters.value[0]
+  if (first?.url) {
+    selectedPoster.value = first.url
+    return
+  }
+  if (seriesPosterUrl.value) {
+    selectedPoster.value = seriesPosterUrl.value
+  }
+}
 
 const { success, error: notifyError } = useNotification()
 
@@ -404,8 +417,14 @@ const boundingBoxStyle = computed(() => {
   if (!previewImgRef.value || !showBoundingBox.value || !isUniformLogo.value) return {}
 
   const img = previewImgRef.value
-  const imgWidth = img.clientWidth
-  const imgHeight = img.clientHeight
+  const container = img.parentElement as HTMLElement | null
+  if (!container) return {}
+
+  const imgRect = img.getBoundingClientRect()
+  const containerRect = container.getBoundingClientRect()
+
+  const imgWidth = imgRect.width
+  const imgHeight = imgRect.height
 
   if (!imgWidth || !imgHeight) return {}
 
@@ -428,9 +447,11 @@ const boundingBoxStyle = computed(() => {
   const offsetX = options.value.uniformLogoOffsetX / 100
   const offsetY = options.value.uniformLogoOffsetY / 100
 
-  // Position (centered on offset point)
-  const left = (imgWidth * offsetX) - (boxWidth / 2)
-  const top = (imgHeight * offsetY) - (boxHeight / 2)
+  // Position (centered on offset point) relative to container
+  const imageOffsetLeft = imgRect.left - containerRect.left
+  const imageOffsetTop = imgRect.top - containerRect.top
+  const left = imageOffsetLeft + (imgWidth * offsetX) - (boxWidth / 2)
+  const top = imageOffsetTop + (imgHeight * offsetY) - (boxHeight / 2)
 
   return {
     width: `${boxWidth}px`,
@@ -440,18 +461,28 @@ const boundingBoxStyle = computed(() => {
   }
 })
 
+const posterCounts = computed(() => {
+  const tmdb = posters.value.filter(p => (p.source || 'tmdb').toLowerCase() === 'tmdb').length
+  const fanart = posters.value.filter(p => (p.source || 'tmdb').toLowerCase() === 'fanart').length
+  const tvdb = posters.value.filter(p => (p.source || 'tmdb').toLowerCase() === 'tvdb').length
+  return { tmdb, fanart, tvdb, total: posters.value.length }
+})
+
 const filteredPosters = computed(() => {
   let items = posters.value
   if (posterFilter.value === 'textless') {
-    items = items.filter((p) => p.has_text === false)
+    // Treat posters with no language or has_text=false as textless
+    items = items.filter((p) => p.has_text === false || !p.language)
   } else if (posterFilter.value === 'text') {
     items = items.filter((p) => p.has_text === true)
   }
 
-  if (posterLanguageFilter.value === 'en') {
-    items = items.filter((p) => (p.language || '').toLowerCase() === 'en')
-  } else if (posterLanguageFilter.value === 'with_lang') {
-    items = items.filter((p) => !!p.language)
+  // Only apply language filter when not filtering for textless (textless posters don't have language tags)
+  if (posterFilter.value !== 'textless' && posterLanguageFilter.value === 'en') {
+    items = items.filter((p) => {
+      const lang = (p.language || '').toLowerCase()
+      return lang === 'en' || lang === 'eng'
+    })
   }
 
   items = items.filter((p) => {
@@ -464,12 +495,22 @@ const filteredPosters = computed(() => {
   return items
 })
 
+const logoCounts = computed(() => {
+  const tmdb = logos.value.filter(l => (l.source || 'tmdb').toLowerCase() === 'tmdb').length
+  const fanart = logos.value.filter(l => (l.source || 'tmdb').toLowerCase() === 'fanart').length
+  const tvdb = logos.value.filter(l => (l.source || 'tmdb').toLowerCase() === 'tvdb').length
+  return { tmdb, fanart, tvdb, total: logos.value.length }
+})
+
 const filteredLogos = computed(() => {
   let items = logos.value
+  // Only apply language filter if there's a language tag (logos without language tags are universal)
   if (logoLanguageFilter.value === 'en') {
-    items = items.filter((l) => (l.language || '').toLowerCase() === 'en')
-  } else if (logoLanguageFilter.value === 'with_lang') {
-    items = items.filter((l) => !!l.language)
+    items = items.filter((l) => {
+      const lang = (l.language || '').toLowerCase()
+      // Include logos with no language (universal) or English language
+      return !l.language || lang === 'en' || lang === 'eng'
+    })
   }
   if (!showClearArt.value) {
     items = items.filter((l) => (l.type || 'logo') === 'logo')
@@ -785,15 +826,17 @@ const fetchTmdbAssets = async () => {
       ? `${apiBase}/api/tv-show/${props.movie.key}/tmdb`
       : `${apiBase}/api/movie/${props.movie.key}/tmdb`
 
-    const tmdbRes = await fetch(tmdbEndpoint)
-    const tmdb = await tmdbRes.json()
-    tmdbId.value = tmdb.tmdb_id || null
-    if (!tmdbId.value) return
+  const tmdbRes = await fetch(tmdbEndpoint)
+  const tmdb = await tmdbRes.json()
+  tmdbId.value = tmdb.tmdb_id || null
+  tvdbId.value = tmdb.tvdb_id || null
+  if (!tmdbId.value) return
 
     // Use appropriate endpoint for images
-    const imagesEndpoint = isTvShow
-      ? `${apiBase}/api/tmdb/tv/${tmdbId.value}/images`
-      : `${apiBase}/api/tmdb/${tmdbId.value}/images`
+  const tvdbQuery = tvdbId.value ? `&tvdb_id=${tvdbId.value}` : ''
+  const imagesEndpoint = isTvShow
+    ? `${apiBase}/api/tmdb/tv/${tmdbId.value}/images?${tvdbQuery.replace(/^&/, '')}`
+    : `${apiBase}/api/tmdb/${tmdbId.value}/images`
 
     const imgRes = await fetch(imagesEndpoint)
     const imgs = await imgRes.json()
@@ -806,6 +849,7 @@ const fetchTmdbAssets = async () => {
     }
     applyPosterFilter()
     applyLogoPreference()
+    ensurePosterSelected()
   } catch (e) {
     console.error(e)
   }
@@ -826,28 +870,30 @@ const fetchImagesForCurrentSeason = async () => {
   }
 
   // Use cached assets if available
-  const cached = seasonAssetsCache.value[season.key]
-  if (cached) {
-    posters.value = cached.posters || []
-    logos.value = cached.logos || []
-    applyPosterFilter()
-    applyLogoPreference()
-    return
-  }
+    const cached = seasonAssetsCache.value[season.key]
+    if (cached) {
+      posters.value = cached.posters || []
+      logos.value = cached.logos || []
+      applyPosterFilter()
+      applyLogoPreference()
+      return
+    }
 
-  try {
-    const imgRes = await fetch(`${apiBase}/api/tmdb/tv/${tmdbId.value}/images?season=${season.index}`)
-    if (!imgRes.ok) throw new Error('Failed to fetch season images')
-    const imgs = await imgRes.json()
-    seasonAssetsCache.value[season.key] = {
-      posters: imgs.posters || [],
-      logos: imgs.logos || [],
+    try {
+      const tvdbQuery = tvdbId.value ? `&tvdb_id=${tvdbId.value}` : ''
+      const imgRes = await fetch(`${apiBase}/api/tmdb/tv/${tmdbId.value}/images?season=${season.index}${tvdbQuery}`)
+      if (!imgRes.ok) throw new Error('Failed to fetch season images')
+      const imgs = await imgRes.json()
+      seasonAssetsCache.value[season.key] = {
+        posters: imgs.posters || [],
+        logos: imgs.logos || [],
       backdrops: imgs.backdrops || []
     }
     posters.value = imgs.posters || []
     logos.value = imgs.logos || []
     applyPosterFilter()
     applyLogoPreference()
+    ensurePosterSelected()
   } catch (err) {
     console.error('Failed to fetch season images:', err)
   }
@@ -1047,52 +1093,29 @@ async function fetchSeasons() {
 
 // Toggle season selection
 async function toggleSeasonSelection(seasonKey: string) {
-  const newSet = new Set(selectedSeasons.value)
-  const wasSelected = newSet.has(seasonKey)
+  const season = seasons.value.find(s => s.key === seasonKey)
+  // Disable season selection for now (coming soon)
+  if (season && !season.isSeries) return
 
-  if (wasSelected) {
-    newSet.delete(seasonKey)
-  } else {
-    newSet.add(seasonKey)
-  }
-
-  selectedSeasons.value = newSet
-
-  // When a season is clicked, make it the current season for editing
-  if (newSet.has(seasonKey)) {
-    const index = Array.from(newSet).findIndex(key => key === seasonKey)
-    if (index >= 0) {
-      currentSeasonIndex.value = index
-    }
-
-    // Fetch season-specific images (will use cache if already loaded)
-    await fetchImagesForCurrentSeason()
-
-    // Auto-select first poster and logo
-    if (posters.value.length > 0 && posters.value[0]) {
-      selectedPoster.value = posters.value[0].url
-    }
-    if (logos.value.length > 0 && logos.value[0]) {
-      selectedLogo.value = logos.value[0].url
-    }
-  } else if (wasSelected) {
-    // If we just deselected the current season, move to the first available
-    currentSeasonIndex.value = 0
-  }
-
+  const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+  selectedSeasons.value = new Set([seriesKey])
+  currentSeasonIndex.value = 0
+  await fetchImagesForCurrentSeason()
   syncRenderedPlaceholders()
 }
 
 // Select all seasons
 function selectAllSeasons() {
-  selectedSeasons.value = new Set(seasons.value.map(s => s.key))
+  const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+  selectedSeasons.value = new Set([seriesKey])
   currentSeasonIndex.value = 0
   syncRenderedPlaceholders()
 }
 
 // Deselect all seasons
 function deselectAllSeasons() {
-  selectedSeasons.value = new Set()
+  const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+  selectedSeasons.value = new Set([seriesKey])
   currentSeasonIndex.value = 0
   syncRenderedPlaceholders()
 }
@@ -1175,6 +1198,7 @@ watch(
     await fetchImagesForCurrentSeason()
     await fetchLabels()
     await fetchExistingPoster()
+    ensurePosterSelected() // Ensure series poster is selected after existing poster loads
     await presetService.load()
     applyPresetOptions(selectedPreset.value)
   },
@@ -1415,14 +1439,13 @@ watch(tmdbId, () => {
           </label>
           
 
-          <div class="label-title">Posters</div>
+          <div class="label-title">Posters (TMDb: {{ posterCounts.tmdb }} | Fanart: {{ posterCounts.fanart }} | TVDB: {{ posterCounts.tvdb }})</div>
           <div class="inline-controls">
             <label class="inline-field" v-if="posterFilter !== 'textless'">
               <span>Language</span>
               <select v-model="posterLanguageFilter">
                 <option value="all">All</option>
                 <option value="en">English</option>
-                <option value="with_lang">With language tag</option>
               </select>
             </label>
             <label class="inline-field checkbox">
@@ -1460,14 +1483,13 @@ watch(tmdbId, () => {
             </select>
           </label>
 
-          <div v-if="!isLogoNone" class="label-title">Logos (TMDb / Fanart)</div>
+          <div v-if="!isLogoNone" class="label-title">Logos (TMDb: {{ logoCounts.tmdb }} | Fanart: {{ logoCounts.fanart }} | TVDB: {{ logoCounts.tvdb }})</div>
           <div v-if="!isLogoNone" class="inline-controls">
             <label class="inline-field">
               <span>Language</span>
               <select v-model="logoLanguageFilter">
                 <option value="all">All</option>
                 <option value="en">English</option>
-                <option value="with_lang">With language tag</option>
               </select>
             </label>
             <label class="inline-field">
@@ -1790,15 +1812,17 @@ watch(tmdbId, () => {
       </div>
 
       <div class="season-list">
+        <div class="season-note">Season posters coming soon</div>
         <div
           v-for="season in seasons"
           :key="season.key"
           class="season-item"
           :class="{
             selected: selectedSeasons.has(season.key),
-            active: currentSeason && currentSeason.key === season.key
+            active: currentSeason && currentSeason.key === season.key,
+            disabled: !season.isSeries
           }"
-          @click="toggleSeasonSelection(season.key)"
+          @click="season.isSeries && toggleSeasonSelection(season.key)"
         >
           <div class="season-thumb-wrap">
             <img
@@ -1814,23 +1838,19 @@ watch(tmdbId, () => {
                 <polyline points="21 15 16 10 5 21" />
               </svg>
             </div>
-            <!-- Active indicator -->
-            <div v-if="currentSeason && currentSeason.key === season.key" class="active-indicator">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-                <circle cx="12" cy="13" r="3" />
-              </svg>
+          </div>
+          <div class="season-info">
+            <div class="season-name-row">
+              <span v-if="season.isSeries" class="season-badge">Series</span>
+              <div class="season-checkbox">
+                <input
+                  type="checkbox"
+                  :checked="selectedSeasons.has(season.key)"
+                  :disabled="!season.isSeries"
+                  @click.stop="season.isSeries && toggleSeasonSelection(season.key)"
+                />
+              </div>
             </div>
-          </div>
-          <div class="season-label">
-            {{ season.isSeries ? '' : 'S' + String(season.index).padStart(2, '0') }}
-          </div>
-          <div class="season-checkbox">
-            <input
-              type="checkbox"
-              :checked="selectedSeasons.has(season.key)"
-              @click.stop="toggleSeasonSelection(season.key)"
-            />
           </div>
         </div>
         <div v-if="seasons.length === 0" class="empty-seasons">
@@ -1877,7 +1897,7 @@ watch(tmdbId, () => {
             <div v-else-if="selectedPoster" class="placeholder-state">
               <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" />
               <div class="placeholder-overlay">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="40" height="40" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
                   <circle cx="12" cy="13" r="3" />
                 </svg>
@@ -1897,10 +1917,10 @@ watch(tmdbId, () => {
             <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
           </div>
 
-          <!-- Rendered Preview Carousel -->
-          <div v-if="renderedPreviews.length > 0" class="preview-carousel">
+          <!-- Rendered Preview Carousel - Hidden until season poster support is added -->
+          <div v-if="false" class="preview-carousel">
             <div class="carousel-label">
-              Rendered Previews ({{ renderedPreviews.length }})
+              Rendered Previews ({{ renderedPreviews.filter(p => p.imageUrl).length }})
               <span class="carousel-hint">Scroll to cycle • Click to load</span>
             </div>
             <div class="carousel-scroll">
@@ -2630,6 +2650,13 @@ button:disabled {
   background: rgba(61, 214, 183, 0.25);
 }
 
+.season-item.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
 .season-thumb-wrap {
   width: 40px;
   height: 60px;
@@ -2639,32 +2666,6 @@ button:disabled {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
   position: relative;
-}
-
-.active-indicator {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 28px;
-  height: 28px;
-  background: rgba(61, 214, 183, 0.95);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #0a0d14;
-  box-shadow: 0 2px 8px rgba(61, 214, 183, 0.4);
-  animation: pulse-indicator 2s ease-in-out infinite;
-}
-
-@keyframes pulse-indicator {
-  0%, 100% {
-    box-shadow: 0 2px 8px rgba(61, 214, 183, 0.4);
-  }
-  50% {
-    box-shadow: 0 2px 12px rgba(61, 214, 183, 0.7);
-  }
 }
 
 .season-thumb {
@@ -2695,6 +2696,15 @@ button:disabled {
   text-overflow: ellipsis;
 }
 
+.series-tag {
+  margin-left: 6px;
+  font-size: 10px;
+  color: #9ad8ff;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 .season-badge {
   padding: 2px 6px;
   font-size: 10px;
@@ -2714,6 +2724,12 @@ button:disabled {
   cursor: pointer;
   width: 16px;
   height: 16px;
+}
+
+.season-note {
+  margin: 6px 8px 8px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .empty-seasons {
@@ -2851,7 +2867,8 @@ button:disabled {
 
 .preview-main {
   flex: 1;
-  max-width: 800px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .preview-container {
@@ -2859,16 +2876,20 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 360px;
   background: rgba(0, 0, 0, 0.3);
   border-radius: 12px;
   border: 1px solid var(--border);
+  width: min(70vw, 556px);
+  max-height: 80vh;
+  aspect-ratio: 9 / 16;
 }
 
 .preview-img {
-  max-height: 65vh;
+  width: 100%;
+  height: 100%;
+  max-height: 80vh;
   max-width: 100%;
-  width: auto;
+  object-fit: contain;
   border-radius: 10px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
 }
@@ -2883,7 +2904,7 @@ button:disabled {
 .placeholder-img {
   opacity: 0.2;
   filter: blur(3px);
-  max-height: 65vh;
+  max-height: 85vh;
   max-width: 100%;
   border-radius: 10px;
 }

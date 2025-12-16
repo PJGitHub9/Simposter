@@ -99,6 +99,11 @@ def _build_image_entry(p: Dict[str, Any], kind: str) -> Dict[str, Any]:
     path = p.get("file_path")
     if not path:
         return {}
+    
+    # Skip SVG files for posters and backdrops (PIL can't handle them)
+    # But allow SVG logos - they'll be handled by cairosvg if available, or skipped during render
+    if path.lower().endswith('.svg') and kind != "logo":
+        return {}
 
     lang = p.get("iso_639_1")
     width = p.get("width")

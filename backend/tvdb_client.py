@@ -116,6 +116,8 @@ def get_series_images(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
     logger.debug("[TVDB] Series %d: received %d artworks", tvdb_id, len(artworks))
     if artworks and len(artworks) > 0:
         logger.debug("[TVDB] Sample artwork: %s", artworks[0])
+    
+    logger.debug("[TVDB] Series %d: received %d artworks", tvdb_id, len(artworks))
 
     posters: List[Dict[str, Any]] = []
     backdrops: List[Dict[str, Any]] = []
@@ -129,20 +131,32 @@ def get_series_images(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
         if not image_url:
             continue
 
+        # Extract language for has_text property
+        lang = art.get("language")
+        
+        # Determine logo subtype: 23=clearlogo
+        logo_subtype = None
+        if type_id == 23:
+            logo_subtype = "clearlogo"
+        
         mapped = {
             "url": image_url,
             "thumb": thumb_url or image_url,
             "source": "tvdb",
-            "language": art.get("language"),
-            "type": f"type_{type_id}",
+            "language": lang,
+            "has_text": bool(lang),
+            "type": "poster" if type_id == 2 else ("backdrop" if type_id == 3 else ("logo" if type_id == 23 else f"type_{type_id}")),
         }
+        
+        if logo_subtype:
+            mapped["logo_type"] = logo_subtype
 
-        # Match by type ID: 2=poster, 3=background/fanart, 5=clearlogo, 14=clearlogo
+        # Match by type ID: 2=poster, 3=backdrop, 23=clearlogo
         if type_id == 2:
             posters.append(mapped)
         elif type_id == 3:
             backdrops.append(mapped)
-        elif type_id in [14, 5]:
+        elif type_id == 23:
             logos.append(mapped)
 
     logger.debug("[TVDB] Series %d images: %d posters, %d backdrops, %d logos",
@@ -178,13 +192,29 @@ def get_season_images(tvdb_id: int, season_number: int) -> Dict[str, List[Dict[s
         if not image_url:
             continue
 
+        # Extract language from TVDB artwork
+        lang = art.get("language")
+        # If no language tag, treat as textless/universal
+        has_text = bool(lang)
+        
+        # Determine logo subtype: 23=clearlogo, 24=clearart
+        logo_subtype = None
+        if type_id == 23:
+            logo_subtype = "clearlogo"
+        elif type_id == 24:
+            logo_subtype = "clearart"
+
         mapped = {
             "url": image_url,
             "thumb": thumb_url or image_url,
             "source": "tvdb",
-            "language": art.get("language"),
-            "type": f"type_{type_id}",
+            "language": lang,
+            "has_text": has_text,
+            "type": "poster" if type_id == 2 else ("backdrop" if type_id == 3 else ("logo" if type_id in [23, 24] else f"type_{type_id}")),
         }
+        
+        if logo_subtype:
+            mapped["logo_type"] = logo_subtype
 
         # Season posters: only include if they match the season number
         if type_id == 2 and season_num is not None:
@@ -194,7 +224,7 @@ def get_season_images(tvdb_id: int, season_number: int) -> Dict[str, List[Dict[s
         # Series-level backdrops and logos (no season filtering)
         elif type_id == 3 and season_num is None:
             backdrops.append(mapped)
-        elif type_id in [14, 5] and season_num is None:
+        elif type_id in [23, 24] and season_num is None:
             logos.append(mapped)
 
     logger.debug("[TVDB] Season %d images: %d posters, %d backdrops, %d logos",
@@ -231,20 +261,35 @@ def get_movie_images(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
         if not image_url:
             continue
 
+        # Extract language for has_text property
+        lang = art.get("language")
+        
+        # Determine logo subtype: 23=clearlogo, 24=clearart
+        logo_subtype = None
+        if type_id == 23:
+            logo_subtype = "clearlogo"
+        elif type_id == 24:
+            logo_subtype = "clearart"
+        
         mapped = {
             "url": image_url,
             "thumb": thumb_url or image_url,
             "source": "tvdb",
-            "language": art.get("language"),
-            "type": f"type_{type_id}",
+            "language": lang,
+            "has_text": bool(lang),
+            "type": "poster" if type_id == 2 else ("backdrop" if type_id == 3 else ("logo" if type_id in [23, 24] else f"type_{type_id}")),
         }
+        
+        if logo_subtype:
+            mapped["logo_type"] = logo_subtype
 
-        # Match by type ID: 2=poster, 3=background/fanart, 5=clearlogo, 14=clearlogo
+        # Match by type ID: 2=poster, 3=backdrop, 23=clearlogo, 24=clearart
         if type_id == 2:
             posters.append(mapped)
         elif type_id == 3:
             backdrops.append(mapped)
-        elif type_id in [14, 5]:
+        elif type_id in [23, 24]:
+            logger.info("[TVDB] Movie logo: type_id=%s subtype=%s url=%s", type_id, logo_subtype, image_url[:70])
             logos.append(mapped)
 
     logger.debug("[TVDB] Movie %d images: %d posters, %d backdrops, %d logos",

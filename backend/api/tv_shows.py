@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from ..config import settings, plex_headers, logger, plex_session, POSTER_CACHE_DIR, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
 from ..schemas import LabelsResponse
 from ..tmdb_client import get_images_for_tv_show, get_tv_show_details, get_tv_season_images, TMDBError, get_tv_external_ids
-from ..fanart_client import get_images_for_movie as get_fanart_images
+from ..fanart_client import get_images_for_movie as get_fanart_images, get_images_for_tv_show as get_fanart_tv_images
 from .. import cache, database as db, tvdb_client
 
 router = APIRouter()
@@ -337,7 +337,7 @@ def api_tv_show_seasons(rating_key: str, force_refresh: bool = False):
 
 
 @router.get("/tmdb/tv/{tmdb_id}/images")
-def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
+def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None, tvdb_id: Optional[int] = None):
     """Get images for a TV show or specific season from TMDB."""
     try:
         if season is not None:
@@ -348,15 +348,29 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
 
             # TVDB images (season-specific if available)
             tvdb_imgs = {"posters": [], "backdrops": [], "logos": []}
-            tvdb_id: Optional[int] = None
+            fanart_imgs = {"posters": [], "backdrops": [], "logos": []}
+            provided_tvdb_id = tvdb_id
             try:
                 external_ids = get_tv_external_ids(tmdb_id)
-                tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+                tvdb_id = provided_tvdb_id or external_ids.get("tvdb_id") or external_ids.get("id")
             except Exception:
-                tvdb_id = None
+                tvdb_id = provided_tvdb_id or None
+
+            logger.debug(
+                "[TVDB] Series external ids -> tvdb_id=%s api_key_present=%s",
+                tvdb_id,
+                bool(getattr(settings, "TVDB_API_KEY", "")),
+            )
+
+            logger.debug(
+                "[TVDB] Season %s external ids -> tvdb_id=%s api_key_present=%s",
+                season,
+                tvdb_id,
+                bool(getattr(settings, "TVDB_API_KEY", "")),
+            )
             if tvdb_id and settings.TVDB_API_KEY:
                 try:
-                    logger.debug("[TVDB] Fetching season %d images for tvdb_id=%s", season, tvdb_id)
+                    logger.info("[TVDB] Fetching season %d images for tvdb_id=%s", season, tvdb_id)
                     # Fetch season-specific images from TVDB
                     tvdb_imgs = tvdb_client.get_season_images(int(tvdb_id), season)
                     logger.debug("[TVDB] Season %d result: %d posters, %d logos, %d backdrops",
@@ -371,6 +385,21 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
                     logger.debug("[TVDB] No TVDB ID found for tmdb_id=%s", tmdb_id)
                 if not settings.TVDB_API_KEY:
                     logger.debug("[TVDB] TVDB_API_KEY not configured")
+                if tvdb_id and not settings.TVDB_API_KEY:
+                    logger.info("[TVDB] TVDB ID present (%s) but TVDB_API_KEY is missing; skipping TVDB assets for season", tvdb_id)
+                logger.debug("[TVDB] Skipping TVDB season fetch (tvdb_id=%s key_present=%s)", tvdb_id, bool(getattr(settings, "TVDB_API_KEY", "")))
+                logger.debug("[TVDB] Skipping TVDB series fetch (tvdb_id=%s key_present=%s)", tvdb_id, bool(getattr(settings, "TVDB_API_KEY", "")))
+
+            if tvdb_id and settings.FANART_API_KEY:
+                try:
+                    fanart_imgs = get_fanart_tv_images(int(tvdb_id))
+                    logger.debug("[FANART] Season %d fanart result: posters=%d logos=%d backdrops=%d",
+                                season,
+                                len(fanart_imgs.get("posters", [])),
+                                len(fanart_imgs.get("logos", [])),
+                                len(fanart_imgs.get("backdrops", [])))
+                except Exception as fanart_err:
+                    logger.warning("[FANART] Failed to fetch season %d fanart for tvdb_id=%s: %s", season, tvdb_id, fanart_err)
 
             # Get API order from settings
             from ..api.ui_settings import _read_settings
@@ -382,7 +411,7 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
 
             image_sources = {
                 "tmdb": {"logos": tv_imgs.get("logos") or [], "posters": season_imgs.get("posters") or [], "backdrops": tv_imgs.get("backdrops") or []},
-                "fanart": {"logos": [], "posters": [], "backdrops": []},
+                "fanart": fanart_imgs,
                 "tvdb": tvdb_imgs,
             }
 
@@ -405,20 +434,21 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
             details = get_tv_show_details(tmdb_id)
             tv_imgs = get_images_for_tv_show(tmdb_id, details.get("original_language"))
             tvdb_imgs = {"posters": [], "backdrops": [], "logos": []}
-            tvdb_id: Optional[int] = None
+            fanart_imgs = {"posters": [], "backdrops": [], "logos": []}
+            provided_tvdb_id = tvdb_id
 
             try:
                 external_ids = get_tv_external_ids(tmdb_id)
-                tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+                tvdb_id = provided_tvdb_id or external_ids.get("tvdb_id") or external_ids.get("id")
             except Exception:
-                tvdb_id = None
+                tvdb_id = provided_tvdb_id or None
 
             # Only call TVDB if key is set and we have an id
             if tvdb_id and settings.TVDB_API_KEY:
                 try:
-                    logger.debug("[TVDB] Fetching series images for tvdb_id=%s", tvdb_id)
+                    logger.info("[TVDB] Fetching series images for tvdb_id=%s", tvdb_id)
                     tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
-                    logger.debug("[TVDB] Series images result: %d posters, %d logos, %d backdrops",
+                    logger.info("[TVDB] Series images result: %d posters, %d logos, %d backdrops",
                                 len(tvdb_imgs.get("posters", [])),
                                 len(tvdb_imgs.get("logos", [])),
                                 len(tvdb_imgs.get("backdrops", [])))
@@ -429,6 +459,23 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
                     logger.debug("[TVDB] No TVDB ID found for tmdb_id=%s", tmdb_id)
                 if not settings.TVDB_API_KEY:
                     logger.debug("[TVDB] TVDB_API_KEY not configured")
+                if tvdb_id and not settings.TVDB_API_KEY:
+                    logger.info("[TVDB] TVDB ID present (%s) but TVDB_API_KEY is missing; skipping TVDB assets for series", tvdb_id)
+
+            if tvdb_id and settings.FANART_API_KEY:
+                try:
+                    fanart_imgs = get_fanart_tv_images(int(tvdb_id))
+                    logger.debug("[FANART] Series fanart result: posters=%d logos=%d backdrops=%d",
+                                len(fanart_imgs.get("posters", [])),
+                                len(fanart_imgs.get("logos", [])),
+                                len(fanart_imgs.get("backdrops", [])))
+                except Exception as fanart_err:
+                    logger.warning("[FANART] Failed to fetch fanart for tvdb_id=%s: %s", tvdb_id, fanart_err)
+            else:
+                if not tvdb_id:
+                    logger.debug("[FANART] No TVDB ID available for Fanart.tv lookup (tmdb_id=%s)", tmdb_id)
+                if not settings.FANART_API_KEY:
+                    logger.debug("[FANART] FANART_API_KEY not configured")
 
             # Get API order from settings
             from ..api.ui_settings import _read_settings
@@ -441,7 +488,7 @@ def api_tmdb_tv_images(tmdb_id: int, season: Optional[int] = None):
             # Build image sources dictionary
             image_sources = {
                 "tmdb": {"logos": tv_imgs.get("logos") or [], "posters": tv_imgs.get("posters") or [], "backdrops": tv_imgs.get("backdrops") or []},
-                "fanart": {"logos": [], "posters": [], "backdrops": []},
+                "fanart": fanart_imgs,
                 "tvdb": tvdb_imgs,
             }
 
