@@ -94,16 +94,16 @@ def api_presets_export():
 @router.post("/presets/import")
 async def api_presets_import(payload: dict = Body(...)):
     """
-    Import presets from JSON.
+    Import presets from JSON (merges with existing presets).
     Expected shape matches /presets: { template_id: { presets: [{id,name,options}, ...] } }
     """
     try:
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-        db.replace_all_presets(payload)
-        logger.info("[PRESETS] Imported presets from JSON")
-        return {"message": "Presets imported"}
+        db.merge_presets(payload)
+        logger.info("[PRESETS] Imported and merged presets from JSON")
+        return {"message": "Presets imported and merged"}
     except HTTPException:
         raise
     except Exception as e:

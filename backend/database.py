@@ -686,6 +686,37 @@ def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
     logger.info("[DB] Replaced all presets from import")
 
 
+def merge_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
+    """
+    Merge imported presets with existing presets (append mode).
+    Expected shape: { template_id: { presets: [ {id,name,options}, ... ] } }
+    Existing presets with matching IDs will be updated, new ones will be added.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        for template_id, tpl_data in (preset_data or {}).items():
+            presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
+            for preset in presets_list:
+                pid = preset.get("id")
+                name = preset.get("name") or pid
+                options = preset.get("options") or {}
+                if not pid:
+                    continue
+                options_json = json.dumps(options)
+                # Use INSERT OR REPLACE to update existing or add new
+                cursor.execute("""
+                    INSERT INTO presets (id, template_id, name, options_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT(id) DO UPDATE SET
+                        template_id = excluded.template_id,
+                        name = excluded.name,
+                        options_json = excluded.options_json,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (pid, template_id, name, options_json))
+    logger.info("[DB] Merged imported presets with existing presets")
+
+
 def get_presets_for_template(template_id: str) -> List[Dict[str, Any]]:
     """Get all presets for a specific template."""
     with get_db() as conn:
