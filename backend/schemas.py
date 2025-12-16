@@ -25,6 +25,13 @@ class PreviewRequest(BaseModel):
     preset_id: Optional[str] = None   # <-- MAKE OPTIONAL
     movie_title: Optional[str] = None
     movie_year: Optional[int] = None
+    fallbackPosterAction: Optional[str] = None
+    fallbackPosterTemplate: Optional[str] = None
+    fallbackPosterPreset: Optional[str] = None
+    fallbackLogoAction: Optional[str] = None
+    fallbackLogoTemplate: Optional[str] = None
+    fallbackLogoPreset: Optional[str] = None
+    logoSource: Optional[str] = None
 
 
 class SaveRequest(PreviewRequest):
