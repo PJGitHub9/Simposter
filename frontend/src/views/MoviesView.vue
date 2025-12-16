@@ -358,7 +358,7 @@ const prevPage = () => {
   if (page.value > 1) page.value -= 1
 }
 
-const handleRefreshPoster = async (ratingKey: string) => {
+const handleRefreshPoster = async (ratingKey: string, forceRefresh?: boolean) => {
   try {
     const res = await fetch(`${apiBase}/api/movie/${ratingKey}/poster?meta=1&force_refresh=1`)
     if (!res.ok) return
@@ -422,7 +422,7 @@ onMounted(async () => {
     </div>
     <div v-if="error" class="callout error">
       <p>{{ error }}</p>
-      <button @click="fetchMovies">Retry</button>
+      <button @click="() => fetchMovies()">Retry</button>
     </div>
     <div v-else-if="loading" class="callout">Loading movies…</div>
     <MovieGrid v-else heading="Movies" :items="paged" @select="handleSelect" @refresh="handleRefreshPoster" />

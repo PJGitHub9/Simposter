@@ -205,20 +205,24 @@ const { success, error: notifyError } = useNotification()
 
 // Watch for preview changes and store them in carousel
 watch(lastPreview, (newPreview) => {
-  if (!newPreview || !currentSeason.value) return
+  if (!newPreview) return
+  
+  const season = currentSeason.value
+  if (!season) return
 
   // Check if we already have a preview for this season
-  const existingIndex = renderedPreviews.value.findIndex(p => p.seasonKey === currentSeason.value!.key)
+  const existingIndex = renderedPreviews.value.findIndex(p => p.seasonKey === season.key)
 
   if (existingIndex >= 0) {
     // Update existing preview
-    renderedPreviews.value[existingIndex].imageUrl = newPreview
+    const existing = renderedPreviews.value[existingIndex]
+    if (existing) existing.imageUrl = newPreview
     activePreviewIndex.value = existingIndex
   } else {
     // Add new preview
     renderedPreviews.value.push({
-      seasonKey: currentSeason.value.key,
-      seasonTitle: currentSeason.value.title,
+      seasonKey: season.key,
+      seasonTitle: season.title,
       imageUrl: newPreview
     })
     activePreviewIndex.value = renderedPreviews.value.length - 1
