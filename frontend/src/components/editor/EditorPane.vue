@@ -689,7 +689,13 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
     const refreshFlag = typeof forceRefresh === 'boolean'
       ? forceRefresh
       : false
-    const res = await fetch(`${apiBase}/api/movie/${props.movie.key}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
+    const mediaType = props.movie.mediaType || 'movie'
+    const isTvShow = mediaType === 'tv-show'
+    const endpoint = isTvShow
+      ? `${apiBase}/api/tv-show/${props.movie.key}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`
+      : `${apiBase}/api/movie/${props.movie.key}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`
+
+    const res = await fetch(endpoint)
     if (!res.ok) {
       existingPoster.value = null
       updateGlobalPosterCache(props.movie.key, null)
@@ -1362,7 +1368,7 @@ watch(
         <div class="preview-existing">
           <div class="preview-label">
             Current Plex Poster
-            <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster">
+            <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />

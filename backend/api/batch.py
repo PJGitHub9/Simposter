@@ -8,6 +8,7 @@ from io import BytesIO
 import requests
 from backend.assets.selection import pick_poster, pick_logo
 from backend.logo_sources import get_logos_merged
+from .movies import fetch_and_cache_poster
 from .save import apply_save_location_variables, get_save_location_template, resolve_library_label, embed_library_metadata
 from datetime import datetime, timezone
 from PIL import PngImagePlugin
@@ -383,6 +384,12 @@ def _process_single_movie(
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for plex send: {history_err}")
+
+        # Refresh cached poster from Plex so UI sees the new image
+        try:
+            fetch_and_cache_poster(rating_key, force_refresh=True)
+        except Exception as cache_err:
+            logger.debug("[BATCH] Failed to refresh poster cache for %s: %s", rating_key, cache_err)
 
         result = {
             "rating_key": rating_key,

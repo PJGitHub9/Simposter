@@ -53,8 +53,6 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
     if lh * scale > max_h:
         scale = max_h / lh
 
-    scale = min(scale, 1.0)  # never upscale logos
-
     # ------------------------------
     # Override mode?
     # ------------------------------
