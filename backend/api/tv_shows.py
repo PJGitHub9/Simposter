@@ -164,6 +164,10 @@ def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: st
     Return TV shows from Plex. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
     """
     try:
+        # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
+        if library_id in ("default", ""):
+            library_id = None
+
         if not force_refresh and _tv_cache_fresh(max_age, library_id=library_id):
             cached = cache.get_cached_tv_shows(library_id=library_id)
             if cached:

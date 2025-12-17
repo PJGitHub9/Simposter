@@ -286,6 +286,10 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
     """
     Return movies. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
     """
+    # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
+    if library_id in ("default", ""):
+        library_id = None
+
     if not force_refresh and _cache_fresh(max_age, library_id=library_id):
         cached = cache.get_cached_movies(library_id=library_id)
         if cached:

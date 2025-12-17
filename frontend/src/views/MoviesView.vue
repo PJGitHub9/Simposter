@@ -23,10 +23,10 @@ const posterInFlight = new Set<string>()
 const labelInFlight = new Set<string>()
 const moviesLoaded = moviesLoadedFlag
 const route = useRoute()
-const currentLibrary = computed(() => (route.query.library as string) || 'default')
-const POSTER_CACHE_KEY = computed(() => `simposter-poster-cache-${currentLibrary.value}`)
-const LABELS_CACHE_KEY = computed(() => `simposter-labels-cache-${currentLibrary.value}`)
-const MOVIES_CACHE_KEY = computed(() => `simposter-movies-cache-${currentLibrary.value}`)
+const currentLibrary = computed(() => (route.query.library as string) || '')
+const POSTER_CACHE_KEY = computed(() => `simposter-poster-cache-${currentLibrary.value || 'all'}`)
+const LABELS_CACHE_KEY = computed(() => `simposter-labels-cache-${currentLibrary.value || 'all'}`)
+const MOVIES_CACHE_KEY = computed(() => `simposter-movies-cache-${currentLibrary.value || 'all'}`)
 const CACHE_VERSION_KEY = 'simposter-cache-version'
 const CURRENT_CACHE_VERSION = '2' // Increment this to invalidate all caches
 
@@ -88,8 +88,19 @@ const loadMoviesCache = () => {
       const cached = JSON.parse(raw)
       // Only use cache if it actually has movies
       if (cached && cached.length > 0) {
-        moviesCache.value = cached
-        moviesLoaded.value = true
+        // Verify cached movies belong to current library by checking library_id field
+        const validCached = cached.filter((m: any) => {
+          const cachedLib = m.library_id || ''
+          const currentLib = currentLibrary.value
+          // Both empty = all libraries (valid)
+          // Both match = valid
+          // One empty and one set = might be cross-contamination, but allow if no library_id on movie
+          return !m.library_id || cachedLib === currentLib
+        })
+        if (validCached.length > 0) {
+          moviesCache.value = validCached
+        }
+        // Don't set moviesLoaded here - let onMounted decide whether to fetch fresh
       }
     }
   } catch {
@@ -115,6 +126,7 @@ const clearAllCaches = () => {
     posterCacheStore.value = {}
     labelCacheStore.value = {}
     moviesCache.value = []
+    movies.value = []
     moviesLoaded.value = false
   } catch {
     /* ignore */
@@ -155,6 +167,8 @@ loadLabelCache()
 loadMoviesCache()
 // Reload caches when library changes
 watch(currentLibrary, () => {
+  // Clear in-memory display immediately to prevent showing wrong library's movies
+  movies.value = []
   clearAllCaches()
   loadPosterCache()
   loadLabelCache()
@@ -265,6 +279,7 @@ const fetchMovies = async (forceRefresh = false) => {
   loading.value = true
   error.value = null
   try {
+    // Always fetch on mount if not already loaded in this session, or if force refresh
     if (!moviesLoaded.value || forceRefresh) {
       const url = `${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}${forceRefresh ? `${currentLibrary.value ? '&' : '?'}force_refresh=true` : ''}`
       const res = await fetch(url)
