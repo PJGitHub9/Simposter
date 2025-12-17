@@ -58,7 +58,10 @@ export function useRenderService() {
     presetId?: string
   ) => {
     const payload = basePayload(movie, bgUrl, logoUrl, templateId, presetId, options)
-    const data = await post('preview', payload)
+    const data = await post('preview', {
+      ...payload,
+      disableOverlayCache: true
+    })
     if (data?.image_base64) {
       lastPreview.value = `data:image/jpeg;base64,${data.image_base64}`
     }

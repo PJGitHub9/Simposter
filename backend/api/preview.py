@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from io import BytesIO
+import time
 
 from ..config import logger, load_presets, get_movie_tmdb_id
-from ..rendering import render_poster_image
+from ..rendering import render_poster_image, render_with_overlay_cache
 from ..schemas import PreviewRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details
 from ..assets.selection import pick_poster, pick_logo
@@ -12,6 +13,18 @@ router = APIRouter()
 
 @router.post("/preview")
 def api_preview(req: PreviewRequest):
+    ui_settings_data = None
+    use_overlay_cache = True
+    start_time = time.perf_counter()
+
+    try:
+        from .. import database as db
+        ui_settings_data = db.get_ui_settings()
+        if ui_settings_data:
+            use_overlay_cache = ui_settings_data.get("performance", {}).get("useOverlayCache", True)
+    except Exception:
+        pass
+
     try:
         # Load preset options if preset_id is provided
         render_options = dict(req.options or {})
@@ -59,6 +72,13 @@ def api_preview(req: PreviewRequest):
             render_options["movie_title"] = req.movie_title
         if req.movie_year:
             render_options["movie_year"] = str(req.movie_year)
+
+        # Allow per-request opt-out of overlay cache for live editing
+        disable_overlay_cache = render_options.get("disableOverlayCache")
+        if req.disableOverlayCache is not None:
+            disable_overlay_cache = req.disableOverlayCache
+        if disable_overlay_cache:
+            use_overlay_cache = False
 
         # If background_url contains a rating key pattern, try TMDB lookup
         background_url = req.background_url
@@ -155,11 +175,33 @@ def api_preview(req: PreviewRequest):
             except Exception as e:
                 logger.warning("[PREVIEW] TMDB lookup failed, using original URL: %s", e)
 
-        img = render_poster_image(
+        logo_mode_val = render_options.get("logo_mode", "first")
+        effective_logo_url = None if logo_mode_val == "none" else logo_url
+
+        if req.preset_id:
+            img = render_with_overlay_cache(
+                template_id,
+                req.preset_id,
+                background_url,
+                effective_logo_url,
+                render_options,
+                use_cache=use_overlay_cache,
+            )
+        else:
+            img = render_poster_image(
+                template_id,
+                background_url,
+                effective_logo_url,
+                render_options,
+            )
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        logger.info(
+            "[PREVIEW] Render time %.1f ms template=%s preset=%s cache=%s",
+            elapsed_ms,
             template_id,
-            background_url,
-            logo_url,
-            render_options,
+            req.preset_id or "none",
+            "on" if use_overlay_cache else "off",
         )
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid background image.")
@@ -171,10 +213,13 @@ def api_preview(req: PreviewRequest):
     # Get JPEG quality from settings
     quality = 95
     try:
-        from .. import database as db
-        ui_settings_data = db.get_ui_settings()
         if ui_settings_data and "imageQuality" in ui_settings_data:
             quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
+        elif ui_settings_data is None:
+            from .. import database as db
+            ui_settings_data = db.get_ui_settings()
+            if ui_settings_data and "imageQuality" in ui_settings_data:
+                quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
     except Exception:
         pass
     img.convert("RGB").save(buf, "JPEG", quality=quality)

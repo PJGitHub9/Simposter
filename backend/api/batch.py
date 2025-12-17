@@ -3,7 +3,7 @@ from ..schemas import BatchRequest
 from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
 from ..config import load_presets
 from ..tmdb_client import get_images_for_movie, get_movie_details
-from ..rendering import render_poster_image
+from ..rendering import render_poster_image, render_with_overlay_cache
 from io import BytesIO
 import requests
 from backend.assets.selection import pick_poster, pick_logo
@@ -182,11 +182,17 @@ def _process_single_movie(
         render_options["movie_title"] = movie_details.get("title", "")
         render_options["movie_year"] = movie_details.get("year", "")
 
-        img = render_poster_image(
+        # Check if overlay caching is enabled
+        ui_settings = db.get_ui_settings()
+        use_overlay_cache = ui_settings.get("performance", {}).get("useOverlayCache", True)
+        
+        img = render_with_overlay_cache(
             template_id,
+            preset_id,
             poster_url,
             logo_url if logo_mode != "none" else None,
             render_options,
+            use_cache=use_overlay_cache
         )
 
         # ---------------------------

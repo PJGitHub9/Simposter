@@ -32,6 +32,7 @@ class PreviewRequest(BaseModel):
     fallbackLogoTemplate: Optional[str] = None
     fallbackLogoPreset: Optional[str] = None
     logoSource: Optional[str] = None
+    disableOverlayCache: Optional[bool] = None
 
 
 class SaveRequest(PreviewRequest):
@@ -89,6 +90,7 @@ class PerformanceSettings(BaseModel):
     tmdbRateLimit: int = 40  # requests per 10 seconds
     tvdbRateLimit: int = 20
     memoryLimit: int = 2048  # MB
+    useOverlayCache: bool = True  # Pre-generate overlay effects for faster batch rendering
 
 
 class UISettings(BaseModel):

@@ -344,7 +344,8 @@ const previewPreset = async (templateId: string, preset: Preset) => {
         logo_url: null,
         options: preset.options || {},
         preset_id: preset.id,
-        movie_title: movie.title
+        movie_title: movie.title,
+        disableOverlayCache: true
       })
     })
     if (!res.ok) throw new Error(`Preview failed (${res.status})`)

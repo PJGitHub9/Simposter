@@ -113,7 +113,10 @@ async def api_presets_import(payload: dict = Body(...)):
 
 @router.post("/presets/save")
 def api_save_preset(req: PresetSaveRequest):
-    """Save a preset to the database."""
+    """Save a preset to the database and generate overlay cache."""
+    from ..rendering import generate_overlay
+    from ..config import settings
+    
     template_id = req.template_id or "default"
     preset_id = req.preset_id
     options = _apply_global_template_defaults(req.options)
@@ -122,6 +125,23 @@ def api_save_preset(req: PresetSaveRequest):
         # Save to database
         db.save_preset(template_id, preset_id, preset_id, options)
         logger.info(f"[PRESETS] Saved preset {preset_id} for template {template_id}")
+        
+        # Generate and save overlay cache
+        try:
+            overlay = generate_overlay(options)
+            
+            # Create overlay directory: config/overlays/{template_id}/
+            overlay_dir = Path(settings.CONFIG_DIR) / "overlays" / template_id
+            overlay_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save overlay as PNG
+            overlay_path = overlay_dir / f"{preset_id}.png"
+            overlay.save(overlay_path, "PNG")
+            logger.info(f"[PRESETS] Generated overlay cache: {overlay_path}")
+        except Exception as overlay_err:
+            logger.warning(f"[PRESETS] Failed to generate overlay cache: {overlay_err}")
+            # Non-fatal: continue even if overlay generation fails
+        
         return {"message": f"Preset '{preset_id}' saved."}
     except Exception as e:
         logger.error(f"[PRESETS] Error saving preset: {e}")
