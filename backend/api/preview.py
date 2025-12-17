@@ -168,7 +168,16 @@ def api_preview(req: PreviewRequest):
         raise HTTPException(status_code=500, detail="Preview failed.")
 
     buf = BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=95)
+    # Get JPEG quality from settings
+    quality = 95
+    try:
+        from .. import database as db
+        ui_settings_data = db.get_ui_settings()
+        if ui_settings_data and "imageQuality" in ui_settings_data:
+            quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
+    except Exception:
+        pass
+    img.convert("RGB").save(buf, "JPEG", quality=quality)
 
     import base64
     return {"image_base64": base64.b64encode(buf.getvalue()).decode()}

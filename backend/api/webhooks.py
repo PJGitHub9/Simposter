@@ -111,7 +111,16 @@ def api_webhook_radarr(template_id: str, preset_id: str, req: RadarrWebhook):
     # For now: just return the image encoded
 
     buf = BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=95)
+    # Get JPEG quality from settings
+    quality = 95
+    try:
+        from .. import database as db
+        ui_settings_data = db.get_ui_settings()
+        if ui_settings_data and "imageQuality" in ui_settings_data:
+            quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
+    except Exception:
+        pass
+    img.convert("RGB").save(buf, "JPEG", quality=quality)
     payload = buf.getvalue()
 
     sent_to_plex = False

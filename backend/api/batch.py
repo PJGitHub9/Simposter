@@ -328,7 +328,14 @@ def _process_single_movie(
                 exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
                 exif_bytes = exif.tobytes()
 
-                img_rgb.save(save_path, "JPEG", quality=95, exif=exif_bytes)
+                # Get JPEG quality from settings
+                quality = 95
+                try:
+                    if ui_settings and ui_settings.imageQuality:
+                        quality = ui_settings.imageQuality.jpgQuality
+                except Exception:
+                    pass
+                img_rgb.save(save_path, "JPEG", quality=quality, exif=exif_bytes)
 
             logger.info(f"[BATCH] Saved locally: {save_path} (library: {library_label})")
             # Record history entry for local save
@@ -354,7 +361,14 @@ def _process_single_movie(
                 "current_step": "Sending to Plex",
             })
             buf = BytesIO()
-            img.convert("RGB").save(buf, "JPEG", quality=95)
+            # Get JPEG quality from settings
+            quality = 95
+            try:
+                if ui_settings and ui_settings.imageQuality:
+                    quality = ui_settings.imageQuality.jpgQuality
+            except Exception:
+                pass
+            img.convert("RGB").save(buf, "JPEG", quality=quality)
             payload = buf.getvalue()
 
             plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"

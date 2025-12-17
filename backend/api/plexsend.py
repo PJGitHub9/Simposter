@@ -34,7 +34,16 @@ def api_plex_send(req: PlexSendRequest):
 
     # Encode for Plex
     buf = BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=95)
+    # Get JPEG quality from settings
+    quality = 95
+    try:
+        from .. import database as db
+        ui_settings_data = db.get_ui_settings()
+        if ui_settings_data and "imageQuality" in ui_settings_data:
+            quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
+    except Exception:
+        pass
+    img.convert("RGB").save(buf, "JPEG", quality=quality)
     payload = buf.getvalue()
 
     plex_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}/posters"

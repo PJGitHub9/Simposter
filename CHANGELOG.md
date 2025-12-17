@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.4.5
+### Major Features
+- **TV Show Library Support**: Full TV show library integration with TVDB as metadata source, poster rendering, and library management
+- **TVDB Integration**: Added TVDB API client for TV show metadata, logos, and poster fetching with language preference support
+- **Fanart.tv Logo Fallback**: Enhanced logo source selection with TMDB/Fanart priority modes and automatic fallback when logos are missing
+- **Preset Fallback System**: Template/preset fallback logic for missing posters and logos (e.g., switch to text-based template when logo unavailable)
+
+### Improvements
+- **Cache Reliability**: Fixed stale poster cache on app startup after inactivity; movies now refresh properly without manual cache clear
+- **Library Switching**: Improved library switching to prevent cross-library contamination; display clears immediately when changing libraries
+- **Library ID Handling**: Fixed "default" library errors; backend now correctly handles empty/default library IDs
+- **Preview Rendering**: Preview endpoint now respects fallback templates and preset options (text overlay, logo mode) matching batch behavior
+- **Settings UI**: Reorganized performance/quality settings; concurrent rendering functional (JPEG quality setting currently unused)
+
+### Testing & In Progress
+- **Batch Edit**: Continued refinements and testing for bulk poster operations
+
 ## v1.4.4
 - **Database Tweaks**: Optimized the SQLite settings/presets path (initial migration landed in 1.4.2) for smoother reads/writes.
 - **Template Manager**: New UI to manage presets plus poster/logo fallback logic (currently in testing).

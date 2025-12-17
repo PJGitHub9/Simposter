@@ -252,7 +252,15 @@ def api_save(req: SaveRequest):
         exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
         exif_bytes = exif.tobytes()
 
-        img_rgb.save(out_path, "JPEG", quality=95, exif=exif_bytes)
+        # Get JPEG quality from settings
+        quality = 95
+        try:
+            settings_data = db.get_ui_settings()
+            if settings_data and "imageQuality" in settings_data:
+                quality = settings_data["imageQuality"].get("jpgQuality", 95)
+        except Exception:
+            pass
+        img_rgb.save(out_path, "JPEG", quality=quality, exif=exif_bytes)
 
     logger.info("Saved poster to %s (library: %s)", out_path, library_label)
     return {"status": "ok", "saved_path": out_path}
