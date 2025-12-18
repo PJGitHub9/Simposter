@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from io import BytesIO
+import shutil
+import subprocess
+import tempfile
 from typing import Any, Dict, Optional
 from pathlib import Path
 
@@ -35,22 +38,117 @@ def _download_image(url: str) -> Image.Image:
     )
 
     if is_svg:
+        # Strategy 1: CairoSVG (fast, high quality but needs system Cairo)
         try:
             from cairosvg import svg2png  # type: ignore
+            try:
+                # Pass the URL so external refs resolve correctly
+                png_data = svg2png(bytestring=resp.content, url=url)
+                img = Image.open(BytesIO(png_data))
+                img.load()
+                logger.debug("Successfully converted SVG to PNG via CairoSVG: %s", url)
+                return img.convert("RGBA")
+            except Exception as e:
+                logger.exception("CairoSVG failed to convert SVG from URL: %s", url)
         except Exception as e:  # pragma: no cover - optional dependency
-            logger.warning("SVG support not available (install cairosvg): %s", e)
-            raise ValueError(f"SVG not supported: {url}") from e
+            logger.warning("SVG Cairo backend unavailable (cairosvg): %s", e)
 
+        # Strategy 2: pillow-resvg plugin (bundles resvg for Windows/mac/Linux)
         try:
-            # Pass the URL so external refs resolve correctly
-            png_data = svg2png(bytestring=resp.content, url=url)
-            img = Image.open(BytesIO(png_data))
-            img.load()
-            logger.debug("Successfully converted SVG to PNG: %s", url)
-            return img.convert("RGBA")
+            import pillow_resvg  # type: ignore  # noqa: F401 - registers SVG opener with Pillow
+            try:
+                img = Image.open(BytesIO(resp.content))
+                img.load()
+                logger.debug("Successfully converted SVG to PNG via pillow-resvg: %s", url)
+                return img.convert("RGBA")
+            except Exception as e:
+                logger.exception("pillow-resvg failed to decode SVG: %s", url)
         except Exception as e:
-            logger.exception("Failed to convert SVG from URL: %s", url)
-            raise ValueError(f"Failed to convert SVG: {url}") from e
+            logger.warning("SVG pillow-resvg backend unavailable: %s", e)
+
+        # Strategy 3: external resvg binary (no system installs required)
+        # Look for explicit settings.RESVG_PATH, else common repo locations
+        resvg_path: Optional[str] = None
+        try:
+            candidate = settings.RESVG_PATH.strip() if getattr(settings, "RESVG_PATH", "") else ""
+            if candidate:
+                p = Path(candidate)
+                if p.exists():
+                    resvg_path = str(p)
+            if not resvg_path:
+                # Try ./bin/resvg(.exe) and ./tools/resvg/resvg(.exe)
+                for rel in ("bin/resvg.exe", "bin/resvg", "tools/resvg/resvg.exe", "tools/resvg/resvg"):
+                    p = (Path(__file__).resolve().parent.parent / rel).resolve()
+                    if p.exists():
+                        resvg_path = str(p)
+                        break
+        except Exception:
+            resvg_path = None
+
+        if resvg_path:
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    svg_fp = Path(td) / "in.svg"
+                    png_fp = Path(td) / "out.png"
+                    svg_fp.write_bytes(resp.content)
+                    # Render at default size; allow resvg to use viewBox. Users can override with RESVG_PATH wrapper if needed.
+                    subprocess.run([resvg_path, str(svg_fp), str(png_fp)], check=True, timeout=20)
+                    img = Image.open(png_fp)
+                    img.load()
+                    logger.debug("Successfully converted SVG to PNG via resvg binary: %s", url)
+                    return img.convert("RGBA")
+            except Exception as e:
+                logger.exception("resvg binary failed to convert SVG: %s (path=%s)", url, resvg_path)
+
+        # Strategy 4: Inkscape CLI (widely available)
+        inkscape_path: Optional[str] = None
+        try:
+            cand = settings.INKSCAPE_PATH.strip() if getattr(settings, "INKSCAPE_PATH", "") else ""
+            if cand:
+                p = Path(cand)
+                if p.exists():
+                    inkscape_path = str(p)
+            if not inkscape_path:
+                # Common install locations on Windows/macOS/Linux
+                common = [
+                    "C:/Program Files/Inkscape/bin/inkscape.exe",
+                    "C:/Program Files/Inkscape/inkscape.exe",
+                    "/usr/bin/inkscape",
+                    "/usr/local/bin/inkscape",
+                ]
+                for rel in common:
+                    p = Path(rel)
+                    if p.exists():
+                        inkscape_path = str(p)
+                        break
+            if not inkscape_path:
+                # Fallback to PATH, but only if actually present
+                found = shutil.which("inkscape")
+                if found:
+                    inkscape_path = found
+        except Exception:
+            inkscape_path = None
+
+        if inkscape_path:
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    svg_fp = Path(td) / "in.svg"
+                    png_fp = Path(td) / "out.png"
+                    svg_fp.write_bytes(resp.content)
+                    # Inkscape 1.x syntax
+                    cmd = [inkscape_path, "--export-type=png", f"--export-filename={png_fp}", str(svg_fp)]
+                    subprocess.run(cmd, check=True, timeout=30)
+                    img = Image.open(png_fp)
+                    img.load()
+                    logger.debug("Successfully converted SVG to PNG via Inkscape: %s", url)
+                    return img.convert("RGBA")
+            except FileNotFoundError:
+                logger.debug("Inkscape not found at path=%s; skipping SVG conversion", inkscape_path)
+            except Exception:
+                logger.exception("Inkscape failed to convert SVG: %s (path=%s)", url, inkscape_path)
+
+        # If all strategies failed, abort gracefully so rendering can continue without a logo
+        raise ValueError(f"SVG not supported or failed to convert: {url}")
 
     try:
         img = Image.open(BytesIO(resp.content))

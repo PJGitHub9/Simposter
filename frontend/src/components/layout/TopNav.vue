@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { APP_VERSION } from '@/version'
 import { getApiBase } from '@/services/apiBase'
 
-type Movie = { key: string; title: string; year?: number | string; poster?: string | null }
+type Movie = { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show' }
+type GroupedMovies = { libraryName: string; mediaType?: string; movies: Movie[] }[]
+type GroupedShows = { libraryName: string; mediaType?: string; shows: Movie[] }[]
+type GroupedContent = (
+  | { libraryName: string; mediaType?: string; movies: Movie[] }
+  | { libraryName: string; mediaType?: string; shows: Movie[] }
+)[]
 
 const props = defineProps<{
   search?: string
   showBack?: boolean
-  movies?: Movie[]
+  movies?: Movie[] | GroupedMovies | GroupedShows | GroupedContent
 }>()
 
 const emit = defineEmits<{
@@ -49,9 +55,42 @@ const searchResults = computed(() => {
   const term = props.search.trim().toLowerCase()
   if (!term) return []
 
-  return props.movies
-    .filter((m) => m.title.toLowerCase().includes(term))
-    .slice(0, 8)
+  // Check if movies is already grouped format
+  const isGrouped = Array.isArray(props.movies) && props.movies.length > 0 && 
+    ('libraryName' in props.movies[0] && ('movies' in props.movies[0] || 'shows' in props.movies[0]))
+
+  if (isGrouped) {
+    // Handle grouped format (mix of movies and TV shows)
+    const grouped = props.movies as GroupedContent
+    const results: (Movie & { libraryName: string } | { separator: string })[] = []
+    
+    for (const group of grouped) {
+      // Get items from either movies or shows property
+      const items = 'movies' in group ? group.movies : 'shows' in group ? group.shows : []
+      const matching = items.filter((m) => m.title.toLowerCase().includes(term))
+      if (matching.length > 0) {
+        // Add library separator
+        results.push({ separator: group.libraryName })
+        // Add up to 3 results per library, include mediaType from group
+        results.push(
+          ...matching
+            .slice(0, 3)
+            .map((m) => ({ 
+              ...m, 
+              libraryName: group.libraryName,
+              mediaType: (group.mediaType as 'movie' | 'tv-show') || 'movie'
+            }))
+        )
+      }
+    }
+    
+    return results.slice(0, 12)
+  } else {
+    // Handle flat format (backward compatibility)
+    return (props.movies as Movie[])
+      .filter((m) => m.title.toLowerCase().includes(term))
+      .slice(0, 8)
+  }
 })
 
 const showDropdown = computed(() => searchFocused.value && searchResults.value.length > 0)
@@ -68,9 +107,22 @@ const handleBlur = () => {
   }, 200)
 }
 
+let posterCacheInterval: number | null = null
+
 onMounted(() => {
   loadPosterCache()
+  // Watch for changes to the poster cache in sessionStorage every 500ms
+  posterCacheInterval = window.setInterval(() => {
+    loadPosterCache()
+  }, 500)
 })
+
+onUnmounted(() => {
+  if (posterCacheInterval !== null) {
+    clearInterval(posterCacheInterval)
+  }
+})
+
 </script>
 
 <template>
@@ -103,26 +155,32 @@ onMounted(() => {
 
       <!-- Search Results Dropdown -->
       <div v-if="showDropdown" class="search-dropdown">
-        <div
-          v-for="movie in searchResults"
-          :key="movie.key"
-          class="search-result"
-          @click="handleSelectMovie(movie)"
-        >
-          <div class="result-poster" :style="{ backgroundImage: getPosterFor(movie) ? `url(${getPosterFor(movie)})` : 'none' }">
-            <div v-if="!getPosterFor(movie)" class="result-poster-placeholder">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <polyline points="21 15 16 10 5 21" />
-              </svg>
+        <template v-for="item in searchResults" :key="'separator' in item ? `sep-${(item as any).separator}` : (item as Movie).key">
+          <!-- Library Separator -->
+          <div v-if="'separator' in item" class="search-separator">
+            {{ (item as any).separator }}
+          </div>
+          <!-- Search Result -->
+          <div
+            v-else
+            class="search-result"
+            @click="handleSelectMovie(item as Movie)"
+          >
+            <div class="result-poster" :style="{ backgroundImage: getPosterFor(item as Movie) ? `url(${getPosterFor(item as Movie)})` : 'none' }">
+              <div v-if="!getPosterFor(item as Movie)" class="result-poster-placeholder">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <polyline points="21 15 16 10 5 21" />
+                </svg>
+              </div>
+            </div>
+            <div class="result-info">
+              <p class="result-title">{{ (item as Movie).title }}</p>
+              <p v-if="(item as Movie).year" class="result-year">{{ (item as Movie).year }}</p>
             </div>
           </div>
-          <div class="result-info">
-            <p class="result-title">{{ movie.title }}</p>
-            <p v-if="movie.year" class="result-year">{{ movie.year }}</p>
-          </div>
-        </div>
+        </template>
       </div>
     </div>
   </header>
@@ -259,6 +317,18 @@ onMounted(() => {
 
 .search-result:hover {
   background: rgba(61, 214, 183, 0.1);
+}
+
+.search-separator {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: rgba(169, 240, 221, 0.7);
+  background: rgba(61, 214, 183, 0.08);
+  border-bottom: 1px solid rgba(61, 214, 183, 0.2);
+  border-top: 1px solid rgba(61, 214, 183, 0.1);
 }
 
 .result-poster {

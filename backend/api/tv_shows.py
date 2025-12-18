@@ -190,6 +190,11 @@ def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: st
 
         lib_ids = [library_id] if library_id else None
         shows = _get_plex_tv_shows(lib_ids)
+        try:
+            libs_str = ",".join(lib_ids or (getattr(settings, "PLEX_TV_SHOW_LIB_IDS", []) or [])) or "?"
+            logger.info("[PLEX] Loaded %d TV shows from %s libraries (%s)", len(shows), len(lib_ids or getattr(settings, "PLEX_TV_SHOW_LIB_IDS", []) or []), libs_str)
+        except Exception:
+            pass
         cache.refresh_tv_from_list(shows)
         return shows
     except Exception as e:

@@ -83,6 +83,11 @@ def _apply_runtime_settings(merged: dict):
     tvdb_data = merged.get("tvdb", {}) or {}
     fanart_data = merged.get("fanart", {}) or {}
     library_mappings = plex_data.get("libraryMappings") or []
+    tv_names = plex_data.get("tvShowLibraryNames") or []
+    if not tv_names and plex_data.get("tvShowLibraryName"):
+        tv_names = [plex_data.get("tvShowLibraryName")]
+    tv_names = [str(n) for n in tv_names if str(n).strip()]
+    tv_library_mappings = plex_data.get("tvShowLibraryMappings") or []
     url = plex_data.get("url") or ""
     token = plex_data.get("token") or ""
     names = plex_data.get("movieLibraryNames") or []
@@ -122,6 +127,14 @@ def _apply_runtime_settings(merged: dict):
 
     # Library mappings for name/id resolution
     object.__setattr__(settings, "PLEX_LIBRARY_MAPPINGS", library_mappings)
+
+    # TV libraries: store mappings and resolved IDs for backend/tv_shows.py
+    object.__setattr__(settings, "PLEX_TV_LIBRARY_MAPPINGS", tv_library_mappings)
+    try:
+        tv_ids = resolve_library_ids(tv_names) if tv_names else []
+    except Exception:
+        tv_ids = tv_names
+    object.__setattr__(settings, "PLEX_TV_SHOW_LIB_IDS", tv_ids)
 
 
 def _default_ui_settings() -> UISettings:

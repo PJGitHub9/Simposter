@@ -58,6 +58,208 @@ const operationStatus = useOperationStatus()
 let scanPoller: number | null = null
 let batchPoller: number | null = null
 
+// State for all-libraries search
+const allLibrariesMovies = ref<{ libraryName: string; mediaType: string; movies: any[] }[]>([])
+const allLibrariesTvShows = ref<{ libraryName: string; mediaType: string; shows: any[] }[]>([])
+const allLibrariesLoaded = ref(false)
+
+// Fetch all movies and TV shows from all libraries for search
+const fetchAllLibrariesContent = async () => {
+  const apiBase = getApiBase()
+  
+  // Get or initialize poster cache from sessionStorage
+  let posterCache: Record<string, string | null> = {}
+  if (typeof sessionStorage !== 'undefined') {
+    try {
+      const cached = sessionStorage.getItem('simposter-poster-cache')
+      if (cached) {
+        posterCache = JSON.parse(cached)
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  
+  // Fetch movies
+  try {
+    const res = await fetch(`${apiBase}/api/movies`)
+    if (res.ok) {
+      const allMovies = await res.json()
+
+      // Cache poster URLs
+      for (const movie of allMovies) {
+        if (movie.key && movie.poster) {
+          posterCache[movie.key] = movie.poster
+        }
+      }
+
+      const movieLibs = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length
+        ? settings.plex.value.libraryMappings
+        : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
+
+      // Group movies by library_id
+      const grouped = new Map<string, any[]>()
+      for (const movie of allMovies) {
+        const libId = movie.library_id || 'default'
+        if (!grouped.has(libId)) {
+          grouped.set(libId, [])
+        }
+        grouped.get(libId)!.push(movie)
+      }
+
+      // Convert to sorted array
+      const groups: { libraryName: string; mediaType: string; movies: any[] }[] = []
+      for (const lib of movieLibs) {
+        const libId = lib.id || 'default'
+        const movies = grouped.get(libId) || []
+        if (movies.length > 0) {
+          groups.push({
+            libraryName: lib.displayName || lib.title || 'Movies',
+            mediaType: 'movie',
+            movies
+          })
+        }
+      }
+
+      allLibrariesMovies.value = groups
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Fetch TV shows
+  try {
+    const res = await fetch(`${apiBase}/api/tv-shows`)
+    if (res.ok) {
+      const allShows = await res.json()
+
+      // Cache poster URLs
+      for (const show of allShows) {
+        if (show.key && show.poster) {
+          posterCache[show.key] = show.poster
+        }
+      }
+
+      const tvLibs = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings.length
+        ? settings.plex.value.tvShowLibraryMappings
+        : []
+
+      if (tvLibs.length > 0) {
+        // Group shows by library_id
+        const grouped = new Map<string, any[]>()
+        for (const show of allShows) {
+          const libId = show.library_id || 'default'
+          if (!grouped.has(libId)) {
+            grouped.set(libId, [])
+          }
+          grouped.get(libId)!.push(show)
+        }
+
+        // Convert to sorted array
+        const groups: { libraryName: string; mediaType: string; shows: any[] }[] = []
+        for (const lib of tvLibs) {
+          const libId = lib.id || 'default'
+          const shows = grouped.get(libId) || []
+          if (shows.length > 0) {
+            groups.push({
+              libraryName: lib.displayName || lib.title || 'TV Shows',
+              mediaType: 'tv-show',
+              shows
+            })
+          }
+        }
+
+        allLibrariesTvShows.value = groups
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Save poster cache to sessionStorage
+  if (typeof sessionStorage !== 'undefined') {
+    try {
+      sessionStorage.setItem('simposter-poster-cache', JSON.stringify(posterCache))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  allLibrariesLoaded.value = true
+}
+
+// Grouped content for search - use fetched data when available, fallback to sessionStorage
+const groupedContentForSearch = computed(() => {
+  const groups: (
+    | { libraryName: string; mediaType: string; movies: any[] }
+    | { libraryName: string; mediaType: string; shows: any[] }
+  )[] = []
+
+  // Add movies if loaded
+  if (allLibrariesLoaded.value && (allLibrariesMovies.value.length > 0 || allLibrariesTvShows.value.length > 0)) {
+    groups.push(...allLibrariesMovies.value)
+    groups.push(...allLibrariesTvShows.value)
+    return groups
+  }
+
+  // Fallback to sessionStorage
+  const movieLibs = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length
+    ? settings.plex.value.libraryMappings
+    : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
+
+  const tvLibs = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings.length
+    ? settings.plex.value.tvShowLibraryMappings
+    : []
+
+  if (typeof sessionStorage !== 'undefined') {
+    // Movies from sessionStorage
+    for (const lib of movieLibs) {
+      const libId = lib.id || 'default'
+      const libName = lib.displayName || lib.title || 'Movies'
+      const cacheKey = `simposter-movies-cache-${libId}`
+      try {
+        const raw = sessionStorage.getItem(cacheKey)
+        if (raw) {
+          const libMovies = JSON.parse(raw)
+          if (Array.isArray(libMovies) && libMovies.length > 0) {
+            groups.push({
+              libraryName: libName,
+              mediaType: 'movie',
+              movies: libMovies
+            })
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // TV shows from sessionStorage
+    for (const lib of tvLibs) {
+      const libId = lib.id || 'default'
+      const libName = lib.displayName || lib.title || 'TV Shows'
+      const cacheKey = `simposter-tv-shows-cache-${libId}`
+      try {
+        const raw = sessionStorage.getItem(cacheKey)
+        if (raw) {
+          const libShows = JSON.parse(raw)
+          if (Array.isArray(libShows) && libShows.length > 0) {
+            groups.push({
+              libraryName: libName,
+              mediaType: 'tv-show',
+              shows: libShows
+            })
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  return groups
+})
+
 const activeTab = computed<TabKey>(() => {
   const libQuery = (route.query.library as string) || ''
   if (route.name === 'batch-edit' || route.name === 'batch-edit-test' || route.name === 'local-assets' || route.name === 'movies') {
@@ -124,6 +326,7 @@ onMounted(() => {
     (t) => applyTheme(t)
   )
   hydratePostersFromSession()
+  fetchAllLibrariesContent()
   scan.checking.value = true
   fetchScanStatus().then((running) => {
     if (running) startScanPolling()
@@ -228,9 +431,14 @@ const stopBatchPolling = () => {
 // Export for use by BatchEditModal
 ;(window as any).startBatchPolling = startBatchPolling
 
-const handleSearchSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null }) => {
-  router.push({ name: 'movies' })
-  ui.setSelectedMovie(movie)
+const handleSearchSelect = (item: { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show' }) => {
+  const mediaType = item.mediaType || 'movie'
+  if (mediaType === 'tv-show') {
+    router.push({ name: 'tv-shows' })
+  } else {
+    router.push({ name: 'movies' })
+  }
+  ui.setSelectedMovie({ ...item, mediaType })
 }
 
 const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
@@ -258,7 +466,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <TopNav
       :search="searchQuery"
       :show-back="showBackButton"
-      :movies="movies"
+      :movies="groupedContentForSearch.length > 0 ? groupedContentForSearch : movies"
       @update:search="searchQuery = $event"
       @back="handleBack"
       @select-movie="handleSearchSelect"
