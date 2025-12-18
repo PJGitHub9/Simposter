@@ -1,5 +1,7 @@
 # backend/tmdb_client.py
 from typing import Dict, Any, List, Optional
+import time
+import threading
 
 import requests
 
@@ -14,10 +16,53 @@ class TMDBError(Exception):
     pass
 
 
+# Rate limiting: Track requests in a sliding window
+_rate_limit_lock = threading.Lock()
+_rate_limit_requests = []  # List of (timestamp,) tuples
+
+
+def _apply_rate_limit():
+    """Apply rate limiting based on UI settings (requests per 10 seconds)."""
+    # Get rate limit from UI settings
+    try:
+        from .api.ui_settings import _read_settings
+        ui_settings = _read_settings(include_env=False)
+        rate_limit = ui_settings.performance.tmdbRateLimit if ui_settings.performance else 40
+    except Exception:
+        rate_limit = 40  # Default to 40 requests per 10 seconds
+
+    with _rate_limit_lock:
+        now = time.time()
+        window_start = now - 10.0  # 10 second window
+
+        # Remove requests outside the window
+        global _rate_limit_requests
+        _rate_limit_requests = [ts for ts in _rate_limit_requests if ts > window_start]
+
+        # Check if we're at the limit
+        if len(_rate_limit_requests) >= rate_limit:
+            # Calculate how long to wait
+            oldest_request = _rate_limit_requests[0]
+            wait_time = 10.0 - (now - oldest_request) + 0.1  # Add small buffer
+            if wait_time > 0:
+                logger.debug("[TMDB] Rate limit reached (%d/%d), waiting %.2fs", len(_rate_limit_requests), rate_limit, wait_time)
+                time.sleep(wait_time)
+                # Recalculate after sleep
+                now = time.time()
+                window_start = now - 10.0
+                _rate_limit_requests = [ts for ts in _rate_limit_requests if ts > window_start]
+
+        # Record this request
+        _rate_limit_requests.append(now)
+
+
 def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if not settings.TMDB_API_KEY:
         logger.error("[TMDB] TMDB_API_KEY not set")
         raise TMDBError("TMDB_API_KEY not set")
+
+    # Apply rate limiting
+    _apply_rate_limit()
 
     url = f"{TMDB_API_BASE}{path}"
     params = dict(params)
@@ -36,6 +81,16 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         raise TMDBError(f"TMDb request failed: {e}") from e
 
 
+def get_tv_external_ids(tmdb_id: int) -> Dict[str, Any]:
+    """Get external IDs (including TVDB) for a TV show."""
+    return _tmdb_get(f"/tv/{tmdb_id}/external_ids", {})
+
+
+def get_movie_external_ids(tmdb_id: int) -> Dict[str, Any]:
+    """Get external IDs (including IMDB) for a movie."""
+    return _tmdb_get(f"/movie/{tmdb_id}/external_ids", {})
+
+
 def _make_img_url(file_path: str, size: str = "original") -> str:
     return f"{TMDB_IMG_BASE}/{size}{file_path}"
 
@@ -43,6 +98,11 @@ def _make_img_url(file_path: str, size: str = "original") -> str:
 def _build_image_entry(p: Dict[str, Any], kind: str) -> Dict[str, Any]:
     path = p.get("file_path")
     if not path:
+        return {}
+    
+    # Skip SVG files for posters and backdrops (PIL can't handle them)
+    # But allow SVG logos - they'll be handled by cairosvg if available, or skipped during render
+    if path.lower().endswith('.svg') and kind != "logo":
         return {}
 
     lang = p.get("iso_639_1")
@@ -157,4 +217,105 @@ def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
         "original_language": original_language,
         "year": year,
         "release_date": release_date,
+    }
+
+
+def get_images_for_tv_show(tmdb_id: int, original_language: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Fetch images for a TV show from TMDb."""
+    logger.info("[TMDB] Fetching TV show images tmdb_id=%s", tmdb_id)
+    language_pref = db.get_setting("pref.language") or "en"
+    include_lang = _build_lang_param(language_pref, original_language)
+    data = _tmdb_get(
+        f"/tv/{tmdb_id}/images",
+        {
+            "include_image_language": include_lang,
+        },
+    )
+
+    posters: List[Dict[str, Any]] = []
+    for p in data.get("posters", []):
+        entry = _build_image_entry(p, "poster")
+        if entry:
+            posters.append(entry)
+
+    backdrops: List[Dict[str, Any]] = []
+    for b in data.get("backdrops", []):
+        entry = _build_image_entry(b, "backdrop")
+        if entry:
+            backdrops.append(entry)
+
+    logos: List[Dict[str, Any]] = []
+    for l in data.get("logos", []):
+        entry = _build_image_entry(l, "logo")
+        if entry:
+            logos.append(entry)
+
+    logger.debug(
+        "[TMDB] TV show tmdb_id=%s posters=%d backdrops=%d logos=%d",
+        tmdb_id,
+        len(posters),
+        len(backdrops),
+        len(logos),
+    )
+
+    return {
+        "posters": posters,
+        "backdrops": backdrops,
+        "logos": logos,
+    }
+
+
+def get_tv_show_details(tmdb_id: int) -> Dict[str, Any]:
+    """Fetch TV show details from TMDb."""
+    logger.info("[TMDB] Fetching TV show details tmdb_id=%s", tmdb_id)
+    data = _tmdb_get(f"/tv/{tmdb_id}", {})
+
+    name = data.get("name", "")
+    original_name = data.get("original_name", "")
+    original_language = data.get("original_language", "")
+    first_air_date = data.get("first_air_date", "")
+    year = first_air_date.split("-")[0] if first_air_date else ""
+    number_of_seasons = data.get("number_of_seasons", 0)
+
+    logger.debug("[TMDB] TV show tmdb_id=%s name='%s' year=%s seasons=%d", tmdb_id, name, year, number_of_seasons)
+
+    return {
+        "name": name,
+        "original_name": original_name,
+        "original_language": original_language,
+        "year": year,
+        "first_air_date": first_air_date,
+        "number_of_seasons": number_of_seasons,
+    }
+
+
+def get_tv_season_images(tmdb_id: int, season_number: int, original_language: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Fetch images for a specific TV show season from TMDb."""
+    logger.info("[TMDB] Fetching TV season images tmdb_id=%s season=%d", tmdb_id, season_number)
+    language_pref = db.get_setting("pref.language") or "en"
+    include_lang = _build_lang_param(language_pref, original_language)
+    data = _tmdb_get(
+        f"/tv/{tmdb_id}/season/{season_number}/images",
+        {
+            "include_image_language": include_lang,
+        },
+    )
+
+    posters: List[Dict[str, Any]] = []
+    for p in data.get("posters", []):
+        entry = _build_image_entry(p, "poster")
+        if entry:
+            posters.append(entry)
+
+    logger.debug(
+        "[TMDB] TV season tmdb_id=%s season=%d posters=%d",
+        tmdb_id,
+        season_number,
+        len(posters),
+    )
+
+    return {
+        "posters": posters,
+        "backdrops": [],
+        "logos": [],
     }

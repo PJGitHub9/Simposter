@@ -1,10 +1,13 @@
 export type PresetOptions = Record<string, unknown>
 
+export type MediaType = 'movie' | 'tv-show'
+
 export type MovieInput = {
   key: string
   title: string
   year?: number | string
   poster?: string | null
+  mediaType?: MediaType
 }
 
 export type Movie = {
@@ -13,4 +16,5 @@ export type Movie = {
   year?: number | string
   addedAt?: number
   poster?: string | null
+  mediaType?: MediaType
 }

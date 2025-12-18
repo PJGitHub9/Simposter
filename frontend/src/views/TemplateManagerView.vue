@@ -24,6 +24,7 @@ const exporting = ref(false)
 const importing = ref(false)
 const importText = ref('')
 const fallbackPosterFilter = ref('all')
+const fallbackLogoFilter = ref('all')
 const fallbackLogoMode = ref('first')
 const languagePreference = ref('en')
 const logoSource = ref('tmdb_fanart')
@@ -239,6 +240,7 @@ const fetchFallback = async () => {
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     fallbackPosterFilter.value = data.poster_filter || 'all'
+    fallbackLogoFilter.value = data.logo_filter || 'all'
     fallbackLogoMode.value = data.logo_mode || 'first'
     languagePreference.value = data.language_preference || 'en'
     logoSource.value = data.logo_source || 'tmdb_fanart'
@@ -255,6 +257,7 @@ const saveFallback = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         poster_filter: fallbackPosterFilter.value,
+        logo_filter: fallbackLogoFilter.value,
         logo_mode: fallbackLogoMode.value,
         language_preference: languagePreference.value,
         logo_source: logoSource.value
@@ -389,7 +392,7 @@ onMounted(async () => {
               <span class="help small">Falls back to the movie's original language, then English/any.</span>
             </label>
             <label>
-              <span class="label-text">Default poster filter</span>
+              <span class="label-text">Default poster language filter</span>
               <select v-model="fallbackPosterFilter">
                 <option value="all">All posters (no filter)</option>
                 <option value="en">English only</option>
@@ -397,6 +400,16 @@ onMounted(async () => {
                 <option value="no_text">No text/textless only</option>
               </select>
               <span class="help small">Filter posters by language or text presence.</span>
+            </label>
+            <label>
+              <span class="label-text">Default logo language filter</span>
+              <select v-model="fallbackLogoFilter">
+                <option value="all">All logos (no filter)</option>
+                <option value="en">English only</option>
+                <option value="original">Original language only</option>
+                <option value="no_text">No text/textless only</option>
+              </select>
+              <span class="help small">Filter logos by language or text presence.</span>
             </label>
             <label>
               <span class="label-text">Default logo selection</span>

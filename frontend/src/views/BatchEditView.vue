@@ -439,7 +439,9 @@ const toggleMovie = (key: string) => {
 }
 
 const selectAll = () => {
-  selectedMovies.value = new Set(moviesWithPosters.value.map(m => m.key))
+  const merged = new Set(selectedMovies.value)
+  moviesWithPosters.value.forEach(m => merged.add(m.key))
+  selectedMovies.value = merged
 }
 
 const deselectAll = () => {
@@ -550,10 +552,18 @@ const processBatch = async () => {
 // Preview navigation
 const previewIndex = ref(0)
 
-// Get all selected movies in order
+// Get all selected movies (across pages) in selection order, merging cached posters
 const selectedMoviesList = computed(() => {
   const keys = Array.from(selectedMovies.value)
-  return keys.map(key => moviesWithPosters.value.find(m => m.key === key)).filter(Boolean) as Movie[]
+  const byKey = new Map(movies.value.map(m => [m.key, m]))
+  return keys
+    .map((key) => {
+      const base = byKey.get(key)
+      if (!base) return null
+      const poster = posterCache.value[key] ?? base.poster ?? null
+      return { ...base, poster }
+    })
+    .filter(Boolean) as Movie[]
 })
 
 // Current movie being previewed
@@ -581,6 +591,12 @@ const goToPreview = (index: number) => {
 // Reset preview index when selection changes
 watch(selectedMovies, () => {
   previewIndex.value = 0
+})
+
+watch(selectedMoviesList, (list) => {
+  if (previewIndex.value >= list.length) {
+    previewIndex.value = Math.max(0, list.length - 1)
+  }
 })
 
 // Preview rendering

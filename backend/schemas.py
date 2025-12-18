@@ -25,6 +25,13 @@ class PreviewRequest(BaseModel):
     preset_id: Optional[str] = None   # <-- MAKE OPTIONAL
     movie_title: Optional[str] = None
     movie_year: Optional[int] = None
+    fallbackPosterAction: Optional[str] = None
+    fallbackPosterTemplate: Optional[str] = None
+    fallbackPosterPreset: Optional[str] = None
+    fallbackLogoAction: Optional[str] = None
+    fallbackLogoTemplate: Optional[str] = None
+    fallbackLogoPreset: Optional[str] = None
+    logoSource: Optional[str] = None
 
 
 class SaveRequest(PreviewRequest):
@@ -52,6 +59,9 @@ class PlexSettings(BaseModel):
     movieLibraryName: str = ""
     movieLibraryNames: List[str] = Field(default_factory=list)
     libraryMappings: List[Dict[str, str]] = Field(default_factory=list)
+    tvShowLibraryName: str = ""
+    tvShowLibraryNames: List[str] = Field(default_factory=list)
+    tvShowLibraryMappings: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class TMDBSettings(BaseModel):

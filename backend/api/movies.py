@@ -12,8 +12,9 @@ import requests
 from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR
 from .. import cache, database as db
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
-from ..tmdb_client import get_images_for_movie, get_movie_details, TMDBError
+from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, TMDBError
 from ..fanart_client import get_images_for_movie as get_fanart_images
+from .. import tvdb_client
 
 router = APIRouter()
 
@@ -285,6 +286,10 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
     """
     Return movies. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
     """
+    # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
+    if library_id in ("default", ""):
+        library_id = None
+
     if not force_refresh and _cache_fresh(max_age, library_id=library_id):
         cached = cache.get_cached_movies(library_id=library_id)
         if cached:
@@ -315,6 +320,7 @@ def api_clear_cache():
     try:
         # Clear DB cache
         db.clear_movie_cache()
+        db.clear_tv_cache()
 
         # Clear poster cache on disk
         poster_dir = Path(POSTER_CACHE_DIR)
@@ -327,7 +333,7 @@ def api_clear_cache():
                         removed_files += 1
                     except Exception:
                         pass
-        logger.info("[CACHE] Cleared movie_cache table and removed %d poster files", removed_files)
+        logger.info("[CACHE] Cleared movie_cache/tv_cache tables and removed %d poster files", removed_files)
         return {"status": "ok", "removed_posters": removed_files}
     except Exception as e:
         logger.error(f"[CACHE] Failed to clear cache: {e}")
@@ -400,6 +406,38 @@ def api_tmdb_images(tmdb_id: int):
         details = get_movie_details(tmdb_id)
         tmdb_imgs = get_images_for_movie(tmdb_id, details.get("original_language"))
         fanart_imgs = get_fanart_images(tmdb_id)
+        tvdb_imgs = {"posters": [], "backdrops": [], "logos": []}
+        tvdb_id: Optional[int] = None
+
+        logger.info("[TVDB] Starting TVDB lookup for movie tmdb_id=%s", tmdb_id)
+        # Try to get TVDB ID from TMDB external IDs
+        try:
+            external_ids = get_movie_external_ids(tmdb_id)
+            logger.info("[TVDB] Movie external IDs for tmdb_id=%s: %s", tmdb_id, external_ids)
+            # For movies, TVDB might not always have an entry, so we check imdb_id first
+            # TVDB movie IDs might be stored differently than TV show IDs
+            tvdb_id = external_ids.get("tvdb_id")
+            logger.info("[TVDB] Extracted TVDB ID: %s", tvdb_id)
+        except Exception as e:
+            logger.info("[TVDB] Failed to get external IDs for tmdb_id=%s: %s", tmdb_id, e)
+            tvdb_id = None
+
+        # Only call TVDB if key is set and we have an id
+        if tvdb_id and settings.TVDB_API_KEY:
+            try:
+                logger.debug("[TVDB] Fetching movie images for tvdb_id=%s", tvdb_id)
+                tvdb_imgs = tvdb_client.get_movie_images(int(tvdb_id))
+                logger.debug("[TVDB] Movie images result: %d posters, %d logos, %d backdrops",
+                            len(tvdb_imgs.get("posters", [])),
+                            len(tvdb_imgs.get("logos", [])),
+                            len(tvdb_imgs.get("backdrops", [])))
+            except Exception as tvdb_err:
+                logger.warning("[TVDB] Failed to fetch movie images for tvdb_id=%s: %s", tvdb_id, tvdb_err)
+        else:
+            if not tvdb_id:
+                logger.debug("[TVDB] No TVDB ID found for tmdb_id=%s", tmdb_id)
+            if not settings.TVDB_API_KEY:
+                logger.debug("[TVDB] TVDB_API_KEY not configured")
 
         # Get API order from settings
         from ..api.ui_settings import _read_settings
@@ -413,7 +451,7 @@ def api_tmdb_images(tmdb_id: int):
         image_sources = {
             "tmdb": {"logos": tmdb_imgs.get("logos") or [], "posters": tmdb_imgs.get("posters") or [], "backdrops": tmdb_imgs.get("backdrops") or []},
             "fanart": {"logos": fanart_imgs.get("logos") or [], "posters": fanart_imgs.get("posters") or [], "backdrops": fanart_imgs.get("backdrops") or []},
-            "tvdb": {"logos": [], "posters": [], "backdrops": []}  # TVDB not yet implemented
+            "tvdb": {"logos": tvdb_imgs.get("logos") or [], "posters": tvdb_imgs.get("posters") or [], "backdrops": tvdb_imgs.get("backdrops") or []}
         }
 
         # Merge images based on API order
@@ -428,13 +466,11 @@ def api_tmdb_images(tmdb_id: int):
                 merged_backdrops.extend(image_sources[source]["backdrops"])
 
         logger.info(
-            "[IMAGES] tmdb_id=%s order=%s posters=%d backdrops=%d logos_tmdb=%d logos_fanart=%d",
+            "[IMAGES] Movie tmdb_id=%s posters=%d backdrops=%d logos=%d",
             tmdb_id,
-            api_order,
             len(merged_posters),
             len(merged_backdrops),
-            len(tmdb_imgs.get("logos") or []),
-            len(fanart_imgs.get("logos") or []),
+            len(merged_logos),
         )
 
         return {

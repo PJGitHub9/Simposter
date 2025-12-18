@@ -49,6 +49,29 @@ def _normalize_plex_payload(data: dict) -> dict:
             if isinstance(m, dict)
         ]
 
+    # Normalize TV show library settings
+    if "tvShowLibraryName" in normalized:
+        normalized["tvShowLibraryName"] = str(normalized["tvShowLibraryName"])
+    # Ensure list exists and is stringified
+    if "tvShowLibraryNames" in normalized and isinstance(normalized["tvShowLibraryNames"], list):
+        normalized["tvShowLibraryNames"] = [str(x) for x in normalized["tvShowLibraryNames"]]
+    elif normalized.get("tvShowLibraryName"):
+        normalized["tvShowLibraryNames"] = [str(normalized["tvShowLibraryName"])]
+    else:
+        normalized["tvShowLibraryNames"] = []
+
+    # Normalize TV show library mappings if present
+    if "tvShowLibraryMappings" in normalized and isinstance(normalized["tvShowLibraryMappings"], list):
+        normalized["tvShowLibraryMappings"] = [
+            {
+                "id": str(m.get("id", "")),
+                "title": str(m.get("title", "")),
+                "displayName": str(m.get("displayName", "")),
+            }
+            for m in normalized["tvShowLibraryMappings"]
+            if isinstance(m, dict)
+        ]
+
     data["plex"] = normalized
     return data
 
@@ -57,6 +80,7 @@ def _apply_runtime_settings(merged: dict):
     """Update global settings with latest UI settings so runtime calls use fresh values."""
     plex_data = merged.get("plex", {}) or {}
     tmdb_data = merged.get("tmdb", {}) or {}
+    tvdb_data = merged.get("tvdb", {}) or {}
     fanart_data = merged.get("fanart", {}) or {}
     library_mappings = plex_data.get("libraryMappings") or []
     url = plex_data.get("url") or ""
@@ -88,6 +112,10 @@ def _apply_runtime_settings(merged: dict):
     tmdb_key = tmdb_data.get("apiKey") or ""
     object.__setattr__(settings, "TMDB_API_KEY", tmdb_key)
 
+    # TVDB runtime key
+    tvdb_key = tvdb_data.get("apiKey") or ""
+    object.__setattr__(settings, "TVDB_API_KEY", tvdb_key)
+
     # Fanart runtime key
     fanart_key = fanart_data.get("apiKey") or ""
     object.__setattr__(settings, "FANART_API_KEY", fanart_key)
@@ -116,7 +144,7 @@ def _default_ui_settings() -> UISettings:
             ],
         },
         tmdb={"apiKey": getattr(settings, "TMDB_API_KEY", "")},
-        tvdb={"apiKey": "", "comingSoon": True},
+        tvdb={"apiKey": getattr(settings, "TVDB_API_KEY", ""), "comingSoon": False},
         fanart={"apiKey": getattr(settings, "FANART_API_KEY", "")},
         saveBatchInSubfolder=False,
     )
@@ -130,6 +158,7 @@ def _env_overrides() -> dict:
     plex_lib = os.getenv("PLEX_MOVIE_LIBRARY_NAME")
     plex_libs = os.getenv("PLEX_MOVIE_LIBRARY_NAMES")
     tmdb_key = os.getenv("TMDB_API_KEY")
+    tvdb_key = os.getenv("TVDB_API_KEY")
     fanart_key = os.getenv("FANART_API_KEY")
 
     if plex_url:
@@ -142,6 +171,8 @@ def _env_overrides() -> dict:
         out.setdefault("plex", {})["movieLibraryNames"] = [s.strip() for s in plex_libs.split(",") if s.strip()]
     if tmdb_key:
         out.setdefault("tmdb", {})["apiKey"] = tmdb_key
+    if tvdb_key:
+        out.setdefault("tvdb", {})["apiKey"] = tvdb_key
     if fanart_key:
         out.setdefault("fanart", {})["apiKey"] = fanart_key
     return out
@@ -240,6 +271,14 @@ def _read_settings(include_env: bool = True) -> UISettings:
 def get_ui_settings():
     settings_obj = _read_settings()
     return JSONResponse(content=settings_obj.model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False))
+
+@router.get("/ping")
+def api_ping():
+    return {
+        "status": "ok",
+        "app_version": db.get_app_version(),
+        "db_version": db.get_db_version()
+    }
 
 
 @router.post("/ui-settings")

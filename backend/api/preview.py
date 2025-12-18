@@ -15,14 +15,28 @@ def api_preview(req: PreviewRequest):
     try:
         # Load preset options if preset_id is provided
         render_options = dict(req.options or {})
+        # Allow explicit fallback fields/logo source to come through even when options are empty
+        explicit_overrides = {
+            "fallbackPosterAction": req.fallbackPosterAction,
+            "fallbackPosterTemplate": req.fallbackPosterTemplate,
+            "fallbackPosterPreset": req.fallbackPosterPreset,
+            "fallbackLogoAction": req.fallbackLogoAction,
+            "fallbackLogoTemplate": req.fallbackLogoTemplate,
+            "fallbackLogoPreset": req.fallbackLogoPreset,
+            "logoSource": req.logoSource,
+        }
+        for key, value in explicit_overrides.items():
+            if value is not None and key not in render_options:
+                render_options[key] = value
         poster_filter = "all"
         logo_preference = "first"
+        template_id = req.template_id
 
         if req.preset_id:
             presets = load_presets()
 
-            if req.template_id in presets:
-                preset_list = presets[req.template_id]["presets"]
+            if template_id in presets:
+                preset_list = presets[template_id]["presets"]
                 preset = next((p for p in preset_list if p["id"] == req.preset_id), None)
 
                 if preset:
@@ -32,10 +46,13 @@ def api_preview(req: PreviewRequest):
                     poster_filter = render_options.get("poster_filter", preset_options.get("poster_filter", "all"))
                     logo_preference = render_options.get("logo_preference", preset_options.get("logo_preference", "first"))
                     logger.debug("[PREVIEW] Applied preset '%s' options: %s", req.preset_id, preset_options)
+                    logo_override = render_options.get("logo_url") or render_options.get("logoUrl")
+                    if logo_override:
+                        logo_url = logo_override
                 else:
-                    logger.warning("[PREVIEW] Preset '%s' not found for template '%s'", req.preset_id, req.template_id)
+                    logger.warning("[PREVIEW] Preset '%s' not found for template '%s'", req.preset_id, template_id)
             else:
-                logger.warning("[PREVIEW] Template '%s' not found in presets", req.template_id)
+                logger.warning("[PREVIEW] Template '%s' not found in presets", template_id)
 
         # Add movie details to options for template variable substitution
         if req.movie_title:
@@ -84,6 +101,50 @@ def api_preview(req: PreviewRequest):
                     logo_mode = render_options.get("logo_mode", "first")
                     if not logo_url and logo_mode != "none":
                         logo = pick_logo(logos, logo_preference)
+
+                        # If no logo, try fallback template/preset (append mode, similar to batch)
+                        if not logo:
+                            logger.info(
+                                "[PREVIEW] No logo before fallback; action=%s template=%s preset=%s logos=%s",
+                                render_options.get("fallbackLogoAction"),
+                                render_options.get("fallbackLogoTemplate"),
+                                render_options.get("fallbackLogoPreset"),
+                                len(logos) if logos is not None else "n/a",
+                            )
+                            fallback_logo_action = render_options.get("fallbackLogoAction") or "continue"
+                            fallback_logo_template = render_options.get("fallbackLogoTemplate")
+                            fallback_logo_preset = render_options.get("fallbackLogoPreset")
+                            if fallback_logo_action == "template" and fallback_logo_template:
+                                presets = load_presets()
+                                tpl_presets = presets.get(fallback_logo_template, {}).get("presets", [])
+                                fpreset = next((p for p in tpl_presets if p.get("id") == fallback_logo_preset), None) if fallback_logo_preset else None
+                                if fpreset:
+                                    fp_opts = fpreset.get("options", {})
+                                    # Merge fallback preset options, letting fallback override current options
+                                    # to mirror batch behavior and ensure template-specific settings (e.g., text overlay)
+                                    # take effect. Request-supplied transient sliders can still override both.
+                                    render_options = {**render_options, **fp_opts}
+                                    poster_filter = render_options.get("poster_filter", poster_filter)
+                                    logo_preference = render_options.get("logo_preference", logo_preference)
+                                    logo_mode = render_options.get("logo_mode", logo_mode)
+                                    template_id = fallback_logo_template
+                                    logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
+                                    logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"))
+                                    # If fallback preset provides a static logo URL, use it directly
+                                    logo_override = render_options.get("logo_url") or render_options.get("logoUrl")
+                                    if logo_override:
+                                        logo_url = logo_override
+                                        logo = None
+                                    if logo_url is None:
+                                        logo = pick_logo(logos, logo_preference)
+                                    if logo:
+                                        logger.info("[PREVIEW] Fallback logo from template '%s' preset '%s'", fallback_logo_template, fallback_logo_preset)
+                                else:
+                                    logger.warning("[PREVIEW] Fallback logo preset '%s' not found for template '%s'", fallback_logo_preset, fallback_logo_template)
+                            elif fallback_logo_action == "skip":
+                                logger.info("[PREVIEW] Skipping logo due to fallback action 'skip'")
+                            # else: continue without logo
+
                         if logo:
                             logo_url = logo.get("url")
                             logger.info("[PREVIEW] Picked TMDB logo with preference='%s': %s", logo_preference, logo_url)
@@ -95,7 +156,7 @@ def api_preview(req: PreviewRequest):
                 logger.warning("[PREVIEW] TMDB lookup failed, using original URL: %s", e)
 
         img = render_poster_image(
-            req.template_id,
+            template_id,
             background_url,
             logo_url,
             render_options,
@@ -107,7 +168,16 @@ def api_preview(req: PreviewRequest):
         raise HTTPException(status_code=500, detail="Preview failed.")
 
     buf = BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=95)
+    # Get JPEG quality from settings
+    quality = 95
+    try:
+        from .. import database as db
+        ui_settings_data = db.get_ui_settings()
+        if ui_settings_data and "imageQuality" in ui_settings_data:
+            quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
+    except Exception:
+        pass
+    img.convert("RGB").save(buf, "JPEG", quality=quality)
 
     import base64
     return {"image_base64": base64.b64encode(buf.getvalue()).decode()}

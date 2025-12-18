@@ -44,12 +44,14 @@ async def test_tmdb_api_key(api_key: str = Query(..., description="TMDb API key 
 
 @router.get("/test-tvdb")
 async def test_tvdb_api_key(api_key: str = Query(..., description="TVDB API key to test")):
-    """Test a TVDB API key (placeholder for future implementation)."""
-    # TVDB API testing will be implemented when TVDB integration is added
-    return {
-        "status": "error",
-        "error": "TVDB testing not yet implemented (coming soon)"
-    }
+    """Test a TVDB API key by performing a login call."""
+    try:
+        from .. import tvdb_client
+        result = tvdb_client.test_tvdb_key(api_key)
+        return result
+    except Exception as e:
+        logger.error(f"[TEST_TVDB] Error testing API key: {e}")
+        return {"status": "error", "error": str(e)}
 
 
 @router.post("/test-fanart")

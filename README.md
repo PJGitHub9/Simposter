@@ -48,19 +48,31 @@ Selecting a movie automatically loads:
 
 ---
 
-## 🖼 TMDb Artwork Integration
+## 🖼 Multi-Source Artwork Integration
 
-Simposter pulls:
+Simposter pulls artwork from multiple sources:
 
-- Posters  
-- Textless variants  
-- High-resolution logos  
+### TMDb (Movies & TV)
+- Posters (original, textless, text variants)
+- High-resolution logos
+- Multi-language support with fallback
+
+### Fanart.tv (Movies)
+- HD clearlogos
+- High-quality artwork
+- Merged with TMDB or standalone
+
+### TVDB (TV Shows)
+- TV show posters
+- Season posters
+- Logos and banners
+- Coming soon indicator support
 
 UI includes:
-
 - Thumbnail strips  
-- “View All” modal  
+- "View All" modal  
 - Filters: **all**, **textless**, **text**
+- Source priority selection
 
 ---
 
@@ -76,15 +88,28 @@ Precise bounding-box placement for ultra-clean minimalist sets.
 
 ## 🔣 Logo System
 
-Modes:
+### Logo Sources
+- **TMDB** — Movie logos from The Movie Database
+- **Fanart.tv** — High-quality HD clearlogos
+- **Merged** — Combine both sources with priority
+- **Auto-fallback** — Switch sources if preferred unavailable
 
+### Logo Modes
 - **Stock** — Keep logo as-is
 - **Match** — Color match logo to poster
 - **Hex** — Custom color (works best with white logos)
 - **None** — No logo rendering
 
-Preference:
-- **White** or **Color** — Preferred logo type for bulk edits
+### Logo Preference
+- **White** — Prefer white/light logos (low saturation)
+- **Color** — Prefer colored logos (high saturation)
+- **First** — Use first available logo
+
+### Fallback System
+- **Continue** — Render without logo if missing
+- **Skip** — Don't render if logo unavailable
+- **Template** — Switch to different template/preset (e.g., text-based)
+- **Template** — Switch to different template/preset (e.g., text-based)
 
 ![Image](https://github.com/user-attachments/assets/10ba7d2f-0e1b-4ab7-b9cf-67651ec335e0)
 ![Image](https://github.com/user-attachments/assets/9ebeed0c-5727-48f7-8be7-302d1f1d7b1c)
@@ -258,7 +283,10 @@ Simposter supports **two configuration methods**:
 | `PLEX_URL` | * | Base Plex URL | `http://myplex:32400` |
 | `PLEX_TOKEN` | * | Plex token | `xxxyyyzzz` |
 | `PLEX_MOVIE_LIBRARY_NAME` | * | Movie library | `Movies` |
+| `PLEX_TV_LIBRARY_NAME` |  | TV show library | `TV Shows` |
 | `TMDB_API_KEY` | * | TMDb key |  `abcd1234` |
+| `TVDB_API_KEY` |  | TVDB key (for TV shows) |  `efgh5678` |
+| `FANART_API_KEY` |  | Fanart.tv key (for logos) |  `ijkl9012` |
 | `CONFIG_DIR` |  | Config path (Docker only) | `/config` |
 
 \* Can be set via GUI Settings OR environment variables
