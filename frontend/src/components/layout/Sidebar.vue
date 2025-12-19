@@ -46,6 +46,7 @@ const getIcon = (key: TabKey | string) => {
     logs: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="10" y1="10" x2="16" y2="10"/><line x1="10" y1="14" x2="16" y2="14"/></svg>`,
     'batch-edit': `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M9 14l2 2 4-4"/></svg>`,
     'local-assets': `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>`,
+    collections: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="12" height="13" rx="2" ry="2"/><path d="M9 3.5h8.5a2 2 0 0 1 2 2V17"/><path d="M7.5 9.5h6"/><path d="M7.5 13h4"/><circle cx="16" cy="10" r="0.9"/><circle cx="16" cy="14" r="0.9"/></svg>`,
     'template-manager': `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="14" rx="1.5"/><rect x="13" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="13" width="8" height="5" rx="1.5"/><path d="M6 8h2M6 12h2M6 16h2"/></svg>`
   }
   // Check for exact match first
@@ -55,6 +56,7 @@ const getIcon = (key: TabKey | string) => {
   if (key.startsWith('tv-shows-')) return icons['tv-shows']
   if (key.startsWith('batch-')) return icons['batch-edit']
   if (key.startsWith('batch-test-')) return icons['batch-edit']
+  if (key.startsWith('collections-')) return icons.collections
   if (key.startsWith('assets-')) return icons['local-assets']
   return ''
 }

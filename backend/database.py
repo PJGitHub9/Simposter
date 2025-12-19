@@ -322,6 +322,35 @@ def init_database():
             ON tv_cache(library_id)
         """)
 
+        # Cache table for Plex collections
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS collection_cache (
+                rating_key TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                year INTEGER,
+                added_at INTEGER,
+                poster_url TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                library_id TEXT DEFAULT 'default'
+            )
+        """)
+        cursor.execute("PRAGMA table_info(collection_cache)")
+        coll_cols = [row["name"] for row in cursor.fetchall()]
+        if "library_id" not in coll_cols:
+            cursor.execute("ALTER TABLE collection_cache ADD COLUMN library_id TEXT DEFAULT 'default'")
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_collection_cache_updated
+            ON collection_cache(updated_at)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_collection_cache_title
+            ON collection_cache(title)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_collection_cache_library
+            ON collection_cache(library_id)
+        """)
+
         # Poster history table - track poster actions (local save / send to Plex)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS poster_history (
@@ -1157,6 +1186,118 @@ def clear_tv_cache(library_id: Optional[str] = None) -> None:
         else:
             cursor.execute("DELETE FROM tv_cache")
             logger.info("[DB] Cleared tv_cache")
+
+
+# ============================================
+#  Collection Cache Operations
+# ============================================
+
+def upsert_collection_cache(
+    rating_key: str,
+    title: str,
+    year: Optional[int],
+    added_at: Optional[int],
+    poster_url: Optional[str] = None,
+    library_id: str = "default",
+) -> None:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO collection_cache (rating_key, title, year, added_at, poster_url, updated_at, library_id)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(rating_key) DO UPDATE SET
+                title = excluded.title,
+                year = excluded.year,
+                added_at = excluded.added_at,
+                poster_url = COALESCE(excluded.poster_url, collection_cache.poster_url),
+                library_id = COALESCE(excluded.library_id, collection_cache.library_id),
+                updated_at = CURRENT_TIMESTAMP
+        """, (rating_key, title, year, added_at, poster_url, library_id))
+
+
+def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id: str = "default") -> None:
+    keys = [c["rating_key"] for c in collections]
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for c in collections:
+            cursor.execute("""
+                INSERT INTO collection_cache (rating_key, title, year, added_at, poster_url, updated_at, library_id)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                ON CONFLICT(rating_key) DO UPDATE SET
+                    title = excluded.title,
+                    year = excluded.year,
+                    added_at = excluded.added_at,
+                    poster_url = COALESCE(excluded.poster_url, collection_cache.poster_url),
+                    library_id = COALESCE(excluded.library_id, collection_cache.library_id),
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                c["rating_key"],
+                c["title"],
+                c.get("year"),
+                c.get("added_at"),
+                c.get("poster_url"),
+                library_id,
+            ))
+
+        if keys:
+            cursor.execute(f"""
+                DELETE FROM collection_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+            """, keys + [library_id])
+
+
+def get_cached_collections(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if library_id:
+            cursor.execute("""
+                SELECT rating_key, title, year, added_at, poster_url, updated_at, library_id
+                FROM collection_cache
+                WHERE library_id = ?
+                ORDER BY COALESCE(updated_at, added_at) DESC
+            """, (library_id,))
+        else:
+            cursor.execute("""
+                SELECT rating_key, title, year, added_at, poster_url, updated_at, library_id
+                FROM collection_cache
+                ORDER BY COALESCE(updated_at, added_at) DESC
+            """)
+        rows = cursor.fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        out.append({
+            "rating_key": row["rating_key"],
+            "title": row["title"],
+            "year": row["year"],
+            "addedAt": row["added_at"],
+            "poster_url": row["poster_url"],
+            "updated_at": row["updated_at"],
+            "library_id": row["library_id"],
+        })
+    return out
+
+
+def get_collection_cache_stats(library_id: Optional[str] = None) -> Dict[str, Any]:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if library_id:
+            cursor.execute("SELECT COUNT(*) as cnt, MAX(updated_at) as max_updated FROM collection_cache WHERE library_id = ?", (library_id,))
+        else:
+            cursor.execute("SELECT COUNT(*) as cnt, MAX(updated_at) as max_updated FROM collection_cache")
+        row = cursor.fetchone()
+    return {"count": row["cnt"] if row else 0, "max_updated": row["max_updated"] if row else None}
+
+
+def clear_collection_cache(library_id: Optional[str] = None) -> None:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if library_id:
+            cursor.execute("DELETE FROM collection_cache WHERE library_id = ?", (library_id,))
+            logger.info("[DB] Cleared collection_cache for library %s", library_id)
+        else:
+            cursor.execute("DELETE FROM collection_cache")
+            logger.info("[DB] Cleared collection_cache")
 
 
 def copy_env_to_ui_settings():

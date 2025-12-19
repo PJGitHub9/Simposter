@@ -159,3 +159,48 @@ def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict]:
 
 def get_tv_cache_stats(library_id: Optional[str] = None) -> Dict[str, any]:
     return db.get_tv_cache_stats(library_id=library_id)
+
+
+# Collection cache helpers
+def upsert_collection(collection: Dict, library_id: str = "default"):
+    try:
+        db.upsert_collection_cache(
+            rating_key=collection.get("key"),
+            title=collection.get("title") or "",
+            year=collection.get("year"),
+            added_at=collection.get("addedAt"),
+            poster_url=collection.get("poster"),
+            library_id=collection.get("library_id") or library_id or "default",
+        )
+    except Exception as e:
+        log.debug("[CACHE] failed to upsert collection %s: %s", collection.get("key"), e, exc_info="database is locked" not in str(e).lower())
+
+
+def refresh_collections_from_list(collections: List[Dict]):
+    try:
+        payload = []
+        for c in collections:
+            payload.append({
+                "rating_key": c.get("key"),
+                "title": c.get("title") or "",
+                "year": c.get("year"),
+                "added_at": c.get("addedAt"),
+                "poster_url": c.get("poster"),
+                "library_id": c.get("library_id") or "default",
+            })
+        by_lib: Dict[str, List[Dict]] = {}
+        for item in payload:
+            by_lib.setdefault(item["library_id"], []).append(item)
+        for lib_id, items in by_lib.items():
+            db.bulk_refresh_collection_cache(items, library_id=lib_id)
+            log.info("[CACHE] refreshed %d collections for library %s", len(items), lib_id)
+    except Exception as e:
+        log.warning("[CACHE] collections refresh failed: %s", e)
+
+
+def get_cached_collections(library_id: Optional[str] = None) -> List[Dict]:
+    return db.get_cached_collections(library_id=library_id)
+
+
+def get_collection_cache_stats(library_id: Optional[str] = None) -> Dict[str, any]:
+    return db.get_collection_cache_stats(library_id=library_id)

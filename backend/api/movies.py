@@ -281,6 +281,67 @@ def _cache_fresh(max_age_seconds: int, library_id: Optional[str] = None) -> bool
     return age <= max_age_seconds
 
 
+def _collections_cache_fresh(max_age_seconds: int, library_id: Optional[str] = None) -> bool:
+    stats = cache.get_collection_cache_stats(library_id=library_id)
+    if not stats.get("count"):
+        return False
+    ts = stats.get("max_updated")
+    if not ts:
+        return False
+    try:
+        last = datetime.fromisoformat(ts)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+    except Exception:
+        return False
+    age = (datetime.now(timezone.utc) - last).total_seconds()
+    return age <= max_age_seconds
+
+
+# --- Plex Collections ---
+def _get_plex_collections(lib_ids: Optional[List[str]] = None) -> List[dict]:
+    """Fetch collections from Plex libraries."""
+    if lib_ids is None:
+        lib_ids = getattr(settings, "PLEX_MOVIE_LIB_IDS", []) or [settings.PLEX_MOVIE_LIBRARY_NAME]
+
+    items: List[dict] = []
+    for lib_id in lib_ids:
+        try:
+            url = f"{settings.PLEX_URL}/library/sections/{lib_id}/all?type=18"
+            r = plex_session.get(url, headers=plex_headers(), timeout=10)
+            r.raise_for_status()
+            root = ET.fromstring(r.text)
+
+            for directory in root.findall(".//Directory"):
+                key = directory.get("ratingKey")
+                title = directory.get("title")
+                thumb = directory.get("thumb")
+                added_at = directory.get("addedAt")
+
+                if not key or not title:
+                    continue
+
+                # Prefer cached poster if we already have it; otherwise fall back to proxy endpoint for caching
+                cached = _poster_cache_path(key)
+                poster_url = _poster_cache_url(key, cached) if cached else f"/api/movie/{key}/poster"
+
+                items.append(
+                    {
+                        "key": key,
+                        "title": title,
+                        "year": None,
+                        "addedAt": int(added_at) if added_at else None,
+                        "poster": poster_url,
+                        "library_id": lib_id,
+                    }
+                )
+        except Exception as e:
+            logger.warning("[PLEX] Failed to fetch collections for library %s: %s", lib_id, e)
+
+    logger.info("[PLEX] Loaded %d collections from %d libraries (%s)", len(items), len(lib_ids), ",".join(lib_ids))
+    return items
+
+
 @router.get("/movies", response_model=List[Movie])
 def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
     """
@@ -314,6 +375,35 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
     return [{**m.model_dump(), "poster": None} for m in movies]
 
 
+@router.get("/collections")
+def api_collections(force_refresh: bool = False, library_id: str = None):
+    """Return Plex collections for the specified library (or all movie libraries by default)."""
+    if library_id in ("default", ""):
+        library_id = None
+
+    lib_ids = [library_id] if library_id else None
+
+    if not force_refresh and _collections_cache_fresh(max_age_seconds=900, library_id=library_id):
+        cached = cache.get_cached_collections(library_id=library_id)
+        if cached:
+            return [
+                {
+                    "key": c.get("rating_key"),
+                    "title": c.get("title"),
+                    "year": c.get("year"),
+                    "addedAt": c.get("addedAt"),
+                    "poster": c.get("poster_url"),
+                    "library_id": c.get("library_id"),
+                }
+                for c in cached
+            ]
+
+    items = _get_plex_collections(lib_ids)
+    if items:
+        cache.refresh_collections_from_list(items)
+    return items
+
+
 @router.delete("/cache")
 def api_clear_cache():
     """Clear backend cache: DB movie_cache and on-disk poster cache."""
@@ -321,6 +411,7 @@ def api_clear_cache():
         # Clear DB cache
         db.clear_movie_cache()
         db.clear_tv_cache()
+        db.clear_collection_cache()
 
         # Clear poster cache on disk
         poster_dir = Path(POSTER_CACHE_DIR)
