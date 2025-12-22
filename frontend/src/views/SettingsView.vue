@@ -30,6 +30,7 @@ const sectionsWithChanges = ref({
 
 // Cooldown state to prevent rapid clicking
 const scanCooldown = ref(false)
+const scanningLibraryId = ref<string | null>(null)
 
 // Computed property to ensure button disable state is reactive
 const isScanInProgress = computed(() => scan.running.value || scan.checking.value || scanCooldown.value)
@@ -476,7 +477,7 @@ const clearCache = () => {
   }
 }
 
-const scanLibrary = async () => {
+const scanLibrary = async (libraryId?: string) => {
   if (scan.running.value || scan.checking.value) {
     saved.value = 'Scan already in progress'
     setTimeout(() => (saved.value = ''), 2000)
@@ -492,17 +493,20 @@ const scanLibrary = async () => {
   try {
     // Set scan state immediately to prevent double-clicks
     scan.running.value = true
+    scanningLibraryId.value = libraryId || null
     // Enable cooldown for 10 seconds
     scanCooldown.value = true
     setTimeout(() => {
       // Only disable cooldown if scan is not still running
       if (!scan.running.value && !scan.checking.value) {
         scanCooldown.value = false
+        scanningLibraryId.value = null
       } else {
         // If scan is still running, check again in 5 seconds
         const checkScanStatus = () => {
           if (!scan.running.value && !scan.checking.value) {
             scanCooldown.value = false
+            scanningLibraryId.value = null
           } else {
             setTimeout(checkScanStatus, 5000)
           }
@@ -510,7 +514,7 @@ const scanLibrary = async () => {
         setTimeout(checkScanStatus, 5000)
       }
     }, 10000)
-    saved.value = 'Rescanning library...'
+    saved.value = libraryId ? `Rescanning library ${libraryId}...` : 'Rescanning all libraries...'
     scan.visible.value = true
     scan.log.value = ['Starting rescan...']
     scan.progress.value = { processed: 0, total: 0 }
@@ -518,7 +522,9 @@ const scanLibrary = async () => {
     startScanPolling()
     
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/scan-library`, { method: 'POST' })
+    const url = new URL(`${apiBase}/api/scan-library`)
+    if (libraryId) url.searchParams.set('library_id', libraryId)
+    const res = await fetch(url.toString(), { method: 'POST' })
     if (!res.ok) {
       if (res.status === 409) {
         throw new Error('Scan already in progress on server')
@@ -1195,6 +1201,10 @@ const checkBackendHealth = async () => {
                 @select.stop
                 @selectstart.stop
               />
+              <button v-if="lib.id" class="secondary small" type="button" :disabled="isScanInProgress" @click="scanLibrary(lib.id)">
+                <span v-if="scanningLibraryId === lib.id && scan.running.value">Scanning...</span>
+                <span v-else>Scan</span>
+              </button>
               <button class="secondary small" type="button" @click="removeLibrary(idx)">Remove</button>
             </div>
             <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
@@ -1252,6 +1262,10 @@ const checkBackendHealth = async () => {
                 @select.stop
                 @selectstart.stop
               />
+              <button v-if="lib.id" class="secondary small" type="button" :disabled="isScanInProgress" @click="scanLibrary(lib.id)">
+                <span v-if="scanningLibraryId === lib.id && scan.running.value">Scanning...</span>
+                <span v-else>Scan</span>
+              </button>
               <button class="secondary small" type="button" @click="removeTvShowLibrary(idx)">Remove</button>
             </div>
             <button class="secondary small" type="button" @click="addTvShowLibrary">+ Add Library</button>

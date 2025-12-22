@@ -381,6 +381,16 @@ def init_database():
 
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
+        
+        # Clean up any invalid TV cache entries (NULL or empty rating_key)
+        try:
+            cursor.execute("DELETE FROM tv_cache WHERE rating_key IS NULL OR rating_key = ''")
+            deleted_count = cursor.rowcount
+            if deleted_count > 0:
+                logger.info(f"[DB] Cleaned up {deleted_count} invalid TV cache entries")
+                conn.commit()
+        except Exception as cleanup_err:
+            logger.warning(f"[DB] Failed to clean up TV cache: {cleanup_err}")
     except Exception as e:
         logger.error(f"[DB] Initialization/migration failed: {e}")
         conn.rollback()

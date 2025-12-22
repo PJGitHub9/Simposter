@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request, Body
+from fastapi import APIRouter, HTTPException, Request, Body, Query
 from fastapi.responses import Response, FileResponse, JSONResponse
 from PIL import Image
 
@@ -15,6 +15,7 @@ from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequ
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, TMDBError
 from ..fanart_client import get_images_for_movie as get_fanart_images
 from .. import tvdb_client
+from .tv_shows import _get_plex_tv_shows, api_tv_show_labels
 
 router = APIRouter()
 
@@ -649,19 +650,31 @@ def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
 
 
 @router.post("/scan-library")
-def api_scan_library():
-    """Scan entire Plex library and return full data for caching."""
+def api_scan_library(library_id: Optional[str] = Query(None)):
+    """Comprehensive full-library sync: fetch movies, TV shows, and collections. If library_id provided, scan only that library."""
     try:
         # Prevent multiple simultaneous scans
         if scan_status.get("state") == "running":
             logger.warning("[SCAN] Scan already in progress, rejecting new scan request")
             raise HTTPException(status_code=409, detail="Scan already in progress")
         
-        movies = get_plex_movies()
-        logger.info(f"[SCAN] Starting library scan for {len(movies)} movies")
+        # Normalize library_id
+        if library_id in ("default", ""):
+            library_id = None
+        
+        logger.info(f"[SCAN] Scan request for library_id={library_id}")
+        
+        # Fetch all content types
+        lib_ids = [library_id] if library_id else None
+        movies = get_plex_movies(library_ids=lib_ids)
+        tv_shows = _get_plex_tv_shows(lib_ids=lib_ids)
+        collections_list = _get_plex_collections(lib_ids=lib_ids)
+        
+        total_items = len(movies) + len(tv_shows) + len(collections_list)
+        logger.info(f"[SCAN] Starting full library sync: {len(movies)} movies, {len(tv_shows)} TV shows, {len(collections_list)} collections")
         scan_status.update({
             "state": "running",
-            "total": len(movies),
+            "total": total_items,
             "processed": 0,
             "current": "",
             "started_at": datetime.now(timezone.utc).isoformat(),
@@ -669,69 +682,139 @@ def api_scan_library():
             "error": None,
         })
 
-        # Build complete response with posters and labels
         result = {
             "status": "ok",
-            "count": len(movies),
-            "movies": [],
-            "posters": {},
-            "labels": {}
+            "movies_count": len(movies),
+            "tv_shows_count": len(tv_shows),
+            "collections_count": len(collections_list),
+            "total_count": total_items,
         }
 
-        total = len(movies)
-        for idx, movie in enumerate(movies, start=1):
-            title_for_log = (movie.title or "").strip()
-            if len(title_for_log) > 60:
-                title_for_log = title_for_log[:57] + "..."
-            logger.debug("[SCAN] %d/%d %s", idx, total, title_for_log or "(untitled)")
-            # Add movie data
-            result["movies"].append({
-                "key": movie.key,
-                "title": movie.title,
-                "year": movie.year,
-                "addedAt": movie.addedAt
-            })
-
-            # Fetch poster URL
+        # Process movies per library
+        processed = 0
+        movie_cache_by_lib = {}
+        for movie in movies:
+            lib_id = getattr(movie, "library_id", None) or "default"
+            if lib_id not in movie_cache_by_lib:
+                movie_cache_by_lib[lib_id] = []
+            
+            # Fetch poster
+            poster_url = None
             try:
                 poster_path = fetch_and_cache_poster(movie.key, force_refresh=False)
                 if poster_path:
-                    result["posters"][movie.key] = _poster_cache_url(movie.key, poster_path)
-                else:
-                    result["posters"][movie.key] = None
+                    poster_url = _poster_cache_url(movie.key, poster_path)
             except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch poster for {movie.key}: {e}")
-                result["posters"][movie.key] = None
-
+                logger.debug(f"[SCAN] Failed to fetch poster for movie {movie.key}: {e}")
+            
             # Fetch labels
+            labels = []
             try:
                 labels_data = api_movie_labels(movie.key)
-                result["labels"][movie.key] = labels_data.labels
-                
-                # Also update the backend cache with this data
-                try:
-                    poster_url = result["posters"].get(movie.key)
-                    cache.upsert_movie(
-                        movie,
-                        tmdb_id=None,
-                        poster_url=poster_url,
-                        labels=labels_data.labels
-                    )
-                except Exception as cache_err:
-                    logger.debug(f"[SCAN] Failed to cache data for {movie.key}: {cache_err}")
-                    
+                labels = labels_data.labels
             except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch labels for {movie.key}: {e}")
-                result["labels"][movie.key] = []
-
-            if idx % 50 == 0 or idx == total:
-                logger.info("[SCAN] Progress %d/%d (posters=%d labels=%d)", idx, total, len(result["posters"]), len(result["labels"]))
-            scan_status.update({
-                "processed": idx,
-                "current": movie.title or "",
+                logger.debug(f"[SCAN] Failed to fetch labels for movie {movie.key}: {e}")
+            
+            movie_cache_by_lib[lib_id].append({
+                "rating_key": movie.key,
+                "title": movie.title,
+                "year": movie.year,
+                "added_at": movie.addedAt,
+                "poster_url": poster_url,
+                "labels": labels,
+                "library_id": lib_id,
             })
+            
+            processed += 1
+            if processed % 50 == 0 or processed == len(movies):
+                logger.info("[SCAN] Movies progress %d/%d", processed, len(movies))
+            scan_status.update({"processed": processed, "current": movie.title or ""})
+        
+        # Bulk refresh movie cache per library
+        for lib_id, cached_movies in movie_cache_by_lib.items():
+            cache.refresh_from_list(cached_movies)
+            logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id}")
+        
+        # Process TV shows per library
+        tv_cache_by_lib = {}
+        for show in tv_shows:
+            lib_id = show.get("library_id") or "default"
+            if lib_id not in tv_cache_by_lib:
+                tv_cache_by_lib[lib_id] = []
+            
+            # Fetch poster
+            poster_url = None
+            try:
+                poster_path = fetch_and_cache_poster(show.get("key"), force_refresh=False)
+                if poster_path:
+                    poster_url = _poster_cache_url(show.get("key"), poster_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch poster for TV show {show.get('key')}: {e}")
+            
+            # Fetch labels
+            labels = []
+            try:
+                labels_data = api_tv_show_labels(show.get("key"))
+                labels = labels_data.labels
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch labels for TV show {show.get('key')}: {e}")
+            
+            tv_cache_by_lib[lib_id].append({
+                "rating_key": show.get("key"),
+                "title": show.get("title"),
+                "year": show.get("year"),
+                "added_at": show.get("addedAt"),
+                "poster_url": poster_url,
+                "labels": labels,
+                "library_id": lib_id,
+            })
+            
+            processed += 1
+            if processed % 50 == 0 or processed == total_items:
+                logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
+            scan_status.update({"processed": processed, "current": show.get("title") or ""})
+        
+        # Bulk refresh TV cache per library
+        for lib_id, cached_shows in tv_cache_by_lib.items():
+            cache.refresh_tv_from_list(cached_shows)
+            logger.info(f"[SCAN] Cached {len(cached_shows)} TV shows for library {lib_id}")
+        
+        # Process collections per library
+        coll_cache_by_lib = {}
+        for coll in collections_list:
+            lib_id = coll.get("library_id") or "default"
+            if lib_id not in coll_cache_by_lib:
+                coll_cache_by_lib[lib_id] = []
+            
+            # Fetch poster
+            poster_url = None
+            try:
+                poster_path = fetch_and_cache_poster(coll.get("key"), force_refresh=False)
+                if poster_path:
+                    poster_url = _poster_cache_url(coll.get("key"), poster_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch poster for collection {coll.get('key')}: {e}")
+            
+            coll_cache_by_lib[lib_id].append({
+                "rating_key": coll.get("key"),
+                "title": coll.get("title"),
+                "year": coll.get("year"),
+                "added_at": coll.get("addedAt"),
+                "poster_url": poster_url or coll.get("poster"),
+                "library_id": lib_id,
+            })
+            
+            processed += 1
+            if processed % 50 == 0 or processed == total_items:
+                logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
+            scan_status.update({"processed": processed, "current": coll.get("title") or ""})
+        
+        # Bulk refresh collection cache per library
+        for lib_id, cached_colls in coll_cache_by_lib.items():
+            cache.refresh_collections_from_list(cached_colls)
+            logger.info(f"[SCAN] Cached {len(cached_colls)} collections for library {lib_id}")
 
-        logger.info(f"[SCAN] Completed library scan - {len(movies)} movies, {len(result['posters'])} posters, {len(result['labels'])} label sets")
+        logger.info(f"[SCAN] Completed full library sync")
         scan_status.update({
             "state": "done",
             "finished_at": datetime.now(timezone.utc).isoformat(),

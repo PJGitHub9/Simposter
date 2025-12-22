@@ -130,6 +130,24 @@ const refreshData = async () => {
   await fetchLabels(paged.value)
 }
 
+const forcePosterRefresh = async () => {
+  if (forceRefreshingPosters.value || loading.value) return
+  forceRefreshingPosters.value = true
+  try {
+    await fetch(`${apiBase}/api/cache`, { method: 'DELETE' })
+  } catch {
+    /* ignore errors; proceed to refetch */
+  }
+  clearAllCaches()
+  sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
+  tvShows.value = []
+  tvShowsLoaded.value = false
+  await fetchTvShows()
+  await fetchPosters(paged.value)
+  await fetchLabels(paged.value)
+  forceRefreshingPosters.value = false
+}
+
 loadPosterCache()
 loadLabelCache()
 loadTvShowsCache()
@@ -163,6 +181,7 @@ const sortOrder = ref<'asc' | 'desc'>('asc')
 const filterLabel = ref<string>('')
 const posterCache = posterCacheStore
 const labelCache = labelCacheStore
+const forceRefreshingPosters = ref(false)
 
 const apiBase = getApiBase()
 const settings = useSettingsStore()
@@ -394,6 +413,9 @@ onMounted(async () => {
         <button @click="refreshData" class="refresh-btn" :disabled="loading">
           {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
         </button>
+        <button @click="forcePosterRefresh" class="refresh-btn danger" :disabled="loading || forceRefreshingPosters">
+          {{ forceRefreshingPosters ? 'Forcing...' : 'Force Poster Refresh' }}
+        </button>
       </div>
     </div>
     <div v-if="error" class="callout error">
@@ -492,6 +514,17 @@ onMounted(async () => {
 .refresh-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.refresh-btn.danger {
+  background: rgba(255, 126, 126, 0.15);
+  color: #ff7e7e;
+  border-color: rgba(255, 126, 126, 0.3);
+}
+
+.refresh-btn.danger:hover:not(:disabled) {
+  background: rgba(255, 126, 126, 0.25);
+  border-color: rgba(255, 126, 126, 0.5);
 }
 
 .pager {

@@ -46,18 +46,31 @@ def update_poster(rating_key: str, poster_url: Optional[str]):
         log.debug("[CACHE] failed to update poster for %s: %s", rating_key, e)
 
 
-def refresh_from_list(movies: List[Movie]):
-    """Replace cache with the provided list (basic metadata only)."""
+def refresh_from_list(movies):
+    """Replace cache with the provided list (basic metadata only). Accepts Movie objects or dicts."""
     try:
         payload = []
         for m in movies:
-            payload.append({
-                "rating_key": m.key,
-                "title": m.title,
-                "year": m.year,
-                "added_at": m.addedAt,
-                "library_id": getattr(m, "library_id", None) or "default",
-            })
+            # Handle both Movie objects and dicts
+            if isinstance(m, dict):
+                payload.append({
+                    "rating_key": m.get("rating_key") or m.get("key"),
+                    "title": m.get("title"),
+                    "year": m.get("year"),
+                    "added_at": m.get("added_at") or m.get("addedAt"),
+                    "poster_url": m.get("poster_url"),
+                    "labels": m.get("labels") or [],
+                    "library_id": m.get("library_id") or "default",
+                })
+            else:
+                # Movie object
+                payload.append({
+                    "rating_key": m.key,
+                    "title": m.title,
+                    "year": m.year,
+                    "added_at": m.addedAt,
+                    "library_id": getattr(m, "library_id", None) or "default",
+                })
         # Refresh per library to avoid deleting other libraries
         by_lib = {}
         for m in payload:
@@ -131,14 +144,19 @@ def refresh_tv_from_list(shows: List[Dict]):
     try:
         payload = []
         for s in shows:
+            # Handle both dict formats: from scan (has "rating_key") and from API (has "key")
+            rating_key = s.get("rating_key") or s.get("key")
+            added_at = s.get("added_at") or s.get("addedAt")
+            poster_url = s.get("poster_url") or s.get("poster")
+            
             payload.append({
-                "rating_key": s.get("key"),
+                "rating_key": rating_key,
                 "title": s.get("title"),
                 "year": s.get("year"),
-                "added_at": s.get("addedAt"),
+                "added_at": added_at,
                 "tmdb_id": s.get("tmdb_id"),
                 "tvdb_id": s.get("tvdb_id"),
-                "poster_url": s.get("poster"),
+                "poster_url": poster_url,
                 "labels": s.get("labels"),
                 "seasons": s.get("seasons"),
                 "library_id": s.get("library_id") or "default",
