@@ -41,6 +41,7 @@ export type PerformanceSettings = {
   tmdbRateLimit: number
   tvdbRateLimit: number
   memoryLimit: number
+  useOverlayCache: boolean
 }
 
 export type UISettings = {
@@ -71,7 +72,7 @@ const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
-const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048 })
+const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 
 async function loadSettings() {
@@ -116,7 +117,8 @@ async function loadSettings() {
       concurrentRenders: data.performance?.concurrentRenders ?? 2,
       tmdbRateLimit: data.performance?.tmdbRateLimit ?? 40,
       tvdbRateLimit: data.performance?.tvdbRateLimit ?? 20,
-      memoryLimit: data.performance?.memoryLimit ?? 2048
+      memoryLimit: data.performance?.memoryLimit ?? 2048,
+      useOverlayCache: data.performance?.useOverlayCache ?? true
     }
     apiOrder.value = data.apiOrder ?? ['tmdb', 'fanart', 'tvdb']
 

@@ -86,7 +86,7 @@ def _process_single_movie(
 
         # Get logos using merged sources based on preference
         logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
-        logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"))
+        logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
         logger.debug(
             "[BATCH] rating_key=%s posters=%d logos=%d filter=%s logo_pref=%s",
             rating_key,

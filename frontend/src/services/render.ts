@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
 import type { MovieInput, PresetOptions } from './types'
 import { getApiBase } from './apiBase'
 
@@ -8,6 +9,7 @@ export function useRenderService() {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const lastPreview = ref<string | null>(null)
+  const settings = useSettingsStore()
 
   const post = async (path: string, body: unknown) => {
     loading.value = true
@@ -58,9 +60,12 @@ export function useRenderService() {
     presetId?: string
   ) => {
     const payload = basePayload(movie, bgUrl, logoUrl, templateId, presetId, options)
+    // General previews should NOT use overlay cache per requirements
+    const disableOverlayCache = true
     const data = await post('preview', {
       ...payload,
-      disableOverlayCache: true
+      // Only disable when setting is off; backend ignores false
+      disableOverlayCache
     })
     if (data?.image_base64) {
       lastPreview.value = `data:image/jpeg;base64,${data.image_base64}`

@@ -14,7 +14,7 @@ router = APIRouter()
 @router.post("/preview")
 def api_preview(req: PreviewRequest):
     ui_settings_data = None
-    use_overlay_cache = True
+    use_overlay_cache = True  # Overlay cache enabled by default
     start_time = time.perf_counter()
 
     try:
@@ -22,7 +22,11 @@ def api_preview(req: PreviewRequest):
         ui_settings_data = db.get_ui_settings()
         if ui_settings_data:
             use_overlay_cache = ui_settings_data.get("performance", {}).get("useOverlayCache", True)
-    except Exception:
+            logger.info(f"[PREVIEW] Global overlay cache setting: {use_overlay_cache}")
+        else:
+            logger.info("[PREVIEW] No UI settings found, using default: overlay cache enabled")
+    except Exception as e:
+        logger.warning(f"[PREVIEW] Failed to load UI settings: {e}")
         pass
 
     try:
@@ -55,6 +59,13 @@ def api_preview(req: PreviewRequest):
                 if preset:
                     # Merge preset options (request options take precedence so sliders work)
                     preset_options = preset.get("options", {})
+                    
+                    # Remove deprecated disableOverlayCache flag from preset options
+                    # (overlay cache now respects global settings)
+                    if "disableOverlayCache" in preset_options:
+                        del preset_options["disableOverlayCache"]
+                        logger.info("[PREVIEW] Removed deprecated disableOverlayCache flag from preset '%s'", req.preset_id)
+                    
                     render_options = {**preset_options, **render_options}
                     poster_filter = render_options.get("poster_filter", preset_options.get("poster_filter", "all"))
                     logo_preference = render_options.get("logo_preference", preset_options.get("logo_preference", "first"))
@@ -74,11 +85,16 @@ def api_preview(req: PreviewRequest):
             render_options["movie_year"] = str(req.movie_year)
 
         # Allow per-request opt-out of overlay cache for live editing
+        # Only disable cache if explicitly requested; respect global setting otherwise
         disable_overlay_cache = render_options.get("disableOverlayCache")
         if req.disableOverlayCache is not None:
             disable_overlay_cache = req.disableOverlayCache
-        if disable_overlay_cache:
+        
+        if disable_overlay_cache is True:  # Explicitly True, not just falsy
             use_overlay_cache = False
+            logger.info(f"[PREVIEW] Overlay cache disabled via preset/request flag (disableOverlayCache={disable_overlay_cache})")
+        else:
+            logger.info(f"[PREVIEW] Using global overlay cache setting: {use_overlay_cache}")
 
         # If background_url contains a rating key pattern, try TMDB lookup
         background_url = req.background_url
@@ -109,7 +125,7 @@ def api_preview(req: PreviewRequest):
 
                     # Get logos using merged sources based on preference
                     logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
-                    logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"))
+                    logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
 
                     # Pick poster based on filter
                     poster = pick_poster(posters, poster_filter)

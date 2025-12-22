@@ -2,6 +2,7 @@
 import { onMounted, ref, computed } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
+import { useSettingsStore } from '@/stores/settings'
 
 type Preset = { id: string; name: string; options: Record<string, any> }
 type TemplatePresets = Record<string, { presets: Preset[] }>
@@ -16,6 +17,7 @@ type PresetFallback = {
 }
 
 const apiBase = getApiBase()
+const settings = useSettingsStore()
 const { error: showError } = useNotification()
 
 const presets = ref<TemplatePresets>({})
@@ -345,7 +347,8 @@ const previewPreset = async (templateId: string, preset: Preset) => {
         options: preset.options || {},
         preset_id: preset.id,
         movie_title: movie.title,
-        disableOverlayCache: true
+        // Only disable overlay cache when setting is off
+        disableOverlayCache: !settings.performance.value.useOverlayCache
       })
     })
     if (!res.ok) throw new Error(`Preview failed (${res.status})`)
