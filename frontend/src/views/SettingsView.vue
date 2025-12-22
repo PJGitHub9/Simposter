@@ -64,7 +64,6 @@ const localConcurrentRenders = ref(2)
 const localTmdbRateLimit = ref(40)
 const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
-const localUseOverlayCache = ref(true)
 let scanPoller: number | null = null
 
 // Preset import/export states
@@ -214,7 +213,6 @@ const loadLocalSettings = async () => {
   localTmdbRateLimit.value = settings.performance.value.tmdbRateLimit
   localTvdbRateLimit.value = settings.performance.value.tvdbRateLimit
   localMemoryLimit.value = settings.performance.value.memoryLimit
-  localUseOverlayCache.value = settings.performance.value.useOverlayCache ?? true
 
   // Wait for next tick to ensure all reactive updates are complete
   await nextTick()
@@ -242,8 +240,7 @@ const captureSettingsSnapshot = () => {
     concurrentRenders: localConcurrentRenders.value,
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
-    memoryLimit: localMemoryLimit.value,
-    useOverlayCache: localUseOverlayCache.value
+    memoryLimit: localMemoryLimit.value
   })
   hasUnsavedChanges.value = false
 
@@ -283,8 +280,7 @@ const checkForChanges = () => {
     concurrentRenders: localConcurrentRenders.value,
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
-    memoryLimit: localMemoryLimit.value,
-    useOverlayCache: localUseOverlayCache.value
+    memoryLimit: localMemoryLimit.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -322,8 +318,7 @@ const checkForChanges = () => {
     localConcurrentRenders.value !== initial.concurrentRenders ||
     localTmdbRateLimit.value !== initial.tmdbRateLimit ||
     localTvdbRateLimit.value !== initial.tvdbRateLimit ||
-    localMemoryLimit.value !== initial.memoryLimit ||
-    localUseOverlayCache.value !== initial.useOverlayCache
+    localMemoryLimit.value !== initial.memoryLimit
 }
 
 const saveSettings = async () => {
@@ -367,8 +362,7 @@ const saveSettings = async () => {
     concurrentRenders: localConcurrentRenders.value,
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
-    memoryLimit: localMemoryLimit.value,
-    useOverlayCache: localUseOverlayCache.value
+    memoryLimit: localMemoryLimit.value
   }
 
   // Save to backend
@@ -805,8 +799,7 @@ watch([
   localConcurrentRenders,
   localTmdbRateLimit,
   localTvdbRateLimit,
-  localMemoryLimit,
-  localUseOverlayCache
+  localMemoryLimit
 ], () => {
   // Only check for changes if watchers are enabled (after initial load)
   if (watchersEnabled.value) {
@@ -1461,16 +1454,6 @@ const checkBackendHealth = async () => {
           />
           <span class="help-text">Maximum memory for image processing</span>
         </label>
-        <label class="checkbox-label">
-          <input
-            type="checkbox"
-            v-model="localUseOverlayCache"
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="label-text">Use Overlay Cache</span>
-          <span class="help-text">Pre-generate template effects for faster batch rendering</span>
-        </label>
       </div>
     </div>
 
@@ -1524,7 +1507,7 @@ const checkBackendHealth = async () => {
         </svg>
         Clear Backend Cache
       </button>
-      <button @click="scanLibrary" class="secondary" :disabled="isScanInProgress">
+      <button @click="() => scanLibrary()" class="secondary" :disabled="isScanInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>

@@ -57,7 +57,7 @@ const searchResults = computed(() => {
 
   // Check if movies is already grouped format
   const isGrouped = Array.isArray(props.movies) && props.movies.length > 0 && 
-    ('libraryName' in props.movies[0] && ('movies' in props.movies[0] || 'shows' in props.movies[0]))
+    ('libraryName' in (props.movies[0] || {}) && ('movies' in (props.movies[0] || {}) || 'shows' in (props.movies[0] || {})))
 
   if (isGrouped) {
     // Handle grouped format (mix of movies and TV shows)
@@ -66,7 +66,7 @@ const searchResults = computed(() => {
     
     for (const group of grouped) {
       // Get items from either movies or shows property
-      const items = 'movies' in group ? group.movies : 'shows' in group ? group.shows : []
+      const items: Movie[] = 'movies' in group ? group.movies : ('shows' in group ? group.shows : [])
       const matching = items.filter((m) => m.title.toLowerCase().includes(term))
       if (matching.length > 0) {
         // Add library separator
