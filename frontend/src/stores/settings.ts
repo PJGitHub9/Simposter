@@ -48,6 +48,7 @@ export type UISettings = {
   theme: Theme
   posterDensity: number
   defaultLabelsToRemove?: string[] | Record<string, string[]>
+  defaultTvLabelsToRemove?: string[] | Record<string, string[]>
   saveLocation?: string
   saveBatchInSubfolder?: boolean
   plex?: PlexSettings
@@ -62,6 +63,7 @@ export type UISettings = {
 const theme = ref<Theme>('neon')
 const posterDensity = ref(20)
 const defaultLabelsToRemove = ref<Record<string, string[]>>({})
+const defaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const loading = ref(false)
 const error = ref<string | null>(null)
 const loaded = ref(false)
@@ -90,6 +92,12 @@ async function loadSettings() {
       defaultLabelsToRemove.value = { 'default': data.defaultLabelsToRemove }
     } else {
       defaultLabelsToRemove.value = data.defaultLabelsToRemove || {}
+    }
+    // Load TV labels (same logic as movie labels)
+    if (Array.isArray(data.defaultTvLabelsToRemove)) {
+      defaultTvLabelsToRemove.value = { 'default': data.defaultTvLabelsToRemove }
+    } else {
+      defaultTvLabelsToRemove.value = data.defaultTvLabelsToRemove || {}
     }
     loaded.value = true
     saveLocation.value = data.saveLocation ?? "/output"
@@ -138,6 +146,7 @@ async function saveSettings() {
       theme: theme.value,
       posterDensity: posterDensity.value,
       defaultLabelsToRemove: defaultLabelsToRemove.value,
+      defaultTvLabelsToRemove: defaultTvLabelsToRemove.value,
       saveLocation: saveLocation.value,
       saveBatchInSubfolder: saveBatchInSubfolder.value,
       plex: { ...plex.value },
@@ -171,6 +180,7 @@ export function useSettingsStore() {
     theme,
     posterDensity,
     defaultLabelsToRemove,
+    defaultTvLabelsToRemove,
     plex,
     tmdb,
     tvdb,

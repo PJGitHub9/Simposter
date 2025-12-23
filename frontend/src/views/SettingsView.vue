@@ -9,7 +9,7 @@ import { onBeforeRouteLeave } from 'vue-router'
 
 const settings = useSettingsStore()
 const saved = ref('')
-const allLabels = ref<Record<string, string[]>>({})
+const allLibraryLabels = ref<Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }>>({})
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
 
@@ -41,6 +41,7 @@ const localPosterDensity = ref(20)
 const localSaveLocation = ref('')
 const localSaveBatch = ref(false)
 const localDefaultLabelsToRemove = ref<Record<string, string[]>>({})
+const localDefaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
@@ -147,6 +148,7 @@ const loadLocalSettings = async () => {
   localSaveLocation.value = settings.saveLocation.value
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
+  localDefaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultTvLabelsToRemove.value))
   // API order
   apiOrder.value = [...(settings.apiOrder.value || ['tmdb', 'fanart', 'tvdb'])]
   // Connection settings
@@ -227,6 +229,7 @@ const captureSettingsSnapshot = () => {
     saveLocation: localSaveLocation.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
+    defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
     plexUrl: localPlexUrl.value,
     plexToken: localPlexToken.value,
     libraries: localLibraries.value,
@@ -268,6 +271,7 @@ const checkForChanges = () => {
     saveLocation: localSaveLocation.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
+    defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
     plexUrl: localPlexUrl.value,
     plexToken: localPlexToken.value,
     libraries: localLibraries.value,
@@ -333,6 +337,7 @@ const saveSettings = async () => {
   settings.saveLocation.value = localSaveLocation.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
+  settings.defaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultTvLabelsToRemove.value))
   settings.apiOrder.value = [...apiOrder.value]
   const libs = localLibraries.value.filter(l => l.id || l.title)
   const tvShowLibs = localTvShowLibraries.value.filter(l => l.id || l.title)
@@ -570,7 +575,7 @@ const scanLibrary = async (libraryId?: string) => {
     saved.value = `Rescanned ${data.count || 0} items`
     setTimeout(() => (saved.value = ''), 2000)
     // Refresh label cache after scan
-    await fetchAllLabels()
+    await fetchAllLibraryLabels()
     // Mark scan done; overlay will auto-hide via scan store
     scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
     scan.running.value = false
@@ -673,23 +678,31 @@ const handlePresetImport = async () => {
   }
 }
 
-// Fetch all available labels from movies per library
-const fetchAllLabels = async () => {
+// Fetch all available labels from both movies and TV shows, organized by library
+const fetchAllLibraryLabels = async () => {
   try {
-    const libs = settings.plex.value.libraryMappings || []
-    const labelsByLibrary: Record<string, string[]> = {}
+    const movieLibs = settings.plex.value.libraryMappings || []
+    const tvLibs = settings.plex.value.tvShowLibraryMappings || []
+    const combined: Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }> = {}
 
     // Get all valid library IDs
-    const validLibIds = new Set(libs.map(l => l.id).filter(Boolean))
+    const validMovieLibIds = new Set(movieLibs.map(l => l.id).filter(Boolean))
+    const validTvLibIds = new Set(tvLibs.map(l => l.id).filter(Boolean))
 
-    // Clear stale caches that don't correspond to current libraries
+    // Clear stale caches for movies
     if (typeof sessionStorage !== 'undefined') {
       const keysToRemove: string[] = []
       for (let i = 0; i < sessionStorage.length; i++) {
         const key = sessionStorage.key(i)
         if (key && key.startsWith('simposter-labels-cache-')) {
           const libId = key.replace('simposter-labels-cache-', '')
-          if (libId !== 'default' && !validLibIds.has(libId)) {
+          if (libId !== 'default' && !validMovieLibIds.has(libId)) {
+            keysToRemove.push(key)
+          }
+        }
+        if (key && key.startsWith('simposter-tv-labels-cache-')) {
+          const libId = key.replace('simposter-tv-labels-cache-', '')
+          if (libId !== 'default' && !validTvLibIds.has(libId)) {
             keysToRemove.push(key)
           }
         }
@@ -697,20 +710,26 @@ const fetchAllLabels = async () => {
       keysToRemove.forEach(key => sessionStorage.removeItem(key))
     }
 
-    for (const lib of libs) {
+    // Process movie libraries
+    for (const lib of movieLibs) {
       const libId = lib.id || 'default'
       const labelCacheKey = `simposter-labels-cache-${libId}`
       const labelCache = sessionStorage.getItem(labelCacheKey)
 
+      const labels = new Set<string>()
       if (labelCache) {
         const cache = JSON.parse(labelCache) as Record<string, string[]>
-        const labels = new Set<string>()
         Object.values(cache).forEach((movieLabels) => {
           if (Array.isArray(movieLabels)) {
             movieLabels.forEach((label) => labels.add(label))
           }
         })
-        labelsByLibrary[libId] = Array.from(labels).sort()
+      }
+
+      combined[libId] = {
+        type: 'movie',
+        name: lib.displayName || lib.title || libId,
+        labels: Array.from(labels).sort()
       }
 
       // Initialize empty labels if library not in settings yet
@@ -719,9 +738,37 @@ const fetchAllLabels = async () => {
       }
     }
 
-    allLabels.value = labelsByLibrary
+    // Process TV show libraries
+    for (const lib of tvLibs) {
+      const libId = lib.id || 'default'
+      const labelCacheKey = `simposter-tv-labels-cache-${libId}`
+      const labelCache = sessionStorage.getItem(labelCacheKey)
+
+      const labels = new Set<string>()
+      if (labelCache) {
+        const cache = JSON.parse(labelCache) as Record<string, string[]>
+        Object.values(cache).forEach((showLabels) => {
+          if (Array.isArray(showLabels)) {
+            showLabels.forEach((label) => labels.add(label))
+          }
+        })
+      }
+
+      combined[libId] = {
+        type: 'show',
+        name: lib.displayName || lib.title || libId,
+        labels: Array.from(labels).sort()
+      }
+
+      // Initialize empty labels if TV library not in settings yet
+      if (!localDefaultTvLabelsToRemove.value[libId]) {
+        localDefaultTvLabelsToRemove.value[libId] = []
+      }
+    }
+
+    allLibraryLabels.value = combined
   } catch (e) {
-    console.error('Failed to fetch labels', e)
+    console.error('Failed to fetch library labels', e)
   }
 }
 
@@ -743,8 +790,8 @@ onMounted(async () => {
     await testPlexConnection()
   }
 
-  // Fetch labels
-  fetchAllLabels()
+  // Fetch labels for both movies and TV
+  fetchAllLibraryLabels()
 
   // Now capture the snapshot after everything has loaded
   await nextTick()
@@ -765,7 +812,7 @@ watch(
         await testPlexConnection()
       }
 
-      fetchAllLabels()
+      fetchAllLibraryLabels()
 
       // Recapture snapshot after reload
       await nextTick()
@@ -776,9 +823,9 @@ watch(
 
 // Refetch labels when library mappings change
 watch(
-  () => settings.plex.value.libraryMappings,
+  [() => settings.plex.value.libraryMappings, () => settings.plex.value.tvShowLibraryMappings],
   () => {
-    fetchAllLabels()
+    fetchAllLibraryLabels()
   },
   { deep: true }
 )
@@ -790,6 +837,7 @@ watch([
   localSaveLocation,
   localSaveBatch,
   localDefaultLabelsToRemove,
+  localDefaultTvLabelsToRemove,
   localPlexUrl,
   localPlexToken,
   localLibraries,
@@ -847,20 +895,25 @@ onMounted(() => {
 })
 
 const toggleLabel = (libraryId: string, label: string) => {
-  if (!localDefaultLabelsToRemove.value[libraryId]) {
-    localDefaultLabelsToRemove.value[libraryId] = []
+  const libInfo = allLibraryLabels.value[libraryId]
+  const labelsRef = libInfo?.type === 'show' ? localDefaultTvLabelsToRemove : localDefaultLabelsToRemove
+
+  if (!labelsRef.value[libraryId]) {
+    labelsRef.value[libraryId] = []
   }
-  const set = new Set(localDefaultLabelsToRemove.value[libraryId])
+  const set = new Set(labelsRef.value[libraryId])
   if (set.has(label)) {
     set.delete(label)
   } else {
     set.add(label)
   }
-  localDefaultLabelsToRemove.value[libraryId] = Array.from(set)
+  labelsRef.value[libraryId] = Array.from(set)
 }
 
 const isLabelSelected = (libraryId: string, label: string) => {
-  return localDefaultLabelsToRemove.value[libraryId]?.includes(label) || false
+  const libInfo = allLibraryLabels.value[libraryId]
+  const labelsRef = libInfo?.type === 'show' ? localDefaultTvLabelsToRemove : localDefaultLabelsToRemove
+  return labelsRef.value[libraryId]?.includes(label) || false
 }
 
 const startScanPolling = () => {
@@ -1006,7 +1059,10 @@ const checkBackendHealth = async () => {
     const data = await res.json()
 
     if (data.status === 'ok') {
-      backendStatus.value = `✓ Backend healthy! App: v${data.app_version}, DB: v${data.db_version}`
+      // Strip leading 'v' from versions if present, then add single 'v' prefix
+      const appVer = data.app_version?.replace(/^v/, '') || 'unknown'
+      const dbVer = data.db_version ? data.db_version.replace(/^v/, '') : 'not-set'
+      backendStatus.value = `✓ Backend healthy! App: v${appVer}, DB: v${dbVer}`
     } else {
       backendStatus.value = '✗ Backend returned unexpected status'
     }
@@ -1475,7 +1531,7 @@ const checkBackendHealth = async () => {
     </div>
 
 
-    <div v-if="Object.keys(allLabels).length > 0" class="settings-section labels-section">
+    <div v-if="Object.keys(allLibraryLabels).length > 0" class="settings-section labels-section">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
@@ -1485,13 +1541,14 @@ const checkBackendHealth = async () => {
       </h3>
       <p class="section-subtitle">When sending to Plex, these labels will be removed by default for each library</p>
 
-      <!-- Library-specific label sections -->
-      <div v-for="(labels, libId) in allLabels" :key="libId" class="library-labels-section">
+      <!-- Library-specific label sections (unified for both movies and TV shows) -->
+      <div v-for="(libInfo, libId) in allLibraryLabels" :key="libId" class="library-labels-section">
         <h4 class="library-labels-title">
-          {{ localLibraries.find(l => l.id === libId)?.displayName || localLibraries.find(l => l.id === libId)?.title || libId }}
+          {{ libInfo.name }}
+          <span class="library-type-badge" :class="libInfo.type">{{ libInfo.type === 'show' ? 'TV' : 'Movies' }}</span>
         </h4>
-        <div v-if="labels.length > 0" class="labels-grid">
-          <label v-for="label in labels" :key="`${libId}-${label}`" class="label-checkbox">
+        <div v-if="libInfo.labels.length > 0" class="labels-grid">
+          <label v-for="label in libInfo.labels" :key="`${libId}-${label}`" class="label-checkbox">
             <input type="checkbox" :checked="isLabelSelected(libId, label)" @change="toggleLabel(libId, label)" />
             <span>{{ label }}</span>
           </label>
@@ -1833,6 +1890,28 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.library-type-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-left: auto;
+}
+
+.library-type-badge.movie {
+  background: rgba(91, 141, 238, 0.15);
+  color: #7b9bff;
+  border: 1px solid rgba(91, 141, 238, 0.3);
+}
+
+.library-type-badge.show {
+  background: rgba(255, 152, 0, 0.15);
+  color: #ffb74d;
+  border: 1px solid rgba(255, 152, 0, 0.3);
 }
 
 .no-labels-message {

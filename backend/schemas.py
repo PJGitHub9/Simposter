@@ -99,6 +99,7 @@ class UISettings(BaseModel):
     saveLocation: str = "/config/output/{library}/{title}.jpg"
     saveBatchInSubfolder: bool = False
     defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
+    defaultTvLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)
     tmdb: TMDBSettings = Field(default_factory=TMDBSettings)
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)

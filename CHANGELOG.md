@@ -2,24 +2,34 @@
 
 ## v1.4.6 (In Progress)
 ### Major Features
-- **Overlay Caching System**: Pre-generate template effects (matte/fade/vignette/grain/wash) as PNG overlays when saving presets
-  - Batch rendering composites cached overlays over posters instead of rendering effects from scratch
-  - 3-5x speed improvement for uniformlogo templates (with or without logos)
+- **Overlay Caching for Fast Rendering**: Pre-generated template effect overlays (matte, fade, vignette, grain, wash) for rapid batch poster generation
+  - Composites cached PNG overlays with posters instead of rendering effects from scratch
+  - 3-5x speed improvement for `uniformlogo` templates with or without logos
   - Configurable via "Use Overlay Cache" toggle in Performance settings (enabled by default)
-  - Overlays saved to `config/overlays/{template_id}/{preset_id}.png`
-  - Full uniformlogo support: logo positioning, text overlay, and borders rendered in fast path
+  - Full uniformlogo support: logo positioning, text overlays, and borders all work in fast path
   - Other templates fall back to full render when logos present (future enhancement)
 
 ### Performance
-- **Batch Rendering Speed**: Significant performance gains for large batch operations
-  - Overlay effects only rendered once per preset (not per movie)
-  - Fast composite path reduces per-poster processing time from 5-10s to 1-2s
-  - uniformlogo template: Full cache benefits even with logos (logo positioning is lightweight)
-  - Logo modes (stock/match/hex/none) fully supported in cache path
+- **Logo Selection Optimization**: Drastically faster logo selection in preview and batch operations
+  - Analyzes only top 6 logo candidates (sorted by size/source priority) instead of all logos
+  - Uses TMDb thumbnail images (w300) instead of full-resolution downloads
+  - Concurrent color analysis via ThreadPoolExecutor instead of serial processing
+  - Batch logo selection now completes in seconds instead of 20+ seconds
+  - Batch rendering speed improvements: 3-5x faster with overlay cache, 2-3x faster logo selection
+
+### Improvements
+- **Batch Edit Fallback Logic**: Batch now correctly re-selects posters/logos after applying template fallback (matches preview behavior)
+  - Respects fallback template and preset options in correct order
+  - Re-picks logo after fallback to ensure compatibility with new template
+- **Settings Labels UI Consolidation**: Unified "Default Labels to Remove" section displays both movie and TV libraries with type badges
+  - Type badges (Movies/TV) clearly distinguish library type
+  - Single organized section instead of separate movie/TV sections
+  - Labels auto-refresh after library scan without manual "Refresh Cache" click
 
 ### Technical
 - Added `useOverlayCache` field to PerformanceSettings schema (default: true)
 - New `generate_overlay()` function in `rendering.py` extracts effect pipeline
+- Optimized `pick_logo()` and `analyze_logo_color()` with thumbnail-based concurrent analysis
 - Preset save endpoint generates and caches overlay PNG automatically
 - Batch rendering checks overlay cache before falling back to standard render
 
