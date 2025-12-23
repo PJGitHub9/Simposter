@@ -1,9 +1,15 @@
 from fastapi import APIRouter, Query
-from typing import Optional
+from typing import Optional, List
+from pydantic import BaseModel
 
 from .. import database as db
 
 router = APIRouter()
+
+
+class PosterStatusRequest(BaseModel):
+    rating_keys: Optional[List[str]] = None
+    library_id: Optional[str] = None
 
 
 @router.get("/poster-history")
@@ -24,4 +30,14 @@ def api_poster_history(
         limit=limit,
     )
     return {"records": records}
+
+
+@router.post("/poster-status")
+def api_poster_status(payload: PosterStatusRequest):
+    """Return latest sent/saved status per rating key (optionally filtered by library)."""
+    status = db.get_poster_status(
+        library_id=payload.library_id,
+        rating_keys=payload.rating_keys,
+    )
+    return {"status": status}
 

@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useMovies } from '../composables/useMovies'
+import { useSettingsStore } from '@/stores/settings'
 
 type Movie = {
   key: string
@@ -24,8 +25,20 @@ type Preset = {
   template_id: string
 }
 
+type PosterStatusEntry = {
+  template_id?: string | null
+  preset_id?: string | null
+  created_at?: string | null
+}
+
+type PosterStatus = {
+  sent: PosterStatusEntry | null
+  saved: PosterStatusEntry | null
+}
+
 const { success, error: showError } = useNotification()
 const { movies: moviesCache, moviesLoaded: moviesLoadedFlag } = useMovies()
+const settings = useSettingsStore()
 
 const movies = ref<Movie[]>(moviesCache.value)
 const loading = ref(false)
@@ -93,7 +106,9 @@ watch(currentLibrary, async (newLib, oldLib) => {
   selectedMovies.value.clear()
   currentPage.value = 1
   posterCache.value = {}
+  posterStatus.value = {}
   moviesLoadedFlag.value = false
+  labelsToRemove.value = new Set()
   
   // Clear any stale data from previous library to prevent contamination
   if (oldLib && typeof sessionStorage !== 'undefined') {
@@ -109,6 +124,8 @@ watch(currentLibrary, async (newLib, oldLib) => {
     await fetchLabelsFromCache()
     loadLabelCache()
     loadPosterCache()
+    await fetchPosterStatus()
+    syncLabelsFromSettings()
   }
 })
 
@@ -119,10 +136,20 @@ const selectedTemplate = ref('')
 const selectedPreset = ref('')
 const sendToPlex = ref(true)
 const saveLocally = ref(false)
+const sentFilter = ref<'all' | 'sent' | 'unsent'>('all')
+const savedFilter = ref<'all' | 'saved' | 'unsaved'>('all')
 const labelsToRemove = ref<Set<string>>(new Set())
 const processing = ref(false)
 const currentIndex = ref(0)
 const statusOverlay = ref<{ visible: boolean; message: string; detail?: string }>({ visible: false, message: '' })
+const posterStatus = ref<Record<string, PosterStatus>>({})
+const statusLoading = ref(false)
+
+const syncLabelsFromSettings = () => {
+  const libId = currentLibrary.value || 'default'
+  const defaults = settings.defaultLabelsToRemove.value?.[libId]
+  labelsToRemove.value = new Set(Array.isArray(defaults) ? defaults : [])
+}
 
 const apiBase = getApiBase()
 
@@ -195,6 +222,22 @@ const filteredMovies = computed(() => {
     })
   }
 
+  // Filter by sent status
+  if (sentFilter.value !== 'all') {
+    result = result.filter(m => {
+      const hasSent = !!posterStatus.value[m.key]?.sent
+      return sentFilter.value === 'sent' ? hasSent : !hasSent
+    })
+  }
+
+  // Filter by saved status
+  if (savedFilter.value !== 'all') {
+    result = result.filter(m => {
+      const hasSaved = !!posterStatus.value[m.key]?.saved
+      return savedFilter.value === 'saved' ? hasSaved : !hasSaved
+    })
+  }
+
   return result
 })
 
@@ -253,6 +296,80 @@ const filteredPresets = computed(() => {
   if (!selectedTemplate.value) return presets.value
   return presets.value.filter(p => p.template_id === selectedTemplate.value)
 })
+
+const templateNameMap = computed(() => {
+  const map: Record<string, string> = {}
+  templates.value.forEach(t => {
+    map[t.id] = t.name || t.id
+  })
+  return map
+})
+
+const presetNameMap = computed(() => {
+  const map: Record<string, string> = {}
+  presets.value.forEach(p => {
+    map[p.id] = p.name || p.id
+  })
+  return map
+})
+
+const getTemplateName = (id?: string | null) => {
+  if (!id) return '—'
+  return templateNameMap.value[id] || id
+}
+
+const getPresetName = (id?: string | null) => {
+  if (!id) return '—'
+  return presetNameMap.value[id] || id
+}
+
+const formatDate = (value?: string | null) => {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+const getTemplatePresetText = (movieKey: string) => {
+  const status = posterStatus.value[movieKey]
+  const source = status?.sent || status?.saved
+  const tpl = getTemplateName(source?.template_id)
+  const pre = getPresetName(source?.preset_id)
+  return `${tpl}/${pre}`
+}
+
+const getSentText = (movieKey: string) => {
+  const sent = posterStatus.value[movieKey]?.sent
+  return formatDate(sent?.created_at)
+}
+
+const getSavedText = (movieKey: string) => {
+  const saved = posterStatus.value[movieKey]?.saved
+  return formatDate(saved?.created_at)
+}
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
+const getSentTooltip = (movieKey: string) => {
+  const sent = posterStatus.value[movieKey]?.sent
+  return sent?.created_at ? `Sent on ${formatDateTime(sent.created_at)}` : 'Not sent'
+}
+
+const getSavedTooltip = (movieKey: string) => {
+  const saved = posterStatus.value[movieKey]?.saved
+  return saved?.created_at ? `Saved on ${formatDateTime(saved.created_at)}` : 'Not saved'
+}
 
 const fetchMovies = async () => {
   loading.value = true
@@ -377,6 +494,43 @@ const fetchLabels = async (list: Movie[]) => {
     // Clean up in flight status on any error
     missing.forEach(m => labelInFlight.delete(m.key))
     console.error('Failed to fetch labels:', error)
+  }
+}
+
+const fetchPosterStatus = async () => {
+  if (!currentLibrary.value) return
+  statusLoading.value = true
+  try {
+    const ratingKeys = moviesCache.value.map(m => m.key)
+    if (ratingKeys.length === 0) {
+      posterStatus.value = {}
+      return
+    }
+
+    const res = await fetch(`${apiBase}/api/poster-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        library_id: currentLibrary.value,
+        rating_keys: ratingKeys,
+      }),
+    })
+
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    const statusMap: Record<string, PosterStatus> = {}
+    Object.entries(data.status || {}).forEach(([key, val]) => {
+      const entry = val as { sent?: PosterStatusEntry | null; saved?: PosterStatusEntry | null }
+      statusMap[key] = {
+        sent: entry.sent || null,
+        saved: entry.saved || null,
+      }
+    })
+    posterStatus.value = statusMap
+  } catch (err) {
+    console.error('Failed to fetch poster status', err)
+  } finally {
+    statusLoading.value = false
   }
 }
 
@@ -532,6 +686,9 @@ const processBatch = async () => {
     }
     success(message)
     statusOverlay.value = { visible: true, message }
+
+    // Refresh status for sent/saved indicators
+    await fetchPosterStatus()
 
     // Reset
     setTimeout(() => {
@@ -704,6 +861,11 @@ onMounted(async () => {
   // Wait for route to be ready 
   await new Promise(resolve => setTimeout(resolve, 0))
 
+  // Ensure settings are loaded so defaults are available
+  if (!settings.loaded.value) {
+    await settings.load()
+  }
+
   // Clear any stale cache data first to prevent cross-library contamination on page load
   labelCache.value = {}
   posterCache.value = {}
@@ -724,6 +886,12 @@ onMounted(async () => {
     // Load any additional cached data from sessionStorage for this specific library
     loadLabelCache()
     loadPosterCache()
+
+    // Load latest sent/saved status for this library
+    await fetchPosterStatus()
+
+    // Seed labels to remove from settings defaults
+    syncLabelsFromSettings()
     
     // Fetch fresh posters and any missing labels for the loaded movies
     fetchPosters()
@@ -739,7 +907,7 @@ onMounted(async () => {
       <h2>Batch Edit</h2>
 
       <!-- Template & Preset Selection -->
-      <div class="selection-row">
+      <div class="selection-row template-row">
         <div class="form-group">
           <label>Template</label>
           <select v-model="selectedTemplate" class="form-control">
@@ -848,6 +1016,16 @@ onMounted(async () => {
               {{ label }}
             </option>
           </select>
+          <select v-model="sentFilter" class="filter-select">
+            <option value="all">All Sent States</option>
+            <option value="sent">Sent</option>
+            <option value="unsent">Not Sent</option>
+          </select>
+          <select v-model="savedFilter" class="filter-select">
+            <option value="all">All Save States</option>
+            <option value="saved">Saved</option>
+            <option value="unsaved">Not Saved</option>
+          </select>
         </div>
         <input
           v-model="searchQuery"
@@ -903,6 +1081,25 @@ onMounted(async () => {
             <div class="movie-info">
               <p class="title">{{ movie.title }}</p>
               <p class="year">{{ movie.year }}</p>
+              <div class="status-row">
+                <span class="pill pill-template" :title="`Template/Preset: ${getTemplatePresetText(movie.key)}`">
+                  {{ getTemplatePresetText(movie.key) }}
+                </span>
+                <span
+                  class="pill"
+                  :class="getSentText(movie.key) ? 'pill-sent' : 'pill-unsent'"
+                  :title="getSentTooltip(movie.key)"
+                >
+                  {{ getSentText(movie.key) ? 'Sent' : 'Not sent' }}
+                </span>
+                <span
+                  class="pill"
+                  :class="getSavedText(movie.key) ? 'pill-saved' : 'pill-unsaved'"
+                  :title="getSavedTooltip(movie.key)"
+                >
+                  {{ getSavedText(movie.key) ? 'Saved' : 'Not saved' }}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -1193,6 +1390,13 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
+.selection-row.template-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+  align-items: end;
+}
+
 .selection-summary {
   display: flex;
   align-items: center;
@@ -1459,6 +1663,67 @@ onMounted(async () => {
   margin: 0;
   color: var(--text-secondary, #aaa);
   font-size: 0.85rem;
+}
+
+.meta {
+  margin: 0;
+  color: var(--text-secondary, #999);
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #dce6ff;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill-template {
+  background: rgba(91, 141, 238, 0.14);
+  border-color: rgba(91, 141, 238, 0.3);
+  color: #a8c3ff;
+}
+
+.pill-sent {
+  background: rgba(61, 214, 183, 0.16);
+  border-color: rgba(61, 214, 183, 0.35);
+  color: #9bf2df;
+}
+
+.pill-unsent {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #c8d0e0;
+}
+
+.pill-saved {
+  background: rgba(255, 193, 7, 0.14);
+  border-color: rgba(255, 193, 7, 0.35);
+  color: #ffe28a;
+}
+
+.pill-unsaved {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: #c8d0e0;
 }
 
 /* Disabled select styling */

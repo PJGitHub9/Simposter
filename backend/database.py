@@ -1408,6 +1408,21 @@ def record_poster_history(
     """Record a poster-related action for tracking."""
     with get_db() as conn:
         cursor = conn.cursor()
+        # Keep only the most recent record per rating_key/action (scoped by library)
+        cursor.execute(
+            """
+            DELETE FROM poster_history
+            WHERE rating_key = ?
+              AND action = ?
+              AND (
+                    (library_id IS NULL AND ? IS NULL)
+                 OR (library_id = ?)
+                 OR (library_id IS NULL AND ? = '')
+                 OR (library_id = '' AND ? IS NULL)
+              )
+            """,
+            (rating_key, action, library_id, library_id or '', library_id, library_id),
+        )
         cursor.execute(
             """
             INSERT INTO poster_history
@@ -1474,6 +1489,68 @@ def get_poster_history(
             "created_at": row["created_at"],
         })
     return out
+
+
+def get_poster_status(
+    library_id: Optional[str] = None,
+    rating_keys: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Return latest sent/saved status per rating_key."""
+    clauses = []
+    params: List[Any] = []
+
+    if library_id:
+        clauses.append("library_id = ?")
+        params.append(library_id)
+
+    if rating_keys:
+        placeholders = ",".join(["?"] * len(rating_keys))
+        clauses.append(f"rating_key IN ({placeholders})")
+        params.extend(rating_keys)
+
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    query = f"""
+        SELECT rating_key, action, template_id, preset_id, created_at
+        FROM poster_history
+        {where_clause}
+        ORDER BY datetime(created_at) DESC
+    """
+
+    result: Dict[str, Dict[str, Any]] = {}
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+    for row in rows:
+        rating_key = row["rating_key"]
+        action = row["action"]
+        created_at = row["created_at"]
+        template_id = row["template_id"]
+        preset_id = row["preset_id"]
+
+        if rating_key not in result:
+            result[rating_key] = {
+                "sent": None,
+                "saved": None,
+            }
+
+        # Record the first (latest) occurrence for each action
+        if action == "sent_to_plex" and result[rating_key]["sent"] is None:
+            result[rating_key]["sent"] = {
+                "template_id": template_id,
+                "preset_id": preset_id,
+                "created_at": created_at,
+            }
+        elif action == "saved_local" and result[rating_key]["saved"] is None:
+            result[rating_key]["saved"] = {
+                "template_id": template_id,
+                "preset_id": preset_id,
+                "created_at": created_at,
+            }
+
+    return result
 
 
 # Initialize database on module import

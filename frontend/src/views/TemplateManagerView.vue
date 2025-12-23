@@ -619,6 +619,7 @@ onMounted(async () => {
           <button class="icon-btn" @click="showFallbackModal = false">×</button>
         </div>
         <div class="modal-body">
+          <p class="help small">Fallback settings apply in batch edit mode only. Poster fallback is checked first and takes priority.</p>
           <h5>Logo source (optional override)</h5>
           <div class="grid">
             <label>

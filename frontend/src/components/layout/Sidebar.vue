@@ -55,7 +55,6 @@ const getIcon = (key: TabKey | string) => {
   if (key.startsWith('movies-')) return icons.movies
   if (key.startsWith('tv-shows-')) return icons['tv-shows']
   if (key.startsWith('batch-')) return icons['batch-edit']
-  if (key.startsWith('batch-test-')) return icons['batch-edit']
   if (key.startsWith('collections-')) return icons.collections
   if (key.startsWith('assets-')) return icons['local-assets']
   return ''
