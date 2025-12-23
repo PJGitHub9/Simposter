@@ -30,6 +30,7 @@ const sectionsWithChanges = ref({
 
 // Cooldown state to prevent rapid clicking
 const scanCooldown = ref(false)
+const scanningLibraryId = ref<string | null>(null)
 
 // Computed property to ensure button disable state is reactive
 const isScanInProgress = computed(() => scan.running.value || scan.checking.value || scanCooldown.value)
@@ -63,6 +64,7 @@ const localConcurrentRenders = ref(2)
 const localTmdbRateLimit = ref(40)
 const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
+const localUseOverlayCache = ref(true)
 let scanPoller: number | null = null
 
 // Preset import/export states
@@ -212,6 +214,7 @@ const loadLocalSettings = async () => {
   localTmdbRateLimit.value = settings.performance.value.tmdbRateLimit
   localTvdbRateLimit.value = settings.performance.value.tvdbRateLimit
   localMemoryLimit.value = settings.performance.value.memoryLimit
+  localUseOverlayCache.value = settings.performance.value.useOverlayCache
 
   // Wait for next tick to ensure all reactive updates are complete
   await nextTick()
@@ -239,7 +242,8 @@ const captureSettingsSnapshot = () => {
     concurrentRenders: localConcurrentRenders.value,
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
-    memoryLimit: localMemoryLimit.value
+    memoryLimit: localMemoryLimit.value,
+    useOverlayCache: localUseOverlayCache.value
   })
   hasUnsavedChanges.value = false
 
@@ -279,7 +283,8 @@ const checkForChanges = () => {
     concurrentRenders: localConcurrentRenders.value,
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
-    memoryLimit: localMemoryLimit.value
+    memoryLimit: localMemoryLimit.value,
+    useOverlayCache: localUseOverlayCache.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -317,7 +322,8 @@ const checkForChanges = () => {
     localConcurrentRenders.value !== initial.concurrentRenders ||
     localTmdbRateLimit.value !== initial.tmdbRateLimit ||
     localTvdbRateLimit.value !== initial.tvdbRateLimit ||
-    localMemoryLimit.value !== initial.memoryLimit
+    localMemoryLimit.value !== initial.memoryLimit ||
+    localUseOverlayCache.value !== initial.useOverlayCache
 }
 
 const saveSettings = async () => {
@@ -361,7 +367,8 @@ const saveSettings = async () => {
     concurrentRenders: localConcurrentRenders.value,
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
-    memoryLimit: localMemoryLimit.value
+    memoryLimit: localMemoryLimit.value,
+    useOverlayCache: localUseOverlayCache.value
   }
 
   // Save to backend
@@ -470,7 +477,7 @@ const clearCache = () => {
   }
 }
 
-const scanLibrary = async () => {
+const scanLibrary = async (libraryId?: string) => {
   if (scan.running.value || scan.checking.value) {
     saved.value = 'Scan already in progress'
     setTimeout(() => (saved.value = ''), 2000)
@@ -486,17 +493,20 @@ const scanLibrary = async () => {
   try {
     // Set scan state immediately to prevent double-clicks
     scan.running.value = true
+    scanningLibraryId.value = libraryId || null
     // Enable cooldown for 10 seconds
     scanCooldown.value = true
     setTimeout(() => {
       // Only disable cooldown if scan is not still running
       if (!scan.running.value && !scan.checking.value) {
         scanCooldown.value = false
+        scanningLibraryId.value = null
       } else {
         // If scan is still running, check again in 5 seconds
         const checkScanStatus = () => {
           if (!scan.running.value && !scan.checking.value) {
             scanCooldown.value = false
+            scanningLibraryId.value = null
           } else {
             setTimeout(checkScanStatus, 5000)
           }
@@ -504,7 +514,7 @@ const scanLibrary = async () => {
         setTimeout(checkScanStatus, 5000)
       }
     }, 10000)
-    saved.value = 'Rescanning library...'
+    saved.value = libraryId ? `Rescanning library ${libraryId}...` : 'Rescanning all libraries...'
     scan.visible.value = true
     scan.log.value = ['Starting rescan...']
     scan.progress.value = { processed: 0, total: 0 }
@@ -512,7 +522,9 @@ const scanLibrary = async () => {
     startScanPolling()
     
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/scan-library`, { method: 'POST' })
+    const url = new URL(`${apiBase}/api/scan-library`)
+    if (libraryId) url.searchParams.set('library_id', libraryId)
+    const res = await fetch(url.toString(), { method: 'POST' })
     if (!res.ok) {
       if (res.status === 409) {
         throw new Error('Scan already in progress on server')
@@ -793,7 +805,8 @@ watch([
   localConcurrentRenders,
   localTmdbRateLimit,
   localTvdbRateLimit,
-  localMemoryLimit
+  localMemoryLimit,
+  localUseOverlayCache
 ], () => {
   // Only check for changes if watchers are enabled (after initial load)
   if (watchersEnabled.value) {
@@ -1188,6 +1201,10 @@ const checkBackendHealth = async () => {
                 @select.stop
                 @selectstart.stop
               />
+              <button v-if="lib.id" class="secondary small" type="button" :disabled="isScanInProgress" @click="scanLibrary(lib.id)">
+                <span v-if="scanningLibraryId === lib.id && scan.running.value">Scanning...</span>
+                <span v-else>Scan</span>
+              </button>
               <button class="secondary small" type="button" @click="removeLibrary(idx)">Remove</button>
             </div>
             <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
@@ -1245,6 +1262,10 @@ const checkBackendHealth = async () => {
                 @select.stop
                 @selectstart.stop
               />
+              <button v-if="lib.id" class="secondary small" type="button" :disabled="isScanInProgress" @click="scanLibrary(lib.id)">
+                <span v-if="scanningLibraryId === lib.id && scan.running.value">Scanning...</span>
+                <span v-else>Scan</span>
+              </button>
               <button class="secondary small" type="button" @click="removeTvShowLibrary(idx)">Remove</button>
             </div>
             <button class="secondary small" type="button" @click="addTvShowLibrary">+ Add Library</button>
@@ -1440,6 +1461,16 @@ const checkBackendHealth = async () => {
           />
           <span class="help-text">Maximum memory for image processing</span>
         </label>
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            v-model="localUseOverlayCache"
+            @select.stop
+            @selectstart.stop
+          />
+          <span class="label-text">Use Overlay Cache</span>
+          <span class="help-text">Pre-render template effects for faster preview generation</span>
+        </label>
       </div>
     </div>
 
@@ -1493,7 +1524,7 @@ const checkBackendHealth = async () => {
         </svg>
         Clear Backend Cache
       </button>
-      <button @click="scanLibrary" class="secondary" :disabled="isScanInProgress">
+      <button @click="() => scanLibrary()" class="secondary" :disabled="isScanInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
           <polyline points="9 22 9 12 15 12 15 22"/>

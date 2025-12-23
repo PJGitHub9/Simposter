@@ -6,6 +6,7 @@ import LogsView from './views/LogsView.vue'
 import BatchEditView from './views/BatchEditView.vue'
 import BatchEditTestView from './views/BatchEditTestView.vue'
 import LocalAssetsView from './views/LocalAssetsView.vue'
+import CollectionsView from './views/CollectionsView.vue'
 import TemplateManagerView from './views/TemplateManagerView.vue'
 
 export const router = createRouter({
@@ -15,6 +16,7 @@ export const router = createRouter({
     { path: '/movies', name: 'movies', component: MoviesView },
     { path: '/movies/batch-edit', name: 'batch-edit', component: BatchEditView },
     { path: '/movies/batch-edit-test', name: 'batch-edit-test', component: BatchEditTestView },
+    { path: '/movies/collections', name: 'collections', component: CollectionsView },
     { path: '/movies/local-assets', name: 'local-assets', component: LocalAssetsView },
     { path: '/tv-shows', name: 'tv-shows', component: TvShowsView },
     { path: '/templates', name: 'template-manager', component: TemplateManagerView },

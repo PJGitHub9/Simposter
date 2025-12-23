@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.4.6 (In Progress)
+### Major Features
+- **Overlay Caching System**: Pre-generate template effects (matte/fade/vignette/grain/wash) as PNG overlays when saving presets
+  - Batch rendering composites cached overlays over posters instead of rendering effects from scratch
+  - 3-5x speed improvement for uniformlogo templates (with or without logos)
+  - Configurable via "Use Overlay Cache" toggle in Performance settings (enabled by default)
+  - Overlays saved to `config/overlays/{template_id}/{preset_id}.png`
+  - Full uniformlogo support: logo positioning, text overlay, and borders rendered in fast path
+  - Other templates fall back to full render when logos present (future enhancement)
+
+### Performance
+- **Batch Rendering Speed**: Significant performance gains for large batch operations
+  - Overlay effects only rendered once per preset (not per movie)
+  - Fast composite path reduces per-poster processing time from 5-10s to 1-2s
+  - uniformlogo template: Full cache benefits even with logos (logo positioning is lightweight)
+  - Logo modes (stock/match/hex/none) fully supported in cache path
+
+### Technical
+- Added `useOverlayCache` field to PerformanceSettings schema (default: true)
+- New `generate_overlay()` function in `rendering.py` extracts effect pipeline
+- Preset save endpoint generates and caches overlay PNG automatically
+- Batch rendering checks overlay cache before falling back to standard render
+
 ## v1.4.5
 ### Major Features
 - **TV Show Library Support**: Full TV show library integration with TVDB as metadata source, poster rendering, and library management

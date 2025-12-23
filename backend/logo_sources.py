@@ -7,7 +7,8 @@ from . import tmdb_client, fanart_client, database as db
 def get_logos_merged(
     tmdb_id: int,
     logo_source: Optional[str] = None,
-    original_language: Optional[str] = None
+    original_language: Optional[str] = None,
+    tmdb_imgs: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch logos from TMDB and/or Fanart.tv based on source priority.
@@ -36,7 +37,7 @@ def get_logos_merged(
     # Fetch from sources based on priority
     if logo_source == "tmdb":
         # TMDB only
-        imgs = tmdb_client.get_images_for_movie(tmdb_id, original_language)
+        imgs = tmdb_imgs or tmdb_client.get_images_for_movie(tmdb_id, original_language)
         tmdb_logos = imgs.get("logos", [])
         for logo in tmdb_logos:
             logo["source"] = "tmdb"
@@ -50,7 +51,7 @@ def get_logos_merged(
 
     elif logo_source == "tmdb_fanart":
         # TMDB first, then Fanart as fallback
-        imgs = tmdb_client.get_images_for_movie(tmdb_id, original_language)
+        imgs = tmdb_imgs or tmdb_client.get_images_for_movie(tmdb_id, original_language)
         tmdb_logos = imgs.get("logos", [])
         for logo in tmdb_logos:
             logo["source"] = "tmdb"
@@ -73,7 +74,7 @@ def get_logos_merged(
             return fanart_logos
 
         logger.debug("[LOGO_SOURCES] No Fanart logos, fetching from TMDB")
-        imgs = tmdb_client.get_images_for_movie(tmdb_id, original_language)
+        imgs = tmdb_imgs or tmdb_client.get_images_for_movie(tmdb_id, original_language)
         tmdb_logos = imgs.get("logos", [])
         for logo in tmdb_logos:
             logo["source"] = "tmdb"
@@ -82,7 +83,7 @@ def get_logos_merged(
 
     elif logo_source == "both":
         # Merge results from both sources
-        imgs = tmdb_client.get_images_for_movie(tmdb_id, original_language)
+        imgs = tmdb_imgs or tmdb_client.get_images_for_movie(tmdb_id, original_language)
         tmdb_logos = imgs.get("logos", [])
         for logo in tmdb_logos:
             logo["source"] = "tmdb"

@@ -3,60 +3,62 @@ from io import BytesIO
 from PIL import Image
 import numpy as np
 import colorsys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ---------------------------
 # Logo Color Analysis
 # ---------------------------
 
+def _tmdb_thumb(url: str) -> str:
+    """Use a smaller TMDb size for faster analysis when possible."""
+    try:
+        if "image.tmdb.org/t/p/" in url and "/original/" in url:
+            return url.replace("/original/", "/w300/")
+        return url
+    except Exception:
+        return url
+
+
 def analyze_logo_color(url: str) -> dict:
     """
-    Analyzes logo color properties using HSV color space.
+    Fast logo color analysis using HSV color space on a thumbnail image.
     Returns dict with 'brightness' (0-255) and 'saturation' (0-1).
-
-    - White logos: high brightness, low saturation
-    - Colored logos: high saturation
-    - Dark logos: low brightness
     """
     try:
-        r = requests.get(url, timeout=10)
+        thumb = _tmdb_thumb(url)
+        r = requests.get(thumb, timeout=8)
         r.raise_for_status()
         img = Image.open(BytesIO(r.content)).convert("RGBA")
+        # Downscale further to cap work (keeps transparency)
+        max_w = 256
+        if img.width > max_w:
+            ratio = max_w / float(img.width)
+            img = img.resize((max_w, int(img.height * ratio)), Image.LANCZOS)
 
         arr = np.array(img)
         rgb = arr[..., :3]
         alpha = arr[..., 3]
 
-        # Filter to non-transparent pixels
-        mask = alpha > 128
+        # Filter to non-transparent pixels; be permissive to keep samples
+        mask = alpha > 64
         if mask.sum() == 0:
             return {"brightness": 0, "saturation": 0, "valid": False}
 
-        # Get RGB values of non-transparent pixels
         valid_pixels = rgb[mask]
+        # Subsample to speed up on very large masks
+        if valid_pixels.shape[0] > 20000:
+            valid_pixels = valid_pixels[:: int(valid_pixels.shape[0] / 20000) or 1]
 
-        # Convert RGB (0-255) to HSV
-        # Normalize RGB to 0-1 for colorsys
         valid_pixels_norm = valid_pixels / 255.0
-
-        hsv_values = []
-        for pixel in valid_pixels_norm:
-            h, s, v = colorsys.rgb_to_hsv(pixel[0], pixel[1], pixel[2])
-            hsv_values.append((h, s, v))
-
+        hsv_values = [colorsys.rgb_to_hsv(p[0], p[1], p[2]) for p in valid_pixels_norm]
         hsv_array = np.array(hsv_values)
 
-        # Calculate average saturation and brightness
-        avg_saturation = float(hsv_array[:, 1].mean())  # 0-1
-        avg_value = float(hsv_array[:, 2].mean())  # 0-1
-        avg_brightness = avg_value * 255  # Convert to 0-255 for backward compatibility
+        avg_saturation = float(hsv_array[:, 1].mean())
+        avg_value = float(hsv_array[:, 2].mean())
+        avg_brightness = avg_value * 255
 
-        return {
-            "brightness": avg_brightness,
-            "saturation": avg_saturation,
-            "valid": True
-        }
-
+        return {"brightness": avg_brightness, "saturation": avg_saturation, "valid": True}
     except Exception:
         return {"brightness": 0, "saturation": 0, "valid": False}
 
@@ -92,9 +94,19 @@ def pick_poster(posters: list, filter_mode: str):
 # Logo Selection
 # ---------------------------
 
+def _sort_logos_for_analysis(logos: list) -> list:
+    """Sort logos by quality heuristic (width desc, TMDb first)."""
+    def key(l: dict):
+        w = l.get("width") or 0
+        src = l.get("source") or ""
+        src_rank = 0 if src == "tmdb" else 1
+        return (-int(w), src_rank)
+    return sorted(logos, key=key)
+
+
 def pick_logo(logos: list, preference: str):
     """
-    Analyzes logo color properties to pick the best match.
+    Faster logo selection with limited concurrent analysis on thumbnails.
 
     preference options:
     - "white": High brightness + low saturation (actual white/light logos)
@@ -107,48 +119,48 @@ def pick_logo(logos: list, preference: str):
     if preference == "first":
         return logos[0]
 
-    # Analyze color properties for each logo
+    # Limit analysis to top-N candidates to reduce network/CPU work
+    TOP_N = 6
+    candidates = _sort_logos_for_analysis(logos)[:TOP_N]
+
     analyzed = []
-    for logo in logos:
-        url = logo.get("url")
+
+    def work(l: dict):
+        url = l.get("url")
         if not url:
-            continue
+            return None
+        data = analyze_logo_color(url)
+        if not data.get("valid"):
+            return None
+        return (data, l)
 
-        color_data = analyze_logo_color(url)
-        if not color_data["valid"]:
-            continue
-
-        analyzed.append((color_data, logo))
+    # Analyze concurrently for speed
+    with ThreadPoolExecutor(max_workers=min(TOP_N, 6)) as ex:
+        futures = [ex.submit(work, l) for l in candidates]
+        for f in as_completed(futures):
+            res = f.result()
+            if res:
+                analyzed.append(res)
 
     if not analyzed:
         return logos[0]  # fallback to first if analysis fails
 
     if preference == "white":
-        # White logo: maximize brightness, minimize saturation
-        # Score = brightness * (1 - saturation)
-        # This favors bright, desaturated (white/gray) logos
         def white_score(item):
             data = item[0]
-            # Normalize brightness to 0-1 scale
             brightness_norm = data["brightness"] / 255.0
-            # Invert saturation (low saturation = high score)
             desaturation = 1.0 - data["saturation"]
-            # Combined score favoring bright + desaturated
             return brightness_norm * 0.7 + desaturation * 0.3
-
         best = max(analyzed, key=white_score)
         return best[1]
 
     if preference == "color":
-        # Colored logo: maximize saturation
-        # Among saturated logos, prefer brighter ones
         def color_score(item):
             data = item[0]
             brightness_norm = data["brightness"] / 255.0
-            # Heavily weight saturation, slightly weight brightness
             return data["saturation"] * 0.8 + brightness_norm * 0.2
-
         best = max(analyzed, key=color_score)
         return best[1]
 
-    return logos[0]  # fallback: first
+    return logos[0]
+

@@ -20,6 +20,15 @@
 - [x] Multi-library support with environment variables
 - [x] TVDB/Fanart API key support
 
+## v1.4.6 (Planned)
+- [ ] Update notification on first startup (show changelog modal after version bump)
+- [ ] Template overlay caching system:
+  - [ ] Generate overlay PNG when saving template/preset (matte/fade/vignette/grain pre-rendered)
+  - [ ] Store overlays in `config/overlays/{template_id}/{preset_id}.png`
+  - [ ] Batch operations load cached overlay instead of re-rendering effects per poster
+  - [ ] Performance setting: Enable/disable overlay cache (default: enabled)
+  - [ ] Regenerate overlay when preset options change
+
 ## In Progress
 - [ ] Batch edit refinements and testing
 - [ ] Collection poster generation

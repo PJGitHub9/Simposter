@@ -310,6 +310,11 @@ const filteredLogos = computed(() => {
   } else if (logoLanguageFilter.value === 'with_lang') {
     items = items.filter((l) => !!l.language)
   }
+  // Skip SVG logos for now to avoid missing render dependencies
+  items = items.filter((l) => {
+    const url = (l.url || '').toLowerCase()
+    return !url.endsWith('.svg') && !url.includes('.svg?')
+  })
   if (!showClearArt.value) {
     items = items.filter((l) => (l.type || 'logo') === 'logo')
   }

@@ -513,14 +513,19 @@ const filteredLogos = computed(() => {
     items = items.filter((l) => {
       const lang = (l.language || '').toLowerCase()
       // Include logos with no language (universal) or English language
-      return !l.language || lang === 'en' || lang === 'eng'
-    })
-  }
-  if (!showClearArt.value) {
-    items = items.filter((l) => (l.type || 'logo') === 'logo')
-  }
+        return !l.language || lang === 'en' || lang === 'eng'
+      })
+    }
+  // Skip SVG logos for now to avoid missing render dependencies
   items = items.filter((l) => {
-    const src = (l.source || 'tmdb').toLowerCase()
+    const url = (l.url || '').toLowerCase()
+    return !url.endsWith('.svg') && !url.includes('.svg?')
+  })
+    if (!showClearArt.value) {
+      items = items.filter((l) => (l.type || 'logo') === 'logo')
+    }
+    items = items.filter((l) => {
+      const src = (l.source || 'tmdb').toLowerCase()
     if (src === 'fanart') return showFanartLogos.value
     if (src === 'tvdb') return showTvdbLogos.value
     return showTmdbLogos.value

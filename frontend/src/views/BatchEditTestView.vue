@@ -95,6 +95,16 @@ const fetchMovies = async () => {
   }
 }
 
+// Reload when library changes
+watch(currentLibrary, async (newLib, oldLib) => {
+  if (newLib === oldLib) return
+  moviesLoaded.value = false
+  moviesCache.value = []
+  movies.value = []
+  await fetchMovies()
+  await fetchHistory()
+})
+
 const fetchHistory = async () => {
   historyLoading.value = true
   try {

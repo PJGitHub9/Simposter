@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     WEBHOOK_AUTO_LABELS: str = "Overlay"
     WEBHOOK_SECRET: str = ""
 
+    # Optional: path to resvg binary for SVG rasterization fallback on systems
+    # without Cairo (e.g., Windows without GTK runtime). If empty, the app will
+    # attempt to locate resvg under ./bin/resvg(.exe) or ./tools/resvg/resvg(.exe).
+    RESVG_PATH: str = ""
+    # Optional: path to inkscape binary for SVG rasterization fallback.
+    INKSCAPE_PATH: str = ""
+
     class Config:
         env_file = str(BASE_DIR / ".env")
         env_file_encoding = "utf-8"
