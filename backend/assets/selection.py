@@ -106,7 +106,7 @@ def _sort_logos_for_analysis(logos: list) -> list:
     return sorted(logos, key=key)
 
 
-def pick_logo(logos: list, preference: str):
+def pick_logo(logos: list, preference: str, white_fallback: str = "use_next"):
     """
     Faster logo selection with limited concurrent analysis on thumbnails.
 
@@ -114,6 +114,10 @@ def pick_logo(logos: list, preference: str):
     - "white": High brightness + low saturation (actual white/light logos)
     - "color": High saturation (vibrant colored logos)
     - "first": First available logo (no analysis)
+
+    white_fallback options:
+    - "use_next": Use next available logo if white not found
+    - "skip": Return None (skip logo entirely)
     """
     if not logos:
         return None
@@ -145,6 +149,8 @@ def pick_logo(logos: list, preference: str):
                 analyzed.append(res)
 
     if not analyzed:
+        if preference == "white":
+            return None if white_fallback == "skip" else logos[0]
         return None if preference == "white" else logos[0]
 
     if preference == "white":
@@ -155,7 +161,11 @@ def pick_logo(logos: list, preference: str):
             if item[0]["saturation"] <= WHITE_SAT_MAX and item[0]["brightness"] >= WHITE_BRIGHT_MIN
         ]
         if not white_candidates:
-            return None
+            # No white logo found; apply global white fallback
+            if white_fallback == "skip":
+                return None
+            else:  # use_next
+                return logos[0]
 
         def white_score(item):
             data = item[0]

@@ -52,6 +52,7 @@ def _process_single_movie(
     base_poster_filter: str,
     base_logo_preference: str,
     base_logo_mode: str,
+    white_logo_fallback: str,
     presets_data: dict,
 ):
     """Process a single movie in the batch. Returns result dict."""
@@ -106,7 +107,7 @@ def _process_single_movie(
         # Auto-select assets
         # ---------------------------
         poster = pick_poster(posters, poster_filter)
-        logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference)
+        logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference, white_logo_fallback)
 
         poster_fallback_action_used = None
 
@@ -137,7 +138,7 @@ def _process_single_movie(
                 # Re-evaluate logos with any updated preferences from the fallback preset
                 logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
                 logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
-                logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference)
+                logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference, white_logo_fallback)
             elif fallback_action == "skip":
                 return {
                     "rating_key": rating_key,
@@ -193,7 +194,7 @@ def _process_single_movie(
                         logger.warning("[BATCH] Fallback logo preset '%s' not found for template '%s'", fallback_logo_preset, fallback_logo_template)
                 # Re-pick logo with updated preference and mode from fallback preset
                 if logo_mode != "none" and logo_url is None:
-                    logo = pick_logo(logos, logo_preference)
+                    logo = pick_logo(logos, logo_preference, white_logo_fallback)
                     if logo:
                         logger.info("[BATCH] Picked logo after fallback: preference=%s", logo_preference)
             elif fallback_logo_action == "skip":
@@ -504,6 +505,7 @@ def api_batch(req: BatchRequest):
     base_poster_filter = base_options.get("poster_filter", "all")
     base_logo_mode = base_options.get("logo_mode", "first")
     base_logo_preference = base_options.get("logo_preference") or base_logo_mode or "first"
+    white_logo_fallback = db.get_setting("fallback.white_logo_fallback") or "use_next"
     if req.preset_id:
         if req.template_id in presets_data:
             preset_list = presets_data[req.template_id]["presets"]
@@ -536,6 +538,7 @@ def api_batch(req: BatchRequest):
                 base_poster_filter,
                 base_logo_preference,
                 base_logo_mode,
+                white_logo_fallback,
                 presets_data,
             )
             future_to_idx[future] = idx

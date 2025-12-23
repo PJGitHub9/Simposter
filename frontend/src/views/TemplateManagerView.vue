@@ -28,6 +28,7 @@ const importText = ref('')
 const fallbackPosterFilter = ref('all')
 const fallbackLogoFilter = ref('all')
 const fallbackLogoMode = ref('first')
+const whiteLogoFallback = ref('use_next')
 const languagePreference = ref('en')
 const logoSource = ref('tmdb_fanart')
 const languageOptions = [
@@ -239,6 +240,7 @@ const fetchFallback = async () => {
     fallbackPosterFilter.value = data.poster_filter || 'all'
     fallbackLogoFilter.value = data.logo_filter || 'all'
     fallbackLogoMode.value = data.logo_mode || 'first'
+    whiteLogoFallback.value = data.white_logo_fallback || 'use_next'
     languagePreference.value = data.language_preference || 'en'
     logoSource.value = data.logo_source || 'tmdb_fanart'
   } catch (e) {
@@ -256,6 +258,7 @@ const saveFallback = async () => {
         poster_filter: fallbackPosterFilter.value,
         logo_filter: fallbackLogoFilter.value,
         logo_mode: fallbackLogoMode.value,
+        white_logo_fallback: whiteLogoFallback.value,
         language_preference: languagePreference.value,
         logo_source: logoSource.value
       })
@@ -433,6 +436,14 @@ onMounted(async () => {
                 <option value="none">No logo</option>
               </select>
               <span class="help small">Logo color detection uses HSV analysis for accurate selection.</span>
+            </label>
+            <label>
+              <span class="label-text">White logo fallback (if white not available)</span>
+              <select v-model="whiteLogoFallback">
+                <option value="use_next">Use next available logo</option>
+                <option value="skip">Continue with render (no logo)</option>
+              </select>
+              <span class="help small">Applied when a template requests white logo but none qualify.</span>
             </label>
             <label>
               <span class="label-text">Logo source priority</span>
@@ -712,6 +723,9 @@ onMounted(async () => {
               </label>
             </div>
           </div>
+          <p v-if="(modalPreset?.preset.options?.logo_preference === 'white' || modalPreset?.preset.options?.logo_mode === 'white')" class="help small">
+            <strong>Note:</strong> Global white logo fallback will apply if a white logo is not available before this individual fallback setting is checked.
+          </p>
         </div>
         <div class="modal-actions">
           <button class="secondary" @click="showFallbackModal = false">Cancel</button>
