@@ -4,7 +4,7 @@ import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useSettingsStore } from '@/stores/settings'
 
-type Preset = { id: string; name: string; options: Record<string, any> }
+type Preset = { id: string; name: string; options: Record<string, unknown> }
 type TemplatePresets = Record<string, { presets: Preset[] }>
 type PresetFallback = {
   fallbackPosterAction?: 'continue' | 'skip' | 'template'
@@ -116,11 +116,6 @@ const handleExportAll = async () => {
   } finally {
     exporting.value = false
   }
-}
-
-const exportSingle = (templateId: string, preset: Preset) => {
-  const payload: TemplatePresets = { [templateId]: { presets: [preset] } }
-  importText.value = JSON.stringify(payload, null, 2)
 }
 
 const openFallbackModal = (templateId: string, preset: Preset) => {
@@ -278,7 +273,7 @@ const fetchMovies = async () => {
     const res = await fetch(`${apiBase}/api/movies`)
     if (res.ok) {
       const data = await res.json()
-      const list = Array.isArray(data) ? data.map((m: any) => ({ key: m.key, title: m.title })) : []
+      const list = Array.isArray(data) ? data.map((m: { key: string; title: string }) => ({ key: m.key, title: m.title })) : []
       movies.value = list
       if (selectedPreviewMovie.value && !list.some((m) => m.key === selectedPreviewMovie.value?.key)) {
         selectedPreviewMovie.value = null
@@ -351,7 +346,21 @@ const previewPreset = async (templateId: string, preset: Preset) => {
         disableOverlayCache: !settings.performance.value.useOverlayCache
       })
     })
-    if (!res.ok) throw new Error(`Preview failed (${res.status})`)
+    if (!res.ok) {
+      let message = `Preview failed (${res.status})`
+      try {
+        const err = await res.json()
+        if (err?.detail) {
+          message = err.detail
+          if (res.status === 400 || res.status === 404) {
+            message += ' — poster fallback stopped the render, so logo fallback was not applied.'
+          }
+        }
+      } catch {
+        /* ignore parse issues */
+      }
+      throw new Error(message)
+    }
     const data = await res.json()
     previewUrl.value = `data:image/jpeg;base64,${data.image_base64}`
   } catch (e) {

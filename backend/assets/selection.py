@@ -77,15 +77,17 @@ def compute_logo_brightness(url: str) -> float:
 # ---------------------------
 
 def pick_poster(posters: list, filter_mode: str):
-    """Exact poster-selection matching the frontend."""
+    """Exact poster-selection matching the frontend, strict on requested type."""
     if not posters:
         return None
 
     if filter_mode == "textless":
-        return next((p for p in posters if not p.get("has_text")), posters[0])
+        # Require a textless poster; if none, return None so caller can trigger fallback
+        return next((p for p in posters if not p.get("has_text")), None)
 
     if filter_mode == "text":
-        return next((p for p in posters if p.get("has_text")), posters[0])
+        # Require a poster with text; if none, return None so caller can trigger fallback
+        return next((p for p in posters if p.get("has_text")), None)
 
     return posters[0]  # "all"
 
@@ -143,15 +145,24 @@ def pick_logo(logos: list, preference: str):
                 analyzed.append(res)
 
     if not analyzed:
-        return logos[0]  # fallback to first if analysis fails
+        return None if preference == "white" else logos[0]
 
     if preference == "white":
+        WHITE_SAT_MAX = 0.25
+        WHITE_BRIGHT_MIN = 60.0
+        white_candidates = [
+            item for item in analyzed
+            if item[0]["saturation"] <= WHITE_SAT_MAX and item[0]["brightness"] >= WHITE_BRIGHT_MIN
+        ]
+        if not white_candidates:
+            return None
+
         def white_score(item):
             data = item[0]
             brightness_norm = data["brightness"] / 255.0
             desaturation = 1.0 - data["saturation"]
             return brightness_norm * 0.7 + desaturation * 0.3
-        best = max(analyzed, key=white_score)
+        best = max(white_candidates, key=white_score)
         return best[1]
 
     if preference == "color":

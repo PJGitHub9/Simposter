@@ -60,7 +60,7 @@ def _process_single_movie(
         preset_id = req.preset_id
         render_options_base = dict(base_options)
         poster_filter = base_poster_filter
-        logo_preference = base_logo_preference
+        logo_preference = render_options_base.get("logo_preference") or render_options_base.get("logo_mode") or base_logo_preference
         logo_mode = base_logo_mode
 
         logger.info("[BATCH] Start rating_key=%s template=%s", rating_key, template_id)
@@ -108,9 +108,12 @@ def _process_single_movie(
         poster = pick_poster(posters, poster_filter)
         logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference)
 
-        # Fallback handling for poster preference
+        poster_fallback_action_used = None
+
+        # Fallback handling for poster preference (runs before any logo fallback)
         if not poster:
             fallback_action = render_options_base.get("fallbackPosterAction") or "continue"
+            poster_fallback_action_used = fallback_action
             fallback_template = render_options_base.get("fallbackPosterTemplate")
             fallback_preset = render_options_base.get("fallbackPosterPreset")
             if fallback_action == "template" and fallback_template:
@@ -123,7 +126,7 @@ def _process_single_movie(
                         # Let fallback preset options override original options (matching preview behavior)
                         render_options_base = {**render_options_base, **fp_opts}
                         poster_filter = render_options_base.get("poster_filter", poster_filter)
-                        logo_preference = render_options_base.get("logo_preference", logo_preference)
+                        logo_preference = render_options_base.get("logo_preference") or render_options_base.get("logo_mode") or logo_preference
                         logo_mode = render_options_base.get("logo_mode", logo_mode)
                         preset_id = fallback_preset
                         logger.info("[BATCH] Applied fallback poster template '%s' preset '%s'", fallback_template, fallback_preset)
@@ -131,6 +134,10 @@ def _process_single_movie(
                         logger.warning("[BATCH] Fallback preset '%s' not found for template '%s'", fallback_preset, fallback_template)
                 # Re-pick poster with updated filter from fallback preset
                 poster = pick_poster(posters, poster_filter)
+                # Re-evaluate logos with any updated preferences from the fallback preset
+                logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
+                logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
+                logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference)
             elif fallback_action == "skip":
                 return {
                     "rating_key": rating_key,
@@ -145,8 +152,12 @@ def _process_single_movie(
         poster_url = poster.get("url")
         # Initialize logo_url for fallback logic
         logo_url = None
+
+        # Only run logo fallback when poster handling chose to continue
+        allow_logo_fallback = poster_fallback_action_used in (None, "continue")
+
         # Logo fallback handling
-        if not logo and logo_mode != "none":
+        if allow_logo_fallback and not logo and logo_mode != "none":
             fallback_logo_action = render_options_base.get("fallbackLogoAction") or "continue"
             fallback_logo_template = render_options_base.get("fallbackLogoTemplate")
             fallback_logo_preset = render_options_base.get("fallbackLogoPreset")
@@ -160,7 +171,7 @@ def _process_single_movie(
                         # Let fallback preset options override original options (matching preview behavior)
                         render_options_base = {**render_options_base, **fp_opts}
                         poster_filter = render_options_base.get("poster_filter", poster_filter)
-                        logo_preference = render_options_base.get("logo_preference", logo_preference)
+                        logo_preference = render_options_base.get("logo_preference") or render_options_base.get("logo_mode") or logo_preference
                         logo_mode = render_options_base.get("logo_mode", logo_mode)
                         preset_id = fallback_logo_preset
                         logger.info("[BATCH] Applied fallback logo template '%s' preset '%s'", fallback_logo_template, fallback_logo_preset)
@@ -491,8 +502,8 @@ def api_batch(req: BatchRequest):
     presets_data = load_presets() or {}
     base_options = dict(req.options or {})
     base_poster_filter = base_options.get("poster_filter", "all")
-    base_logo_preference = base_options.get("logo_preference", "first")
-    base_logo_mode = base_options.get("logo_mode", "stock")
+    base_logo_mode = base_options.get("logo_mode", "first")
+    base_logo_preference = base_options.get("logo_preference") or base_logo_mode or "first"
     if req.preset_id:
         if req.template_id in presets_data:
             preset_list = presets_data[req.template_id]["presets"]
@@ -501,8 +512,8 @@ def api_batch(req: BatchRequest):
                 preset_opts = preset.get("options", {})
                 base_options = {**preset_opts, **base_options}
                 base_poster_filter = base_options.get("poster_filter", base_poster_filter)
-                base_logo_preference = base_options.get("logo_preference", base_logo_preference)
                 base_logo_mode = base_options.get("logo_mode", base_logo_mode)
+                base_logo_preference = base_options.get("logo_preference") or base_logo_mode or base_logo_preference
                 logger.debug("[BATCH] Applied preset '%s' options for template '%s'", req.preset_id, req.template_id)
             else:
                 logger.warning("[BATCH] Preset '%s' not found for template '%s'", req.preset_id, req.template_id)
