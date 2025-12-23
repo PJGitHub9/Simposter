@@ -83,6 +83,19 @@ def _list_log_files() -> List[Dict[str, str]]:
                 })
             except OSError:
                 continue
+    
+    # Respect maxBackups setting: only show current log + maxBackups archived logs
+    try:
+        config = _read_log_config()
+        max_backups = config.maxBackups
+        # Separate current from archived
+        current = [f for f in files if f.get("current")]
+        archived = [f for f in files if not f.get("current")]
+        # Limit archived logs to maxBackups
+        files = current + archived[:max_backups]
+    except Exception:
+        pass  # If config read fails, show all files
+    
     return files
 
 
