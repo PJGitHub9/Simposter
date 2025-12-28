@@ -86,7 +86,7 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
           />
         </label>
         <div class="field-hint">
-          Use template variables: {title}, {year}
+          Use template variables: {title}, {year}, {season}
         </div>
       </div>
 

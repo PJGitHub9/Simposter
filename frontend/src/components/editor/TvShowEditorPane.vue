@@ -1,5 +1,5 @@
-<script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+﻿<script setup lang="ts">
+import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import type { MovieInput } from '../../services/types'
 import { useRenderService } from '../../services/render'
 import { usePresetService } from '../../services/presets'
@@ -51,6 +51,10 @@ const normalizeLogoMode = (mode: unknown): 'original' | 'match' | 'hex' | 'none'
 
 const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
+// Cache poster selection per season/series so switching targets doesn't reset the choice
+const selectedPosterCache = ref<Record<string, string>>({})
+// Cache full settings per season/series to prevent cross-contamination
+const settingsCache = ref<Record<string, any>>({})
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
 const showBoundingBox = ref(false)
@@ -189,6 +193,103 @@ const loading = render.loading
 const error = render.error
 const lastPreview = render.lastPreview
 
+// Helpers to isolate per-target settings
+const getCurrentSettings = () => ({
+  selectedPoster: selectedPoster.value,
+  selectedLogo: selectedLogo.value,
+  posterFilter: posterFilter.value,
+  posterLanguageFilter: posterLanguageFilter.value,
+  logoPreference: logoPreference.value,
+  logoLanguageFilter: logoLanguageFilter.value,
+  showTmdbPosters: showTmdbPosters.value,
+  showFanartPosters: showFanartPosters.value,
+  showTvdbPosters: showTvdbPosters.value,
+  showTmdbLogos: showTmdbLogos.value,
+  showFanartLogos: showFanartLogos.value,
+  showTvdbLogos: showTvdbLogos.value,
+  showClearArt: showClearArt.value,
+  logoMode: logoMode.value,
+  logoHex: logoHex.value,
+  options: JSON.parse(JSON.stringify(options.value)),
+  textOverlayEnabled: textOverlayEnabled.value,
+  customText: customText.value,
+  fontFamily: fontFamily.value,
+  fontSize: fontSize.value,
+  fontWeight: fontWeight.value,
+  textColor: textColor.value,
+  textAlign: textAlign.value,
+  textTransform: textTransform.value,
+  letterSpacing: letterSpacing.value,
+  lineHeight: lineHeight.value,
+  positionY: positionY.value,
+  shadowEnabled: shadowEnabled.value,
+  shadowBlur: shadowBlur.value,
+  shadowOffsetX: shadowOffsetX.value,
+  shadowOffsetY: shadowOffsetY.value,
+  shadowColor: shadowColor.value,
+  shadowOpacity: shadowOpacity.value,
+  strokeEnabled: strokeEnabled.value,
+  strokeWidth: strokeWidth.value,
+  strokeColor: strokeColor.value,
+})
+
+const applySettings = (s: any) => {
+  if (!s) return
+  if (s.selectedPoster !== undefined) selectedPoster.value = s.selectedPoster
+  if (s.selectedLogo !== undefined) selectedLogo.value = s.selectedLogo
+  if (s.posterFilter !== undefined) posterFilter.value = s.posterFilter
+  if (s.posterLanguageFilter !== undefined) posterLanguageFilter.value = s.posterLanguageFilter
+  if (s.logoPreference !== undefined) logoPreference.value = s.logoPreference
+  if (s.logoLanguageFilter !== undefined) logoLanguageFilter.value = s.logoLanguageFilter
+  if (s.showTmdbPosters !== undefined) showTmdbPosters.value = s.showTmdbPosters
+  if (s.showFanartPosters !== undefined) showFanartPosters.value = s.showFanartPosters
+  if (s.showTvdbPosters !== undefined) showTvdbPosters.value = s.showTvdbPosters
+  if (s.showTmdbLogos !== undefined) showTmdbLogos.value = s.showTmdbLogos
+  if (s.showFanartLogos !== undefined) showFanartLogos.value = s.showFanartLogos
+  if (s.showTvdbLogos !== undefined) showTvdbLogos.value = s.showTvdbLogos
+  if (s.showClearArt !== undefined) showClearArt.value = s.showClearArt
+  if (s.logoMode !== undefined) logoMode.value = s.logoMode
+  if (s.logoHex !== undefined) logoHex.value = s.logoHex
+  if (s.options) Object.assign(options.value, s.options)
+  if (s.textOverlayEnabled !== undefined) textOverlayEnabled.value = s.textOverlayEnabled
+  if (s.customText !== undefined) customText.value = s.customText
+  if (s.fontFamily !== undefined) fontFamily.value = s.fontFamily
+  if (s.fontSize !== undefined) fontSize.value = s.fontSize
+  if (s.fontWeight !== undefined) fontWeight.value = s.fontWeight
+  if (s.textColor !== undefined) textColor.value = s.textColor
+  if (s.textAlign !== undefined) textAlign.value = s.textAlign
+  if (s.textTransform !== undefined) textTransform.value = s.textTransform
+  if (s.letterSpacing !== undefined) letterSpacing.value = s.letterSpacing
+  if (s.lineHeight !== undefined) lineHeight.value = s.lineHeight
+  if (s.positionY !== undefined) positionY.value = s.positionY
+  if (s.shadowEnabled !== undefined) shadowEnabled.value = s.shadowEnabled
+  if (s.shadowBlur !== undefined) shadowBlur.value = s.shadowBlur
+  if (s.shadowOffsetX !== undefined) shadowOffsetX.value = s.shadowOffsetX
+  if (s.shadowOffsetY !== undefined) shadowOffsetY.value = s.shadowOffsetY
+  if (s.shadowColor !== undefined) shadowColor.value = s.shadowColor
+  if (s.shadowOpacity !== undefined) shadowOpacity.value = s.shadowOpacity
+  if (s.strokeEnabled !== undefined) strokeEnabled.value = s.strokeEnabled
+  if (s.strokeWidth !== undefined) strokeWidth.value = s.strokeWidth
+  if (s.strokeColor !== undefined) strokeColor.value = s.strokeColor
+}
+
+const currentTargetKey = computed(() => currentSeason.value?.key || props.movie.key)
+
+const saveCurrentSettings = () => {
+  const key = currentTargetKey.value
+  settingsCache.value[key] = getCurrentSettings()
+  if (selectedPoster.value) selectedPosterCache.value[key] = selectedPoster.value
+}
+
+const restoreSettingsForCurrent = () => {
+  const key = currentTargetKey.value
+  const cached = settingsCache.value[key]
+  if (cached) {
+    applySettings(cached)
+  }
+  restorePosterForCurrentSeason()
+}
+
 const ensurePosterSelected = () => {
   if (selectedPoster.value) return
   const first = posters.value[0]
@@ -234,6 +335,8 @@ async function switchToRenderedPreview(index: number) {
   if (index < 0 || index >= renderedPreviews.value.length) return
   activePreviewIndex.value = index
 
+  saveCurrentSettings()
+
   const preview = renderedPreviews.value[index]
   if (preview) {
     lastPreview.value = preview.imageUrl
@@ -242,6 +345,7 @@ async function switchToRenderedPreview(index: number) {
       currentSeasonIndex.value = seasonIndex
       // Load season-specific assets when switching to this preview
       await fetchImagesForCurrentSeason()
+      restoreSettingsForCurrent()
     }
   }
 }
@@ -541,7 +645,18 @@ const filteredLogos = computed(() => {
   return [...items].sort((a, b) => scoreLogo(b) - scoreLogo(a))
 })
 
-const optionsPayload = computed(() => ({
+const optionsPayload = computed(() => {
+  // Generate season text (e.g., "Season 1" or "Specials")
+  let seasonText = ""
+  if (currentSeason.value) {
+    if (currentSeason.value.index === 0) {
+      seasonText = "Specials"
+    } else {
+      seasonText = `Season ${currentSeason.value.index}`
+    }
+  }
+
+  return {
   poster_zoom: options.value.posterZoom / 100,
   poster_shift_y: options.value.posterShiftY / 100,
   matte_height_ratio: options.value.matteHeight / 100,
@@ -583,8 +698,10 @@ const optionsPayload = computed(() => ({
   shadow_opacity: shadowOpacity.value / 100,
   stroke_enabled: strokeEnabled.value,
   stroke_width: strokeWidth.value,
-  stroke_color: strokeColor.value
-}))
+  stroke_color: strokeColor.value,
+  season_text: seasonText
+}
+})
 
 const bgUrl = computed(() => selectedPoster.value || '')
 const logoUrl = computed(() => (logoMode.value === 'none' ? '' : selectedLogo.value || ''))
@@ -885,6 +1002,7 @@ const fetchImagesForCurrentSeason = async () => {
       logos.value = cached.logos || []
       applyPosterFilter()
       applyLogoPreference()
+      restoreSettingsForCurrent()
       return
     }
 
@@ -896,16 +1014,16 @@ const fetchImagesForCurrentSeason = async () => {
       seasonAssetsCache.value[season.key] = {
         posters: imgs.posters || [],
         logos: imgs.logos || [],
-      backdrops: imgs.backdrops || []
+        backdrops: imgs.backdrops || []
+      }
+      posters.value = imgs.posters || []
+      logos.value = imgs.logos || []
+      applyPosterFilter()
+      applyLogoPreference()
+      restoreSettingsForCurrent()
+    } catch (err) {
+      console.error('Failed to fetch season images:', err)
     }
-    posters.value = imgs.posters || []
-    logos.value = imgs.logos || []
-    applyPosterFilter()
-    applyLogoPreference()
-    ensurePosterSelected()
-  } catch (err) {
-    console.error('Failed to fetch season images:', err)
-  }
 }
 
 const fetchLabels = async () => {
@@ -993,6 +1111,9 @@ const toggleLabel = (label: string) => {
 
 const doPreview = async () => {
   if (!bgUrl.value) return
+  // Cache current settings before rendering
+  saveCurrentSettings()
+
   await render.preview(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
 }
 
@@ -1102,15 +1223,41 @@ async function fetchSeasons() {
 
 // Toggle season selection
 async function toggleSeasonSelection(seasonKey: string) {
-  const season = seasons.value.find(s => s.key === seasonKey)
-  // Disable season selection for now (coming soon)
-  if (season && !season.isSeries) return
+  // Cache current settings before switching
+  saveCurrentSettings()
 
-  const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
-  selectedSeasons.value = new Set([seriesKey])
-  currentSeasonIndex.value = 0
-  await fetchImagesForCurrentSeason()
-  syncRenderedPlaceholders()
+  const season = seasons.value.find(s => s.key === seasonKey)
+  if (!season) return
+
+  // Toggle selection of this season
+  const newSelection = new Set(selectedSeasons.value)
+  if (newSelection.has(seasonKey)) {
+    newSelection.delete(seasonKey)
+  } else {
+    newSelection.add(seasonKey)
+  }
+  
+  selectedSeasons.value = newSelection
+  
+  // If at least one season is selected, set current season to the first selected one
+  if (newSelection.size > 0) {
+    const selected = Array.from(newSelection)
+    currentSeasonIndex.value = 0
+    // Wait for computed property to update before fetching images
+    await nextTick()
+    await fetchImagesForCurrentSeason()
+    restoreSettingsForCurrent()
+    syncRenderedPlaceholders()
+  } else {
+    // Always keep at least the series entry selected
+    const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+    selectedSeasons.value = new Set([seriesKey])
+    currentSeasonIndex.value = 0
+    await nextTick()
+    await fetchImagesForCurrentSeason()
+    restoreSettingsForCurrent()
+    syncRenderedPlaceholders()
+  }
 }
 
 // Select all seasons
@@ -1820,18 +1967,44 @@ watch(tmdbId, () => {
         </div>
       </div>
 
+      <!-- Rendered previews above season/series selector -->
+      <div v-if="renderedPreviews.length" class="rendered-previews-panel">
+        <div class="carousel-label">
+          Rendered Previews ({{ renderedPreviews.filter(p => p.imageUrl).length }})
+          <span class="carousel-hint">Scroll to cycle • Click to load</span>
+        </div>
+        <div class="carousel-scroll">
+          <div
+            v-for="(preview, index) in renderedPreviews"
+            :key="preview.seasonKey"
+            class="carousel-item"
+            :class="{ active: index === activePreviewIndex }"
+            @click="switchToRenderedPreview(index)"
+            :title="preview.seasonTitle"
+          >
+            <template v-if="preview.imageUrl">
+              <img :src="preview.imageUrl" :alt="preview.seasonTitle" class="carousel-thumb" />
+            </template>
+            <template v-else>
+              <div class="carousel-thumb placeholder">
+                <span>No render yet</span>
+              </div>
+            </template>
+            <div class="carousel-item-label">{{ preview.seasonTitle }}</div>
+          </div>
+        </div>
+      </div>
+
       <div class="season-list">
-        <div class="season-note">Season posters coming soon</div>
         <div
           v-for="season in seasons"
           :key="season.key"
           class="season-item"
           :class="{
             selected: selectedSeasons.has(season.key),
-            active: currentSeason && currentSeason.key === season.key,
-            disabled: !season.isSeries
+            active: currentSeason && currentSeason.key === season.key
           }"
-          @click="season.isSeries && toggleSeasonSelection(season.key)"
+          @click="toggleSeasonSelection(season.key)"
         >
           <div class="season-thumb-wrap">
             <img
@@ -1855,8 +2028,7 @@ watch(tmdbId, () => {
                 <input
                   type="checkbox"
                   :checked="selectedSeasons.has(season.key)"
-                  :disabled="!season.isSeries"
-                  @click.stop="season.isSeries && toggleSeasonSelection(season.key)"
+                  @click.stop="toggleSeasonSelection(season.key)"
                 />
               </div>
             </div>
@@ -1926,33 +2098,6 @@ watch(tmdbId, () => {
             <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
           </div>
 
-          <!-- Rendered Preview Carousel - Hidden until season poster support is added -->
-          <div v-if="false" class="preview-carousel">
-            <div class="carousel-label">
-              Rendered Previews ({{ renderedPreviews.filter(p => p.imageUrl).length }})
-              <span class="carousel-hint">Scroll to cycle • Click to load</span>
-            </div>
-            <div class="carousel-scroll">
-              <div
-                v-for="(preview, index) in renderedPreviews"
-                :key="preview.seasonKey"
-                class="carousel-item"
-                :class="{ active: index === activePreviewIndex }"
-                @click="switchToRenderedPreview(index)"
-                :title="preview.seasonTitle"
-              >
-                <template v-if="preview.imageUrl">
-                  <img :src="preview.imageUrl" :alt="preview.seasonTitle" class="carousel-thumb" />
-                </template>
-                <template v-else>
-                  <div class="carousel-thumb placeholder">
-                    <span>No render yet</span>
-                  </div>
-                </template>
-                <div class="carousel-item-label">{{ preview.seasonTitle }}</div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -2888,7 +3033,7 @@ button:disabled {
   background: rgba(0, 0, 0, 0.3);
   border-radius: 12px;
   border: 1px solid var(--border);
-  width: min(70vw, 556px);
+  width: min(100%, 556px);
   max-height: 80vh;
   aspect-ratio: 9 / 16;
 }

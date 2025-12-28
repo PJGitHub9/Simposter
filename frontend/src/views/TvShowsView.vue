@@ -13,6 +13,8 @@ type TvShow = {
   addedAt?: number
   poster?: string | null
   mediaType?: 'movie' | 'tv-show'
+  tmdb_id?: number
+  tvdb_id?: number
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything

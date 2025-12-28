@@ -537,3 +537,47 @@ def api_tmdb_tv_details(tmdb_id: int):
         return details
     except TMDBError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/plex/upload-season-poster")
+async def api_upload_season_poster(request: Request):
+    """Upload a season poster to Plex directly from an image URL."""
+    import requests
+    from io import BytesIO
+    
+    try:
+        body = await request.json()
+        rating_key = body.get("rating_key")
+        image_url = body.get("image_url")
+        
+        if not rating_key or not image_url:
+            raise HTTPException(status_code=400, detail="rating_key and image_url are required")
+        
+        if not settings.PLEX_URL or not settings.PLEX_TOKEN:
+            raise HTTPException(status_code=400, detail="PLEX_URL and PLEX_TOKEN must be configured")
+        
+        # Download the image
+        logger.info(f"[SEASON] Downloading season poster from {image_url}")
+        img_response = requests.get(image_url, timeout=30)
+        img_response.raise_for_status()
+        
+        # Upload to Plex
+        plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+        headers = {
+            "X-Plex-Token": settings.PLEX_TOKEN,
+            "Content-Type": "image/jpeg",
+        }
+        
+        logger.info(f"[SEASON] Uploading poster to Plex for season {rating_key}")
+        upload_response = requests.post(plex_url, headers=headers, data=img_response.content, timeout=20)
+        upload_response.raise_for_status()
+        
+        logger.info(f"[SEASON] Successfully uploaded poster for season {rating_key}")
+        return {"status": "ok", "message": "Season poster uploaded successfully"}
+        
+    except requests.RequestException as e:
+        logger.error(f"[SEASON] Failed to upload poster: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload poster: {str(e)}")
+    except Exception as e:
+        logger.error(f"[SEASON] Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
