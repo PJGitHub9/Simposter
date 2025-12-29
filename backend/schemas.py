@@ -47,6 +47,7 @@ class PresetSaveRequest(BaseModel):
     template_id: str = "default"
     preset_id: str
     options: Dict[str, Any]
+    season_options: Optional[Dict[str, Any]] = None
 
 
 class PresetDeleteRequest(BaseModel):

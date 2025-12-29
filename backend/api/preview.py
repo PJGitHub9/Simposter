@@ -50,6 +50,9 @@ def api_preview(req: PreviewRequest):
         template_id = req.template_id
 
         if req.preset_id:
+            logger.info("[PREVIEW] Loading preset '%s' for template '%s'", req.preset_id, template_id)
+            logger.info("[PREVIEW] Incoming request options keys: %s", list(render_options.keys()))
+            logger.info("[PREVIEW] season_text in request: %s", render_options.get("season_text"))
             presets = load_presets()
 
             if template_id in presets:
@@ -57,8 +60,25 @@ def api_preview(req: PreviewRequest):
                 preset = next((p for p in preset_list if p["id"] == req.preset_id), None)
 
                 if preset:
-                    # Merge preset options (request options take precedence so sliders work)
-                    preset_options = preset.get("options", {})
+                    # Decide whether to use season-specific options based on season_text
+                    is_season = False
+                    try:
+                        st = (render_options.get("season_text") or "").strip()
+                        is_season = len(st) > 0
+                    except Exception:
+                        is_season = False
+
+                    # Prefer season_options when rendering a season target
+                    if is_season and isinstance(preset.get("season_options"), dict):
+                        preset_options = preset.get("season_options", {})
+                        logger.info("[PREVIEW] Using season_options for preset '%s' (season_text='%s')", req.preset_id, st)
+                        logger.info("[PREVIEW] season_options from DB: text_overlay_enabled=%s custom_text=%s logo_mode=%s", 
+                                    preset_options.get("text_overlay_enabled"), 
+                                    preset_options.get("custom_text"), 
+                                    preset_options.get("logo_mode"))
+                    else:
+                        preset_options = preset.get("options", {})
+                        logger.info("[PREVIEW] Using regular options for preset '%s' (is_season=%s)", req.preset_id, is_season)
                     
                     # Remove deprecated disableOverlayCache flag from preset options
                     # (overlay cache now respects global settings)
@@ -66,10 +86,12 @@ def api_preview(req: PreviewRequest):
                         del preset_options["disableOverlayCache"]
                         logger.info("[PREVIEW] Removed deprecated disableOverlayCache flag from preset '%s'", req.preset_id)
                     
+                    # Merge preset options (request options take precedence so sliders work)
                     render_options = {**preset_options, **render_options}
                     poster_filter = render_options.get("poster_filter", preset_options.get("poster_filter", "all"))
                     logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or preset_options.get("logo_preference") or preset_options.get("logo_mode") or "first"
-                    logger.debug("[PREVIEW] Applied preset '%s' options: %s", req.preset_id, preset_options)
+                    logger.debug("[PREVIEW] Applied preset '%s' options (is_season=%s): %s", req.preset_id, is_season, preset_options)
+                    logger.info("[PREVIEW] Effective opts: text_overlay_enabled=%s custom_text=%s logo_mode=%s", render_options.get("text_overlay_enabled"), render_options.get("custom_text"), render_options.get("logo_mode"))
                     logo_override = render_options.get("logo_url") or render_options.get("logoUrl")
                     if logo_override:
                         logo_url = logo_override

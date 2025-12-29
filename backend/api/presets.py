@@ -120,10 +120,11 @@ def api_save_preset(req: PresetSaveRequest):
     template_id = req.template_id or "default"
     preset_id = req.preset_id
     options = _apply_global_template_defaults(req.options)
+    season_options = req.season_options or {}
 
     try:
         # Save to database
-        db.save_preset(template_id, preset_id, preset_id, options)
+        db.save_preset(template_id, preset_id, preset_id, options, season_options)
         logger.info(f"[PRESETS] Saved preset {preset_id} for template {template_id}")
         
         # Generate and save overlay cache

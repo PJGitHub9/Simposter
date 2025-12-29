@@ -285,17 +285,22 @@ const saveCurrentSettings = () => {
 const restoreSettingsForCurrent = () => {
   const key = currentTargetKey.value
   const cached = settingsCache.value[key]
+  const isSeason = currentSeason.value && !currentSeason.value.isSeries
   
-  if (cached) {
+  console.log('[RESTORE] Target:', key, 'isSeason:', isSeason, 'hasCached:', !!cached)
+  
+  // For seasons, always apply preset season_options first (they come from DB)
+  // Then optionally apply cached manual edits on top
+  if (isSeason) {
+    console.log('[RESTORE] Season detected, applying preset season_options')
+    applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true })
+    // If there were manual edits cached, you could apply them here
+    // For now, we prioritize the DB season_options over manual edits
+  } else if (cached) {
+    console.log('[RESTORE] Applying cached settings for non-season')
     applySettings(cached)
-  } else if (currentSeason.value && !currentSeason.value.isSeries) {
-    // Apply default settings for seasons: no logo, custom text = "{season}"
-    applySettings({
-      logoMode: 'none',
-      customText: '{season}',
-      textOverlayEnabled: true
-    })
   }
+  
   restorePosterForCurrentSeason()
 }
 
@@ -668,9 +673,9 @@ const filteredLogos = computed(() => {
 })
 
 const optionsPayload = computed(() => {
-  // Generate season text (e.g., "Season 1" or "Specials")
+  // Generate season text (e.g., "Season 1" or "Specials") - only for actual seasons, not series
   let seasonText = ""
-  if (currentSeason.value) {
+  if (currentSeason.value && !currentSeason.value.isSeries) {
     if (currentSeason.value.index === 0) {
       seasonText = "Specials"
     } else {
@@ -1106,10 +1111,13 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
     // Use current season key if available, otherwise use series key
     const targetKey = currentSeason.value?.key || props.movie.key
     
+    console.log('[EXISTING POSTER] Fetching for target:', targetKey, 'forceRefresh:', refreshFlag)
+    
     const res = await fetch(`${apiBase}/api/movie/${targetKey}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
     if (!res.ok) {
       existingPoster.value = null
       updateGlobalPosterCache(targetKey, null)
+      posterRefreshKey.value += 1
       return
     }
     const data = await res.json()
@@ -1119,6 +1127,8 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
         ? data.url
         : `${apiBase}${data.url}`
       updateGlobalPosterCache(targetKey, existingPoster.value)
+
+      console.log('[EXISTING POSTER] Updated to:', existingPoster.value)
 
       // Update the thumbnail for the target season/series in the left list
       seasons.value = seasons.value.map(s => s.key === targetKey ? { ...s, thumb: existingPoster.value || s.thumb } : s)
@@ -1132,6 +1142,7 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
     console.error('Failed to fetch existing poster:', err)
     existingPoster.value = null
     updateGlobalPosterCache(props.movie.key, null)
+    posterRefreshKey.value += 1
   }
 }
 
@@ -1146,6 +1157,18 @@ const doPreview = async () => {
   if (!bgUrl.value) return
   // Cache current settings before rendering
   saveCurrentSettings()
+
+  console.log('[PREVIEW] Starting with:', {
+    target: currentSeason.value?.key || props.movie.key,
+    logoMode: logoMode.value,
+    textOverlayEnabled: textOverlayEnabled.value,
+    customText: customText.value,
+    fontSize: fontSize.value
+  })
+  console.log('[PREVIEW] Full optionsPayload:', optionsPayload.value)
+  console.log('[PREVIEW] optionsPayload.text_overlay_enabled:', optionsPayload.value.text_overlay_enabled)
+  console.log('[PREVIEW] optionsPayload.custom_text:', optionsPayload.value.custom_text)
+  console.log('[PREVIEW] optionsPayload.season_text:', optionsPayload.value.season_text)
 
   await render.preview(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
 }
@@ -1433,11 +1456,31 @@ watch(logoPreference, () => {
   applyLogoPreference()
 })
 
-const applyPresetOptions = (id: string) => {
-  const p = presets.value.find((x) => x.id === id)
-  if (!p?.options) return
+type PresetApplyOptions = {
+  // Force applying season overrides even if we already have cached season edits
+  forceSeasonOverrides?: boolean
+}
 
-  const o = p.options
+const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
+  const p = presets.value.find((x) => x.id === id)
+  if (!p) return
+
+    console.log('[PRESET APPLY] Found preset:', p.id, 'name:', (p as any).name)
+    console.log('[PRESET APPLY] has season_options:', !!(p as any).season_options)
+    if ((p as any).season_options) {
+      console.log('[PRESET APPLY] season_options:', (p as any).season_options)
+    }
+
+  const isSeason = !!(currentSeason.value && !currentSeason.value.isSeries)
+  const baseOptions = isSeason && (p as any).season_options ? (p as any).season_options : p.options
+  if (!baseOptions) return
+
+    console.log('[PRESET APPLY] isSeason:', isSeason, 'using:', baseOptions === (p as any).season_options ? 'season_options' : 'regular options')
+    console.log('[PRESET APPLY] baseOptions.text_overlay_enabled:', baseOptions.text_overlay_enabled, 'custom_text:', baseOptions.custom_text)
+
+  const o = baseOptions
+  const currentKey = currentTargetKey.value
+  const cached = settingsCache.value[currentKey]
 
   // Reset text overlay defaults before applying preset values
   textOverlayEnabled.value = false
@@ -1507,18 +1550,13 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
     logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
   }
-  // Respect season-level "no logo" choice; do not override from preset
-  const key = currentTargetKey.value
-  const cached = settingsCache.value[key]
-  const shouldKeepNoLogo = !!(currentSeason.value && !currentSeason.value.isSeries && cached && cached.logoMode === 'none')
-  if (!shouldKeepNoLogo) {
-    logoMode.value = normalizeLogoMode(o.logo_mode)
-  }
+  logoMode.value = normalizeLogoMode(o.logo_mode)
   if (typeof o.logo_hex === 'string') {
     logoHex.value = o.logo_hex
   }
 
   // Load text overlay settings (enable/disable + attributes)
+  console.log('[PRESET APPLY] Loading text overlay from baseOptions - text_overlay_enabled:', o.text_overlay_enabled, 'custom_text:', o.custom_text)
   textOverlayEnabled.value = !!o.text_overlay_enabled
   if (typeof o.custom_text === 'string') customText.value = o.custom_text
   if (typeof o.font_family === 'string') fontFamily.value = o.font_family
@@ -1539,6 +1577,24 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
   if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
   if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
+
+  // Season-specific overrides: apply AFTER loading from baseOptions
+  // Only needed if season_options don't exist in the preset (legacy presets)
+  // or if forceSeasonOverrides is explicitly requested
+  if (isSeason && !((p as any).season_options) && (opts.forceSeasonOverrides || !cached)) {
+    console.log('[PRESET APPLY] Applying hardcoded season overrides (no season_options in preset)')
+    logoMode.value = 'none'
+    textOverlayEnabled.value = true
+    customText.value = '{season}'
+    fontFamily.value = 'Arial'
+    fontSize.value = 150
+    shadowEnabled.value = false
+    shadowBlur.value = 0
+    letterSpacing.value = 1
+    positionY.value = 85
+  }
+  
+  console.log('[PRESET APPLY] Final values - textOverlayEnabled:', textOverlayEnabled.value, 'customText:', customText.value, 'logoMode:', logoMode.value)
 
   applyPosterFilter()
   applyLogoPreference()

@@ -237,11 +237,50 @@ def init_database():
                 template_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 options_json TEXT NOT NULL,
+                season_options_json TEXT NOT NULL DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(template_id, id)
             )
         """)
+
+        # Ensure season_options_json exists for older databases
+        cursor.execute("PRAGMA table_info(presets)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if "season_options_json" not in cols:
+            cursor.execute("ALTER TABLE presets ADD COLUMN season_options_json TEXT NOT NULL DEFAULT '{}' ")
+
+        # Backfill season_options_json for rows that are empty/null by copying options_json with season overrides
+        cursor.execute("""
+            SELECT id, options_json, season_options_json
+            FROM presets
+        """)
+        rows = cursor.fetchall()
+        for row in rows:
+            try:
+                season_raw = row["season_options_json"] if "season_options_json" in row.keys() else None
+                if season_raw and season_raw.strip() not in ("", "{}", "null", "NULL"):
+                    continue  # already populated
+                base_opts = json.loads(row["options_json"]) if row["options_json"] else {}
+                # Apply season overrides: no logo, season text label defaults
+                season_opts = dict(base_opts or {})
+                season_opts.update({
+                    "logo_mode": "none",
+                    "text_overlay_enabled": True,
+                    "custom_text": "{season}",
+                    "font_family": "Arial",
+                    "font_size": 150,
+                    "shadow_enabled": False,
+                    "shadow_blur": 0,
+                    "letter_spacing": 1,
+                    "position_y": 0.85,
+                })
+                cursor.execute(
+                    "UPDATE presets SET season_options_json = ? WHERE id = ?",
+                    (json.dumps(season_opts), row["id"]),
+                )
+            except Exception as backfill_err:
+                logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row.get("id"), backfill_err)
 
         # Create indexes for better query performance
         cursor.execute("""
@@ -631,7 +670,7 @@ def get_all_presets() -> Dict[str, Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, template_id, name, options_json FROM presets")
+        cursor.execute("SELECT id, template_id, name, options_json, season_options_json FROM presets")
         rows = cursor.fetchall()
 
     result: Dict[str, Dict[str, Any]] = {}
@@ -640,10 +679,15 @@ def get_all_presets() -> Dict[str, Dict[str, Any]]:
         if template_id not in result:
             result[template_id] = {"presets": []}
 
+        # Gracefully handle missing season_options_json column (older DBs) by defaulting to {}
+        row_keys = row.keys()
+        season_payload = row["season_options_json"] if "season_options_json" in row_keys else "{}"
+
         result[template_id]["presets"].append({
             "id": row["id"],
             "name": row["name"],
-            "options": json.loads(row["options_json"])
+            "options": json.loads(row["options_json"]),
+            "season_options": json.loads(season_payload)
         })
 
     return result
@@ -654,34 +698,39 @@ def get_preset(template_id: str, preset_id: str) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, options_json FROM presets
+            SELECT id, name, options_json, season_options_json FROM presets
             WHERE template_id = ? AND id = ?
         """, (template_id, preset_id))
         row = cursor.fetchone()
 
     if row:
+        row_keys = row.keys()
+        season_payload = row["season_options_json"] if "season_options_json" in row_keys else "{}"
         return {
             "id": row["id"],
             "name": row["name"],
-            "options": json.loads(row["options_json"])
+            "options": json.loads(row["options_json"]),
+            "season_options": json.loads(season_payload)
         }
     return None
 
 
-def save_preset(template_id: str, preset_id: str, name: str, options: Dict[str, Any]) -> None:
+def save_preset(template_id: str, preset_id: str, name: str, options: Dict[str, Any], season_options: Optional[Dict[str, Any]] = None) -> None:
     """Save or update a preset."""
     with get_db() as conn:
         cursor = conn.cursor()
         options_json = json.dumps(options)
+        season_json = json.dumps(season_options or {})
 
         cursor.execute("""
-            INSERT INTO presets (id, template_id, name, options_json, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO presets (id, template_id, name, options_json, season_options_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 options_json = excluded.options_json,
+                season_options_json = excluded.season_options_json,
                 updated_at = CURRENT_TIMESTAMP
-        """, (preset_id, template_id, name, options_json))
+        """, (preset_id, template_id, name, options_json, season_json))
 
     logger.debug(f"[DB] Saved preset {preset_id} for template {template_id}")
 
@@ -718,10 +767,11 @@ def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
                 if not pid:
                     continue
                 options_json = json.dumps(options)
+                season_options_json = json.dumps(preset.get("season_options") or {})
                 cursor.execute("""
-                    INSERT INTO presets (id, template_id, name, options_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """, (pid, template_id, name, options_json))
+                    INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, (pid, template_id, name, options_json, season_options_json))
     logger.info("[DB] Replaced all presets from import")
 
 
@@ -743,16 +793,18 @@ def merge_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
                 if not pid:
                     continue
                 options_json = json.dumps(options)
+                season_options_json = json.dumps(preset.get("season_options") or {})
                 # Use INSERT OR REPLACE to update existing or add new
                 cursor.execute("""
-                    INSERT INTO presets (id, template_id, name, options_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     ON CONFLICT(id) DO UPDATE SET
                         template_id = excluded.template_id,
                         name = excluded.name,
                         options_json = excluded.options_json,
+                        season_options_json = excluded.season_options_json,
                         updated_at = CURRENT_TIMESTAMP
-                """, (pid, template_id, name, options_json))
+                """, (pid, template_id, name, options_json, season_options_json))
     logger.info("[DB] Merged imported presets with existing presets")
 
 
