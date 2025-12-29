@@ -128,7 +128,8 @@ const toPlexPosterUrl = (path?: string | null) => {
 }
 
 const seriesPosterUrl = computed(() => {
-  if (existingPoster.value) return existingPoster.value
+  // Only derive from the series-level sources; do not use the global existingPoster
+  // to avoid bleeding season posters into the series thumbnail.
   if (props.movie.poster) {
     const maybeUrl = toPlexPosterUrl(props.movie.poster)
     if (maybeUrl) return maybeUrl
@@ -284,10 +285,31 @@ const saveCurrentSettings = () => {
 const restoreSettingsForCurrent = () => {
   const key = currentTargetKey.value
   const cached = settingsCache.value[key]
+  
+  if (cached) {
+    applySettings(cached)
+  } else if (currentSeason.value && !currentSeason.value.isSeries) {
+    // Apply default settings for seasons: no logo, custom text = "{season}"
+    applySettings({
+      logoMode: 'none',
+      customText: '{season}',
+      textOverlayEnabled: true
+    })
+  }
+  restorePosterForCurrentSeason()
+}
+
+const restoreSettingsForKey = async (key: string) => {
+  const cached = settingsCache.value[key]
   if (cached) {
     applySettings(cached)
   }
-  restorePosterForCurrentSeason()
+  if (selectedPosterCache.value[key]) {
+    selectedPoster.value = selectedPosterCache.value[key]
+  } else {
+    ensurePosterSelected()
+  }
+  await nextTick()
 }
 
 const ensurePosterSelected = () => {
@@ -656,6 +678,9 @@ const optionsPayload = computed(() => {
     }
   }
 
+  // Replace {season} placeholder in custom text
+  const processedCustomText = customText.value.replace('{season}', seasonText)
+
   return {
   poster_zoom: options.value.posterZoom / 100,
   poster_shift_y: options.value.posterShiftY / 100,
@@ -680,7 +705,7 @@ const optionsPayload = computed(() => {
   poster_filter: posterFilter.value,
   logo_preference: logoPreference.value,
   text_overlay_enabled: textOverlayEnabled.value,
-  custom_text: customText.value,
+  custom_text: processedCustomText,
   font_family: fontFamily.value,
   font_size: fontSize.value,
   font_weight: fontWeight.value,
@@ -1073,13 +1098,18 @@ const updateGlobalPosterCache = (key: string, url: string | null) => {
 
 const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
   try {
+    // Handle both boolean and Event parameter
     const refreshFlag = typeof forceRefresh === 'boolean'
       ? forceRefresh
-      : false
-    const res = await fetch(`${apiBase}/api/movie/${props.movie.key}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
+      : (forceRefresh instanceof Event ? true : false)
+    
+    // Use current season key if available, otherwise use series key
+    const targetKey = currentSeason.value?.key || props.movie.key
+    
+    const res = await fetch(`${apiBase}/api/movie/${targetKey}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
     if (!res.ok) {
       existingPoster.value = null
-      updateGlobalPosterCache(props.movie.key, null)
+      updateGlobalPosterCache(targetKey, null)
       return
     }
     const data = await res.json()
@@ -1088,10 +1118,13 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
       existingPoster.value = data.url.startsWith('http')
         ? data.url
         : `${apiBase}${data.url}`
-      updateGlobalPosterCache(props.movie.key, existingPoster.value)
+      updateGlobalPosterCache(targetKey, existingPoster.value)
+
+      // Update the thumbnail for the target season/series in the left list
+      seasons.value = seasons.value.map(s => s.key === targetKey ? { ...s, thumb: existingPoster.value || s.thumb } : s)
     } else {
       existingPoster.value = null
-      updateGlobalPosterCache(props.movie.key, null)
+      updateGlobalPosterCache(targetKey, null)
     }
     // Force re-render by toggling key
     posterRefreshKey.value += 1
@@ -1157,15 +1190,39 @@ const doSend = async () => {
   }
 
   try {
+    // Save the current target settings before iterating
+    saveCurrentSettings()
+
+    // Preserve current target settings to restore after send
+    const originalKey = currentTargetKey.value
+    const originalSettings = getCurrentSettings()
+    const originalPoster = selectedPoster.value
+
     // Send for each selected season
     for (const seasonKey of selectedSeasonKeys) {
       const season = seasons.value.find(s => s.key === seasonKey)
       if (!season) continue
 
+      // Switch context to the target season/series and load its cached settings
+      const idxInSelected = Array.from(selectedSeasons.value).findIndex(k => k === seasonKey)
+      if (idxInSelected >= 0) currentSeasonIndex.value = idxInSelected
+      await fetchImagesForCurrentSeason()
+      await restoreSettingsForKey(seasonKey)
+
       // Create a temporary movie object for this season
       const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
       await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value)
       success(`Successfully sent poster to ${season.title}!`)
+    }
+
+    // Restore original editing context/settings/poster
+    if (originalKey) {
+      settingsCache.value[originalKey] = originalSettings
+      if (originalPoster) selectedPosterCache.value[originalKey] = originalPoster
+      await restoreSettingsForKey(originalKey)
+      // Restore current season index to the original selection if possible
+      const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
+      if (origIdx >= 0) currentSeasonIndex.value = origIdx
     }
 
     // Wait 600ms for Plex to process, then refresh poster and labels
@@ -1223,7 +1280,7 @@ async function fetchSeasons() {
 
 // Toggle season selection
 async function toggleSeasonSelection(seasonKey: string) {
-  // Cache current settings before switching
+  // Persist current target settings before switching to avoid bleed-over
   saveCurrentSettings()
 
   const season = seasons.value.find(s => s.key === seasonKey)
@@ -1239,15 +1296,19 @@ async function toggleSeasonSelection(seasonKey: string) {
   
   selectedSeasons.value = newSelection
   
-  // If at least one season is selected, set current season to the first selected one
+  // If at least one season is selected, focus the clicked target when possible
   if (newSelection.size > 0) {
     const selected = Array.from(newSelection)
-    currentSeasonIndex.value = 0
+    const idx = selected.findIndex(k => k === seasonKey)
+    currentSeasonIndex.value = idx >= 0 ? idx : 0
     // Wait for computed property to update before fetching images
     await nextTick()
     await fetchImagesForCurrentSeason()
     restoreSettingsForCurrent()
+    await fetchExistingPoster()
     syncRenderedPlaceholders()
+    // Auto-render the selected season/series
+    await doPreview()
   } else {
     // Always keep at least the series entry selected
     const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
@@ -1256,7 +1317,10 @@ async function toggleSeasonSelection(seasonKey: string) {
     await nextTick()
     await fetchImagesForCurrentSeason()
     restoreSettingsForCurrent()
+    await fetchExistingPoster()
     syncRenderedPlaceholders()
+    // Auto-render the series
+    await doPreview()
   }
 }
 
@@ -1443,7 +1507,13 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
     logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
   }
-  logoMode.value = normalizeLogoMode(o.logo_mode)
+  // Respect season-level "no logo" choice; do not override from preset
+  const key = currentTargetKey.value
+  const cached = settingsCache.value[key]
+  const shouldKeepNoLogo = !!(currentSeason.value && !currentSeason.value.isSeries && cached && cached.logoMode === 'none')
+  if (!shouldKeepNoLogo) {
+    logoMode.value = normalizeLogoMode(o.logo_mode)
+  }
   if (typeof o.logo_hex === 'string') {
     logoHex.value = o.logo_hex
   }
@@ -2048,7 +2118,7 @@ watch(tmdbId, () => {
         <div class="preview-existing">
           <div class="preview-label">
             Current Plex Poster
-            <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster">
+            <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
@@ -2060,7 +2130,7 @@ watch(tmdbId, () => {
           <div v-else class="empty-preview">No poster</div>
         </div>
 
-        <div class="preview-main" @wheel.prevent="onPreviewWheel">
+        <div class="preview-main">
           <div class="preview-label">
             <div class="preview-title-row">
               <span>Preview</span>
