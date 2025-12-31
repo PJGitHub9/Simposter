@@ -57,14 +57,15 @@ export function useRenderService() {
     logoUrl?: string | null,
     options?: PresetOptions,
     templateId?: string,
-    presetId?: string
+    presetId?: string,
+    disableCache?: boolean
   ) => {
     const payload = basePayload(movie, bgUrl, logoUrl, templateId, presetId, options)
-    // General previews should NOT use overlay cache per requirements
-    const disableOverlayCache = true
+    // Allow overlay caching by default for better performance
+    const disableOverlayCache = disableCache ?? false
     const data = await post('preview', {
       ...payload,
-      // Only disable when setting is off; backend ignores false
+      // Only disable when explicitly requested
       disableOverlayCache
     })
     if (data?.image_base64) {
