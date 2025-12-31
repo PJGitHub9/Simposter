@@ -250,7 +250,7 @@ def init_database():
         if "season_options_json" not in cols:
             cursor.execute("ALTER TABLE presets ADD COLUMN season_options_json TEXT NOT NULL DEFAULT '{}' ")
 
-        # Backfill season_options_json for rows that are empty/null by copying options_json with season overrides
+        # Backfill/update season_options_json to ensure all season fields are present
         cursor.execute("""
             SELECT id, options_json, season_options_json
             FROM presets
@@ -258,13 +258,20 @@ def init_database():
         rows = cursor.fetchall()
         for row in rows:
             try:
+                # Load existing season options or create from base
                 season_raw = row["season_options_json"] if "season_options_json" in row.keys() else None
-                if season_raw and season_raw.strip() not in ("", "{}", "null", "NULL"):
-                    continue  # already populated
                 base_opts = json.loads(row["options_json"]) if row["options_json"] else {}
-                # Apply season overrides: no logo, season text label defaults
-                season_opts = dict(base_opts or {})
-                season_opts.update({
+                
+                # If season_options exist, load them, otherwise start from base
+                if season_raw and season_raw.strip() not in ("", "{}", "null", "NULL"):
+                    season_opts = json.loads(season_raw)
+                    # Merge with base to ensure all base fields are present
+                    season_opts = {**base_opts, **season_opts}
+                else:
+                    season_opts = dict(base_opts or {})
+                
+                # Apply/ensure season-specific defaults
+                season_defaults = {
                     "logo_mode": "none",
                     "text_overlay_enabled": True,
                     "custom_text": "{season}",
@@ -274,7 +281,12 @@ def init_database():
                     "shadow_blur": 0,
                     "letter_spacing": 1,
                     "position_y": 0.85,
-                })
+                }
+                # Only set defaults if not already present (preserve user customizations)
+                for key, val in season_defaults.items():
+                    if key not in season_opts:
+                        season_opts[key] = val
+                
                 cursor.execute(
                     "UPDATE presets SET season_options_json = ? WHERE id = ?",
                     (json.dumps(season_opts), row["id"]),

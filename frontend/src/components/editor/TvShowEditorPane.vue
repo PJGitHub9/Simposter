@@ -89,6 +89,14 @@ const currentSeason = computed(() => {
 const renderedPreviews = ref<RenderedPreview[]>([])
 const activePreviewIndex = ref(0)
 
+// Cache rendered previews to avoid re-rendering when cycling back
+// Key format: `${seasonKey}_${bgUrl}_${logoUrl}_${JSON.stringify(options)}`
+const renderedPreviewCache = ref<Record<string, string>>({})
+
+// Track which season preset fields have been manually modified by the user
+// Key is seasonKey, value is Set of field names (e.g., 'fontSize', 'shadowEnabled')
+const userModifiedFields = ref<Record<string, Set<string>>>({})
+
 // Cache assets per season to avoid re-fetching when switching
 const seasonAssetsCache = ref<Record<string, { posters: any[]; logos: any[]; backdrops?: any[] }>>({})
 const showLevelAssets = ref<{ posters: any[]; logos: any[]; backdrops?: any[] }>({ posters: [], logos: [], backdrops: [] })
@@ -278,7 +286,23 @@ const currentTargetKey = computed(() => currentSeason.value?.key || props.movie.
 
 const saveCurrentSettings = () => {
   const key = currentTargetKey.value
-  settingsCache.value[key] = getCurrentSettings()
+  const settings = getCurrentSettings()
+  
+  // For seasons, only cache preset fields if user manually modified them
+  const isSeason = currentSeason.value && !currentSeason.value.isSeries
+  if (isSeason) {
+    const modified = userModifiedFields.value[key] || new Set()
+    const presetFields = ['logoMode', 'textOverlayEnabled', 'customText', 'fontFamily', 'fontSize', 'shadowEnabled', 'letterSpacing', 'positionY']
+    
+    // Remove preset fields that user hasn't modified
+    presetFields.forEach(field => {
+      if (!modified.has(field)) {
+        delete (settings as any)[field]
+      }
+    })
+  }
+  
+  settingsCache.value[key] = settings
   if (selectedPoster.value) selectedPosterCache.value[key] = selectedPoster.value
 }
 
@@ -289,16 +313,22 @@ const restoreSettingsForCurrent = () => {
   
   console.log('[RESTORE] Target:', key, 'isSeason:', isSeason, 'hasCached:', !!cached)
   
-  // For seasons, always apply preset season_options first (they come from DB)
-  // Then optionally apply cached manual edits on top
   if (isSeason) {
     console.log('[RESTORE] Season detected, applying preset season_options')
     applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true })
-    // If there were manual edits cached, you could apply them here
-    // For now, we prioritize the DB season_options over manual edits
-  } else if (cached) {
-    console.log('[RESTORE] Applying cached settings for non-season')
-    applySettings(cached)
+    if (cached) {
+      console.log('[RESTORE] Applying cached season edits on top of preset')
+      // Apply all cached season edits so manual tweaks persist when returning
+      applySettings(cached)
+    }
+  } else {
+    if (cached) {
+      console.log('[RESTORE] Applying cached settings for series')
+      applySettings(cached)
+    } else {
+      console.log('[RESTORE] Series with no cache, applying preset')
+      applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false })
+    }
   }
   
   restorePosterForCurrentSeason()
@@ -950,17 +980,33 @@ const applyLogoPreference = () => {
 }
 
 const applyPosterFilter = () => {
-  if (!posters.value.length) return
+  const isSeason = !!(currentSeason.value && !currentSeason.value.isSeries)
+  const seasonPosters = posters.value || []
+  const seriesPosters = showLevelAssets.value.posters || []
+  if (!seasonPosters.length && !(isSeason && seriesPosters.length)) return
+
   if (posterFilter.value === 'textless') {
-    const textless = posters.value.find((p) => p.has_text === false)
-    if (textless) selectedPoster.value = textless.url
-    else if (!selectedPoster.value) selectedPoster.value = posters.value[0]?.url || null
+    const seasonTextless = seasonPosters.find((p) => p.has_text === false)
+    const seriesTextless = isSeason ? seriesPosters.find((p: any) => p.has_text === false) : null
+    const choice = seasonTextless || seriesTextless
+
+    // If no textless at all, keep existing selection or first season poster
+    if (choice) {
+      // Replace selection if it's empty or currently not textless
+      if (!selectedPoster.value) selectedPoster.value = choice.url
+      else {
+        const currentIsTextless = [...seasonPosters, ...seriesPosters].some((p) => p.url === selectedPoster.value && p.has_text === false)
+        if (!currentIsTextless) selectedPoster.value = choice.url
+      }
+    } else if (!selectedPoster.value) {
+      selectedPoster.value = seasonPosters[0]?.url || null
+    }
   } else if (posterFilter.value === 'text') {
-    const withText = posters.value.find((p) => p.has_text === true)
+    const withText = seasonPosters.find((p) => p.has_text === true)
     if (withText) selectedPoster.value = withText.url
-    else if (!selectedPoster.value) selectedPoster.value = posters.value[0]?.url || null
-  } else if (!selectedPoster.value && posters.value.length) {
-    const firstPoster = posters.value[0]
+    else if (!selectedPoster.value) selectedPoster.value = seasonPosters[0]?.url || null
+  } else if (!selectedPoster.value && seasonPosters.length) {
+    const firstPoster = seasonPosters[0]
     if (firstPoster) selectedPoster.value = firstPoster.url
   }
 }
@@ -1170,7 +1216,24 @@ const doPreview = async () => {
   console.log('[PREVIEW] optionsPayload.custom_text:', optionsPayload.value.custom_text)
   console.log('[PREVIEW] optionsPayload.season_text:', optionsPayload.value.season_text)
 
+  // Generate cache key based on current settings
+  const season = currentSeason.value
+  const cacheKey = season ? `${season.key}_${bgUrl.value}_${logoUrl.value}_${JSON.stringify(optionsPayload.value)}` : ''
+  
+  // Check if we have a cached render for these exact settings
+  if (cacheKey && renderedPreviewCache.value[cacheKey]) {
+    console.log('[PREVIEW] Using cached render for', season?.title)
+    lastPreview.value = renderedPreviewCache.value[cacheKey]
+    return
+  }
+
+  // Render and cache the result
   await render.preview(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
+  
+  // Store in cache if we have a season key
+  if (cacheKey && lastPreview.value) {
+    renderedPreviewCache.value[cacheKey] = lastPreview.value
+  }
 }
 
 const doSave = async () => {
@@ -1309,40 +1372,56 @@ async function toggleSeasonSelection(seasonKey: string) {
   const season = seasons.value.find(s => s.key === seasonKey)
   if (!season) return
 
-  // Toggle selection of this season
+  const wasSelected = selectedSeasons.value.has(seasonKey)
+  const isCurrentlyFocused = currentSeason.value?.key === seasonKey
+  
+  // If clicking an already-selected season that's currently focused, deselect it
+  // Otherwise, if it's selected but not focused, just switch to it
+  // If it's not selected, add it and switch to it
   const newSelection = new Set(selectedSeasons.value)
-  if (newSelection.has(seasonKey)) {
+  
+  if (wasSelected && isCurrentlyFocused) {
+    // Deselect the focused season
     newSelection.delete(seasonKey)
-  } else {
-    newSelection.add(seasonKey)
-  }
-  
-  selectedSeasons.value = newSelection
-  
-  // If at least one season is selected, focus the clicked target when possible
-  if (newSelection.size > 0) {
+    selectedSeasons.value = newSelection
+    
+    // If no seasons left, force select the series
+    if (newSelection.size === 0) {
+      const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+      selectedSeasons.value = new Set([seriesKey])
+      currentSeasonIndex.value = 0
+      await nextTick()
+      await fetchImagesForCurrentSeason()
+      restoreSettingsForCurrent()
+      await fetchExistingPoster()
+      syncRenderedPlaceholders()
+      await doPreview()
+    } else {
+      // Just removed a season, sync the rendered previews
+      syncRenderedPlaceholders()
+    }
+  } else if (wasSelected && !isCurrentlyFocused) {
+    // Season already selected, just switch focus to it (don't re-render)
     const selected = Array.from(newSelection)
     const idx = selected.findIndex(k => k === seasonKey)
     currentSeasonIndex.value = idx >= 0 ? idx : 0
-    // Wait for computed property to update before fetching images
     await nextTick()
     await fetchImagesForCurrentSeason()
     restoreSettingsForCurrent()
     await fetchExistingPoster()
-    syncRenderedPlaceholders()
-    // Auto-render the selected season/series
-    await doPreview()
   } else {
-    // Always keep at least the series entry selected
-    const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
-    selectedSeasons.value = new Set([seriesKey])
-    currentSeasonIndex.value = 0
+    // Add new season and switch to it
+    newSelection.add(seasonKey)
+    selectedSeasons.value = newSelection
+    
+    const selected = Array.from(newSelection)
+    const idx = selected.findIndex(k => k === seasonKey)
+    currentSeasonIndex.value = idx >= 0 ? idx : 0
     await nextTick()
     await fetchImagesForCurrentSeason()
     restoreSettingsForCurrent()
     await fetchExistingPoster()
     syncRenderedPlaceholders()
-    // Auto-render the series
     await doPreview()
   }
 }
@@ -1601,8 +1680,35 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
 }
 
 watch(selectedPreset, (id) => {
-  applyPresetOptions(id)
+  // When preset changes, check if we're on a season and force season overrides
+  const isSeason = !!(currentSeason.value && !currentSeason.value.isSeries)
+  applyPresetOptions(id, { forceSeasonOverrides: isSeason })
+  // Clear modification tracking when preset changes
+  if (isSeason && currentSeason.value) {
+    delete userModifiedFields.value[currentSeason.value.key]
+  }
 })
+
+// Track manual modifications to season preset fields
+const markFieldModified = (fieldName: string) => {
+  const isSeason = currentSeason.value && !currentSeason.value.isSeries
+  if (isSeason && currentSeason.value) {
+    const key = currentSeason.value.key
+    if (!userModifiedFields.value[key]) {
+      userModifiedFields.value[key] = new Set()
+    }
+    userModifiedFields.value[key].add(fieldName)
+  }
+}
+
+watch(logoMode, () => markFieldModified('logoMode'))
+watch(textOverlayEnabled, () => markFieldModified('textOverlayEnabled'))
+watch(customText, () => markFieldModified('customText'))
+watch(fontFamily, () => markFieldModified('fontFamily'))
+watch(fontSize, () => markFieldModified('fontSize'))
+watch(shadowEnabled, () => markFieldModified('shadowEnabled'))
+watch(letterSpacing, () => markFieldModified('letterSpacing'))
+watch(positionY, () => markFieldModified('positionY'))
 
 let previewTimer: ReturnType<typeof setTimeout> | null = null
 watch(
