@@ -16,6 +16,12 @@ from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_ext
 from ..fanart_client import get_images_for_movie as get_fanart_images
 from .. import tvdb_client
 from .tv_shows import _get_plex_tv_shows, api_tv_show_labels
+from ..middleware.validation import (
+    validate_rating_key,
+    validate_tmdb_id,
+    validate_library_id,
+    validate_labels
+)
 
 router = APIRouter()
 
@@ -82,8 +88,8 @@ def _read_image_metadata(file_path: Path) -> dict:
                         return result
                 except (json.JSONDecodeError, TypeError):
                     pass
-        except Exception:
-            pass
+        except (AttributeError, UnicodeDecodeError) as e:
+            logger.debug("Failed to extract poster metadata: %s", e)
 
         # Try from img.info dict (fallback)
         if hasattr(img, 'info'):
@@ -145,8 +151,8 @@ def _remove_poster_cache(rating_key: str):
             try:
                 p.unlink()
                 removed = True
-            except Exception:
-                pass
+            except OSError as e:
+                logger.warning("Failed to remove cached poster %s: %s", p, e)
     return removed
 
 
@@ -170,8 +176,8 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
             content_type = r.headers.get('content-type', 'image/jpeg')
             try:
                 cache.update_poster(rating_key, direct)
-            except Exception:
-                logger.debug("[CACHE] update_poster failed for %s", rating_key, exc_info=True)
+            except (sqlite3.Error, AttributeError) as e:
+                logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
             saved = _save_poster_cache(rating_key, r.content, content_type)
             return saved
     except Exception as e:
@@ -192,8 +198,8 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
                     content_type = poster_r.headers.get('content-type', 'image/jpeg')
                     try:
                         cache.update_poster(rating_key, thumb_url)
-                    except Exception:
-                        logger.debug("[CACHE] update_poster failed for %s", rating_key, exc_info=True)
+                    except (sqlite3.Error, AttributeError) as e:
+                        logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
                     saved = _save_poster_cache(rating_key, poster_r.content, content_type)
                     return saved
     except Exception as e:
@@ -276,7 +282,8 @@ def _cache_fresh(max_age_seconds: int, library_id: Optional[str] = None) -> bool
         last = datetime.fromisoformat(ts)
         if last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
-    except Exception:
+    except (ValueError, TypeError) as e:
+        logger.debug("Invalid timestamp format: %s", e)
         return False
     age = (datetime.now(timezone.utc) - last).total_seconds()
     return age <= max_age_seconds
@@ -293,7 +300,8 @@ def _collections_cache_fresh(max_age_seconds: int, library_id: Optional[str] = N
         last = datetime.fromisoformat(ts)
         if last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
-    except Exception:
+    except (ValueError, TypeError) as e:
+        logger.debug("Invalid timestamp format: %s", e)
         return False
     age = (datetime.now(timezone.utc) - last).total_seconds()
     return age <= max_age_seconds
@@ -423,8 +431,8 @@ def api_clear_cache():
                     try:
                         child.unlink()
                         removed_files += 1
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        logger.warning("Failed to remove cached poster file %s: %s", child, e)
         logger.info("[CACHE] Cleared movie_cache/tv_cache tables and removed %d poster files", removed_files)
         return {"status": "ok", "removed_posters": removed_files}
     except Exception as e:
@@ -440,12 +448,14 @@ def api_scan_progress():
 
 @router.get("/movie/{rating_key}/tmdb", response_model=MovieTMDbResponse)
 def api_movie_tmdb(rating_key: str):
+    rating_key = validate_rating_key(rating_key)
     tmdb_id = get_movie_tmdb_id(rating_key)
     return MovieTMDbResponse(tmdb_id=tmdb_id)
 
 
 @router.get("/movie/{rating_key}/labels", response_model=LabelsResponse)
 def api_movie_labels(rating_key: str):
+    rating_key = validate_rating_key(rating_key)
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=10)
@@ -456,7 +466,8 @@ def api_movie_labels(rating_key: str):
 
     try:
         root = ET.fromstring(r.text)
-    except Exception:
+    except ET.ParseError as e:
+        logger.debug("Failed to parse labels XML for %s: %s", rating_key, e)
         return LabelsResponse(labels=[])
 
     labels = set()
@@ -478,8 +489,8 @@ def api_movie_labels(rating_key: str):
     labels_list = sorted(labels)
     try:
         cache.update_labels(rating_key, labels_list)
-    except Exception:
-        logger.debug("[CACHE] update_labels failed for %s", rating_key, exc_info=True)
+    except (sqlite3.Error, AttributeError) as e:
+        logger.debug("[CACHE] update_labels failed for %s: %s", rating_key, e, exc_info=True)
     return LabelsResponse(labels=labels_list)
 
 
@@ -494,6 +505,7 @@ def api_movie_labels_remove(rating_key: str, req: LabelsRemoveRequest):
 
 @router.get("/tmdb/{tmdb_id}/images")
 def api_tmdb_images(tmdb_id: int):
+    tmdb_id = validate_tmdb_id(tmdb_id)
     try:
         details = get_movie_details(tmdb_id)
         tmdb_imgs = get_images_for_movie(tmdb_id, details.get("original_language"))
@@ -536,7 +548,8 @@ def api_tmdb_images(tmdb_id: int):
         try:
             ui_settings = _read_settings(include_env=False)
             api_order = ui_settings.apiOrder or ["tmdb", "fanart", "tvdb"]
-        except Exception:
+        except (AttributeError, ImportError, sqlite3.Error) as e:
+            logger.debug("Failed to load API order from settings: %s", e)
             api_order = ["tmdb", "fanart", "tvdb"]
 
         # Build image sources dictionary
@@ -693,38 +706,71 @@ def api_scan_library(library_id: Optional[str] = Query(None)):
         # Process movies per library
         processed = 0
         movie_cache_by_lib = {}
+
+        # Bulk fetch labels for all movies to avoid N+1 queries
+        movie_keys = [movie.key for movie in movies]
+        bulk_labels = {}
+        if movie_keys:
+            try:
+                logger.info(f"[SCAN] Bulk fetching labels for {len(movie_keys)} movies")
+                # Call internal bulk labels function directly
+                for movie_key in movie_keys:
+                    try:
+                        url = f"{settings.PLEX_URL}/library/metadata/{movie_key}"
+                        r = plex_session.get(url, headers=plex_headers(), timeout=10)
+                        r.raise_for_status()
+                        root = ET.fromstring(r.text)
+                        labels_list = []
+                        for label in root.findall(".//Label"):
+                            tag = label.get('tag', '').strip()
+                            if tag:
+                                labels_list.append(tag)
+                        bulk_labels[movie_key] = labels_list
+                    except Exception as e:
+                        logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
+                        bulk_labels[movie_key] = []
+                logger.info(f"[SCAN] Successfully fetched labels for {len(bulk_labels)} movies")
+            except Exception as e:
+                logger.warning(f"[SCAN] Bulk label fetch failed, will skip labels: {e}")
+
+        # Parallelize poster fetching using ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        poster_results = {}
+
+        def fetch_poster_for_movie(movie_key):
+            try:
+                poster_path = fetch_and_cache_poster(movie_key, force_refresh=False)
+                if poster_path:
+                    return movie_key, _poster_cache_url(movie_key, poster_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch poster for movie {movie_key}: {e}")
+            return movie_key, None
+
+        if movie_keys:
+            logger.info(f"[SCAN] Parallel fetching posters for {len(movie_keys)} movies")
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_key = {executor.submit(fetch_poster_for_movie, key): key for key in movie_keys}
+                for future in as_completed(future_to_key):
+                    movie_key, poster_url = future.result()
+                    poster_results[movie_key] = poster_url
+            logger.info(f"[SCAN] Completed poster fetching for {len(poster_results)} movies")
+
+        # Now assemble the movie cache using pre-fetched data
         for movie in movies:
             lib_id = getattr(movie, "library_id", None) or "default"
             if lib_id not in movie_cache_by_lib:
                 movie_cache_by_lib[lib_id] = []
-            
-            # Fetch poster
-            poster_url = None
-            try:
-                poster_path = fetch_and_cache_poster(movie.key, force_refresh=False)
-                if poster_path:
-                    poster_url = _poster_cache_url(movie.key, poster_path)
-            except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch poster for movie {movie.key}: {e}")
-            
-            # Fetch labels
-            labels = []
-            try:
-                labels_data = api_movie_labels(movie.key)
-                labels = labels_data.labels
-            except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch labels for movie {movie.key}: {e}")
-            
+
             movie_cache_by_lib[lib_id].append({
                 "rating_key": movie.key,
                 "title": movie.title,
                 "year": movie.year,
                 "added_at": movie.addedAt,
-                "poster_url": poster_url,
-                "labels": labels,
+                "poster_url": poster_results.get(movie.key),
+                "labels": bulk_labels.get(movie.key, []),
                 "library_id": lib_id,
             })
-            
+
             processed += 1
             if processed % 50 == 0 or processed == len(movies):
                 logger.info("[SCAN] Movies progress %d/%d", processed, len(movies))

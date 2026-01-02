@@ -26,8 +26,9 @@ def _running_in_container() -> bool:
         cgroup = Path("/proc/1/cgroup")
         if cgroup.exists() and "docker" in cgroup.read_text():
             return True
-    except Exception:
-        pass
+    except (OSError, IOError) as e:
+        # File system errors reading container detection files
+        logger.debug("Container detection failed: %s", e)
     return False
 
 # Load env files in order of priority:
@@ -119,9 +120,9 @@ def _load_ui_settings_fallback():
 
         db = importlib.import_module('backend.database')
         data = db.get_ui_settings()
-    except Exception:
-        # Silently ignore database errors during initial load
-        pass
+    except (ImportError, AttributeError, sqlite3.Error) as e:
+        # Database might not be initialized yet during startup
+        logger.debug("Could not load settings from database: %s", e)
 
     # Fallback to JSON files if database is empty
     if not data:
@@ -134,7 +135,8 @@ def _load_ui_settings_fallback():
         if settings_file.exists():
             try:
                 data = json.loads(settings_file.read_text(encoding="utf-8"))
-            except Exception:
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Failed to load settings from %s: %s", settings_file, e)
                 return
 
     if not data:
@@ -177,8 +179,8 @@ def _load_ui_settings_fallback():
         if tmdb_key_env:
             settings.TMDB_API_KEY = tmdb_key_env
 
-    except Exception:
-        pass  # Silently ignore errors during settings application
+    except (KeyError, TypeError, ValueError) as e:
+        logger.warning("Error applying settings to config: %s", e)
 
 # Normalize paths relative to repo root so npm/uvicorn cwd doesn't matter
 def _resolve_path(p: str) -> str:
@@ -318,8 +320,8 @@ for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"):
         # Only adjust formatter on the clone if it's a Stream/FileHandler
         try:
             clone.setFormatter(api_formatter)
-        except Exception:
-            pass
+        except (AttributeError, ValueError) as e:
+            logger.debug("Could not set formatter on handler %s: %s", type(clone).__name__, e)
         uv_logger.addHandler(clone)
     uv_logger.setLevel(logging.DEBUG)
     uv_logger.propagate = False
@@ -510,8 +512,8 @@ def get_plex_movies(library_ids: Optional[List[str]] = None):
     logger.info("[PLEX] Loaded %d movies from %d libraries (%s)", len(out), len(lib_ids), ",".join(lib_ids))
     try:
         cache.refresh_from_list(out)
-    except Exception:
-        logger.debug("[CACHE] refresh_from_list failed", exc_info=True)
+    except (sqlite3.Error, AttributeError) as e:
+        logger.debug("[CACHE] refresh_from_list failed: %s", e, exc_info=True)
     return out
 
 
@@ -522,7 +524,8 @@ def extract_tmdb_id_from_metadata(xml_text: str) -> Optional[int]:
 
     try:
         root = ET.fromstring(xml_text)
-    except Exception:
+    except ET.ParseError as e:
+        logger.debug("Failed to parse XML metadata: %s", e)
         return None
 
     for g in root.findall(".//Guid"):
@@ -540,7 +543,8 @@ def extract_tvdb_id_from_metadata(xml_text: str) -> Optional[int]:
 
     try:
         root = ET.fromstring(xml_text)
-    except Exception:
+    except ET.ParseError as e:
+        logger.debug("Failed to parse XML metadata for TVDB: %s", e)
         return None
 
     for g in root.findall(".//Guid"):
@@ -565,8 +569,8 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     tmdb_id = extract_tmdb_id_from_metadata(r.text)
     try:
         cache.update_tmdb(rating_key, tmdb_id)
-    except Exception:
-        logger.debug("[CACHE] update_tmdb failed", exc_info=True)
+    except (sqlite3.Error, AttributeError) as e:
+        logger.debug("[CACHE] update_tmdb failed: %s", e, exc_info=True)
     return tmdb_id
 
 
@@ -620,8 +624,8 @@ def plex_remove_label(rating_key: str, label: str):
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via sections endpoint rating_key=%s label=%s", rating_key, label)
             return
-    except Exception:
-        pass
+    except (requests.RequestException, requests.Timeout) as e:
+        logger.debug("[PLEX] Method 1 failed: %s", e)
 
     # Method 2
     try:
@@ -631,8 +635,8 @@ def plex_remove_label(rating_key: str, label: str):
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via metadata/labels rating_key=%s label=%s", rating_key, label)
             return
-    except Exception:
-        pass
+    except (requests.RequestException, requests.Timeout) as e:
+        logger.debug("[PLEX] Method 2 failed: %s", e)
 
     # Method 3
     try:
@@ -640,5 +644,5 @@ def plex_remove_label(rating_key: str, label: str):
         params = {"label[].tag.tag-": label, "type": "1"}
         r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
         logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s status=%s", rating_key, label, r.status_code)
-    except Exception:
-        pass
+    except (requests.RequestException, requests.Timeout) as e:
+        logger.debug("[PLEX] Method 3 failed: %s", e)

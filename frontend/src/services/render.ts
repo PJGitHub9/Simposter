@@ -58,7 +58,8 @@ export function useRenderService() {
     options?: PresetOptions,
     templateId?: string,
     presetId?: string,
-    disableCache?: boolean
+    disableCache?: boolean,
+    skipLastPreviewUpdate?: boolean
   ) => {
     const payload = basePayload(movie, bgUrl, logoUrl, templateId, presetId, options)
     // Allow overlay caching by default for better performance
@@ -68,7 +69,7 @@ export function useRenderService() {
       // Only disable when explicitly requested
       disableOverlayCache
     })
-    if (data?.image_base64) {
+    if (data?.image_base64 && !skipLastPreviewUpdate) {
       lastPreview.value = `data:image/jpeg;base64,${data.image_base64}`
     }
     return data

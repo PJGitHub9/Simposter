@@ -54,9 +54,9 @@ def get_db_version() -> Optional[str]:
             row = cursor.fetchone()
             if row:
                 return row["value"]
-    except Exception:
-        # Table might not exist yet
-        pass
+    except sqlite3.Error as e:
+        # Table might not exist yet during initial setup
+        logger.debug("Could not read app version from database: %s", e)
     return None
 
 
@@ -461,8 +461,9 @@ def get_db():
     try:
         yield conn
         conn.commit()
-    except Exception:
+    except (sqlite3.Error, Exception) as e:
         conn.rollback()
+        logger.error("Database transaction failed, rolling back: %s", e)
         raise
     finally:
         conn.close()

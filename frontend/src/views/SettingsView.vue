@@ -7,6 +7,23 @@ import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 import { onBeforeRouteLeave } from 'vue-router'
 
+interface LibraryMapping {
+  id: string
+  title?: string
+  displayName?: string
+}
+
+interface PlexLibrary {
+  title: string
+  key: string
+  type: string
+}
+
+interface Movie {
+  title: string
+  year?: number
+}
+
 const settings = useSettingsStore()
 const saved = ref('')
 const allLibraryLabels = ref<Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }>>({})
@@ -156,7 +173,7 @@ const loadLocalSettings = async () => {
   localPlexToken.value = settings.plex.value.token
   localPlexLibrary.value = settings.plex.value.movieLibraryName
   // Deep clone library mappings to prevent real-time updates
-  const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: any) => l && l.id)
+  const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: LibraryMapping) => l && l.id)
   const libraryMappings = hasPersistedLibraries
     ? settings.plex.value.libraryMappings
     : (settings.plex.value.movieLibraryNames || settings.plex.value.movieLibraryName
@@ -174,13 +191,13 @@ const loadLocalSettings = async () => {
   savedLibraryIds.value = hasPersistedLibraries
     ? new Set(
         (libraryMappings || [])
-          .map((l: any) => (l && l.id ? String(l.id) : ''))
+          .map((l: LibraryMapping) => (l && l.id ? String(l.id) : ''))
           .filter(Boolean)
       )
     : new Set()
 
   // Load TV show libraries
-  const hasPersistedTvShowLibraries = (settings.plex.value.tvShowLibraryMappings || []).some((l: any) => l && l.id)
+  const hasPersistedTvShowLibraries = (settings.plex.value.tvShowLibraryMappings || []).some((l: LibraryMapping) => l && l.id)
   const tvShowLibraryMappings = hasPersistedTvShowLibraries
     ? settings.plex.value.tvShowLibraryMappings
     : (settings.plex.value.tvShowLibraryNames || settings.plex.value.tvShowLibraryName
@@ -198,7 +215,7 @@ const loadLocalSettings = async () => {
   savedTvShowLibraryIds.value = hasPersistedTvShowLibraries
     ? new Set(
         (tvShowLibraryMappings || [])
-          .map((l: any) => (l && l.id ? String(l.id) : ''))
+          .map((l: LibraryMapping) => (l && l.id ? String(l.id) : ''))
           .filter(Boolean)
       )
     : new Set()
@@ -426,13 +443,13 @@ const testPlexConnection = async () => {
       plexLibraries.value = data.sections || []
       const movieLibs = plexLibraries.value.filter(s => s.type === 'movie')
       const tvShowLibs = plexLibraries.value.filter(s => s.type === 'show')
-      const movieSectionsList = movieLibs.map((s: any) => s.title).join(', ')
-      const tvShowSectionsList = tvShowLibs.map((s: any) => s.title).join(', ')
+      const movieSectionsList = movieLibs.map((s: PlexLibrary) => s.title).join(', ')
+      const tvShowSectionsList = tvShowLibs.map((s: PlexLibrary) => s.title).join(', ')
       testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${movieSectionsList}${tvShowLibs.length > 0 ? ` and ${tvShowLibs.length} TV show libraries: ${tvShowSectionsList}` : ''}`
       if (movieLibs.length > 0) {
         // Seed libraries if none configured yet
         if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
-          localLibraries.value = movieLibs.map((s: any, idx: number) => ({
+          localLibraries.value = movieLibs.map((s: PlexLibrary, idx: number) => ({
             id: s.key,
             title: s.title,
             displayName: s.title || `Library ${idx + 1}`,
@@ -442,7 +459,7 @@ const testPlexConnection = async () => {
       if (tvShowLibs.length > 0) {
         // Seed TV show libraries if none configured yet
         if (!localTvShowLibraries.value.length || localTvShowLibraries.value.every(l => !l.id)) {
-          localTvShowLibraries.value = tvShowLibs.map((s: any, idx: number) => ({
+          localTvShowLibraries.value = tvShowLibs.map((s: PlexLibrary, idx: number) => ({
             id: s.key,
             title: s.title,
             displayName: s.title || `TV Library ${idx + 1}`,
@@ -543,7 +560,7 @@ const scanLibrary = async (libraryId?: string) => {
       moviesCache.value = data.movies
       moviesLoaded.value = true
       scan.progress.value = { processed: data.movies.length, total: data.movies.length }
-      scan.log.value = data.movies.slice(0, 20).map((m: any) => `${m.title}${m.year ? ` (${m.year})` : ''}`)
+      scan.log.value = data.movies.slice(0, 20).map((m: Movie) => `${m.title}${m.year ? ` (${m.year})` : ''}`)
       if (data.movies.length > 20) {
         scan.log.value.push(`...and ${data.movies.length - 20} more`)
       }

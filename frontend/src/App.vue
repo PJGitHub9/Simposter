@@ -35,7 +35,9 @@ const tabs = computed<MenuItem[]>(() => {
   const tvShowTabs: MenuItem[] = tvLibs.length > 0 ? tvLibs.map((lib, idx) => ({
     key: `tv-shows-${lib.id || idx}`,
     label: lib.displayName || lib.title || `TV Library ${idx + 1}`,
-    submenu: []
+    submenu: [
+      { key: `tv-batch-${lib.id || idx}`, label: 'Batch Edit' }
+    ]
   })) : []
 
   return [
@@ -280,7 +282,8 @@ const activeTab = computed<TabKey>(() => {
 const activeSubmenu = computed<string>(() => {
   const libQuery = (route.query.library as string) || ''
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
-   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
+  if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
+  if (route.name === 'collections') return `collections-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   return ''
 })
@@ -455,6 +458,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'collections', query: { library: libId } })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: { library: libId } })
+    }
+  } else if (parentKey.startsWith('tv-shows-')) {
+    const libId = parentKey.replace('tv-shows-', '')
+    if (submenuKey.startsWith('tv-batch-')) {
+      router.push({ name: 'tv-batch-edit', query: { library: libId } })
     }
   }
 }

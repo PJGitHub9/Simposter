@@ -92,10 +92,10 @@ const loadMoviesCache = () => {
         const validCached = cached.filter((m: any) => {
           const cachedLib = m.library_id || ''
           const currentLib = currentLibrary.value
-          // Both empty = all libraries (valid)
-          // Both match = valid
-          // One empty and one set = might be cross-contamination, but allow if no library_id on movie
-          return !m.library_id || cachedLib === currentLib
+          // No library filter (currentLib empty) = show all movies
+          // No library_id on movie = show in all views
+          // Library matches = show it
+          return !currentLib || !m.library_id || cachedLib === currentLib
         })
         if (validCached.length > 0) {
           moviesCache.value = validCached

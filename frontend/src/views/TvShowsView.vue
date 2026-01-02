@@ -90,8 +90,20 @@ const loadTvShowsCache = () => {
       const cached = JSON.parse(raw)
       // Only use cache if it actually has TV shows
       if (cached && cached.length > 0) {
-        tvShowsCache.value = cached
-        tvShowsLoaded.value = true
+        // Verify cached TV shows belong to current library by checking library_id field
+        const validCached = cached.filter((show: any) => {
+          const cachedLib = show.library_id || ''
+          const currentLib = currentLibrary.value
+          // No library filter (currentLib empty) = show all TV shows
+          // No library_id on show = show in all views
+          // Library matches = show it
+          return !currentLib || !show.library_id || cachedLib === currentLib
+        })
+        if (validCached.length > 0) {
+          tvShowsCache.value = validCached
+          tvShowsLoaded.value = true
+        }
+        // Don't set tvShowsLoaded here - let onMounted decide whether to fetch fresh
       }
     }
   } catch {

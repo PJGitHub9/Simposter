@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from io import BytesIO
 import time
+import sqlite3
 
 from ..config import logger, load_presets, get_movie_tmdb_id
 from ..rendering import render_poster_image, render_with_overlay_cache
@@ -8,11 +9,35 @@ from ..schemas import PreviewRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details
 from ..assets.selection import pick_poster, pick_logo
 from ..logo_sources import get_logos_merged
+from ..middleware.validation import (
+    validate_template_id,
+    validate_preset_id,
+    validate_url,
+    validate_options
+)
 
 router = APIRouter()
 
 @router.post("/preview")
 def api_preview(req: PreviewRequest):
+    # Input validation
+    try:
+        if req.template_id:
+            req.template_id = validate_template_id(req.template_id)
+        if req.preset_id:
+            req.preset_id = validate_preset_id(req.preset_id)
+        if req.bg_url:
+            req.bg_url = validate_url(req.bg_url, allow_data_uri=True)
+        if req.logo_url:
+            req.logo_url = validate_url(req.logo_url, allow_data_uri=True)
+        if req.options:
+            req.options = validate_options(req.options)
+    except HTTPException:
+        raise  # Re-raise validation errors
+    except Exception as e:
+        logger.error(f"[PREVIEW] Validation error: {e}")
+        raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
+
     ui_settings_data = None
     use_overlay_cache = True  # Overlay cache enabled by default
     start_time = time.perf_counter()
@@ -65,7 +90,8 @@ def api_preview(req: PreviewRequest):
                     try:
                         st = (render_options.get("season_text") or "").strip()
                         is_season = len(st) > 0
-                    except Exception:
+                    except (AttributeError, TypeError) as e:
+                        logger.debug("Failed to parse season_text: %s", e)
                         is_season = False
 
                     # Prefer season_options when rendering a season target
@@ -294,8 +320,8 @@ def api_preview(req: PreviewRequest):
             ui_settings_data = db.get_ui_settings()
             if ui_settings_data and "imageQuality" in ui_settings_data:
                 quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
-    except Exception:
-        pass
+    except (ImportError, AttributeError, KeyError, sqlite3.Error) as e:
+        logger.debug("Failed to load image quality settings: %s", e)
     img.convert("RGB").save(buf, "JPEG", quality=quality)
 
     import base64
