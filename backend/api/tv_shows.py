@@ -239,6 +239,117 @@ def api_tv_show_poster(rating_key: str, request: Request, meta: bool = False, ra
     raise HTTPException(status_code=404, detail="Poster not found")
 
 
+@router.get("/tv-show/{rating_key}/select-poster")
+def api_tv_show_select_poster(
+    rating_key: str,
+    poster_filter: str = "all",
+    season_index: Optional[int] = None
+):
+    """
+    Select a poster for a TV show or season based on poster_filter (textless, text, all).
+    Returns {"url": str, "has_text": bool} for the selected poster.
+    """
+    from ..assets.selection import pick_poster
+
+    # Get TMDB/TVDB IDs for the show
+    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+    try:
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
+        r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch TV show metadata: {e}")
+
+    tmdb_id = extract_tmdb_id_from_metadata(r.text)
+    tvdb_id = extract_tvdb_id_from_metadata(r.text)
+
+    if tmdb_id and not tvdb_id:
+        try:
+            external_ids = get_tv_external_ids(tmdb_id)
+            tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+        except Exception:
+            pass
+
+    if not tmdb_id:
+        raise HTTPException(status_code=404, detail="No TMDB ID found for TV show")
+
+    # Get show details
+    show_details = get_tv_show_details(tmdb_id)
+    original_lang = show_details.get("original_language")
+
+    # Fetch images based on whether we're selecting for a season or the series
+    if season_index is not None:
+        # Get season-specific images
+        season_imgs = get_tv_season_images(tmdb_id, season_index, original_lang)
+        season_posters = season_imgs.get("posters", [])
+
+        # Also get series-level images as fallback
+        series_imgs = get_images_for_tv_show(tmdb_id, original_lang)
+        series_posters = series_imgs.get("posters", [])
+
+        # Add TVDB season images if available
+        if tvdb_id and settings.TVDB_API_KEY:
+            try:
+                tvdb_season_imgs = tvdb_client.get_season_images(int(tvdb_id), season_index)
+                season_posters.extend(tvdb_season_imgs.get("posters", []))
+            except Exception as e:
+                logger.warning("[TVDB] Failed to fetch season images: %s", e)
+
+        # Add TVDB series images to fallback
+        if tvdb_id and settings.TVDB_API_KEY:
+            try:
+                tvdb_series_imgs = tvdb_client.get_series_images(int(tvdb_id))
+                series_posters.extend(tvdb_series_imgs.get("posters", []))
+            except Exception:
+                pass
+
+        # Combine for selection with textless fallback logic
+        poster = None
+        if poster_filter == "textless":
+            # Try season textless first
+            poster = next((p for p in season_posters if p.get("has_text") == False), None)
+            # Fall back to series textless
+            if not poster:
+                poster = next((p for p in series_posters if p.get("has_text") == False), None)
+                logger.debug("[SELECT-POSTER] Season %d: No textless season poster, using series textless", season_index)
+        else:
+            # Use combined list for other filters
+            all_posters = season_posters + series_posters
+            poster = pick_poster(all_posters, poster_filter)
+
+        if not poster and (season_posters or series_posters):
+            # Fallback to first available
+            poster = season_posters[0] if season_posters else series_posters[0] if series_posters else None
+    else:
+        # Get series-level images only
+        series_imgs = get_images_for_tv_show(tmdb_id, original_lang)
+        posters = series_imgs.get("posters", [])
+
+        # Add TVDB series images
+        if tvdb_id and settings.TVDB_API_KEY:
+            try:
+                tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
+                posters.extend(tvdb_imgs.get("posters", []))
+            except Exception:
+                pass
+
+        # Select poster with textless preference
+        if poster_filter == "textless":
+            poster = next((p for p in posters if p.get("has_text") == False), None)
+        else:
+            poster = pick_poster(posters, poster_filter)
+
+        if not poster and posters:
+            poster = posters[0]
+
+    if not poster:
+        raise HTTPException(status_code=404, detail="No poster found")
+
+    return {
+        "url": poster.get("url"),
+        "has_text": poster.get("has_text", None)
+    }
+
+
 @router.get("/tv-show/{rating_key}/labels", response_model=LabelsResponse)
 def api_tv_show_labels(rating_key: str):
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
@@ -580,4 +691,114 @@ async def api_upload_season_poster(request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to upload poster: {str(e)}")
     except Exception as e:
         logger.error(f"[SEASON] Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tv-show/{rating_key}/select-poster")
+def api_select_tv_poster(
+    rating_key: str,
+    poster_filter: str = "all",
+    season_index: Optional[int] = None,
+    library_id: Optional[str] = None
+):
+    """
+    Select and return the best poster URL for a TV show or season based on filter preferences.
+    This respects poster_filter settings (textless, text, all) and returns TMDB/TVDB poster URLs.
+    
+    Args:
+        rating_key: Plex rating key for the show
+        poster_filter: 'textless', 'text', or 'all' (default: 'all')
+        season_index: If provided, selects a season poster; otherwise selects series poster
+        library_id: Optional library ID for context
+    
+    Returns:
+        {"url": "<poster_url>", "has_text": bool, "source": "tmdb|tvdb"}
+    """
+    try:
+        from ..assets.selection import pick_poster
+        
+        # Get show metadata to find TMDB/TVDB IDs
+        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        r = plex_session.get(url, headers=plex_headers(), timeout=10)
+        r.raise_for_status()
+        
+        tmdb_id = extract_tmdb_id_from_metadata(r.text)
+        tvdb_id = extract_tvdb_id_from_metadata(r.text)
+        
+        if not tmdb_id:
+            raise HTTPException(status_code=404, detail="No TMDB ID found for this show")
+        
+        # Get show details for original language
+        show_details = get_tv_show_details(tmdb_id)
+        original_language = show_details.get("original_language")
+        
+        posters = []
+        
+        # Fetch posters based on whether we're selecting for season or series
+        if season_index is not None:
+            # Get season-specific posters
+            logger.info("[SELECT] Fetching season %d posters for show %s (TMDB: %s)", season_index, rating_key, tmdb_id)
+            try:
+                season_imgs = get_tv_season_images(tmdb_id, season_index, original_language)
+                posters.extend(season_imgs.get("posters", []))
+            except Exception as e:
+                logger.warning("[SELECT] Failed to get TMDB season images: %s", e)
+            
+            # Also get TVDB season posters if available
+            if tvdb_id and settings.TVDB_API_KEY:
+                try:
+                    tvdb_season_imgs = tvdb_client.get_season_images(int(tvdb_id), season_index)
+                    posters.extend(tvdb_season_imgs.get("posters", []))
+                except Exception as e:
+                    logger.warning("[SELECT] Failed to get TVDB season images: %s", e)
+            
+            # Fallback to series posters if no season posters found
+            if not posters:
+                logger.info("[SELECT] No season posters found, falling back to series posters")
+                series_imgs = get_images_for_tv_show(tmdb_id, original_language)
+                posters.extend(series_imgs.get("posters", []))
+        else:
+            # Get series-level posters
+            logger.info("[SELECT] Fetching series posters for show %s (TMDB: %s)", rating_key, tmdb_id)
+            series_imgs = get_images_for_tv_show(tmdb_id, original_language)
+            posters.extend(series_imgs.get("posters", []))
+            
+            # Also get TVDB series posters if available
+            if tvdb_id and settings.TVDB_API_KEY:
+                try:
+                    tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
+                    posters.extend(tvdb_imgs.get("posters", []))
+                except Exception as e:
+                    logger.warning("[SELECT] Failed to get TVDB series images: %s", e)
+        
+        logger.info("[SELECT] Found %d total posters with filter '%s'", len(posters), poster_filter)
+        
+        if not posters:
+            raise HTTPException(status_code=404, detail="No posters found")
+        
+        # Apply filter selection logic
+        selected_poster = None
+        if poster_filter == "textless":
+            # Prefer textless posters
+            selected_poster = next((p for p in posters if p.get("has_text") == False), None)
+            if not selected_poster:
+                logger.info("[SELECT] No textless poster found, using first available")
+                selected_poster = posters[0]
+        else:
+            selected_poster = pick_poster(posters, poster_filter)
+            if not selected_poster:
+                selected_poster = posters[0]
+        
+        logger.info("[SELECT] Selected poster: has_text=%s, url=%s", selected_poster.get("has_text"), selected_poster.get("url")[:100])
+        
+        return {
+            "url": selected_poster.get("url"),
+            "has_text": selected_poster.get("has_text", None),
+            "source": selected_poster.get("source", "unknown")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[SELECT] Error selecting poster: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

@@ -25,6 +25,7 @@ class PreviewRequest(BaseModel):
     preset_id: Optional[str] = None   # <-- MAKE OPTIONAL
     movie_title: Optional[str] = None
     movie_year: Optional[int] = None
+    tv_show_rating_key: Optional[str] = None  # For TV show logo fetching
     fallbackPosterAction: Optional[str] = None
     fallbackPosterTemplate: Optional[str] = None
     fallbackPosterPreset: Optional[str] = None
@@ -138,6 +139,7 @@ class BatchRequest(BaseModel):
     save_locally: bool = False
     labels: List[str] = []
     library_id: Optional[str] = None
+    include_seasons: bool = False  # TV shows: render all seasons instead of series poster
 
 
 

@@ -7,6 +7,33 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ---------------------------
+# Logo Mode/Preference Mapping
+# ---------------------------
+
+def map_logo_mode_to_preference(logo_mode_or_preference: str) -> str:
+    """
+    Map logo_mode values to valid pick_logo preference values.
+
+    In templates, logo_mode can be:
+    - "original": Use the original/preferred logo (maps to "white" for clean logos)
+    - "white": Prefer white/light logos
+    - "color": Prefer colored logos
+    - "first": Use first available logo
+    - "none": Don't use a logo
+
+    pick_logo only understands: "white", "color", "first"
+    """
+    mapping = {
+        "original": "white",  # "original" means original/clean/professional logo
+        "white": "white",
+        "color": "color",
+        "first": "first",
+        "none": "first"  # Shouldn't be called with "none", but default to first if it is
+    }
+    return mapping.get(logo_mode_or_preference, "first")
+
+
+# ---------------------------
 # Logo Color Analysis
 # ---------------------------
 
@@ -96,17 +123,40 @@ def pick_poster(posters: list, filter_mode: str):
 # Logo Selection
 # ---------------------------
 
-def _sort_logos_for_analysis(logos: list) -> list:
-    """Sort logos by quality heuristic (width desc, TMDb first)."""
+def _sort_logos_for_analysis(logos: list, language_pref: str = "en") -> list:
+    """
+    Sort logos by quality heuristic prioritizing:
+    1. Language (textless/null first, then preferred language, then English, then others)
+    2. Width (larger first)
+    3. Source (TMDB first)
+    """
+    from ..config import logger
+
     def key(l: dict):
         w = l.get("width") or 0
         src = l.get("source") or ""
+        lang = l.get("language") or None  # None/null = textless logo
+
+        # Language ranking: preferred > English > textless > other
+        # Note: We prioritize English/preferred over textless because TMDB sometimes
+        # incorrectly marks non-English logos as textless (language=null)
+        if lang == language_pref:
+            lang_rank = 0  # Preferred language (highest priority)
+        elif lang == "en":
+            lang_rank = 1  # English (always second priority)
+        elif lang is None:
+            lang_rank = 2  # Textless logos (may have incorrect metadata)
+        else:
+            lang_rank = 3  # Other languages (lowest priority)
+
         src_rank = 0 if src == "tmdb" else 1
-        return (-int(w), src_rank)
-    return sorted(logos, key=key)
+        return (lang_rank, -int(w), src_rank)
+
+    sorted_logos = sorted(logos, key=key)
+    return sorted_logos
 
 
-def pick_logo(logos: list, preference: str, white_fallback: str = "use_next"):
+def pick_logo(logos: list, preference: str, white_fallback: str = "use_next", language_pref: str = "en"):
     """
     Faster logo selection with limited concurrent analysis on thumbnails.
 
@@ -118,6 +168,8 @@ def pick_logo(logos: list, preference: str, white_fallback: str = "use_next"):
     white_fallback options:
     - "use_next": Use next available logo if white not found
     - "skip": Return None (skip logo entirely)
+
+    language_pref: Preferred language code (e.g., "en"). Textless logos (language=None) are always prioritized highest.
     """
     if not logos:
         return None
@@ -127,7 +179,7 @@ def pick_logo(logos: list, preference: str, white_fallback: str = "use_next"):
 
     # Limit analysis to top-N candidates to reduce network/CPU work
     TOP_N = 6
-    candidates = _sort_logos_for_analysis(logos)[:TOP_N]
+    candidates = _sort_logos_for_analysis(logos, language_pref)[:TOP_N]
 
     analyzed = []
 
@@ -169,9 +221,24 @@ def pick_logo(logos: list, preference: str, white_fallback: str = "use_next"):
 
         def white_score(item):
             data = item[0]
+            logo = item[1]
             brightness_norm = data["brightness"] / 255.0
             desaturation = 1.0 - data["saturation"]
-            return brightness_norm * 0.7 + desaturation * 0.3
+            color_score = brightness_norm * 0.7 + desaturation * 0.3
+
+            # Add language preference bonus
+            lang = logo.get("language")
+            if lang == language_pref:
+                lang_bonus = 0.5  # Strong preference for preferred language
+            elif lang == "en":
+                lang_bonus = 0.3  # Moderate preference for English
+            elif lang is None:
+                lang_bonus = 0.0  # No bonus for textless (may be mislabeled)
+            else:
+                lang_bonus = -0.5  # Penalty for other languages
+
+            return color_score + lang_bonus
+
         best = max(white_candidates, key=white_score)
         return best[1]
 

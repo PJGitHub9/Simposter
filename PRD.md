@@ -274,19 +274,23 @@ simposter/
 **Description**: Process multiple movies/shows simultaneously with progress tracking
 
 **Key Capabilities:**
-- Multi-select movies from library
+- Multi-select movies/shows from library
 - Search and filter by title, year, labels
 - Library-based filtering
-- Real-time preview sidebar
-- Navigate through selected movies before processing
+- Real-time preview sidebar with template/preset updates
+- Navigate through selected items before processing
+- **TV Show Season Support**: Toggle "Include Seasons" to render all seasons for selected shows
+- Season navigation in preview (Prev/Next Season buttons)
 - Concurrent rendering (configurable workers)
 - Progress tracking with detailed status
 - Send to Plex and/or save locally
 - Label removal for selected labels
 - Session caching for performance
+- Sent/Saved status indicators with timestamps
+- Pagination for large libraries
 
-**User Flow:**
-1. Navigate to Batch Edit view
+**User Flow (Movies):**
+1. Navigate to Movie Batch Edit view
 2. Search/filter movies
 3. Select multiple movies (checkboxes)
 4. Choose template and preset
@@ -294,6 +298,25 @@ simposter/
 6. Click "Process Batch"
 7. Monitor progress (shows X/Y completed)
 8. Review results
+
+**User Flow (TV Shows):**
+1. Navigate to TV Batch Edit view
+2. Search/filter shows
+3. Select multiple shows (checkboxes)
+4. Enable "Include Seasons" if rendering seasons
+5. Choose template and preset (preview updates automatically)
+6. Preview first show/season (navigate with Prev/Next buttons)
+7. For seasons: Use Prev/Next Season to cycle through seasons
+8. Click "Process Batch"
+9. Monitor progress
+10. Review results
+
+**TV Show Batch Processing:**
+- When "Include Seasons" is **disabled**: Renders series-level posters for each selected show
+- When "Include Seasons" is **enabled**: Renders all seasons for each selected show with season text
+- Preview shows current season with proper season text overlay
+- Season text is automatically applied (e.g., "Season 1", "Season 2", "Specials")
+- Uses season-specific posters when available, falls back to series posters
 
 **Performance:**
 - Default: 2 concurrent workers
@@ -733,7 +756,8 @@ watch([bgUrl, logoUrl, options], () => {
 views/
 ├── MoviesView.vue           # Movie library grid
 ├── TvShowsView.vue          # TV show library
-├── BatchEditView.vue        # Batch processing UI
+├── BatchEditView.vue        # Movie batch processing UI
+├── TvBatchEditView.vue      # TV show batch processing UI
 ├── SettingsView.vue         # Settings management
 └── TemplateManagerView.vue  # Template/preset manager
 
@@ -1101,8 +1125,27 @@ class RadarrWebhook(BaseModel):
 | `/api/preview` | POST | Generate preview | `PreviewRequest` | `{image_base64: "data:image/jpeg;base64,..."}` |
 | `/api/save` | POST | Save poster | `SaveRequest` | `{success: true, path: "/config/output/..."}` |
 | `/api/plexsend` | POST | Upload to Plex | `PlexSendRequest` | `{success: true, message: "Uploaded"}` |
-| `/api/batch` | POST | Batch process | `BatchRequest` | `{message: "Batch started"}` |
+| `/api/batch` | POST | Batch process movies/shows | `BatchRequest` (supports both movies and TV shows) | `{message: "Batch started"}` |
 | `/api/batch-progress` | GET | Get batch progress | - | `{total: 100, current: 50, status: "processing"}` |
+
+**Batch Request Format:**
+```typescript
+{
+  rating_keys: string[]          // Array of Plex rating keys (shows or movies)
+  template_id: string
+  preset_id?: string
+  options: Record<string, any>   // Template-specific options
+  send_to_plex: boolean
+  save_locally: boolean
+  labels?: string[]              // Labels to remove (if send_to_plex=true)
+  library_id?: string
+  include_seasons?: boolean      // TV shows only: render all seasons
+}
+```
+
+**TV Show Batch Behavior:**
+- If `include_seasons=false`: Renders series-level posters
+- If `include_seasons=true`: Renders all seasons for each show with automatic season text
 
 ### Presets & Templates API
 
@@ -1333,6 +1376,23 @@ const choice = seasonTextless || seriesTextless || plexDefault
 For season posters with **text** or **all** filters:
 - Only use season-specific posters (no fallback to series)
 - Series posters may have show title text that would be incorrect for seasons
+
+**Known Issue - Textless Poster Detection:**
+
+The current implementation determines if a poster has text based on language metadata from TMDB/TVDB APIs:
+- `language=null` or `language=""` → `has_text=False` (textless)
+- `language="en"` or any language → `has_text=True` (has text)
+
+**Problem**: TMDB/TVDB language tags indicate the "intended audience language" or show language, NOT whether the poster physically contains text overlays. Many posters tagged with `language="en"` or `language="eng"` are actually textless (clean artwork with no title/text), while some posters with no language tag may have text.
+
+**Current Workaround**: Use the "all" filter instead of "textless" to see all available posters, then manually select the ones without text.
+
+**Proposed Solutions** (Future Enhancement):
+1. **Manual Override**: Add UI checkbox "Mark as textless" to override API metadata
+2. **OCR Detection**: Use optical character recognition to detect text on posters automatically
+3. **Community Database**: Build a community-contributed database of textless poster IDs
+4. **Machine Learning**: Train a model to detect text presence in posters
+5. **Provider Priority**: Add option to prioritize specific providers known for better textless tagging (e.g., Fanart.tv with `lang="00"` is more reliable)
 
 **Logo Selection Logic:**
 ```python
