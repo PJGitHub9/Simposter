@@ -1403,9 +1403,9 @@ watch(
             <div v-else-if="selectedPoster" class="placeholder-state">
               <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" />
               <div class="placeholder-overlay">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-                  <circle cx="12" cy="13" r="3" />
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
                 </svg>
                 <p>Adjust settings to render</p>
               </div>
@@ -1417,6 +1417,12 @@ watch(
                 <polyline points="21 15 16 10 5 21" />
               </svg>
               <p>Select a poster to begin</p>
+            </div>
+
+            <!-- Loading Overlay -->
+            <div v-if="loading" class="loading-overlay">
+              <div class="spinner"></div>
+              <p>Rendering...</p>
             </div>
 
             <!-- Bounding Box for Uniform Logo -->
@@ -2117,6 +2123,44 @@ button:disabled {
 
 .empty-preview p {
   font-size: 14px;
+}
+
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  border-radius: 10px;
+  z-index: 10;
+}
+
+.loading-overlay p {
+  font-size: 16px;
+  font-weight: 500;
+  color: #dce6ff;
+}
+
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(255, 255, 255, 0.1);
+  border-top-color: #4a9eff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .bounding-box {

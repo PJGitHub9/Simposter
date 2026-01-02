@@ -26,8 +26,8 @@ def api_preview(req: PreviewRequest):
             req.template_id = validate_template_id(req.template_id)
         if req.preset_id:
             req.preset_id = validate_preset_id(req.preset_id)
-        if req.bg_url:
-            req.bg_url = validate_url(req.bg_url, allow_data_uri=True)
+        if req.background_url:
+            req.background_url = validate_url(req.background_url, allow_data_uri=True)
         if req.logo_url:
             req.logo_url = validate_url(req.logo_url, allow_data_uri=True)
         if req.options:

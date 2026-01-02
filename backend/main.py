@@ -14,11 +14,13 @@ from .middleware.rate_limit import RateLimitMiddleware
 app = FastAPI()
 
 # Add rate limiting middleware (before CORS)
-app.add_middleware(
-    RateLimitMiddleware,
-    default_limit=60,  # 60 requests per minute for general endpoints
-    window_seconds=60  # 60 second window
-)
+# Note: Disabled by default to not interfere with normal usage
+# Uncomment to enable rate limiting for production deployments
+# app.add_middleware(
+#     RateLimitMiddleware,
+#     default_limit=300,  # 300 requests per minute for general endpoints
+#     window_seconds=60   # 60 second window
+# )
 
 app.add_middleware(
     CORSMiddleware,

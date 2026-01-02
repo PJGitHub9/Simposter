@@ -258,6 +258,7 @@ simposter/
 - Separate preset options for series vs. seasons
 - Batch render all seasons with "All" button
 - Coming soon indicator support (TVDB)
+- **Smart poster fallback**: When "textless" filter is selected for seasons, falls back to series textless posters if no season-specific textless posters are available (since textless posters have no text, they work for any season)
 
 **User Flow:**
 1. Navigate to TV Shows view
@@ -1311,6 +1312,27 @@ def select_best_poster(
     # 3. Sort by width (prefer higher resolution)
     # 4. Return first match
 ```
+
+**TV Season Poster Selection** (Frontend: `TvShowEditorPane.vue`):
+
+For season posters with **textless** filter:
+```typescript
+// Priority order:
+1. Season-specific textless poster (TVDB/TMDB)
+2. Series textless poster (fallback - works because no text)
+3. Plex default poster
+
+// Logic:
+const seasonTextless = seasonPosters.find(p => p.has_text === false)
+const seriesTextless = seriesPosters.find(p => p.has_text === false)
+const choice = seasonTextless || seriesTextless || plexDefault
+```
+
+**Rationale**: Textless posters have no text overlay, so a series textless poster can be used for any season without looking incorrect. This maximizes the chances of finding a high-quality textless poster.
+
+For season posters with **text** or **all** filters:
+- Only use season-specific posters (no fallback to series)
+- Series posters may have show title text that would be incorrect for seasons
 
 **Logo Selection Logic:**
 ```python
