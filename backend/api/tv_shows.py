@@ -279,8 +279,13 @@ def api_tv_show_select_poster(
     # Fetch images based on whether we're selecting for a season or the series
     if season_index is not None:
         # Get season-specific images
-        season_imgs = get_tv_season_images(tmdb_id, season_index, original_lang)
-        season_posters = season_imgs.get("posters", [])
+        try:
+            season_imgs = get_tv_season_images(tmdb_id, season_index, original_lang)
+            season_posters = season_imgs.get("posters", [])
+        except Exception as e:
+            # Season 0 (specials) often don't have images on TMDB
+            logger.warning("[TMDB] Failed to fetch season %d images: %s", season_index, e)
+            season_posters = []
 
         # Also get series-level images as fallback
         series_imgs = get_images_for_tv_show(tmdb_id, original_lang)

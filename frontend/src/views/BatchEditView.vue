@@ -1121,6 +1121,14 @@ onMounted(async () => {
       <!-- Preview Sidebar -->
       <div v-if="currentPreviewMovie" class="preview-sidebar">
         <h3>Preview</h3>
+
+        <!-- Title and Year Header -->
+        <div class="preview-header">
+          <p class="preview-title">{{ currentPreviewMovie.title }}</p>
+          <p class="preview-year">{{ currentPreviewMovie.year }}</p>
+        </div>
+
+        <!-- Preview Poster -->
         <div class="preview-poster">
           <div v-if="previewLoading" class="preview-loading">Rendering...</div>
           <img
@@ -1135,35 +1143,36 @@ onMounted(async () => {
           />
         </div>
 
-        <!-- Navigation Controls -->
-        <div v-if="selectedMoviesList.length > 1" class="preview-nav">
-          <button
-            class="nav-btn"
-            @click="prevPreview"
-            :disabled="previewIndex === 0"
-          >
-            ← Prev
-          </button>
-          <span class="nav-counter">{{ previewIndex + 1 }} / {{ selectedMoviesList.length }}</span>
-          <button
-            class="nav-btn"
-            @click="nextPreview"
-            :disabled="previewIndex === selectedMoviesList.length - 1"
-          >
-            Next →
-          </button>
-        </div>
-
-        <div class="preview-info">
-          <p class="preview-title">{{ currentPreviewMovie.title }}</p>
-          <p class="preview-year">{{ currentPreviewMovie.year }}</p>
+        <!-- Hints -->
+        <div v-if="!selectedTemplate || !selectedPreset" class="preview-hints">
           <p v-if="!selectedTemplate" class="preview-hint">Select a template to preview</p>
           <p v-else-if="!selectedPreset" class="preview-hint">Preset optional - preview will use template defaults</p>
         </div>
 
+        <!-- Navigation Controls -->
+        <div v-if="selectedMoviesList.length > 1" class="preview-nav-section">
+          <div class="preview-nav">
+            <button
+              class="nav-btn"
+              @click="prevPreview"
+              :disabled="previewIndex === 0"
+            >
+              ← Prev
+            </button>
+            <span class="nav-counter">{{ previewIndex + 1 }} / {{ selectedMoviesList.length }}</span>
+            <button
+              class="nav-btn"
+              @click="nextPreview"
+              :disabled="previewIndex === selectedMoviesList.length - 1"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+
         <!-- Movie List -->
         <div v-if="selectedMoviesList.length > 1" class="preview-list">
-          <h4>Selected Movies</h4>
+          <h4>Selected Movies ({{ selectedMoviesList.length }})</h4>
           <div class="movie-list-scroll">
             <button
               v-for="(movie, index) in selectedMoviesList"
@@ -1551,12 +1560,35 @@ onMounted(async () => {
   font-size: 1.1rem;
 }
 
+/* Preview header with title and year */
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.preview-title {
+  margin: 0;
+  color: var(--text-primary, #fff);
+  font-size: 1rem;
+  font-weight: 600;
+  flex: 1;
+}
+
+.preview-year {
+  margin: 0;
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
 .preview-poster {
   aspect-ratio: 2/3;
   overflow: hidden;
   background: var(--surface-alt, #242933);
   border-radius: 6px;
-  margin-bottom: 1rem;
   position: relative;
 }
 
@@ -1575,21 +1607,9 @@ onMounted(async () => {
   font-size: 0.9rem;
 }
 
-.preview-info {
-  padding: 0.5rem 0;
-}
-
-.preview-title {
-  margin: 0 0 0.25rem 0;
-  color: var(--text-primary, #fff);
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.preview-year {
-  margin: 0;
-  color: var(--text-secondary, #aaa);
-  font-size: 0.9rem;
+/* Hints section */
+.preview-hints {
+  margin-top: 0.75rem;
 }
 
 .preview-hint {
@@ -1762,16 +1782,23 @@ onMounted(async () => {
   color: var(--text-secondary, #ccc);
 }
 
+/* Preview navigation section wrapper */
+.preview-nav-section {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border, #2a2f3e);
+}
+
 /* Preview navigation */
 .preview-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-top: 0.75rem;
   padding: 0.5rem;
   background: var(--surface-alt, #242933);
   border-radius: 6px;
+  border-left: 3px solid var(--accent, #3dd6b7);
 }
 
 .nav-btn {
@@ -1801,6 +1828,8 @@ onMounted(async () => {
   color: var(--text-secondary, #aaa);
   font-size: 0.85rem;
   font-weight: 500;
+  min-width: 80px;
+  text-align: center;
 }
 
 /* Preview movie list */

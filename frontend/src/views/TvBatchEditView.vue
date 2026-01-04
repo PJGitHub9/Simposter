@@ -871,13 +871,15 @@ watch(includeSeasons, async (enabled) => {
     await fetchSeasons(currentPreviewMovie.value.key)
     // Don't auto-select first season - let user navigate to it
     // This ensures series poster shows by default
+    // Don't call fetchPreview() here - currentSeason will change when seasons load,
+    // which will trigger watch(currentSeasonIndex) and call fetchPreview()
   } else {
     currentSeasons.value = []
     currentSeasonIndex.value = 0
+    // When disabling seasons, we need to fetch the show-level preview
+    previewCache.value = {}
+    fetchPreview()
   }
-  // Clear preview cache when toggling to force re-render
-  previewCache.value = {}
-  fetchPreview()
 })
 
 // Preview rendering
@@ -885,6 +887,8 @@ const previewImage = ref<string | null>(null)
 const previewLoading = ref(false)
 const previewCache = ref<Record<string, string>>({})
 let preloadTimeout: ReturnType<typeof setTimeout> | null = null
+let currentPreviewAbortController: AbortController | null = null
+let previewRequestId = 0
 
 const cancelPreload = () => {
   if (preloadTimeout !== null) {
@@ -908,6 +912,12 @@ const fetchPreview = async (isPreload = false) => {
   // If this is a manual fetch (not preload), cancel any scheduled preload
   if (!isPreload) {
     cancelPreload()
+
+    // Cancel any in-flight preview request
+    if (currentPreviewAbortController) {
+      currentPreviewAbortController.abort()
+      currentPreviewAbortController = null
+    }
   }
 
   if (!currentPreviewMovie.value || !selectedTemplate.value) {
@@ -915,21 +925,28 @@ const fetchPreview = async (isPreload = false) => {
     return
   }
 
+  // Assign a unique ID to this request to track ordering
+  const requestId = ++previewRequestId
+
   // Determine if we're viewing a show or a specific season
   const movie = currentPreviewMovie.value
   const isShowLevel = movie.seasons !== undefined // Has seasons = show level
 
-  // Build cache key - only include season info if we're actually rendering a season
+  // Build cache key - include library, show key, template, preset, and season index
   let cacheKey: string
+  const libraryPart = currentLibrary.value ? `lib:${currentLibrary.value}` : 'no-lib'
+
   if (includeSeasons.value && !isShowLevel) {
     // Viewing a specific season - include season info in cache key
-    cacheKey = `${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${movie.title}`
+    cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${movie.title}`
   } else if (includeSeasons.value && currentSeason.value && currentSeasons.value.length > 0) {
     // Viewing show with seasons enabled AND seasons have been loaded AND a season is selected
-    cacheKey = `${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${currentSeason.value.title}`
+    // Use season index for more reliable cache key (title can have special chars)
+    const seasonIdx = currentSeason.value.index
+    cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${seasonIdx}`
   } else {
     // Viewing show without seasons OR seasons not loaded yet
-    cacheKey = `${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|show`
+    cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|show`
   }
 
   console.log('[TV BATCH PREVIEW] Cache key:', cacheKey)
@@ -946,7 +963,16 @@ const fetchPreview = async (isPreload = false) => {
   // Only show loading indicator for manual fetches, not preloads
   if (!isPreload) {
     previewLoading.value = true
+    // Clear the preview image while loading to prevent showing stale cached poster
+    previewImage.value = null
   }
+
+  // Create abort controller for this request
+  const abortController = new AbortController()
+  if (!isPreload) {
+    currentPreviewAbortController = abortController
+  }
+
   try {
     // Determine which poster to use
     let posterUrl = movie.poster
@@ -1071,7 +1097,8 @@ const fetchPreview = async (isPreload = false) => {
     const response = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: abortController.signal
     })
 
     if (response.ok) {
@@ -1081,24 +1108,32 @@ const fetchPreview = async (isPreload = false) => {
       // Always cache the result
       previewCache.value[cacheKey] = img
 
-      // Only update preview image if this is a manual fetch (not a background preload)
-      if (!isPreload) {
+      // Only update preview image if this request is still the most recent one
+      // This prevents race conditions where an older request completes after a newer one
+      if (!isPreload && requestId === previewRequestId) {
         previewImage.value = img
-        console.log('[TV BATCH PREVIEW] Preview rendered successfully')
-      } else {
+        console.log('[TV BATCH PREVIEW] Preview rendered successfully (request #' + requestId + ')')
+      } else if (isPreload) {
         console.log('[TV BATCH PREVIEW] Background preload completed and cached')
+      } else {
+        console.log('[TV BATCH PREVIEW] Ignoring stale preview response (request #' + requestId + ', current #' + previewRequestId + ')')
       }
     } else {
       console.error('[TV BATCH PREVIEW] Preview response not OK:', response.status)
       const errorText = await response.text()
       console.error('[TV BATCH PREVIEW] Error details:', errorText)
-      if (!isPreload) {
+      if (!isPreload && requestId === previewRequestId) {
         previewImage.value = null
       }
     }
   } catch (err) {
+    // Ignore abort errors - these are expected when canceling
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.log('[TV BATCH PREVIEW] Request aborted (request #' + requestId + ')')
+      return
+    }
     console.error('[TV BATCH PREVIEW] Preview failed:', err)
-    if (!isPreload) {
+    if (!isPreload && requestId === previewRequestId) {
       previewImage.value = null
     }
   } finally {
@@ -1152,14 +1187,20 @@ watch(selectedPreset, () => {
 })
 
 watch(currentPreviewMovie, () => {
-  // This is handled by the earlier watch that includes seasons fetching
-  // Just trigger immediate preview fetch
-  fetchPreview()
+  // When seasons are enabled, the currentSeason watch will handle preview fetching
+  // When seasons are disabled, we need to fetch the show-level preview
+  if (!includeSeasons.value) {
+    fetchPreview()
+  }
+  // If includeSeasons is true, the watch(currentSeason) will trigger when seasons load
 })
 
 // Update preview when season changes
-watch(currentSeasonIndex, () => {
-  if (includeSeasons.value) {
+// Watch currentSeason instead of currentSeasonIndex because currentSeason is a computed
+// property that changes when seasons are loaded, even if the index stays at 0
+watch(currentSeason, (newSeason, oldSeason) => {
+  // Only fetch if season actually changed (not just from null to null)
+  if (newSeason !== oldSeason) {
     // Don't clear cache - let fetchPreview use cached results if available
     fetchPreview()
   }
@@ -1433,6 +1474,14 @@ onMounted(async () => {
       <!-- Preview Sidebar -->
       <div v-if="currentPreviewMovie" class="preview-sidebar">
         <h3>Preview</h3>
+
+        <!-- Title and Year Header -->
+        <div class="preview-header">
+          <p class="preview-title">{{ currentPreviewMovie.title }}</p>
+          <p class="preview-year">{{ currentPreviewMovie.year }}</p>
+        </div>
+
+        <!-- Preview Poster -->
         <div class="preview-poster">
           <div v-if="previewLoading" class="preview-loading">Rendering...</div>
           <img
@@ -1440,64 +1489,61 @@ onMounted(async () => {
             :src="previewImage"
             :alt="currentPreviewMovie.title"
           />
-          <img
-            v-else
-            :src="currentPreviewMovie.poster || `/api/tv-show/${currentPreviewMovie.key}/poster${currentLibrary ? `?library_id=${encodeURIComponent(currentLibrary)}` : ''}`"
-            :alt="currentPreviewMovie.title"
-          />
+          <div v-else-if="!selectedTemplate" class="preview-loading">Select a template to preview</div>
+          <div v-else class="preview-loading">Waiting for preview...</div>
         </div>
 
-        <!-- Show Navigation Controls -->
-        <div v-if="selectedShowsList.length > 1" class="preview-nav">
+        <!-- Season Navigation - Below Poster -->
+        <div v-if="includeSeasons && currentSeasons.length > 0" class="season-nav-inline">
           <button
-            class="nav-btn"
-            @click="prevPreview"
-            :disabled="previewIndex === 0"
-          >
-            ← Prev Show
-          </button>
-          <span class="nav-counter">{{ previewIndex + 1 }} / {{ selectedShowsList.length }}</span>
-          <button
-            class="nav-btn"
-            @click="nextPreview"
-            :disabled="previewIndex === selectedShowsList.length - 1"
-          >
-            Next Show →
-          </button>
-        </div>
-
-        <!-- Season Navigation Controls -->
-        <div v-if="includeSeasons && currentSeasons.length > 0" class="season-nav">
-          <button
-            class="nav-btn"
+            class="season-arrow-btn"
             @click="prevSeason"
             :disabled="currentSeasonIndex === 0"
           >
-            ← Prev Season
+            ←
           </button>
-          <span class="season-counter">
+          <span class="season-label">
             {{ currentSeason?.title || `Season ${currentSeasonIndex + 1}` }}
           </span>
           <button
-            class="nav-btn"
+            class="season-arrow-btn"
             @click="nextSeason"
             :disabled="currentSeasonIndex === currentSeasons.length - 1"
           >
-            Next Season →
+            →
           </button>
         </div>
 
-        <div class="preview-info">
-          <p class="preview-title">{{ currentPreviewMovie.title }}</p>
-          <p class="preview-year">{{ currentPreviewMovie.year }}</p>
-          <p v-if="currentSeason" class="preview-season">{{ currentSeason.title }}</p>
+        <!-- Hints -->
+        <div v-if="!selectedTemplate || !selectedPreset" class="preview-hints">
           <p v-if="!selectedTemplate" class="preview-hint">Select a template to preview</p>
           <p v-else-if="!selectedPreset" class="preview-hint">Preset optional - preview will use template defaults</p>
         </div>
 
+        <!-- Show Navigation -->
+        <div v-if="selectedShowsList.length > 1" class="preview-nav-section">
+          <div class="preview-nav">
+            <button
+              class="nav-btn"
+              @click="prevPreview"
+              :disabled="previewIndex === 0"
+            >
+              ← Prev
+            </button>
+            <span class="nav-counter">{{ previewIndex + 1 }} / {{ selectedShowsList.length }}</span>
+            <button
+              class="nav-btn"
+              @click="nextPreview"
+              :disabled="previewIndex === selectedShowsList.length - 1"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+
         <!-- Movie List -->
         <div v-if="selectedShowsList.length > 1" class="preview-list">
-          <h4>Selected TV Shows</h4>
+          <h4>Selected TV Shows ({{ selectedShowsList.length }})</h4>
           <div class="movie-list-scroll">
             <button
               v-for="(movie, index) in selectedShowsList"
@@ -1885,12 +1931,35 @@ onMounted(async () => {
   font-size: 1.1rem;
 }
 
+/* Preview header with title and year */
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.preview-title {
+  margin: 0;
+  color: var(--text-primary, #fff);
+  font-size: 1rem;
+  font-weight: 600;
+  flex: 1;
+}
+
+.preview-year {
+  margin: 0;
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
 .preview-poster {
   aspect-ratio: 2/3;
   overflow: hidden;
   background: var(--surface-alt, #242933);
   border-radius: 6px;
-  margin-bottom: 1rem;
   position: relative;
 }
 
@@ -1909,21 +1978,49 @@ onMounted(async () => {
   font-size: 0.9rem;
 }
 
-.preview-info {
-  padding: 0.5rem 0;
+/* Season navigation inline below poster */
+.season-nav-inline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem;
 }
 
-.preview-title {
-  margin: 0 0 0.25rem 0;
+.season-arrow-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent, #3dd6b7);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.season-arrow-btn:hover:not(:disabled) {
+  color: #2bc4a3;
+  transform: scale(1.2);
+}
+
+.season-arrow-btn:disabled {
+  color: rgba(170, 170, 170, 0.3);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.season-label {
   color: var(--text-primary, #fff);
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  min-width: 120px;
 }
 
-.preview-year {
-  margin: 0;
-  color: var(--text-secondary, #aaa);
-  font-size: 0.9rem;
+/* Hints section */
+.preview-hints {
+  margin-top: 0.75rem;
 }
 
 .preview-hint {
@@ -2096,89 +2193,54 @@ onMounted(async () => {
   color: var(--text-secondary, #ccc);
 }
 
+/* Preview navigation section wrapper */
+.preview-nav-section {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border, #2a2f3e);
+}
+
 /* Preview navigation */
 .preview-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-  padding: 0.5rem;
-  background: var(--surface-alt, #242933);
-  border-radius: 6px;
-  border-left: 3px solid var(--accent, #3dd6b7);
-}
-
-/* Season navigation - more subtle styling */
-.season-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.4rem;
-  margin-top: 0.5rem;
-  padding: 0.4rem 0.5rem;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
   background: transparent;
-  border-radius: 4px;
-  border: 1px solid rgba(61, 214, 183, 0.2);
+  border-radius: 6px;
+  border: 1px solid rgba(61, 214, 183, 0.25);
 }
 
 .nav-btn {
-  padding: 0.5rem 1rem;
-  background: var(--accent, #3dd6b7);
-  color: #000;
-  border: none;
+  padding: 0.4rem 0.9rem;
+  background: rgba(61, 214, 183, 0.1);
+  color: var(--accent, #3dd6b7);
+  border: 1px solid rgba(61, 214, 183, 0.3);
   border-radius: 4px;
   font-size: 0.85rem;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-/* Smaller, subtle buttons for season navigation */
-.season-nav .nav-btn {
-  padding: 0.35rem 0.75rem;
-  background: rgba(61, 214, 183, 0.15);
-  color: var(--accent, #3dd6b7);
-  font-size: 0.8rem;
-  font-weight: 500;
-  border: 1px solid rgba(61, 214, 183, 0.3);
-}
-
-.season-nav .nav-btn:hover:not(:disabled) {
-  background: rgba(61, 214, 183, 0.25);
-  border-color: rgba(61, 214, 183, 0.5);
-  transform: none;
-}
-
-.season-nav .nav-btn:disabled {
-  opacity: 0.2;
-  cursor: not-allowed;
-}
-
 .nav-btn:hover:not(:disabled) {
-  background: #2bc4a3;
+  background: rgba(61, 214, 183, 0.2);
+  border-color: rgba(61, 214, 183, 0.5);
   transform: translateY(-1px);
 }
 
 .nav-btn:disabled {
-  opacity: 0.3;
+  opacity: 0.25;
   cursor: not-allowed;
   transform: none;
 }
 
 .nav-counter {
-  color: var(--text-secondary, #aaa);
+  color: var(--text-primary, #fff);
   font-size: 0.85rem;
   font-weight: 500;
   min-width: 80px;
-  text-align: center;
-}
-
-.season-counter {
-  color: rgba(170, 170, 170, 0.7);
-  font-size: 0.75rem;
-  font-weight: 400;
-  min-width: 100px;
   text-align: center;
 }
 
