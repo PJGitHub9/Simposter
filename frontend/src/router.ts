@@ -19,6 +19,7 @@ export const router = createRouter({
     { path: '/movies/local-assets', name: 'local-assets', component: LocalAssetsView },
     { path: '/tv-shows', name: 'tv-shows', component: TvShowsView },
     { path: '/tv-shows/batch-edit', name: 'tv-batch-edit', component: TvBatchEditView },
+    { path: '/tv-shows/local-assets', name: 'tv-local-assets', component: LocalAssetsView },
     { path: '/templates', name: 'template-manager', component: TemplateManagerView },
     { path: '/settings', name: 'settings', component: SettingsView },
     { path: '/logs', name: 'logs', component: LogsView }

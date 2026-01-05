@@ -36,7 +36,8 @@ const tabs = computed<MenuItem[]>(() => {
     key: `tv-shows-${lib.id || idx}`,
     label: lib.displayName || lib.title || `TV Library ${idx + 1}`,
     submenu: [
-      { key: `tv-batch-${lib.id || idx}`, label: 'Batch Edit' }
+      { key: `tv-batch-${lib.id || idx}`, label: 'Batch Edit' },
+      { key: `tv-assets-${lib.id || idx}`, label: 'Local Assets' }
     ]
   })) : []
 
@@ -270,7 +271,7 @@ const activeTab = computed<TabKey>(() => {
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -285,6 +286,7 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
+  if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
   return ''
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
@@ -463,6 +465,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     const libId = parentKey.replace('tv-shows-', '')
     if (submenuKey.startsWith('tv-batch-')) {
       router.push({ name: 'tv-batch-edit', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-assets-')) {
+      router.push({ name: 'tv-local-assets', query: { library: libId } })
     }
   }
 }
