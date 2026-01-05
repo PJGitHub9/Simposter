@@ -18,6 +18,7 @@
 - 💾 **SessionStorage caching** — Posters and labels cached across views
 - 🚀 **Lazy loading** — Images load on-demand for better performance
 - 🔍 **Label filtering** — Filter movies by existing labels in batch edit
+- ⏰ **Scheduled library scans** — Automatic cron-based scanning to keep Simposter synced with Plex
 
 ### 🎬 **Enhanced Preview System**
 - 🖼️ **TMDB integration** — Preview uses TMDB posters based on preset filter (textless, text, any)
@@ -365,6 +366,7 @@ uvicorn backend.main:app --reload --port 8003
 
 ## Automation
 - **Radarr webhook** — Automatic poster generation on import
+- **Scheduled scans** — Configure cron schedule in Settings to automatically scan your Plex library
 
 ---
 

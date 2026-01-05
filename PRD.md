@@ -61,6 +61,7 @@ Simposter is a web application that generates custom posters for Plex media libr
 - Pillow + NumPy for image processing
 - SQLite with WAL mode
 - CairoSVG/resvg for SVG handling
+- APScheduler for cron-based scheduling
 
 **Frontend:**
 - Vue 3 (Composition API)
@@ -144,11 +145,13 @@ Simposter is a web application that generates custom posters for Plex media libr
 │  │              API Layer (Routes)                      │   │
 │  │  movies • tv_shows • preview • save • batch          │   │
 │  │  presets • templates • settings • webhooks           │   │
+│  │  scheduler                                           │   │
 │  └──────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │           Core Services                              │   │
 │  │  • Rendering Engine  • Cache Manager                │   │
 │  │  • Database Layer    • Configuration                │   │
+│  │  • Scheduler (APScheduler)                          │   │
 │  └──────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │        External API Clients                          │   │
@@ -178,6 +181,7 @@ simposter/
 │   ├── database.py         # SQLite operations
 │   ├── rendering.py        # Core rendering pipeline
 │   ├── schemas.py          # Pydantic models
+│   ├── scheduler.py        # APScheduler background service
 │   ├── tmdb_client.py      # TMDB API client
 │   ├── tvdb_client.py      # TVDB API client
 │   ├── fanart_client.py    # Fanart.tv API client
@@ -192,6 +196,7 @@ simposter/
 │   │   ├── presets.py
 │   │   ├── templates.py
 │   │   ├── webhooks.py
+│   │   ├── scheduler.py   # Scheduler API endpoints
 │   │   └── ...
 │   ├── templates/          # Template renderers
 │   │   ├── universal.py

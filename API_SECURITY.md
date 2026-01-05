@@ -31,6 +31,7 @@ Rate limiting is implemented using a sliding window algorithm via the `RateLimit
 | `/api/plexsend` | 20 | External API calls |
 | `/api/batch` | 5 | Very expensive batch operations |
 | `/api/scan-library` | 5 | Resource-intensive library scanning |
+| `/api/scheduler/*` | 10 | Scheduler configuration endpoints |
 | `/api/movies` | 100 | Read-heavy, less expensive |
 | `/api/tv-shows` | 100 | Read-heavy, less expensive |
 | `/api/tmdb` | 40 | Match TMDB's own rate limit |
