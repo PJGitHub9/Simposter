@@ -44,6 +44,12 @@ export type PerformanceSettings = {
   useOverlayCache: boolean
 }
 
+export type SchedulerSettings = {
+  enabled: boolean
+  cronExpression: string
+  libraryId?: string | null
+}
+
 export type UISettings = {
   theme: Theme
   posterDensity: number
@@ -58,6 +64,7 @@ export type UISettings = {
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
   apiOrder?: string[]
+  scheduler?: SchedulerSettings
 }
 
 const theme = ref<Theme>('neon')
@@ -76,6 +83,7 @@ const fanart = ref<FanartSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
+const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null })
 
 async function loadSettings() {
   loading.value = true
@@ -129,6 +137,11 @@ async function loadSettings() {
       useOverlayCache: data.performance?.useOverlayCache ?? true
     }
     apiOrder.value = data.apiOrder ?? ['tmdb', 'fanart', 'tvdb']
+    scheduler.value = {
+      enabled: data.scheduler?.enabled ?? false,
+      cronExpression: data.scheduler?.cronExpression ?? '0 1 * * *',
+      libraryId: data.scheduler?.libraryId ?? null
+    }
 
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to load settings'
@@ -155,7 +168,8 @@ async function saveSettings() {
       fanart: { ...fanart.value },
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value },
-      apiOrder: apiOrder.value
+      apiOrder: apiOrder.value,
+      scheduler: { ...scheduler.value }
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -188,6 +202,7 @@ export function useSettingsStore() {
     imageQuality,
     performance,
     apiOrder,
+    scheduler,
     loading,
     error,
     loaded,

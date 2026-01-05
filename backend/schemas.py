@@ -95,6 +95,12 @@ class PerformanceSettings(BaseModel):
     useOverlayCache: bool = True  # Pre-generate overlay effects for faster batch rendering
 
 
+class SchedulerSettings(BaseModel):
+    enabled: bool = False
+    cronExpression: str = "0 1 * * *"
+    libraryId: Optional[Union[str, int]] = None
+
+
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
@@ -108,6 +114,7 @@ class UISettings(BaseModel):
     fanart: FanartSettings = Field(default_factory=FanartSettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
+    scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
 
 class PlexSendRequest(BaseModel):

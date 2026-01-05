@@ -930,7 +930,21 @@ def _render_and_save_poster(
                 # Sanitize the title for filename
                 safe_title = "".join(c for c in title if c.isalnum() or c in " _-()")
                 safe_title = safe_title.strip()
-                filename = f"{safe_title}.png"
+
+                # Add season suffix for TV show seasons
+                if season_title:
+                    # Extract season number from season_title (e.g., "Season 1" -> "S01")
+                    import re
+                    season_match = re.search(r'(\d+)', season_title)
+                    if season_match:
+                        season_num = int(season_match.group(1))
+                        filename = f"{safe_title} - S{season_num:02d}.png"
+                    else:
+                        # Fallback: use sanitized season title
+                        safe_season = "".join(c for c in season_title if c.isalnum() or c in " _-()")
+                        filename = f"{safe_title} - {safe_season}.png"
+                else:
+                    filename = f"{safe_title}.png"
 
             save_path = base_dir / filename
             save_path.parent.mkdir(parents=True, exist_ok=True)
