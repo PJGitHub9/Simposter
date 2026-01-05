@@ -262,17 +262,23 @@ def init_database():
                 season_raw = row["season_options_json"] if "season_options_json" in row.keys() else None
                 base_opts = json.loads(row["options_json"]) if row["options_json"] else {}
                 
-                # If season_options exist, load them, otherwise start from base
-                if season_raw and season_raw.strip() not in ("", "{}", "null", "NULL"):
+                # Check if season_options is empty (newly created column defaults to '{}')
+                # or if it's a non-empty user-customized value
+                is_empty = not season_raw or season_raw.strip() in ("", "{}", "null", "NULL")
+                
+                if not is_empty:
+                    # User has custom season options - merge with base but don't override custom values
                     season_opts = json.loads(season_raw)
                     # Merge with base to ensure all base fields are present
                     season_opts = {**base_opts, **season_opts}
                 else:
+                    # Empty season options - start fresh from base
                     season_opts = dict(base_opts or {})
                 
-                # Apply/ensure season-specific defaults
+                # Apply season-specific overrides (these always override base options)
                 season_defaults = {
                     "logo_mode": "none",
+                    "poster_filter": "textless",
                     "text_overlay_enabled": True,
                     "custom_text": "{season}",
                     "font_family": "Arial",
@@ -282,10 +288,8 @@ def init_database():
                     "letter_spacing": 1,
                     "position_y": 0.85,
                 }
-                # Only set defaults if not already present (preserve user customizations)
-                for key, val in season_defaults.items():
-                    if key not in season_opts:
-                        season_opts[key] = val
+                # Always override these specific fields for season posters
+                season_opts.update(season_defaults)
                 
                 cursor.execute(
                     "UPDATE presets SET season_options_json = ? WHERE id = ?",

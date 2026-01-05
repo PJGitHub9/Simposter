@@ -85,6 +85,17 @@ const currentSeason = computed(() => {
   return seasons.value.find(s => s.key === seasonKey) || null
 })
 
+// Track which poster type (series or season) is being edited
+type PosterType = 'series' | 'season'
+const selectedPosterType = ref<PosterType>('series')
+
+// Watch currentSeason and auto-switch editor type
+watch(currentSeason, (newSeason) => {
+  if (newSeason) {
+    selectedPosterType.value = newSeason.isSeries ? 'series' : 'season'
+  }
+}, { immediate: true })
+
 // Rendered preview carousel
 const renderedPreviews = ref<RenderedPreview[]>([])
 const activePreviewIndex = ref(0)
@@ -188,7 +199,8 @@ const options = ref({
   borderColor: '#ffffff',
   overlayFile: '',
   overlayOpacity: 40,
-  overlayMode: 'screen'
+  overlayMode: 'screen',
+  season_text: undefined as string | undefined
 })
 
 // Text overlay settings
@@ -839,81 +851,8 @@ const logoUrl = computed(() => (logoMode.value === 'none' ? '' : selectedLogo.va
 
 const reloadPreset = async () => {
   await presetService.load()
-  const p = presets.value.find((x) => x.id === selectedPreset.value)
-  if (p?.options) {
-    const o = p.options
-    // Reset text overlay defaults first
-    textOverlayEnabled.value = false
-    customText.value = ''
-    fontFamily.value = 'Arial'
-    fontSize.value = 120
-    fontWeight.value = '700'
-    textColor.value = '#ffffff'
-    textAlign.value = 'center'
-    textTransform.value = 'uppercase'
-    letterSpacing.value = 2
-    lineHeight.value = 120
-    positionY.value = 75
-    shadowEnabled.value = true
-    shadowBlur.value = 10
-    shadowOffsetX.value = 0
-    shadowOffsetY.value = 4
-    shadowColor.value = '#000000'
-    shadowOpacity.value = 80
-    strokeEnabled.value = false
-    strokeWidth.value = 4
-    strokeColor.value = '#000000'
-    options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
-    options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
-    options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
-    options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
-    options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
-    options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
-    options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
-    options.value.logoOffset = Math.round((Number(o.logo_offset) || 0.75) * 100)
-    if (o.uniform_logo_max_w) options.value.uniformLogoMaxW = Number(o.uniform_logo_max_w)
-    if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
-    if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
-    if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
-    options.value.borderEnabled = !!o.border_enabled
-    options.value.borderThickness = Number(o.border_px) || 0
-    if (o.border_color) options.value.borderColor = String(o.border_color)
-    if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
-    if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
-    if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
-    if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
-      posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
-    }
-    if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
-      logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
-    }
-    logoMode.value = normalizeLogoMode(o.logo_mode)
-    if (typeof o.logo_hex === 'string') {
-      logoHex.value = o.logo_hex
-    }
-
-    // Load text overlay settings
-    textOverlayEnabled.value = !!o.text_overlay_enabled
-    if (typeof o.custom_text === 'string') customText.value = o.custom_text
-    if (typeof o.font_family === 'string') fontFamily.value = o.font_family
-    if (typeof o.font_size === 'number') fontSize.value = o.font_size
-    if (typeof o.font_weight === 'string') fontWeight.value = o.font_weight
-    if (typeof o.text_color === 'string') textColor.value = o.text_color
-    if (typeof o.text_align === 'string') textAlign.value = o.text_align
-    if (typeof o.text_transform === 'string') textTransform.value = o.text_transform
-    if (typeof o.letter_spacing === 'number') letterSpacing.value = o.letter_spacing
-    if (typeof o.line_height === 'number') lineHeight.value = Math.round(o.line_height * 100)
-    if (typeof o.position_y === 'number') positionY.value = Math.round(o.position_y * 100)
-    if (typeof o.shadow_enabled === 'boolean') shadowEnabled.value = o.shadow_enabled
-    if (typeof o.shadow_blur === 'number') shadowBlur.value = o.shadow_blur
-    if (typeof o.shadow_offset_x === 'number') shadowOffsetX.value = o.shadow_offset_x
-    if (typeof o.shadow_offset_y === 'number') shadowOffsetY.value = o.shadow_offset_y
-    if (typeof o.shadow_color === 'string') shadowColor.value = o.shadow_color
-    if (typeof o.shadow_opacity === 'number') shadowOpacity.value = Math.round(o.shadow_opacity * 100)
-    if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
-    if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
-    if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
-
+  if (selectedPreset.value) {
+    applyPresetOptions(selectedPreset.value)
     applyPosterFilter()
     applyLogoPreference()
     success('Preset reloaded!')
@@ -972,11 +911,38 @@ const saveCurrentPreset = async () => {
     stroke_color: strokeColor.value
   }
 
-  await presetService.savePreset(backendOptions)
-  if (!presetService.error.value) {
-    success('Preset saved!')
+  // When editing season options, we need to save to season_options_json
+  // The presetService will handle both options and season_options
+  if (selectedPosterType.value === 'season') {
+    // Fetch current preset, update only season_options
+    const currentPreset = presets.value.find(p => p.id === selectedPreset.value)
+    if (currentPreset) {
+      // Save via API to update season_options_json specifically
+      try {
+        const res = await fetch(`${apiBase}/api/presets/save-season-options`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            template_id: selectedTemplate.value,
+            preset_id: selectedPreset.value,
+            season_options: backendOptions
+          })
+        })
+        if (!res.ok) throw new Error(`API error ${res.status}`)
+        success('Season preset saved!')
+        await presetService.load()
+      } catch (e) {
+        notifyError(`Failed to save: ${e instanceof Error ? e.message : 'Unknown error'}`)
+      }
+    }
   } else {
-    notifyError(`Failed to save: ${presetService.error.value}`)
+    // Save to regular options_json
+    await presetService.savePreset(backendOptions)
+    if (!presetService.error.value) {
+      success('Preset saved!')
+    } else {
+      notifyError(`Failed to save: ${presetService.error.value}`)
+    }
   }
 }
 
@@ -1032,13 +998,17 @@ const saveAsNewPreset = async () => {
   }
 
   const newId = newPresetId.value.trim()
-  await presetService.savePresetAs(newId, backendOptions)
-  if (!presetService.error.value) {
-    selectedPreset.value = newId
-    success('Preset saved as new!')
-    newPresetId.value = ''
+  if (selectedPosterType.value === 'season') {
+    notifyError('Cannot save season options as new preset - use regular options only')
   } else {
-    notifyError(`Failed to save: ${presetService.error.value}`)
+    await presetService.savePresetAs(newId, backendOptions)
+    if (!presetService.error.value) {
+      selectedPreset.value = newId
+      success('Preset saved as new!')
+      newPresetId.value = ''
+    } else {
+      notifyError(`Failed to save: ${presetService.error.value}`)
+    }
   }
 }
 
@@ -1564,7 +1534,7 @@ const renderAllSelectedSeasons = async () => {
     // For background renders, don't send text overlay, logo mode, or custom text
     // Let the backend preset's season_options define these per-season
     // Only send season_text so backend can use it for {season} placeholder replacement
-    const hasUserModifications = cachedSettings && userModifiedFields.value[seasonKey]?.size > 0
+    const hasUserModifications = cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
 
     if (!hasUserModifications) {
       // No user modifications - let backend preset season_options handle everything
@@ -2067,12 +2037,14 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (!p) return
 
     console.log('[PRESET APPLY] Found preset:', p.id, 'name:', (p as any).name)
+    console.log('[PRESET APPLY] selectedPosterType:', selectedPosterType.value)
     console.log('[PRESET APPLY] has season_options:', !!(p as any).season_options)
     if ((p as any).season_options) {
       console.log('[PRESET APPLY] season_options:', (p as any).season_options)
     }
 
-  const isSeason = !!(currentSeason.value && !currentSeason.value.isSeries)
+  // Use selectedPosterType to determine which options to load
+  const isSeason = selectedPosterType.value === 'season'
   const baseOptions = isSeason && (p as any).season_options ? (p as any).season_options : p.options
   if (!baseOptions) return
 
@@ -2082,28 +2054,6 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   const o = baseOptions
   const currentKey = currentTargetKey.value
   const cached = settingsCache.value[currentKey]
-
-  // Reset text overlay defaults before applying preset values
-  textOverlayEnabled.value = false
-  customText.value = ''
-  fontFamily.value = 'Arial'
-  fontSize.value = 120
-  fontWeight.value = '700'
-  textColor.value = '#ffffff'
-  textAlign.value = 'center'
-  textTransform.value = 'uppercase'
-  letterSpacing.value = 2
-  lineHeight.value = 120
-  positionY.value = 75
-  shadowEnabled.value = true
-  shadowBlur.value = 10
-  shadowOffsetX.value = 0
-  shadowOffsetY.value = 4
-  shadowColor.value = '#000000'
-  shadowOpacity.value = 80
-  strokeEnabled.value = false
-  strokeWidth.value = 4
-  strokeColor.value = '#000000'
 
   // Reset text overlay defaults before applying preset values
   textOverlayEnabled.value = false
@@ -2308,7 +2258,11 @@ watch(tmdbId, () => {
       <div class="pane-header">
         <div>
           <p class="kicker">Editing</p>
-          <h2>{{ movie.title }} <span v-if="movie.year">({{ movie.year }})</span></h2>
+          <h2>
+            {{ movie.title }} <span v-if="movie.year">({{ movie.year }})</span>
+            <span v-if="selectedPosterType === 'season'" class="poster-type-badge season-badge">Season Poster</span>
+            <span v-else class="poster-type-badge series-badge">Series Poster</span>
+          </h2>
         </div>
       </div>
 
@@ -2696,7 +2650,7 @@ watch(tmdbId, () => {
 
         <!-- Actions -->
         <div class="section actions">
-          <button class="btn-primary" :disabled="loading" @click="doPreview">Preview</button>
+          <button class="btn-primary" :disabled="loading" @click="() => doPreview()">Preview</button>
           <span v-if="error" class="error-text">{{ error }}</span>
         </div>
       </div>
@@ -4078,5 +4032,28 @@ button:disabled {
   background: rgba(99, 102, 241, 0.3);
   color: #c7d2fe;
   font-weight: 600;
+}
+
+.poster-type-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.season-badge {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+.series-badge {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.4);
 }
 </style>

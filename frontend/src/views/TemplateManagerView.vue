@@ -123,13 +123,13 @@ const openFallbackModal = (templateId: string, preset: Preset) => {
   modalPreset.value = { templateId, preset }
   const opts = preset.options || {}
   modalFallback.value = {
-    fallbackPosterAction: opts.fallbackPosterAction || 'continue',
-    fallbackPosterTemplate: opts.fallbackPosterTemplate || '',
-    fallbackPosterPreset: opts.fallbackPosterPreset || '',
-    fallbackLogoAction: opts.fallbackLogoAction || 'continue',
-    fallbackLogoTemplate: opts.fallbackLogoTemplate || '',
-    fallbackLogoPreset: opts.fallbackLogoPreset || '',
-    logoSource: opts.logoSource || ''
+    fallbackPosterAction: (opts.fallbackPosterAction as 'template' | 'continue' | 'skip' | undefined) || 'continue',
+    fallbackPosterTemplate: (opts.fallbackPosterTemplate as string) || '',
+    fallbackPosterPreset: (opts.fallbackPosterPreset as string) || '',
+    fallbackLogoAction: (opts.fallbackLogoAction as 'template' | 'continue' | 'skip' | undefined) || 'continue',
+    fallbackLogoTemplate: (opts.fallbackLogoTemplate as string) || '',
+    fallbackLogoPreset: (opts.fallbackLogoPreset as string) || '',
+    logoSource: (opts.logoSource as string) || ''
   }
   showFallbackModal.value = true
 }

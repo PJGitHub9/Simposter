@@ -149,6 +149,41 @@ def api_save_preset(req: PresetSaveRequest):
         raise HTTPException(status_code=500, detail=f"Failed to save preset: {e}")
 
 
+@router.post("/presets/save-season-options")
+def api_save_season_options(req: dict = Body(...)):
+    """Save only the season_options for a preset without modifying the base options."""
+    import json
+    
+    template_id = req.get('template_id') or "default"
+    preset_id = req.get('preset_id')
+    season_options = req.get('season_options', {})
+    
+    if not preset_id:
+        raise HTTPException(status_code=400, detail="preset_id is required")
+
+    try:
+        # Get current preset to verify it exists
+        current = db.get_preset(template_id, preset_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Preset not found")
+        
+        # Update only season_options_json in the database
+        with db.get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE presets SET season_options_json = ?, updated_at = CURRENT_TIMESTAMP WHERE template_id = ? AND id = ?",
+                (json.dumps(season_options), template_id, preset_id)
+            )
+        
+        logger.info(f"[PRESETS] Saved season options for preset {preset_id}")
+        return {"message": f"Season options for preset '{preset_id}' saved."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[PRESETS] Error saving season options: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save season options: {e}")
+
+
 @router.post("/presets/delete")
 def api_delete_preset(req: PresetDeleteRequest):
     """Delete a preset from the database."""
