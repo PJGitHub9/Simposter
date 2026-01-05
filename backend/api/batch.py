@@ -12,7 +12,7 @@ from .movies import fetch_and_cache_poster
 from .tv_shows import plex_session, plex_headers, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
 from .save import apply_save_location_variables, get_save_location_template, resolve_library_label, embed_library_metadata
 from datetime import datetime, timezone
-from PIL import PngImagePlugin
+from PIL import Image, PngImagePlugin
 from .. import database as db
 from .. import tvdb_client
 from ..fanart_client import get_images_for_tv_show as get_fanart_tv_images
@@ -435,8 +435,14 @@ def _process_single_movie(
             r.raise_for_status()
 
             # Label removal
-            for label in req.labels or []:
-                plex_remove_label(rating_key, label)
+            if req.labels:
+                logger.info("[BATCH] Removing labels %s from %s", req.labels, rating_key)
+                try:
+                    for label in req.labels:
+                        plex_remove_label(rating_key, label)
+                        logger.info("[BATCH] Removed label '%s' from %s", label, rating_key)
+                except Exception as label_err:
+                    logger.warning("[BATCH] Label removal failed for %s: %s", rating_key, label_err)
 
             logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
             try:
@@ -826,8 +832,13 @@ def _render_all_tv_seasons(
             })
             continue
 
-        # Select logo
-        logo = None if str(logo_mode).lower() == "none" else pick_logo(series_logos, logo_preference, white_logo_fallback, language_pref)
+        # Extract logo mode from season options (may differ from series logo mode)
+        season_logo_mode = final_season_options.get("logo_mode", logo_mode)
+        season_logo_preference = final_season_options.get("logo_preference") or season_logo_mode or logo_preference
+        season_logo_preference = map_logo_mode_to_preference(season_logo_preference)
+
+        # Select logo using season-specific logo mode
+        logo = None if str(season_logo_mode).lower() == "none" else pick_logo(series_logos, season_logo_preference, white_logo_fallback, language_pref)
 
         poster_url = poster.get("url")
         logo_url = logo.get("url") if logo else None
@@ -871,38 +882,19 @@ def _render_and_save_poster(
         "current_step": "Rendering poster",
     })
 
-    # Fetch background image
-    bg_img_response = requests.get(poster_url, timeout=10)
-    bg_img_response.raise_for_status()
-    bg_img = BytesIO(bg_img_response.content)
+    # Check if overlay caching is enabled
+    ui_settings = db.get_ui_settings()
+    use_overlay_cache = ui_settings.get("performance", {}).get("useOverlayCache", True)
 
-    # Fetch logo if present
-    logo_img = None
-    if logo_url:
-        try:
-            logo_response = requests.get(logo_url, timeout=10)
-            logo_response.raise_for_status()
-            logo_img = BytesIO(logo_response.content)
-        except Exception as logo_err:
-            logger.warning("[BATCH] Failed to fetch logo %s: %s", logo_url, logo_err)
-
-    # Determine which rendering function to use
-    overlay_cache_enabled = db.get_setting("performance.overlay_cache_enabled")
-    if overlay_cache_enabled:
-        rendered = render_with_overlay_cache(
-            template_id=template_id,
-            bg_img=bg_img,
-            logo_img=logo_img,
-            options=render_options,
-            preset_id=preset_id,
-        )
-    else:
-        rendered = render_poster_image(
-            template_id=template_id,
-            bg_img=bg_img,
-            logo_img=logo_img,
-            options=render_options,
-        )
+    # Use overlay cache rendering (takes URLs directly)
+    rendered = render_with_overlay_cache(
+        template_id,
+        preset_id,
+        poster_url,
+        logo_url,
+        render_options,
+        use_cache=use_overlay_cache
+    )
 
     # Save locally if requested
     save_path = None
@@ -914,20 +906,57 @@ def _render_and_save_poster(
         try:
             template_str = get_save_location_template()
             library_label = resolve_library_label(req.library_id) if req.library_id else ""
-            filename = apply_save_location_variables(
+
+            # Apply variable substitution
+            save_path_template = apply_save_location_variables(
                 template_str,
-                title=title,
-                year=year,
-                template_id=template_id,
-                preset_id=preset_id,
-                library_label=library_label,
+                title,
+                int(year) if year else None,
+                rating_key,
+                library_label
             )
-            save_path = settings.OUTPUT_DIR / filename
+
+            # Sanitize path components
+            safe_path = "".join(c for c in save_path_template if c.isalnum() or c in " _-/().")
+            safe_path = safe_path.strip()
+
+            from pathlib import Path
+            candidate = Path(safe_path)
+            if candidate.suffix:
+                base_dir = candidate.parent
+                filename = candidate.name
+            else:
+                base_dir = candidate
+                # Sanitize the title for filename
+                safe_title = "".join(c for c in title if c.isalnum() or c in " _-()")
+                safe_title = safe_title.strip()
+                filename = f"{safe_title}.png"
+
+            save_path = base_dir / filename
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Embed metadata
+            # Embed library metadata into the image
+            rendered = embed_library_metadata(
+                rendered,
+                req.library_id,
+                library_label,
+                title,
+                str(year) if year else None
+            )
+
+            # Save as PNG with metadata
             pnginfo = PngImagePlugin.PngInfo()
-            embed_library_metadata(pnginfo, req.library_id or "", title, year, template_id, preset_id)
+            pnginfo.add_text("simposter_library_id", str(req.library_id or ""))
+            pnginfo.add_text("simposter_library_name", library_label or "")
+            if title:
+                pnginfo.add_text("simposter_movie_title", title)
+            if year:
+                pnginfo.add_text("simposter_movie_year", str(year))
+            if template_id:
+                pnginfo.add_text("simposter_template_id", template_id)
+            if preset_id:
+                pnginfo.add_text("simposter_preset_id", preset_id)
+
             rendered.save(str(save_path), "PNG", pnginfo=pnginfo, optimize=False)
             logger.info("[BATCH] Saved %s to %s", title, save_path)
 
@@ -955,22 +984,36 @@ def _render_and_save_poster(
         })
 
         buf = BytesIO()
-        rendered.save(buf, "JPEG", quality=95)
-        buf.seek(0)
+        rendered.convert("RGB").save(buf, "JPEG", quality=95)
+        payload = buf.getvalue()
 
         try:
             upload_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
-            files = {"file": ("poster.jpg", buf, "image/jpeg")}
-            headers = plex_headers()
-            upload_resp = requests.post(upload_url, headers=headers, files=files, timeout=10)
+            headers = {
+                "X-Plex-Token": settings.PLEX_TOKEN,
+                "Content-Type": "image/jpeg",
+            }
+            upload_resp = requests.post(upload_url, headers=headers, data=payload, timeout=20)
             upload_resp.raise_for_status()
             logger.info("[BATCH] Uploaded poster to Plex for %s", title)
 
+            # Invalidate poster cache so UI shows updated poster
+            if is_tv:
+                from .tv_shows import _remove_poster_cache as _remove_tv_poster_cache
+                _remove_tv_poster_cache(rating_key, "tv")
+                logger.info("[BATCH] Invalidated TV poster cache for %s", rating_key)
+            else:
+                from .movies import _remove_poster_cache as _remove_movie_poster_cache
+                _remove_movie_poster_cache(rating_key)
+                logger.info("[BATCH] Invalidated movie poster cache for %s", rating_key)
+
             # Remove labels if specified
             if req.labels:
+                logger.info("[BATCH] Removing labels %s from %s (%s)", req.labels, rating_key, title)
                 try:
                     for label_name in req.labels:
                         plex_remove_label(rating_key, label_name)
+                        logger.info("[BATCH] Removed label '%s' from %s", label_name, rating_key)
                 except Exception as label_err:
                     logger.warning("[BATCH] Label removal failed for %s: %s", rating_key, label_err)
 

@@ -577,17 +577,20 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
 def get_library_section_id(rating_key: str) -> Optional[str]:
     """
     Fetch metadata for a rating_key and return the librarySectionID if present.
+    Works for movies, TV shows, and seasons.
     """
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=6)
         r.raise_for_status()
         root = ET.fromstring(r.text)
-        video = root.find(".//Video")
-        if video is not None:
-            lib_id = video.get("librarySectionID") or video.get("librarySectionId")
-            if lib_id:
-                return lib_id
+
+        # Try Video (movies, episodes), Directory (TV shows, seasons), or any child element
+        for element in root.iter():
+            if element.tag in ("Video", "Directory"):
+                lib_id = element.get("librarySectionID") or element.get("librarySectionId")
+                if lib_id:
+                    return lib_id
     except Exception as e:
         logger.debug("[PLEX] Failed to resolve librarySectionID for %s: %s", rating_key, e)
     return None
@@ -608,7 +611,7 @@ def find_rating_key_by_title_year(title: str, year: Optional[int], library_ids: 
 
 
 def plex_remove_label(rating_key: str, label: str):
-    """Attempts 3 different Plex label removal methods."""
+    """Attempts 3 different Plex label removal methods. Works for movies, TV shows, and seasons."""
 
     if not label:
         return
@@ -616,18 +619,37 @@ def plex_remove_label(rating_key: str, label: str):
     # Resolve library for this item (fallback to default)
     lib_id = get_library_section_id(rating_key) or PLEX_DEFAULT_MOVIE_LIB_ID
 
-    # Method 1
+    # Detect content type (1=movie, 2=show, 3=season, 4=episode)
+    # Try to determine from metadata
+    content_type = "1"  # Default to movie
+    try:
+        metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        r = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
+        if r.status_code == 200:
+            root = ET.fromstring(r.text)
+            # Check for Directory (TV show/season) vs Video (movie/episode)
+            if root.find(".//Directory[@type='show']") is not None:
+                content_type = "2"  # TV show
+            elif root.find(".//Directory[@type='season']") is not None:
+                content_type = "3"  # Season
+            elif root.find(".//Video[@type='episode']") is not None:
+                content_type = "4"  # Episode
+            # Otherwise stays as "1" for movie
+    except Exception:
+        pass  # Use default type if detection fails
+
+    # Method 1: Use library sections endpoint with detected type
     try:
         url = f"{settings.PLEX_URL}/library/sections/{lib_id}/all"
-        params = {"type": "1", "id": rating_key, "label[].tag.tag-": label}
+        params = {"type": content_type, "id": rating_key, "label[].tag.tag-": label}
         r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
         if r.status_code in (200, 204):
-            logger.debug("[PLEX] Removed label via sections endpoint rating_key=%s label=%s", rating_key, label)
+            logger.debug("[PLEX] Removed label via sections endpoint rating_key=%s label=%s type=%s", rating_key, label, content_type)
             return
     except (requests.RequestException, requests.Timeout) as e:
         logger.debug("[PLEX] Method 1 failed: %s", e)
 
-    # Method 2
+    # Method 2: Use metadata/labels endpoint (type-agnostic, most reliable)
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/labels"
         params = {"tag.tag": label, "tag.type": "label"}
@@ -638,11 +660,11 @@ def plex_remove_label(rating_key: str, label: str):
     except (requests.RequestException, requests.Timeout) as e:
         logger.debug("[PLEX] Method 2 failed: %s", e)
 
-    # Method 3
+    # Method 3: Use metadata PUT with detected type
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-        params = {"label[].tag.tag-": label, "type": "1"}
+        params = {"label[].tag.tag-": label, "type": content_type}
         r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
-        logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s status=%s", rating_key, label, r.status_code)
+        logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s type=%s status=%s", rating_key, label, content_type, r.status_code)
     except (requests.RequestException, requests.Timeout) as e:
         logger.debug("[PLEX] Method 3 failed: %s", e)

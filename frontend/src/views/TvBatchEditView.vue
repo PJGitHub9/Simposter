@@ -712,6 +712,13 @@ const processBatch = async () => {
     // Refresh status for sent/saved indicators
     await fetchPosterStatus()
 
+    // Clear poster cache to force reload of updated posters from Plex
+    posterCache.value = {}
+    posterInFlight.clear()
+
+    // Refetch posters to show the new Simposter posters
+    await fetchPosters()
+
     // Reset
     setTimeout(() => {
       processing.value = false
