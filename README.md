@@ -5,7 +5,7 @@
 ![Image](https://github.com/user-attachments/assets/bc31ee99-0d68-4ba0-a54f-d6b4a1b119b7)
 ---
 
-## ✨ What’s New in v1.4.1
+## ✨ Key Features
 
 ### 🎨 **Complete UI Overhaul**
 - 🖥️ **New full-page batch edit interface** — Grid view with movie selection
