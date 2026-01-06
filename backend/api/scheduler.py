@@ -41,13 +41,8 @@ def api_schedule_library_scan(req: ScheduleRequest):
         # Save to settings database
         settings = _read_settings()
         settings_dict = settings.model_dump(exclude_none=False)
-        # Ensure empty string is converted to None/null, and convert to string if needed
-        library_id = None
-        if req.library_id:
-            if isinstance(req.library_id, str) and req.library_id.strip():
-                library_id = req.library_id.strip()
-            elif isinstance(req.library_id, int):
-                library_id = str(req.library_id)
+        # Normalize library_id: empty strings become None
+        library_id = req.library_id.strip() if req.library_id else None
 
         settings_dict["scheduler"] = {
             "enabled": True,

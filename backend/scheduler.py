@@ -80,6 +80,70 @@ def schedule_library_scan(cron_expression: str, library_id: Optional[str] = None
 
         minute, hour, day, month, day_of_week = parts
 
+        # Validate cron field ranges
+        def validate_cron_field(value: str, min_val: int, max_val: int, field_name: str) -> bool:
+            """Validate a single cron field (handles *, ranges, steps, lists)"""
+            if value == '*':
+                return True
+
+            # Handle ranges (e.g., 1-5)
+            if '-' in value:
+                try:
+                    start, end = value.split('-')
+                    return (min_val <= int(start) <= max_val and
+                           min_val <= int(end) <= max_val)
+                except (ValueError, AttributeError):
+                    return False
+
+            # Handle steps (e.g., */5)
+            if '/' in value:
+                base, step = value.split('/')
+                if base != '*':
+                    try:
+                        if not (min_val <= int(base) <= max_val):
+                            return False
+                    except ValueError:
+                        return False
+                try:
+                    return int(step) > 0
+                except ValueError:
+                    return False
+
+            # Handle lists (e.g., 1,3,5)
+            if ',' in value:
+                try:
+                    values = [int(v) for v in value.split(',')]
+                    return all(min_val <= v <= max_val for v in values)
+                except ValueError:
+                    return False
+
+            # Handle single value
+            try:
+                return min_val <= int(value) <= max_val
+            except ValueError:
+                return False
+
+        # Validate each field
+        if not validate_cron_field(minute, 0, 59, 'minute'):
+            logger.error("[SCHEDULER] Invalid minute value: %s (must be 0-59)", minute)
+            return False
+
+        if not validate_cron_field(hour, 0, 23, 'hour'):
+            logger.error("[SCHEDULER] Invalid hour value: %s (must be 0-23)", hour)
+            return False
+
+        if not validate_cron_field(day, 1, 31, 'day'):
+            logger.error("[SCHEDULER] Invalid day value: %s (must be 1-31)", day)
+            return False
+
+        if not validate_cron_field(month, 1, 12, 'month'):
+            logger.error("[SCHEDULER] Invalid month value: %s (must be 1-12)", month)
+            return False
+
+        if not validate_cron_field(day_of_week, 0, 6, 'day_of_week'):
+            logger.error("[SCHEDULER] Invalid day_of_week value: %s (must be 0-6)", day_of_week)
+            return False
+
         # Create trigger using local timezone
         import tzlocal
         local_tz = tzlocal.get_localzone()
@@ -182,8 +246,12 @@ def _run_library_scan(library_id: Optional[str] = None):
 
     except requests.Timeout:
         logger.error("[SCHEDULER] Library scan timed out after 5 minutes")
+    except requests.ConnectionError as e:
+        logger.error("[SCHEDULER] Connection error during library scan (server may be down): %s", e)
+    except requests.RequestException as e:
+        logger.error("[SCHEDULER] Network error during library scan: %s", e)
     except Exception as e:
-        logger.error("[SCHEDULER] Failed to run scheduled library scan: %s", e)
+        logger.error("[SCHEDULER] Unexpected error during scheduled library scan: %s", e, exc_info=True)
 
 
 def shutdown_scheduler():

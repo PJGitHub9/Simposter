@@ -339,6 +339,14 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_movie_cache_library
             ON movie_cache(library_id)
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_movie_cache_tmdb
+            ON movie_cache(tmdb_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_movie_cache_composite
+            ON movie_cache(library_id, rating_key)
+        """)
 
         # Cache table for Plex TV shows (metadata + labels/poster/tmdb + seasons)
         cursor.execute("""
@@ -375,6 +383,18 @@ def init_database():
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_tv_cache_library
             ON tv_cache(library_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tv_cache_tmdb
+            ON tv_cache(tmdb_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tv_cache_tvdb
+            ON tv_cache(tvdb_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tv_cache_composite
+            ON tv_cache(library_id, rating_key)
         """)
 
         # Cache table for Plex collections
@@ -432,6 +452,10 @@ def init_database():
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_poster_history_created
             ON poster_history(created_at DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_poster_history_template_preset
+            ON poster_history(template_id, preset_id)
         """)
 
         conn.commit()

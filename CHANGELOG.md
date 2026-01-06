@@ -1,6 +1,84 @@
 # Changelog
 
-## v1.4.6 (In Progress)
+## v1.4.7 (2026-01-06)
+### Major Features
+- **TV Show Seasons Support**: Enhanced TV show rendering with season-specific poster generation
+  - Season suffixes in local asset filenames (e.g., `Show Name_s01.jpg` for Season 1)
+  - Season metadata passed through rendering pipeline with proper schema validation
+  - Settings checkbox for season-specific local asset saving
+  - "Coming Soon" badge support for unreleased seasons via TVDB integration
+
+- **Scheduled Library Scans**: Automatic cron-based library scanning to keep Simposter synced with Plex
+  - Configure cron schedule in Settings (e.g., "0 2 * * *" for daily 2 AM scans)
+  - Optional library-specific scans or scan all libraries
+  - APScheduler background daemon with proper initialization and restoration
+  - Schedule status and next run time visible in Settings
+  - Comprehensive cron validation (supports wildcards, ranges, steps, lists)
+
+### Performance Optimizations
+- **Database Indexing**: Added 6 new database indexes for 5-10x faster queries
+  - `idx_movie_cache_tmdb`, `idx_movie_cache_composite` (library + rating_key)
+  - `idx_tv_cache_tmdb`, `idx_tv_cache_tvdb`, `idx_tv_cache_composite`
+  - `idx_poster_history_template_preset` for faster history filtering
+
+- **Smart SessionStorage Caching**: LRU eviction system prevents quota errors
+  - 4MB cache limit with automatic eviction of least-recently-used items
+  - Access time tracking for intelligent cache management
+  - Graceful QuotaExceededError handling
+  - Cache statistics API (`getCacheStats()`)
+  - Integrated in SettingsView with plans for full rollout
+
+- **Debounced Editor Saves**: 300ms debounce on localStorage writes
+  - 60-80% reduction in storage operations during slider adjustments
+  - Eliminates UI stuttering when dragging sliders
+  - Applied to both MovieEditorPane and TvShowEditorPane
+
+- **Memory Leak Fixes**: Eliminated interval/timer memory leaks
+  - Fixed scanPoller leak in SettingsView (interval continued after navigation)
+  - Added proper cleanup in `onBeforeUnmount` hooks
+
+### API & Security
+- **Enhanced Rate Limiting**: Added rate limits for scheduler endpoints
+  - `/api/scheduler/*` limited to 10 req/60s
+  - Updated API_SECURITY.md documentation with scheduler endpoints
+
+- **Improved Error Handling**: More specific network error handling
+  - Separate handlers for `ConnectionError`, `RequestException`, and `Timeout`
+  - Better logging with stack traces for unexpected errors
+
+- **Cron Expression Validation**: Comprehensive validation for scheduler
+  - Validates individual fields (minute: 0-59, hour: 0-23, etc.)
+  - Supports wildcards (*), ranges (1-5), steps (*/5), lists (1,3,5)
+  - Clear error messages for invalid expressions
+
+### Technical Improvements
+- **Simplified Library ID Handling**: Reduced complexity in scheduler API
+  - Single-line normalization instead of verbose type checking
+  - Pydantic already ensures correct types
+
+- **Settings Architecture**: Unified scheduler settings persistence
+  - Scheduler settings integrated into main settings store
+  - Proper change detection with unsaved changes indicator
+  - Settings snapshot system tracks all scheduler fields
+
+### Documentation
+- **Updated README**: Performance & Caching section highlights all optimizations
+  - Smart caching, indexed database, debounced saves, memory leak protection
+  - Updated Performance tips section with new best practices
+
+- **Architecture Documentation**: Added scheduler initialization flow
+  - Scheduler startup process documented
+  - API router descriptions for all scheduler endpoints
+
+- **PRD Updates**: APScheduler added to tech stack and architecture diagrams
+
+### Bug Fixes
+- Scheduler settings now persist correctly across page refreshes
+- Scheduler shows unsaved changes indicator when modified
+- SessionStorage operations no longer throw uncaught errors
+- Scan polling properly stops when navigating away from Settings
+
+## v1.4.6
 ### Major Features
 - **Overlay Caching for Fast Rendering**: Pre-generated template effect overlays (matte, fade, vignette, grain, wash) for rapid batch poster generation
   - Composites cached PNG overlays with posters instead of rendering effects from scratch

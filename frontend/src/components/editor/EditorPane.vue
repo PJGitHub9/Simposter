@@ -9,6 +9,15 @@ import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import { getApiBase } from '../../services/apiBase'
 
+// Simple debounce helper
+function debounce<T extends (...args: any[]) => any>(fn: T, delay: number): (...args: Parameters<T>) => void {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  return (...args: Parameters<T>) => {
+    if (timeoutId) clearTimeout(timeoutId)
+    timeoutId = setTimeout(() => fn(...args), delay)
+  }
+}
+
 const props = defineProps<{ movie: MovieInput }>()
 
 const settings = useSettingsStore()
@@ -118,7 +127,7 @@ const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 // State persistence
 const EDITOR_STATE_KEY = 'simposter_editor_state'
 
-const saveEditorState = () => {
+const saveEditorStateImmediate = () => {
   try {
     const state = {
       options: options.value,
@@ -163,6 +172,9 @@ const saveEditorState = () => {
     console.warn('Failed to save editor state:', e)
   }
 }
+
+// Debounced version to reduce localStorage writes
+const saveEditorState = debounce(saveEditorStateImmediate, 300)
 
 const loadGlobalFallbackSettings = async () => {
   try {

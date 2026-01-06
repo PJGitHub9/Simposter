@@ -6,6 +6,7 @@ import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 import { onBeforeRouteLeave } from 'vue-router'
+import { setSessionStorage, getSessionStorage } from '../composables/useSessionStorage'
 
 interface LibraryMapping {
   id: string
@@ -600,7 +601,7 @@ const scanLibrary = async (libraryId?: string) => {
         scan.log.value.push(`...and ${data.movies.length - 20} more`)
       }
       try {
-        sessionStorage.setItem('simposter-movies-cache', JSON.stringify(data.movies))
+        setSessionStorage('movies-cache', data.movies)
       } catch (err) {
         console.error('Failed to cache movies', err)
       }
@@ -609,7 +610,7 @@ const scanLibrary = async (libraryId?: string) => {
     // Cache posters
     if (data.posters && typeof sessionStorage !== 'undefined') {
       try {
-        sessionStorage.setItem('simposter-poster-cache', JSON.stringify(data.posters))
+        setSessionStorage('poster-cache', data.posters)
       } catch (err) {
         console.error('Failed to cache posters', err)
       }
@@ -618,7 +619,7 @@ const scanLibrary = async (libraryId?: string) => {
     // Cache labels
     if (data.labels && typeof sessionStorage !== 'undefined') {
       try {
-        sessionStorage.setItem('simposter-labels-cache', JSON.stringify(data.labels))
+        setSessionStorage('labels-cache', data.labels)
       } catch (err) {
         console.error('Failed to cache labels', err)
       }
@@ -833,8 +834,8 @@ const fetchAllLibraryLabels = async () => {
     // Process movie libraries
     for (const lib of movieLibs) {
       const libId = lib.id || 'default'
-      const labelCacheKey = `simposter-labels-cache-${libId}`
-      let labelCache = sessionStorage.getItem(labelCacheKey)
+      const labelCacheKey = `labels-cache-${libId}`
+      let labelCache = getSessionStorage<Record<string, string[]>>(labelCacheKey)
 
       const labels = new Set<string>()
 
@@ -861,9 +862,9 @@ const fetchAllLibraryLabels = async () => {
                 const bulkData = await bulkRes.json()
                 const labelsCache: Record<string, string[]> = bulkData.labels || {}
 
-                // Save to sessionStorage
-                sessionStorage.setItem(labelCacheKey, JSON.stringify(labelsCache))
-                labelCache = JSON.stringify(labelsCache)
+                // Save to sessionStorage with LRU eviction
+                setSessionStorage(labelCacheKey, labelsCache)
+                labelCache = labelsCache
               }
             }
           }
@@ -873,8 +874,7 @@ const fetchAllLibraryLabels = async () => {
       }
 
       if (labelCache) {
-        const cache = JSON.parse(labelCache) as Record<string, string[]>
-        Object.values(cache).forEach((movieLabels) => {
+        Object.values(labelCache).forEach((movieLabels) => {
           if (Array.isArray(movieLabels)) {
             movieLabels.forEach((label) => labels.add(label))
           }
@@ -896,8 +896,8 @@ const fetchAllLibraryLabels = async () => {
     // Process TV show libraries
     for (const lib of tvLibs) {
       const libId = lib.id || 'default'
-      const labelCacheKey = `simposter-tv-labels-cache-${libId}`
-      let labelCache = sessionStorage.getItem(labelCacheKey)
+      const labelCacheKey = `tv-labels-cache-${libId}`
+      let labelCache = getSessionStorage<Record<string, string[]>>(labelCacheKey)
 
       const labels = new Set<string>()
 
@@ -925,10 +925,10 @@ const fetchAllLibraryLabels = async () => {
               }
             }
 
-            // Save to sessionStorage
+            // Save to sessionStorage with LRU eviction
             if (Object.keys(labelsCache).length > 0) {
-              sessionStorage.setItem(labelCacheKey, JSON.stringify(labelsCache))
-              labelCache = JSON.stringify(labelsCache)
+              setSessionStorage(labelCacheKey, labelsCache)
+              labelCache = labelsCache
             }
           }
         } catch (err) {
@@ -937,8 +937,7 @@ const fetchAllLibraryLabels = async () => {
       }
 
       if (labelCache) {
-        const cache = JSON.parse(labelCache) as Record<string, string[]>
-        Object.values(cache).forEach((showLabels) => {
+        Object.values(labelCache).forEach((showLabels) => {
           if (Array.isArray(showLabels)) {
             showLabels.forEach((label) => labels.add(label))
           }
@@ -1064,6 +1063,9 @@ watch([
 
 // Navigation guard - warn before leaving with unsaved changes
 onBeforeRouteLeave((_to, _from, next) => {
+  // Stop scan polling to prevent memory leak
+  stopScanPolling()
+
   if (hasUnsavedChanges.value) {
     const answer = window.confirm('You have unsaved changes. Are you sure you want to leave?')
     if (answer) {
@@ -1087,6 +1089,7 @@ onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
 
   onBeforeUnmount(() => {
+    stopScanPolling()
     window.removeEventListener('beforeunload', handleBeforeUnload)
   })
 })
