@@ -28,6 +28,7 @@ interface Movie {
 const settings = useSettingsStore()
 const saved = ref('')
 const allLibraryLabels = ref<Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }>>({})
+const labelsLoading = ref(false)
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
 
@@ -800,6 +801,7 @@ const handlePresetImport = async () => {
 
 // Fetch all available labels from both movies and TV shows, organized by library
 const fetchAllLibraryLabels = async () => {
+  labelsLoading.value = true
   try {
     const apiBase = getApiBase()
     const movieLibs = settings.plex.value.libraryMappings || []
@@ -865,11 +867,20 @@ const fetchAllLibraryLabels = async () => {
                 // Save to sessionStorage with LRU eviction
                 setSessionStorage(labelCacheKey, labelsCache)
                 labelCache = labelsCache
+              } else {
+                console.warn(`[Settings] Failed to fetch labels for library ${libId}: ${bulkRes.status}`)
               }
+            } else {
+              console.warn(`[Settings] No movies found in library ${libId}, labels will be empty`)
+              // Cache empty result to avoid repeated failed fetches
+              setSessionStorage(labelCacheKey, {})
+              labelCache = {}
             }
+          } else {
+            console.error(`[Settings] Failed to fetch movies for library ${libId}: ${moviesRes.status}`)
           }
         } catch (err) {
-          console.error(`Failed to fetch labels for movie library ${libId}:`, err)
+          console.error(`[Settings] Failed to fetch labels for movie library ${libId}:`, err)
         }
       }
 
@@ -929,10 +940,17 @@ const fetchAllLibraryLabels = async () => {
             if (Object.keys(labelsCache).length > 0) {
               setSessionStorage(labelCacheKey, labelsCache)
               labelCache = labelsCache
+            } else if (shows.length === 0) {
+              console.warn(`[Settings] No TV shows found in library ${libId}, labels will be empty`)
+              // Cache empty result to avoid repeated failed fetches
+              setSessionStorage(labelCacheKey, {})
+              labelCache = {}
             }
+          } else {
+            console.error(`[Settings] Failed to fetch TV shows for library ${libId}: ${showsRes.status}`)
           }
         } catch (err) {
-          console.error(`Failed to fetch labels for TV library ${libId}:`, err)
+          console.error(`[Settings] Failed to fetch labels for TV library ${libId}:`, err)
         }
       }
 
@@ -959,6 +977,8 @@ const fetchAllLibraryLabels = async () => {
     allLibraryLabels.value = combined
   } catch (e) {
     console.error('Failed to fetch library labels', e)
+  } finally {
+    labelsLoading.value = false
   }
 }
 
@@ -981,7 +1001,7 @@ onMounted(async () => {
   }
 
   // Fetch labels for both movies and TV
-  fetchAllLibraryLabels()
+  await fetchAllLibraryLabels()
 
   // Fetch scheduler status
   await fetchSchedulerStatus()
@@ -1005,7 +1025,7 @@ watch(
         await testPlexConnection()
       }
 
-      fetchAllLibraryLabels()
+      await fetchAllLibraryLabels()
 
       // Recapture snapshot after reload
       await nextTick()
@@ -1798,7 +1818,7 @@ const checkBackendHealth = async () => {
       </div>
     </div>
 
-    <div v-if="Object.keys(allLibraryLabels).length > 0" class="settings-section labels-section">
+    <div class="settings-section labels-section">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
@@ -1807,6 +1827,26 @@ const checkBackendHealth = async () => {
         Default Labels to Remove
       </h3>
       <p class="section-subtitle">When sending to Plex, these labels will be removed by default for each library</p>
+
+      <div v-if="labelsLoading" class="labels-loading">
+        <svg class="spinner" width="20" height="20" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3" opacity="0.25"/>
+          <path fill="currentColor" d="M12 2a10 10 0 0 1 10 10h-3a7 7 0 0 0-7-7V2z"/>
+        </svg>
+        <span>Loading labels...</span>
+      </div>
+
+      <div v-else-if="Object.keys(allLibraryLabels).length === 0" class="no-labels">
+        <p>No labels found. Make sure you have libraries configured and have scanned them.</p>
+        <button @click="fetchAllLibraryLabels()" class="refresh-labels-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Refresh Labels
+        </button>
+      </div>
 
       <!-- Library-specific label sections (unified for both movies and TV shows) -->
       <div v-for="(libInfo, libId) in allLibraryLabels" :key="libId" class="library-labels-section">
@@ -2856,5 +2896,71 @@ button.secondary:hover {
   color: var(--accent);
   font-weight: 600;
   min-width: 120px;
+}
+
+/* Labels Loading State */
+.labels-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  background: rgba(61, 214, 183, 0.05);
+  border-radius: 10px;
+  margin: 16px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.labels-loading .spinner {
+  animation: spin 1s linear infinite;
+  color: var(--accent);
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.no-labels {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 30px;
+  background: rgba(255, 193, 7, 0.05);
+  border: 1px solid rgba(255, 193, 7, 0.2);
+  border-radius: 10px;
+  margin: 16px 0;
+  text-align: center;
+}
+
+.no-labels p {
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.refresh-labels-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--background-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.refresh-labels-btn:hover {
+  background: var(--button-hover);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.refresh-labels-btn svg {
+  color: var(--accent);
 }
 </style>

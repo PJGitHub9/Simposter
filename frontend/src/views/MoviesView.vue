@@ -88,17 +88,22 @@ const loadMoviesCache = () => {
       const cached = JSON.parse(raw)
       // Only use cache if it actually has movies
       if (cached && cached.length > 0) {
-        // Verify cached movies belong to current library by checking library_id field
+        // STRICT validation: only show movies from current library
+        const currentLib = currentLibrary.value
         const validCached = cached.filter((m: any) => {
           const cachedLib = m.library_id || ''
-          const currentLib = currentLibrary.value
-          // No library filter (currentLib empty) = show all movies
-          // No library_id on movie = show in all views
-          // Library matches = show it
-          return !currentLib || !m.library_id || cachedLib === currentLib
+          // If viewing specific library, ONLY show exact matches
+          if (currentLib) {
+            return cachedLib === currentLib
+          }
+          // If viewing "all" (no library filter), show everything
+          return true
         })
         if (validCached.length > 0) {
           moviesCache.value = validCached
+        } else {
+          // No valid movies for this library, clear the cache
+          moviesCache.value = []
         }
         // Don't set moviesLoaded here - let onMounted decide whether to fetch fresh
       }
@@ -162,9 +167,7 @@ const forcePosterRefresh = async () => {
   forceRefreshingPosters.value = false
 }
 
-loadPosterCache()
-loadLabelCache()
-loadMoviesCache()
+// NOTE: Initial cache load moved to onMounted to ensure route is ready
 // Reload caches when library changes
 watch(currentLibrary, () => {
   // Clear in-memory display immediately to prevent showing wrong library's movies
@@ -388,9 +391,10 @@ const handleRefreshPoster = async (ratingKey: string, forceRefresh?: boolean) =>
 }
 
 onMounted(async () => {
-  // Reload caches from sessionStorage (in case they were updated by scan library)
+  // Load caches AFTER route is fully ready (prevents loading wrong library)
   loadPosterCache()
   loadLabelCache()
+  loadMoviesCache()
 
   if (!settings.loaded.value && !settings.loading.value) {
     await settings.load()

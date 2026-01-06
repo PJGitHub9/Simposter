@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.4.8 (2026-01-06)
+### Bug Fixes
+- **Library Switching Cache Contamination**: Fixed critical issue where items from one library appeared in another
+  - Deferred initial cache load until route is fully ready
+  - Added immediate display clear when switching libraries (`movies.value = []`, `tvShows.value = []`)
+  - Strengthened library ID validation to strictly filter by current library
+  - Eliminated race conditions between cache loading and route resolution
+
+- **Settings Labels Not Populating**: Fixed inconsistent label loading in Settings
+  - Added loading state with spinner indicator
+  - Made label fetching properly await completion before displaying
+  - Added "Refresh Labels" button when no labels found
+  - Better error logging and empty result caching
+  - Shows clear "Loading labels..." state during fetch
+
+### UX Improvements
+- **Template Manager Fallback Clarity**: Improved wording and added visual fallback chain
+  - Changed "If X logo missing" to "If X logo not found" for clarity
+  - Added numbered fallback priority chain showing exact order of operations
+  - Clarified that global white logo fallback applies between preset preference and preset fallback
+  - Better explanation of when fallback settings apply (batch edit mode only)
+
+### Performance & Reliability
+- Strict library filtering prevents cross-contamination in multi-library setups
+- Cached empty label results prevent repeated failed API calls
+- Improved timing of cache operations for more reliable data display
+
 ## v1.4.7 (2026-01-06)
 ### Major Features
 - **TV Show Seasons Support**: Enhanced TV show rendering with season-specific poster generation

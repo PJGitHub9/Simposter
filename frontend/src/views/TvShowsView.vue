@@ -90,18 +90,22 @@ const loadTvShowsCache = () => {
       const cached = JSON.parse(raw)
       // Only use cache if it actually has TV shows
       if (cached && cached.length > 0) {
-        // Verify cached TV shows belong to current library by checking library_id field
+        // STRICT validation: only show TV shows from current library
+        const currentLib = currentLibrary.value
         const validCached = cached.filter((show: any) => {
           const cachedLib = show.library_id || ''
-          const currentLib = currentLibrary.value
-          // No library filter (currentLib empty) = show all TV shows
-          // No library_id on show = show in all views
-          // Library matches = show it
-          return !currentLib || !show.library_id || cachedLib === currentLib
+          // If viewing specific library, ONLY show exact matches
+          if (currentLib) {
+            return cachedLib === currentLib
+          }
+          // If viewing "all" (no library filter), show everything
+          return true
         })
         if (validCached.length > 0) {
           tvShowsCache.value = validCached
-          tvShowsLoaded.value = true
+        } else {
+          // No valid shows for this library, clear the cache
+          tvShowsCache.value = []
         }
         // Don't set tvShowsLoaded here - let onMounted decide whether to fetch fresh
       }
@@ -162,11 +166,11 @@ const forcePosterRefresh = async () => {
   forceRefreshingPosters.value = false
 }
 
-loadPosterCache()
-loadLabelCache()
-loadTvShowsCache()
+// NOTE: Initial cache load moved to onMounted to ensure route is ready
 // Reload caches when library changes
 watch(currentLibrary, () => {
+  // Clear display immediately to prevent showing wrong library's shows
+  tvShows.value = []
   clearAllCaches()
   loadPosterCache()
   loadLabelCache()
@@ -385,9 +389,10 @@ const handleRefreshPoster = async (ratingKey: string) => {
 }
 
 onMounted(async () => {
-  // Reload caches from sessionStorage (in case they were updated by scan library)
+  // Load caches AFTER route is fully ready (prevents loading wrong library)
   loadPosterCache()
   loadLabelCache()
+  loadTvShowsCache()
 
   if (!settings.loaded.value && !settings.loading.value) {
     await settings.load()

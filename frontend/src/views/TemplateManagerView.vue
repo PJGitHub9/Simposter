@@ -83,13 +83,21 @@ const presetCount = computed(() =>
 const posterFallbackLabel = computed(() => {
   const opts = modalPreset.value?.preset.options || {}
   const pref = opts.poster_filter || opts.posterPreference || ''
-  return pref ? `If ${pref} poster missing` : 'If poster preference missing'
+  if (pref) {
+    // Make it clear this fallback applies AFTER the preference is tried
+    return `If ${pref} poster not found`
+  }
+  return 'If preferred poster not found'
 })
 
 const logoFallbackLabel = computed(() => {
   const opts = modalPreset.value?.preset.options || {}
-  const pref = opts.logo_preference || ''
-  return pref ? `If ${pref} logo missing` : 'If logo preference missing'
+  const pref = opts.logo_preference || opts.logo_mode || ''
+  if (pref) {
+    // Make it clear this fallback applies AFTER the preference is tried
+    return `If ${pref} logo not found`
+  }
+  return 'If preferred logo not found'
 })
 
 const fetchPresets = async () => {
@@ -639,7 +647,10 @@ onMounted(async () => {
           <button class="icon-btn" @click="showFallbackModal = false">×</button>
         </div>
         <div class="modal-body">
-          <p class="help small">Fallback settings apply in batch edit mode only. Poster fallback is checked first and takes priority.</p>
+          <p class="help small">
+            <strong>Fallback settings</strong> define what happens when this preset's preferred poster or logo cannot be found.
+            These settings only apply in batch edit mode.
+          </p>
           <h5>Logo source (optional override)</h5>
           <div class="grid">
             <label>
@@ -723,9 +734,14 @@ onMounted(async () => {
               </label>
             </div>
           </div>
-          <p v-if="(modalPreset?.preset.options?.logo_preference === 'white' || modalPreset?.preset.options?.logo_mode === 'white')" class="help small">
-            <strong>Note:</strong> Global white logo fallback will apply if a white logo is not available before this individual fallback setting is checked.
-          </p>
+          <div class="fallback-chain-info">
+            <p class="help small"><strong>Fallback Priority Chain:</strong></p>
+            <ol class="help small">
+              <li>Try this preset's logo preference: <strong>{{ modalPreset?.preset.options?.logo_preference || modalPreset?.preset.options?.logo_mode || 'default' }}</strong></li>
+              <li v-if="(modalPreset?.preset.options?.logo_preference === 'white' || modalPreset?.preset.options?.logo_mode === 'white')">If not found, try global white logo fallback setting</li>
+              <li>If still not found, use the fallback action selected above</li>
+            </ol>
+          </div>
         </div>
         <div class="modal-actions">
           <button class="secondary" @click="showFallbackModal = false">Cancel</button>
@@ -1225,5 +1241,34 @@ input:focus {
   display: block;
   color: var(--text-secondary, #9aa4b5);
   font-size: 0.8rem;
+}
+
+.fallback-chain-info {
+  margin-top: 16px;
+  padding: 16px;
+  background: rgba(61, 214, 183, 0.05);
+  border: 1px solid rgba(61, 214, 183, 0.2);
+  border-radius: 8px;
+}
+
+.fallback-chain-info p {
+  margin: 0 0 8px 0;
+  color: var(--text-primary);
+}
+
+.fallback-chain-info ol {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+}
+
+.fallback-chain-info ol li {
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+.fallback-chain-info ol li strong {
+  color: var(--accent);
+  font-weight: 600;
 }
 </style>
