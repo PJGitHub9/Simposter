@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
 import { useMovies } from '../composables/useMovies'
@@ -13,10 +13,11 @@ type Movie = {
   addedAt?: number
   poster?: string | null
   mediaType?: 'movie' | 'tv-show'
+  library_id?: string | number
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
-const { movies: moviesCache, moviesLoaded: moviesLoadedFlag, setMoviePoster, hydratePostersFromSession } = useMovies()
+const { movies: moviesCache, moviesLoaded: moviesLoadedFlag, setMoviePoster } = useMovies()
 const posterCacheStore = ref<Record<string, string | null>>({})
 const labelCacheStore = ref<Record<string, string[]>>({})
 const posterInFlight = new Set<string>()
@@ -45,8 +46,8 @@ const loadPosterCache = () => {
     if (raw) {
       posterCacheStore.value = JSON.parse(raw)
     }
-  } catch {
-    /* ignore */
+  } catch (e) {
+    console.warn('[MoviesView] Failed to load poster cache:', e)
   }
 }
 
@@ -84,32 +85,36 @@ const loadMoviesCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
     const raw = sessionStorage.getItem(MOVIES_CACHE_KEY.value)
+    console.log('[MoviesView] loadMoviesCache - Cache key:', MOVIES_CACHE_KEY.value)
+    console.log('[MoviesView] loadMoviesCache - Current library:', currentLibrary.value)
     if (raw) {
       const cached = JSON.parse(raw)
+      console.log('[MoviesView] loadMoviesCache - Total cached items:', cached.length)
       // Only use cache if it actually has movies
       if (cached && cached.length > 0) {
         // STRICT validation: only show movies from current library
-        const currentLib = currentLibrary.value
+        const currentLib = currentLibrary.value || ''
         const validCached = cached.filter((m: any) => {
-          const cachedLib = m.library_id || ''
-          // If viewing specific library, ONLY show exact matches
-          if (currentLib) {
-            return cachedLib === currentLib
-          }
-          // If viewing "all" (no library filter), show everything
-          return true
+          const cachedLib = String(m.library_id || '')
+          // STRICT: library IDs must match exactly
+          return cachedLib === currentLib
         })
+        console.log('[MoviesView] loadMoviesCache - Filtered items for library', currentLib + ':', validCached.length)
         if (validCached.length > 0) {
           moviesCache.value = validCached
+          console.log('[MoviesView] loadMoviesCache - Set moviesCache to', validCached.length, 'items')
         } else {
           // No valid movies for this library, clear the cache
           moviesCache.value = []
+          console.log('[MoviesView] loadMoviesCache - No valid items, cleared cache')
         }
         // Don't set moviesLoaded here - let onMounted decide whether to fetch fresh
       }
+    } else {
+      console.log('[MoviesView] loadMoviesCache - No cached data found')
     }
-  } catch {
-    /* ignore */
+  } catch (e) {
+    console.warn('[MoviesView] loadMoviesCache - Error:', e)
   }
 }
 
@@ -169,15 +174,25 @@ const forcePosterRefresh = async () => {
 
 // NOTE: Initial cache load moved to onMounted to ensure route is ready
 // Reload caches when library changes
-watch(currentLibrary, () => {
-  // Clear in-memory display immediately to prevent showing wrong library's movies
+watch(currentLibrary, (newLib, oldLib) => {
+  console.log('[MoviesView] Library changed from', oldLib, 'to', newLib)
+  console.log('[MoviesView] Current moviesCache length before clear:', moviesCache.value.length)
+  console.log('[MoviesView] Current movies display length before clear:', movies.value.length)
+
+  // Clear display AND cache immediately to prevent showing wrong library's movies
+  loading.value = true
   movies.value = []
+  moviesCache.value = []
+  moviesLoaded.value = false
+  console.log('[MoviesView] Cleared all arrays')
+
   clearAllCaches()
   loadPosterCache()
   loadLabelCache()
-  loadMoviesCache()
-  moviesLoaded.value = false
+  // Don't load movies cache - force fresh fetch from API
   fetchMovies().then(() => {
+    console.log('[MoviesView] Fetch complete, moviesCache length:', moviesCache.value.length)
+    console.log('[MoviesView] Fetch complete, movies display length:', movies.value.length)
     fetchPosters(paged.value)
     fetchLabels(paged.value)
   })
@@ -194,10 +209,14 @@ const emit = defineEmits<{
 const movies = ref<Movie[]>(moviesCache.value)
 const loading = ref(false)
 const error = ref<string | null>(null)
-const page = ref(1)
-const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
-const sortOrder = ref<'asc' | 'desc'>('asc')
-const filterLabel = ref<string>('')
+
+// Initialize from URL query parameters (route already declared on line 25)
+const router = useRouter()
+const page = ref(Number(route.query.page) || 1)
+const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || 'title')
+const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || 'asc')
+const filterLabel = ref<string>((route.query.label as string) || '')
+
 const posterCache = posterCacheStore
 const labelCache = labelCacheStore
 
@@ -210,7 +229,9 @@ const pageSize = computed(() => settings.posterDensity.value || 20)
 const allLabels = computed(() => {
   const labels = new Set<string>()
   Object.values(labelCache.value).forEach(movieLabels => {
-    movieLabels.forEach(label => labels.add(label))
+    if (Array.isArray(movieLabels)) {
+      movieLabels.forEach(label => labels.add(label))
+    }
   })
   return Array.from(labels).sort()
 })
@@ -282,30 +303,42 @@ const fetchMovies = async (forceRefresh = false) => {
   loading.value = true
   error.value = null
   try {
-    // Always fetch on mount if not already loaded in this session, or if force refresh
-    if (!moviesLoaded.value || forceRefresh) {
-      const url = `${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}${forceRefresh ? `${currentLibrary.value ? '&' : '?'}force_refresh=true` : ''}`
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`API error ${res.status}`)
-      const data = (await res.json()) as (Movie & { labels?: string[] })[]
-      // Seed caches from server data when available
-      data.forEach((m) => {
-        if (m.poster && !(m.key in posterCacheStore.value)) {
-          posterCacheStore.value[m.key] = m.poster
-        }
-        if (m.labels && !(m.key in labelCacheStore.value)) {
-          labelCacheStore.value[m.key] = m.labels
-        }
-      })
-      savePosterCache()
-      saveLabelCache()
+    // Always fetch to ensure we have the correct library's data
+    const url = `${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}${forceRefresh ? `${currentLibrary.value ? '&' : '?'}force_refresh=true` : ''}`
+    console.log('[MoviesView] fetchMovies - Current library:', currentLibrary.value)
+    console.log('[MoviesView] fetchMovies - URL:', url)
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = (await res.json()) as (Movie & { labels?: string[] })[]
+    console.log('[MoviesView] fetchMovies - Received', data.length, 'items from API')
+    console.log('[MoviesView] fetchMovies - Sample library_ids:', data.slice(0, 5).map(m => m.library_id))
+    // Seed caches from server data when available
+    data.forEach((m) => {
+      if (m.poster && !(m.key in posterCacheStore.value)) {
+        posterCacheStore.value[m.key] = m.poster
+      }
+      if (m.labels && !(m.key in labelCacheStore.value)) {
+        labelCacheStore.value[m.key] = m.labels
+      }
+    })
+    savePosterCache()
+    saveLabelCache()
 
-      moviesCache.value = data
-      hydratePostersFromSession() // reapply cached poster URLs after replacing movie list
-      moviesLoaded.value = true
-      saveMoviesCache()
-    }
+    moviesCache.value = data
+    console.log('[MoviesView] fetchMovies - Set moviesCache to', data.length, 'items')
+
+    // IMPORTANT: Don't use hydratePostersFromSession() - it uses wrong cache key!
+    // Instead, manually apply poster cache from our library-specific cache
+    moviesCache.value.forEach((m: Movie) => {
+      if (m.key in posterCacheStore.value && posterCacheStore.value[m.key]) {
+        m.poster = posterCacheStore.value[m.key]
+      }
+    })
+
+    moviesLoaded.value = true
+    saveMoviesCache()
     movies.value = moviesCache.value
+    console.log('[MoviesView] fetchMovies - Set movies display to', movies.value.length, 'items')
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'Failed to load movies'
   } finally {
@@ -389,6 +422,32 @@ const handleRefreshPoster = async (ratingKey: string, forceRefresh?: boolean) =>
     /* ignore */
   }
 }
+
+// Sync URL query parameters with state
+watch([page, sortBy, sortOrder, filterLabel], () => {
+  const query: Record<string, string> = {}
+
+  // CRITICAL: Preserve library parameter!
+  if (currentLibrary.value) {
+    query.library = currentLibrary.value
+  }
+
+  if (page.value > 1) query.page = String(page.value)
+  if (sortBy.value !== 'title') query.sortBy = sortBy.value
+  if (sortOrder.value !== 'asc') query.sortOrder = sortOrder.value
+  if (filterLabel.value) query.label = filterLabel.value
+
+  // Update URL without triggering navigation
+  router.replace({ query })
+}, { deep: true })
+
+// Watch for route query changes (browser back/forward buttons)
+watch(() => route.query, (newQuery) => {
+  page.value = Number(newQuery.page) || 1
+  sortBy.value = (newQuery.sortBy as any) || 'title'
+  sortOrder.value = (newQuery.sortOrder as any) || 'asc'
+  filterLabel.value = (newQuery.label as string) || ''
+}, { deep: true })
 
 onMounted(async () => {
   // Load caches AFTER route is fully ready (prevents loading wrong library)

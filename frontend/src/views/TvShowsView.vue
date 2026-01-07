@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
 import { useTvShows } from '../composables/useTvShows'
@@ -18,7 +18,7 @@ type TvShow = {
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
-const { tvShows: tvShowsCache, tvShowsLoaded: tvShowsLoadedFlag, setTvShowPoster, hydratePostersFromSession } = useTvShows()
+const { tvShows: tvShowsCache, tvShowsLoaded: tvShowsLoadedFlag, setTvShowPoster } = useTvShows()
 const posterCacheStore = ref<Record<string, string | null>>({})
 const labelCacheStore = ref<Record<string, string[]>>({})
 const posterInFlight = new Set<string>()
@@ -91,15 +91,11 @@ const loadTvShowsCache = () => {
       // Only use cache if it actually has TV shows
       if (cached && cached.length > 0) {
         // STRICT validation: only show TV shows from current library
-        const currentLib = currentLibrary.value
+        const currentLib = currentLibrary.value || 'default'
         const validCached = cached.filter((show: any) => {
-          const cachedLib = show.library_id || ''
-          // If viewing specific library, ONLY show exact matches
-          if (currentLib) {
-            return cachedLib === currentLib
-          }
-          // If viewing "all" (no library filter), show everything
-          return true
+          const cachedLib = String(show.library_id || 'default')
+          // STRICT: library IDs must match exactly
+          return cachedLib === currentLib
         })
         if (validCached.length > 0) {
           tvShowsCache.value = validCached
@@ -169,13 +165,15 @@ const forcePosterRefresh = async () => {
 // NOTE: Initial cache load moved to onMounted to ensure route is ready
 // Reload caches when library changes
 watch(currentLibrary, () => {
-  // Clear display immediately to prevent showing wrong library's shows
+  // Clear display AND cache immediately to prevent showing wrong library's shows
+  loading.value = true
   tvShows.value = []
+  tvShowsCache.value = []
+  tvShowsLoaded.value = false
   clearAllCaches()
   loadPosterCache()
   loadLabelCache()
-  loadTvShowsCache()
-  tvShowsLoaded.value = false
+  // Don't load TV shows cache - force fresh fetch from API
   fetchTvShows().then(() => {
     fetchPosters(paged.value)
     fetchLabels(paged.value)
@@ -193,10 +191,14 @@ const emit = defineEmits<{
 const tvShows = ref<TvShow[]>(tvShowsCache.value)
 const loading = ref(false)
 const error = ref<string | null>(null)
-const page = ref(1)
-const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
-const sortOrder = ref<'asc' | 'desc'>('asc')
-const filterLabel = ref<string>('')
+
+// Initialize from URL query parameters (route already declared on line 27)
+const router = useRouter()
+const page = ref(Number(route.query.page) || 1)
+const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || 'title')
+const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || 'asc')
+const filterLabel = ref<string>((route.query.label as string) || '')
+
 const posterCache = posterCacheStore
 const labelCache = labelCacheStore
 const forceRefreshingPosters = ref(false)
@@ -210,7 +212,9 @@ const pageSize = computed(() => settings.posterDensity.value || 20)
 const allLabels = computed(() => {
   const labels = new Set<string>()
   Object.values(labelCache.value).forEach(showLabels => {
-    showLabels.forEach(label => labels.add(label))
+    if (Array.isArray(showLabels)) {
+      showLabels.forEach(label => labels.add(label))
+    }
   })
   return Array.from(labels).sort()
 })
@@ -282,27 +286,34 @@ const fetchTvShows = async () => {
   loading.value = true
   error.value = null
   try {
-    if (!tvShowsLoaded.value) {
-      const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
-      if (!res.ok) throw new Error(`API error ${res.status}`)
-      const data = (await res.json()) as (TvShow & { labels?: string[] })[]
-      // Seed caches from server data when available
-      data.forEach((s) => {
-        if (s.poster && !(s.key in posterCacheStore.value)) {
-          posterCacheStore.value[s.key] = s.poster
-        }
-        if (s.labels && !(s.key in labelCacheStore.value)) {
-          labelCacheStore.value[s.key] = s.labels
-        }
-      })
-      savePosterCache()
-      saveLabelCache()
+    // Always fetch to ensure we have the correct library's data
+    const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = (await res.json()) as (TvShow & { labels?: string[] })[]
+    // Seed caches from server data when available
+    data.forEach((s) => {
+      if (s.poster && !(s.key in posterCacheStore.value)) {
+        posterCacheStore.value[s.key] = s.poster
+      }
+      if (s.labels && !(s.key in labelCacheStore.value)) {
+        labelCacheStore.value[s.key] = s.labels
+      }
+    })
+    savePosterCache()
+    saveLabelCache()
 
-      tvShowsCache.value = data
-      hydratePostersFromSession() // reapply cached poster URLs after replacing TV show list
-      tvShowsLoaded.value = true
-      saveTvShowsCache()
-    }
+    tvShowsCache.value = data
+
+    // IMPORTANT: Don't use hydratePostersFromSession() - it uses wrong cache key!
+    // Instead, manually apply poster cache from our library-specific cache
+    tvShowsCache.value.forEach((s: TvShow) => {
+      if (s.key in posterCacheStore.value && posterCacheStore.value[s.key]) {
+        s.poster = posterCacheStore.value[s.key]
+      }
+    })
+
+    tvShowsLoaded.value = true
+    saveTvShowsCache()
     tvShows.value = tvShowsCache.value
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'Failed to load TV shows'
@@ -387,6 +398,32 @@ const handleRefreshPoster = async (ratingKey: string) => {
     /* ignore */
   }
 }
+
+// Sync URL query parameters with state
+watch([page, sortBy, sortOrder, filterLabel], () => {
+  const query: Record<string, string> = {}
+
+  // CRITICAL: Preserve library parameter!
+  if (currentLibrary.value) {
+    query.library = currentLibrary.value
+  }
+
+  if (page.value > 1) query.page = String(page.value)
+  if (sortBy.value !== 'title') query.sortBy = sortBy.value
+  if (sortOrder.value !== 'asc') query.sortOrder = sortOrder.value
+  if (filterLabel.value) query.label = filterLabel.value
+
+  // Update URL without triggering navigation
+  router.replace({ query })
+}, { deep: true })
+
+// Watch for route query changes (browser back/forward buttons)
+watch(() => route.query, (newQuery) => {
+  page.value = Number(newQuery.page) || 1
+  sortBy.value = (newQuery.sortBy as any) || 'title'
+  sortOrder.value = (newQuery.sortOrder as any) || 'asc'
+  filterLabel.value = (newQuery.label as string) || ''
+}, { deep: true })
 
 onMounted(async () => {
   // Load caches AFTER route is fully ready (prevents loading wrong library)

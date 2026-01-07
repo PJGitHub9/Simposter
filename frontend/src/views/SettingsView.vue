@@ -998,10 +998,9 @@ onMounted(async () => {
   // Do this BEFORE capturing snapshot since it modifies localLibraries
   if (settings.plex.value.url && settings.plex.value.token) {
     await testPlexConnection()
+    // Fetch labels for both movies and TV (only if Plex is configured)
+    await fetchAllLibraryLabels()
   }
-
-  // Fetch labels for both movies and TV
-  await fetchAllLibraryLabels()
 
   // Fetch scheduler status
   await fetchSchedulerStatus()
@@ -1023,9 +1022,8 @@ watch(
       // Load Plex libraries if credentials exist
       if (settings.plex.value.url && settings.plex.value.token) {
         await testPlexConnection()
+        await fetchAllLibraryLabels()
       }
-
-      await fetchAllLibraryLabels()
 
       // Recapture snapshot after reload
       await nextTick()
@@ -1038,7 +1036,10 @@ watch(
 watch(
   [() => settings.plex.value.libraryMappings, () => settings.plex.value.tvShowLibraryMappings],
   () => {
-    fetchAllLibraryLabels()
+    // Only fetch labels if Plex is configured
+    if (settings.plex.value.url && settings.plex.value.token) {
+      fetchAllLibraryLabels()
+    }
   },
   { deep: true }
 )

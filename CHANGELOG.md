@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.4.9 (2026-01-07)
+### Bug Fixes
+- **Library Cache Contamination (FIXED)**: Resolved persistent issue where movies/shows from one library appeared in another
+  - Root cause: `hydratePostersFromSession()` was loading from hardcoded global cache key instead of library-specific keys
+  - Removed composable's `hydratePostersFromSession` calls, using library-specific poster cache directly
+  - Fixed poster hydration to only apply posters from the current library's cache
+
+- **Library Parameter Loss**: Fixed critical bug where library parameter was removed from URL when applying filters/sorting
+  - URL sync watcher now preserves the `library` query parameter
+  - Prevents switching to "all libraries" view when changing sort order or filters
+  - Applied to both MoviesView and TvShowsView
+
+### UX Improvements
+- **Browser Navigation Support**: Added URL state management for filters, sorting, pagination, and edit mode
+  - Browser back/forward buttons now work correctly when editing items
+  - Filters, sort order, and page number preserved in URL
+  - Edit mode includes item ID in URL (e.g., `?edit=12345&library=1`)
+  - URL state restored when using browser navigation
+
+- **Conditional Navigation**: Navigation sidebar now adapts to Plex configuration state
+  - Only Settings shown when Plex not configured
+  - Full navigation restored once Plex configured
+  - Automatic redirect to Settings on fresh instances
+
+### Technical Improvements
+- Added comprehensive debug logging to track cache operations and library switches
+- Added `library_id` field to Movie type definition
+- Removed unused `hydratePostersFromSession` imports from both view components
+- Settings page now checks Plex configuration before attempting to load labels
+
 ## v1.4.8 (2026-01-06)
 ### Bug Fixes
 - **Library Switching Cache Contamination**: Fixed critical issue where items from one library appeared in another

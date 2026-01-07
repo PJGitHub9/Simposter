@@ -865,28 +865,6 @@ const applyPresetOptions = (id: string) => {
   strokeWidth.value = 4
   strokeColor.value = '#000000'
 
-  // Reset text overlay defaults before applying preset values
-  textOverlayEnabled.value = false
-  customText.value = ''
-  fontFamily.value = 'Arial'
-  fontSize.value = 120
-  fontWeight.value = '700'
-  textColor.value = '#ffffff'
-  textAlign.value = 'center'
-  textTransform.value = 'uppercase'
-  letterSpacing.value = 2
-  lineHeight.value = 120
-  positionY.value = 75
-  shadowEnabled.value = true
-  shadowBlur.value = 10
-  shadowOffsetX.value = 0
-  shadowOffsetY.value = 4
-  shadowColor.value = '#000000'
-  shadowOpacity.value = 80
-  strokeEnabled.value = false
-  strokeWidth.value = 4
-  strokeColor.value = '#000000'
-
   options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
   options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
