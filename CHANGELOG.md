@@ -12,6 +12,15 @@
   - Settings UI shows separate inputs with available variable hints
 
 ### Bug Fixes
+- **TV Show Save to Disk**: Fixed critical issue where `/api/save` endpoint didn't support TV shows properly
+  - Updated SaveRequest schema to include `season_index` and `is_tv` fields
+  - `/api/save` now uses correct media type and passes season to path variables
+  - `/api/save` now loads preset season_options for season-specific rendering (matching preview behavior)
+  - Frontend render service updated to pass library_id and season_index
+  - TV show editor builds season-specific options for each season (poster, logo, text overlay)
+  - TV show editor correctly retrieves library_id from route and passes season index
+  - Fixes "wrong library", "Season X.jpg" filename, and "all seasons same poster" issues
+
 - **Library Cache Contamination (FIXED)**: Resolved persistent issue where movies/shows from one library appeared in another
   - Root cause: `hydratePostersFromSession()` was loading from hardcoded global cache key instead of library-specific keys
   - Removed composable's `hydratePostersFromSession` calls, using library-specific poster cache directly

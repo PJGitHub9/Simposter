@@ -184,6 +184,27 @@ def api_save(req: SaveRequest):
     render_options["movie_title"] = req.movie_title or ""
     render_options["movie_year"] = str(req.movie_year) if req.movie_year else ""
 
+    # Load preset season_options if rendering a season (same logic as preview endpoint)
+    if req.preset_id:
+        from .. import database as db
+        preset = db.get_preset(req.template_id or "default", req.preset_id)
+        if preset:
+            # Check if this is a season render based on season_text presence
+            is_season = False
+            try:
+                st = (render_options.get("season_text") or "").strip()
+                is_season = len(st) > 0
+            except (AttributeError, TypeError):
+                is_season = False
+
+            # Use season_options when rendering a season
+            if is_season and isinstance(preset.get("season_options"), dict):
+                preset_season_opts = preset.get("season_options", {})
+                logger.info("[SAVE] Using season_options for preset '%s' (season_text='%s')", req.preset_id, st)
+                # Merge preset season options with request options (request options take precedence)
+                merged_options = {**preset_season_opts, **render_options}
+                render_options = merged_options
+
     img = render_poster_image(
         req.template_id,
         req.background_url,
@@ -191,19 +212,21 @@ def api_save(req: SaveRequest):
         render_options,
     )
 
-    # Get save location template from UI settings
-    save_template = get_save_location_template()
+    # Determine media type and get appropriate save location template
+    media_type = "tv-show" if req.is_tv else "movie"
+    save_template = get_save_location_template(media_type=media_type)
 
     # Resolve library label for template substitution (prefer display name/title over id)
     library_label = resolve_library_label(req.library_id)
 
-    # Apply variable substitution
+    # Apply variable substitution (include season for TV shows)
     save_path = apply_save_location_variables(
         save_template,
         req.movie_title,
         req.movie_year,
         req.rating_key,
-        library_label
+        library_label,
+        season=req.season_index if req.is_tv else None
     )
 
     # Sanitize path components (keep dots so we can detect filenames)

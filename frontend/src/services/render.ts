@@ -81,13 +81,19 @@ export function useRenderService() {
     logoUrl?: string | null,
     options?: PresetOptions,
     templateId?: string,
-    presetId?: string
+    presetId?: string,
+    libraryId?: string | null,
+    seasonIndex?: number | null
   ) => {
     const payload = {
       ...basePayload(movie, bgUrl, logoUrl, templateId, presetId, options),
       movie_title: movie.title,
       movie_year: movie.year ?? null,
-      filename: 'poster.jpg'
+      filename: 'poster.jpg',
+      library_id: libraryId ?? null,
+      is_tv: movie.mediaType === 'tv-show',
+      season_index: seasonIndex ?? null,
+      rating_key: movie.key
     }
     return post('save', payload)
   }

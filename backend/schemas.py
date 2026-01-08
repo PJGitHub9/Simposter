@@ -42,6 +42,8 @@ class SaveRequest(PreviewRequest):
     rating_key: Optional[str] = None
     filename: Optional[str] = "poster.jpg"
     library_id: Optional[str] = None
+    season_index: Optional[int] = None  # For TV show seasons (e.g., 1, 2, 3)
+    is_tv: Optional[bool] = False  # True for TV shows, False for movies
 
 
 class PresetSaveRequest(BaseModel):

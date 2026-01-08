@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import type { MovieInput } from '../../services/types'
 import { useRenderService } from '../../services/render'
 import { usePresetService } from '../../services/presets'
@@ -22,6 +23,7 @@ const props = defineProps<{ movie: MovieInput }>()
 
 const settings = useSettingsStore()
 const { movies: globalMovies, setMoviePoster } = useMovies()
+const route = useRoute()
 
 const apiBase = getApiBase()
 
@@ -1660,14 +1662,124 @@ const doSave = async () => {
     return
   }
 
+  // Get library_id from route query or movie object
+  const libraryId = route.query.library as string || (props.movie as any).library_id || null
+
+  // Capture template/preset at start to avoid race conditions
+  const currentTemplate = selectedTemplate.value
+  const currentPreset = selectedPreset.value
+
+  // Get base options but remove season-specific processed values
+  const baseOptions = { ...optionsPayload.value }
+  delete (baseOptions as any).custom_text
+  delete (baseOptions as any).season_text
+
   // Save for each selected season
   for (const seasonKey of selectedSeasonKeys) {
     const season = seasons.value.find(s => s.key === seasonKey)
     if (!season) continue
 
-    // Create a temporary movie object for this season
-    const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
-    const res = await render.save(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
+    // Get poster URL for this specific season
+    const cachedPoster = selectedPosterCache.value[seasonKey]
+    const seasonPosterUrl = season.thumb || season.poster || posterUrlForRatingKey(seasonKey)
+    let seasonBgUrl = cachedPoster || seasonPosterUrl || bgUrl.value
+
+    // Apply poster filter if no manual selection (same logic as background render)
+    if (!cachedPoster) {
+      const seasonAssets = seasonAssetsCache.value[seasonKey]
+      const seasonPosters = seasonAssets?.posters || []
+      const seriesPosters = showLevelAssets.value.posters || []
+      const isSeason = !season.isSeries
+
+      // Apply poster filter based on available assets
+      if (posterFilter.value === 'textless') {
+        const seasonTextless = seasonPosters.find((p) => p.has_text === false)
+        const seriesTextless = isSeason ? seriesPosters.find((p: any) => p.has_text === false) : null
+        const choice = seasonTextless || seriesTextless
+        if (choice) {
+          seasonBgUrl = choice.url
+        }
+      } else if (posterFilter.value === 'text') {
+        const withText = seasonPosters.find((p) => p.has_text === true)
+        if (withText) {
+          seasonBgUrl = withText.url
+        }
+      } else if (seasonPosters.length > 0) {
+        // Filter is 'all' - use first available
+        seasonBgUrl = seasonPosters[0]?.url || seasonPosterUrl
+      }
+    }
+
+    // Get cached settings for this season
+    const cachedSettings = settingsCache.value[seasonKey]
+
+    // Build season-specific options
+    let seasonOptions = { ...baseOptions }
+
+    // Add season_text for season-specific rendering
+    let thisSeasonText = ''
+    if (!season.isSeries) {
+      thisSeasonText = season.title.includes('Special') ? 'Specials' : `Season ${season.index}`
+      seasonOptions.season_text = thisSeasonText
+    }
+
+    // Apply cached settings if user modified this season
+    const hasUserModifications = cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
+    if (hasUserModifications) {
+      if (cachedSettings.logoMode) seasonOptions.logo_mode = cachedSettings.logoMode
+      if (cachedSettings.textOverlayEnabled !== undefined) {
+        seasonOptions.text_overlay_enabled = cachedSettings.textOverlayEnabled
+        if (cachedSettings.customText !== undefined) {
+          seasonOptions.custom_text = cachedSettings.customText
+        }
+      }
+      if (cachedSettings.fontSize) seasonOptions.font_size = cachedSettings.fontSize
+      if (cachedSettings.fontFamily) seasonOptions.font_family = cachedSettings.fontFamily
+    } else {
+      // No user modifications - let backend preset season_options handle text overlay
+      const fieldsToRemove = [
+        'text_overlay_enabled', 'custom_text', 'logo_mode', 'font_size', 'font_family',
+        'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
+        'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
+        'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color'
+      ]
+      seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
+        if (!fieldsToRemove.includes(key)) {
+          (acc as any)[key] = (seasonOptions as any)[key]
+        }
+        return acc
+      }, {} as any)
+      // Keep season_text for backend placeholder replacement
+      if (thisSeasonText) {
+        seasonOptions.season_text = thisSeasonText
+      }
+    }
+
+    // Get logo for this season
+    // If no user modifications, check if preset uses logo_mode=none
+    let seasonLogoUrl = cachedSettings?.selectedLogo || logoUrl.value
+    if (!hasUserModifications) {
+      // When relying on preset season_options, let the backend decide logo mode
+      // Only pass logo URL if user explicitly selected one for this season
+      seasonLogoUrl = cachedSettings?.selectedLogo || null
+    }
+
+    // Create a temporary movie object for this season with proper media type
+    const seasonMovie = { ...props.movie, key: seasonKey, title: season.title, mediaType: 'tv-show' as const }
+
+    // Pass season index (null for series poster)
+    const seasonIndex = season.isSeries ? null : season.index
+
+    const res = await render.save(
+      seasonMovie,
+      seasonBgUrl,
+      seasonLogoUrl,
+      seasonOptions,
+      currentTemplate,
+      currentPreset,
+      libraryId,
+      seasonIndex
+    )
 
     if (res && typeof res.saved_path === 'string') {
       success(`Saved ${season.title} to ${res.saved_path}`)
