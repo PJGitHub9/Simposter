@@ -55,7 +55,9 @@ export type UISettings = {
   posterDensity: number
   defaultLabelsToRemove?: string[] | Record<string, string[]>
   defaultTvLabelsToRemove?: string[] | Record<string, string[]>
-  saveLocation?: string
+  saveLocation?: string  // Legacy field for backwards compatibility
+  movieSaveLocation?: string
+  tvShowSaveLocation?: string
   saveBatchInSubfolder?: boolean
   plex?: PlexSettings
   tmdb?: TMDBSettings
@@ -74,7 +76,9 @@ const defaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const loading = ref(false)
 const error = ref<string | null>(null)
 const loaded = ref(false)
-const saveLocation = ref<string>('/output')
+const saveLocation = ref<string>('/output')  // Legacy, kept for backwards compatibility
+const movieSaveLocation = ref<string>('/config/output/{library}/{title}.jpg')
+const tvShowSaveLocation = ref<string>('/config/output/{library}/{title}.jpg')
 const saveBatchInSubfolder = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
@@ -109,6 +113,9 @@ async function loadSettings() {
     }
     loaded.value = true
     saveLocation.value = data.saveLocation ?? "/output"
+    // New separate save locations with backwards compatibility
+    movieSaveLocation.value = data.movieSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title}.jpg"
+    tvShowSaveLocation.value = data.tvShowSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title}.jpg"
     saveBatchInSubfolder.value = !!data.saveBatchInSubfolder
     plex.value = {
       url: data.plex?.url ?? '',
@@ -161,6 +168,8 @@ async function saveSettings() {
       defaultLabelsToRemove: defaultLabelsToRemove.value,
       defaultTvLabelsToRemove: defaultTvLabelsToRemove.value,
       saveLocation: saveLocation.value,
+      movieSaveLocation: movieSaveLocation.value,
+      tvShowSaveLocation: tvShowSaveLocation.value,
       saveBatchInSubfolder: saveBatchInSubfolder.value,
       plex: { ...plex.value },
       tmdb: { ...tmdb.value },
@@ -207,6 +216,8 @@ export function useSettingsStore() {
     error,
     loaded,
     saveLocation,
+    movieSaveLocation,
+    tvShowSaveLocation,
     saveBatchInSubfolder,
     load: loadSettings,
     save: saveSettings

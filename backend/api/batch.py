@@ -258,7 +258,7 @@ def _process_single_movie(
             # Load UI settings to respect saveLocation + batch subfolder flag
             ui_settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
             legacy_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
-            save_template = get_save_location_template()
+            save_template = get_save_location_template(media_type="movie")
             save_batch = False
             try:
                 data = None
@@ -851,7 +851,7 @@ def _render_all_tv_seasons(
         result = _render_and_save_poster(
             season_key, poster_url, logo_url, season_options_final, template_id, preset_id,
             show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
-            req, is_tv=True, season_title=season_title
+            req, is_tv=True, season_title=season_title, season_index=season_index
         )
         results.append(result)
 
@@ -875,7 +875,8 @@ def _render_and_save_poster(
     year: Optional[str],
     req: BatchRequest,
     is_tv: bool = False,
-    season_title: Optional[str] = None
+    season_title: Optional[str] = None,
+    season_index: Optional[int] = None
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     _update_batch_status({
@@ -904,16 +905,19 @@ def _render_and_save_poster(
         })
 
         try:
-            template_str = get_save_location_template()
+            # Use appropriate save location template based on media type
+            media_type = "tv-show" if is_tv else "movie"
+            template_str = get_save_location_template(media_type=media_type)
             library_label = resolve_library_label(req.library_id) if req.library_id else ""
 
-            # Apply variable substitution
+            # Apply variable substitution (include season for TV shows if provided)
             save_path_template = apply_save_location_variables(
                 template_str,
                 title,
                 int(year) if year else None,
                 rating_key,
-                library_label
+                library_label,
+                season=season_index if is_tv else None
             )
 
             # Sanitize path components
@@ -947,7 +951,16 @@ def _render_and_save_poster(
                     filename = f"{safe_title}.png"
 
             save_path = base_dir / filename
-            save_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Convert to absolute path for clarity
+            save_path = save_path.resolve()
+
+            # Create parent directory if it doesn't exist
+            try:
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.error("[BATCH] Failed to create directory %s: %s", save_path.parent, e)
+                raise
 
             # Embed library metadata into the image
             rendered = embed_library_metadata(
@@ -972,7 +985,7 @@ def _render_and_save_poster(
                 pnginfo.add_text("simposter_preset_id", preset_id)
 
             rendered.save(str(save_path), "PNG", pnginfo=pnginfo, optimize=False)
-            logger.info("[BATCH] Saved %s to %s", title, save_path)
+            logger.info("[BATCH] Saved %s to: %s", title, save_path)
 
             # Record history
             try:

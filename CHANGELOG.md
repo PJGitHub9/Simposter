@@ -1,6 +1,16 @@
 # Changelog
 
 ## v1.4.9 (2026-01-07)
+### Major Features
+- **Separate Save Locations for Movies and TV Shows**: Enhanced local asset saving with media-type-specific save locations
+  - Split single save location into `movieSaveLocation` and `tvShowSaveLocation` settings
+  - Movie save location supports variables: `{library}`, `{title}`, `{year}`, `{key}`
+  - TV show save location adds `{season}` variable for season-specific saving (formats as `s01`, `s02`, etc.)
+  - Automatic cleanup of empty variables to prevent dangling punctuation in filenames
+  - Library folder names now use display names instead of numeric IDs
+  - Full backwards compatibility with legacy `saveLocation` field
+  - Settings UI shows separate inputs with available variable hints
+
 ### Bug Fixes
 - **Library Cache Contamination (FIXED)**: Resolved persistent issue where movies/shows from one library appeared in another
   - Root cause: `hydratePostersFromSession()` was loading from hardcoded global cache key instead of library-specific keys
@@ -11,6 +21,9 @@
   - URL sync watcher now preserves the `library` query parameter
   - Prevents switching to "all libraries" view when changing sort order or filters
   - Applied to both MoviesView and TvShowsView
+
+- **Save Location Settings Change Detection**: Fixed unsaved changes indicator not showing when editing save location text fields
+  - Added proper event handlers to trigger change detection on input
 
 ### UX Improvements
 - **Browser Navigation Support**: Added URL state management for filters, sorting, pagination, and edit mode
@@ -29,6 +42,10 @@
 - Added `library_id` field to Movie type definition
 - Removed unused `hydratePostersFromSession` imports from both view components
 - Settings page now checks Plex configuration before attempting to load labels
+- Enhanced `resolve_library_label()` to load from database instead of settings module
+- Updated `apply_save_location_variables()` with regex-based cleanup for empty variables
+- Improved `get_save_location_template()` to accept media_type parameter
+- Enhanced batch save logging with absolute paths for better file location visibility
 
 ## v1.4.8 (2026-01-06)
 ### Bug Fixes

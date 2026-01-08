@@ -58,7 +58,9 @@ const isScanInProgress = computed(() => scan.running.value || scan.checking.valu
 // Local state that will only be applied when save is clicked
 const localTheme = ref<Theme>('neon')
 const localPosterDensity = ref(20)
-const localSaveLocation = ref('')
+const localSaveLocation = ref('')  // Legacy, kept for backwards compatibility
+const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
+const localTvShowSaveLocation = ref('/config/output/{library}/{title}.jpg')
 const localSaveBatch = ref(false)
 const localDefaultLabelsToRemove = ref<Record<string, string[]>>({})
 const localDefaultTvLabelsToRemove = ref<Record<string, string[]>>({})
@@ -173,6 +175,8 @@ const loadLocalSettings = async () => {
   localTheme.value = settings.theme.value
   localPosterDensity.value = settings.posterDensity.value
   localSaveLocation.value = settings.saveLocation.value
+  localMovieSaveLocation.value = settings.movieSaveLocation.value
+  localTvShowSaveLocation.value = settings.tvShowSaveLocation.value
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
   localDefaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultTvLabelsToRemove.value))
@@ -258,6 +262,8 @@ const captureSettingsSnapshot = () => {
     theme: localTheme.value,
     posterDensity: localPosterDensity.value,
     saveLocation: localSaveLocation.value,
+    movieSaveLocation: localMovieSaveLocation.value,
+    tvShowSaveLocation: localTvShowSaveLocation.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
     defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
@@ -304,6 +310,8 @@ const checkForChanges = () => {
     theme: localTheme.value,
     posterDensity: localPosterDensity.value,
     saveLocation: localSaveLocation.value,
+    movieSaveLocation: localMovieSaveLocation.value,
+    tvShowSaveLocation: localTvShowSaveLocation.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
     defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
@@ -340,6 +348,8 @@ const checkForChanges = () => {
 
   sectionsWithChanges.value.output =
     localSaveLocation.value !== initial.saveLocation ||
+    localMovieSaveLocation.value !== initial.movieSaveLocation ||
+    localTvShowSaveLocation.value !== initial.tvShowSaveLocation ||
     localSaveBatch.value !== initial.saveBatch
 
   sectionsWithChanges.value.connections =
@@ -378,6 +388,8 @@ const saveSettings = async () => {
   settings.theme.value = localTheme.value
   settings.posterDensity.value = localPosterDensity.value
   settings.saveLocation.value = localSaveLocation.value
+  settings.movieSaveLocation.value = localMovieSaveLocation.value
+  settings.tvShowSaveLocation.value = localTvShowSaveLocation.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
   settings.defaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultTvLabelsToRemove.value))
@@ -1361,11 +1373,12 @@ const checkBackendHealth = async () => {
       </h3>
       <div class="grid">
         <label class="full-width" @mousedown.stop @click.stop>
-          <span class="label-text">Save Location</span>
+          <span class="label-text">Movie Save Location</span>
           <input
-            v-model="localSaveLocation"
+            v-model="localMovieSaveLocation"
             type="text"
-            placeholder="config/output/{library}/{title}.jpg"
+            placeholder="/config/output/{library}/{title}.jpg"
+            @input="checkForChanges"
             @mousedown.stop
             @click.stop
             @mouseup.stop
@@ -1373,6 +1386,22 @@ const checkBackendHealth = async () => {
             @selectstart.stop
           />
           <span class="help-text">Available variables: {library}, {title}, {year}, {key}</span>
+        </label>
+
+        <label class="full-width" @mousedown.stop @click.stop>
+          <span class="label-text">TV Show Save Location</span>
+          <input
+            v-model="localTvShowSaveLocation"
+            type="text"
+            placeholder="/config/output/{library}/{title}.jpg"
+            @input="checkForChanges"
+            @mousedown.stop
+            @click.stop
+            @mouseup.stop
+            @select.stop
+            @selectstart.stop
+          />
+          <span class="help-text">Available variables: {library}, {title}, {year}, {key}, {season}</span>
         </label>
       </div>
     </div>

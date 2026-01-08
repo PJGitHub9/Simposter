@@ -104,7 +104,9 @@ class SchedulerSettings(BaseModel):
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
-    saveLocation: str = "/config/output/{library}/{title}.jpg"
+    saveLocation: str = "/config/output/{library}/{title}.jpg"  # Legacy field for backwards compatibility
+    movieSaveLocation: str = "/config/output/{library}/{title}.jpg"
+    tvShowSaveLocation: str = "/config/output/{library}/{title}.jpg"
     saveBatchInSubfolder: bool = False
     defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     defaultTvLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
