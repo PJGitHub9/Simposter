@@ -44,11 +44,20 @@ export type PerformanceSettings = {
   useOverlayCache: boolean
 }
 
+export type SchedulerSettings = {
+  enabled: boolean
+  cronExpression: string
+  libraryId?: string | null
+}
+
 export type UISettings = {
   theme: Theme
   posterDensity: number
   defaultLabelsToRemove?: string[] | Record<string, string[]>
-  saveLocation?: string
+  defaultTvLabelsToRemove?: string[] | Record<string, string[]>
+  saveLocation?: string  // Legacy field for backwards compatibility
+  movieSaveLocation?: string
+  tvShowSaveLocation?: string
   saveBatchInSubfolder?: boolean
   plex?: PlexSettings
   tmdb?: TMDBSettings
@@ -57,15 +66,19 @@ export type UISettings = {
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
   apiOrder?: string[]
+  scheduler?: SchedulerSettings
 }
 
 const theme = ref<Theme>('neon')
 const posterDensity = ref(20)
 const defaultLabelsToRemove = ref<Record<string, string[]>>({})
+const defaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const loading = ref(false)
 const error = ref<string | null>(null)
 const loaded = ref(false)
-const saveLocation = ref<string>('/output')
+const saveLocation = ref<string>('/output')  // Legacy, kept for backwards compatibility
+const movieSaveLocation = ref<string>('/config/output/{library}/{title}.jpg')
+const tvShowSaveLocation = ref<string>('/config/output/{library}/{title}.jpg')
 const saveBatchInSubfolder = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
@@ -74,6 +87,7 @@ const fanart = ref<FanartSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
+const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null })
 
 async function loadSettings() {
   loading.value = true
@@ -91,8 +105,17 @@ async function loadSettings() {
     } else {
       defaultLabelsToRemove.value = data.defaultLabelsToRemove || {}
     }
+    // Load TV labels (same logic as movie labels)
+    if (Array.isArray(data.defaultTvLabelsToRemove)) {
+      defaultTvLabelsToRemove.value = { 'default': data.defaultTvLabelsToRemove }
+    } else {
+      defaultTvLabelsToRemove.value = data.defaultTvLabelsToRemove || {}
+    }
     loaded.value = true
     saveLocation.value = data.saveLocation ?? "/output"
+    // New separate save locations with backwards compatibility
+    movieSaveLocation.value = data.movieSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title}.jpg"
+    tvShowSaveLocation.value = data.tvShowSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title}.jpg"
     saveBatchInSubfolder.value = !!data.saveBatchInSubfolder
     plex.value = {
       url: data.plex?.url ?? '',
@@ -121,6 +144,11 @@ async function loadSettings() {
       useOverlayCache: data.performance?.useOverlayCache ?? true
     }
     apiOrder.value = data.apiOrder ?? ['tmdb', 'fanart', 'tvdb']
+    scheduler.value = {
+      enabled: data.scheduler?.enabled ?? false,
+      cronExpression: data.scheduler?.cronExpression ?? '0 1 * * *',
+      libraryId: data.scheduler?.libraryId ?? null
+    }
 
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to load settings'
@@ -138,7 +166,10 @@ async function saveSettings() {
       theme: theme.value,
       posterDensity: posterDensity.value,
       defaultLabelsToRemove: defaultLabelsToRemove.value,
+      defaultTvLabelsToRemove: defaultTvLabelsToRemove.value,
       saveLocation: saveLocation.value,
+      movieSaveLocation: movieSaveLocation.value,
+      tvShowSaveLocation: tvShowSaveLocation.value,
       saveBatchInSubfolder: saveBatchInSubfolder.value,
       plex: { ...plex.value },
       tmdb: { ...tmdb.value },
@@ -146,7 +177,8 @@ async function saveSettings() {
       fanart: { ...fanart.value },
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value },
-      apiOrder: apiOrder.value
+      apiOrder: apiOrder.value,
+      scheduler: { ...scheduler.value }
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -171,6 +203,7 @@ export function useSettingsStore() {
     theme,
     posterDensity,
     defaultLabelsToRemove,
+    defaultTvLabelsToRemove,
     plex,
     tmdb,
     tvdb,
@@ -178,10 +211,13 @@ export function useSettingsStore() {
     imageQuality,
     performance,
     apiOrder,
+    scheduler,
     loading,
     error,
     loaded,
     saveLocation,
+    movieSaveLocation,
+    tvShowSaveLocation,
     saveBatchInSubfolder,
     load: loadSettings,
     save: saveSettings

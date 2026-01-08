@@ -26,8 +26,9 @@ def _running_in_container() -> bool:
         cgroup = Path("/proc/1/cgroup")
         if cgroup.exists() and "docker" in cgroup.read_text():
             return True
-    except Exception:
-        pass
+    except (OSError, IOError) as e:
+        # File system errors reading container detection files
+        logger.debug("Container detection failed: %s", e)
     return False
 
 # Load env files in order of priority:
@@ -119,9 +120,9 @@ def _load_ui_settings_fallback():
 
         db = importlib.import_module('backend.database')
         data = db.get_ui_settings()
-    except Exception:
-        # Silently ignore database errors during initial load
-        pass
+    except (ImportError, AttributeError, sqlite3.Error) as e:
+        # Database might not be initialized yet during startup
+        logger.debug("Could not load settings from database: %s", e)
 
     # Fallback to JSON files if database is empty
     if not data:
@@ -134,7 +135,8 @@ def _load_ui_settings_fallback():
         if settings_file.exists():
             try:
                 data = json.loads(settings_file.read_text(encoding="utf-8"))
-            except Exception:
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Failed to load settings from %s: %s", settings_file, e)
                 return
 
     if not data:
@@ -177,8 +179,8 @@ def _load_ui_settings_fallback():
         if tmdb_key_env:
             settings.TMDB_API_KEY = tmdb_key_env
 
-    except Exception:
-        pass  # Silently ignore errors during settings application
+    except (KeyError, TypeError, ValueError) as e:
+        logger.warning("Error applying settings to config: %s", e)
 
 # Normalize paths relative to repo root so npm/uvicorn cwd doesn't matter
 def _resolve_path(p: str) -> str:
@@ -318,8 +320,8 @@ for name in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"):
         # Only adjust formatter on the clone if it's a Stream/FileHandler
         try:
             clone.setFormatter(api_formatter)
-        except Exception:
-            pass
+        except (AttributeError, ValueError) as e:
+            logger.debug("Could not set formatter on handler %s: %s", type(clone).__name__, e)
         uv_logger.addHandler(clone)
     uv_logger.setLevel(logging.DEBUG)
     uv_logger.propagate = False
@@ -510,8 +512,8 @@ def get_plex_movies(library_ids: Optional[List[str]] = None):
     logger.info("[PLEX] Loaded %d movies from %d libraries (%s)", len(out), len(lib_ids), ",".join(lib_ids))
     try:
         cache.refresh_from_list(out)
-    except Exception:
-        logger.debug("[CACHE] refresh_from_list failed", exc_info=True)
+    except (sqlite3.Error, AttributeError) as e:
+        logger.debug("[CACHE] refresh_from_list failed: %s", e, exc_info=True)
     return out
 
 
@@ -522,7 +524,8 @@ def extract_tmdb_id_from_metadata(xml_text: str) -> Optional[int]:
 
     try:
         root = ET.fromstring(xml_text)
-    except Exception:
+    except ET.ParseError as e:
+        logger.debug("Failed to parse XML metadata: %s", e)
         return None
 
     for g in root.findall(".//Guid"):
@@ -540,7 +543,8 @@ def extract_tvdb_id_from_metadata(xml_text: str) -> Optional[int]:
 
     try:
         root = ET.fromstring(xml_text)
-    except Exception:
+    except ET.ParseError as e:
+        logger.debug("Failed to parse XML metadata for TVDB: %s", e)
         return None
 
     for g in root.findall(".//Guid"):
@@ -565,25 +569,28 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     tmdb_id = extract_tmdb_id_from_metadata(r.text)
     try:
         cache.update_tmdb(rating_key, tmdb_id)
-    except Exception:
-        logger.debug("[CACHE] update_tmdb failed", exc_info=True)
+    except (sqlite3.Error, AttributeError) as e:
+        logger.debug("[CACHE] update_tmdb failed: %s", e, exc_info=True)
     return tmdb_id
 
 
 def get_library_section_id(rating_key: str) -> Optional[str]:
     """
     Fetch metadata for a rating_key and return the librarySectionID if present.
+    Works for movies, TV shows, and seasons.
     """
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=6)
         r.raise_for_status()
         root = ET.fromstring(r.text)
-        video = root.find(".//Video")
-        if video is not None:
-            lib_id = video.get("librarySectionID") or video.get("librarySectionId")
-            if lib_id:
-                return lib_id
+
+        # Try Video (movies, episodes), Directory (TV shows, seasons), or any child element
+        for element in root.iter():
+            if element.tag in ("Video", "Directory"):
+                lib_id = element.get("librarySectionID") or element.get("librarySectionId")
+                if lib_id:
+                    return lib_id
     except Exception as e:
         logger.debug("[PLEX] Failed to resolve librarySectionID for %s: %s", rating_key, e)
     return None
@@ -604,7 +611,7 @@ def find_rating_key_by_title_year(title: str, year: Optional[int], library_ids: 
 
 
 def plex_remove_label(rating_key: str, label: str):
-    """Attempts 3 different Plex label removal methods."""
+    """Attempts 3 different Plex label removal methods. Works for movies, TV shows, and seasons."""
 
     if not label:
         return
@@ -612,18 +619,37 @@ def plex_remove_label(rating_key: str, label: str):
     # Resolve library for this item (fallback to default)
     lib_id = get_library_section_id(rating_key) or PLEX_DEFAULT_MOVIE_LIB_ID
 
-    # Method 1
+    # Detect content type (1=movie, 2=show, 3=season, 4=episode)
+    # Try to determine from metadata
+    content_type = "1"  # Default to movie
+    try:
+        metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        r = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
+        if r.status_code == 200:
+            root = ET.fromstring(r.text)
+            # Check for Directory (TV show/season) vs Video (movie/episode)
+            if root.find(".//Directory[@type='show']") is not None:
+                content_type = "2"  # TV show
+            elif root.find(".//Directory[@type='season']") is not None:
+                content_type = "3"  # Season
+            elif root.find(".//Video[@type='episode']") is not None:
+                content_type = "4"  # Episode
+            # Otherwise stays as "1" for movie
+    except Exception:
+        pass  # Use default type if detection fails
+
+    # Method 1: Use library sections endpoint with detected type
     try:
         url = f"{settings.PLEX_URL}/library/sections/{lib_id}/all"
-        params = {"type": "1", "id": rating_key, "label[].tag.tag-": label}
+        params = {"type": content_type, "id": rating_key, "label[].tag.tag-": label}
         r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
         if r.status_code in (200, 204):
-            logger.debug("[PLEX] Removed label via sections endpoint rating_key=%s label=%s", rating_key, label)
+            logger.debug("[PLEX] Removed label via sections endpoint rating_key=%s label=%s type=%s", rating_key, label, content_type)
             return
-    except Exception:
-        pass
+    except (requests.RequestException, requests.Timeout) as e:
+        logger.debug("[PLEX] Method 1 failed: %s", e)
 
-    # Method 2
+    # Method 2: Use metadata/labels endpoint (type-agnostic, most reliable)
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/labels"
         params = {"tag.tag": label, "tag.type": "label"}
@@ -631,14 +657,14 @@ def plex_remove_label(rating_key: str, label: str):
         if r.status_code in (200, 204):
             logger.debug("[PLEX] Removed label via metadata/labels rating_key=%s label=%s", rating_key, label)
             return
-    except Exception:
-        pass
+    except (requests.RequestException, requests.Timeout) as e:
+        logger.debug("[PLEX] Method 2 failed: %s", e)
 
-    # Method 3
+    # Method 3: Use metadata PUT with detected type
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-        params = {"label[].tag.tag-": label, "type": "1"}
+        params = {"label[].tag.tag-": label, "type": content_type}
         r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
-        logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s status=%s", rating_key, label, r.status_code)
-    except Exception:
-        pass
+        logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s type=%s status=%s", rating_key, label, content_type, r.status_code)
+    except (requests.RequestException, requests.Timeout) as e:
+        logger.debug("[PLEX] Method 3 failed: %s", e)

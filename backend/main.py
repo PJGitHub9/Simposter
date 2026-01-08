@@ -8,9 +8,30 @@ from fastapi.responses import FileResponse
 
 from .api import router as api_router
 from .config import FRONTEND_DIR
+from .middleware.rate_limit import RateLimitMiddleware
+from .scheduler import init_scheduler, shutdown_scheduler
 
 
 app = FastAPI()
+
+# Initialize the background scheduler on startup
+@app.on_event("startup")
+async def startup_event():
+    init_scheduler()
+
+# Shutdown the scheduler gracefully
+@app.on_event("shutdown")
+async def shutdown_event():
+    shutdown_scheduler()
+
+# Add rate limiting middleware (before CORS)
+# Note: Disabled by default to not interfere with normal usage
+# Uncomment to enable rate limiting for production deployments
+# app.add_middleware(
+#     RateLimitMiddleware,
+#     default_limit=300,  # 300 requests per minute for general endpoints
+#     window_seconds=60   # 60 second window
+# )
 
 app.add_middleware(
     CORSMiddleware,

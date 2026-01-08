@@ -54,10 +54,9 @@ const getIcon = (key: TabKey | string) => {
   // Check for pattern matches (e.g., movies-1, movies-2 should use the movies icon)
   if (key.startsWith('movies-')) return icons.movies
   if (key.startsWith('tv-shows-')) return icons['tv-shows']
-  if (key.startsWith('batch-')) return icons['batch-edit']
-  if (key.startsWith('batch-test-')) return icons['batch-edit']
+  if (key.startsWith('batch-') || key.startsWith('tv-batch-')) return icons['batch-edit']
   if (key.startsWith('collections-')) return icons.collections
-  if (key.startsWith('assets-')) return icons['local-assets']
+  if (key.startsWith('assets-') || key.startsWith('tv-assets-')) return icons['local-assets']
   return ''
 }
 </script>

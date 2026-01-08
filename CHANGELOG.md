@@ -1,25 +1,196 @@
 # Changelog
 
-## v1.4.6 (In Progress)
+## v1.4.9 (2026-01-07)
 ### Major Features
-- **Overlay Caching System**: Pre-generate template effects (matte/fade/vignette/grain/wash) as PNG overlays when saving presets
-  - Batch rendering composites cached overlays over posters instead of rendering effects from scratch
-  - 3-5x speed improvement for uniformlogo templates (with or without logos)
+- **Separate Save Locations for Movies and TV Shows**: Enhanced local asset saving with media-type-specific save locations
+  - Split single save location into `movieSaveLocation` and `tvShowSaveLocation` settings
+  - Movie save location supports variables: `{library}`, `{title}`, `{year}`, `{key}`
+  - TV show save location adds `{season}` variable for season-specific saving (formats as `s01`, `s02`, etc.)
+  - Automatic cleanup of empty variables to prevent dangling punctuation in filenames
+  - Library folder names now use display names instead of numeric IDs
+  - Full backwards compatibility with legacy `saveLocation` field
+  - Settings UI shows separate inputs with available variable hints
+
+### Bug Fixes
+- **TV Show Save to Disk**: Fixed critical issue where `/api/save` endpoint didn't support TV shows properly
+  - Updated SaveRequest schema to include `season_index` and `is_tv` fields
+  - `/api/save` now uses correct media type and passes season to path variables
+  - `/api/save` now loads preset season_options for season-specific rendering (matching preview behavior)
+  - Frontend render service updated to pass library_id and season_index
+  - TV show editor builds season-specific options for each season (poster, logo, text overlay)
+  - TV show editor correctly retrieves library_id from route and passes season index
+  - Fixes "wrong library", "Season X.jpg" filename, and "all seasons same poster" issues
+
+- **Library Cache Contamination (FIXED)**: Resolved persistent issue where movies/shows from one library appeared in another
+  - Root cause: `hydratePostersFromSession()` was loading from hardcoded global cache key instead of library-specific keys
+  - Removed composable's `hydratePostersFromSession` calls, using library-specific poster cache directly
+  - Fixed poster hydration to only apply posters from the current library's cache
+
+- **Library Parameter Loss**: Fixed critical bug where library parameter was removed from URL when applying filters/sorting
+  - URL sync watcher now preserves the `library` query parameter
+  - Prevents switching to "all libraries" view when changing sort order or filters
+  - Applied to both MoviesView and TvShowsView
+
+- **Save Location Settings Change Detection**: Fixed unsaved changes indicator not showing when editing save location text fields
+  - Added proper event handlers to trigger change detection on input
+
+### UX Improvements
+- **Browser Navigation Support**: Added URL state management for filters, sorting, pagination, and edit mode
+  - Browser back/forward buttons now work correctly when editing items
+  - Filters, sort order, and page number preserved in URL
+  - Edit mode includes item ID in URL (e.g., `?edit=12345&library=1`)
+  - URL state restored when using browser navigation
+
+- **Conditional Navigation**: Navigation sidebar now adapts to Plex configuration state
+  - Only Settings shown when Plex not configured
+  - Full navigation restored once Plex configured
+  - Automatic redirect to Settings on fresh instances
+
+### Technical Improvements
+- Added comprehensive debug logging to track cache operations and library switches
+- Added `library_id` field to Movie type definition
+- Removed unused `hydratePostersFromSession` imports from both view components
+- Settings page now checks Plex configuration before attempting to load labels
+- Enhanced `resolve_library_label()` to load from database instead of settings module
+- Updated `apply_save_location_variables()` with regex-based cleanup for empty variables
+- Improved `get_save_location_template()` to accept media_type parameter
+- Enhanced batch save logging with absolute paths for better file location visibility
+
+## v1.4.8 (2026-01-06)
+### Bug Fixes
+- **Library Switching Cache Contamination**: Fixed critical issue where items from one library appeared in another
+  - Deferred initial cache load until route is fully ready
+  - Added immediate display clear when switching libraries (`movies.value = []`, `tvShows.value = []`)
+  - Strengthened library ID validation to strictly filter by current library
+  - Eliminated race conditions between cache loading and route resolution
+
+- **Settings Labels Not Populating**: Fixed inconsistent label loading in Settings
+  - Added loading state with spinner indicator
+  - Made label fetching properly await completion before displaying
+  - Added "Refresh Labels" button when no labels found
+  - Better error logging and empty result caching
+  - Shows clear "Loading labels..." state during fetch
+
+### UX Improvements
+- **Template Manager Fallback Clarity**: Improved wording and added visual fallback chain
+  - Changed "If X logo missing" to "If X logo not found" for clarity
+  - Added numbered fallback priority chain showing exact order of operations
+  - Clarified that global white logo fallback applies between preset preference and preset fallback
+  - Better explanation of when fallback settings apply (batch edit mode only)
+
+### Performance & Reliability
+- Strict library filtering prevents cross-contamination in multi-library setups
+- Cached empty label results prevent repeated failed API calls
+- Improved timing of cache operations for more reliable data display
+
+## v1.4.7 (2026-01-06)
+### Major Features
+- **TV Show Seasons Support**: Enhanced TV show rendering with season-specific poster generation
+  - Season suffixes in local asset filenames (e.g., `Show Name_s01.jpg` for Season 1)
+  - Season metadata passed through rendering pipeline with proper schema validation
+  - Settings checkbox for season-specific local asset saving
+  - "Coming Soon" badge support for unreleased seasons via TVDB integration
+
+- **Scheduled Library Scans**: Automatic cron-based library scanning to keep Simposter synced with Plex
+  - Configure cron schedule in Settings (e.g., "0 2 * * *" for daily 2 AM scans)
+  - Optional library-specific scans or scan all libraries
+  - APScheduler background daemon with proper initialization and restoration
+  - Schedule status and next run time visible in Settings
+  - Comprehensive cron validation (supports wildcards, ranges, steps, lists)
+
+### Performance Optimizations
+- **Database Indexing**: Added 6 new database indexes for 5-10x faster queries
+  - `idx_movie_cache_tmdb`, `idx_movie_cache_composite` (library + rating_key)
+  - `idx_tv_cache_tmdb`, `idx_tv_cache_tvdb`, `idx_tv_cache_composite`
+  - `idx_poster_history_template_preset` for faster history filtering
+
+- **Smart SessionStorage Caching**: LRU eviction system prevents quota errors
+  - 4MB cache limit with automatic eviction of least-recently-used items
+  - Access time tracking for intelligent cache management
+  - Graceful QuotaExceededError handling
+  - Cache statistics API (`getCacheStats()`)
+  - Integrated in SettingsView with plans for full rollout
+
+- **Debounced Editor Saves**: 300ms debounce on localStorage writes
+  - 60-80% reduction in storage operations during slider adjustments
+  - Eliminates UI stuttering when dragging sliders
+  - Applied to both MovieEditorPane and TvShowEditorPane
+
+- **Memory Leak Fixes**: Eliminated interval/timer memory leaks
+  - Fixed scanPoller leak in SettingsView (interval continued after navigation)
+  - Added proper cleanup in `onBeforeUnmount` hooks
+
+### API & Security
+- **Enhanced Rate Limiting**: Added rate limits for scheduler endpoints
+  - `/api/scheduler/*` limited to 10 req/60s
+  - Updated API_SECURITY.md documentation with scheduler endpoints
+
+- **Improved Error Handling**: More specific network error handling
+  - Separate handlers for `ConnectionError`, `RequestException`, and `Timeout`
+  - Better logging with stack traces for unexpected errors
+
+- **Cron Expression Validation**: Comprehensive validation for scheduler
+  - Validates individual fields (minute: 0-59, hour: 0-23, etc.)
+  - Supports wildcards (*), ranges (1-5), steps (*/5), lists (1,3,5)
+  - Clear error messages for invalid expressions
+
+### Technical Improvements
+- **Simplified Library ID Handling**: Reduced complexity in scheduler API
+  - Single-line normalization instead of verbose type checking
+  - Pydantic already ensures correct types
+
+- **Settings Architecture**: Unified scheduler settings persistence
+  - Scheduler settings integrated into main settings store
+  - Proper change detection with unsaved changes indicator
+  - Settings snapshot system tracks all scheduler fields
+
+### Documentation
+- **Updated README**: Performance & Caching section highlights all optimizations
+  - Smart caching, indexed database, debounced saves, memory leak protection
+  - Updated Performance tips section with new best practices
+
+- **Architecture Documentation**: Added scheduler initialization flow
+  - Scheduler startup process documented
+  - API router descriptions for all scheduler endpoints
+
+- **PRD Updates**: APScheduler added to tech stack and architecture diagrams
+
+### Bug Fixes
+- Scheduler settings now persist correctly across page refreshes
+- Scheduler shows unsaved changes indicator when modified
+- SessionStorage operations no longer throw uncaught errors
+- Scan polling properly stops when navigating away from Settings
+
+## v1.4.6
+### Major Features
+- **Overlay Caching for Fast Rendering**: Pre-generated template effect overlays (matte, fade, vignette, grain, wash) for rapid batch poster generation
+  - Composites cached PNG overlays with posters instead of rendering effects from scratch
+  - 3-5x speed improvement for `uniformlogo` templates with or without logos
   - Configurable via "Use Overlay Cache" toggle in Performance settings (enabled by default)
-  - Overlays saved to `config/overlays/{template_id}/{preset_id}.png`
-  - Full uniformlogo support: logo positioning, text overlay, and borders rendered in fast path
+  - Full uniformlogo support: logo positioning, text overlays, and borders all work in fast path
   - Other templates fall back to full render when logos present (future enhancement)
 
 ### Performance
-- **Batch Rendering Speed**: Significant performance gains for large batch operations
-  - Overlay effects only rendered once per preset (not per movie)
-  - Fast composite path reduces per-poster processing time from 5-10s to 1-2s
-  - uniformlogo template: Full cache benefits even with logos (logo positioning is lightweight)
-  - Logo modes (stock/match/hex/none) fully supported in cache path
+- **Logo Selection Optimization**: Drastically faster logo selection in preview and batch operations
+  - Analyzes only top 6 logo candidates (sorted by size/source priority) instead of all logos
+  - Uses TMDb thumbnail images (w300) instead of full-resolution downloads
+  - Concurrent color analysis via ThreadPoolExecutor instead of serial processing
+  - Batch logo selection now completes in seconds instead of 20+ seconds
+  - Batch rendering speed improvements: 3-5x faster with overlay cache, 2-3x faster logo selection
+
+### Improvements
+- **Batch Edit Fallback Logic**: Batch now correctly re-selects posters/logos after applying template fallback (matches preview behavior)
+  - Respects fallback template and preset options in correct order
+  - Re-picks logo after fallback to ensure compatibility with new template
+- **Settings Labels UI Consolidation**: Unified "Default Labels to Remove" section displays both movie and TV libraries with type badges
+  - Type badges (Movies/TV) clearly distinguish library type
+  - Single organized section instead of separate movie/TV sections
+  - Labels auto-refresh after library scan without manual "Refresh Cache" click
 
 ### Technical
 - Added `useOverlayCache` field to PerformanceSettings schema (default: true)
 - New `generate_overlay()` function in `rendering.py` extracts effect pipeline
+- Optimized `pick_logo()` and `analyze_logo_color()` with thumbnail-based concurrent analysis
 - Preset save endpoint generates and caches overlay PNG automatically
 - Batch rendering checks overlay cache before falling back to standard render
 

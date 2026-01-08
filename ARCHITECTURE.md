@@ -14,11 +14,16 @@ This doc explains how Simposter starts, how the backend and frontend interact, a
    - Loads config from `backend/config.py` (env + fallbacks to db/json).
    - Mounts all routers from `backend/api/`.
    - Calls `init_database()` to ensure tables exist and to run version checks.
+   - Initializes APScheduler (`init_scheduler()`) and restores any saved schedules from database.
 2. **Database init & versioning** (`backend/database.py`)
    - `_get_db_path()` decides where `simposter.db` lives (uses `SETTINGS_DIR`/`CONFIG_DIR`).
    - `init_database()` creates/migrates tables, migrates legacy `ui_settings` to `settings`, then calls `check_and_update_version()`.
    - `check_and_update_version()` compares stored `app.version` (from `settings` table) with `frontend/src/version.ts`; on change it calls `_backup_database()` to create `simposter_vX.Y.Z.db.bak`, then updates the stored version.
-3. **Frontend** (dev vs prod)
+3. **Scheduler initialization** (`backend/scheduler.py`)
+   - `init_scheduler()` creates background scheduler daemon
+   - Reads scheduler settings from database
+   - If enabled, restores cron schedule for automatic library scans
+4. **Frontend** (dev vs prod)
    - Dev: Vite serves the SPA and proxies API calls to FastAPI.
    - Prod: FastAPI serves the built `dist/` assets; frontend calls `/api/*`.
 
@@ -72,11 +77,22 @@ Tables created:
   - `api_batch_render`: Process multiple movies with template/preset; supports concurrent rendering.
   - Logo/poster fallback logic matching preview behavior.
   - Uses ui_settings for quality and concurrency.
+- **scheduler.py (module)**
+  - `init_scheduler()`: Initializes APScheduler background instance on app startup.
+  - `schedule_library_scan()`: Schedules cron-based automatic library scans.
+  - `cancel_library_scan()`: Cancels scheduled scans.
+  - Restores schedules from database on startup.
+- **scheduler.py (API router)**
+  - `api_schedule_library_scan` (POST): Schedule library scans with cron expression and optional library_id.
+  - `api_cancel_library_scan` (DELETE): Cancel scheduled scans.
+  - `api_get_library_scan_schedule` (GET): Get current schedule status and next run time.
+  - `api_scheduler_status` (GET): Check if scheduler is running.
+  - Settings persist to `ui_settings` in database.
 - **presets.py / template_manager.py**
   - CRUD for presets; import/export (merge mode); fallback rule configuration per preset/template.
   - Global template preferences (logo source, poster filter, logo mode).
 - **ui_settings.py**
-  - `api_ui_settings` (GET/POST): Read/write UI settings.
+  - `api_ui_settings` (GET/POST): Read/write UI settings (including scheduler config).
   - `_apply_runtime_settings`: Immediately updates runtime keys/paths so new settings take effect without restart.
 - **logs.py, history.py, cache.py, webhooks.py**
   - Logs retrieval, history listing, cache endpoints, webhook management.

@@ -4,9 +4,11 @@ import { getApiBase } from './apiBase'
 
 const apiBase = getApiBase()
 
+type PresetRecord = { id: string; name?: string; options?: PresetOptions; season_options?: PresetOptions }
+
 export function usePresetService() {
   const templates = ref<string[]>(['default'])
-  const presets = ref<{ id: string; name?: string; options?: PresetOptions }[]>([])
+  const presets = ref<PresetRecord[]>([])
   const selectedTemplate = ref('default')
   const selectedPreset = ref('')
   const loading = ref(false)
@@ -36,15 +38,33 @@ export function usePresetService() {
     }
   }
 
+  const deriveSeasonOptions = (opts: PresetOptions): PresetOptions => {
+    const base = { ...(opts || {}) } as Record<string, any>
+    return {
+      ...base,
+      logo_mode: 'none',
+      text_overlay_enabled: true,
+      custom_text: '{season}',
+      font_family: 'Arial',
+      font_size: 150,
+      shadow_enabled: false,
+      shadow_blur: 0,
+      letter_spacing: 1,
+      position_y: 0.85,
+    }
+  }
+
   const savePreset = async (options?: PresetOptions) => {
     if (!selectedTemplate.value || !selectedPreset.value) return
     loading.value = true
     error.value = null
     try {
+      const baseOptions = options ?? presets.value.find((p) => p.id === selectedPreset.value)?.options ?? {}
       const payload = {
         template_id: selectedTemplate.value,
         preset_id: selectedPreset.value,
-        options: options ?? presets.value.find((p) => p.id === selectedPreset.value)?.options ?? {}
+        options: baseOptions,
+        season_options: deriveSeasonOptions(baseOptions)
       }
       const res = await fetch(`${apiBase}/api/presets/save`, {
         method: 'POST',
@@ -68,13 +88,12 @@ export function usePresetService() {
     loading.value = true
     error.value = null
     try {
+      const baseOptions = options ?? presets.value.find((p) => p.id === selectedPreset.value)?.options ?? {}
       const payload = {
         template_id: selectedTemplate.value || 'default',
         preset_id: targetId,
-        options:
-          options ??
-          presets.value.find((p) => p.id === selectedPreset.value)?.options ??
-          {}
+        options: baseOptions,
+        season_options: deriveSeasonOptions(baseOptions)
       }
       const res = await fetch(`${apiBase}/api/presets/save`, {
         method: 'POST',

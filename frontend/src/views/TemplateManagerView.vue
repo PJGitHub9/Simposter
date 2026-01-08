@@ -4,7 +4,7 @@ import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useSettingsStore } from '@/stores/settings'
 
-type Preset = { id: string; name: string; options: Record<string, any> }
+type Preset = { id: string; name: string; options: Record<string, unknown> }
 type TemplatePresets = Record<string, { presets: Preset[] }>
 type PresetFallback = {
   fallbackPosterAction?: 'continue' | 'skip' | 'template'
@@ -28,6 +28,7 @@ const importText = ref('')
 const fallbackPosterFilter = ref('all')
 const fallbackLogoFilter = ref('all')
 const fallbackLogoMode = ref('first')
+const whiteLogoFallback = ref('use_next')
 const languagePreference = ref('en')
 const logoSource = ref('tmdb_fanart')
 const languageOptions = [
@@ -82,13 +83,21 @@ const presetCount = computed(() =>
 const posterFallbackLabel = computed(() => {
   const opts = modalPreset.value?.preset.options || {}
   const pref = opts.poster_filter || opts.posterPreference || ''
-  return pref ? `If ${pref} poster missing` : 'If poster preference missing'
+  if (pref) {
+    // Make it clear this fallback applies AFTER the preference is tried
+    return `If ${pref} poster not found`
+  }
+  return 'If preferred poster not found'
 })
 
 const logoFallbackLabel = computed(() => {
   const opts = modalPreset.value?.preset.options || {}
-  const pref = opts.logo_preference || ''
-  return pref ? `If ${pref} logo missing` : 'If logo preference missing'
+  const pref = opts.logo_preference || opts.logo_mode || ''
+  if (pref) {
+    // Make it clear this fallback applies AFTER the preference is tried
+    return `If ${pref} logo not found`
+  }
+  return 'If preferred logo not found'
 })
 
 const fetchPresets = async () => {
@@ -118,22 +127,17 @@ const handleExportAll = async () => {
   }
 }
 
-const exportSingle = (templateId: string, preset: Preset) => {
-  const payload: TemplatePresets = { [templateId]: { presets: [preset] } }
-  importText.value = JSON.stringify(payload, null, 2)
-}
-
 const openFallbackModal = (templateId: string, preset: Preset) => {
   modalPreset.value = { templateId, preset }
   const opts = preset.options || {}
   modalFallback.value = {
-    fallbackPosterAction: opts.fallbackPosterAction || 'continue',
-    fallbackPosterTemplate: opts.fallbackPosterTemplate || '',
-    fallbackPosterPreset: opts.fallbackPosterPreset || '',
-    fallbackLogoAction: opts.fallbackLogoAction || 'continue',
-    fallbackLogoTemplate: opts.fallbackLogoTemplate || '',
-    fallbackLogoPreset: opts.fallbackLogoPreset || '',
-    logoSource: opts.logoSource || ''
+    fallbackPosterAction: (opts.fallbackPosterAction as 'template' | 'continue' | 'skip' | undefined) || 'continue',
+    fallbackPosterTemplate: (opts.fallbackPosterTemplate as string) || '',
+    fallbackPosterPreset: (opts.fallbackPosterPreset as string) || '',
+    fallbackLogoAction: (opts.fallbackLogoAction as 'template' | 'continue' | 'skip' | undefined) || 'continue',
+    fallbackLogoTemplate: (opts.fallbackLogoTemplate as string) || '',
+    fallbackLogoPreset: (opts.fallbackLogoPreset as string) || '',
+    logoSource: (opts.logoSource as string) || ''
   }
   showFallbackModal.value = true
 }
@@ -244,6 +248,7 @@ const fetchFallback = async () => {
     fallbackPosterFilter.value = data.poster_filter || 'all'
     fallbackLogoFilter.value = data.logo_filter || 'all'
     fallbackLogoMode.value = data.logo_mode || 'first'
+    whiteLogoFallback.value = data.white_logo_fallback || 'use_next'
     languagePreference.value = data.language_preference || 'en'
     logoSource.value = data.logo_source || 'tmdb_fanart'
   } catch (e) {
@@ -261,6 +266,7 @@ const saveFallback = async () => {
         poster_filter: fallbackPosterFilter.value,
         logo_filter: fallbackLogoFilter.value,
         logo_mode: fallbackLogoMode.value,
+        white_logo_fallback: whiteLogoFallback.value,
         language_preference: languagePreference.value,
         logo_source: logoSource.value
       })
@@ -278,7 +284,7 @@ const fetchMovies = async () => {
     const res = await fetch(`${apiBase}/api/movies`)
     if (res.ok) {
       const data = await res.json()
-      const list = Array.isArray(data) ? data.map((m: any) => ({ key: m.key, title: m.title })) : []
+      const list = Array.isArray(data) ? data.map((m: { key: string; title: string }) => ({ key: m.key, title: m.title })) : []
       movies.value = list
       if (selectedPreviewMovie.value && !list.some((m) => m.key === selectedPreviewMovie.value?.key)) {
         selectedPreviewMovie.value = null
@@ -351,7 +357,21 @@ const previewPreset = async (templateId: string, preset: Preset) => {
         disableOverlayCache: !settings.performance.value.useOverlayCache
       })
     })
-    if (!res.ok) throw new Error(`Preview failed (${res.status})`)
+    if (!res.ok) {
+      let message = `Preview failed (${res.status})`
+      try {
+        const err = await res.json()
+        if (err?.detail) {
+          message = err.detail
+          if (res.status === 400 || res.status === 404) {
+            message += ' — poster fallback stopped the render, so logo fallback was not applied.'
+          }
+        }
+      } catch {
+        /* ignore parse issues */
+      }
+      throw new Error(message)
+    }
     const data = await res.json()
     previewUrl.value = `data:image/jpeg;base64,${data.image_base64}`
   } catch (e) {
@@ -424,6 +444,14 @@ onMounted(async () => {
                 <option value="none">No logo</option>
               </select>
               <span class="help small">Logo color detection uses HSV analysis for accurate selection.</span>
+            </label>
+            <label>
+              <span class="label-text">White logo fallback (if white not available)</span>
+              <select v-model="whiteLogoFallback">
+                <option value="use_next">Use next available logo</option>
+                <option value="skip">Continue with render (no logo)</option>
+              </select>
+              <span class="help small">Applied when a template requests white logo but none qualify.</span>
             </label>
             <label>
               <span class="label-text">Logo source priority</span>
@@ -619,6 +647,10 @@ onMounted(async () => {
           <button class="icon-btn" @click="showFallbackModal = false">×</button>
         </div>
         <div class="modal-body">
+          <p class="help small">
+            <strong>Fallback settings</strong> define what happens when this preset's preferred poster or logo cannot be found.
+            These settings only apply in batch edit mode.
+          </p>
           <h5>Logo source (optional override)</h5>
           <div class="grid">
             <label>
@@ -701,6 +733,14 @@ onMounted(async () => {
                 </select>
               </label>
             </div>
+          </div>
+          <div class="fallback-chain-info">
+            <p class="help small"><strong>Fallback Priority Chain:</strong></p>
+            <ol class="help small">
+              <li>Try this preset's logo preference: <strong>{{ modalPreset?.preset.options?.logo_preference || modalPreset?.preset.options?.logo_mode || 'default' }}</strong></li>
+              <li v-if="(modalPreset?.preset.options?.logo_preference === 'white' || modalPreset?.preset.options?.logo_mode === 'white')">If not found, try global white logo fallback setting</li>
+              <li>If still not found, use the fallback action selected above</li>
+            </ol>
           </div>
         </div>
         <div class="modal-actions">
@@ -1201,5 +1241,34 @@ input:focus {
   display: block;
   color: var(--text-secondary, #9aa4b5);
   font-size: 0.8rem;
+}
+
+.fallback-chain-info {
+  margin-top: 16px;
+  padding: 16px;
+  background: rgba(61, 214, 183, 0.05);
+  border: 1px solid rgba(61, 214, 183, 0.2);
+  border-radius: 8px;
+}
+
+.fallback-chain-info p {
+  margin: 0 0 8px 0;
+  color: var(--text-primary);
+}
+
+.fallback-chain-info ol {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-secondary);
+}
+
+.fallback-chain-info ol li {
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+.fallback-chain-info ol li strong {
+  color: var(--accent);
+  font-weight: 600;
 }
 </style>

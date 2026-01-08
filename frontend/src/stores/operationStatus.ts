@@ -13,6 +13,16 @@ export type StatusData = {
   error: string | null
 }
 
+export interface OperationStatus {
+  state: OperationState
+  processed?: number
+  total?: number
+  current?: string
+  current_movie?: string
+  current_step?: string
+  error?: string
+}
+
 const type = ref<OperationType>(null)
 const state = ref<OperationState>('idle')
 const visible = ref(false)
@@ -45,7 +55,7 @@ export function useOperationStatus() {
     error,
     checking,
 
-    applyStatus(status: any, operationType: OperationType) {
+    applyStatus(status: OperationStatus | null, operationType: OperationType) {
       if (!status) return
 
       const isRunning = status.state === 'running'

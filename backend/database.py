@@ -54,9 +54,9 @@ def get_db_version() -> Optional[str]:
             row = cursor.fetchone()
             if row:
                 return row["value"]
-    except Exception:
-        # Table might not exist yet
-        pass
+    except sqlite3.Error as e:
+        # Table might not exist yet during initial setup
+        logger.debug("Could not read app version from database: %s", e)
     return None
 
 
@@ -237,11 +237,66 @@ def init_database():
                 template_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 options_json TEXT NOT NULL,
+                season_options_json TEXT NOT NULL DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(template_id, id)
             )
         """)
+
+        # Ensure season_options_json exists for older databases
+        cursor.execute("PRAGMA table_info(presets)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if "season_options_json" not in cols:
+            cursor.execute("ALTER TABLE presets ADD COLUMN season_options_json TEXT NOT NULL DEFAULT '{}' ")
+
+        # Backfill/update season_options_json to ensure all season fields are present
+        cursor.execute("""
+            SELECT id, options_json, season_options_json
+            FROM presets
+        """)
+        rows = cursor.fetchall()
+        for row in rows:
+            try:
+                # Load existing season options or create from base
+                season_raw = row["season_options_json"] if "season_options_json" in row.keys() else None
+                base_opts = json.loads(row["options_json"]) if row["options_json"] else {}
+                
+                # Check if season_options is empty (newly created column defaults to '{}')
+                # or if it's a non-empty user-customized value
+                is_empty = not season_raw or season_raw.strip() in ("", "{}", "null", "NULL")
+                
+                if not is_empty:
+                    # User has custom season options - merge with base but don't override custom values
+                    season_opts = json.loads(season_raw)
+                    # Merge with base to ensure all base fields are present
+                    season_opts = {**base_opts, **season_opts}
+                else:
+                    # Empty season options - start fresh from base
+                    season_opts = dict(base_opts or {})
+                
+                # Apply season-specific overrides (these always override base options)
+                season_defaults = {
+                    "logo_mode": "none",
+                    "poster_filter": "textless",
+                    "text_overlay_enabled": True,
+                    "custom_text": "{season}",
+                    "font_family": "Arial",
+                    "font_size": 150,
+                    "shadow_enabled": False,
+                    "shadow_blur": 0,
+                    "letter_spacing": 1,
+                    "position_y": 0.85,
+                }
+                # Always override these specific fields for season posters
+                season_opts.update(season_defaults)
+                
+                cursor.execute(
+                    "UPDATE presets SET season_options_json = ? WHERE id = ?",
+                    (json.dumps(season_opts), row["id"]),
+                )
+            except Exception as backfill_err:
+                logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row.get("id"), backfill_err)
 
         # Create indexes for better query performance
         cursor.execute("""
@@ -284,6 +339,14 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_movie_cache_library
             ON movie_cache(library_id)
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_movie_cache_tmdb
+            ON movie_cache(tmdb_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_movie_cache_composite
+            ON movie_cache(library_id, rating_key)
+        """)
 
         # Cache table for Plex TV shows (metadata + labels/poster/tmdb + seasons)
         cursor.execute("""
@@ -320,6 +383,18 @@ def init_database():
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_tv_cache_library
             ON tv_cache(library_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tv_cache_tmdb
+            ON tv_cache(tmdb_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tv_cache_tvdb
+            ON tv_cache(tvdb_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tv_cache_composite
+            ON tv_cache(library_id, rating_key)
         """)
 
         # Cache table for Plex collections
@@ -378,6 +453,10 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_poster_history_created
             ON poster_history(created_at DESC)
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_poster_history_template_preset
+            ON poster_history(template_id, preset_id)
+        """)
 
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
@@ -410,8 +489,9 @@ def get_db():
     try:
         yield conn
         conn.commit()
-    except Exception:
+    except (sqlite3.Error, Exception) as e:
         conn.rollback()
+        logger.error("Database transaction failed, rolling back: %s", e)
         raise
     finally:
         conn.close()
@@ -631,7 +711,7 @@ def get_all_presets() -> Dict[str, Dict[str, Any]]:
     """
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, template_id, name, options_json FROM presets")
+        cursor.execute("SELECT id, template_id, name, options_json, season_options_json FROM presets")
         rows = cursor.fetchall()
 
     result: Dict[str, Dict[str, Any]] = {}
@@ -640,10 +720,15 @@ def get_all_presets() -> Dict[str, Dict[str, Any]]:
         if template_id not in result:
             result[template_id] = {"presets": []}
 
+        # Gracefully handle missing season_options_json column (older DBs) by defaulting to {}
+        row_keys = row.keys()
+        season_payload = row["season_options_json"] if "season_options_json" in row_keys else "{}"
+
         result[template_id]["presets"].append({
             "id": row["id"],
             "name": row["name"],
-            "options": json.loads(row["options_json"])
+            "options": json.loads(row["options_json"]),
+            "season_options": json.loads(season_payload)
         })
 
     return result
@@ -654,34 +739,39 @@ def get_preset(template_id: str, preset_id: str) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, options_json FROM presets
+            SELECT id, name, options_json, season_options_json FROM presets
             WHERE template_id = ? AND id = ?
         """, (template_id, preset_id))
         row = cursor.fetchone()
 
     if row:
+        row_keys = row.keys()
+        season_payload = row["season_options_json"] if "season_options_json" in row_keys else "{}"
         return {
             "id": row["id"],
             "name": row["name"],
-            "options": json.loads(row["options_json"])
+            "options": json.loads(row["options_json"]),
+            "season_options": json.loads(season_payload)
         }
     return None
 
 
-def save_preset(template_id: str, preset_id: str, name: str, options: Dict[str, Any]) -> None:
+def save_preset(template_id: str, preset_id: str, name: str, options: Dict[str, Any], season_options: Optional[Dict[str, Any]] = None) -> None:
     """Save or update a preset."""
     with get_db() as conn:
         cursor = conn.cursor()
         options_json = json.dumps(options)
+        season_json = json.dumps(season_options or {})
 
         cursor.execute("""
-            INSERT INTO presets (id, template_id, name, options_json, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO presets (id, template_id, name, options_json, season_options_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 options_json = excluded.options_json,
+                season_options_json = excluded.season_options_json,
                 updated_at = CURRENT_TIMESTAMP
-        """, (preset_id, template_id, name, options_json))
+        """, (preset_id, template_id, name, options_json, season_json))
 
     logger.debug(f"[DB] Saved preset {preset_id} for template {template_id}")
 
@@ -718,10 +808,11 @@ def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
                 if not pid:
                     continue
                 options_json = json.dumps(options)
+                season_options_json = json.dumps(preset.get("season_options") or {})
                 cursor.execute("""
-                    INSERT INTO presets (id, template_id, name, options_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """, (pid, template_id, name, options_json))
+                    INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """, (pid, template_id, name, options_json, season_options_json))
     logger.info("[DB] Replaced all presets from import")
 
 
@@ -743,16 +834,18 @@ def merge_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
                 if not pid:
                     continue
                 options_json = json.dumps(options)
+                season_options_json = json.dumps(preset.get("season_options") or {})
                 # Use INSERT OR REPLACE to update existing or add new
                 cursor.execute("""
-                    INSERT INTO presets (id, template_id, name, options_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     ON CONFLICT(id) DO UPDATE SET
                         template_id = excluded.template_id,
                         name = excluded.name,
                         options_json = excluded.options_json,
+                        season_options_json = excluded.season_options_json,
                         updated_at = CURRENT_TIMESTAMP
-                """, (pid, template_id, name, options_json))
+                """, (pid, template_id, name, options_json, season_options_json))
     logger.info("[DB] Merged imported presets with existing presets")
 
 
@@ -1408,6 +1501,21 @@ def record_poster_history(
     """Record a poster-related action for tracking."""
     with get_db() as conn:
         cursor = conn.cursor()
+        # Keep only the most recent record per rating_key/action (scoped by library)
+        cursor.execute(
+            """
+            DELETE FROM poster_history
+            WHERE rating_key = ?
+              AND action = ?
+              AND (
+                    (library_id IS NULL AND ? IS NULL)
+                 OR (library_id = ?)
+                 OR (library_id IS NULL AND ? = '')
+                 OR (library_id = '' AND ? IS NULL)
+              )
+            """,
+            (rating_key, action, library_id, library_id or '', library_id, library_id),
+        )
         cursor.execute(
             """
             INSERT INTO poster_history
@@ -1474,6 +1582,68 @@ def get_poster_history(
             "created_at": row["created_at"],
         })
     return out
+
+
+def get_poster_status(
+    library_id: Optional[str] = None,
+    rating_keys: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Return latest sent/saved status per rating_key."""
+    clauses = []
+    params: List[Any] = []
+
+    if library_id:
+        clauses.append("library_id = ?")
+        params.append(library_id)
+
+    if rating_keys:
+        placeholders = ",".join(["?"] * len(rating_keys))
+        clauses.append(f"rating_key IN ({placeholders})")
+        params.extend(rating_keys)
+
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    query = f"""
+        SELECT rating_key, action, template_id, preset_id, created_at
+        FROM poster_history
+        {where_clause}
+        ORDER BY datetime(created_at) DESC
+    """
+
+    result: Dict[str, Dict[str, Any]] = {}
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+    for row in rows:
+        rating_key = row["rating_key"]
+        action = row["action"]
+        created_at = row["created_at"]
+        template_id = row["template_id"]
+        preset_id = row["preset_id"]
+
+        if rating_key not in result:
+            result[rating_key] = {
+                "sent": None,
+                "saved": None,
+            }
+
+        # Record the first (latest) occurrence for each action
+        if action == "sent_to_plex" and result[rating_key]["sent"] is None:
+            result[rating_key]["sent"] = {
+                "template_id": template_id,
+                "preset_id": preset_id,
+                "created_at": created_at,
+            }
+        elif action == "saved_local" and result[rating_key]["saved"] is None:
+            result[rating_key]["saved"] = {
+                "template_id": template_id,
+                "preset_id": preset_id,
+                "created_at": created_at,
+            }
+
+    return result
 
 
 # Initialize database on module import

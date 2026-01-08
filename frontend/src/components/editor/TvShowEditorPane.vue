@@ -1,5 +1,6 @@
-<script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+﻿<script setup lang="ts">
+import { computed, onMounted, ref, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import type { MovieInput } from '../../services/types'
 import { useRenderService } from '../../services/render'
 import { usePresetService } from '../../services/presets'
@@ -9,10 +10,20 @@ import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import { getApiBase } from '../../services/apiBase'
 
+// Simple debounce helper
+function debounce<T extends (...args: any[]) => any>(fn: T, delay: number): (...args: Parameters<T>) => void {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  return (...args: Parameters<T>) => {
+    if (timeoutId) clearTimeout(timeoutId)
+    timeoutId = setTimeout(() => fn(...args), delay)
+  }
+}
+
 const props = defineProps<{ movie: MovieInput }>()
 
 const settings = useSettingsStore()
 const { movies: globalMovies, setMoviePoster } = useMovies()
+const route = useRoute()
 
 const apiBase = getApiBase()
 
@@ -51,6 +62,10 @@ const normalizeLogoMode = (mode: unknown): 'original' | 'match' | 'hex' | 'none'
 
 const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
+// Cache poster selection per season/series so switching targets doesn't reset the choice
+const selectedPosterCache = ref<Record<string, string>>({})
+// Cache full settings per season/series to prevent cross-contamination
+const settingsCache = ref<Record<string, any>>({})
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
 const showBoundingBox = ref(false)
@@ -81,9 +96,45 @@ const currentSeason = computed(() => {
   return seasons.value.find(s => s.key === seasonKey) || null
 })
 
+// Track which poster type (series or season) is being edited
+type PosterType = 'series' | 'season'
+const selectedPosterType = ref<PosterType>('series')
+
+// Watch currentSeason and auto-switch editor type
+watch(currentSeason, (newSeason) => {
+  if (newSeason) {
+    selectedPosterType.value = newSeason.isSeries ? 'series' : 'season'
+  }
+}, { immediate: true })
+
 // Rendered preview carousel
 const renderedPreviews = ref<RenderedPreview[]>([])
 const activePreviewIndex = ref(0)
+
+// Sorted rendered previews by season order (series first, then seasons 0, 1, 2, etc.)
+const sortedRenderedPreviews = computed(() => {
+  return [...renderedPreviews.value].sort((a, b) => {
+    const seasonA = seasons.value.find(s => s.key === a.seasonKey)
+    const seasonB = seasons.value.find(s => s.key === b.seasonKey)
+
+    if (!seasonA || !seasonB) return 0
+
+    // Series always first
+    if (seasonA.isSeries) return -1
+    if (seasonB.isSeries) return 1
+
+    // Then by season index (0 = Specials, 1, 2, 3, etc.)
+    return seasonA.index - seasonB.index
+  })
+})
+
+// Cache rendered previews to avoid re-rendering when cycling back
+// Key format: `${seasonKey}_${bgUrl}_${logoUrl}_${JSON.stringify(options)}`
+const renderedPreviewCache = ref<Record<string, string>>({})
+
+// Track which season preset fields have been manually modified by the user
+// Key is seasonKey, value is Set of field names (e.g., 'fontSize', 'shadowEnabled')
+const userModifiedFields = ref<Record<string, Set<string>>>({})
 
 // Cache assets per season to avoid re-fetching when switching
 const seasonAssetsCache = ref<Record<string, { posters: any[]; logos: any[]; backdrops?: any[] }>>({})
@@ -124,7 +175,8 @@ const toPlexPosterUrl = (path?: string | null) => {
 }
 
 const seriesPosterUrl = computed(() => {
-  if (existingPoster.value) return existingPoster.value
+  // Only derive from the series-level sources; do not use the global existingPoster
+  // to avoid bleeding season posters into the series thumbnail.
   if (props.movie.poster) {
     const maybeUrl = toPlexPosterUrl(props.movie.poster)
     if (maybeUrl) return maybeUrl
@@ -158,7 +210,8 @@ const options = ref({
   borderColor: '#ffffff',
   overlayFile: '',
   overlayOpacity: 40,
-  overlayMode: 'screen'
+  overlayMode: 'screen',
+  season_text: undefined as string | undefined
 })
 
 // Text overlay settings
@@ -188,6 +241,180 @@ const render = useRenderService()
 const loading = render.loading
 const error = render.error
 const lastPreview = render.lastPreview
+
+// Helpers to isolate per-target settings
+const getCurrentSettings = () => ({
+  selectedPoster: selectedPoster.value,
+  selectedLogo: selectedLogo.value,
+  posterFilter: posterFilter.value,
+  posterLanguageFilter: posterLanguageFilter.value,
+  logoPreference: logoPreference.value,
+  logoLanguageFilter: logoLanguageFilter.value,
+  showTmdbPosters: showTmdbPosters.value,
+  showFanartPosters: showFanartPosters.value,
+  showTvdbPosters: showTvdbPosters.value,
+  showTmdbLogos: showTmdbLogos.value,
+  showFanartLogos: showFanartLogos.value,
+  showTvdbLogos: showTvdbLogos.value,
+  showClearArt: showClearArt.value,
+  logoMode: logoMode.value,
+  logoHex: logoHex.value,
+  options: JSON.parse(JSON.stringify(options.value)),
+  textOverlayEnabled: textOverlayEnabled.value,
+  customText: customText.value,
+  fontFamily: fontFamily.value,
+  fontSize: fontSize.value,
+  fontWeight: fontWeight.value,
+  textColor: textColor.value,
+  textAlign: textAlign.value,
+  textTransform: textTransform.value,
+  letterSpacing: letterSpacing.value,
+  lineHeight: lineHeight.value,
+  positionY: positionY.value,
+  shadowEnabled: shadowEnabled.value,
+  shadowBlur: shadowBlur.value,
+  shadowOffsetX: shadowOffsetX.value,
+  shadowOffsetY: shadowOffsetY.value,
+  shadowColor: shadowColor.value,
+  shadowOpacity: shadowOpacity.value,
+  strokeEnabled: strokeEnabled.value,
+  strokeWidth: strokeWidth.value,
+  strokeColor: strokeColor.value,
+})
+
+const applySettings = (s: any) => {
+  if (!s) return
+  if (s.selectedPoster !== undefined) selectedPoster.value = s.selectedPoster
+  if (s.selectedLogo !== undefined) selectedLogo.value = s.selectedLogo
+  if (s.posterFilter !== undefined) posterFilter.value = s.posterFilter
+  if (s.posterLanguageFilter !== undefined) posterLanguageFilter.value = s.posterLanguageFilter
+  if (s.logoPreference !== undefined) logoPreference.value = s.logoPreference
+  if (s.logoLanguageFilter !== undefined) logoLanguageFilter.value = s.logoLanguageFilter
+  if (s.showTmdbPosters !== undefined) showTmdbPosters.value = s.showTmdbPosters
+  if (s.showFanartPosters !== undefined) showFanartPosters.value = s.showFanartPosters
+  if (s.showTvdbPosters !== undefined) showTvdbPosters.value = s.showTvdbPosters
+  if (s.showTmdbLogos !== undefined) showTmdbLogos.value = s.showTmdbLogos
+  if (s.showFanartLogos !== undefined) showFanartLogos.value = s.showFanartLogos
+  if (s.showTvdbLogos !== undefined) showTvdbLogos.value = s.showTvdbLogos
+  if (s.showClearArt !== undefined) showClearArt.value = s.showClearArt
+  if (s.logoMode !== undefined) logoMode.value = s.logoMode
+  if (s.logoHex !== undefined) logoHex.value = s.logoHex
+  if (s.options) Object.assign(options.value, s.options)
+  if (s.textOverlayEnabled !== undefined) textOverlayEnabled.value = s.textOverlayEnabled
+  if (s.customText !== undefined) customText.value = s.customText
+  if (s.fontFamily !== undefined) fontFamily.value = s.fontFamily
+  if (s.fontSize !== undefined) fontSize.value = s.fontSize
+  if (s.fontWeight !== undefined) fontWeight.value = s.fontWeight
+  if (s.textColor !== undefined) textColor.value = s.textColor
+  if (s.textAlign !== undefined) textAlign.value = s.textAlign
+  if (s.textTransform !== undefined) textTransform.value = s.textTransform
+  if (s.letterSpacing !== undefined) letterSpacing.value = s.letterSpacing
+  if (s.lineHeight !== undefined) lineHeight.value = s.lineHeight
+  if (s.positionY !== undefined) positionY.value = s.positionY
+  if (s.shadowEnabled !== undefined) shadowEnabled.value = s.shadowEnabled
+  if (s.shadowBlur !== undefined) shadowBlur.value = s.shadowBlur
+  if (s.shadowOffsetX !== undefined) shadowOffsetX.value = s.shadowOffsetX
+  if (s.shadowOffsetY !== undefined) shadowOffsetY.value = s.shadowOffsetY
+  if (s.shadowColor !== undefined) shadowColor.value = s.shadowColor
+  if (s.shadowOpacity !== undefined) shadowOpacity.value = s.shadowOpacity
+  if (s.strokeEnabled !== undefined) strokeEnabled.value = s.strokeEnabled
+  if (s.strokeWidth !== undefined) strokeWidth.value = s.strokeWidth
+  if (s.strokeColor !== undefined) strokeColor.value = s.strokeColor
+}
+
+const currentTargetKey = computed(() => currentSeason.value?.key || props.movie.key)
+
+const saveCurrentSettings = () => {
+  const key = currentTargetKey.value
+  const settings = getCurrentSettings()
+
+  const isSeason = currentSeason.value && !currentSeason.value.isSeries
+
+  if (isSeason) {
+    // For seasons, only cache preset fields if user manually modified them
+    const modified = userModifiedFields.value[key] || new Set()
+    const presetFields = [
+      'logoMode', 'textOverlayEnabled', 'customText', 'fontFamily', 'fontSize',
+      'shadowEnabled', 'letterSpacing', 'positionY', 'posterZoom', 'posterShiftY',
+      'matteHeight', 'fadeHeight', 'vignette', 'grain', 'logoScale', 'logoOffset'
+    ]
+
+    // Remove preset fields that user hasn't modified
+    presetFields.forEach(field => {
+      if (!modified.has(field)) {
+        delete (settings as any)[field]
+        // Also remove from options object if applicable
+        if (settings.options && field in settings.options) {
+          delete settings.options[field]
+        }
+      }
+    })
+  } else {
+    // For series, ensure season_text is never saved
+    if (settings.options && settings.options.season_text) {
+      console.log('[SAVE] Removing season_text from series settings')
+      delete settings.options.season_text
+    }
+  }
+
+  settingsCache.value[key] = settings
+  if (selectedPoster.value) selectedPosterCache.value[key] = selectedPoster.value
+}
+
+const restoreSettingsForCurrent = () => {
+  const key = currentTargetKey.value
+  const cached = settingsCache.value[key]
+  const isSeason = currentSeason.value && !currentSeason.value.isSeries
+
+  console.log('[RESTORE] Target:', key, 'isSeason:', isSeason, 'hasCached:', !!cached)
+
+  if (isSeason) {
+    console.log('[RESTORE] Season detected, applying preset season_options')
+    applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true })
+    if (cached) {
+      console.log('[RESTORE] Applying cached season edits on top of preset')
+      // Apply all cached season edits so manual tweaks persist when returning
+      applySettings(cached)
+    }
+  } else {
+    // This is a series poster - explicitly clear season_text
+    if (options.value.season_text) {
+      console.log('[RESTORE] Clearing season_text for series')
+      delete options.value.season_text
+    }
+
+    if (cached) {
+      console.log('[RESTORE] Applying cached settings for series')
+      applySettings(cached)
+      // Ensure season_text is not in cached settings for series
+      if (options.value.season_text) {
+        delete options.value.season_text
+      }
+    } else {
+      console.log('[RESTORE] Series with no cache, applying preset')
+      applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false })
+    }
+  }
+
+  // Restore cached poster selection if available
+  if (selectedPosterCache.value[key]) {
+    selectedPoster.value = selectedPosterCache.value[key]
+    console.log('[RESTORE] Restored cached poster for', key)
+  }
+}
+
+const restoreSettingsForKey = async (key: string) => {
+  const cached = settingsCache.value[key]
+  if (cached) {
+    applySettings(cached)
+  }
+  if (selectedPosterCache.value[key]) {
+    selectedPoster.value = selectedPosterCache.value[key]
+  } else {
+    ensurePosterSelected()
+  }
+  await nextTick()
+}
 
 const ensurePosterSelected = () => {
   if (selectedPoster.value) return
@@ -234,14 +461,36 @@ async function switchToRenderedPreview(index: number) {
   if (index < 0 || index >= renderedPreviews.value.length) return
   activePreviewIndex.value = index
 
+  saveCurrentSettings()
+
   const preview = renderedPreviews.value[index]
   if (preview) {
     lastPreview.value = preview.imageUrl
     const seasonIndex = Array.from(selectedSeasons.value).findIndex(key => key === preview.seasonKey)
     if (seasonIndex >= 0) {
-      currentSeasonIndex.value = seasonIndex
-      // Load season-specific assets when switching to this preview
-      await fetchImagesForCurrentSeason()
+      // Suppress auto-preview watcher during preview switching
+      console.log('[SWITCH PREVIEW] Setting suppressAutoPreview=true for', preview.seasonTitle)
+      suppressAutoPreview = true
+
+      try {
+        currentSeasonIndex.value = seasonIndex
+
+        // Restore cached poster BEFORE fetching images to prevent applyPosterFilter from changing it
+        const cachedPoster = selectedPosterCache.value[preview.seasonKey]
+        if (cachedPoster) {
+          selectedPoster.value = cachedPoster
+        }
+
+        // Load season-specific assets when switching to this preview
+        // Skip restore in fetchImagesForCurrentSeason since we call restoreSettingsForCurrent explicitly below
+        await fetchImagesForCurrentSeason(true)
+        restoreSettingsForCurrent()
+      } finally {
+        // Always re-enable auto-preview, even if there's an error
+        await nextTick()
+        console.log('[SWITCH PREVIEW] Setting suppressAutoPreview=false')
+        suppressAutoPreview = false
+      }
     }
   }
 }
@@ -294,7 +543,7 @@ const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 // State persistence
 const EDITOR_STATE_KEY = 'simposter_editor_state'
 
-const saveEditorState = () => {
+const saveEditorStateImmediate = () => {
   try {
     const state = {
       options: options.value,
@@ -341,6 +590,9 @@ const saveEditorState = () => {
     console.warn('Failed to save editor state:', e)
   }
 }
+
+// Debounced version to reduce localStorage writes
+const saveEditorState = debounce(saveEditorStateImmediate, 300)
 
 const loadGlobalFallbackSettings = async () => {
   try {
@@ -541,131 +793,80 @@ const filteredLogos = computed(() => {
   return [...items].sort((a, b) => scoreLogo(b) - scoreLogo(a))
 })
 
-const optionsPayload = computed(() => ({
-  poster_zoom: options.value.posterZoom / 100,
-  poster_shift_y: options.value.posterShiftY / 100,
-  matte_height_ratio: options.value.matteHeight / 100,
-  fade_height_ratio: options.value.fadeHeight / 100,
-  vignette_strength: options.value.vignette / 100,
-  grain_amount: options.value.grain / 100,
-  logo_scale: options.value.logoScale / 100,
-  logo_offset: options.value.logoOffset / 100,
-  uniform_logo_max_w: options.value.uniformLogoMaxW,
-  uniform_logo_max_h: options.value.uniformLogoMaxH,
-  uniform_logo_offset_x: options.value.uniformLogoOffsetX / 100,
-  uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
-  border_enabled: options.value.borderEnabled,
-  border_px: options.value.borderThickness,
-  border_color: options.value.borderColor,
-  overlay_file: options.value.overlayFile || null,
-  overlay_opacity: options.value.overlayOpacity / 100,
-  overlay_mode: options.value.overlayMode,
-  logo_mode: logoMode.value,
-  logo_hex: logoHex.value,
-  poster_filter: posterFilter.value,
-  logo_preference: logoPreference.value,
-  text_overlay_enabled: textOverlayEnabled.value,
-  custom_text: customText.value,
-  font_family: fontFamily.value,
-  font_size: fontSize.value,
-  font_weight: fontWeight.value,
-  text_color: textColor.value,
-  text_align: textAlign.value,
-  text_transform: textTransform.value,
-  letter_spacing: letterSpacing.value,
-  line_height: lineHeight.value / 100,
-  position_y: positionY.value / 100,
-  shadow_enabled: shadowEnabled.value,
-  shadow_blur: shadowBlur.value,
-  shadow_offset_x: shadowOffsetX.value,
-  shadow_offset_y: shadowOffsetY.value,
-  shadow_color: shadowColor.value,
-  shadow_opacity: shadowOpacity.value / 100,
-  stroke_enabled: strokeEnabled.value,
-  stroke_width: strokeWidth.value,
-  stroke_color: strokeColor.value
-}))
+const optionsPayload = computed(() => {
+  // Generate season text (e.g., "Season 1" or "Specials") - only for actual seasons, not series
+  let seasonText = ""
+  if (currentSeason.value && !currentSeason.value.isSeries) {
+    if (currentSeason.value.index === 0) {
+      seasonText = "Specials"
+    } else {
+      seasonText = `Season ${currentSeason.value.index}`
+    }
+  }
+
+  // Replace {season} placeholder in custom text
+  const processedCustomText = customText.value.replace('{season}', seasonText)
+
+  const payload: Record<string, any> = {
+    poster_zoom: options.value.posterZoom / 100,
+    poster_shift_y: options.value.posterShiftY / 100,
+    matte_height_ratio: options.value.matteHeight / 100,
+    fade_height_ratio: options.value.fadeHeight / 100,
+    vignette_strength: options.value.vignette / 100,
+    grain_amount: options.value.grain / 100,
+    logo_scale: options.value.logoScale / 100,
+    logo_offset: options.value.logoOffset / 100,
+    uniform_logo_max_w: options.value.uniformLogoMaxW,
+    uniform_logo_max_h: options.value.uniformLogoMaxH,
+    uniform_logo_offset_x: options.value.uniformLogoOffsetX / 100,
+    uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
+    border_enabled: options.value.borderEnabled,
+    border_px: options.value.borderThickness,
+    border_color: options.value.borderColor,
+    overlay_file: options.value.overlayFile || null,
+    overlay_opacity: options.value.overlayOpacity / 100,
+    overlay_mode: options.value.overlayMode,
+    logo_mode: logoMode.value,
+    logo_hex: logoHex.value,
+    poster_filter: posterFilter.value,
+    logo_preference: logoPreference.value,
+    text_overlay_enabled: textOverlayEnabled.value,
+    custom_text: processedCustomText,
+    font_family: fontFamily.value,
+    font_size: fontSize.value,
+    font_weight: fontWeight.value,
+    text_color: textColor.value,
+    text_align: textAlign.value,
+    text_transform: textTransform.value,
+    letter_spacing: letterSpacing.value,
+    line_height: lineHeight.value / 100,
+    position_y: positionY.value / 100,
+    shadow_enabled: shadowEnabled.value,
+    shadow_blur: shadowBlur.value,
+    shadow_offset_x: shadowOffsetX.value,
+    shadow_offset_y: shadowOffsetY.value,
+    shadow_color: shadowColor.value,
+    shadow_opacity: shadowOpacity.value / 100,
+    stroke_enabled: strokeEnabled.value,
+    stroke_width: strokeWidth.value,
+    stroke_color: strokeColor.value
+  }
+
+  // Only include season_text if it's not empty (for seasons, not series)
+  if (seasonText) {
+    payload.season_text = seasonText
+  }
+
+  return payload
+})
 
 const bgUrl = computed(() => selectedPoster.value || '')
 const logoUrl = computed(() => (logoMode.value === 'none' ? '' : selectedLogo.value || ''))
 
 const reloadPreset = async () => {
   await presetService.load()
-  const p = presets.value.find((x) => x.id === selectedPreset.value)
-  if (p?.options) {
-    const o = p.options
-    // Reset text overlay defaults first
-    textOverlayEnabled.value = false
-    customText.value = ''
-    fontFamily.value = 'Arial'
-    fontSize.value = 120
-    fontWeight.value = '700'
-    textColor.value = '#ffffff'
-    textAlign.value = 'center'
-    textTransform.value = 'uppercase'
-    letterSpacing.value = 2
-    lineHeight.value = 120
-    positionY.value = 75
-    shadowEnabled.value = true
-    shadowBlur.value = 10
-    shadowOffsetX.value = 0
-    shadowOffsetY.value = 4
-    shadowColor.value = '#000000'
-    shadowOpacity.value = 80
-    strokeEnabled.value = false
-    strokeWidth.value = 4
-    strokeColor.value = '#000000'
-    options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
-    options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
-    options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
-    options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
-    options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
-    options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
-    options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
-    options.value.logoOffset = Math.round((Number(o.logo_offset) || 0.75) * 100)
-    if (o.uniform_logo_max_w) options.value.uniformLogoMaxW = Number(o.uniform_logo_max_w)
-    if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
-    if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
-    if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
-    options.value.borderEnabled = !!o.border_enabled
-    options.value.borderThickness = Number(o.border_px) || 0
-    if (o.border_color) options.value.borderColor = String(o.border_color)
-    if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
-    if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
-    if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
-    if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
-      posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
-    }
-    if (typeof o.logo_preference === 'string' && ['first', 'white', 'color'].includes(o.logo_preference)) {
-      logoPreference.value = o.logo_preference as 'first' | 'white' | 'color'
-    }
-    logoMode.value = normalizeLogoMode(o.logo_mode)
-    if (typeof o.logo_hex === 'string') {
-      logoHex.value = o.logo_hex
-    }
-
-    // Load text overlay settings
-    textOverlayEnabled.value = !!o.text_overlay_enabled
-    if (typeof o.custom_text === 'string') customText.value = o.custom_text
-    if (typeof o.font_family === 'string') fontFamily.value = o.font_family
-    if (typeof o.font_size === 'number') fontSize.value = o.font_size
-    if (typeof o.font_weight === 'string') fontWeight.value = o.font_weight
-    if (typeof o.text_color === 'string') textColor.value = o.text_color
-    if (typeof o.text_align === 'string') textAlign.value = o.text_align
-    if (typeof o.text_transform === 'string') textTransform.value = o.text_transform
-    if (typeof o.letter_spacing === 'number') letterSpacing.value = o.letter_spacing
-    if (typeof o.line_height === 'number') lineHeight.value = Math.round(o.line_height * 100)
-    if (typeof o.position_y === 'number') positionY.value = Math.round(o.position_y * 100)
-    if (typeof o.shadow_enabled === 'boolean') shadowEnabled.value = o.shadow_enabled
-    if (typeof o.shadow_blur === 'number') shadowBlur.value = o.shadow_blur
-    if (typeof o.shadow_offset_x === 'number') shadowOffsetX.value = o.shadow_offset_x
-    if (typeof o.shadow_offset_y === 'number') shadowOffsetY.value = o.shadow_offset_y
-    if (typeof o.shadow_color === 'string') shadowColor.value = o.shadow_color
-    if (typeof o.shadow_opacity === 'number') shadowOpacity.value = Math.round(o.shadow_opacity * 100)
-    if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
-    if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
-    if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
-
+  if (selectedPreset.value) {
+    applyPresetOptions(selectedPreset.value)
     applyPosterFilter()
     applyLogoPreference()
     success('Preset reloaded!')
@@ -724,11 +925,38 @@ const saveCurrentPreset = async () => {
     stroke_color: strokeColor.value
   }
 
-  await presetService.savePreset(backendOptions)
-  if (!presetService.error.value) {
-    success('Preset saved!')
+  // When editing season options, we need to save to season_options_json
+  // The presetService will handle both options and season_options
+  if (selectedPosterType.value === 'season') {
+    // Fetch current preset, update only season_options
+    const currentPreset = presets.value.find(p => p.id === selectedPreset.value)
+    if (currentPreset) {
+      // Save via API to update season_options_json specifically
+      try {
+        const res = await fetch(`${apiBase}/api/presets/save-season-options`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            template_id: selectedTemplate.value,
+            preset_id: selectedPreset.value,
+            season_options: backendOptions
+          })
+        })
+        if (!res.ok) throw new Error(`API error ${res.status}`)
+        success('Season preset saved!')
+        await presetService.load()
+      } catch (e) {
+        notifyError(`Failed to save: ${e instanceof Error ? e.message : 'Unknown error'}`)
+      }
+    }
   } else {
-    notifyError(`Failed to save: ${presetService.error.value}`)
+    // Save to regular options_json
+    await presetService.savePreset(backendOptions)
+    if (!presetService.error.value) {
+      success('Preset saved!')
+    } else {
+      notifyError(`Failed to save: ${presetService.error.value}`)
+    }
   }
 }
 
@@ -784,13 +1012,17 @@ const saveAsNewPreset = async () => {
   }
 
   const newId = newPresetId.value.trim()
-  await presetService.savePresetAs(newId, backendOptions)
-  if (!presetService.error.value) {
-    selectedPreset.value = newId
-    success('Preset saved as new!')
-    newPresetId.value = ''
+  if (selectedPosterType.value === 'season') {
+    notifyError('Cannot save season options as new preset - use regular options only')
   } else {
-    notifyError(`Failed to save: ${presetService.error.value}`)
+    await presetService.savePresetAs(newId, backendOptions)
+    if (!presetService.error.value) {
+      selectedPreset.value = newId
+      success('Preset saved as new!')
+      newPresetId.value = ''
+    } else {
+      notifyError(`Failed to save: ${presetService.error.value}`)
+    }
   }
 }
 
@@ -803,17 +1035,33 @@ const applyLogoPreference = () => {
 }
 
 const applyPosterFilter = () => {
-  if (!posters.value.length) return
+  const isSeason = !!(currentSeason.value && !currentSeason.value.isSeries)
+  const seasonPosters = posters.value || []
+  const seriesPosters = showLevelAssets.value.posters || []
+  if (!seasonPosters.length && !(isSeason && seriesPosters.length)) return
+
   if (posterFilter.value === 'textless') {
-    const textless = posters.value.find((p) => p.has_text === false)
-    if (textless) selectedPoster.value = textless.url
-    else if (!selectedPoster.value) selectedPoster.value = posters.value[0]?.url || null
+    const seasonTextless = seasonPosters.find((p) => p.has_text === false)
+    const seriesTextless = isSeason ? seriesPosters.find((p: any) => p.has_text === false) : null
+    const choice = seasonTextless || seriesTextless
+
+    // If no textless at all, keep existing selection or first season poster
+    if (choice) {
+      // Replace selection if it's empty or currently not textless
+      if (!selectedPoster.value) selectedPoster.value = choice.url
+      else {
+        const currentIsTextless = [...seasonPosters, ...seriesPosters].some((p) => p.url === selectedPoster.value && p.has_text === false)
+        if (!currentIsTextless) selectedPoster.value = choice.url
+      }
+    } else if (!selectedPoster.value) {
+      selectedPoster.value = seasonPosters[0]?.url || null
+    }
   } else if (posterFilter.value === 'text') {
-    const withText = posters.value.find((p) => p.has_text === true)
+    const withText = seasonPosters.find((p) => p.has_text === true)
     if (withText) selectedPoster.value = withText.url
-    else if (!selectedPoster.value) selectedPoster.value = posters.value[0]?.url || null
-  } else if (!selectedPoster.value && posters.value.length) {
-    const firstPoster = posters.value[0]
+    else if (!selectedPoster.value) selectedPoster.value = seasonPosters[0]?.url || null
+  } else if (!selectedPoster.value && seasonPosters.length) {
+    const firstPoster = seasonPosters[0]
     if (firstPoster) selectedPoster.value = firstPoster.url
   }
 }
@@ -864,48 +1112,97 @@ const fetchTmdbAssets = async () => {
   }
 }
 
-const fetchImagesForCurrentSeason = async () => {
-  const season = currentSeason.value
-  if (!season) return
+const fetchImagesForSeason = async (season: Season) => {
   if (!tmdbId.value) return
 
   // Series entry uses show-level assets
   if (season.isSeries) {
-    posters.value = showLevelAssets.value.posters || []
-    logos.value = showLevelAssets.value.logos || []
-    applyPosterFilter()
-    applyLogoPreference()
-    return
+    return {
+      posters: showLevelAssets.value.posters || [],
+      logos: showLevelAssets.value.logos || [],
+      backdrops: showLevelAssets.value.backdrops || []
+    }
   }
 
   // Use cached assets if available
-    const cached = seasonAssetsCache.value[season.key]
-    if (cached) {
-      posters.value = cached.posters || []
-      logos.value = cached.logos || []
-      applyPosterFilter()
-      applyLogoPreference()
-      return
-    }
+  const cached = seasonAssetsCache.value[season.key]
+  if (cached) {
+    return cached
+  }
 
-    try {
-      const tvdbQuery = tvdbId.value ? `&tvdb_id=${tvdbId.value}` : ''
-      const imgRes = await fetch(`${apiBase}/api/tmdb/tv/${tmdbId.value}/images?season=${season.index}${tvdbQuery}`)
-      if (!imgRes.ok) throw new Error('Failed to fetch season images')
-      const imgs = await imgRes.json()
-      seasonAssetsCache.value[season.key] = {
-        posters: imgs.posters || [],
-        logos: imgs.logos || [],
+  try {
+    const tvdbQuery = tvdbId.value ? `&tvdb_id=${tvdbId.value}` : ''
+    const imgRes = await fetch(`${apiBase}/api/tmdb/tv/${tmdbId.value}/images?season=${season.index}${tvdbQuery}`)
+    if (!imgRes.ok) throw new Error('Failed to fetch season images')
+    const imgs = await imgRes.json()
+    const assets = {
+      posters: imgs.posters || [],
+      logos: imgs.logos || [],
       backdrops: imgs.backdrops || []
     }
-    posters.value = imgs.posters || []
-    logos.value = imgs.logos || []
-    applyPosterFilter()
-    applyLogoPreference()
-    ensurePosterSelected()
+    seasonAssetsCache.value[season.key] = assets
+    return assets
   } catch (err) {
     console.error('Failed to fetch season images:', err)
+    return { posters: [], logos: [], backdrops: [] }
   }
+}
+
+const fetchImagesForCurrentSeason = async (skipRestore = false) => {
+  const season = currentSeason.value
+  if (!season) return
+
+  const assets = await fetchImagesForSeason(season)
+  if (assets) {
+    const seasonPosters = assets.posters || []
+    posters.value = seasonPosters
+
+    // For seasons with textless filter, also include series textless posters
+    // Season posters are shown FIRST, then series posters are appended
+    if (!season.isSeries && posterFilter.value === 'textless') {
+      const seriesTextlessPosters = (showLevelAssets.value.posters || [])
+        .filter((p: any) => p.has_text === false)
+
+      if (seriesTextlessPosters.length > 0) {
+        // Add series textless posters to the END of the list with a marker
+        const markedSeriesPosters = seriesTextlessPosters.map((p: any) => ({
+          ...p,
+          _isSeriesPoster: true  // Mark so we can show in UI
+        }))
+        // Season posters first, then series posters
+        posters.value = [...seasonPosters, ...markedSeriesPosters]
+        console.log(`[FETCH IMAGES] Poster order: ${seasonPosters.length} season posters, then ${seriesTextlessPosters.length} series textless posters`)
+      }
+    }
+
+    logos.value = assets.logos || []
+    applyPosterFilter()
+    applyLogoPreference()
+    if (!season.isSeries && !skipRestore) {
+      restoreSettingsForCurrent()
+    }
+  }
+}
+
+// Fetch assets for all selected seasons in parallel
+const fetchAssetsForAllSeasons = async () => {
+  console.log('[FETCH ASSETS] Called fetchAssetsForAllSeasons(), tmdbId:', tmdbId.value)
+
+  if (!tmdbId.value) {
+    console.log('[FETCH ASSETS] No tmdbId, returning early')
+    return
+  }
+
+  const selectedKeys = Array.from(selectedSeasons.value)
+  const seasonsToFetch = selectedKeys
+    .map(key => seasons.value.find(s => s.key === key))
+    .filter(Boolean) as Season[]
+
+  console.log('[FETCH ASSETS] Fetching assets for', seasonsToFetch.length, 'seasons')
+
+  await Promise.all(seasonsToFetch.map(season => fetchImagesForSeason(season)))
+
+  console.log('[FETCH ASSETS] All assets fetched')
 }
 
 const fetchLabels = async () => {
@@ -955,13 +1252,21 @@ const updateGlobalPosterCache = (key: string, url: string | null) => {
 
 const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
   try {
+    // Handle both boolean and Event parameter
     const refreshFlag = typeof forceRefresh === 'boolean'
       ? forceRefresh
-      : false
-    const res = await fetch(`${apiBase}/api/movie/${props.movie.key}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
+      : (forceRefresh instanceof Event ? true : false)
+    
+    // Use current season key if available, otherwise use series key
+    const targetKey = currentSeason.value?.key || props.movie.key
+    
+    console.log('[EXISTING POSTER] Fetching for target:', targetKey, 'forceRefresh:', refreshFlag)
+    
+    const res = await fetch(`${apiBase}/api/movie/${targetKey}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
     if (!res.ok) {
       existingPoster.value = null
-      updateGlobalPosterCache(props.movie.key, null)
+      updateGlobalPosterCache(targetKey, null)
+      posterRefreshKey.value += 1
       return
     }
     const data = await res.json()
@@ -970,10 +1275,15 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
       existingPoster.value = data.url.startsWith('http')
         ? data.url
         : `${apiBase}${data.url}`
-      updateGlobalPosterCache(props.movie.key, existingPoster.value)
+      updateGlobalPosterCache(targetKey, existingPoster.value)
+
+      console.log('[EXISTING POSTER] Updated to:', existingPoster.value)
+
+      // Update the thumbnail for the target season/series in the left list
+      seasons.value = seasons.value.map(s => s.key === targetKey ? { ...s, thumb: existingPoster.value || s.thumb } : s)
     } else {
       existingPoster.value = null
-      updateGlobalPosterCache(props.movie.key, null)
+      updateGlobalPosterCache(targetKey, null)
     }
     // Force re-render by toggling key
     posterRefreshKey.value += 1
@@ -981,6 +1291,7 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
     console.error('Failed to fetch existing poster:', err)
     existingPoster.value = null
     updateGlobalPosterCache(props.movie.key, null)
+    posterRefreshKey.value += 1
   }
 }
 
@@ -991,9 +1302,353 @@ const toggleLabel = (label: string) => {
   selectedLabels.value = set
 }
 
-const doPreview = async () => {
+const doPreview = async (skipBackgroundRender = false) => {
   if (!bgUrl.value) return
-  await render.preview(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
+  // Cache current settings before rendering
+  saveCurrentSettings()
+
+  // Capture reactive values at the start to prevent race conditions
+  // If user clicks to switch seasons while render is in progress,
+  // we want to use the season info from when render started, not when it completes
+  const season = currentSeason.value
+  const capturedBgUrl = bgUrl.value
+  const capturedLogoUrl = logoUrl.value
+  const capturedTemplate = selectedTemplate.value
+  const capturedPreset = selectedPreset.value
+
+  // Capture season text at the start to prevent wrong text appearing
+  let capturedSeasonText = ""
+  if (season && !season.isSeries) {
+    if (season.index === 0) {
+      capturedSeasonText = "Specials"
+    } else {
+      capturedSeasonText = `Season ${season.index}`
+    }
+  }
+
+  // Build options payload with captured season text
+  const processedCustomText = customText.value.replace('{season}', capturedSeasonText)
+
+  const capturedOptionsPayload: Record<string, any> = {
+    poster_zoom: options.value.posterZoom / 100,
+    poster_shift_y: options.value.posterShiftY / 100,
+    matte_height_ratio: options.value.matteHeight / 100,
+    fade_height_ratio: options.value.fadeHeight / 100,
+    vignette_strength: options.value.vignette / 100,
+    grain_amount: options.value.grain / 100,
+    logo_scale: options.value.logoScale / 100,
+    logo_offset: options.value.logoOffset / 100,
+    uniform_logo_max_w: options.value.uniformLogoMaxW,
+    uniform_logo_max_h: options.value.uniformLogoMaxH,
+    uniform_logo_offset_x: options.value.uniformLogoOffsetX / 100,
+    uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
+    border_enabled: options.value.borderEnabled,
+    border_px: options.value.borderThickness,
+    border_color: options.value.borderColor,
+    overlay_file: options.value.overlayFile || null,
+    overlay_opacity: options.value.overlayOpacity / 100,
+    overlay_mode: options.value.overlayMode,
+    logo_mode: logoMode.value,
+    logo_hex: logoHex.value,
+    poster_filter: posterFilter.value,
+    logo_preference: logoPreference.value,
+    text_overlay_enabled: textOverlayEnabled.value,
+    custom_text: processedCustomText,
+    font_family: fontFamily.value,
+    font_size: fontSize.value,
+    font_weight: fontWeight.value,
+    text_color: textColor.value,
+    text_align: textAlign.value,
+    text_transform: textTransform.value,
+    letter_spacing: letterSpacing.value,
+    line_height: lineHeight.value / 100,
+    position_y: positionY.value / 100,
+    shadow_enabled: shadowEnabled.value,
+    shadow_blur: shadowBlur.value,
+    shadow_offset_x: shadowOffsetX.value,
+    shadow_offset_y: shadowOffsetY.value,
+    shadow_color: shadowColor.value,
+    shadow_opacity: shadowOpacity.value / 100,
+    stroke_enabled: strokeEnabled.value,
+    stroke_width: strokeWidth.value,
+    stroke_color: strokeColor.value
+  }
+
+  // Only include season_text if it's not empty (for seasons, not series)
+  if (capturedSeasonText) {
+    capturedOptionsPayload.season_text = capturedSeasonText
+  }
+
+  console.log('[PREVIEW] Starting with:', {
+    target: season?.key || props.movie.key,
+    seasonTitle: season?.title,
+    capturedSeasonText,
+    logoMode: logoMode.value,
+    textOverlayEnabled: textOverlayEnabled.value,
+    customText: customText.value,
+    fontSize: fontSize.value
+  })
+  console.log('[PREVIEW] Full capturedOptionsPayload:', capturedOptionsPayload)
+  console.log('[PREVIEW] capturedOptionsPayload.text_overlay_enabled:', capturedOptionsPayload.text_overlay_enabled)
+  console.log('[PREVIEW] capturedOptionsPayload.custom_text:', capturedOptionsPayload.custom_text)
+  console.log('[PREVIEW] capturedOptionsPayload.season_text:', capturedOptionsPayload.season_text)
+
+  // Generate cache key based on captured settings
+  const cacheKey = season ? `${season.key}_${capturedBgUrl}_${capturedLogoUrl}_${JSON.stringify(capturedOptionsPayload)}` : ''
+
+  // Check if we have a cached render for these exact settings
+  if (cacheKey && renderedPreviewCache.value[cacheKey]) {
+    console.log('[PREVIEW] Using cached render for', season?.title)
+    lastPreview.value = renderedPreviewCache.value[cacheKey]
+    return
+  }
+
+  // Render and cache the result using captured values
+  await render.preview(props.movie, capturedBgUrl, capturedLogoUrl, capturedOptionsPayload, capturedTemplate, capturedPreset)
+
+  // Store in cache if we have a season key
+  if (cacheKey && lastPreview.value) {
+    renderedPreviewCache.value[cacheKey] = lastPreview.value
+  }
+
+  // After rendering current season, render all other selected seasons in background
+  // Skip if caller will handle background rendering (e.g., selectAllSeasons)
+  if (!skipBackgroundRender) {
+    renderAllSelectedSeasons()
+  }
+}
+
+// Render all selected seasons in the background so they're ready when user clicks them
+const renderAllSelectedSeasons = async () => {
+  console.log('[RENDER ALL] Called renderAllSelectedSeasons()')
+
+  const selectedKeys = Array.from(selectedSeasons.value)
+  const currentKey = currentSeason.value?.key
+
+  console.log('[RENDER ALL] selectedKeys:', selectedKeys)
+  console.log('[RENDER ALL] currentKey:', currentKey)
+
+  // Capture reactive values at the start to prevent race conditions
+  const currentTemplate = selectedTemplate.value
+  const currentPreset = selectedPreset.value
+  const currentLogoUrl = logoUrl.value
+
+  // Get base options but remove season-specific processed values
+  const baseOptions = { ...optionsPayload.value }
+  // Only remove custom_text and season_text which are already processed for current season
+  // Keep text_overlay_enabled and logo_mode - they'll be handled per-season below
+  delete (baseOptions as any).custom_text
+  delete (baseOptions as any).season_text
+
+  // Build array of seasons to render (excluding current which is already rendered)
+  const seasonsToRender = selectedKeys
+    .filter(key => key !== currentKey)
+    .map(key => seasons.value.find(s => s.key === key))
+    .filter(Boolean) as Season[]
+
+  console.log('[BACKGROUND RENDER] Starting parallel render for', seasonsToRender.length, 'seasons')
+
+  // Render all seasons in parallel for better performance
+  const renderPromises = seasonsToRender.map(async (season) => {
+    // Capture season details early to avoid race conditions
+    const seasonKey = season.key
+    const seasonTitle = season.title
+    const seasonIsSeries = season.isSeries
+    const seasonIndex = season.index
+
+    // Get the poster URL for this specific season
+    const seasonPosterUrl = season.thumb || season.poster || posterUrlForRatingKey(seasonKey)
+    if (!seasonPosterUrl) {
+      console.warn('[BACKGROUND RENDER] No poster URL for', seasonTitle)
+      return
+    }
+
+    // Check if user manually selected a different poster for this season
+    const cachedPoster = selectedPosterCache.value[seasonKey]
+    let seasonBgUrl = cachedPoster || seasonPosterUrl
+
+    console.log(`[BACKGROUND RENDER] ${seasonTitle} - Poster selection:`, {
+      hasCachedPoster: !!cachedPoster,
+      defaultPosterUrl: seasonPosterUrl,
+      posterFilter: posterFilter.value
+    })
+
+    // Only apply poster filter if we don't have a manually selected poster
+    // and we have assets cached for this season
+    if (!cachedPoster) {
+      const seasonAssets = seasonAssetsCache.value[seasonKey]
+      const seasonPosters = seasonAssets?.posters || []
+      const seriesPosters = showLevelAssets.value.posters || []
+      const isSeason = !seasonIsSeries
+
+      console.log(`[BACKGROUND RENDER] ${seasonTitle} - Available posters:`, {
+        seasonPostersCount: seasonPosters.length,
+        seriesPostersCount: seriesPosters.length,
+        isSeason
+      })
+
+      // Apply poster filter based on available assets
+      // For textless filter: check season posters first, then fall back to series textless
+      if (posterFilter.value === 'textless') {
+        // Find textless poster for this season
+        const seasonTextless = seasonPosters.find((p) => p.has_text === false)
+        // For seasons (not series), also consider series textless posters as fallback
+        const seriesTextless = isSeason ? seriesPosters.find((p: any) => p.has_text === false) : null
+        const choice = seasonTextless || seriesTextless
+
+        if (choice) {
+          seasonBgUrl = choice.url
+          const source = seasonTextless ? 'season' : 'series'
+          console.log(`[BACKGROUND RENDER] ${seasonTitle} - Using ${source} textless poster:`, choice.url.substring(0, 80))
+        } else {
+          console.log(`[BACKGROUND RENDER] ${seasonTitle} - No textless poster found (season or series), using Plex default`)
+        }
+      } else if (seasonPosters.length > 0) {
+        // For text/all filters, only use season-specific posters if available
+        if (posterFilter.value === 'text') {
+          // Find poster with text for this season
+          const withText = seasonPosters.find((p) => p.has_text === true)
+          if (withText) {
+            seasonBgUrl = withText.url
+            console.log(`[BACKGROUND RENDER] ${seasonTitle} - Using text poster:`, withText.url.substring(0, 80))
+          } else {
+            console.log(`[BACKGROUND RENDER] ${seasonTitle} - No text poster found, using Plex default`)
+          }
+        } else {
+          // Filter is 'all' - use first available TMDB/Fanart poster
+          seasonBgUrl = seasonPosters[0]?.url || seasonPosterUrl
+          console.log(`[BACKGROUND RENDER] ${seasonTitle} - Using first available poster (all):`, seasonBgUrl.substring(0, 80))
+        }
+      } else {
+        console.log(`[BACKGROUND RENDER] ${seasonTitle} - No TMDB/Fanart season assets, using Plex default`)
+      }
+      // If no cached assets, just use the season's default Plex poster
+    } else {
+      console.log(`[BACKGROUND RENDER] ${seasonTitle} - Using cached manual selection:`, cachedPoster.substring(0, 80))
+    }
+
+    // Get cached settings for this season
+    const cachedSettings = settingsCache.value[seasonKey]
+
+    // Build options using preset defaults + any cached customizations
+    let seasonOptions = { ...baseOptions }
+
+    // Add season_text for season-specific rendering
+    let thisSeasonText = ''
+    console.log(`[BACKGROUND RENDER] ${seasonTitle} - isSeries=${seasonIsSeries}, index=${seasonIndex}`)
+    if (!seasonIsSeries) {
+      thisSeasonText = seasonTitle.includes('Special') ? 'Specials' : `Season ${seasonIndex}`
+      seasonOptions.season_text = thisSeasonText
+      console.log(`[BACKGROUND RENDER] ${seasonTitle} - Set season_text to "${thisSeasonText}"`)
+    } else {
+      // Explicitly ensure no season_text for series poster
+      console.log('[BACKGROUND RENDER] Rendering series poster - no season_text')
+    }
+
+    // For background renders, don't send text overlay, logo mode, or custom text
+    // Let the backend preset's season_options define these per-season
+    // Only send season_text so backend can use it for {season} placeholder replacement
+    const hasUserModifications = cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
+
+    if (!hasUserModifications) {
+      // No user modifications - let backend preset season_options handle everything
+      // Remove fields that should come from preset season_options
+      const fieldsToRemove = [
+        'text_overlay_enabled', 'custom_text', 'logo_mode', 'font_size', 'font_family',
+        'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
+        'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
+        'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color'
+      ]
+      seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
+        if (!fieldsToRemove.includes(key)) {
+          (acc as any)[key] = (seasonOptions as any)[key]
+        }
+        return acc
+      }, {} as any)
+      // Keep season_text for backend placeholder replacement (only if not empty)
+      if (thisSeasonText) {
+        seasonOptions.season_text = thisSeasonText
+      }
+    } else {
+      // User has modified this season - apply their customizations
+      if (cachedSettings.logoMode) seasonOptions.logo_mode = cachedSettings.logoMode
+      if (cachedSettings.textOverlayEnabled !== undefined) {
+        seasonOptions.text_overlay_enabled = cachedSettings.textOverlayEnabled
+        // Send custom_text as-is (with {season} template) - let backend replace it
+        if (cachedSettings.customText !== undefined) {
+          seasonOptions.custom_text = cachedSettings.customText
+        }
+      }
+      if (cachedSettings.fontSize) seasonOptions.font_size = cachedSettings.fontSize
+      if (cachedSettings.fontFamily) seasonOptions.font_family = cachedSettings.fontFamily
+    }
+
+    const seasonLogoUrl = cachedSettings?.selectedLogo || currentLogoUrl
+
+    // Generate cache key
+    const cacheKey = `${seasonKey}_${seasonBgUrl}_${seasonLogoUrl}_${JSON.stringify(seasonOptions)}`
+
+    // Check if already in preview cache
+    const existingPreview = renderedPreviews.value.find(p => p.seasonKey === seasonKey)
+    if (existingPreview?.imageUrl) {
+      console.log('[BACKGROUND RENDER] Already have preview for', season.title)
+      return
+    }
+
+    // Render in background
+    console.log(`[BACKGROUND RENDER] ${seasonTitle} - Starting render (user modified: ${hasUserModifications})`)
+    console.log(`[BACKGROUND RENDER] ${seasonTitle} - Options:`, {
+      text_overlay_enabled: seasonOptions.text_overlay_enabled,
+      custom_text: seasonOptions.custom_text,
+      season_text: seasonOptions.season_text,
+      logo_mode: seasonOptions.logo_mode,
+      poster_filter: seasonOptions.poster_filter
+    })
+    try {
+      const result = await render.preview(
+        props.movie,
+        seasonBgUrl,
+        seasonLogoUrl,
+        seasonOptions,
+        currentTemplate,
+        currentPreset,
+        false, // Enable caching for performance
+        true   // Skip lastPreview update for background renders
+      )
+
+      // Get the image data directly from the result instead of the shared lastPreview
+      if (result?.image_base64) {
+        const imageUrl = `data:image/jpeg;base64,${result.image_base64}`
+
+        // Cache the result
+        renderedPreviewCache.value[cacheKey] = imageUrl
+
+        // Update or add to renderedPreviews using captured seasonKey and seasonTitle
+        const existingIndex = renderedPreviews.value.findIndex(p => p.seasonKey === seasonKey)
+        if (existingIndex >= 0) {
+          renderedPreviews.value[existingIndex]!.imageUrl = imageUrl
+        } else {
+          renderedPreviews.value.push({
+            seasonKey,
+            seasonTitle,
+            imageUrl: imageUrl
+          })
+        }
+        console.log(`[BACKGROUND RENDER] ${seasonTitle} - Completed successfully`)
+      } else {
+        console.warn(`[BACKGROUND RENDER] ${seasonTitle} - No image data returned`)
+      }
+    } catch (err) {
+      console.error(`[BACKGROUND RENDER] ${seasonTitle} - Failed:`, err)
+    }
+  })
+
+  // Wait for all renders to complete
+  await Promise.all(renderPromises)
+
+  const successCount = renderedPreviews.value.filter(p => p.imageUrl).length
+  const totalCount = seasonsToRender.length
+  console.log(`[BACKGROUND RENDER] Completed ${successCount}/${totalCount} renders`)
 }
 
 const doSave = async () => {
@@ -1007,14 +1662,124 @@ const doSave = async () => {
     return
   }
 
+  // Get library_id from route query or movie object
+  const libraryId = route.query.library as string || (props.movie as any).library_id || null
+
+  // Capture template/preset at start to avoid race conditions
+  const currentTemplate = selectedTemplate.value
+  const currentPreset = selectedPreset.value
+
+  // Get base options but remove season-specific processed values
+  const baseOptions = { ...optionsPayload.value }
+  delete (baseOptions as any).custom_text
+  delete (baseOptions as any).season_text
+
   // Save for each selected season
   for (const seasonKey of selectedSeasonKeys) {
     const season = seasons.value.find(s => s.key === seasonKey)
     if (!season) continue
 
-    // Create a temporary movie object for this season
-    const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
-    const res = await render.save(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
+    // Get poster URL for this specific season
+    const cachedPoster = selectedPosterCache.value[seasonKey]
+    const seasonPosterUrl = season.thumb || season.poster || posterUrlForRatingKey(seasonKey)
+    let seasonBgUrl = cachedPoster || seasonPosterUrl || bgUrl.value
+
+    // Apply poster filter if no manual selection (same logic as background render)
+    if (!cachedPoster) {
+      const seasonAssets = seasonAssetsCache.value[seasonKey]
+      const seasonPosters = seasonAssets?.posters || []
+      const seriesPosters = showLevelAssets.value.posters || []
+      const isSeason = !season.isSeries
+
+      // Apply poster filter based on available assets
+      if (posterFilter.value === 'textless') {
+        const seasonTextless = seasonPosters.find((p) => p.has_text === false)
+        const seriesTextless = isSeason ? seriesPosters.find((p: any) => p.has_text === false) : null
+        const choice = seasonTextless || seriesTextless
+        if (choice) {
+          seasonBgUrl = choice.url
+        }
+      } else if (posterFilter.value === 'text') {
+        const withText = seasonPosters.find((p) => p.has_text === true)
+        if (withText) {
+          seasonBgUrl = withText.url
+        }
+      } else if (seasonPosters.length > 0) {
+        // Filter is 'all' - use first available
+        seasonBgUrl = seasonPosters[0]?.url || seasonPosterUrl
+      }
+    }
+
+    // Get cached settings for this season
+    const cachedSettings = settingsCache.value[seasonKey]
+
+    // Build season-specific options
+    let seasonOptions = { ...baseOptions }
+
+    // Add season_text for season-specific rendering
+    let thisSeasonText = ''
+    if (!season.isSeries) {
+      thisSeasonText = season.title.includes('Special') ? 'Specials' : `Season ${season.index}`
+      seasonOptions.season_text = thisSeasonText
+    }
+
+    // Apply cached settings if user modified this season
+    const hasUserModifications = cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
+    if (hasUserModifications) {
+      if (cachedSettings.logoMode) seasonOptions.logo_mode = cachedSettings.logoMode
+      if (cachedSettings.textOverlayEnabled !== undefined) {
+        seasonOptions.text_overlay_enabled = cachedSettings.textOverlayEnabled
+        if (cachedSettings.customText !== undefined) {
+          seasonOptions.custom_text = cachedSettings.customText
+        }
+      }
+      if (cachedSettings.fontSize) seasonOptions.font_size = cachedSettings.fontSize
+      if (cachedSettings.fontFamily) seasonOptions.font_family = cachedSettings.fontFamily
+    } else {
+      // No user modifications - let backend preset season_options handle text overlay
+      const fieldsToRemove = [
+        'text_overlay_enabled', 'custom_text', 'logo_mode', 'font_size', 'font_family',
+        'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
+        'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
+        'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color'
+      ]
+      seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
+        if (!fieldsToRemove.includes(key)) {
+          (acc as any)[key] = (seasonOptions as any)[key]
+        }
+        return acc
+      }, {} as any)
+      // Keep season_text for backend placeholder replacement
+      if (thisSeasonText) {
+        seasonOptions.season_text = thisSeasonText
+      }
+    }
+
+    // Get logo for this season
+    // If no user modifications, check if preset uses logo_mode=none
+    let seasonLogoUrl = cachedSettings?.selectedLogo || logoUrl.value
+    if (!hasUserModifications) {
+      // When relying on preset season_options, let the backend decide logo mode
+      // Only pass logo URL if user explicitly selected one for this season
+      seasonLogoUrl = cachedSettings?.selectedLogo || null
+    }
+
+    // Create a temporary movie object for this season with proper media type
+    const seasonMovie = { ...props.movie, key: seasonKey, title: season.title, mediaType: 'tv-show' as const }
+
+    // Pass season index (null for series poster)
+    const seasonIndex = season.isSeries ? null : season.index
+
+    const res = await render.save(
+      seasonMovie,
+      seasonBgUrl,
+      seasonLogoUrl,
+      seasonOptions,
+      currentTemplate,
+      currentPreset,
+      libraryId,
+      seasonIndex
+    )
 
     if (res && typeof res.saved_path === 'string') {
       success(`Saved ${season.title} to ${res.saved_path}`)
@@ -1035,25 +1800,74 @@ const doSend = async () => {
     return
   }
 
+  const succeeded: string[] = []
+  const failed: string[] = []
+
   try {
+    // Save the current target settings before iterating
+    saveCurrentSettings()
+
+    // Preserve current target settings to restore after send
+    const originalKey = currentTargetKey.value
+    const originalSettings = getCurrentSettings()
+    const originalPoster = selectedPoster.value
+
+    console.log(`[SEND TO PLEX] Sending ${selectedSeasonKeys.length} season(s)`)
+
     // Send for each selected season
     for (const seasonKey of selectedSeasonKeys) {
       const season = seasons.value.find(s => s.key === seasonKey)
       if (!season) continue
 
-      // Create a temporary movie object for this season
-      const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
-      await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value)
-      success(`Successfully sent poster to ${season.title}!`)
+      try {
+        // Switch context to the target season/series and load its cached settings
+        const idxInSelected = Array.from(selectedSeasons.value).findIndex(k => k === seasonKey)
+        if (idxInSelected >= 0) currentSeasonIndex.value = idxInSelected
+        await fetchImagesForCurrentSeason()
+        await restoreSettingsForKey(seasonKey)
+
+        // Create a temporary movie object for this season
+        const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
+        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value)
+
+        succeeded.push(season.title)
+        console.log(`[SEND TO PLEX] ${season.title} - Success`)
+      } catch (err) {
+        failed.push(season.title)
+        console.error(`[SEND TO PLEX] ${season.title} - Failed:`, err)
+      }
     }
+
+    // Restore original editing context/settings/poster
+    if (originalKey) {
+      settingsCache.value[originalKey] = originalSettings
+      if (originalPoster) selectedPosterCache.value[originalKey] = originalPoster
+      await restoreSettingsForKey(originalKey)
+      // Restore current season index to the original selection if possible
+      const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
+      if (origIdx >= 0) currentSeasonIndex.value = origIdx
+    }
+
+    // Show results
+    if (succeeded.length > 0) {
+      const seasonList = succeeded.join(', ')
+      success(`Successfully sent ${succeeded.length} poster(s): ${seasonList}`)
+    }
+    if (failed.length > 0) {
+      const seasonList = failed.join(', ')
+      notifyError(`Failed to send ${failed.length} poster(s): ${seasonList}`)
+    }
+
+    console.log(`[SEND TO PLEX] Completed - ${succeeded.length} succeeded, ${failed.length} failed`)
 
     // Wait 600ms for Plex to process, then refresh poster and labels
     await new Promise(resolve => setTimeout(resolve, 600))
     await fetchExistingPoster(true)
     await fetchLabels()
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to send poster to Plex'
+    const message = err instanceof Error ? err.message : 'Failed to send posters to Plex'
     notifyError(message)
+    console.error('[SEND TO PLEX] Fatal error:', err)
   }
 }
 
@@ -1101,32 +1915,147 @@ async function fetchSeasons() {
 }
 
 // Toggle season selection
-async function toggleSeasonSelection(seasonKey: string) {
-  const season = seasons.value.find(s => s.key === seasonKey)
-  // Disable season selection for now (coming soon)
-  if (season && !season.isSeries) return
+// Toggle selection only (for checkboxes) - doesn't change focus/preview
+function toggleSelectionOnly(seasonKey: string) {
+  const wasSelected = selectedSeasons.value.has(seasonKey)
+  const newSelection = new Set(selectedSeasons.value)
 
-  const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
-  selectedSeasons.value = new Set([seriesKey])
-  currentSeasonIndex.value = 0
-  await fetchImagesForCurrentSeason()
-  syncRenderedPlaceholders()
+  if (wasSelected) {
+    newSelection.delete(seasonKey)
+    // Ensure at least one item is always selected
+    if (newSelection.size === 0) {
+      const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+      newSelection.add(seriesKey)
+    }
+  } else {
+    newSelection.add(seasonKey)
+  }
+
+  selectedSeasons.value = newSelection
+  // Trigger background render for newly selected/deselected items
+  renderAllSelectedSeasons()
+}
+
+async function toggleSeasonSelection(seasonKey: string) {
+  // Persist current target settings before switching to avoid bleed-over
+  saveCurrentSettings()
+
+  const season = seasons.value.find(s => s.key === seasonKey)
+  if (!season) return
+
+  const wasSelected = selectedSeasons.value.has(seasonKey)
+  const isCurrentlyFocused = currentSeason.value?.key === seasonKey
+
+  // If clicking an already-selected season that's currently focused, deselect it
+  // Otherwise, if it's selected but not focused, just switch to it
+  // If it's not selected, add it and switch to it
+  const newSelection = new Set(selectedSeasons.value)
+
+  if (wasSelected && isCurrentlyFocused) {
+    // Deselect the focused season
+    newSelection.delete(seasonKey)
+    selectedSeasons.value = newSelection
+
+    // If no seasons left, force select the series
+    if (newSelection.size === 0) {
+      const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+      selectedSeasons.value = new Set([seriesKey])
+      currentSeasonIndex.value = 0
+      await nextTick()
+      await fetchImagesForCurrentSeason()
+      restoreSettingsForCurrent()
+      await fetchExistingPoster()
+      syncRenderedPlaceholders()
+      await doPreview()
+    } else {
+      // Just removed a season, sync the rendered previews
+      syncRenderedPlaceholders()
+    }
+  } else if (wasSelected && !isCurrentlyFocused) {
+    // Season already selected, just switch focus to it (use cached render if available)
+    const selected = Array.from(newSelection)
+    const idx = selected.findIndex(k => k === seasonKey)
+    currentSeasonIndex.value = idx >= 0 ? idx : 0
+    await nextTick()
+    await fetchImagesForCurrentSeason()
+    restoreSettingsForCurrent()
+    await fetchExistingPoster()
+
+    // Check if we already have a rendered preview for this season
+    const existingPreview = renderedPreviews.value.find(p => p.seasonKey === seasonKey)
+    if (existingPreview && existingPreview.imageUrl) {
+      // Use the cached preview
+      lastPreview.value = existingPreview.imageUrl
+    }
+  } else {
+    // Add new season and switch to it
+    newSelection.add(seasonKey)
+    selectedSeasons.value = newSelection
+    
+    const selected = Array.from(newSelection)
+    const idx = selected.findIndex(k => k === seasonKey)
+    currentSeasonIndex.value = idx >= 0 ? idx : 0
+    await nextTick()
+    await fetchImagesForCurrentSeason()
+    restoreSettingsForCurrent()
+    await fetchExistingPoster()
+    syncRenderedPlaceholders()
+    await doPreview()
+  }
 }
 
 // Select all seasons
-function selectAllSeasons() {
-  const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
-  selectedSeasons.value = new Set([seriesKey])
+async function selectAllSeasons() {
+  console.log('[SELECT ALL] Starting selectAllSeasons()')
+
+  // Select all seasons
+  const allKeys = seasons.value.map(s => s.key)
+  selectedSeasons.value = new Set(allKeys)
   currentSeasonIndex.value = 0
   syncRenderedPlaceholders()
+
+  console.log('[SELECT ALL] Selected', allKeys.length, 'seasons')
+
+  // Fetch images and restore settings for the first season
+  await nextTick()
+  await fetchImagesForCurrentSeason()
+  restoreSettingsForCurrent()
+  await fetchExistingPoster()
+
+  // Trigger preview (skip background render since we'll do it after fetching assets)
+  console.log('[SELECT ALL] Calling doPreview()')
+  try {
+    await doPreview(true)
+    console.log('[SELECT ALL] doPreview() completed')
+  } catch (err) {
+    console.error('[SELECT ALL] doPreview() error:', err)
+  }
+
+  // Fetch assets for all seasons first, then trigger background rendering
+  console.log('[SELECT ALL] About to fetch assets for all seasons')
+  await fetchAssetsForAllSeasons()
+
+  console.log('[SELECT ALL] About to render all selected seasons')
+  await renderAllSelectedSeasons()
+
+  console.log('[SELECT ALL] Completed selectAllSeasons()')
 }
 
 // Deselect all seasons
-function deselectAllSeasons() {
+async function deselectAllSeasons() {
   const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
   selectedSeasons.value = new Set([seriesKey])
   currentSeasonIndex.value = 0
   syncRenderedPlaceholders()
+
+  // Fetch images and restore settings for the series
+  await nextTick()
+  await fetchImagesForCurrentSeason()
+  restoreSettingsForCurrent()
+  await fetchExistingPoster()
+
+  // Trigger preview
+  await doPreview()
 }
 
 // Keep the series entry poster updated when the Plex poster refreshes
@@ -1222,33 +2151,33 @@ watch(logoPreference, () => {
   applyLogoPreference()
 })
 
-const applyPresetOptions = (id: string) => {
+type PresetApplyOptions = {
+  // Force applying season overrides even if we already have cached season edits
+  forceSeasonOverrides?: boolean
+}
+
+const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   const p = presets.value.find((x) => x.id === id)
-  if (!p?.options) return
+  if (!p) return
 
-  const o = p.options
+    console.log('[PRESET APPLY] Found preset:', p.id, 'name:', (p as any).name)
+    console.log('[PRESET APPLY] selectedPosterType:', selectedPosterType.value)
+    console.log('[PRESET APPLY] has season_options:', !!(p as any).season_options)
+    if ((p as any).season_options) {
+      console.log('[PRESET APPLY] season_options:', (p as any).season_options)
+    }
 
-  // Reset text overlay defaults before applying preset values
-  textOverlayEnabled.value = false
-  customText.value = ''
-  fontFamily.value = 'Arial'
-  fontSize.value = 120
-  fontWeight.value = '700'
-  textColor.value = '#ffffff'
-  textAlign.value = 'center'
-  textTransform.value = 'uppercase'
-  letterSpacing.value = 2
-  lineHeight.value = 120
-  positionY.value = 75
-  shadowEnabled.value = true
-  shadowBlur.value = 10
-  shadowOffsetX.value = 0
-  shadowOffsetY.value = 4
-  shadowColor.value = '#000000'
-  shadowOpacity.value = 80
-  strokeEnabled.value = false
-  strokeWidth.value = 4
-  strokeColor.value = '#000000'
+  // Use selectedPosterType to determine which options to load
+  const isSeason = selectedPosterType.value === 'season'
+  const baseOptions = isSeason && (p as any).season_options ? (p as any).season_options : p.options
+  if (!baseOptions) return
+
+    console.log('[PRESET APPLY] isSeason:', isSeason, 'using:', baseOptions === (p as any).season_options ? 'season_options' : 'regular options')
+    console.log('[PRESET APPLY] baseOptions.text_overlay_enabled:', baseOptions.text_overlay_enabled, 'custom_text:', baseOptions.custom_text)
+
+  const o = baseOptions
+  const currentKey = currentTargetKey.value
+  const cached = settingsCache.value[currentKey]
 
   // Reset text overlay defaults before applying preset values
   textOverlayEnabled.value = false
@@ -1302,6 +2231,7 @@ const applyPresetOptions = (id: string) => {
   }
 
   // Load text overlay settings (enable/disable + attributes)
+  console.log('[PRESET APPLY] Loading text overlay from baseOptions - text_overlay_enabled:', o.text_overlay_enabled, 'custom_text:', o.custom_text)
   textOverlayEnabled.value = !!o.text_overlay_enabled
   if (typeof o.custom_text === 'string') customText.value = o.custom_text
   if (typeof o.font_family === 'string') fontFamily.value = o.font_family
@@ -1323,15 +2253,71 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
   if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
 
+  // Season-specific overrides: apply AFTER loading from baseOptions
+  // Only needed if season_options don't exist in the preset (legacy presets)
+  // or if forceSeasonOverrides is explicitly requested
+  if (isSeason && !((p as any).season_options) && (opts.forceSeasonOverrides || !cached)) {
+    console.log('[PRESET APPLY] Applying hardcoded season overrides (no season_options in preset)')
+    logoMode.value = 'none'
+    textOverlayEnabled.value = true
+    customText.value = '{season}'
+    fontFamily.value = 'Arial'
+    fontSize.value = 150
+    shadowEnabled.value = false
+    shadowBlur.value = 0
+    letterSpacing.value = 1
+    positionY.value = 85
+  }
+  
+  console.log('[PRESET APPLY] Final values - textOverlayEnabled:', textOverlayEnabled.value, 'customText:', customText.value, 'logoMode:', logoMode.value)
+
   applyPosterFilter()
   applyLogoPreference()
 }
 
 watch(selectedPreset, (id) => {
-  applyPresetOptions(id)
+  // When preset changes, check if we're on a season and force season overrides
+  const isSeason = !!(currentSeason.value && !currentSeason.value.isSeries)
+  applyPresetOptions(id, { forceSeasonOverrides: isSeason })
+  // Clear modification tracking when preset changes
+  if (isSeason && currentSeason.value) {
+    delete userModifiedFields.value[currentSeason.value.key]
+  }
 })
 
+// Track manual modifications to season preset fields
+const markFieldModified = (fieldName: string) => {
+  const isSeason = currentSeason.value && !currentSeason.value.isSeries
+  if (isSeason && currentSeason.value) {
+    const key = currentSeason.value.key
+    if (!userModifiedFields.value[key]) {
+      userModifiedFields.value[key] = new Set()
+    }
+    userModifiedFields.value[key].add(fieldName)
+  }
+}
+
+watch(logoMode, () => markFieldModified('logoMode'))
+watch(textOverlayEnabled, () => markFieldModified('textOverlayEnabled'))
+watch(customText, () => markFieldModified('customText'))
+watch(fontFamily, () => markFieldModified('fontFamily'))
+watch(fontSize, () => markFieldModified('fontSize'))
+watch(shadowEnabled, () => markFieldModified('shadowEnabled'))
+watch(letterSpacing, () => markFieldModified('letterSpacing'))
+watch(positionY, () => markFieldModified('positionY'))
+
+// Track modifications to options fields
+watch(() => options.value.posterZoom, () => markFieldModified('posterZoom'))
+watch(() => options.value.posterShiftY, () => markFieldModified('posterShiftY'))
+watch(() => options.value.matteHeight, () => markFieldModified('matteHeight'))
+watch(() => options.value.fadeHeight, () => markFieldModified('fadeHeight'))
+watch(() => options.value.vignette, () => markFieldModified('vignette'))
+watch(() => options.value.grain, () => markFieldModified('grain'))
+watch(() => options.value.logoScale, () => markFieldModified('logoScale'))
+watch(() => options.value.logoOffset, () => markFieldModified('logoOffset'))
+
 let previewTimer: ReturnType<typeof setTimeout> | null = null
+let suppressAutoPreview = false // Flag to prevent auto-preview when switching to rendered preview
 watch(
   [
     bgUrl,
@@ -1366,10 +2352,16 @@ watch(
     currentSeason
   ],
   () => {
+    if (suppressAutoPreview) {
+      console.log('[AUTO-PREVIEW] Suppressed (suppressAutoPreview=true)')
+      return // Don't auto-preview when switching to rendered preview
+    }
+    console.log('[AUTO-PREVIEW] Debouncing preview (800ms)...')
     if (previewTimer) clearTimeout(previewTimer)
     previewTimer = setTimeout(() => {
+      console.log('[AUTO-PREVIEW] Calling doPreview()')
       doPreview()
-    }, 400)
+    }, 800)
   },
   { deep: true }
 )
@@ -1390,7 +2382,11 @@ watch(tmdbId, () => {
       <div class="pane-header">
         <div>
           <p class="kicker">Editing</p>
-          <h2>{{ movie.title }} <span v-if="movie.year">({{ movie.year }})</span></h2>
+          <h2>
+            {{ movie.title }} <span v-if="movie.year">({{ movie.year }})</span>
+            <span v-if="selectedPosterType === 'season'" class="poster-type-badge season-badge">Season Poster</span>
+            <span v-else class="poster-type-badge series-badge">Series Poster</span>
+          </h2>
         </div>
       </div>
 
@@ -1778,7 +2774,7 @@ watch(tmdbId, () => {
 
         <!-- Actions -->
         <div class="section actions">
-          <button class="btn-primary" :disabled="loading" @click="doPreview">Preview</button>
+          <button class="btn-primary" :disabled="loading" @click="() => doPreview()">Preview</button>
           <span v-if="error" class="error-text">{{ error }}</span>
         </div>
       </div>
@@ -1821,17 +2817,15 @@ watch(tmdbId, () => {
       </div>
 
       <div class="season-list">
-        <div class="season-note">Season posters coming soon</div>
         <div
           v-for="season in seasons"
           :key="season.key"
           class="season-item"
           :class="{
             selected: selectedSeasons.has(season.key),
-            active: currentSeason && currentSeason.key === season.key,
-            disabled: !season.isSeries
+            active: currentSeason && currentSeason.key === season.key
           }"
-          @click="season.isSeries && toggleSeasonSelection(season.key)"
+          @click="toggleSeasonSelection(season.key)"
         >
           <div class="season-thumb-wrap">
             <img
@@ -1850,13 +2844,15 @@ watch(tmdbId, () => {
           </div>
           <div class="season-info">
             <div class="season-name-row">
-              <span v-if="season.isSeries" class="season-badge">Series</span>
+              <div class="season-title-text">
+                <span v-if="season.isSeries" class="season-badge">Series</span>
+                <span v-else class="season-number">Season {{ season.index }}</span>
+              </div>
               <div class="season-checkbox">
                 <input
                   type="checkbox"
                   :checked="selectedSeasons.has(season.key)"
-                  :disabled="!season.isSeries"
-                  @click.stop="season.isSeries && toggleSeasonSelection(season.key)"
+                  @click.stop="toggleSelectionOnly(season.key)"
                 />
               </div>
             </div>
@@ -1876,7 +2872,7 @@ watch(tmdbId, () => {
         <div class="preview-existing">
           <div class="preview-label">
             Current Plex Poster
-            <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster">
+            <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
@@ -1888,7 +2884,8 @@ watch(tmdbId, () => {
           <div v-else class="empty-preview">No poster</div>
         </div>
 
-        <div class="preview-main" @wheel.prevent="onPreviewWheel">
+        <div class="preview-content-wrapper">
+          <div class="preview-main">
           <div class="preview-label">
             <div class="preview-title-row">
               <span>Preview</span>
@@ -1906,9 +2903,9 @@ watch(tmdbId, () => {
             <div v-else-if="selectedPoster" class="placeholder-state">
               <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" />
               <div class="placeholder-overlay">
-                <svg width="40" height="40" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-                  <circle cx="12" cy="13" r="3" />
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
                 </svg>
                 <p>Adjust settings to render</p>
               </div>
@@ -1922,36 +2919,44 @@ watch(tmdbId, () => {
               <p>Select a poster to begin</p>
             </div>
 
+            <!-- Loading Overlay -->
+            <div v-if="loading" class="loading-overlay">
+              <div class="spinner"></div>
+              <p>Rendering...</p>
+            </div>
+
             <!-- Bounding Box for Uniform Logo -->
             <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
           </div>
 
-          <!-- Rendered Preview Carousel - Hidden until season poster support is added -->
-          <div v-if="false" class="preview-carousel">
-            <div class="carousel-label">
-              Rendered Previews ({{ renderedPreviews.filter(p => p.imageUrl).length }})
-              <span class="carousel-hint">Scroll to cycle • Click to load</span>
+          </div>
+
+          <!-- Rendered previews below main preview -->
+          <div v-if="renderedPreviews.length" class="rendered-previews-section">
+          <div class="carousel-label">
+            Rendered Posters ({{ renderedPreviews.filter(p => p.imageUrl).length }})
+            <span class="carousel-hint">Click to load • Scroll to cycle</span>
+          </div>
+          <div class="carousel-scroll">
+            <div
+              v-for="(preview, index) in sortedRenderedPreviews"
+              :key="preview.seasonKey"
+              class="carousel-item"
+              :class="{ active: index === activePreviewIndex }"
+              @click="switchToRenderedPreview(index)"
+              :title="preview.seasonTitle"
+            >
+              <template v-if="preview.imageUrl">
+                <img :src="preview.imageUrl" :alt="preview.seasonTitle" class="carousel-thumb" />
+              </template>
+              <template v-else>
+                <div class="carousel-thumb placeholder">
+                  <span>No render yet</span>
+                </div>
+              </template>
+              <div class="carousel-item-label">{{ preview.seasonTitle }}</div>
             </div>
-            <div class="carousel-scroll">
-              <div
-                v-for="(preview, index) in renderedPreviews"
-                :key="preview.seasonKey"
-                class="carousel-item"
-                :class="{ active: index === activePreviewIndex }"
-                @click="switchToRenderedPreview(index)"
-                :title="preview.seasonTitle"
-              >
-                <template v-if="preview.imageUrl">
-                  <img :src="preview.imageUrl" :alt="preview.seasonTitle" class="carousel-thumb" />
-                </template>
-                <template v-else>
-                  <div class="carousel-thumb placeholder">
-                    <span>No render yet</span>
-                  </div>
-                </template>
-                <div class="carousel-item-label">{{ preview.seasonTitle }}</div>
-              </div>
-            </div>
+          </div>
           </div>
         </div>
       </div>
@@ -2735,6 +3740,29 @@ button:disabled {
   height: 16px;
 }
 
+.season-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.season-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.season-title-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.season-number {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e6edff;
+}
+
 .season-note {
   margin: 6px 8px 8px;
   font-size: 12px;
@@ -2811,26 +3839,38 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: 12px;
   overflow: auto;
   height: 100%;
 }
 
 .preview-inner {
   display: flex;
-  gap: 20px;
+  flex-direction: row;
+  gap: 12px;
   align-items: flex-start;
   max-width: 100%;
+  width: 100%;
 }
 
 .preview-existing {
   text-align: center;
+  flex-shrink: 0;
+}
+
+.preview-content-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
 }
 
 .preview-label {
   font-size: 12px;
   color: var(--muted);
-  margin-bottom: 8px;
+  margin-bottom: 4px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2875,9 +3915,10 @@ button:disabled {
 }
 
 .preview-main {
-  flex: 1;
-  min-width: 0;
-  max-width: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .preview-container {
@@ -2888,15 +3929,15 @@ button:disabled {
   background: rgba(0, 0, 0, 0.3);
   border-radius: 12px;
   border: 1px solid var(--border);
-  width: min(70vw, 556px);
-  max-height: 80vh;
-  aspect-ratio: 9 / 16;
+  width: min(100%, 500px);
+  max-height: 70vh;
+  aspect-ratio: 2 / 3;
 }
 
 .preview-img {
   width: 100%;
   height: 100%;
-  max-height: 80vh;
+  max-height: 70vh;
   max-width: 100%;
   object-fit: contain;
   border-radius: 10px;
@@ -2958,10 +3999,53 @@ button:disabled {
   font-size: 14px;
 }
 
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  border-radius: 10px;
+  z-index: 10;
+}
+
+.loading-overlay p {
+  font-size: 16px;
+  font-weight: 500;
+  color: #dce6ff;
+}
+
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(255, 255, 255, 0.1);
+  border-top-color: #4a9eff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .bounding-box {
   position: absolute;
   border: 2px dashed rgba(255, 255, 0, 0.8);
   pointer-events: none;
+}
+
+.rendered-previews-section {
+  width: 100%;
+  max-width: 800px;
 }
 
 /* Rendered Preview Carousel */
@@ -3043,8 +4127,9 @@ button:disabled {
 .carousel-thumb {
   width: 100%;
   height: 150px;
-  object-fit: cover;
+  object-fit: contain;
   display: block;
+  background: rgba(0, 0, 0, 0.3);
 }
 .carousel-thumb.placeholder {
   display: flex;
@@ -3071,5 +4156,28 @@ button:disabled {
   background: rgba(99, 102, 241, 0.3);
   color: #c7d2fe;
   font-weight: 600;
+}
+
+.poster-type-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.season-badge {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.4);
+}
+
+.series-badge {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+  border: 1px solid rgba(34, 197, 94, 0.4);
 }
 </style>

@@ -8,6 +8,15 @@ export type ScanState = {
   log: string[]
 }
 
+export interface ScanStatus {
+  state: 'idle' | 'running' | 'done' | 'error'
+  processed?: number
+  total?: number
+  current?: string
+  log?: string[]
+  finished_at?: string
+}
+
 const running = ref(false)
 const visible = ref(false)
 const progress = ref<{ processed: number; total: number }>({ processed: 0, total: 0 })
@@ -35,7 +44,7 @@ export function useScanStore() {
     current,
     log,
     checking,
-    applyStatus(status: any) {
+    applyStatus(status: ScanStatus | null) {
       if (!status) return
       const isRunning = status.state === 'running'
       const isDone = status.state === 'done'

@@ -246,9 +246,11 @@ def _render_text_overlay(
     # Replace template variables
     movie_title = str(options.get("movie_title", ""))
     movie_year = str(options.get("movie_year", ""))
+    season_text = str(options.get("season_text", ""))
 
     text = text.replace("{title}", movie_title)
     text = text.replace("{year}", movie_year)
+    text = text.replace("{season}", season_text)
     print(f"[DEBUG] Text after template substitution: '{text}'")
 
     # Apply text transform

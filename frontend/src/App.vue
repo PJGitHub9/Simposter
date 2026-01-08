@@ -8,12 +8,23 @@ import TvShowEditorPane from './components/editor/TvShowEditorPane.vue'
 import NotificationContainer from './components/NotificationContainer.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
+import { useTvShows } from './composables/useTvShows'
 import { useSettingsStore } from './stores/settings'
 import { useScanStore } from './stores/scan'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
 
 const tabs = computed<MenuItem[]>(() => {
+  // Check if Plex is configured
+  const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
+
+  // If Plex not configured, only show Settings
+  if (!plexConfigured) {
+    return [
+      { key: 'settings', label: 'Settings' }
+    ]
+  }
+
   const libs = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length
     ? settings.plex.value.libraryMappings
     : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
@@ -23,7 +34,6 @@ const tabs = computed<MenuItem[]>(() => {
     label: lib.displayName || lib.title || `Library ${idx + 1}`,
     submenu: [
       { key: `batch-${lib.id || idx}`, label: 'Batch Edit' },
-      { key: `batch-test-${lib.id || idx}`, label: 'Batch Edit (test)' },
       { key: `collections-${lib.id || idx}`, label: 'Collections' },
       { key: `assets-${lib.id || idx}`, label: 'Local Assets' }
     ]
@@ -36,7 +46,10 @@ const tabs = computed<MenuItem[]>(() => {
   const tvShowTabs: MenuItem[] = tvLibs.length > 0 ? tvLibs.map((lib, idx) => ({
     key: `tv-shows-${lib.id || idx}`,
     label: lib.displayName || lib.title || `TV Library ${idx + 1}`,
-    submenu: []
+    submenu: [
+      { key: `tv-batch-${lib.id || idx}`, label: 'Batch Edit' },
+      { key: `tv-assets-${lib.id || idx}`, label: 'Local Assets' }
+    ]
   })) : []
 
   return [
@@ -53,6 +66,7 @@ const route = useRoute()
 const router = useRouter()
 const searchQuery = ref('')
 const { movies, hydratePostersFromSession } = useMovies()
+const { tvShows } = useTvShows()
 const settings = useSettingsStore()
 const scan = useScanStore()
 const operationStatus = useOperationStatus()
@@ -263,13 +277,13 @@ const groupedContentForSearch = computed(() => {
 
 const activeTab = computed<TabKey>(() => {
   const libQuery = (route.query.library as string) || ''
-  if (route.name === 'batch-edit' || route.name === 'batch-edit-test' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -281,14 +295,15 @@ const activeTab = computed<TabKey>(() => {
 const activeSubmenu = computed<string>(() => {
   const libQuery = (route.query.library as string) || ''
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
-  if (route.name === 'batch-edit-test') return `batch-test-${libQuery || 'default'}`
-   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
+  if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
+  if (route.name === 'collections') return `collections-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
+  if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
   return ''
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
 
-const handleSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null }) => {
+const handleSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null; tmdb_id?: string | number; tvdb_id?: string | number }) => {
   // Guard against native DOM events being passed instead of movie objects
   if (!movie || typeof movie !== 'object' || !movie.key || !movie.title) {
     return
@@ -296,6 +311,18 @@ const handleSelect = (movie: { key: string; title: string; year?: number | strin
   // Detect media type based on current route
   const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
   ui.setSelectedMovie({ ...movie, mediaType })
+
+  // Update URL with edit mode and library info
+  const currentLibrary = route.query.library as string | undefined
+  const itemId = mediaType === 'tv-show' ? (movie.tvdb_id || movie.key) : (movie.tmdb_id || movie.key)
+  const newQuery: Record<string, string> = {
+    edit: String(itemId)
+  }
+  if (currentLibrary) {
+    newQuery.library = currentLibrary
+  }
+
+  router.replace({ query: newQuery })
 }
 
 const handleTabSelect = (tab: TabKey) => {
@@ -316,9 +343,13 @@ const handleTabSelect = (tab: TabKey) => {
 
 const handleBack = () => {
   ui.setSelectedMovie(null)
+
+  // Remove edit parameter from URL, keep other query params
+  const { edit, ...remainingQuery } = route.query
+  router.replace({ query: remainingQuery })
 }
 
-onMounted(() => {
+onMounted(async () => {
   const applyTheme = (theme: string) => {
     document.documentElement.dataset.theme = theme
   }
@@ -327,6 +358,19 @@ onMounted(() => {
     () => settings.theme.value,
     (t) => applyTheme(t)
   )
+
+  // Wait for settings to load before checking Plex configuration
+  if (!settings.loaded.value) {
+    await settings.load()
+  }
+
+  // Check if Plex is configured
+  const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
+  if (!plexConfigured && route.path !== '/settings') {
+    // Redirect to settings if Plex not configured
+    router.push('/settings')
+  }
+
   hydratePostersFromSession()
   fetchAllLibrariesContent()
   scan.checking.value = true
@@ -338,6 +382,34 @@ onMounted(() => {
   fetchBatchStatus().then((running) => {
     if (running) startBatchPolling()
   })
+
+  // Restore edit state from URL if present
+  if (route.query.edit) {
+    // We need to wait for content to load before we can find the item
+    // This will be handled by a watcher below
+  }
+})
+
+// Watch for URL edit parameter changes (browser back/forward)
+watch(() => route.query.edit, (editId) => {
+  if (editId && !ui.selectedMovie.value) {
+    // User navigated to an edit URL, find the item and open editor
+    const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
+    const allItems = mediaType === 'tv-show' ? tvShows.value : movies.value
+
+    // Try to find by tmdb_id/tvdb_id first, fall back to key
+    const item = allItems.find((m: any) => {
+      const itemId = mediaType === 'tv-show' ? (m.tvdb_id || m.key) : (m.tmdb_id || m.key)
+      return String(itemId) === String(editId)
+    })
+
+    if (item) {
+      ui.setSelectedMovie({ ...item, mediaType })
+    }
+  } else if (!editId && ui.selectedMovie.value) {
+    // Edit parameter removed, close editor
+    ui.setSelectedMovie(null)
+  }
 })
 
 onUnmounted(() => {
@@ -451,14 +523,19 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
   if (parentKey.startsWith('movies-')) {
     const libId = parentKey.replace('movies-', '')
-    if (submenuKey.startsWith('batch-test-')) {
-      router.push({ name: 'batch-edit-test', query: { library: libId } })
-    } else if (submenuKey.startsWith('batch-')) {
+    if (submenuKey.startsWith('batch-')) {
       router.push({ name: 'batch-edit', query: { library: libId } })
     } else if (submenuKey.startsWith('collections-')) {
       router.push({ name: 'collections', query: { library: libId } })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: { library: libId } })
+    }
+  } else if (parentKey.startsWith('tv-shows-')) {
+    const libId = parentKey.replace('tv-shows-', '')
+    if (submenuKey.startsWith('tv-batch-')) {
+      router.push({ name: 'tv-batch-edit', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-assets-')) {
+      router.push({ name: 'tv-local-assets', query: { library: libId } })
     }
   }
 }

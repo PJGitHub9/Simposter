@@ -6,10 +6,29 @@ import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 import { onBeforeRouteLeave } from 'vue-router'
+import { setSessionStorage, getSessionStorage } from '../composables/useSessionStorage'
+
+interface LibraryMapping {
+  id: string
+  title?: string
+  displayName?: string
+}
+
+interface PlexLibrary {
+  title: string
+  key: string
+  type: string
+}
+
+interface Movie {
+  title: string
+  year?: number
+}
 
 const settings = useSettingsStore()
 const saved = ref('')
-const allLabels = ref<Record<string, string[]>>({})
+const allLibraryLabels = ref<Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }>>({})
+const labelsLoading = ref(false)
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
 
@@ -25,7 +44,8 @@ const sectionsWithChanges = ref({
   connections: false,
   apiKeys: false,
   imageQuality: false,
-  performance: false
+  performance: false,
+  scheduler: false
 })
 
 // Cooldown state to prevent rapid clicking
@@ -38,9 +58,12 @@ const isScanInProgress = computed(() => scan.running.value || scan.checking.valu
 // Local state that will only be applied when save is clicked
 const localTheme = ref<Theme>('neon')
 const localPosterDensity = ref(20)
-const localSaveLocation = ref('')
+const localSaveLocation = ref('')  // Legacy, kept for backwards compatibility
+const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
+const localTvShowSaveLocation = ref('/config/output/{library}/{title}.jpg')
 const localSaveBatch = ref(false)
 const localDefaultLabelsToRemove = ref<Record<string, string[]>>({})
+const localDefaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
@@ -66,6 +89,13 @@ const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
 const localUseOverlayCache = ref(true)
 let scanPoller: number | null = null
+
+// Scheduler - using local refs that sync with store
+const localSchedulerEnabled = ref(false)
+const localSchedulerCronExpression = ref('0 1 * * *')
+const localSchedulerLibraryId = ref('')
+const schedulerNextRun = ref<string | null>(null)
+const schedulerStatus = ref<string>('not_initialized')
 
 // Preset import/export states
 const presetExporting = ref(false)
@@ -145,8 +175,11 @@ const loadLocalSettings = async () => {
   localTheme.value = settings.theme.value
   localPosterDensity.value = settings.posterDensity.value
   localSaveLocation.value = settings.saveLocation.value
+  localMovieSaveLocation.value = settings.movieSaveLocation.value
+  localTvShowSaveLocation.value = settings.tvShowSaveLocation.value
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
+  localDefaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultTvLabelsToRemove.value))
   // API order
   apiOrder.value = [...(settings.apiOrder.value || ['tmdb', 'fanart', 'tvdb'])]
   // Connection settings
@@ -154,7 +187,7 @@ const loadLocalSettings = async () => {
   localPlexToken.value = settings.plex.value.token
   localPlexLibrary.value = settings.plex.value.movieLibraryName
   // Deep clone library mappings to prevent real-time updates
-  const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: any) => l && l.id)
+  const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: LibraryMapping) => l && l.id)
   const libraryMappings = hasPersistedLibraries
     ? settings.plex.value.libraryMappings
     : (settings.plex.value.movieLibraryNames || settings.plex.value.movieLibraryName
@@ -172,13 +205,13 @@ const loadLocalSettings = async () => {
   savedLibraryIds.value = hasPersistedLibraries
     ? new Set(
         (libraryMappings || [])
-          .map((l: any) => (l && l.id ? String(l.id) : ''))
+          .map((l: LibraryMapping) => (l && l.id ? String(l.id) : ''))
           .filter(Boolean)
       )
     : new Set()
 
   // Load TV show libraries
-  const hasPersistedTvShowLibraries = (settings.plex.value.tvShowLibraryMappings || []).some((l: any) => l && l.id)
+  const hasPersistedTvShowLibraries = (settings.plex.value.tvShowLibraryMappings || []).some((l: LibraryMapping) => l && l.id)
   const tvShowLibraryMappings = hasPersistedTvShowLibraries
     ? settings.plex.value.tvShowLibraryMappings
     : (settings.plex.value.tvShowLibraryNames || settings.plex.value.tvShowLibraryName
@@ -196,7 +229,7 @@ const loadLocalSettings = async () => {
   savedTvShowLibraryIds.value = hasPersistedTvShowLibraries
     ? new Set(
         (tvShowLibraryMappings || [])
-          .map((l: any) => (l && l.id ? String(l.id) : ''))
+          .map((l: LibraryMapping) => (l && l.id ? String(l.id) : ''))
           .filter(Boolean)
       )
     : new Set()
@@ -215,6 +248,10 @@ const loadLocalSettings = async () => {
   localTvdbRateLimit.value = settings.performance.value.tvdbRateLimit
   localMemoryLimit.value = settings.performance.value.memoryLimit
   localUseOverlayCache.value = settings.performance.value.useOverlayCache
+  // Scheduler
+  localSchedulerEnabled.value = settings.scheduler.value.enabled
+  localSchedulerCronExpression.value = settings.scheduler.value.cronExpression
+  localSchedulerLibraryId.value = settings.scheduler.value.libraryId || ''
 
   // Wait for next tick to ensure all reactive updates are complete
   await nextTick()
@@ -225,8 +262,11 @@ const captureSettingsSnapshot = () => {
     theme: localTheme.value,
     posterDensity: localPosterDensity.value,
     saveLocation: localSaveLocation.value,
+    movieSaveLocation: localMovieSaveLocation.value,
+    tvShowSaveLocation: localTvShowSaveLocation.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
+    defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
     plexUrl: localPlexUrl.value,
     plexToken: localPlexToken.value,
     libraries: localLibraries.value,
@@ -243,7 +283,10 @@ const captureSettingsSnapshot = () => {
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
     memoryLimit: localMemoryLimit.value,
-    useOverlayCache: localUseOverlayCache.value
+    useOverlayCache: localUseOverlayCache.value,
+    schedulerEnabled: localSchedulerEnabled.value,
+    schedulerCronExpression: localSchedulerCronExpression.value,
+    schedulerLibraryId: localSchedulerLibraryId.value
   })
   hasUnsavedChanges.value = false
 
@@ -254,6 +297,7 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.apiKeys = false
   sectionsWithChanges.value.imageQuality = false
   sectionsWithChanges.value.performance = false
+  sectionsWithChanges.value.scheduler = false
 
   // Enable watchers after a small delay to ensure all async updates have completed
   setTimeout(() => {
@@ -266,8 +310,11 @@ const checkForChanges = () => {
     theme: localTheme.value,
     posterDensity: localPosterDensity.value,
     saveLocation: localSaveLocation.value,
+    movieSaveLocation: localMovieSaveLocation.value,
+    tvShowSaveLocation: localTvShowSaveLocation.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
+    defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
     plexUrl: localPlexUrl.value,
     plexToken: localPlexToken.value,
     libraries: localLibraries.value,
@@ -284,7 +331,10 @@ const checkForChanges = () => {
     tmdbRateLimit: localTmdbRateLimit.value,
     tvdbRateLimit: localTvdbRateLimit.value,
     memoryLimit: localMemoryLimit.value,
-    useOverlayCache: localUseOverlayCache.value
+    useOverlayCache: localUseOverlayCache.value,
+    schedulerEnabled: localSchedulerEnabled.value,
+    schedulerCronExpression: localSchedulerCronExpression.value,
+    schedulerLibraryId: localSchedulerLibraryId.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -298,6 +348,8 @@ const checkForChanges = () => {
 
   sectionsWithChanges.value.output =
     localSaveLocation.value !== initial.saveLocation ||
+    localMovieSaveLocation.value !== initial.movieSaveLocation ||
+    localTvShowSaveLocation.value !== initial.tvShowSaveLocation ||
     localSaveBatch.value !== initial.saveBatch
 
   sectionsWithChanges.value.connections =
@@ -324,6 +376,11 @@ const checkForChanges = () => {
     localTvdbRateLimit.value !== initial.tvdbRateLimit ||
     localMemoryLimit.value !== initial.memoryLimit ||
     localUseOverlayCache.value !== initial.useOverlayCache
+
+  sectionsWithChanges.value.scheduler =
+    localSchedulerEnabled.value !== initial.schedulerEnabled ||
+    localSchedulerCronExpression.value !== initial.schedulerCronExpression ||
+    localSchedulerLibraryId.value !== initial.schedulerLibraryId
 }
 
 const saveSettings = async () => {
@@ -331,8 +388,11 @@ const saveSettings = async () => {
   settings.theme.value = localTheme.value
   settings.posterDensity.value = localPosterDensity.value
   settings.saveLocation.value = localSaveLocation.value
+  settings.movieSaveLocation.value = localMovieSaveLocation.value
+  settings.tvShowSaveLocation.value = localTvShowSaveLocation.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
+  settings.defaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultTvLabelsToRemove.value))
   settings.apiOrder.value = [...apiOrder.value]
   const libs = localLibraries.value.filter(l => l.id || l.title)
   const tvShowLibs = localTvShowLibraries.value.filter(l => l.id || l.title)
@@ -370,9 +430,20 @@ const saveSettings = async () => {
     memoryLimit: localMemoryLimit.value,
     useOverlayCache: localUseOverlayCache.value
   }
+  settings.scheduler.value = {
+    enabled: localSchedulerEnabled.value,
+    cronExpression: localSchedulerCronExpression.value,
+    libraryId: localSchedulerLibraryId.value || null
+  }
 
   // Save to backend
   await settings.save()
+
+  // Also update the scheduler via its API endpoint
+  if (!settings.error.value) {
+    await updateScheduler()
+  }
+
   saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
   // After save, lock current library selections
@@ -421,13 +492,13 @@ const testPlexConnection = async () => {
       plexLibraries.value = data.sections || []
       const movieLibs = plexLibraries.value.filter(s => s.type === 'movie')
       const tvShowLibs = plexLibraries.value.filter(s => s.type === 'show')
-      const movieSectionsList = movieLibs.map((s: any) => s.title).join(', ')
-      const tvShowSectionsList = tvShowLibs.map((s: any) => s.title).join(', ')
+      const movieSectionsList = movieLibs.map((s: PlexLibrary) => s.title).join(', ')
+      const tvShowSectionsList = tvShowLibs.map((s: PlexLibrary) => s.title).join(', ')
       testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${movieSectionsList}${tvShowLibs.length > 0 ? ` and ${tvShowLibs.length} TV show libraries: ${tvShowSectionsList}` : ''}`
       if (movieLibs.length > 0) {
         // Seed libraries if none configured yet
         if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
-          localLibraries.value = movieLibs.map((s: any, idx: number) => ({
+          localLibraries.value = movieLibs.map((s: PlexLibrary, idx: number) => ({
             id: s.key,
             title: s.title,
             displayName: s.title || `Library ${idx + 1}`,
@@ -437,7 +508,7 @@ const testPlexConnection = async () => {
       if (tvShowLibs.length > 0) {
         // Seed TV show libraries if none configured yet
         if (!localTvShowLibraries.value.length || localTvShowLibraries.value.every(l => !l.id)) {
-          localTvShowLibraries.value = tvShowLibs.map((s: any, idx: number) => ({
+          localTvShowLibraries.value = tvShowLibs.map((s: PlexLibrary, idx: number) => ({
             id: s.key,
             title: s.title,
             displayName: s.title || `TV Library ${idx + 1}`,
@@ -538,12 +609,12 @@ const scanLibrary = async (libraryId?: string) => {
       moviesCache.value = data.movies
       moviesLoaded.value = true
       scan.progress.value = { processed: data.movies.length, total: data.movies.length }
-      scan.log.value = data.movies.slice(0, 20).map((m: any) => `${m.title}${m.year ? ` (${m.year})` : ''}`)
+      scan.log.value = data.movies.slice(0, 20).map((m: Movie) => `${m.title}${m.year ? ` (${m.year})` : ''}`)
       if (data.movies.length > 20) {
         scan.log.value.push(`...and ${data.movies.length - 20} more`)
       }
       try {
-        sessionStorage.setItem('simposter-movies-cache', JSON.stringify(data.movies))
+        setSessionStorage('movies-cache', data.movies)
       } catch (err) {
         console.error('Failed to cache movies', err)
       }
@@ -552,7 +623,7 @@ const scanLibrary = async (libraryId?: string) => {
     // Cache posters
     if (data.posters && typeof sessionStorage !== 'undefined') {
       try {
-        sessionStorage.setItem('simposter-poster-cache', JSON.stringify(data.posters))
+        setSessionStorage('poster-cache', data.posters)
       } catch (err) {
         console.error('Failed to cache posters', err)
       }
@@ -561,7 +632,7 @@ const scanLibrary = async (libraryId?: string) => {
     // Cache labels
     if (data.labels && typeof sessionStorage !== 'undefined') {
       try {
-        sessionStorage.setItem('simposter-labels-cache', JSON.stringify(data.labels))
+        setSessionStorage('labels-cache', data.labels)
       } catch (err) {
         console.error('Failed to cache labels', err)
       }
@@ -570,7 +641,7 @@ const scanLibrary = async (libraryId?: string) => {
     saved.value = `Rescanned ${data.count || 0} items`
     setTimeout(() => (saved.value = ''), 2000)
     // Refresh label cache after scan
-    await fetchAllLabels()
+    await fetchAllLibraryLabels()
     // Mark scan done; overlay will auto-hide via scan store
     scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
     scan.running.value = false
@@ -594,6 +665,73 @@ const scanLibrary = async (libraryId?: string) => {
   scan.running.value = false
   // Clear cooldown when function exits
   scanCooldown.value = false
+}
+
+const fetchSchedulerStatus = async () => {
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/scheduler/library-scan`)
+    if (!res.ok) return
+    const data = await res.json()
+
+    // Load settings from the response
+    if (data.settings) {
+      localSchedulerEnabled.value = data.settings.enabled
+      localSchedulerCronExpression.value = data.settings.cronExpression || '0 1 * * *'
+      localSchedulerLibraryId.value = data.settings.libraryId || ''
+    }
+
+    // Update next run time if scheduled
+    if (data.status === 'scheduled' && data.schedule) {
+      schedulerNextRun.value = data.schedule.next_run_time || null
+    } else {
+      schedulerNextRun.value = null
+    }
+  } catch (e) {
+    console.error('Failed to fetch scheduler status:', e)
+  }
+}
+
+const updateScheduler = async () => {
+  try {
+    const apiBase = getApiBase()
+
+    if (localSchedulerEnabled.value) {
+      // Schedule the scan
+      const res = await fetch(`${apiBase}/api/scheduler/library-scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cron_expression: localSchedulerCronExpression.value,
+          library_id: localSchedulerLibraryId.value || null
+        })
+      })
+
+      if (!res.ok) {
+        const error = await res.json()
+        throw new Error(error.detail || 'Failed to schedule scan')
+      }
+
+      const data = await res.json()
+      schedulerNextRun.value = data.schedule?.next_run_time || null
+      saved.value = 'Library scan scheduled successfully'
+    } else {
+      // Cancel the scan
+      const res = await fetch(`${apiBase}/api/scheduler/library-scan`, {
+        method: 'DELETE'
+      })
+
+      if (!res.ok) throw new Error('Failed to cancel schedule')
+
+      schedulerNextRun.value = null
+      saved.value = 'Library scan schedule cancelled'
+    }
+
+    setTimeout(() => (saved.value = ''), 2000)
+  } catch (e) {
+    saved.value = `Scheduler error: ${e instanceof Error ? e.message : 'Unknown error'}`
+    setTimeout(() => (saved.value = ''), 3000)
+  }
 }
 
 const clearBackendCache = async () => {
@@ -673,23 +811,33 @@ const handlePresetImport = async () => {
   }
 }
 
-// Fetch all available labels from movies per library
-const fetchAllLabels = async () => {
+// Fetch all available labels from both movies and TV shows, organized by library
+const fetchAllLibraryLabels = async () => {
+  labelsLoading.value = true
   try {
-    const libs = settings.plex.value.libraryMappings || []
-    const labelsByLibrary: Record<string, string[]> = {}
+    const apiBase = getApiBase()
+    const movieLibs = settings.plex.value.libraryMappings || []
+    const tvLibs = settings.plex.value.tvShowLibraryMappings || []
+    const combined: Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }> = {}
 
     // Get all valid library IDs
-    const validLibIds = new Set(libs.map(l => l.id).filter(Boolean))
+    const validMovieLibIds = new Set(movieLibs.map(l => l.id).filter(Boolean))
+    const validTvLibIds = new Set(tvLibs.map(l => l.id).filter(Boolean))
 
-    // Clear stale caches that don't correspond to current libraries
+    // Clear stale caches for movies
     if (typeof sessionStorage !== 'undefined') {
       const keysToRemove: string[] = []
       for (let i = 0; i < sessionStorage.length; i++) {
         const key = sessionStorage.key(i)
         if (key && key.startsWith('simposter-labels-cache-')) {
           const libId = key.replace('simposter-labels-cache-', '')
-          if (libId !== 'default' && !validLibIds.has(libId)) {
+          if (libId !== 'default' && !validMovieLibIds.has(libId)) {
+            keysToRemove.push(key)
+          }
+        }
+        if (key && key.startsWith('simposter-tv-labels-cache-')) {
+          const libId = key.replace('simposter-tv-labels-cache-', '')
+          if (libId !== 'default' && !validTvLibIds.has(libId)) {
             keysToRemove.push(key)
           }
         }
@@ -697,20 +845,69 @@ const fetchAllLabels = async () => {
       keysToRemove.forEach(key => sessionStorage.removeItem(key))
     }
 
-    for (const lib of libs) {
+    // Process movie libraries
+    for (const lib of movieLibs) {
       const libId = lib.id || 'default'
-      const labelCacheKey = `simposter-labels-cache-${libId}`
-      const labelCache = sessionStorage.getItem(labelCacheKey)
+      const labelCacheKey = `labels-cache-${libId}`
+      let labelCache = getSessionStorage<Record<string, string[]>>(labelCacheKey)
+
+      const labels = new Set<string>()
+
+      // If cache is empty, fetch from API
+      if (!labelCache) {
+        try {
+          const moviesUrl = new URL(`${apiBase}/api/movies`)
+          if (libId) moviesUrl.searchParams.set('library_id', libId)
+          const moviesRes = await fetch(moviesUrl.toString())
+          if (moviesRes.ok) {
+            const moviesData = await moviesRes.json()
+            const movies = Array.isArray(moviesData) ? moviesData : []
+
+            // Use bulk endpoint to get all labels efficiently
+            if (movies.length > 0) {
+              const movieKeys = movies.map((m: any) => m.key)
+              const bulkRes = await fetch(`${apiBase}/api/movies/labels/bulk`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(movieKeys)
+              })
+
+              if (bulkRes.ok) {
+                const bulkData = await bulkRes.json()
+                const labelsCache: Record<string, string[]> = bulkData.labels || {}
+
+                // Save to sessionStorage with LRU eviction
+                setSessionStorage(labelCacheKey, labelsCache)
+                labelCache = labelsCache
+              } else {
+                console.warn(`[Settings] Failed to fetch labels for library ${libId}: ${bulkRes.status}`)
+              }
+            } else {
+              console.warn(`[Settings] No movies found in library ${libId}, labels will be empty`)
+              // Cache empty result to avoid repeated failed fetches
+              setSessionStorage(labelCacheKey, {})
+              labelCache = {}
+            }
+          } else {
+            console.error(`[Settings] Failed to fetch movies for library ${libId}: ${moviesRes.status}`)
+          }
+        } catch (err) {
+          console.error(`[Settings] Failed to fetch labels for movie library ${libId}:`, err)
+        }
+      }
 
       if (labelCache) {
-        const cache = JSON.parse(labelCache) as Record<string, string[]>
-        const labels = new Set<string>()
-        Object.values(cache).forEach((movieLabels) => {
+        Object.values(labelCache).forEach((movieLabels) => {
           if (Array.isArray(movieLabels)) {
             movieLabels.forEach((label) => labels.add(label))
           }
         })
-        labelsByLibrary[libId] = Array.from(labels).sort()
+      }
+
+      combined[libId] = {
+        type: 'movie',
+        name: lib.displayName || lib.title || libId,
+        labels: Array.from(labels).sort()
       }
 
       // Initialize empty labels if library not in settings yet
@@ -719,9 +916,81 @@ const fetchAllLabels = async () => {
       }
     }
 
-    allLabels.value = labelsByLibrary
+    // Process TV show libraries
+    for (const lib of tvLibs) {
+      const libId = lib.id || 'default'
+      const labelCacheKey = `tv-labels-cache-${libId}`
+      let labelCache = getSessionStorage<Record<string, string[]>>(labelCacheKey)
+
+      const labels = new Set<string>()
+
+      // If cache is empty, fetch from API
+      if (!labelCache) {
+        try {
+          const showsUrl = new URL(`${apiBase}/api/tv-shows`)
+          if (libId) showsUrl.searchParams.set('library_id', libId)
+          const showsRes = await fetch(showsUrl.toString())
+          if (showsRes.ok) {
+            const showsData = await showsRes.json()
+            const shows = Array.isArray(showsData) ? showsData : []
+
+            // Fetch labels for each TV show (no bulk endpoint for TV)
+            const labelsCache: Record<string, string[]> = {}
+            for (const show of shows) {
+              try {
+                const labelsRes = await fetch(`${apiBase}/api/tv-show/${show.key}/labels`)
+                if (labelsRes.ok) {
+                  const labelsData = await labelsRes.json()
+                  labelsCache[show.key] = labelsData.labels || []
+                }
+              } catch {
+                labelsCache[show.key] = []
+              }
+            }
+
+            // Save to sessionStorage with LRU eviction
+            if (Object.keys(labelsCache).length > 0) {
+              setSessionStorage(labelCacheKey, labelsCache)
+              labelCache = labelsCache
+            } else if (shows.length === 0) {
+              console.warn(`[Settings] No TV shows found in library ${libId}, labels will be empty`)
+              // Cache empty result to avoid repeated failed fetches
+              setSessionStorage(labelCacheKey, {})
+              labelCache = {}
+            }
+          } else {
+            console.error(`[Settings] Failed to fetch TV shows for library ${libId}: ${showsRes.status}`)
+          }
+        } catch (err) {
+          console.error(`[Settings] Failed to fetch labels for TV library ${libId}:`, err)
+        }
+      }
+
+      if (labelCache) {
+        Object.values(labelCache).forEach((showLabels) => {
+          if (Array.isArray(showLabels)) {
+            showLabels.forEach((label) => labels.add(label))
+          }
+        })
+      }
+
+      combined[libId] = {
+        type: 'show',
+        name: lib.displayName || lib.title || libId,
+        labels: Array.from(labels).sort()
+      }
+
+      // Initialize empty labels if TV library not in settings yet
+      if (!localDefaultTvLabelsToRemove.value[libId]) {
+        localDefaultTvLabelsToRemove.value[libId] = []
+      }
+    }
+
+    allLibraryLabels.value = combined
   } catch (e) {
-    console.error('Failed to fetch labels', e)
+    console.error('Failed to fetch library labels', e)
+  } finally {
+    labelsLoading.value = false
   }
 }
 
@@ -741,10 +1010,12 @@ onMounted(async () => {
   // Do this BEFORE capturing snapshot since it modifies localLibraries
   if (settings.plex.value.url && settings.plex.value.token) {
     await testPlexConnection()
+    // Fetch labels for both movies and TV (only if Plex is configured)
+    await fetchAllLibraryLabels()
   }
 
-  // Fetch labels
-  fetchAllLabels()
+  // Fetch scheduler status
+  await fetchSchedulerStatus()
 
   // Now capture the snapshot after everything has loaded
   await nextTick()
@@ -763,9 +1034,8 @@ watch(
       // Load Plex libraries if credentials exist
       if (settings.plex.value.url && settings.plex.value.token) {
         await testPlexConnection()
+        await fetchAllLibraryLabels()
       }
-
-      fetchAllLabels()
 
       // Recapture snapshot after reload
       await nextTick()
@@ -776,9 +1046,12 @@ watch(
 
 // Refetch labels when library mappings change
 watch(
-  () => settings.plex.value.libraryMappings,
+  [() => settings.plex.value.libraryMappings, () => settings.plex.value.tvShowLibraryMappings],
   () => {
-    fetchAllLabels()
+    // Only fetch labels if Plex is configured
+    if (settings.plex.value.url && settings.plex.value.token) {
+      fetchAllLibraryLabels()
+    }
   },
   { deep: true }
 )
@@ -790,6 +1063,7 @@ watch([
   localSaveLocation,
   localSaveBatch,
   localDefaultLabelsToRemove,
+  localDefaultTvLabelsToRemove,
   localPlexUrl,
   localPlexToken,
   localLibraries,
@@ -806,7 +1080,10 @@ watch([
   localTmdbRateLimit,
   localTvdbRateLimit,
   localMemoryLimit,
-  localUseOverlayCache
+  localUseOverlayCache,
+  localSchedulerEnabled,
+  localSchedulerCronExpression,
+  localSchedulerLibraryId
 ], () => {
   // Only check for changes if watchers are enabled (after initial load)
   if (watchersEnabled.value) {
@@ -819,6 +1096,9 @@ watch([
 
 // Navigation guard - warn before leaving with unsaved changes
 onBeforeRouteLeave((_to, _from, next) => {
+  // Stop scan polling to prevent memory leak
+  stopScanPolling()
+
   if (hasUnsavedChanges.value) {
     const answer = window.confirm('You have unsaved changes. Are you sure you want to leave?')
     if (answer) {
@@ -842,25 +1122,31 @@ onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
 
   onBeforeUnmount(() => {
+    stopScanPolling()
     window.removeEventListener('beforeunload', handleBeforeUnload)
   })
 })
 
 const toggleLabel = (libraryId: string, label: string) => {
-  if (!localDefaultLabelsToRemove.value[libraryId]) {
-    localDefaultLabelsToRemove.value[libraryId] = []
+  const libInfo = allLibraryLabels.value[libraryId]
+  const labelsRef = libInfo?.type === 'show' ? localDefaultTvLabelsToRemove : localDefaultLabelsToRemove
+
+  if (!labelsRef.value[libraryId]) {
+    labelsRef.value[libraryId] = []
   }
-  const set = new Set(localDefaultLabelsToRemove.value[libraryId])
+  const set = new Set(labelsRef.value[libraryId])
   if (set.has(label)) {
     set.delete(label)
   } else {
     set.add(label)
   }
-  localDefaultLabelsToRemove.value[libraryId] = Array.from(set)
+  labelsRef.value[libraryId] = Array.from(set)
 }
 
 const isLabelSelected = (libraryId: string, label: string) => {
-  return localDefaultLabelsToRemove.value[libraryId]?.includes(label) || false
+  const libInfo = allLibraryLabels.value[libraryId]
+  const labelsRef = libInfo?.type === 'show' ? localDefaultTvLabelsToRemove : localDefaultLabelsToRemove
+  return labelsRef.value[libraryId]?.includes(label) || false
 }
 
 const startScanPolling = () => {
@@ -1006,7 +1292,10 @@ const checkBackendHealth = async () => {
     const data = await res.json()
 
     if (data.status === 'ok') {
-      backendStatus.value = `✓ Backend healthy! App: v${data.app_version}, DB: v${data.db_version}`
+      // Strip leading 'v' from versions if present, then add single 'v' prefix
+      const appVer = data.app_version?.replace(/^v/, '') || 'unknown'
+      const dbVer = data.db_version ? data.db_version.replace(/^v/, '') : 'not-set'
+      backendStatus.value = `✓ Backend healthy! App: v${appVer}, DB: v${dbVer}`
     } else {
       backendStatus.value = '✗ Backend returned unexpected status'
     }
@@ -1084,11 +1373,12 @@ const checkBackendHealth = async () => {
       </h3>
       <div class="grid">
         <label class="full-width" @mousedown.stop @click.stop>
-          <span class="label-text">Save Location</span>
+          <span class="label-text">Movie Save Location</span>
           <input
-            v-model="localSaveLocation"
+            v-model="localMovieSaveLocation"
             type="text"
-            placeholder="config/output/{library}/{title}.jpg"
+            placeholder="/config/output/{library}/{title}.jpg"
+            @input="checkForChanges"
             @mousedown.stop
             @click.stop
             @mouseup.stop
@@ -1096,6 +1386,22 @@ const checkBackendHealth = async () => {
             @selectstart.stop
           />
           <span class="help-text">Available variables: {library}, {title}, {year}, {key}</span>
+        </label>
+
+        <label class="full-width" @mousedown.stop @click.stop>
+          <span class="label-text">TV Show Save Location</span>
+          <input
+            v-model="localTvShowSaveLocation"
+            type="text"
+            placeholder="/config/output/{library}/{title}.jpg"
+            @input="checkForChanges"
+            @mousedown.stop
+            @click.stop
+            @mouseup.stop
+            @select.stop
+            @selectstart.stop
+          />
+          <span class="help-text">Available variables: {library}, {title}, {year}, {key}, {season}</span>
         </label>
       </div>
     </div>
@@ -1474,8 +1780,75 @@ const checkBackendHealth = async () => {
       </div>
     </div>
 
+    <!-- Scheduler Section -->
+    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.scheduler }">
+      <h3 class="section-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        Automatic Library Scan
+      </h3>
+      <p class="section-subtitle">Schedule automatic library scans to keep Simposter in sync with Plex</p>
 
-    <div v-if="Object.keys(allLabels).length > 0" class="settings-section labels-section">
+      <div class="grid">
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            v-model="localSchedulerEnabled"
+            @select.stop
+            @selectstart.stop
+          />
+          <span class="label-text">Enable Scheduled Scans</span>
+          <span class="help-text">Automatically scan library on a schedule</span>
+        </label>
+
+        <label v-if="localSchedulerEnabled">
+          <span class="label-text">Cron Expression</span>
+          <input
+            v-model="localSchedulerCronExpression"
+            type="text"
+            placeholder="0 1 * * *"
+            @select.stop
+            @selectstart.stop
+          />
+          <span class="help-text">minute hour day month day_of_week (e.g., "0 1 * * *" = 1:00 AM daily)</span>
+        </label>
+
+        <label v-if="localSchedulerEnabled">
+          <span class="label-text">Library (Optional)</span>
+          <select v-model="localSchedulerLibraryId">
+            <option value="">All Libraries</option>
+            <option v-for="lib in localLibraries" :key="lib.id" :value="lib.id">
+              {{ lib.displayName || lib.title || lib.id }}
+            </option>
+            <option v-for="lib in localTvShowLibraries" :key="lib.id" :value="lib.id">
+              {{ lib.displayName || lib.title || lib.id }}
+            </option>
+          </select>
+          <span class="help-text">Leave as "All Libraries" to scan everything</span>
+        </label>
+      </div>
+
+      <div v-if="localSchedulerEnabled && schedulerNextRun" class="scheduler-status">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        <span>Next scan: {{ new Date(schedulerNextRun).toLocaleString() }}</span>
+      </div>
+
+      <div class="cron-examples">
+        <strong>Common Cron Examples:</strong>
+        <ul>
+          <li><code>0 1 * * *</code> - Every day at 1:00 AM</li>
+          <li><code>0 */6 * * *</code> - Every 6 hours</li>
+          <li><code>0 0 * * 0</code> - Every Sunday at midnight</li>
+          <li><code>30 3 * * 1-5</code> - Weekdays at 3:30 AM</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="settings-section labels-section">
       <h3 class="section-title">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
@@ -1485,13 +1858,34 @@ const checkBackendHealth = async () => {
       </h3>
       <p class="section-subtitle">When sending to Plex, these labels will be removed by default for each library</p>
 
-      <!-- Library-specific label sections -->
-      <div v-for="(labels, libId) in allLabels" :key="libId" class="library-labels-section">
+      <div v-if="labelsLoading" class="labels-loading">
+        <svg class="spinner" width="20" height="20" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3" opacity="0.25"/>
+          <path fill="currentColor" d="M12 2a10 10 0 0 1 10 10h-3a7 7 0 0 0-7-7V2z"/>
+        </svg>
+        <span>Loading labels...</span>
+      </div>
+
+      <div v-else-if="Object.keys(allLibraryLabels).length === 0" class="no-labels">
+        <p>No labels found. Make sure you have libraries configured and have scanned them.</p>
+        <button @click="fetchAllLibraryLabels()" class="refresh-labels-btn">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Refresh Labels
+        </button>
+      </div>
+
+      <!-- Library-specific label sections (unified for both movies and TV shows) -->
+      <div v-for="(libInfo, libId) in allLibraryLabels" :key="libId" class="library-labels-section">
         <h4 class="library-labels-title">
-          {{ localLibraries.find(l => l.id === libId)?.displayName || localLibraries.find(l => l.id === libId)?.title || libId }}
+          {{ libInfo.name }}
+          <span class="library-type-badge" :class="libInfo.type">{{ libInfo.type === 'show' ? 'TV' : 'Movies' }}</span>
         </h4>
-        <div v-if="labels.length > 0" class="labels-grid">
-          <label v-for="label in labels" :key="`${libId}-${label}`" class="label-checkbox">
+        <div v-if="libInfo.labels.length > 0" class="labels-grid">
+          <label v-for="label in libInfo.labels" :key="`${libId}-${label}`" class="label-checkbox">
             <input type="checkbox" :checked="isLabelSelected(libId, label)" @change="toggleLabel(libId, label)" />
             <span>{{ label }}</span>
           </label>
@@ -1833,6 +2227,28 @@ input[type="checkbox"] {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.library-type-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-left: auto;
+}
+
+.library-type-badge.movie {
+  background: rgba(91, 141, 238, 0.15);
+  color: #7b9bff;
+  border: 1px solid rgba(91, 141, 238, 0.3);
+}
+
+.library-type-badge.show {
+  background: rgba(255, 152, 0, 0.15);
+  color: #ffb74d;
+  border: 1px solid rgba(255, 152, 0, 0.3);
 }
 
 .no-labels-message {
@@ -2447,5 +2863,134 @@ button.secondary:hover {
 .lock-btn.unlocked:hover {
   background: rgba(61, 214, 183, 0.15);
   border-color: rgba(61, 214, 183, 0.5);
+}
+
+/* Scheduler Section Styles */
+.scheduler-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: rgba(61, 214, 183, 0.1);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  border-radius: 10px;
+  margin-top: 16px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.scheduler-status svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.cron-examples {
+  margin-top: 16px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.cron-examples strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cron-examples ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cron-examples li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cron-examples code {
+  background: rgba(61, 214, 183, 0.1);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 120px;
+}
+
+/* Labels Loading State */
+.labels-loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  background: rgba(61, 214, 183, 0.05);
+  border-radius: 10px;
+  margin: 16px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.labels-loading .spinner {
+  animation: spin 1s linear infinite;
+  color: var(--accent);
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.no-labels {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 30px;
+  background: rgba(255, 193, 7, 0.05);
+  border: 1px solid rgba(255, 193, 7, 0.2);
+  border-radius: 10px;
+  margin: 16px 0;
+  text-align: center;
+}
+
+.no-labels p {
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.refresh-labels-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--background-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.refresh-labels-btn:hover {
+  background: var(--button-hover);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.refresh-labels-btn svg {
+  color: var(--accent);
 }
 </style>

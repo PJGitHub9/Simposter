@@ -25,6 +25,7 @@ class PreviewRequest(BaseModel):
     preset_id: Optional[str] = None   # <-- MAKE OPTIONAL
     movie_title: Optional[str] = None
     movie_year: Optional[int] = None
+    tv_show_rating_key: Optional[str] = None  # For TV show logo fetching
     fallbackPosterAction: Optional[str] = None
     fallbackPosterTemplate: Optional[str] = None
     fallbackPosterPreset: Optional[str] = None
@@ -41,12 +42,15 @@ class SaveRequest(PreviewRequest):
     rating_key: Optional[str] = None
     filename: Optional[str] = "poster.jpg"
     library_id: Optional[str] = None
+    season_index: Optional[int] = None  # For TV show seasons (e.g., 1, 2, 3)
+    is_tv: Optional[bool] = False  # True for TV shows, False for movies
 
 
 class PresetSaveRequest(BaseModel):
     template_id: str = "default"
     preset_id: str
     options: Dict[str, Any]
+    season_options: Optional[Dict[str, Any]] = None
 
 
 class PresetDeleteRequest(BaseModel):
@@ -93,18 +97,28 @@ class PerformanceSettings(BaseModel):
     useOverlayCache: bool = True  # Pre-generate overlay effects for faster batch rendering
 
 
+class SchedulerSettings(BaseModel):
+    enabled: bool = False
+    cronExpression: str = "0 1 * * *"
+    libraryId: Optional[Union[str, int]] = None
+
+
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
-    saveLocation: str = "/config/output/{library}/{title}.jpg"
+    saveLocation: str = "/config/output/{library}/{title}.jpg"  # Legacy field for backwards compatibility
+    movieSaveLocation: str = "/config/output/{library}/{title}.jpg"
+    tvShowSaveLocation: str = "/config/output/{library}/{title}.jpg"
     saveBatchInSubfolder: bool = False
     defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
+    defaultTvLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)
     tmdb: TMDBSettings = Field(default_factory=TMDBSettings)
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)
     fanart: FanartSettings = Field(default_factory=FanartSettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
+    scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
 
 class PlexSendRequest(BaseModel):
@@ -136,6 +150,7 @@ class BatchRequest(BaseModel):
     save_locally: bool = False
     labels: List[str] = []
     library_id: Optional[str] = None
+    include_seasons: bool = False  # TV shows: render all seasons instead of series poster
 
 
 

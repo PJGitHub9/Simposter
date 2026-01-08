@@ -1,20 +1,47 @@
 from fastapi import APIRouter, HTTPException
 from io import BytesIO
 import time
+import sqlite3
 
 from ..config import logger, load_presets, get_movie_tmdb_id
 from ..rendering import render_poster_image, render_with_overlay_cache
 from ..schemas import PreviewRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details
-from ..assets.selection import pick_poster, pick_logo
+from ..assets.selection import pick_poster, pick_logo, map_logo_mode_to_preference
 from ..logo_sources import get_logos_merged
+from ..middleware.validation import (
+    validate_template_id,
+    validate_preset_id,
+    validate_url,
+    validate_options
+)
 
 router = APIRouter()
 
 @router.post("/preview")
 def api_preview(req: PreviewRequest):
+    # Input validation
+    try:
+        if req.template_id:
+            req.template_id = validate_template_id(req.template_id)
+        if req.preset_id:
+            req.preset_id = validate_preset_id(req.preset_id)
+        if req.background_url:
+            req.background_url = validate_url(req.background_url, allow_data_uri=True)
+        if req.logo_url:
+            req.logo_url = validate_url(req.logo_url, allow_data_uri=True)
+        if req.options:
+            req.options = validate_options(req.options)
+    except HTTPException:
+        raise  # Re-raise validation errors
+    except Exception as e:
+        logger.error(f"[PREVIEW] Validation error: {e}")
+        raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
+
     ui_settings_data = None
     use_overlay_cache = True  # Overlay cache enabled by default
+    white_logo_fallback = "use_next"  # Default fallback behavior
+    language_pref = "en"  # Default language preference
     start_time = time.perf_counter()
 
     try:
@@ -25,6 +52,14 @@ def api_preview(req: PreviewRequest):
             logger.info(f"[PREVIEW] Global overlay cache setting: {use_overlay_cache}")
         else:
             logger.info("[PREVIEW] No UI settings found, using default: overlay cache enabled")
+
+        # Load white logo fallback setting
+        white_logo_fallback = db.get_setting("fallback.white_logo_fallback") or "use_next"
+        logger.debug(f"[PREVIEW] White logo fallback setting: {white_logo_fallback}")
+
+        # Load language preference
+        language_pref = db.get_setting("pref.language") or "en"
+        logger.debug(f"[PREVIEW] Language preference: {language_pref}")
     except Exception as e:
         logger.warning(f"[PREVIEW] Failed to load UI settings: {e}")
         pass
@@ -46,10 +81,16 @@ def api_preview(req: PreviewRequest):
             if value is not None and key not in render_options:
                 render_options[key] = value
         poster_filter = "all"
-        logo_preference = "first"
+        logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or "first"
+        # Map logo_mode values (like "original") to valid pick_logo preferences (like "white")
+        logo_preference = map_logo_mode_to_preference(logo_preference)
+
         template_id = req.template_id
 
         if req.preset_id:
+            logger.info("[PREVIEW] Loading preset '%s' for template '%s'", req.preset_id, template_id)
+            logger.info("[PREVIEW] Incoming request options keys: %s", list(render_options.keys()))
+            logger.info("[PREVIEW] season_text in request: %s", render_options.get("season_text"))
             presets = load_presets()
 
             if template_id in presets:
@@ -57,8 +98,26 @@ def api_preview(req: PreviewRequest):
                 preset = next((p for p in preset_list if p["id"] == req.preset_id), None)
 
                 if preset:
-                    # Merge preset options (request options take precedence so sliders work)
-                    preset_options = preset.get("options", {})
+                    # Decide whether to use season-specific options based on season_text
+                    is_season = False
+                    try:
+                        st = (render_options.get("season_text") or "").strip()
+                        is_season = len(st) > 0
+                    except (AttributeError, TypeError) as e:
+                        logger.debug("Failed to parse season_text: %s", e)
+                        is_season = False
+
+                    # Prefer season_options when rendering a season target
+                    if is_season and isinstance(preset.get("season_options"), dict):
+                        preset_options = preset.get("season_options", {})
+                        logger.info("[PREVIEW] Using season_options for preset '%s' (season_text='%s')", req.preset_id, st)
+                        logger.info("[PREVIEW] season_options from DB: text_overlay_enabled=%s custom_text=%s logo_mode=%s", 
+                                    preset_options.get("text_overlay_enabled"), 
+                                    preset_options.get("custom_text"), 
+                                    preset_options.get("logo_mode"))
+                    else:
+                        preset_options = preset.get("options", {})
+                        logger.info("[PREVIEW] Using regular options for preset '%s' (is_season=%s)", req.preset_id, is_season)
                     
                     # Remove deprecated disableOverlayCache flag from preset options
                     # (overlay cache now respects global settings)
@@ -66,10 +125,13 @@ def api_preview(req: PreviewRequest):
                         del preset_options["disableOverlayCache"]
                         logger.info("[PREVIEW] Removed deprecated disableOverlayCache flag from preset '%s'", req.preset_id)
                     
+                    # Merge preset options (request options take precedence so sliders work)
                     render_options = {**preset_options, **render_options}
                     poster_filter = render_options.get("poster_filter", preset_options.get("poster_filter", "all"))
-                    logo_preference = render_options.get("logo_preference", preset_options.get("logo_preference", "first"))
-                    logger.debug("[PREVIEW] Applied preset '%s' options: %s", req.preset_id, preset_options)
+                    logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or preset_options.get("logo_preference") or preset_options.get("logo_mode") or "first"
+                    logo_preference = map_logo_mode_to_preference(logo_preference)
+                    logger.debug("[PREVIEW] Applied preset '%s' options (is_season=%s): %s", req.preset_id, is_season, preset_options)
+                    logger.info("[PREVIEW] Effective opts: text_overlay_enabled=%s custom_text=%s logo_mode=%s", render_options.get("text_overlay_enabled"), render_options.get("custom_text"), render_options.get("logo_mode"))
                     logo_override = render_options.get("logo_url") or render_options.get("logoUrl")
                     if logo_override:
                         logo_url = logo_override
@@ -100,16 +162,31 @@ def api_preview(req: PreviewRequest):
         background_url = req.background_url
         logo_url = req.logo_url
 
+        logger.debug("[PREVIEW] background_url=%s logo_url=%s", background_url[:100] if background_url else None, logo_url)
+
         # Check if this is a Plex URL or API URL - if so, extract rating key and fetch from TMDB
         rating_key = None
+        is_tv_show = False
         if "/library/metadata/" in background_url and "/thumb" in background_url:
             # Plex URL format
             rating_key = background_url.split("/library/metadata/")[1].split("/")[0]
         elif "/api/movie/" in background_url and "/poster" in background_url:
             # API URL format: /api/movie/{rating_key}/poster
             rating_key = background_url.split("/api/movie/")[1].split("/")[0]
+        elif "/api/tv-show/" in background_url and "/poster" in background_url:
+            # API URL format: /api/tv-show/{rating_key}/poster
+            rating_key = background_url.split("/api/tv-show/")[1].split("/")[0]
+            is_tv_show = True
 
-        if rating_key:
+        # Also check if tv_show_rating_key was explicitly provided
+        if req.tv_show_rating_key and not rating_key:
+            rating_key = req.tv_show_rating_key
+            is_tv_show = True
+            logger.debug("[PREVIEW] Using explicitly provided TV show rating_key=%s", rating_key)
+
+        logger.debug("[PREVIEW] Detected rating_key=%s is_tv_show=%s", rating_key, is_tv_show)
+
+        if rating_key and not is_tv_show:
             try:
                 logger.debug("[PREVIEW] Detected rating_key=%s from URL", rating_key)
 
@@ -129,17 +206,52 @@ def api_preview(req: PreviewRequest):
 
                     # Pick poster based on filter
                     poster = pick_poster(posters, poster_filter)
+                    poster_fallback_action_used = None
+
+                    # Poster fallback handling (precedes any logo fallback)
+                    if not poster:
+                        fallback_action = render_options.get("fallbackPosterAction") or "continue"
+                        poster_fallback_action_used = fallback_action
+                        fallback_poster_template = render_options.get("fallbackPosterTemplate")
+                        fallback_poster_preset = render_options.get("fallbackPosterPreset")
+                        if fallback_action == "template" and fallback_poster_template:
+                            presets = load_presets()
+                            tpl_presets = presets.get(fallback_poster_template, {}).get("presets", [])
+                            fpreset = next((p for p in tpl_presets if p.get("id") == fallback_poster_preset), None) if fallback_poster_preset else None
+                            if fpreset:
+                                fp_opts = fpreset.get("options", {})
+                                # Merge fallback preset options, letting fallback override current options to mirror batch behavior
+                                render_options = {**render_options, **fp_opts}
+                                poster_filter = render_options.get("poster_filter", poster_filter)
+                                logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
+                                logo_preference = map_logo_mode_to_preference(logo_preference)
+                                logo_mode = render_options.get("logo_mode", "first")
+                                template_id = fallback_poster_template
+                                logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
+                                logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
+                            else:
+                                logger.warning("[PREVIEW] Fallback poster preset '%s' not found for template '%s'", fallback_poster_preset, fallback_poster_template)
+                            # Re-pick poster with updated filter from fallback preset (or same filter if no preset options)
+                            poster = pick_poster(posters, poster_filter)
+                        elif fallback_action == "skip":
+                            raise HTTPException(status_code=400, detail="Poster fallback is set to skip (no poster found).")
+                        else:  # continue
+                            poster = posters[0] if posters else None
+
                     if poster:
                         background_url = poster.get("url")
                         logger.info("[PREVIEW] Picked TMDB poster with filter='%s': %s", poster_filter, background_url)
+                    else:
+                        raise HTTPException(status_code=404, detail="No valid poster found (even after fallback).")
 
                     # Pick logo based on preference (only if logo_mode is not 'none')
                     logo_mode = render_options.get("logo_mode", "first")
+                    allow_logo_fallback = poster_fallback_action_used in (None, "continue")
                     if not logo_url and logo_mode != "none":
-                        logo = pick_logo(logos, logo_preference)
+                        logo = pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
 
-                        # If no logo, try fallback template/preset (append mode, similar to batch)
-                        if not logo:
+                        # If no logo, try fallback template/preset (append mode, similar to batch) — only when poster allowed it
+                        if not logo and allow_logo_fallback:
                             logger.info(
                                 "[PREVIEW] No logo before fallback; action=%s template=%s preset=%s logos=%s",
                                 render_options.get("fallbackLogoAction"),
@@ -161,7 +273,8 @@ def api_preview(req: PreviewRequest):
                                     # take effect. Request-supplied transient sliders can still override both.
                                     render_options = {**render_options, **fp_opts}
                                     poster_filter = render_options.get("poster_filter", poster_filter)
-                                    logo_preference = render_options.get("logo_preference", logo_preference)
+                                    logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
+                                    logo_preference = map_logo_mode_to_preference(logo_preference)
                                     logo_mode = render_options.get("logo_mode", logo_mode)
                                     template_id = fallback_logo_template
                                     logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
@@ -172,7 +285,7 @@ def api_preview(req: PreviewRequest):
                                         logo_url = logo_override
                                         logo = None
                                     if logo_url is None:
-                                        logo = pick_logo(logos, logo_preference)
+                                        logo = pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
                                     if logo:
                                         logger.info("[PREVIEW] Fallback logo from template '%s' preset '%s'", fallback_logo_template, fallback_logo_preset)
                                 else:
@@ -180,6 +293,8 @@ def api_preview(req: PreviewRequest):
                             elif fallback_logo_action == "skip":
                                 logger.info("[PREVIEW] Skipping logo due to fallback action 'skip'")
                             # else: continue without logo
+                        elif not logo and not allow_logo_fallback:
+                            logger.info("[PREVIEW] Skipping logo fallback because poster fallback action was '%s'", poster_fallback_action_used)
 
                         if logo:
                             logo_url = logo.get("url")
@@ -190,6 +305,70 @@ def api_preview(req: PreviewRequest):
                     logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s", rating_key)
             except Exception as e:
                 logger.warning("[PREVIEW] TMDB lookup failed, using original URL: %s", e)
+
+        elif rating_key and is_tv_show:
+            # Handle TV show logo fetching
+            try:
+                from ..config import settings as config_settings, plex_session, plex_headers
+                from ..config import extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
+                from ..tmdb_client import get_tv_show_details, get_images_for_tv_show, get_tv_external_ids
+                from .. import tvdb_client
+                from ..fanart_client import get_images_for_tv_show as get_fanart_tv_images
+
+                logger.debug("[PREVIEW] Detected TV show rating_key=%s from URL", rating_key)
+
+                # Fetch TV show metadata from Plex
+                url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
+                r = plex_session.get(url, headers=plex_headers(), timeout=6)
+                r.raise_for_status()
+
+                tmdb_id = extract_tmdb_id_from_metadata(r.text)
+                tvdb_id = extract_tvdb_id_from_metadata(r.text)
+
+                if tmdb_id and not tvdb_id:
+                    try:
+                        external_ids = get_tv_external_ids(tmdb_id)
+                        tvdb_id = external_ids.get("tvdb_id") or external_ids.get("id")
+                    except Exception:
+                        pass
+
+                if tmdb_id:
+                    logger.debug("[PREVIEW] Found TV show tmdb_id=%s for rating_key=%s", tmdb_id, rating_key)
+
+                    # Get TV show details and images
+                    show_details = get_tv_show_details(tmdb_id)
+                    show_imgs = get_images_for_tv_show(tmdb_id, show_details.get("original_language"))
+                    logos = show_imgs.get("logos", [])
+
+                    # Add TVDB logos if available
+                    if tvdb_id and config_settings.TVDB_API_KEY:
+                        try:
+                            tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
+                            logos.extend(tvdb_imgs.get("logos", []))
+                        except Exception as e:
+                            logger.warning("[PREVIEW] Failed to fetch TVDB logos: %s", e)
+
+                    # Add Fanart logos if available
+                    if tvdb_id and config_settings.FANART_API_KEY:
+                        try:
+                            fanart_imgs = get_fanart_tv_images(int(tvdb_id))
+                            logos.extend(fanart_imgs.get("logos", []))
+                        except Exception as e:
+                            logger.warning("[PREVIEW] Failed to fetch Fanart logos: %s", e)
+
+                    # Pick logo based on preference (only if logo_mode is not 'none')
+                    logo_mode = render_options.get("logo_mode", "first")
+                    if not logo_url and logo_mode != "none":
+                        logo = pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
+                        if logo:
+                            logo_url = logo.get("url")
+                            logger.info("[PREVIEW] Picked TV show logo with preference='%s': %s", logo_preference, logo_url)
+                    elif logo_mode == "none":
+                        logger.debug("[PREVIEW] Skipping TV show logo fetch because logo_mode='none'")
+                else:
+                    logger.warning("[PREVIEW] Could not find TMDB ID for TV show rating_key=%s", rating_key)
+            except Exception as e:
+                logger.warning("[PREVIEW] TV show lookup failed, using original URL: %s", e)
 
         logo_mode_val = render_options.get("logo_mode", "first")
         effective_logo_url = None if logo_mode_val == "none" else logo_url
@@ -236,8 +415,8 @@ def api_preview(req: PreviewRequest):
             ui_settings_data = db.get_ui_settings()
             if ui_settings_data and "imageQuality" in ui_settings_data:
                 quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
-    except Exception:
-        pass
+    except (ImportError, AttributeError, KeyError, sqlite3.Error) as e:
+        logger.debug("Failed to load image quality settings: %s", e)
     img.convert("RGB").save(buf, "JPEG", quality=quality)
 
     import base64

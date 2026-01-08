@@ -18,7 +18,8 @@ DEFAULT_SAVE_TEMPLATE = "/config/output/{library}/{title}.jpg"
 
 def resolve_library_label(library_id: Optional[str]) -> str:
     """Return a human-friendly library label (display name/title) given an id."""
-    mappings = getattr(settings, "PLEX_LIBRARY_MAPPINGS", []) or []
+    from .. import database as db
+
     label: Optional[str] = None
 
     # Normalize incoming id so any accidental path-like strings are reduced to the last segment
@@ -29,29 +30,30 @@ def resolve_library_label(library_id: Optional[str]) -> str:
             normalized_id = normalized_id.split("/")[-1] or normalized_id
     lib_id = normalized_id or library_id
 
+    # Get library mappings from database settings
+    try:
+        ui_settings = db.get_ui_settings()
+        plex_settings = ui_settings.get("plex", {}) if ui_settings else {}
+        movie_mappings = plex_settings.get("libraryMappings", []) or []
+        tv_mappings = plex_settings.get("tvShowLibraryMappings", []) or []
+        all_mappings = movie_mappings + tv_mappings
+    except Exception:
+        all_mappings = []
+
     # If no id provided, fall back to first mapping/display name
     if not lib_id:
-        if mappings:
-            first = mappings[0]
+        if all_mappings:
+            first = all_mappings[0]
             label = first.get("displayName") or first.get("title") or str(first.get("id") or "default")
         else:
-            names = getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", []) or []
-            label = str(names[0]) if names else "default"
+            label = "default"
     else:
-        mappings = getattr(settings, "PLEX_LIBRARY_MAPPINGS", []) or []
-        for m in mappings:
+        # Search in all mappings (movies and TV shows)
+        for m in all_mappings:
             mid = str(m.get("id", ""))
             if mid == str(lib_id):
                 label = m.get("displayName") or m.get("title") or mid
                 break
-
-        # Fallback to configured names list if it contains the id or a name
-        if not label:
-            names = getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", []) or []
-            for n in names:
-                if str(n) == str(lib_id):
-                    label = str(n)
-                    break
 
     # Final fallback
     label = label or str(lib_id or "default")
@@ -102,14 +104,22 @@ def embed_library_metadata(
     return img
 
 
-def get_save_location_template() -> str:
-    """Read save location template from UI settings."""
+def get_save_location_template(media_type: str = "movie") -> str:
+    """Read save location template from UI settings.
+
+    Args:
+        media_type: Either "movie" or "tv-show" to determine which save location to use
+    """
     # First try database (source of truth after migration)
     try:
         from .. import database as db  # local import to avoid circular
         data = db.get_ui_settings()
         if data:
-            tmpl = data.get("saveLocation")
+            # Try media-specific save location first, fall back to legacy saveLocation
+            if media_type == "tv-show":
+                tmpl = data.get("tvShowSaveLocation") or data.get("saveLocation")
+            else:
+                tmpl = data.get("movieSaveLocation") or data.get("saveLocation")
             if tmpl:
                 return tmpl
     except Exception:
@@ -121,26 +131,48 @@ def get_save_location_template() -> str:
     try:
         if settings_file.exists():
             data = json.loads(settings_file.read_text(encoding="utf-8"))
-            return data.get("saveLocation") or DEFAULT_SAVE_TEMPLATE
+            if media_type == "tv-show":
+                return data.get("tvShowSaveLocation") or data.get("saveLocation") or DEFAULT_SAVE_TEMPLATE
+            else:
+                return data.get("movieSaveLocation") or data.get("saveLocation") or DEFAULT_SAVE_TEMPLATE
         if legacy_file.exists():
             data = json.loads(legacy_file.read_text(encoding="utf-8"))
-            return data.get("saveLocation") or DEFAULT_SAVE_TEMPLATE
+            if media_type == "tv-show":
+                return data.get("tvShowSaveLocation") or data.get("saveLocation") or DEFAULT_SAVE_TEMPLATE
+            else:
+                return data.get("movieSaveLocation") or data.get("saveLocation") or DEFAULT_SAVE_TEMPLATE
     except Exception:
         pass
     return DEFAULT_SAVE_TEMPLATE
 
 
-def apply_save_location_variables(template: str, title: str, year: Optional[int], key: Optional[str], library: Optional[str] = None) -> str:
+def apply_save_location_variables(
+    template: str,
+    title: str,
+    year: Optional[int],
+    key: Optional[str],
+    library: Optional[str] = None,
+    season: Optional[int] = None
+) -> str:
     """Replace variables in save location template with actual values."""
     # Replace variables
     result = template.replace("{title}", title)
     result = result.replace("{year}", str(year) if year else "")
     result = result.replace("{key}", key if key else "")
     result = result.replace("{library}", library if library else "")
+    result = result.replace("{season}", f"s{season:02d}" if season else "")
 
     # Clean up any double slashes or trailing spaces
     result = result.replace("//", "/")
     result = " ".join(result.split())  # Remove extra whitespace
+
+    # Clean up common punctuation patterns when variables are empty
+    # e.g., "Title - .jpg" -> "Title.jpg", "Title ().jpg" -> "Title.jpg"
+    import re
+    result = re.sub(r'\s*[-_]\s*\.', '.', result)  # " - ." or " _ ." -> "."
+    result = re.sub(r'\s*\(\s*\)', '', result)  # " ()" or "()" -> ""
+    result = re.sub(r'\s*\[\s*\]', '', result)  # " []" or "[]" -> ""
+    result = re.sub(r'\s{2,}', ' ', result)  # Multiple spaces -> single space
 
     return result
 
@@ -152,6 +184,27 @@ def api_save(req: SaveRequest):
     render_options["movie_title"] = req.movie_title or ""
     render_options["movie_year"] = str(req.movie_year) if req.movie_year else ""
 
+    # Load preset season_options if rendering a season (same logic as preview endpoint)
+    if req.preset_id:
+        from .. import database as db
+        preset = db.get_preset(req.template_id or "default", req.preset_id)
+        if preset:
+            # Check if this is a season render based on season_text presence
+            is_season = False
+            try:
+                st = (render_options.get("season_text") or "").strip()
+                is_season = len(st) > 0
+            except (AttributeError, TypeError):
+                is_season = False
+
+            # Use season_options when rendering a season
+            if is_season and isinstance(preset.get("season_options"), dict):
+                preset_season_opts = preset.get("season_options", {})
+                logger.info("[SAVE] Using season_options for preset '%s' (season_text='%s')", req.preset_id, st)
+                # Merge preset season options with request options (request options take precedence)
+                merged_options = {**preset_season_opts, **render_options}
+                render_options = merged_options
+
     img = render_poster_image(
         req.template_id,
         req.background_url,
@@ -159,19 +212,21 @@ def api_save(req: SaveRequest):
         render_options,
     )
 
-    # Get save location template from UI settings
-    save_template = get_save_location_template()
+    # Determine media type and get appropriate save location template
+    media_type = "tv-show" if req.is_tv else "movie"
+    save_template = get_save_location_template(media_type=media_type)
 
     # Resolve library label for template substitution (prefer display name/title over id)
     library_label = resolve_library_label(req.library_id)
 
-    # Apply variable substitution
+    # Apply variable substitution (include season for TV shows)
     save_path = apply_save_location_variables(
         save_template,
         req.movie_title,
         req.movie_year,
         req.rating_key,
-        library_label
+        library_label,
+        season=req.season_index if req.is_tv else None
     )
 
     # Sanitize path components (keep dots so we can detect filenames)

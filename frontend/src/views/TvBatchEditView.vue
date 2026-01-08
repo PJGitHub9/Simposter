@@ -3,14 +3,31 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
-import { useMovies } from '../composables/useMovies'
+import { useTvShows } from '../composables/useTvShows'
 import { useSettingsStore } from '@/stores/settings'
 
-type Movie = {
+// Define props and emits to avoid Vue warnings
+defineProps<{
+  search?: string
+}>()
+
+defineEmits<{
+  select: [value: any]
+}>()
+
+type TvShow = {
   key: string
   title: string
   year?: number | string
   addedAt?: number
+  poster?: string | null
+  seasons?: Season[]
+}
+
+type Season = {
+  key: string
+  title: string
+  index: number
   poster?: string | null
 }
 
@@ -37,19 +54,21 @@ type PosterStatus = {
 }
 
 const { success, error: showError } = useNotification()
-const { movies: moviesCache, moviesLoaded: moviesLoadedFlag } = useMovies()
+const { tvShows: tvShowsCache, tvShowsLoaded: tvShowsLoadedFlag } = useTvShows()
 const settings = useSettingsStore()
 
-const movies = ref<Movie[]>(moviesCache.value)
+const tvShows = ref<TvShow[]>(tvShowsCache.value)
+const includeSeasons = ref(false)
 const loading = ref(false)
 const error = ref<string | null>(null)
-const selectedMovies = ref<Set<string>>(new Set())
+const selectedShows = ref<Set<string>>(new Set())
 const searchQuery = ref('')
 const filterLabel = ref<string>('')
 const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
 const sortOrder = ref<'asc' | 'desc'>('asc')
 const posterLimit = ref<number>(50)
 const currentPage = ref<number>(1)
+const currentSeasonIndex = ref<number>(0)
 
 // Get current library from route query params
 const route = useRoute()
@@ -69,7 +88,7 @@ const loadLabelCache = () => {
     if (raw) {
       const cachedLabels = JSON.parse(raw)
       // Only load labels for movies that are actually in the current library
-      const currentMovieKeys = new Set(movies.value.map(m => m.key))
+      const currentMovieKeys = new Set(tvShows.value.map(m => m.key))
       const filteredLabels: Record<string, string[]> = {}
       
       Object.entries(cachedLabels).forEach(([movieKey, labels]) => {
@@ -102,12 +121,12 @@ watch(currentLibrary, async (newLib, oldLib) => {
   
   // Clear all library-specific state completely
   labelCache.value = {}
-  movies.value = []
-  selectedMovies.value.clear()
+  tvShows.value = []
+  selectedShows.value.clear()
   currentPage.value = 1
   posterCache.value = {}
   posterStatus.value = {}
-  moviesLoadedFlag.value = false
+  tvShowsLoadedFlag.value = false
   labelsToRemove.value = new Set()
   
   // Clear any stale data from previous library to prevent contamination
@@ -132,6 +151,7 @@ watch(currentLibrary, async (newLib, oldLib) => {
 // Template/preset selection
 const templates = ref<Template[]>([])
 const presets = ref<Preset[]>([])
+const presetsDataFull = ref<Record<string, any>>({}) // Store full presets data including options
 const selectedTemplate = ref('')
 const selectedPreset = ref('')
 const sendToPlex = ref(true)
@@ -167,7 +187,7 @@ const loadPosterCache = () => {
     if (raw) {
       const cachedPosters = JSON.parse(raw)
       // Only load posters for movies that are actually in the current library
-      const currentMovieKeys = new Set(movies.value.map(m => m.key))
+      const currentMovieKeys = new Set(tvShows.value.map(m => m.key))
       const filteredPosters: Record<string, string | null> = {}
       
       Object.entries(cachedPosters).forEach(([movieKey, posterUrl]) => {
@@ -205,7 +225,7 @@ const allLabels = computed(() => {
 
 const filteredMovies = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
-  let result = movies.value
+  let result = tvShows.value
 
   // Filter by search term
   if (query) {
@@ -279,8 +299,8 @@ const prevPage = () => {
 }
 
 const progressPercent = computed(() => {
-  if (selectedMovies.value.size === 0) return 0
-  return (currentIndex.value / selectedMovies.value.size) * 100
+  if (selectedShows.value.size === 0) return 0
+  return (currentIndex.value / selectedShows.value.size) * 100
 })
 
 // Computed property to merge cached posters with movie data
@@ -375,16 +395,16 @@ const fetchMovies = async () => {
   loading.value = true
   error.value = null
   try {
-    if (!moviesLoadedFlag.value) {
-      const res = await fetch(`${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+    if (!tvShowsLoadedFlag.value) {
+      const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
-      const data = (await res.json()) as Movie[]
-      moviesCache.value = data
-      moviesLoadedFlag.value = true
+      const data = (await res.json()) as TvShow[]
+      tvShowsCache.value = data
+      tvShowsLoadedFlag.value = true
     }
-    movies.value = moviesCache.value
+    tvShows.value = tvShowsCache.value
   } catch (err: unknown) {
-    error.value = err instanceof Error ? err.message : 'Failed to load movies'
+    error.value = err instanceof Error ? err.message : 'Failed to load TV shows'
   } finally {
     loading.value = false
   }
@@ -400,7 +420,7 @@ const fetchPosters = async () => {
   const results = await Promise.all(
     missing.map(async m => {
       try {
-        const posterUrl = `${apiBase}/api/movie/${m.key}/poster${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
+        const posterUrl = `${apiBase}/api/tv-show/${m.key}/poster${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
         const res = await fetch(posterUrl)
         if (res.ok) {
           return { key: m.key, url: posterUrl }
@@ -443,7 +463,7 @@ const fetchLabelsFromCache = async () => {
   }
 }
 
-const fetchLabels = async (list: Movie[]) => {
+const fetchLabels = async (list: TvShow[]) => {
   const missing = list.filter(m => !(m.key in labelCache.value) && !labelInFlight.has(m.key))
   if (!missing.length) return
 
@@ -501,7 +521,7 @@ const fetchPosterStatus = async () => {
   if (!currentLibrary.value) return
   statusLoading.value = true
   try {
-    const ratingKeys = moviesCache.value.map(m => m.key)
+    const ratingKeys = tvShowsCache.value.map(m => m.key)
     if (ratingKeys.length === 0) {
       posterStatus.value = {}
       return
@@ -556,6 +576,7 @@ const loadTemplatesAndPresets = async () => {
     if (presetsRes.ok) {
       const presetsData = await presetsRes.json()
       console.log('Raw presets data:', presetsData)
+      presetsDataFull.value = presetsData // Store full data for later use
       // Convert presets structure to flat array
       const allPresets: Preset[] = []
       Object.entries(presetsData).forEach(([templateId, data]: [string, any]) => {
@@ -585,21 +606,21 @@ const loadTemplatesAndPresets = async () => {
 }
 
 const toggleMovie = (key: string) => {
-  if (selectedMovies.value.has(key)) {
-    selectedMovies.value.delete(key)
+  if (selectedShows.value.has(key)) {
+    selectedShows.value.delete(key)
   } else {
-    selectedMovies.value.add(key)
+    selectedShows.value.add(key)
   }
 }
 
 const selectAll = () => {
-  const merged = new Set(selectedMovies.value)
+  const merged = new Set(selectedShows.value)
   moviesWithPosters.value.forEach(m => merged.add(m.key))
-  selectedMovies.value = merged
+  selectedShows.value = merged
 }
 
 const deselectAll = () => {
-  selectedMovies.value.clear()
+  selectedShows.value.clear()
 }
 
 const toggleLabelToRemove = (label: string) => {
@@ -611,7 +632,7 @@ const toggleLabelToRemove = (label: string) => {
 }
 
 const processBatch = async () => {
-  if (selectedMovies.value.size === 0 || !selectedTemplate.value) {
+  if (selectedShows.value.size === 0 || !selectedTemplate.value) {
     showError('Please select movies and a template')
     return
   }
@@ -626,8 +647,8 @@ const processBatch = async () => {
   statusOverlay.value = { visible: true, message: 'Starting batch…' }
 
   try {
-    const ratingKeys = Array.from(selectedMovies.value)
-    const selectedForStatus = selectedMoviesList.value
+    const ratingKeys = Array.from(selectedShows.value)
+    const selectedForStatus = selectedShowsList.value
 
     const payload = {
       rating_keys: ratingKeys,
@@ -637,12 +658,13 @@ const processBatch = async () => {
       send_to_plex: sendToPlex.value,
       save_locally: saveLocally.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
-      library_id: currentLibrary.value || undefined
+      library_id: currentLibrary.value || undefined,
+      include_seasons: includeSeasons.value
     }
 
     // Simulate progress
     const progressInterval = setInterval(() => {
-      const idx = Math.min(currentIndex.value, selectedMovies.value.size - 1)
+      const idx = Math.min(currentIndex.value, selectedShows.value.size - 1)
       const movie = selectedForStatus[idx]
       if (movie) {
         statusOverlay.value = {
@@ -655,8 +677,8 @@ const processBatch = async () => {
               : 'Saving locally'
         }
       }
-      currentIndex.value = Math.min(currentIndex.value + 1, selectedMovies.value.size)
-      if (currentIndex.value >= selectedMovies.value.size) {
+      currentIndex.value = Math.min(currentIndex.value + 1, selectedShows.value.size)
+      if (currentIndex.value >= selectedShows.value.size) {
         clearInterval(progressInterval)
       }
     }, 300)
@@ -668,7 +690,7 @@ const processBatch = async () => {
     })
 
     clearInterval(progressInterval)
-    currentIndex.value = selectedMovies.value.size
+    currentIndex.value = selectedShows.value.size
 
     if (!response.ok) {
       throw new Error('Failed to process batch')
@@ -676,7 +698,7 @@ const processBatch = async () => {
 
     await response.json()
 
-    let message = `Successfully processed ${selectedMovies.value.size} movies`
+    let message = `Successfully processed ${selectedShows.value.size} movies`
     if (sendToPlex.value && saveLocally.value) {
       message += ' (sent to Plex and saved locally)'
     } else if (sendToPlex.value) {
@@ -700,7 +722,7 @@ const processBatch = async () => {
     // Reset
     setTimeout(() => {
       processing.value = false
-      selectedMovies.value.clear()
+      selectedShows.value.clear()
       selectedTemplate.value = ''
       selectedPreset.value = ''
       statusOverlay.value = { visible: false, message: '' }
@@ -717,9 +739,9 @@ const processBatch = async () => {
 const previewIndex = ref(0)
 
 // Get all selected movies (across pages) in selection order, merging cached posters
-const selectedMoviesList = computed(() => {
-  const keys = Array.from(selectedMovies.value)
-  const byKey = new Map(movies.value.map(m => [m.key, m]))
+const selectedShowsList = computed(() => {
+  const keys = Array.from(selectedShows.value)
+  const byKey = new Map(tvShows.value.map(m => [m.key, m]))
   return keys
     .map((key) => {
       const base = byKey.get(key)
@@ -727,17 +749,17 @@ const selectedMoviesList = computed(() => {
       const poster = posterCache.value[key] ?? base.poster ?? null
       return { ...base, poster }
     })
-    .filter(Boolean) as Movie[]
+    .filter(Boolean) as TvShow[]
 })
 
 // Current movie being previewed
 const currentPreviewMovie = computed(() => {
-  if (selectedMoviesList.value.length === 0) return null
-  return selectedMoviesList.value[previewIndex.value] || selectedMoviesList.value[0]
+  if (selectedShowsList.value.length === 0) return null
+  return selectedShowsList.value[previewIndex.value] || selectedShowsList.value[0]
 })
 
 const nextPreview = () => {
-  if (previewIndex.value < selectedMoviesList.value.length - 1) {
+  if (previewIndex.value < selectedShowsList.value.length - 1) {
     previewIndex.value++
   }
 }
@@ -753,13 +775,128 @@ const goToPreview = (index: number) => {
 }
 
 // Reset preview index when selection changes
-watch(selectedMovies, () => {
+watch(selectedShows, () => {
   previewIndex.value = 0
 })
 
-watch(selectedMoviesList, (list) => {
+watch(selectedShowsList, (list) => {
   if (previewIndex.value >= list.length) {
     previewIndex.value = Math.max(0, list.length - 1)
+  }
+
+  // Preload all selected shows in background for instant navigation
+  if (list.length > 0 && selectedTemplate.value) {
+    console.log('[TV BATCH PREVIEW] Preloading', list.length, 'shows in background')
+    // Preload in batches to avoid overwhelming the server
+    list.forEach((show, idx) => {
+      setTimeout(() => {
+        preloadShowPreview(show)
+      }, idx * 300) // Stagger requests by 300ms each
+    })
+  }
+})
+
+// Season cycling for TV shows
+const currentSeasons = ref<Season[]>([])
+const loadingSeasons = ref(false)
+const hasNavigatedToSeason = ref(false) // Track if user has navigated to a season
+
+const fetchSeasons = async (showKey: string) => {
+  if (!includeSeasons.value) {
+    currentSeasons.value = []
+    return
+  }
+
+  loadingSeasons.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/tv-show/${showKey}/seasons${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+    if (!res.ok) throw new Error(`Failed to fetch seasons`)
+    const data = await res.json()
+
+    // Add synthetic "Series" entry at the beginning
+    const seriesEntry = {
+      index: -1,
+      key: showKey,
+      title: 'Series',
+      poster: currentPreviewMovie.value?.poster || null,
+      isSeries: true
+    }
+
+    currentSeasons.value = [seriesEntry, ...(data.seasons || [])]
+    currentSeasonIndex.value = 0
+  } catch (err) {
+    console.error('Failed to fetch seasons:', err)
+    currentSeasons.value = []
+  } finally {
+    loadingSeasons.value = false
+  }
+}
+
+const nextSeason = () => {
+  if (currentSeasonIndex.value < currentSeasons.value.length - 1) {
+    currentSeasonIndex.value++
+    hasNavigatedToSeason.value = true
+    // Schedule preload for next season after navigating
+    if (selectedTemplate.value) {
+      schedulePreload()
+    }
+  }
+}
+
+const prevSeason = () => {
+  if (currentSeasonIndex.value > 0) {
+    currentSeasonIndex.value--
+    hasNavigatedToSeason.value = true
+    // Schedule preload for next season after navigating
+    if (selectedTemplate.value) {
+      schedulePreload()
+    }
+  }
+}
+
+const currentSeason = computed(() => {
+  if (!includeSeasons.value || currentSeasons.value.length === 0) return null
+  const season = currentSeasons.value[currentSeasonIndex.value]
+  // Return series entry (index -1) without requiring navigation
+  // For actual seasons, require navigation to prevent auto-displaying first season
+  if (season?.index === -1 || hasNavigatedToSeason.value) {
+    return season
+  }
+  return null
+})
+
+// Watch for preview movie changes to fetch seasons
+watch(currentPreviewMovie, async (newMovie, oldMovie) => {
+  hasNavigatedToSeason.value = false // Reset navigation flag when changing shows
+  if (newMovie && includeSeasons.value) {
+    await fetchSeasons(newMovie.key)
+  } else {
+    currentSeasons.value = []
+    currentSeasonIndex.value = 0
+  }
+
+  // Schedule background preload when a new movie is selected
+  // Only if we actually changed movies and have a template selected
+  if (newMovie && newMovie.key !== oldMovie?.key && selectedTemplate.value) {
+    schedulePreload()
+  }
+})
+
+// Watch for includeSeasons toggle
+watch(includeSeasons, async (enabled) => {
+  hasNavigatedToSeason.value = false // Reset navigation flag when toggling
+  if (enabled && currentPreviewMovie.value) {
+    await fetchSeasons(currentPreviewMovie.value.key)
+    // Don't auto-select first season - let user navigate to it
+    // This ensures series poster shows by default
+    // Don't call fetchPreview() here - currentSeason will change when seasons load,
+    // which will trigger watch(currentSeasonIndex) and call fetchPreview()
+  } else {
+    currentSeasons.value = []
+    currentSeasonIndex.value = 0
+    // When disabling seasons, we need to fetch the show-level preview
+    previewCache.value = {}
+    fetchPreview()
   }
 })
 
@@ -767,44 +904,108 @@ watch(selectedMoviesList, (list) => {
 const previewImage = ref<string | null>(null)
 const previewLoading = ref(false)
 const previewCache = ref<Record<string, string>>({})
+let preloadTimeout: ReturnType<typeof setTimeout> | null = null
+let currentPreviewAbortController: AbortController | null = null
+let previewRequestId = 0
 
-const fetchPreview = async () => {
-  if (!currentPreviewMovie.value || !selectedTemplate.value) {
-    previewImage.value = null
-    return
+const cancelPreload = () => {
+  if (preloadTimeout !== null) {
+    clearTimeout(preloadTimeout)
+    preloadTimeout = null
   }
+}
 
-  const cacheKey = `${currentPreviewMovie.value.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}`
+const schedulePreload = () => {
+  // Cancel any existing preload
+  cancelPreload()
+
+  // Start preload immediately (no delay) to prepare for navigation
+  preloadTimeout = setTimeout(() => {
+    console.log('[TV BATCH PREVIEW] Starting background preload for adjacent item')
+
+    // Preload the next item in the list if available
+    if (selectedShowsList.value.length > 1 && previewIndex.value < selectedShowsList.value.length - 1) {
+      const nextShow = selectedShowsList.value[previewIndex.value + 1]
+      preloadShowPreview(nextShow)
+    }
+  }, 500)
+}
+
+// Preload preview for a specific show in the background
+const preloadShowPreview = async (show: any) => {
+  if (!selectedTemplate.value) return
+
+  console.log('[TV BATCH PREVIEW] Preloading show in background:', show.title)
+
+  // Build the cache key for this show
+  const libraryPart = currentLibrary.value ? `lib:${currentLibrary.value}` : 'no-lib'
+  const seasonIdx = includeSeasons.value ? -1 : undefined // Always preload series entry first
+  const cacheKey = includeSeasons.value
+    ? `${libraryPart}|${show.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${seasonIdx}`
+    : `${libraryPart}|${show.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|show`
+
+  // Skip if already cached
   if (previewCache.value[cacheKey]) {
-    previewImage.value = previewCache.value[cacheKey]
+    console.log('[TV BATCH PREVIEW] Preload skipped - already cached:', cacheKey)
     return
   }
 
-  previewLoading.value = true
-  try {
-    const movie = currentPreviewMovie.value
-
-    // Ensure we have a valid poster URL
-    let posterUrl = movie.poster
-    if (!posterUrl) {
-      // Fetch the poster if not cached
-      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
-      const posterData = await posterRes.json()
-      if (posterData.url) {
-        posterUrl = posterData.url.startsWith('http') ? posterData.url : `${apiBase}${posterData.url}`
+  // Get poster_filter from preset if available
+  let posterFilter = 'all'
+  if (selectedPreset.value && selectedTemplate.value) {
+    const templateData = presetsDataFull.value[selectedTemplate.value]
+    if (templateData && templateData.presets) {
+      const preset = templateData.presets.find((p: any) => p.id === selectedPreset.value)
+      if (preset && preset.options) {
+        posterFilter = preset.options.poster_filter || 'all'
       }
     }
+  }
 
-    const payload = {
-      template_id: selectedTemplate.value,
-      background_url: posterUrl || '',
-      logo_url: null,
-      options: {},
-      preset_id: selectedPreset.value || undefined,
-      movie_title: movie.title,
-      movie_year: movie.year ? Number(movie.year) : undefined
+  // Fetch the correct poster using the select-poster endpoint
+  let posterUrl = show.poster || ''
+
+  // If we have a textless/text filter, use the select-poster endpoint
+  if (posterFilter === 'textless' || posterFilter === 'text') {
+    console.log('[TV BATCH PREVIEW] Preload fetching filtered poster with filter:', posterFilter)
+    const selectParams = new URLSearchParams({
+      poster_filter: posterFilter,
+      ...(currentLibrary.value && { library_id: currentLibrary.value })
+    })
+
+    try {
+      const selectRes = await fetch(`${apiBase}/api/tv-show/${show.key}/select-poster?${selectParams}`)
+      if (selectRes.ok) {
+        const selectData = await selectRes.json()
+        if (selectData.url) {
+          posterUrl = selectData.url
+          console.log('[TV BATCH PREVIEW] Preload selected filtered poster:', posterUrl?.substring(0, 100))
+        } else {
+          console.warn('[TV BATCH PREVIEW] Preload poster selection returned no URL, using fallback')
+        }
+      } else {
+        console.warn('[TV BATCH PREVIEW] Preload poster selection failed, using fallback')
+      }
+    } catch (err) {
+      console.error('[TV BATCH PREVIEW] Preload error selecting poster:', err)
     }
+  }
 
+  // Build the payload with correct options and selected poster
+  const payload = {
+    template_id: selectedTemplate.value,
+    background_url: posterUrl,
+    logo_url: null,
+    options: { poster_filter: posterFilter },
+    preset_id: selectedPreset.value || undefined,
+    movie_title: show.title,
+    movie_year: show.year ? Number(show.year) : undefined,
+    tv_show_rating_key: show.key
+  }
+
+  console.log('[TV BATCH PREVIEW] Preload payload with poster_filter:', posterFilter)
+
+  try {
     const response = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -814,17 +1015,267 @@ const fetchPreview = async () => {
     if (response.ok) {
       const data = await response.json()
       const img = `data:image/jpeg;base64,${data.image_base64}`
-      previewImage.value = img
       previewCache.value[cacheKey] = img
-    } else {
-      console.error('Preview response not OK:', response.status)
-      previewImage.value = null
+      console.log('[TV BATCH PREVIEW] Preload completed for:', show.title)
     }
   } catch (err) {
-    console.error('Preview failed:', err)
+    console.log('[TV BATCH PREVIEW] Preload failed for:', show.title, err)
+  }
+}
+
+const fetchPreview = async (isPreload = false) => {
+  console.log('[TV BATCH PREVIEW] fetchPreview called:', {
+    isPreload,
+    hasMovie: !!currentPreviewMovie.value,
+    hasTemplate: !!selectedTemplate.value,
+    includeSeasons: includeSeasons.value,
+    currentSeason: currentSeason.value?.title || 'null'
+  })
+
+  // If this is a manual fetch (not preload), cancel any scheduled preload
+  if (!isPreload) {
+    cancelPreload()
+
+    // Cancel any in-flight preview request
+    if (currentPreviewAbortController) {
+      currentPreviewAbortController.abort()
+      currentPreviewAbortController = null
+    }
+  }
+
+  if (!currentPreviewMovie.value || !selectedTemplate.value) {
+    console.log('[TV BATCH PREVIEW] Early return - missing movie or template')
     previewImage.value = null
+    return
+  }
+
+  // Assign a unique ID to this request to track ordering
+  const requestId = ++previewRequestId
+
+  // Determine if we're viewing a show or a specific season
+  const movie = currentPreviewMovie.value
+  const isShowLevel = movie.seasons !== undefined // Has seasons = show level
+
+  // Build cache key - include library, show key, template, preset, and season index
+  let cacheKey: string
+  const libraryPart = currentLibrary.value ? `lib:${currentLibrary.value}` : 'no-lib'
+
+  console.log('[TV BATCH PREVIEW] Cache key decision:', {
+    includeSeasons: includeSeasons.value,
+    isShowLevel,
+    hasCurrentSeason: !!currentSeason.value,
+    currentSeasonIndex: currentSeason.value?.index,
+    seasonsLength: currentSeasons.value.length
+  })
+
+  if (includeSeasons.value && !isShowLevel) {
+    // Viewing a specific season - include season info in cache key
+    cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${movie.title}`
+    console.log('[TV BATCH PREVIEW] Using season item cache key (branch 1)')
+  } else if (includeSeasons.value && currentSeason.value && currentSeasons.value.length > 0) {
+    // Viewing show with seasons enabled AND seasons have been loaded AND a season is selected
+    // Use season index for more reliable cache key (title can have special chars)
+    const seasonIdx = currentSeason.value.index
+    cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${seasonIdx}`
+    console.log('[TV BATCH PREVIEW] Using season index cache key (branch 2):', seasonIdx)
+  } else {
+    // Viewing show without seasons OR seasons not loaded yet
+    cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|show`
+    console.log('[TV BATCH PREVIEW] Using show cache key (branch 3)')
+  }
+
+  console.log('[TV BATCH PREVIEW] Final cache key:', cacheKey)
+
+  if (previewCache.value[cacheKey]) {
+    console.log('[TV BATCH PREVIEW] Using cached preview')
+    // If this is a manual fetch (not preload), update the preview image
+    if (!isPreload) {
+      previewImage.value = previewCache.value[cacheKey] || null
+    }
+    return
+  }
+
+  // Only show loading indicator for manual fetches, not preloads
+  if (!isPreload) {
+    previewLoading.value = true
+    // Clear the preview image while loading to prevent showing stale cached poster
+    previewImage.value = null
+  }
+
+  // Create abort controller for this request
+  const abortController = new AbortController()
+  if (!isPreload) {
+    currentPreviewAbortController = abortController
+  }
+
+  try {
+    // Determine which poster to use
+    let posterUrl = movie.poster
+    let targetKey = movie.key
+    let seasonIndex: number | undefined = undefined
+
+    // Important: Only use season-specific rendering if we have seasons loaded AND includeSeasons is checked
+    // This ensures the series poster shows by default when includeSeasons is first checked
+    const shouldRenderSeason = includeSeasons.value && currentSeason.value && isShowLevel && currentSeasons.value.length > 0
+
+    // If viewing seasons and we have a current season
+    if (shouldRenderSeason) {
+      // Check if this is the series entry (index -1) or an actual season
+      if (currentSeason.value.index === -1) {
+        // Series poster - don't set seasonIndex (will render as series)
+        targetKey = currentSeason.value.key
+        posterUrl = currentSeason.value.poster || null
+        seasonIndex = undefined
+      } else {
+        // Actual season - set seasonIndex for season-specific rendering
+        targetKey = currentSeason.value.key
+        posterUrl = currentSeason.value.poster || null
+        seasonIndex = currentSeason.value.index
+      }
+    }
+
+    // Check if we should use poster selection based on preset's poster_filter
+    let posterFilter = 'all'
+    if (selectedPreset.value && selectedTemplate.value) {
+      const templateData = presetsDataFull.value[selectedTemplate.value]
+      if (templateData && templateData.presets) {
+        const preset = templateData.presets.find((p: any) => p.id === selectedPreset.value)
+        if (preset) {
+          // Use season_options poster_filter if we're actually viewing a season (seasonIndex is defined)
+          // Otherwise use regular options poster_filter (for series-level rendering)
+          if (seasonIndex !== undefined && preset.season_options && preset.season_options.poster_filter) {
+            posterFilter = preset.season_options.poster_filter
+            console.log('[TV BATCH PREVIEW] Using season_options poster_filter:', posterFilter)
+          } else if (preset.options && preset.options.poster_filter) {
+            posterFilter = preset.options.poster_filter
+            console.log('[TV BATCH PREVIEW] Using options poster_filter:', posterFilter)
+          }
+        }
+      }
+    }
+
+    // If we have a textless/text filter, use the new select-poster endpoint
+    if (posterFilter === 'textless' || posterFilter === 'text') {
+      console.log('[TV BATCH PREVIEW] Fetching filtered poster with filter:', posterFilter)
+      const selectParams = new URLSearchParams({
+        poster_filter: posterFilter,
+        ...(seasonIndex !== undefined && { season_index: seasonIndex.toString() }),
+        ...(currentLibrary.value && { library_id: currentLibrary.value })
+      })
+      
+      try {
+        // Use movie.key (the show's rating key) not targetKey (which could be a season)
+        // The endpoint needs the show's key to look up TMDB ID
+        const selectRes = await fetch(`${apiBase}/api/tv-show/${movie.key}/select-poster?${selectParams}`)
+        if (selectRes.ok) {
+          const selectData = await selectRes.json()
+          posterUrl = selectData.url
+          console.log('[TV BATCH PREVIEW] Selected filtered poster: has_text=%s url=%s', selectData.has_text, posterUrl?.substring(0, 100))
+        } else {
+          const errorText = await selectRes.text()
+          console.warn('[TV BATCH PREVIEW] Poster selection failed:', selectRes.status, errorText)
+        }
+      } catch (err) {
+        console.error('[TV BATCH PREVIEW] Error selecting poster:', err)
+      }
+    }
+
+    // Fetch poster if still not available
+    if (!posterUrl) {
+      const posterRes = await fetch(`${apiBase}/api/tv-show/${targetKey}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+      const posterData = await posterRes.json()
+      if (posterData.url) {
+        posterUrl = posterData.url.startsWith('http') ? posterData.url : `${apiBase}${posterData.url}`
+      }
+    }
+
+    // Build options object with season_text and poster_filter
+    const options: Record<string, any> = {}
+
+    // Add poster_filter to options so preview endpoint respects it
+    options.poster_filter = posterFilter
+    console.log('[TV BATCH PREVIEW] Adding poster_filter to options:', posterFilter)
+
+    // IMPORTANT: Only add season_text when we're actually rendering a season poster
+    // This ensures the preview API doesn't mistakenly use season_options for series posters
+    if (shouldRenderSeason) {
+      if (!isShowLevel && movie.title) {
+        // Viewing a specific season item - use its title
+        options.season_text = movie.title
+        console.log('[TV BATCH PREVIEW] Season item, text:', movie.title)
+      } else if (currentSeason.value && currentSeason.value.index !== -1) {
+        // Viewing show with current season selected (but not the series entry)
+        options.season_text = currentSeason.value.title
+        console.log('[TV BATCH PREVIEW] Show with season, text:', currentSeason.value.title)
+      } else {
+        // Series entry (index -1) - don't add season_text
+        console.log('[TV BATCH PREVIEW] Series entry detected, NOT adding season_text')
+      }
+    } else {
+      console.log('[TV BATCH PREVIEW] Rendering series poster, NOT adding season_text')
+    }
+
+    const payload = {
+      template_id: selectedTemplate.value,
+      background_url: posterUrl || '',
+      logo_url: null,
+      options,
+      preset_id: selectedPreset.value || undefined,
+      movie_title: movie.title,
+      movie_year: movie.year ? Number(movie.year) : undefined,
+      // Add TV show rating key so preview endpoint can fetch logos
+      tv_show_rating_key: movie.key
+    }
+
+    console.log('[TV BATCH PREVIEW] Fetching preview with payload:', payload)
+
+    const response = await fetch(`${apiBase}/api/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: abortController.signal
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      const img = `data:image/jpeg;base64,${data.image_base64}`
+
+      // Always cache the result
+      previewCache.value[cacheKey] = img
+
+      // Only update preview image if this request is still the most recent one
+      // This prevents race conditions where an older request completes after a newer one
+      if (!isPreload && requestId === previewRequestId) {
+        previewImage.value = img
+        console.log('[TV BATCH PREVIEW] Preview rendered successfully (request #' + requestId + ')')
+      } else if (isPreload) {
+        console.log('[TV BATCH PREVIEW] Background preload completed and cached')
+      } else {
+        console.log('[TV BATCH PREVIEW] Ignoring stale preview response (request #' + requestId + ', current #' + previewRequestId + ')')
+      }
+    } else {
+      console.error('[TV BATCH PREVIEW] Preview response not OK:', response.status)
+      const errorText = await response.text()
+      console.error('[TV BATCH PREVIEW] Error details:', errorText)
+      if (!isPreload && requestId === previewRequestId) {
+        previewImage.value = null
+      }
+    }
+  } catch (err) {
+    // Ignore abort errors - these are expected when canceling
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.log('[TV BATCH PREVIEW] Request aborted (request #' + requestId + ')')
+      return
+    }
+    console.error('[TV BATCH PREVIEW] Preview failed:', err)
+    if (!isPreload && requestId === previewRequestId) {
+      previewImage.value = null
+    }
   } finally {
-    previewLoading.value = false
+    // Only update loading state for manual fetches
+    if (!isPreload) {
+      previewLoading.value = false
+    }
   }
 }
 
@@ -848,20 +1299,53 @@ watch(totalPages, () => {
 })
 
 // Clear preset when template changes
-watch(selectedTemplate, () => {
+watch(selectedTemplate, (newTemplate) => {
   selectedPreset.value = ''
   previewCache.value = {}
   fetchPreview()
+
+  // Schedule a preload if we have a movie selected and now have a template
+  if (newTemplate && currentPreviewMovie.value) {
+    schedulePreload()
+  }
 })
 
 // Update preview when preset or selected movie changes
 watch(selectedPreset, () => {
   previewCache.value = {}
   fetchPreview()
+
+  // Schedule a preload for the new preset/template combination
+  if (selectedPreset.value && currentPreviewMovie.value) {
+    schedulePreload()
+  }
 })
 
 watch(currentPreviewMovie, () => {
-  fetchPreview()
+  // When seasons are enabled, the currentSeason watch will handle preview fetching
+  // When seasons are disabled, we need to fetch the show-level preview
+  if (!includeSeasons.value) {
+    fetchPreview()
+  }
+  // If includeSeasons is true, the watch(currentSeason) will trigger when seasons load
+})
+
+// Update preview when season changes
+// Watch currentSeason instead of currentSeasonIndex because currentSeason is a computed
+// property that changes when seasons are loaded, even if the index stays at 0
+watch(currentSeason, (newSeason, oldSeason) => {
+  console.log('[TV BATCH PREVIEW] currentSeason changed:', {
+    oldSeason: oldSeason?.title || 'null',
+    newSeason: newSeason?.title || 'null',
+    includeSeasons: includeSeasons.value
+  })
+
+  // Fetch preview when we have a valid season (not null)
+  // This handles both initial load and navigation between seasons
+  if (newSeason && includeSeasons.value) {
+    console.log('[TV BATCH PREVIEW] Fetching preview for season:', newSeason.title)
+    fetchPreview()
+  }
 })
 
 onMounted(async () => {
@@ -876,8 +1360,8 @@ onMounted(async () => {
   // Clear any stale cache data first to prevent cross-library contamination on page load
   labelCache.value = {}
   posterCache.value = {}
-  movies.value = []
-  selectedMovies.value.clear()
+  tvShows.value = []
+  selectedShows.value.clear()
   
   // Only proceed if we have a valid library context
   if (currentLibrary.value) {
@@ -902,7 +1386,7 @@ onMounted(async () => {
     
     // Fetch fresh posters and any missing labels for the loaded movies
     fetchPosters()
-    fetchLabels(movies.value) // This will only fetch labels for movies not already in cache
+    fetchLabels(tvShows.value) // This will only fetch labels for movies not already in cache
   }
 })
 </script>
@@ -911,7 +1395,7 @@ onMounted(async () => {
   <div class="batch-edit-view">
     <!-- Top Controls -->
     <div class="controls-panel">
-      <h2>Batch Edit</h2>
+      <h2>TV Show Batch Edit</h2>
 
       <!-- Template & Preset Selection -->
       <div class="selection-row template-row">
@@ -951,6 +1435,10 @@ onMounted(async () => {
             <input type="checkbox" v-model="saveLocally" />
             Save locally
           </label>
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="includeSeasons" />
+            Include Seasons
+          </label>
         </div>
 
         <!-- Label Removal Selector -->
@@ -975,10 +1463,10 @@ onMounted(async () => {
         <button
           class="btn-process"
           @click="processBatch"
-          :disabled="selectedMovies.size === 0 || !selectedTemplate || !selectedPreset || (!sendToPlex && !saveLocally) || processing"
+          :disabled="selectedShows.size === 0 || !selectedTemplate || !selectedPreset || (!sendToPlex && !saveLocally) || processing"
         >
-          <span v-if="!processing">Process {{ selectedMovies.size }} Movies</span>
-          <span v-else>Processing {{ currentIndex }} / {{ selectedMovies.size }}...</span>
+          <span v-if="!processing">Process {{ selectedShows.size }} TV Shows</span>
+          <span v-else>Processing {{ currentIndex }} / {{ selectedShows.size }}...</span>
         </button>
       </div>
 
@@ -1044,7 +1532,7 @@ onMounted(async () => {
 
       <div class="selection-row">
         <div class="selection-summary">
-          <h3>{{ selectedMovies.size }} of {{ moviesWithPosters.length }} selected</h3>
+          <h3>{{ selectedShows.size }} of {{ moviesWithPosters.length }} selected</h3>
           <span v-if="filteredMovies.length > posterLimit" class="limit-notice">
             Showing {{ posterLimit }} of {{ filteredMovies.length }} movies
           </span>
@@ -1067,20 +1555,20 @@ onMounted(async () => {
             v-for="movie in moviesWithPosters"
             :key="movie.key"
             class="movie-card"
-            :class="{ selected: selectedMovies.has(movie.key) }"
+            :class="{ selected: selectedShows.has(movie.key) }"
             @click="toggleMovie(movie.key)"
           >
             <div class="checkbox-overlay">
               <input
                 type="checkbox"
-                :checked="selectedMovies.has(movie.key)"
+                :checked="selectedShows.has(movie.key)"
                 @click.stop="toggleMovie(movie.key)"
                 class="movie-checkbox"
               />
             </div>
             <div class="poster">
               <img
-                :src="movie.poster || `/api/movie/${movie.key}/poster?w=200${currentLibrary ? `&library_id=${encodeURIComponent(currentLibrary)}` : ''}`"
+                :src="movie.poster || `/api/tv-show/${movie.key}/poster?w=200${currentLibrary ? `&library_id=${encodeURIComponent(currentLibrary)}` : ''}`"
                 :alt="movie.title"
                 loading="lazy"
               />
@@ -1143,11 +1631,29 @@ onMounted(async () => {
             :src="previewImage"
             :alt="currentPreviewMovie.title"
           />
-          <img
-            v-else
-            :src="currentPreviewMovie.poster || `/api/movie/${currentPreviewMovie.key}/poster${currentLibrary ? `?library_id=${encodeURIComponent(currentLibrary)}` : ''}`"
-            :alt="currentPreviewMovie.title"
-          />
+          <div v-else-if="!selectedTemplate" class="preview-loading">Select a template to preview</div>
+          <div v-else class="preview-loading">Waiting for preview...</div>
+        </div>
+
+        <!-- Season Navigation - Below Poster -->
+        <div v-if="includeSeasons && currentSeasons.length > 0" class="season-nav-inline">
+          <button
+            class="season-arrow-btn"
+            @click="prevSeason"
+            :disabled="currentSeasonIndex === 0"
+          >
+            ←
+          </button>
+          <span class="season-label">
+            {{ currentSeason?.title || `Season ${currentSeasonIndex + 1}` }}
+          </span>
+          <button
+            class="season-arrow-btn"
+            @click="nextSeason"
+            :disabled="currentSeasonIndex === currentSeasons.length - 1"
+          >
+            →
+          </button>
         </div>
 
         <!-- Hints -->
@@ -1156,8 +1662,8 @@ onMounted(async () => {
           <p v-else-if="!selectedPreset" class="preview-hint">Preset optional - preview will use template defaults</p>
         </div>
 
-        <!-- Navigation Controls -->
-        <div v-if="selectedMoviesList.length > 1" class="preview-nav-section">
+        <!-- Show Navigation -->
+        <div v-if="selectedShowsList.length > 1" class="preview-nav-section">
           <div class="preview-nav">
             <button
               class="nav-btn"
@@ -1166,11 +1672,11 @@ onMounted(async () => {
             >
               ← Prev
             </button>
-            <span class="nav-counter">{{ previewIndex + 1 }} / {{ selectedMoviesList.length }}</span>
+            <span class="nav-counter">{{ previewIndex + 1 }} / {{ selectedShowsList.length }}</span>
             <button
               class="nav-btn"
               @click="nextPreview"
-              :disabled="previewIndex === selectedMoviesList.length - 1"
+              :disabled="previewIndex === selectedShowsList.length - 1"
             >
               Next →
             </button>
@@ -1178,11 +1684,11 @@ onMounted(async () => {
         </div>
 
         <!-- Movie List -->
-        <div v-if="selectedMoviesList.length > 1" class="preview-list">
-          <h4>Selected Movies ({{ selectedMoviesList.length }})</h4>
+        <div v-if="selectedShowsList.length > 1" class="preview-list">
+          <h4>Selected TV Shows ({{ selectedShowsList.length }})</h4>
           <div class="movie-list-scroll">
             <button
-              v-for="(movie, index) in selectedMoviesList"
+              v-for="(movie, index) in selectedShowsList"
               :key="movie.key"
               :class="['movie-list-item', { active: index === previewIndex }]"
               @click="goToPreview(index)"
@@ -1614,6 +2120,46 @@ onMounted(async () => {
   font-size: 0.9rem;
 }
 
+/* Season navigation inline below poster */
+.season-nav-inline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+}
+
+.season-arrow-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent, #3dd6b7);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.season-arrow-btn:hover:not(:disabled) {
+  color: #2bc4a3;
+  transform: scale(1.2);
+}
+
+.season-arrow-btn:disabled {
+  color: rgba(170, 170, 170, 0.3);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.season-label {
+  color: var(--text-primary, #fff);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  min-width: 120px;
+}
+
 /* Hints section */
 .preview-hints {
   margin-top: 0.75rem;
@@ -1801,38 +2347,39 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.5rem;
-  background: var(--surface-alt, #242933);
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
   border-radius: 6px;
-  border-left: 3px solid var(--accent, #3dd6b7);
+  border: 1px solid rgba(61, 214, 183, 0.25);
 }
 
 .nav-btn {
-  padding: 0.5rem 1rem;
-  background: var(--accent, #3dd6b7);
-  color: #000;
-  border: none;
+  padding: 0.4rem 0.9rem;
+  background: rgba(61, 214, 183, 0.1);
+  color: var(--accent, #3dd6b7);
+  border: 1px solid rgba(61, 214, 183, 0.3);
   border-radius: 4px;
   font-size: 0.85rem;
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .nav-btn:hover:not(:disabled) {
-  background: #2bc4a3;
+  background: rgba(61, 214, 183, 0.2);
+  border-color: rgba(61, 214, 183, 0.5);
   transform: translateY(-1px);
 }
 
 .nav-btn:disabled {
-  opacity: 0.3;
+  opacity: 0.25;
   cursor: not-allowed;
   transform: none;
 }
 
 .nav-counter {
-  color: var(--text-secondary, #aaa);
+  color: var(--text-primary, #fff);
   font-size: 0.85rem;
   font-weight: 500;
   min-width: 80px;

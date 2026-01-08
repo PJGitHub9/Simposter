@@ -57,17 +57,19 @@ export function useRenderService() {
     logoUrl?: string | null,
     options?: PresetOptions,
     templateId?: string,
-    presetId?: string
+    presetId?: string,
+    disableCache?: boolean,
+    skipLastPreviewUpdate?: boolean
   ) => {
     const payload = basePayload(movie, bgUrl, logoUrl, templateId, presetId, options)
-    // General previews should NOT use overlay cache per requirements
-    const disableOverlayCache = true
+    // Allow overlay caching by default for better performance
+    const disableOverlayCache = disableCache ?? false
     const data = await post('preview', {
       ...payload,
-      // Only disable when setting is off; backend ignores false
+      // Only disable when explicitly requested
       disableOverlayCache
     })
-    if (data?.image_base64) {
+    if (data?.image_base64 && !skipLastPreviewUpdate) {
       lastPreview.value = `data:image/jpeg;base64,${data.image_base64}`
     }
     return data
@@ -79,13 +81,19 @@ export function useRenderService() {
     logoUrl?: string | null,
     options?: PresetOptions,
     templateId?: string,
-    presetId?: string
+    presetId?: string,
+    libraryId?: string | null,
+    seasonIndex?: number | null
   ) => {
     const payload = {
       ...basePayload(movie, bgUrl, logoUrl, templateId, presetId, options),
       movie_title: movie.title,
       movie_year: movie.year ?? null,
-      filename: 'poster.jpg'
+      filename: 'poster.jpg',
+      library_id: libraryId ?? null,
+      is_tv: movie.mediaType === 'tv-show',
+      season_index: seasonIndex ?? null,
+      rating_key: movie.key
     }
     return post('save', payload)
   }

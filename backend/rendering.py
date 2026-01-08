@@ -24,12 +24,26 @@ def _download_image(url: str) -> Image.Image:
     if not url:
         raise ValueError("Empty image URL")
 
-    try:
-        resp = requests.get(url, timeout=20)
-        resp.raise_for_status()
-    except Exception as e:
-        logger.exception("Failed to download image: %s", url)
-        raise ValueError(f"Failed to download image: {url}") from e
+    # Retry logic with exponential backoff for slow TMDB servers
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Increase timeout from 20s to 60s for slow connections
+            resp = requests.get(url, timeout=60)
+            resp.raise_for_status()
+            break
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(f"Timeout downloading image (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s: {url}")
+                import time
+                time.sleep(wait_time)
+            else:
+                logger.exception("Failed to download image after %d retries: %s", max_retries, url)
+                raise ValueError(f"Failed to download image (timeout after {max_retries} retries): {url}")
+        except Exception as e:
+            logger.exception("Failed to download image: %s", url)
+            raise ValueError(f"Failed to download image: {url}") from e
 
     content_type = resp.headers.get("content-type", "").lower()
     is_svg = (
