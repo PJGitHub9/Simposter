@@ -26,6 +26,7 @@ class PreviewRequest(BaseModel):
     movie_title: Optional[str] = None
     movie_year: Optional[int] = None
     tv_show_rating_key: Optional[str] = None  # For TV show logo fetching
+    season_index: Optional[int] = None  # For TV show season poster fetching (1, 2, 3, etc.)
     fallbackPosterAction: Optional[str] = None
     fallbackPosterTemplate: Optional[str] = None
     fallbackPosterPreset: Optional[str] = None
@@ -139,6 +140,34 @@ class LabelsRemoveRequest(BaseModel):
     labels: List[str]
 
 
+class MovieBatchRequest(BaseModel):
+    rating_keys: List[str]
+    template_id: str
+    preset_id: Optional[str] = None
+    background_url: Optional[str] = None
+    logo_url: Optional[str] = None
+    options: dict
+    send_to_plex: bool = False
+    save_locally: bool = False
+    labels: List[str] = []
+    library_id: Optional[str] = None
+
+
+class TVShowBatchRequest(BaseModel):
+    rating_keys: List[str]
+    template_id: str
+    preset_id: Optional[str] = None
+    background_url: Optional[str] = None
+    logo_url: Optional[str] = None
+    options: dict
+    send_to_plex: bool = False
+    save_locally: bool = False
+    labels: List[str] = []
+    library_id: Optional[str] = None
+    include_seasons: bool = True  # Always true for TV shows: render all seasons instead of series poster
+
+
+# Legacy batch request - kept for backward compatibility
 class BatchRequest(BaseModel):
     rating_keys: List[str]
     template_id: str

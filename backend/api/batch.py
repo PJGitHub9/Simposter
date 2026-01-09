@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from ..schemas import BatchRequest
+from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
 from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
 from ..config import load_presets
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_tv_show_details, get_images_for_tv_show, get_tv_season_images, get_tv_external_ids
@@ -18,7 +18,7 @@ from .. import tvdb_client
 from ..fanart_client import get_images_for_tv_show as get_fanart_tv_images
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 router = APIRouter()
 
@@ -51,7 +51,7 @@ def api_batch_progress():
 def _process_single_movie(
     idx: int,
     rating_key: str,
-    req: BatchRequest,
+    req: Union[BatchRequest, MovieBatchRequest],
     base_options: dict,
     base_poster_filter: str,
     base_logo_preference: str,
@@ -492,7 +492,7 @@ def _process_single_movie(
 def _process_single_tv_show(
     idx: int,
     rating_key: str,
-    req: BatchRequest,
+    req: Union[BatchRequest, TVShowBatchRequest],
     base_options: dict,
     base_poster_filter: str,
     base_logo_preference: str,
@@ -590,7 +590,7 @@ def _render_tv_series_poster(
     logo_mode: str,
     white_logo_fallback: str,
     language_pref: str,
-    req: BatchRequest,
+    req: Union[BatchRequest, TVShowBatchRequest],
 ):
     """Render series-level poster for a TV show."""
     _update_batch_status({
@@ -667,7 +667,7 @@ def _render_all_tv_seasons(
     logo_mode: str,
     white_logo_fallback: str,
     language_pref: str,
-    req: BatchRequest,
+    req: Union[BatchRequest, TVShowBatchRequest],
     season_poster_filter: str = "all",
     season_options: Optional[dict] = None,
 ):
@@ -873,7 +873,7 @@ def _render_and_save_poster(
     preset_id: Optional[str],
     title: str,
     year: Optional[str],
-    req: BatchRequest,
+    req: Union[BatchRequest, MovieBatchRequest, TVShowBatchRequest],
     is_tv: bool = False,
     season_title: Optional[str] = None,
     season_index: Optional[int] = None
@@ -1077,8 +1077,14 @@ def _render_and_save_poster(
     return result
 
 
-@router.post("/batch")
-def api_batch(req: BatchRequest):
+def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchRequest], is_tv_batch: bool):
+    """
+    Shared batch processing logic for both movies and TV shows.
+
+    Args:
+        req: The batch request containing all parameters
+        is_tv_batch: True for TV shows (process seasons), False for movies
+    """
     # Get concurrent renders setting
     try:
         from .ui_settings import _read_settings
@@ -1139,11 +1145,6 @@ def api_batch(req: BatchRequest):
         else:
             logger.warning("[BATCH] Template '%s' not found in presets", req.template_id)
 
-    # Determine if we're processing TV shows or movies
-    # TV shows are indicated by include_seasons being present in the request
-    is_tv_batch = hasattr(req, 'include_seasons')
-    processing_func = _process_single_tv_show if is_tv_batch else _process_single_movie
-
     item_type = "TV shows" if is_tv_batch else "movies"
     logger.info("[BATCH] Processing %d %s with %d concurrent workers", len(req.rating_keys), item_type, max_workers)
 
@@ -1151,21 +1152,36 @@ def api_batch(req: BatchRequest):
         # Submit all tasks
         future_to_idx = {}
         for idx, rating_key in enumerate(req.rating_keys, start=1):
-            future = executor.submit(
-                processing_func,
-                idx,
-                rating_key,
-                req,
-                base_options,
-                base_poster_filter,
-                base_logo_preference,
-                base_logo_mode,
-                white_logo_fallback,
-                language_pref,
-                presets_data,
-                season_poster_filter if is_tv_batch else None,
-                season_options if is_tv_batch else None,
-            )
+            if is_tv_batch:
+                future = executor.submit(
+                    _process_single_tv_show,
+                    idx,
+                    rating_key,
+                    req,
+                    base_options,
+                    base_poster_filter,
+                    base_logo_preference,
+                    base_logo_mode,
+                    white_logo_fallback,
+                    language_pref,
+                    presets_data,
+                    season_poster_filter,
+                    season_options,
+                )
+            else:
+                future = executor.submit(
+                    _process_single_movie,
+                    idx,
+                    rating_key,
+                    req,
+                    base_options,
+                    base_poster_filter,
+                    base_logo_preference,
+                    base_logo_mode,
+                    white_logo_fallback,
+                    language_pref,
+                    presets_data,
+                )
             future_to_idx[future] = idx
 
         # Collect results as they complete
@@ -1195,3 +1211,34 @@ def api_batch(req: BatchRequest):
     })
 
     return {"results": results}
+
+
+@router.post("/batch-movies")
+def api_batch_movies(req: MovieBatchRequest):
+    """
+    Batch process multiple movies with the same template and preset.
+    This endpoint is specifically for movies only.
+    """
+    logger.info("[BATCH MOVIES] Processing %d movies", len(req.rating_keys))
+    return _execute_batch(req, is_tv_batch=False)
+
+
+@router.post("/batch-tv-shows")
+def api_batch_tv_shows(req: TVShowBatchRequest):
+    """
+    Batch process multiple TV shows with the same template and preset.
+    This endpoint handles TV shows and their seasons.
+    """
+    logger.info("[BATCH TV SHOWS] Processing %d TV shows", len(req.rating_keys))
+    return _execute_batch(req, is_tv_batch=True)
+
+
+@router.post("/batch")
+def api_batch(req: BatchRequest):
+    """
+    Legacy batch endpoint that handles both movies and TV shows.
+    Kept for backward compatibility. Use /batch-movies or /batch-tv-shows for new code.
+    """
+    is_tv_batch = getattr(req, 'include_seasons', False)
+    logger.info("[BATCH LEGACY] Processing %d items (TV: %s)", len(req.rating_keys), is_tv_batch)
+    return _execute_batch(req, is_tv_batch=is_tv_batch)
