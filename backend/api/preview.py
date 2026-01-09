@@ -307,15 +307,15 @@ def api_preview(req: PreviewRequest):
                 logger.warning("[PREVIEW] TMDB lookup failed, using original URL: %s", e)
 
         elif rating_key and is_tv_show:
-            # Handle TV show logo fetching
+            # Handle TV show logo and poster fetching (including seasons)
             try:
                 from ..config import settings as config_settings, plex_session, plex_headers
                 from ..config import extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
-                from ..tmdb_client import get_tv_show_details, get_images_for_tv_show, get_tv_external_ids
+                from ..tmdb_client import get_tv_show_details, get_images_for_tv_show, get_tv_external_ids, get_tv_season_images
                 from .. import tvdb_client
                 from ..fanart_client import get_images_for_tv_show as get_fanart_tv_images
 
-                logger.debug("[PREVIEW] Detected TV show rating_key=%s from URL", rating_key)
+                logger.debug("[PREVIEW] Detected TV show rating_key=%s season_index=%s from URL", rating_key, req.season_index)
 
                 # Fetch TV show metadata from Plex
                 url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
@@ -337,7 +337,26 @@ def api_preview(req: PreviewRequest):
 
                     # Get TV show details and images
                     show_details = get_tv_show_details(tmdb_id)
-                    show_imgs = get_images_for_tv_show(tmdb_id, show_details.get("original_language"))
+                    original_language = show_details.get("original_language")
+
+                    # If season_index is provided, fetch season poster instead of series poster
+                    if req.season_index is not None:
+                        logger.info("[PREVIEW] Fetching season %d poster for tmdb_id=%s", req.season_index, tmdb_id)
+                        season_imgs = get_tv_season_images(tmdb_id, req.season_index, original_language)
+                        season_posters = season_imgs.get("posters", [])
+
+                        if season_posters:
+                            season_poster = pick_poster(season_posters, poster_filter)
+                            if season_poster:
+                                background_url = season_poster.get("url")
+                                logger.info("[PREVIEW] Picked season %d poster: %s", req.season_index, background_url)
+                            else:
+                                logger.warning("[PREVIEW] No season %d poster found after filtering", req.season_index)
+                        else:
+                            logger.warning("[PREVIEW] No posters found for season %d", req.season_index)
+
+                    # Fetch logos (always from series, not season-specific)
+                    show_imgs = get_images_for_tv_show(tmdb_id, original_language)
                     logos = show_imgs.get("logos", [])
 
                     # Add TVDB logos if available
