@@ -81,13 +81,23 @@ Tables created:
   - `init_scheduler()`: Initializes APScheduler background instance on app startup.
   - `schedule_library_scan()`: Schedules cron-based automatic library scans.
   - `cancel_library_scan()`: Cancels scheduled scans.
+  - Integrations polling removed (Radarr/Sonarr).
+  - `cancel_integration_polling()` (v1.5.0): Cancels integration polling.
   - Restores schedules from database on startup.
 - **scheduler.py (API router)**
   - `api_schedule_library_scan` (POST): Schedule library scans with cron expression and optional library_id.
   - `api_cancel_library_scan` (DELETE): Cancel scheduled scans.
   - `api_get_library_scan_schedule` (GET): Get current schedule status and next run time.
+  - `api_schedule_integration_poll` (POST) (v1.5.0): Enable/disable integration polling with interval.
+  - `api_get_integration_poll_schedule` (GET) (v1.5.0): Get polling status and next run time.
   - `api_scheduler_status` (GET): Check if scheduler is running.
   - Settings persist to `ui_settings` in database.
+- **integrations_poller.py (v1.5.0)**
+  - Integration poller removed.
+  - `generate_poster_for_content()`: Generates poster for newly detected content.
+  - `process_new_content()`: Processes list of detected content items.
+  - Tracks last poll time per instance in database.
+  - Records history with source='auto'.
 - **presets.py / template_manager.py**
   - CRUD for presets; import/export (merge mode); fallback rule configuration per preset/template.
   - Global template preferences (logo source, poster filter, logo mode).
@@ -113,11 +123,11 @@ Tables created:
 - **Views**:
   - `TemplateManagerView.vue`: Manage presets, fallbacks (poster/logo), preview rendering (with movie search/selection), export/import.
   - `BatchEditView.vue`: Bulk select movies, apply templates, render/send in batches with progress tracking.
-  - `SettingsView.vue`: Configure Plex/API keys/perf options (JPEG quality, concurrent rendering); test keys; reorder API source priority; manage library mappings.
+  - `SettingsView.vue`: Configure Plex/API keys/perf options (JPEG quality, concurrent rendering); test keys; reorder API source priority; manage library mappings; configure integrations (v1.5.0).
   - `MoviesView.vue`: Movie library grid with sessionStorage caching, library filtering, label filtering; validates cached movies by library_id.
   - `TVView.vue`: TV show library (similar to movies).
-  - `LocalAssetsView.vue`, `LogsView.vue`, `CollectionsView.vue`: Asset management, log viewing, collection handling
-  - `MoviesView.vue`, `LocalAssetsView.vue`, `LogsView.vue`, `TemplateManagerView.vue` handle their respective domains.
+  - `HistoryView.vue` (v1.5.0): Poster generation history with filtering by library, template, action, and source.
+  - `LocalAssetsView.vue`, `LogsView.vue`, `CollectionsView.vue`: Asset management, log viewing, collection handling.
 - **API calls**: Built on `getApiBase()` to form `/api/*` requests; plain `fetch` used throughout.
 , TV shows to reduce Plex/TMDb/TVDB/Fanart calls.
 - **Disk poster cache**: Files in `POSTER_CACHE_DIR`; served via `/api/movie/{rating_key}/poster` and `/api/tv-show/{rating_key}/poster`.
@@ -147,6 +157,8 @@ Tables created:
 - Batch rendering: `api/batch.py::api_batch_render` (concurrent processing with fallback logic)
 - Presets/fallbacks: `api/presets.py` CRUD with merge import; `api/template_manager.py` fallback preferences
 - Cache control: `api/cache.py`, `cache.py` module, helpers in `config.py`/`movies.py`
+- Integrations removed: `integrations_poller.py` and related scheduler endpoints removed.
+- History tracking (v1.5.0): `api/history.py` provides poster history with source filtering
 
 ## Tips for Exploring
 - Start at `backend/main.py` to see router wiring.

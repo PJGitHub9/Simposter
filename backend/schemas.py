@@ -64,10 +64,10 @@ class PlexSettings(BaseModel):
     token: str = ""
     movieLibraryName: str = ""
     movieLibraryNames: List[str] = Field(default_factory=list)
-    libraryMappings: List[Dict[str, str]] = Field(default_factory=list)
+    libraryMappings: List[Dict[str, Any]] = Field(default_factory=list)
     tvShowLibraryName: str = ""
     tvShowLibraryNames: List[str] = Field(default_factory=list)
-    tvShowLibraryMappings: List[Dict[str, str]] = Field(default_factory=list)
+    tvShowLibraryMappings: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class TMDBSettings(BaseModel):
@@ -102,11 +102,16 @@ class SchedulerSettings(BaseModel):
     enabled: bool = False
     cronExpression: str = "0 1 * * *"
     libraryId: Optional[Union[str, int]] = None
+    libraryIds: List[str] = Field(default_factory=list)
+
+
+# Integrations removed (Sonarr/Radarr/Tautulli)
 
 
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
+    timezone: str = "UTC"
     saveLocation: str = "/config/output/{library}/{title}.jpg"  # Legacy field for backwards compatibility
     movieSaveLocation: str = "/config/output/{library}/{title}.jpg"
     tvShowSaveLocation: str = "/config/output/{library}/{title}.jpg"
@@ -120,6 +125,7 @@ class UISettings(BaseModel):
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
+    # integrations removed
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
 
 class PlexSendRequest(BaseModel):
@@ -130,6 +136,7 @@ class PlexSendRequest(BaseModel):
     logo_url: Optional[str] = None  # Can be removed
     options: Optional[Dict[str, Any]] = None  # Can be removed
     labels: Optional[List[str]] = None
+    library_id: Optional[str] = None  # For history tracking
 
 
 class LabelsResponse(BaseModel):
@@ -183,12 +190,4 @@ class BatchRequest(BaseModel):
 
 
 
-class RadarrWebhookMovie(BaseModel):
-    title: str
-    year: Optional[int] = None
-    tmdbId: Optional[int] = None
-
-
-class RadarrWebhook(BaseModel):
-    eventType: str
-    movie: RadarrWebhookMovie
+# Radarr webhook schemas removed

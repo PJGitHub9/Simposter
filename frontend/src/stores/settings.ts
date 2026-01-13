@@ -5,15 +5,24 @@ const apiBase = getApiBase()
 
 export type Theme = 'neon' | 'slate' | 'dracula' | 'nord' | 'oled' | 'light'
 
+export type LibraryMapping = {
+  id: string
+  title?: string
+  displayName?: string
+  autoGenerateEnabled?: boolean
+  autoGeneratePresetId?: string | null
+  autoGenerateTemplateId?: string | null
+}
+
 export type PlexSettings = {
   url: string
   token: string
   movieLibraryName: string
   movieLibraryNames?: string[]
-  libraryMappings?: Array<{ id: string; title?: string; displayName?: string }>
+  libraryMappings?: LibraryMapping[]
   tvShowLibraryName?: string
   tvShowLibraryNames?: string[]
-  tvShowLibraryMappings?: Array<{ id: string; title?: string; displayName?: string }>
+  tvShowLibraryMappings?: LibraryMapping[]
 }
 
 export type TMDBSettings = {
@@ -47,12 +56,16 @@ export type PerformanceSettings = {
 export type SchedulerSettings = {
   enabled: boolean
   cronExpression: string
-  libraryId?: string | null
+  libraryId?: string | null  // Legacy - kept for backwards compatibility
+  libraryIds?: string[]      // New multi-select field
 }
+
+// Integrations removed (Sonarr/Radarr/Tautulli)
 
 export type UISettings = {
   theme: Theme
   posterDensity: number
+  timezone?: string
   defaultLabelsToRemove?: string[] | Record<string, string[]>
   defaultTvLabelsToRemove?: string[] | Record<string, string[]>
   saveLocation?: string  // Legacy field for backwards compatibility
@@ -71,6 +84,7 @@ export type UISettings = {
 
 const theme = ref<Theme>('neon')
 const posterDensity = ref(20)
+const timezone = ref('UTC')
 const defaultLabelsToRemove = ref<Record<string, string[]>>({})
 const defaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const loading = ref(false)
@@ -87,7 +101,8 @@ const fanart = ref<FanartSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
-const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null })
+const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
+// integrations removed
 
 async function loadSettings() {
   loading.value = true
@@ -98,6 +113,7 @@ async function loadSettings() {
     const data = (await res.json()) as UISettings
     theme.value = data.theme || 'neon'
     posterDensity.value = Number(data.posterDensity) || 20
+    timezone.value = data.timezone || 'UTC'
     // Handle both legacy array format and new Record format
     if (Array.isArray(data.defaultLabelsToRemove)) {
       // Legacy format: convert to new format using first library as default
@@ -147,8 +163,10 @@ async function loadSettings() {
     scheduler.value = {
       enabled: data.scheduler?.enabled ?? false,
       cronExpression: data.scheduler?.cronExpression ?? '0 1 * * *',
-      libraryId: data.scheduler?.libraryId ?? null
+      libraryId: data.scheduler?.libraryId ?? null,
+      libraryIds: data.scheduler?.libraryIds ?? []
     }
+    // integrations removed
 
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to load settings'
@@ -165,6 +183,7 @@ async function saveSettings() {
     const payload: UISettings = {
       theme: theme.value,
       posterDensity: posterDensity.value,
+      timezone: timezone.value,
       defaultLabelsToRemove: defaultLabelsToRemove.value,
       defaultTvLabelsToRemove: defaultTvLabelsToRemove.value,
       saveLocation: saveLocation.value,
@@ -202,6 +221,7 @@ export function useSettingsStore() {
   return {
     theme,
     posterDensity,
+    timezone,
     defaultLabelsToRemove,
     defaultTvLabelsToRemove,
     plex,
@@ -212,6 +232,7 @@ export function useSettingsStore() {
     performance,
     apiOrder,
     scheduler,
+    // integrations removed
     loading,
     error,
     loaded,

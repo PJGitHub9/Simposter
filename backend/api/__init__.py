@@ -11,13 +11,14 @@ from . import (
     batch,
     uploads,
     logs,
-    webhooks,
+    # webhooks module removed (Radarr/Tautulli integrations deprecated)
     ui_settings,
     history,
     template_manager,
     cache as cache_api,
     test_api_keys,
     scheduler,
+    database,
 )
 
 router = APIRouter()
@@ -32,10 +33,10 @@ router.include_router(save.router)
 router.include_router(batch.router)
 router.include_router(uploads.router)
 router.include_router(logs.router)
-router.include_router(webhooks.router)
 router.include_router(ui_settings.router)
 router.include_router(history.router)
 router.include_router(template_manager.router)
 router.include_router(cache_api.router)
 router.include_router(test_api_keys.router)
 router.include_router(scheduler.router)
+router.include_router(database.router)

@@ -403,6 +403,7 @@ def _process_single_movie(
                     preset_id=preset_id,
                     action="saved_local",
                     save_path=str(save_path),
+                    source='batch',
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for local save: {history_err}")
@@ -455,6 +456,7 @@ def _process_single_movie(
                     preset_id=preset_id,
                     action="sent_to_plex",
                     save_path=str(save_path) if save_path else None,
+                    source='batch',
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for plex send: {history_err}")

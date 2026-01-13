@@ -323,8 +323,9 @@ def validate_url(url: str, allow_data_uri: bool = False) -> str:
             detail="URL must start with http:// or https://"
         )
 
-    # Prevent SSRF: block private IPs and localhost (except in dev mode)
-    # This is a basic check - for production, use a library like validators
+    # Prevent SSRF: block private IPs and localhost (except for Plex servers)
+    # Allow private network URLs from Plex servers (port 32400) since many users
+    # run Plex on their local network and need to access poster/logo URLs
     private_patterns = [
         r'localhost',
         r'127\.0\.0\.',
@@ -335,9 +336,10 @@ def validate_url(url: str, allow_data_uri: bool = False) -> str:
 
     for pattern in private_patterns:
         if re.search(pattern, url, re.IGNORECASE):
-            # Allow localhost for Plex in development
-            if 'localhost' in url or '127.0.0.1' in url:
-                # This is likely Plex server - allow it
+            # Allow private network URLs if they appear to be from Plex (port 32400)
+            # or localhost (common in development)
+            if 'localhost' in url or '127.0.0.1' in url or ':32400' in url:
+                # This is likely a Plex server - allow it
                 pass
             else:
                 raise HTTPException(

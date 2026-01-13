@@ -8,6 +8,7 @@ import TvBatchEditView from './views/TvBatchEditView.vue'
 import LocalAssetsView from './views/LocalAssetsView.vue'
 import CollectionsView from './views/CollectionsView.vue'
 import TemplateManagerView from './views/TemplateManagerView.vue'
+import HistoryView from './views/HistoryView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -21,6 +22,7 @@ export const router = createRouter({
     { path: '/tv-shows/batch-edit', name: 'tv-batch-edit', component: TvBatchEditView },
     { path: '/tv-shows/local-assets', name: 'tv-local-assets', component: LocalAssetsView },
     { path: '/templates', name: 'template-manager', component: TemplateManagerView },
+    { path: '/history', name: 'history', component: HistoryView },
     { path: '/settings', name: 'settings', component: SettingsView },
     { path: '/logs', name: 'logs', component: LogsView }
   ]

@@ -35,7 +35,7 @@
 - Batch processing for entire libraries
 - Integration with TMDB, Fanart.tv, and TVDB for high-quality source material
 - Direct Plex integration for seamless poster uploads
-- Automation support via webhooks (Radarr)
+- Automation via scheduled Plex library scans
 - Intelligent logo selection and color matching
 
 **Target Users**: Self-hosted media enthusiasts, Plex power users, home lab administrators
@@ -104,7 +104,7 @@ Simposter is a web application that generates custom posters for Plex media libr
 1. **Speed**: Generate posters in < 2 seconds per movie
 2. **Quality**: Output high-resolution (2000x3000) posters with professional effects
 3. **Consistency**: Template-based system ensures uniform library appearance
-4. **Automation**: Webhook integration for hands-free poster generation
+4. **Automation**: Scheduled Plex library scans (no webhooks)
 5. **User Experience**: Real-time preview with < 800ms response time
 
 ### Success Metrics
@@ -144,7 +144,7 @@ Simposter is a web application that generates custom posters for Plex media libr
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │              API Layer (Routes)                      │   │
 │  │  movies • tv_shows • preview • save • batch          │   │
-│  │  presets • templates • settings • webhooks           │   │
+│  │  presets • templates • settings                      │   │
 │  │  scheduler                                           │   │
 │  └──────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -195,7 +195,6 @@ simposter/
 │   │   ├── batch.py
 │   │   ├── presets.py
 │   │   ├── templates.py
-│   │   ├── webhooks.py
 │   │   ├── scheduler.py   # Scheduler API endpoints
 │   │   └── ...
 │   ├── templates/          # Template renderers
@@ -406,30 +405,15 @@ def render_{template_id}(
 }
 ```
 
-### 6. Automation via Webhooks
+### 6. Automation
 
-**Description**: Automatic poster generation triggered by Radarr
+Simposter focuses on core automation via scheduled Plex library scans. External integrations (Radarr/Sonarr/Tautulli) and webhooks/polling have been removed.
 
-**Webhook URL:**
-```
-POST /api/webhook/radarr/{template_id}/{preset_id}
-```
+**Capabilities:**
+- Scheduled scans: Configure cron in Settings to keep Simposter in sync with Plex
+- Preview-first workflow: Manual generation remains fast and consistent
 
-**Configuration:**
-- Radarr webhook: "On Import" or "On Download"
-- Auto-send to Plex: `WEBHOOK_AUTO_SEND=true`
-- Auto-remove labels: `WEBHOOK_AUTO_LABELS=Overlay,Needs Poster`
-
-**Process:**
-1. Radarr sends webhook with TMDB ID
-2. Backend fetches movie details
-3. Loads specified template/preset
-4. Renders poster
-5. (Optional) Uploads to Plex
-6. (Optional) Removes labels
-7. Returns success/failure status
-
-**Use Case**: Hands-free poster generation for newly added movies
+No webhook endpoints or integration polling are available.
 
 ### 7. Library Scanning & Caching
 
@@ -466,6 +450,10 @@ POST /api/webhook/radarr/{template_id}/{preset_id}
 - Fanart.tv API key (optional)
 - Test API keys endpoint
 
+#### Automation
+- Scheduled Plex library scans configuration
+- No external integrations or polling
+
 #### Performance
 - Concurrent renders (1-8 workers)
 - TMDB rate limit (req/10s)
@@ -492,27 +480,46 @@ POST /api/webhook/radarr/{template_id}/{preset_id}
 3. Legacy JSON files
 4. Pydantic defaults (lowest)
 
-### 9. Poster History Tracking
+### 9. Poster History Tracking (v1.5.0+)
 
-**Description**: Audit log of all poster operations
+**Description**: Complete audit log of all poster operations with source tracking
 
 **Tracked Data:**
 - Rating key, title, year
 - Template and preset used
 - Action (saved_local, sent_to_plex)
+- Source (manual, batch, auto)
 - Save path
 - Timestamp
 - Library ID
 
+**History UI:**
+- Dedicated History page (/history) with filterable table
+- Filter by library (shows display names, not IDs)
+- Filter by template, action, and source
+- Color-coded source badges:
+  - Green: Auto (from integration polling)
+  - Purple: Batch (batch operations)
+  - Gray: Manual (individual edits)
+- Refresh button for real-time updates
+- Results count display
+- Sortable columns
+
 **API:**
 ```
-GET /api/history?library={id}&limit=500
+GET /api/history?library={id}&template={id}&action={action}&limit=500
+GET /api/poster-status (POST)
+Body: {"rating_keys": [], "library_id": "1"}
+Response: {"status": {rating_key: {action, timestamp, template_id, preset_id}}}
 ```
 
 **Use Cases:**
+- Track which posters were auto-generated vs manual
+- Audit batch operations
 - Identify which movies have custom posters
 - Re-apply same template/preset
 - Troubleshooting and debugging
+- Monitor integration polling effectiveness
 
 ### 10. Local Assets Management
 
@@ -1087,13 +1094,6 @@ class UISettings(BaseModel):
     apiOrder: List[str] = ["tmdb", "fanart", "tvdb"]
 ```
 
-#### Radarr Webhook
-```python
-class RadarrWebhook(BaseModel):
-    eventType: str  # "Download", "Grab", "Test"
-    movie: Dict[str, Any]
-    # movie.title, movie.year, movie.tmdbId
-```
 
 ---
 
@@ -1179,7 +1179,7 @@ class RadarrWebhook(BaseModel):
 | `/api/logs` | GET | Retrieve logs | Query: `lines=100` | `{logs: "..."}` |
 | `/api/history` | GET | Get poster history | Query: `library={id}&limit=500` | `[{id, title, template_id, ...}]` |
 | `/api/cache/clear` | POST | Clear caches | `{type: "movies"}` | `{success: true, cleared: 150}` |
-| `/api/webhook/radarr/{template}/{preset}` | POST | Radarr webhook | `RadarrWebhook` | `{success: true, poster_generated: true}` |
+
 | `/api/local-assets` | GET | List saved posters | - | `[{path, size, modified}]` |
 | `/api/local-assets/{path}` | DELETE | Delete saved poster | - | `{success: true}` |
 
@@ -1840,70 +1840,6 @@ def recolor_logo(logo: Image, hex_color: str) -> Image:
 
 ---
 
-### Workflow 3: Radarr Automation
-
-**Goal**: Automatically generate posters when new movies are added to Radarr
-
-**One-Time Setup:**
-
-1. **Configure Simposter Settings**
-   - Navigate to Settings (`/settings`)
-   - Enter TMDB API key
-   - (Optional) Enter Fanart.tv API key
-   - Configure Plex URL and token
-   - Set performance options (concurrent renders, overlay cache)
-
-2. **Create Preset**
-   - Navigate to Template Manager (`/templates`)
-   - Create preset (e.g., "Auto - Dark Logo")
-   - Note preset ID and template ID
-
-3. **Configure Radarr Webhook**
-   - In Radarr: Settings → Connect → Add Connection → Webhook
-   - Name: "Simposter Auto Poster"
-   - Trigger: "On Import" or "On Download"
-   - URL: `http://simposter:8000/api/webhook/radarr/universal/auto-dark-logo`
-   - Method: POST
-   - Test connection
-
-4. **Set Environment Variables** (optional)
-   ```
-   WEBHOOK_AUTO_SEND=true
-   WEBHOOK_AUTO_LABELS=Overlay,Needs Poster
-   ```
-
-**Automated Flow:**
-
-1. **Movie Added to Radarr**
-   - User adds movie or Radarr auto-imports
-
-2. **Radarr Triggers Webhook**
-   - Sends POST to `/api/webhook/radarr/universal/auto-dark-logo`
-   - Payload: `{eventType: "Download", movie: {title, year, tmdbId}}`
-
-3. **Simposter Receives Webhook**
-   - Validates TMDB ID
-   - Fetches movie details from TMDB
-   - Fetches posters and logos
-
-4. **Renders Poster**
-   - Loads "auto-dark-logo" preset
-   - Selects textless poster (if available)
-   - Selects white logo (if available)
-   - Renders using Universal template
-
-5. **Uploads to Plex** (if `WEBHOOK_AUTO_SEND=true`)
-   - Uploads poster to Plex
-   - Removes "Overlay" and "Needs Poster" labels
-   - Triggers metadata refresh
-
-6. **Returns Response**
-   - Status: 200 OK
-   - Body: `{success: true, poster_generated: true, plex_upload: true}`
-
-**Result**: Hands-free poster generation for all new movies
-
----
 
 ### Workflow 4: TV Show Season Posters
 
@@ -2172,9 +2108,9 @@ session.mount('http://', HTTPAdapter(pool_connections=32, pool_maxsize=64))
 - Vintage/retro styles
 - User-contributed templates
 
-**3. Sonarr Webhook Integration**
-- Similar to Radarr webhook
-- Auto-generate TV show posters on import
+**3. TV Enhancements**
+- Season poster automation via scheduled scans
+- Improved TV metadata handling
 
 **4. Advanced Filters**
 - Filter posters by aspect ratio
@@ -2241,7 +2177,7 @@ session.mount('http://', HTTPAdapter(pool_connections=32, pool_maxsize=64))
 
 **5. Plugin System**
 - Custom template plugins
-- External integrations (Tautulli, Overseerr)
+- External integrations removed
 - Custom effects and filters
 
 **6. Mobile App**
@@ -2330,8 +2266,7 @@ session.mount('http://', HTTPAdapter(pool_connections=32, pool_maxsize=64))
 | `TMDB_API_KEY` | TMDB API key | - |
 | `TVDB_API_KEY` | TVDB API key | - |
 | `FANART_API_KEY` | Fanart.tv API key | - |
-| `WEBHOOK_AUTO_SEND` | Auto-upload webhook posters to Plex | false |
-| `WEBHOOK_AUTO_LABELS` | Labels to remove on webhook | - |
+
 | `LOG_LEVEL` | Logging level | INFO |
 
 ### D. File Paths

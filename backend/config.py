@@ -18,6 +18,20 @@ from . import cache
 # Project base dir (repo root)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+def mask_sensitive(value: str, visible_chars: int = 4) -> str:
+    """
+    Mask sensitive data like API keys for logging.
+    Shows only the last `visible_chars` characters.
+
+    Examples:
+        mask_sensitive("abcdef123456") -> "********3456"
+        mask_sensitive("short") -> "****t"
+        mask_sensitive("") -> ""
+    """
+    if not value or len(value) <= visible_chars:
+        return "*" * len(value) if value else ""
+    return "*" * (len(value) - visible_chars) + value[-visible_chars:]
+
 # Simple docker/container detection for better guidance when connecting to Plex
 def _running_in_container() -> bool:
     try:

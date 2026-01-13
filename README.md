@@ -1,4 +1,4 @@
-# **Simposter 🎬🖼️ — Template-Based Poster Builder with TMDb + Plex + Radarr Automation**
+# **Simposter 🎬🖼️ — Template-Based Poster Builder with TMDb + Plex**
 
 > **Simposter** is a fast, modern poster-generation tool for Plex users who want **clean, consistent, template-driven artwork** — now with a **completely redesigned UI**, **enhanced batch editing**, **real-time preview**, **TMDB-integrated rendering**, and **intelligent caching**.
 
@@ -215,12 +215,7 @@ Log preferences are stored in the database (auto-migrated from `/config/settings
 ![Image](https://github.com/user-attachments/assets/e6e60d93-5913-4054-aa47-b38a04bd5435)
 ---
 
-## 🔗 Radarr Webhook
-
-```
-POST /api/webhook/radarr/{template_id}/{preset_id}
-```
-
+<!-- Integrations (Radarr/Sonarr/Tautulli) removed in vNext -->
 ---
 
 # 📁 Project Structure
@@ -246,7 +241,7 @@ simposter/
 │       ├── presets.py
 │       ├── templates.py         # Template listing (v1.4)
 │       ├── uploads.py
-│       └── webhooks.py
+│       └── ui_settings.py
 ├── frontend/
 │   ├── src/
 │   │   ├── views/
@@ -368,7 +363,6 @@ uvicorn backend.main:app --reload --port 8003
 6. **Process batch** — Send to Plex and/or save locally
 
 ## Automation
-- **Radarr webhook** — Automatic poster generation on import
 - **Scheduled scans** — Configure cron schedule in Settings to automatically scan your Plex library
 
 ---

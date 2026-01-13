@@ -426,6 +426,22 @@ def init_database():
             ON collection_cache(library_id)
         """)
 
+        # Label cache tables for Plex labels
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS label_cache (
+                rating_key TEXT PRIMARY KEY,
+                labels TEXT, -- JSON array of label names
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tv_label_cache (
+                rating_key TEXT PRIMARY KEY,
+                labels TEXT, -- JSON array of label names
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Poster history table - track poster actions (local save / send to Plex)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS poster_history (
@@ -438,6 +454,7 @@ def init_database():
                 preset_id TEXT,
                 action TEXT NOT NULL, -- saved_local | sent_to_plex
                 save_path TEXT,
+                source TEXT DEFAULT 'manual', -- manual | batch | auto
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -457,6 +474,13 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_poster_history_template_preset
             ON poster_history(template_id, preset_id)
         """)
+
+        # Migration: add source column to poster_history if it doesn't exist
+        cursor.execute("PRAGMA table_info(poster_history)")
+        history_cols = [row["name"] for row in cursor.fetchall()]
+        if "source" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN source TEXT DEFAULT 'manual'")
+            logger.info("[DB] Added 'source' column to poster_history table")
 
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
@@ -940,14 +964,54 @@ def update_movie_poster(rating_key: str, poster_url: Optional[str], library_id: 
         """, (poster_url, rating_key, library_id))
 
 
+def _cleanup_orphaned_posters(rating_keys: List[str]) -> None:
+    """Remove poster files for deleted items."""
+    try:
+        # Import here to avoid circular dependency
+        from . import config
+        poster_dir = Path(config.POSTER_CACHE_DIR)
+        if not poster_dir.exists():
+            return
+
+        removed_count = 0
+        for rating_key in rating_keys:
+            for ext in ("jpg", "jpeg", "png", "webp"):
+                poster_file = poster_dir / f"{rating_key}.{ext}"
+                if poster_file.exists():
+                    try:
+                        poster_file.unlink()
+                        removed_count += 1
+                        logger.debug("[DB] Deleted orphaned poster: %s", poster_file.name)
+                    except OSError as e:
+                        logger.warning("[DB] Failed to delete poster %s: %s", poster_file, e)
+
+        if removed_count > 0:
+            logger.info("[DB] Removed %d orphaned poster files", removed_count)
+    except Exception as e:
+        logger.warning("[DB] Failed to clean up orphaned posters: %s", e)
+
+
 def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default") -> None:
     """
     Replace cache entries to match the provided movies list.
     Each movie dict should include rating_key, title, year, added_at, tmdb_id?, poster_url?, labels?.
+    Also removes orphaned poster files and label cache entries.
     """
     keys = [m["rating_key"] for m in movies]
     with get_db() as conn:
         cursor = conn.cursor()
+
+        # Get rating_keys that will be deleted (orphaned entries)
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM movie_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+            """, keys + [library_id])
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+        else:
+            cursor.execute("SELECT rating_key FROM movie_cache WHERE library_id = ?", (library_id,))
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
         for m in movies:
             labels_json = json.dumps(m.get("labels") or [])
             cursor.execute("""
@@ -976,12 +1040,24 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
                 library_id,
             ))
 
-        # Drop entries that are no longer present
+        # Drop database entries that are no longer present
         if keys:
             cursor.execute(f"""
                 DELETE FROM movie_cache
                 WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
             """, keys + [library_id])
+
+        # Also delete from label_cache (Plex labels cache)
+        if orphaned_keys:
+            cursor.execute(f"""
+                DELETE FROM label_cache
+                WHERE rating_key IN ({",".join("?" for _ in orphaned_keys)})
+            """, orphaned_keys)
+
+    # Clean up orphaned poster files on disk
+    if orphaned_keys:
+        _cleanup_orphaned_posters(orphaned_keys)
+        logger.info("[DB] Cleaned up %d orphaned movie entries and posters for library %s", len(orphaned_keys), library_id)
 
 
 def get_cached_movies(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1144,10 +1220,25 @@ def update_tv_seasons(rating_key: str, seasons: List[Dict[str, Any]], library_id
 
 
 def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "default") -> None:
-    """Replace cache entries to match the provided TV shows list."""
+    """
+    Replace cache entries to match the provided TV shows list.
+    Also removes orphaned poster files and label cache entries.
+    """
     keys = [m["rating_key"] for m in shows]
     with get_db() as conn:
         cursor = conn.cursor()
+
+        # Get rating_keys that will be deleted (orphaned entries)
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM tv_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+            """, keys + [library_id])
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+        else:
+            cursor.execute("SELECT rating_key FROM tv_cache WHERE library_id = ?", (library_id,))
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
         for m in shows:
             labels_json = json.dumps(m.get("labels") or [])
             seasons_json = json.dumps(m.get("seasons") or [])
@@ -1184,11 +1275,24 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
                 library_id,
             ))
 
+        # Drop database entries that are no longer present
         if keys:
             cursor.execute(f"""
                 DELETE FROM tv_cache
                 WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
             """, keys + [library_id])
+
+        # Also delete from tv_label_cache (Plex labels cache for TV shows)
+        if orphaned_keys:
+            cursor.execute(f"""
+                DELETE FROM tv_label_cache
+                WHERE rating_key IN ({",".join("?" for _ in orphaned_keys)})
+            """, orphaned_keys)
+
+    # Clean up orphaned poster files on disk
+    if orphaned_keys:
+        _cleanup_orphaned_posters(orphaned_keys)
+        logger.info("[DB] Cleaned up %d orphaned TV show entries and posters for library %s", len(orphaned_keys), library_id)
 
 
 def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1319,9 +1423,25 @@ def upsert_collection_cache(
 
 
 def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id: str = "default") -> None:
+    """
+    Replace cache entries to match the provided collections list.
+    Also removes orphaned poster files.
+    """
     keys = [c["rating_key"] for c in collections]
     with get_db() as conn:
         cursor = conn.cursor()
+
+        # Get rating_keys that will be deleted (orphaned entries)
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM collection_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+            """, keys + [library_id])
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+        else:
+            cursor.execute("SELECT rating_key FROM collection_cache WHERE library_id = ?", (library_id,))
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
         for c in collections:
             cursor.execute("""
                 INSERT INTO collection_cache (rating_key, title, year, added_at, poster_url, updated_at, library_id)
@@ -1342,11 +1462,17 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
                 library_id,
             ))
 
+        # Drop database entries that are no longer present
         if keys:
             cursor.execute(f"""
                 DELETE FROM collection_cache
                 WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
             """, keys + [library_id])
+
+    # Clean up orphaned poster files on disk
+    if orphaned_keys:
+        _cleanup_orphaned_posters(orphaned_keys)
+        logger.info("[DB] Cleaned up %d orphaned collection entries and posters for library %s", len(orphaned_keys), library_id)
 
 
 def get_cached_collections(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1497,6 +1623,7 @@ def record_poster_history(
     preset_id: Optional[str],
     action: str,
     save_path: Optional[str] = None,
+    source: str = 'manual',
 ) -> None:
     """Record a poster-related action for tracking."""
     with get_db() as conn:
@@ -1519,8 +1646,8 @@ def record_poster_history(
         cursor.execute(
             """
             INSERT INTO poster_history
-            (rating_key, library_id, title, year, template_id, preset_id, action, save_path, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            (rating_key, library_id, title, year, template_id, preset_id, action, save_path, source, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 rating_key,
@@ -1531,6 +1658,7 @@ def record_poster_history(
                 preset_id,
                 action,
                 save_path,
+                source,
             ),
         )
 

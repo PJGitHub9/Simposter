@@ -29,14 +29,19 @@
   - [ ] Performance setting: Enable/disable overlay cache (default: enabled)
   - [ ] Regenerate overlay when preset options change
 
+## v1.5.0 (Current - 2026-01-11)
+- [x] Poster generation history tracking with source column
+- [x] History page with filtering (library, template, action, source)
+- [x] Database migration for source column
+- [x] History navigation with clock icon
+
 ## In Progress
 - [ ] Batch edit refinements and testing
 - [ ] Collection poster generation
+- [ ] Sonarr TV show auto-generation (series-level complete, seasons pending)
 
 ## Roadmap
 - [ ] Jellyfin integration
 - [ ] Overlay manager (Kometa YAML generator)
-- [ ] Direct Radarr/Sonarr integration (beyond webhooks)
-- [ ] Tautulli integration
 - [ ] Advanced text overlay features
 - [ ] Custom template upload/management

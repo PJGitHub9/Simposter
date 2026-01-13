@@ -3,12 +3,12 @@ API endpoints for managing scheduled tasks like automatic library scans.
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from ..scheduler import (
     schedule_library_scan,
     cancel_library_scan,
     get_scan_schedule,
-    get_scheduler
+    get_scheduler,
 )
 from ..config import logger
 from .. import database as db
@@ -19,7 +19,8 @@ router = APIRouter()
 
 class ScheduleRequest(BaseModel):
     cron_expression: str
-    library_id: Optional[str] = None
+    library_id: Optional[str] = None  # Legacy - kept for backwards compatibility
+    library_ids: Optional[List[str]] = None  # New multi-select field
 
 
 @router.post("/scheduler/library-scan")
@@ -34,20 +35,26 @@ def api_schedule_library_scan(req: ScheduleRequest):
     - "30 3 * * 1-5"  - Weekdays at 3:30 AM
     """
     try:
-        success = schedule_library_scan(req.cron_expression, req.library_id)
+        # Use library_ids if provided, otherwise fall back to library_id for backwards compatibility
+        library_ids = req.library_ids if req.library_ids is not None else (
+            [req.library_id] if req.library_id else []
+        )
+        # Filter out empty strings
+        library_ids = [lid for lid in library_ids if lid and lid.strip()]
+
+        success = schedule_library_scan(req.cron_expression, library_ids)
         if not success:
             raise HTTPException(status_code=400, detail="Failed to schedule library scan. Check cron expression format.")
 
         # Save to settings database
         settings = _read_settings()
         settings_dict = settings.model_dump(exclude_none=False)
-        # Normalize library_id: empty strings become None
-        library_id = req.library_id.strip() if req.library_id else None
 
         settings_dict["scheduler"] = {
             "enabled": True,
             "cronExpression": req.cron_expression,
-            "libraryId": library_id
+            "libraryId": library_ids[0] if library_ids else None,  # Legacy compatibility
+            "libraryIds": library_ids
         }
         db.save_ui_settings(settings_dict)
 
@@ -55,7 +62,8 @@ def api_schedule_library_scan(req: ScheduleRequest):
         return {
             "status": "scheduled",
             "cron_expression": req.cron_expression,
-            "library_id": req.library_id,
+            "library_id": req.library_id,  # Legacy field
+            "library_ids": library_ids,
             "schedule": schedule_info
         }
     except Exception as e:
@@ -75,7 +83,8 @@ def api_cancel_library_scan():
         settings_dict["scheduler"] = {
             "enabled": False,
             "cronExpression": settings_dict.get("scheduler", {}).get("cronExpression", "0 1 * * *"),
-            "libraryId": settings_dict.get("scheduler", {}).get("libraryId", None)
+            "libraryId": settings_dict.get("scheduler", {}).get("libraryId", None),
+            "libraryIds": settings_dict.get("scheduler", {}).get("libraryIds", [])
         }
         db.save_ui_settings(settings_dict)
 
@@ -98,7 +107,8 @@ def api_get_library_scan_schedule():
         scheduler_settings = settings_dict.get("scheduler", {
             "enabled": False,
             "cronExpression": "0 1 * * *",
-            "libraryId": None
+            "libraryId": None,
+            "libraryIds": []
         })
 
         # Normalize libraryId - convert "None" string or empty string to null, convert int to string
@@ -107,6 +117,10 @@ def api_get_library_scan_schedule():
             scheduler_settings["libraryId"] = None
         elif isinstance(library_id, int):
             scheduler_settings["libraryId"] = str(library_id)
+
+        # Ensure libraryIds exists and is an array
+        if "libraryIds" not in scheduler_settings:
+            scheduler_settings["libraryIds"] = []
 
         if schedule_info is None:
             return {
@@ -139,3 +153,6 @@ def api_scheduler_status():
     except Exception as e:
         logger.error(f"[SCHEDULER API] Failed to get scheduler status: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get scheduler status: {e}")
+
+
+# Integration polling endpoints removed (Radarr/Sonarr/Tautulli integrations deprecated)

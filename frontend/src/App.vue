@@ -56,6 +56,7 @@ const tabs = computed<MenuItem[]>(() => {
     ...movieTabs,
     ...tvShowTabs,
     { key: 'template-manager', label: 'Template Manager' },
+    { key: 'history', label: 'History' },
     { key: 'settings', label: 'Settings' },
     { key: 'logs', label: 'Logs' }
   ]
