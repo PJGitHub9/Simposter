@@ -71,7 +71,9 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     try:
         r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
-        logger.debug("[TMDB] GET %s params=%s", url, params)
+        # Mask API key in debug logging
+        debug_params = {k: ("***" + v[-4:] if k == "api_key" and v else v) for k, v in params.items()}
+        logger.debug("[TMDB] GET %s params=%s", url, debug_params)
         return r.json()
     except Exception as e:
         text = ""

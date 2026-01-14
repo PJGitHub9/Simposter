@@ -474,8 +474,8 @@ const testPlexConnection = async () => {
 }
 
 const testApiKeys = async () => {
-  testingApiKeys.value = true
-  apiKeyTestResult.value = null
+  testingApiKeys.value = { tmdb: true, tvdb: true, fanart: true }
+  apiKeyTestResults.value = {}
 
   try {
     const apiBase = getApiBase()
@@ -498,15 +498,15 @@ const testApiKeys = async () => {
       else if (data.tvdb?.status === 'error') results.push('✗ TVDB')
       if (data.fanart?.status === 'ok') results.push('✓ Fanart.tv')
       else if (data.fanart?.status === 'error') results.push('✗ Fanart.tv')
-      apiKeyTestResult.value = results.length > 0 ? results.join(' | ') : 'No keys to test'
+      apiKeyTestResults.value.all = results.length > 0 ? results.join(' | ') : 'No keys to test'
     } else {
-      apiKeyTestResult.value = `Error: ${data.detail || 'Failed to test API keys'}`
+      apiKeyTestResults.value.all = `Error: ${data.detail || 'Failed to test API keys'}`
     }
   } catch (e) {
-    apiKeyTestResult.value = `Error: ${e instanceof Error ? e.message : 'Unknown error'}`
+    apiKeyTestResults.value.all = `Error: ${e instanceof Error ? e.message : 'Unknown error'}`
   } finally {
-    testingApiKeys.value = false
-    setTimeout(() => (apiKeyTestResult.value = null), 10000)
+    testingApiKeys.value = {}
+    setTimeout(() => { apiKeyTestResults.value = {} }, 10000)
   }
 }
 
@@ -1101,8 +1101,8 @@ onMounted(() => {
         @update:schedulerEnabled="localSchedulerEnabled = $event"
         @update:schedulerCronExpression="localSchedulerCronExpression = $event"
         @update:schedulerLibraryIds="localSchedulerLibraryIds = $event"
-        @update:defaultLabelsToRemove="localDefaultLabelsToRemove = $event; hasUnsavedChanges.value = true"
-        @update:defaultTvLabelsToRemove="localDefaultTvLabelsToRemove = $event; hasUnsavedChanges.value = true"
+        @update:defaultLabelsToRemove="localDefaultLabelsToRemove = $event; hasUnsavedChanges = true"
+        @update:defaultTvLabelsToRemove="localDefaultTvLabelsToRemove = $event; hasUnsavedChanges = true"
         @test-connection="testPlexConnection"
         @scan-library="scanLibrary"
         @save="saveSettings"

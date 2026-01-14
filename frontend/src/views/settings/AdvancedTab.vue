@@ -60,7 +60,9 @@ const onDrop = (targetApi: string) => {
 
   if (draggedIndex > -1 && targetIndex > -1) {
     const newOrder = [...localApiOrder.value]
-    ;[newOrder[draggedIndex], newOrder[targetIndex]] = [newOrder[targetIndex], newOrder[draggedIndex]]
+    const temp = newOrder[draggedIndex]
+    newOrder[draggedIndex] = newOrder[targetIndex]!
+    newOrder[targetIndex] = temp!
     localApiOrder.value = newOrder
   }
 
@@ -72,7 +74,9 @@ const moveApiUp = (api: string) => {
   const index = localApiOrder.value.indexOf(api)
   if (index > 0) {
     const newOrder = [...localApiOrder.value]
-    ;[newOrder[index], newOrder[index - 1]] = [newOrder[index - 1], newOrder[index]]
+    const temp = newOrder[index]
+    newOrder[index] = newOrder[index - 1]!
+    newOrder[index - 1] = temp!
     localApiOrder.value = newOrder
   }
 }
@@ -82,7 +86,9 @@ const moveApiDown = (api: string) => {
   const index = localApiOrder.value.indexOf(api)
   if (index < localApiOrder.value.length - 1) {
     const newOrder = [...localApiOrder.value]
-    ;[newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]]
+    const temp = newOrder[index]
+    newOrder[index] = newOrder[index + 1]!
+    newOrder[index + 1] = temp!
     localApiOrder.value = newOrder
   }
 }
