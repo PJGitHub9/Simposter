@@ -407,10 +407,14 @@ def render_{template_id}(
 
 ### 6. Automation
 
-Simposter focuses on core automation via scheduled Plex library scans. External integrations (Radarr/Sonarr/Tautulli) and webhooks/polling have been removed.
+Simposter provides multiple automation channels:
+
+**Scheduled Library Scans** — Automatic Plex library scanning via cron-based scheduler
+**Webhook Integration** — Real-time poster generation via Radarr, Sonarr, and Tautulli webhooks
 
 **Capabilities:**
 - Scheduled scans: Configure cron in Settings to keep Simposter in sync with Plex
+- Webhook automation: Receive events from Radarr/Sonarr/Tautulli and auto-generate posters
 - Preview-first workflow: Manual generation remains fast and consistent
 
 No webhook endpoints or integration polling are available.

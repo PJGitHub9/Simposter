@@ -41,7 +41,7 @@ def _configure_conn(conn: sqlite3.Connection):
     """Set safe defaults for concurrency on SQLite."""
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=5000;")  # 5s wait if locked
+    conn.execute("PRAGMA busy_timeout=30000;")  # 30s wait if locked
     conn.row_factory = sqlite3.Row
 
 
@@ -149,11 +149,28 @@ def check_and_update_version() -> None:
 
 def init_database():
     """Initialize the database with required tables."""
+    import time
+    
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH, timeout=10.0, check_same_thread=False)
-    _configure_conn(conn)
-    cursor = conn.cursor()
+    # Retry logic for database lock
+    max_retries = 5
+    retry_delay = 1.0
+    
+    for attempt in range(max_retries):
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
+            _configure_conn(conn)
+            cursor = conn.cursor()
+            break
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and attempt < max_retries - 1:
+                logger.warning(f"[DB] Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                continue
+            else:
+                raise
 
     try:
         # Check if old ui_settings table exists (needs migration)
@@ -296,7 +313,7 @@ def init_database():
                     (json.dumps(season_opts), row["id"]),
                 )
             except Exception as backfill_err:
-                logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row.get("id"), backfill_err)
+                logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row["id"], backfill_err)
 
         # Create indexes for better query performance
         cursor.execute("""

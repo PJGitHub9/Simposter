@@ -11,7 +11,7 @@ from . import (
     batch,
     uploads,
     logs,
-    # webhooks module removed (Radarr/Tautulli integrations deprecated)
+    webhooks,
     ui_settings,
     history,
     template_manager,
@@ -33,6 +33,7 @@ router.include_router(save.router)
 router.include_router(batch.router)
 router.include_router(uploads.router)
 router.include_router(logs.router)
+router.include_router(webhooks.router)
 router.include_router(ui_settings.router)
 router.include_router(history.router)
 router.include_router(template_manager.router)

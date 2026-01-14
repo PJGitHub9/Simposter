@@ -6,11 +6,32 @@ const props = defineProps<{
   useOverlayCache: boolean
   unsavedChanges: boolean
   scanRunning: boolean
+  outputFormat: string
+  jpgQuality: number
+  pngCompression: number
+  webpQuality: number
+  tmdbRateLimit: number
+  tvdbRateLimit: number
+  memoryLimit: number
+  webhookAutoSend: boolean
+  webhookAutoLabels: string
+  imageQualityChanged?: boolean
+  performanceChanged?: boolean
+  automationChanged?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:concurrentRenders': [value: number]
   'update:useOverlayCache': [value: boolean]
+  'update:outputFormat': [value: string]
+  'update:jpgQuality': [value: number]
+  'update:pngCompression': [value: number]
+  'update:webpQuality': [value: number]
+  'update:tmdbRateLimit': [value: number]
+  'update:tvdbRateLimit': [value: number]
+  'update:memoryLimit': [value: number]
+  'update:webhookAutoSend': [value: boolean]
+  'update:webhookAutoLabels': [value: string]
   'clear-frontend-cache': []
   'clear-backend-cache': []
   'save': []
@@ -25,13 +46,119 @@ const localUseOverlayCache = computed({
   get: () => props.useOverlayCache,
   set: (val) => emit('update:useOverlayCache', val)
 })
+
+const localOutputFormat = computed({
+  get: () => props.outputFormat,
+  set: (val) => emit('update:outputFormat', val)
+})
+
+const localJpgQuality = computed({
+  get: () => props.jpgQuality,
+  set: (val) => emit('update:jpgQuality', val)
+})
+
+const localPngCompression = computed({
+  get: () => props.pngCompression,
+  set: (val) => emit('update:pngCompression', val)
+})
+
+const localWebpQuality = computed({
+  get: () => props.webpQuality,
+  set: (val) => emit('update:webpQuality', val)
+})
+
+const localTmdbRateLimit = computed({
+  get: () => props.tmdbRateLimit,
+  set: (val) => emit('update:tmdbRateLimit', val)
+})
+
+const localTvdbRateLimit = computed({
+  get: () => props.tvdbRateLimit,
+  set: (val) => emit('update:tvdbRateLimit', val)
+})
+
+const localMemoryLimit = computed({
+  get: () => props.memoryLimit,
+  set: (val) => emit('update:memoryLimit', val)
+})
+
+const localWebhookAutoSend = computed({
+  get: () => props.webhookAutoSend,
+  set: (val) => emit('update:webhookAutoSend', val)
+})
+
+const localWebhookAutoLabels = computed({
+  get: () => props.webhookAutoLabels,
+  set: (val) => emit('update:webhookAutoLabels', val)
+})
+
 </script>
 
 <template>
   <div class="tab-content">
-    <h2>Performance Settings</h2>
+    <h2>Image Quality & Performance</h2>
 
-    <div class="section">
+    <!-- Image Quality Settings -->
+    <div class="section" :class="{ 'unsaved-changes': imageQualityChanged }">
+      <h3>Image Quality</h3>
+      <p class="section-description">
+        Configure output format and compression settings
+      </p>
+
+      <label>
+        <span class="label-text">Output Format</span>
+        <select v-model="localOutputFormat">
+          <option value="jpg">JPEG</option>
+          <option value="png">PNG</option>
+          <option value="webp">WebP</option>
+        </select>
+      </label>
+
+      <div v-if="localOutputFormat === 'jpg'" class="quality-control">
+        <label>
+          <span class="label-text">JPEG Quality: {{ localJpgQuality }}%</span>
+          <input
+            type="range"
+            v-model.number="localJpgQuality"
+            min="1"
+            max="100"
+            step="1"
+          />
+          <span class="help-text">Higher = better quality, larger file size</span>
+        </label>
+      </div>
+
+      <div v-if="localOutputFormat === 'png'" class="quality-control">
+        <label>
+          <span class="label-text">PNG Compression: {{ localPngCompression }}</span>
+          <input
+            type="range"
+            v-model.number="localPngCompression"
+            min="0"
+            max="9"
+            step="1"
+          />
+          <span class="help-text">0 = no compression (fast), 9 = max compression (slow)</span>
+        </label>
+      </div>
+
+      <div v-if="localOutputFormat === 'webp'" class="quality-control">
+        <label>
+          <span class="label-text">WebP Quality: {{ localWebpQuality }}</span>
+          <input
+            type="range"
+            v-model.number="localWebpQuality"
+            min="1"
+            max="100"
+            step="1"
+          />
+          <span class="help-text">Higher = better quality, larger file size</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Rendering Performance -->
+    <div class="section" :class="{ 'unsaved-changes': performanceChanged }">
       <h3>Rendering Performance</h3>
       <p class="section-description">
         Configure rendering options to optimize speed and quality balance.
@@ -58,8 +185,80 @@ const localUseOverlayCache = computed({
           Number of posters to render simultaneously during batch operations. Higher = faster but more CPU usage.
         </span>
       </label>
+
+      <label>
+        <span class="label-text">Memory Limit: {{ localMemoryLimit }} MB</span>
+        <input
+          type="range"
+          v-model.number="localMemoryLimit"
+          min="512"
+          max="8192"
+          step="256"
+        />
+        <span class="help-text">Maximum memory to use during batch operations</span>
+      </label>
     </div>
 
+    <!-- API Rate Limits -->
+    <div class="section">
+      <h3>API Rate Limits</h3>
+      <p class="section-description">
+        Control request rates to external APIs (per 10 seconds)
+      </p>
+
+      <label>
+        <span class="label-text">TMDb Rate Limit: {{ localTmdbRateLimit }} req/10s</span>
+        <input
+          type="range"
+          v-model.number="localTmdbRateLimit"
+          min="5"
+          max="100"
+          step="5"
+        />
+        <span class="help-text">Default: 40 (TMDb free tier: 40 req/10s)</span>
+      </label>
+
+      <label>
+        <span class="label-text">TVDB Rate Limit: {{ localTvdbRateLimit }} req/10s</span>
+        <input
+          type="range"
+          v-model.number="localTvdbRateLimit"
+          min="5"
+          max="100"
+          step="5"
+        />
+        <span class="help-text">Default: 20 (TVDB free tier: 20 req/10s)</span>
+      </label>
+    </div>
+
+    <!-- Automatic Poster Generation -->
+    <div class="section" :class="{ 'unsaved-changes': automationChanged }">
+      <h3>Automatic Poster Generation</h3>
+      <p class="section-description">
+        Configure automatic poster generation and delivery via webhooks (Radarr, Sonarr, Tautulli).
+        Webhooks automatically trigger poster generation when new media is added.
+      </p>
+
+      <label class="checkbox-label">
+        <input type="checkbox" v-model="localWebhookAutoSend" />
+        <span>Automatically Send to Plex</span>
+      </label>
+      <p class="help-text" style="margin: -8px 0 16px 0;">
+        When enabled, webhook-generated posters are automatically sent to Plex and replace the existing poster
+      </p>
+
+      <label>
+        <span class="label-text">Default Labels for Webhook Posters</span>
+        <input
+          type="text"
+          v-model="localWebhookAutoLabels"
+          placeholder="Overlay, Generated"
+        />
+        <span class="help-text">Comma-separated list of labels to apply to webhook-generated posters (e.g., "Overlay, Auto")</span>
+      </label>
+    </div>
+
+    <!-- Cache Management -->
     <div class="section">
       <h3>Cache Management</h3>
       <p class="section-description">
@@ -101,27 +300,6 @@ const localUseOverlayCache = computed({
       </div>
     </div>
 
-    <div class="section info-section">
-      <h3>Performance Tips</h3>
-      <ul class="tips-list">
-        <li>
-          <strong>Overlay Cache:</strong> Keep enabled for best performance with uniformlogo and similar templates
-        </li>
-        <li>
-          <strong>Concurrent Renders:</strong> Set to 3-5 for balanced performance. Higher values use more memory.
-        </li>
-        <li>
-          <strong>Clear Frontend Cache:</strong> If posters aren't updating, clear frontend cache first (quick fix)
-        </li>
-        <li>
-          <strong>Clear Backend Cache:</strong> Only needed when troubleshooting metadata issues or freeing disk space
-        </li>
-        <li>
-          <strong>Database Indexing:</strong> Simposter uses optimized database indexes for 5-10x faster queries
-        </li>
-      </ul>
-    </div>
-
     <div class="actions">
       <button @click="emit('save')" class="primary" :disabled="!unsavedChanges">
         {{ unsavedChanges ? 'Save Changes' : 'No Changes' }}
@@ -150,24 +328,32 @@ h3 {
   font-size: 18px;
 }
 
+h4 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+  font-size: 16px;
+}
+
 .section {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px;
   margin-bottom: 20px;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+.section.unsaved-changes {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
 }
 
 .section-description {
   color: var(--text-muted);
-  font-size: 14px;
-  margin-bottom: 20px;
+  font-size: 13px;
+  margin: -8px 0 16px 0;
   line-height: 1.5;
-}
-
-.info-section {
-  background: rgba(100, 200, 255, 0.03);
-  border-color: rgba(100, 200, 255, 0.2);
 }
 
 label {
@@ -192,9 +378,9 @@ label {
 .checkbox-label {
   flex-direction: row;
   align-items: center;
-  gap: 10px;
-  cursor: pointer;
+  gap: 8px;
   margin-bottom: 4px;
+  cursor: pointer;
 }
 
 .checkbox-label input[type="checkbox"] {
@@ -208,14 +394,48 @@ label {
 }
 
 .checkbox-help {
-  margin-left: 30px;
-  margin-top: 0;
-  margin-bottom: 16px;
+  margin-left: 24px;
+  margin-top: -12px;
 }
 
+select,
+input[type="text"],
 input[type="range"] {
   width: 100%;
   max-width: 400px;
+}
+
+select {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+input[type="text"] {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+input[type="range"] {
   height: 6px;
   background: rgba(255, 255, 255, 0.1);
   border-radius: 3px;
@@ -237,6 +457,12 @@ input[type="range"]::-moz-range-thumb {
   background: var(--accent);
   cursor: pointer;
   border: none;
+}
+
+.quality-control {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 .cache-actions {
@@ -280,22 +506,6 @@ input[type="range"]::-moz-range-thumb {
   color: #ffb000;
   font-size: 14px;
   margin-top: 16px;
-}
-
-.tips-list {
-  margin: 0;
-  padding-left: 20px;
-  color: var(--text-muted);
-  font-size: 14px;
-  line-height: 1.8;
-}
-
-.tips-list li {
-  margin-bottom: 12px;
-}
-
-.tips-list strong {
-  color: var(--text-primary);
 }
 
 .actions {

@@ -60,7 +60,8 @@ const sectionsWithChanges = ref({
   apiKeys: false,
   imageQuality: false,
   performance: false,
-  scheduler: false
+  scheduler: false,
+  automation: false
 })
 
 // Cooldown state to prevent rapid clicking
@@ -106,6 +107,10 @@ const localMemoryLimit = ref(2048)
 const localUseOverlayCache = ref(true)
 let scanPoller: number | null = null
 
+// Automation settings
+const localWebhookAutoSend = ref(true)
+const localWebhookAutoLabels = ref('Overlay')
+
 // API key testing
 const testingApiKeys = ref<Record<string, boolean>>({})
 const apiKeyTestResults = ref<Record<string, string>>({})
@@ -122,8 +127,6 @@ const dbExporting = ref(false)
 const dbImporting = ref(false)
 const showDbImportModal = ref(false)
 const dbImportText = ref('')
-
-// integrations removed
 
 // Presets data for tag mappings
 const presets = ref<Record<string, Record<string, any>>>({})
@@ -146,8 +149,6 @@ const testFanartLoading = ref(false)
 const testConnection = ref('')
 const testConnectionLoading = ref(false)
 const plexLibraries = ref<Array<{ title: string; key: string; type: string }>>([])
-
-// integrations removed
 
 const loadLocalSettings = async () => {
   watchersEnabled.value = false
@@ -226,8 +227,8 @@ const loadLocalSettings = async () => {
   localSchedulerEnabled.value = settings.scheduler.value.enabled
   localSchedulerCronExpression.value = settings.scheduler.value.cronExpression
   localSchedulerLibraryIds.value = settings.scheduler.value.libraryIds || []
-
-  // integrations removed
+  localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
+  localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
 
   await nextTick()
 }
@@ -262,7 +263,9 @@ const captureSettingsSnapshot = () => {
     useOverlayCache: localUseOverlayCache.value,
     schedulerEnabled: localSchedulerEnabled.value,
     schedulerCronExpression: localSchedulerCronExpression.value,
-    schedulerLibraryIds: localSchedulerLibraryIds.value
+    schedulerLibraryIds: localSchedulerLibraryIds.value,
+    webhookAutoSend: localWebhookAutoSend.value,
+    webhookAutoLabels: localWebhookAutoLabels.value
   })
   hasUnsavedChanges.value = false
 
@@ -273,6 +276,7 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.imageQuality = false
   sectionsWithChanges.value.performance = false
   sectionsWithChanges.value.scheduler = false
+  sectionsWithChanges.value.automation = false
 
   setTimeout(() => {
     watchersEnabled.value = true
@@ -309,7 +313,9 @@ const checkForChanges = () => {
     useOverlayCache: localUseOverlayCache.value,
     schedulerEnabled: localSchedulerEnabled.value,
     schedulerCronExpression: localSchedulerCronExpression.value,
-    schedulerLibraryIds: localSchedulerLibraryIds.value
+    schedulerLibraryIds: localSchedulerLibraryIds.value,
+    webhookAutoSend: localWebhookAutoSend.value,
+    webhookAutoLabels: localWebhookAutoLabels.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -341,7 +347,7 @@ const checkForChanges = () => {
     localSchedulerCronExpression.value !== initial.schedulerCronExpression ||
     JSON.stringify(localSchedulerLibraryIds.value) !== JSON.stringify(initial.schedulerLibraryIds)
 
-  // integrations removed
+
 }
 
 const saveSettings = async () => {
@@ -396,7 +402,10 @@ const saveSettings = async () => {
     cronExpression: localSchedulerCronExpression.value,
     libraryIds: localSchedulerLibraryIds.value
   }
-  // integrations removed
+  settings.automation.value = {
+    webhookAutoSend: localWebhookAutoSend.value,
+    webhookAutoLabels: localWebhookAutoLabels.value
+  }
 
   await settings.save()
 
@@ -760,8 +769,6 @@ const clearBackendCache = async () => {
   }
 }
 
-// integrations removed
-
 const handleDbExport = async () => {
   dbExporting.value = true
   try {
@@ -1084,6 +1091,8 @@ onMounted(() => {
         :schedulerCronExpression="localSchedulerCronExpression"
         :schedulerLibraryIds="localSchedulerLibraryIds"
         :schedulerNextRun="schedulerNextRun"
+        :defaultLabelsToRemove="localDefaultLabelsToRemove"
+        :defaultTvLabelsToRemove="localDefaultTvLabelsToRemove"
         :unsavedChanges="hasUnsavedChanges"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
@@ -1092,6 +1101,8 @@ onMounted(() => {
         @update:schedulerEnabled="localSchedulerEnabled = $event"
         @update:schedulerCronExpression="localSchedulerCronExpression = $event"
         @update:schedulerLibraryIds="localSchedulerLibraryIds = $event"
+        @update:defaultLabelsToRemove="localDefaultLabelsToRemove = $event; hasUnsavedChanges.value = true"
+        @update:defaultTvLabelsToRemove="localDefaultTvLabelsToRemove = $event; hasUnsavedChanges.value = true"
         @test-connection="testPlexConnection"
         @scan-library="scanLibrary"
         @save="saveSettings"
@@ -1117,8 +1128,29 @@ onMounted(() => {
         :useOverlayCache="localUseOverlayCache"
         :unsavedChanges="hasUnsavedChanges"
         :scanRunning="scan.running.value"
-        @update:concurrentRenders="localConcurrentRenders = $event"
-        @update:useOverlayCache="localUseOverlayCache = $event"
+        :outputFormat="localOutputFormat"
+        :jpgQuality="localJpgQuality"
+        :pngCompression="localPngCompression"
+        :webpQuality="localWebpQuality"
+        :tmdbRateLimit="localTmdbRateLimit"
+        :tvdbRateLimit="localTvdbRateLimit"
+        :memoryLimit="localMemoryLimit"
+        :webhookAutoSend="localWebhookAutoSend"
+        :webhookAutoLabels="localWebhookAutoLabels"
+        :imageQualityChanged="sectionsWithChanges.imageQuality"
+        :performanceChanged="sectionsWithChanges.performance"
+        :automationChanged="sectionsWithChanges.automation"
+        @update:concurrentRenders="localConcurrentRenders = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:useOverlayCache="localUseOverlayCache = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:outputFormat="localOutputFormat = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:jpgQuality="localJpgQuality = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:pngCompression="localPngCompression = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:webpQuality="localWebpQuality = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:tmdbRateLimit="localTmdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:tvdbRateLimit="localTvdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:memoryLimit="localMemoryLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @clear-frontend-cache="clearCache"
         @clear-backend-cache="clearBackendCache"
         @save="saveSettings"
@@ -1130,9 +1162,11 @@ onMounted(() => {
         :dbImporting="dbImporting"
         :showDbImportModal="showDbImportModal"
         :dbImportText="dbImportText"
+        :apiOrder="apiOrder"
         :unsavedChanges="hasUnsavedChanges"
         @update:showDbImportModal="showDbImportModal = $event"
         @update:dbImportText="dbImportText = $event"
+        @update:apiOrder="apiOrder = $event; sectionsWithChanges.apiKeys = true; hasUnsavedChanges = true"
         @export-db="handleDbExport"
         @import-db="handleDbImport"
         @save="saveSettings"

@@ -354,34 +354,45 @@ def _get_plex_collections(lib_ids: Optional[List[str]] = None) -> List[dict]:
 @router.get("/movies", response_model=List[Movie])
 def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
     """
-    Return movies. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
+    Return movies from cache. Always returns from cache - use /scan-library to refresh.
+    The force_refresh parameter is deprecated but kept for backwards compatibility.
     """
     # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
     if library_id in ("default", ""):
         library_id = None
 
-    if not force_refresh and _cache_fresh(max_age, library_id=library_id):
-        cached = cache.get_cached_movies(library_id=library_id)
-        if cached:
-            return [
-                {
-                    "key": m["rating_key"],
-                    "title": m["title"],
-                    "year": m["year"],
-                    "addedAt": m["addedAt"],
-                    "poster": m.get("poster_url"),
-                    "tmdb_id": m.get("tmdb_id"),
-                    "labels": m.get("labels") or [],
-                    "updated_at": m.get("updated_at"),
-                    "library_id": m.get("library_id"),
-                }
-                for m in cached
-            ]
+    # Always return from cache (which includes labels populated by scans)
+    cached = cache.get_cached_movies(library_id=library_id)
+    return [
+        {
+            "key": m["rating_key"],
+            "title": m["title"],
+            "year": m["year"],
+            "addedAt": m["addedAt"],
+            "poster": m.get("poster_url"),
+            "tmdb_id": m.get("tmdb_id"),
+            "labels": m.get("labels") or [],
+            "updated_at": m.get("updated_at"),
+            "library_id": m.get("library_id"),
+        }
+        for m in cached
+    ]
 
-    # Otherwise hit Plex and refresh the cache
-    lib_ids = [library_id] if library_id else None
-    movies = get_plex_movies(lib_ids)
-    return [{**m.model_dump(), "poster": None} for m in movies]
+
+@router.get("/movies/labels/all")
+def api_all_movie_labels(library_id: str = None):
+    """Get all unique labels for a movie library (or all libraries if not specified)."""
+    if library_id in ("default", ""):
+        library_id = None
+    
+    cached = cache.get_cached_movies(library_id=library_id)
+    labels_set = set()
+    
+    for movie in cached:
+        if movie.get("labels") and isinstance(movie.get("labels"), list):
+            labels_set.update(movie.get("labels"))
+    
+    return {"labels": sorted(list(labels_set))}
 
 
 @router.get("/collections")

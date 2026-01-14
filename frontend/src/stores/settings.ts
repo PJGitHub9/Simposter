@@ -60,7 +60,10 @@ export type SchedulerSettings = {
   libraryIds?: string[]      // New multi-select field
 }
 
-// Integrations removed (Sonarr/Radarr/Tautulli)
+export type AutomationSettings = {
+  webhookAutoSend: boolean
+  webhookAutoLabels: string
+}
 
 export type UISettings = {
   theme: Theme
@@ -80,6 +83,7 @@ export type UISettings = {
   performance?: PerformanceSettings
   apiOrder?: string[]
   scheduler?: SchedulerSettings
+  automation?: AutomationSettings
 }
 
 const theme = ref<Theme>('neon')
@@ -102,7 +106,7 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-// integrations removed
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Overlay' })
 
 async function loadSettings() {
   loading.value = true
@@ -166,7 +170,10 @@ async function loadSettings() {
       libraryId: data.scheduler?.libraryId ?? null,
       libraryIds: data.scheduler?.libraryIds ?? []
     }
-    // integrations removed
+    automation.value = {
+      webhookAutoSend: data.automation?.webhookAutoSend ?? true,
+      webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Overlay'
+    }
 
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to load settings'
@@ -197,7 +204,8 @@ async function saveSettings() {
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value },
       apiOrder: apiOrder.value,
-      scheduler: { ...scheduler.value }
+      scheduler: { ...scheduler.value },
+      automation: { ...automation.value }
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -232,7 +240,7 @@ export function useSettingsStore() {
     performance,
     apiOrder,
     scheduler,
-    // integrations removed
+    automation,
     loading,
     error,
     loaded,

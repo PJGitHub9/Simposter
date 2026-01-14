@@ -12,7 +12,7 @@
 - 👁️ **Real-time preview sidebar** — See rendered output with template + preset applied
 - 🔄 **Preview navigation** — Cycle through selected movies with prev/next controls
 - 📋 **Quick movie list** — Jump to any selected movie instantly
-- 🏷️ **Smart label selector** — Choose specific labels to remove (replaces auto-remove)
+- 🏷️ **Smart label selector** — Choose specific labels to remove per library
 
 ### ⚡ **Performance & Caching**
 - 💾 **Smart sessionStorage caching** — LRU eviction prevents quota errors, cache works indefinitely
@@ -22,14 +22,30 @@
 - 🔍 **Label filtering** — Filter movies by existing labels in batch edit
 - ⏰ **Scheduled library scans** — Automatic cron-based scanning to keep Simposter synced with Plex
 - 🧹 **Memory leak protection** — Automatic cleanup prevents memory leaks on navigation
+- 🎬 **Overlay caching** — Pre-generated template overlays for 3-5x faster batch rendering
 
 ### 🎬 **Enhanced Preview System**
 - 🖼️ **TMDB integration** — Preview uses TMDB posters based on preset filter (textless, text, any)
 - 🎭 **Logo mode support** — Respects 'none' setting (no logo fetch when disabled)
 - 📐 **Accurate rendering** — Preview shows exact output with all preset options applied
 
+### 🔗 **Webhook Integration**
+- 🤖 **Radarr support** — Auto-generate posters for new movies
+- 📺 **Sonarr support** — Auto-generate posters for new TV shows (with season support)
+- 🎙️ **Tautulli support** — Generate posters on Plex events (added, watched, updated)
+- ⚙️ **Flexible configuration** — Choose templates, presets, and event types per integration
+- 📤 **Auto-upload** — Automatically send generated posters to Plex
+
+### 🎞 **Multi-Source Artwork**
+- 🎬 **TMDb integration** — Movies & TV show posters with textless/text variants
+- 🖼️ **Fanart.tv logos** — HD clearlogos and artwork for movies
+- 📺 **TVDB support** — TV show posters, season artwork, logos, and coming-soon indicators
+- 🔀 **Source priority** — Reorder API sources (TMDb, TVDB, Fanart) - configurable in Advanced Settings
+- 🔄 **Smart fallback** — Switch sources if preferred artwork unavailable
+
 ### 🧪 **Experimental Features**
-- 📝 **Custom text overlay** — Add template variables like {title} and {year} (experimental)
+- 📝 **Custom text overlay** — Add template variables like {title} and {year}
+- 🏷️ **Library-specific label removal** — Configure which labels to remove per library
 
 ---
 
@@ -265,6 +281,50 @@ simposter/
 │   └── output/                  # Saved posters
 └── Dockerfile
 ```
+
+---
+
+## 🎯 Settings Guide
+
+Simposter settings are organized into 5 tabs for easy navigation:
+
+### **🏠 General Tab**
+- Theme selection (Light/Dark mode)
+- Poster display density (Grid view)
+- Library refresh interval
+
+### **📚 Libraries Tab**
+- **Plex Connection** — Server URL, API token, SSL verification
+- **Library Configuration** — Enable/disable per-library processing, set output folders
+- **Label Removal** — Choose which Plex labels to remove per library (checkboxes)
+- **Scheduled Scans** — Configure cron schedule for automatic library scanning
+
+### **💾 Save Locations Tab**
+- **Movie Output** — Where to save generated posters (default: Plex poster folder)
+- **TV Show Output** — Separate folder for TV posters
+- **Batch Subfolder** — Organize batch-generated posters in subfolders
+
+### **⚡ Performance Tab**
+- **Image Quality** — Choose output format (JPEG/PNG/WebP) with per-format quality sliders
+  - JPEG quality: 0-100%
+  - PNG compression: 0-9 (0=no compression, 9=best)
+  - WebP quality: 0-100%
+- **Rendering Performance**
+  - Concurrent renders: 1-4 (balance speed vs memory)
+  - Memory limit: 512MB-4GB
+  - Overlay cache: Pre-generate overlays for faster rendering
+- **API Rate Limiting** — Configure request limits per API (5-100 requests/10 seconds)
+  - TMDb rate limit
+  - TVDB rate limit
+- **Cache Management** — Clear application cache, image cache, or database
+
+### **🔧 Advanced Tab**
+- **API Source Priority** — Drag to reorder (TMDb, TVDB, Fanart)
+  - Lock/unlock sources to prevent reordering
+  - Set which source takes priority for artwork lookup
+- **Database Management**
+  - Export settings database
+  - Import settings from backup
 
 ---
 

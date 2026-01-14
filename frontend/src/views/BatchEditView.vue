@@ -61,6 +61,7 @@ const getLabelsCacheKey = () => {
 }
 const labelCache = ref<Record<string, string[]>>({})
 const labelInFlight = new Set<string>()
+const allAvailableLabels = ref<string[]>([]) // All labels available in current library
 
 const loadLabelCache = () => {
   if (typeof sessionStorage === 'undefined') return
@@ -121,6 +122,7 @@ watch(currentLibrary, async (newLib, oldLib) => {
   if (newLib) {
     await fetchMovies()
     // Use efficient bulk cache loading first
+    await fetchAllAvailableLabels() // Fetch all labels for library first
     await fetchLabelsFromCache()
     loadLabelCache()
     loadPosterCache()
@@ -196,6 +198,11 @@ const savePosterCache = () => {
 
 // Get all unique labels from cache
 const allLabels = computed(() => {
+  // Prefer all available labels from library if we have them
+  if (allAvailableLabels.value.length > 0) {
+    return allAvailableLabels.value
+  }
+  // Fallback to labels from loaded movies
   const labels = new Set<string>()
   Object.values(labelCache.value).forEach(movieLabels => {
     movieLabels.forEach(label => labels.add(label))
@@ -416,6 +423,24 @@ const fetchPosters = async () => {
     posterInFlight.delete(r.key)
   })
   savePosterCache()
+}
+
+const fetchAllAvailableLabels = async () => {
+  try {
+    if (!currentLibrary.value) {
+      allAvailableLabels.value = []
+      return
+    }
+    
+    const res = await fetch(`${apiBase}/api/movies/labels/all?library_id=${encodeURIComponent(currentLibrary.value)}`)
+    if (res.ok) {
+      const data = await res.json()
+      allAvailableLabels.value = data.labels || []
+      console.log(`[BatchEdit] Loaded ${allAvailableLabels.value.length} unique labels for library ${currentLibrary.value}`)
+    }
+  } catch (e) {
+    console.warn('[BatchEdit] Failed to fetch all labels:', e)
+  }
 }
 
 const fetchLabelsFromCache = async () => {

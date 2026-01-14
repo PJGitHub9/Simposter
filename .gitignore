@@ -45,3 +45,4 @@ config/ui_settings.json
 */config/settings
 /config/*
 .*/docker-compose.yml
+test_webhooks.py

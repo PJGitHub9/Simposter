@@ -9,7 +9,6 @@ The following data types must NEVER appear in logs unmasked:
 - TMDb API Key (`TMDB_API_KEY`)
 - TVDb API Key (`TVDB_API_KEY`)
 - Fanart.tv API Key (`FANART_API_KEY`)
-<!-- Integrations removed: Radarr/Sonarr/Tautulli -->
 
 ## Protection Mechanisms
 
@@ -36,12 +35,6 @@ def mask_sensitive(value: str, visible_chars: int = 4) -> str:
 ### 3. Fanart Client (`backend/fanart_client.py`)
 - Masks API keys before logging
 - Shows only first 8 characters + "..."
-
-<!-- Integration testing removed -->
-
-<!-- Integration polling removed -->
-
-<!-- Webhooks removed -->
 
 ## Guidelines for Developers
 
@@ -83,7 +76,7 @@ To verify no API keys are logged:
 ## Related Files
 - `backend/config.py` - Main redaction logic
 - `backend/fanart_client.py` - Fanart API key masking
-<!-- Integration files removed -->
+- `backend/api/webhooks.py` - Webhook endpoint security
 
 ## Updates
 - 2026-01-13: Added `mask_sensitive()` utility function

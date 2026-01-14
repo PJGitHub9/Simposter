@@ -157,7 +157,7 @@ Tables created:
 - Batch rendering: `api/batch.py::api_batch_render` (concurrent processing with fallback logic)
 - Presets/fallbacks: `api/presets.py` CRUD with merge import; `api/template_manager.py` fallback preferences
 - Cache control: `api/cache.py`, `cache.py` module, helpers in `config.py`/`movies.py`
-- Integrations removed: `integrations_poller.py` and related scheduler endpoints removed.
+- Webhooks: `api/webhooks.py` with endpoints for Radarr, Sonarr, Tautulli integration
 - History tracking (v1.5.0): `api/history.py` provides poster history with source filtering
 
 ## Tips for Exploring

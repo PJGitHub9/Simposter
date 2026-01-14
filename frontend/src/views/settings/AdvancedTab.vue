@@ -1,17 +1,24 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+
+interface APISource {
+  id: string
+  name: string
+}
 
 const props = defineProps<{
   dbExporting: boolean
   dbImporting: boolean
   showDbImportModal: boolean
   dbImportText: string
+  apiOrder: string[]
   unsavedChanges: boolean
 }>()
 
 const emit = defineEmits<{
   'update:showDbImportModal': [value: boolean]
   'update:dbImportText': [value: string]
+  'update:apiOrder': [value: string[]]
   'export-db': []
   'import-db': []
   'save': []
@@ -26,11 +33,118 @@ const localDbImportText = computed({
   get: () => props.dbImportText,
   set: (val) => emit('update:dbImportText', val)
 })
+
+const localApiOrder = computed({
+  get: () => props.apiOrder,
+  set: (val) => emit('update:apiOrder', val)
+})
+
+const apiOrderLocked = ref(true)
+const draggedApi = ref<string | null>(null)
+
+const availableAPIs: APISource[] = [
+  { id: 'tmdb', name: 'TMDb' },
+  { id: 'tvdb', name: 'TVDB' },
+  { id: 'fanart', name: 'Fanart.tv' }
+]
+
+const startDrag = (api: string) => {
+  draggedApi.value = api
+}
+
+const onDrop = (targetApi: string) => {
+  if (!draggedApi.value || draggedApi.value === targetApi || apiOrderLocked.value) return
+
+  const draggedIndex = localApiOrder.value.indexOf(draggedApi.value)
+  const targetIndex = localApiOrder.value.indexOf(targetApi)
+
+  if (draggedIndex > -1 && targetIndex > -1) {
+    const newOrder = [...localApiOrder.value]
+    ;[newOrder[draggedIndex], newOrder[targetIndex]] = [newOrder[targetIndex], newOrder[draggedIndex]]
+    localApiOrder.value = newOrder
+  }
+
+  draggedApi.value = null
+}
+
+const moveApiUp = (api: string) => {
+  if (apiOrderLocked.value) return
+  const index = localApiOrder.value.indexOf(api)
+  if (index > 0) {
+    const newOrder = [...localApiOrder.value]
+    ;[newOrder[index], newOrder[index - 1]] = [newOrder[index - 1], newOrder[index]]
+    localApiOrder.value = newOrder
+  }
+}
+
+const moveApiDown = (api: string) => {
+  if (apiOrderLocked.value) return
+  const index = localApiOrder.value.indexOf(api)
+  if (index < localApiOrder.value.length - 1) {
+    const newOrder = [...localApiOrder.value]
+    ;[newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]]
+    localApiOrder.value = newOrder
+  }
+}
 </script>
 
 <template>
   <div class="tab-content">
     <h2>Advanced Settings</h2>
+
+    <!-- API Source Priority -->
+    <div class="section">
+      <h3>API Source Priority</h3>
+      <p class="section-description">
+        Reorder which API to use first when fetching artwork (drag to reorder)
+      </p>
+
+      <div class="api-order-header">
+        <span>Priority Order</span>
+        <button
+          @click="apiOrderLocked = !apiOrderLocked"
+          class="lock-btn"
+          :class="{ locked: apiOrderLocked }"
+          type="button"
+        >
+          {{ apiOrderLocked ? '🔒 Locked' : '🔓 Unlock' }}
+        </button>
+      </div>
+
+      <div class="api-order-list">
+        <div
+          v-for="(apiId, index) in localApiOrder"
+          :key="apiId"
+          class="api-order-item"
+          :class="{ disabled: apiOrderLocked, dragging: draggedApi === apiId }"
+          draggable="true"
+          @dragstart="startDrag(apiId)"
+          @dragover.prevent
+          @drop="onDrop(apiId)"
+        >
+          <span class="api-index">{{ index + 1 }}</span>
+          <span class="api-name">{{ availableAPIs.find(a => a.id === apiId)?.name || apiId }}</span>
+          <div class="api-controls" v-if="!apiOrderLocked">
+            <button
+              @click="moveApiUp(apiId)"
+              :disabled="index === 0"
+              class="arrow-btn"
+              type="button"
+            >
+              ↑
+            </button>
+            <button
+              @click="moveApiDown(apiId)"
+              :disabled="index === localApiOrder.length - 1"
+              class="arrow-btn"
+              type="button"
+            >
+              ↓
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div class="section">
       <h3>Database Backup</h3>
@@ -376,6 +490,102 @@ button.secondary {
 
 button:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* API Order Styles */
+.api-order-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lock-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.lock-btn.locked {
+  background: rgba(255, 193, 7, 0.1);
+  border-color: rgba(255, 193, 7, 0.3);
+}
+
+.api-order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.api-order-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: grab;
+  transition: all 0.2s;
+}
+
+.api-order-item:hover:not(.disabled) {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--accent);
+}
+
+.api-order-item.dragging {
+  opacity: 0.5;
+}
+
+.api-order-item.disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.api-index {
+  font-weight: bold;
+  color: var(--accent);
+  min-width: 24px;
+  text-align: center;
+}
+
+.api-name {
+  flex: 1;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.api-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.arrow-btn {
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  max-width: 32px;
+}
+
+.arrow-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.arrow-btn:disabled {
+  opacity: 0.3;
   cursor: not-allowed;
 }
 </style>

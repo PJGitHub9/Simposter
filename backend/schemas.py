@@ -10,6 +10,10 @@ class Movie(BaseModel):
     year: Optional[int] = None
     addedAt: Optional[int] = None
     library_id: Optional[str] = None
+    poster: Optional[str] = None
+    tmdb_id: Optional[int] = None
+    labels: Optional[List[str]] = None
+    updated_at: Optional[str] = None
 
 
 class MovieTMDbResponse(BaseModel):
@@ -105,7 +109,10 @@ class SchedulerSettings(BaseModel):
     libraryIds: List[str] = Field(default_factory=list)
 
 
-# Integrations removed (Sonarr/Radarr/Tautulli)
+class AutomationSettings(BaseModel):
+    """Settings for automatic poster generation via webhooks"""
+    webhookAutoSend: bool = True  # Automatically send generated posters to Plex
+    webhookAutoLabels: str = "Overlay"  # Comma-separated labels to apply to webhook-generated posters
 
 
 class UISettings(BaseModel):
@@ -125,7 +132,7 @@ class UISettings(BaseModel):
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
-    # integrations removed
+    automation: AutomationSettings = Field(default_factory=AutomationSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
 
 class PlexSendRequest(BaseModel):

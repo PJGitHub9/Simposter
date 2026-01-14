@@ -161,45 +161,51 @@ def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> O
 @router.get("/tv-shows")
 def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
     """
-    Return TV shows from Plex. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
+    Return TV shows from cache. Always returns from cache - use /scan-library to refresh.
+    The force_refresh parameter is deprecated but kept for backwards compatibility.
     """
     try:
         # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
         if library_id in ("default", ""):
             library_id = None
 
-        if not force_refresh and _tv_cache_fresh(max_age, library_id=library_id):
-            cached = cache.get_cached_tv_shows(library_id=library_id)
-            if cached:
-                return [
-                    {
-                        "key": s["rating_key"],
-                        "title": s["title"],
-                        "year": s["year"],
-                        "addedAt": s["addedAt"],
-                        "poster": s.get("poster_url"),
-                        "tmdb_id": s.get("tmdb_id"),
-                        "tvdb_id": s.get("tvdb_id"),
-                        "labels": s.get("labels") or [],
-                        "seasons": s.get("seasons") or [],
-                        "updated_at": s.get("updated_at"),
-                        "library_id": s.get("library_id"),
-                    }
-                    for s in cached
-                ]
-
-        lib_ids = [library_id] if library_id else None
-        shows = _get_plex_tv_shows(lib_ids)
-        try:
-            libs_str = ",".join(lib_ids or (getattr(settings, "PLEX_TV_SHOW_LIB_IDS", []) or [])) or "?"
-            logger.info("[PLEX] Loaded %d TV shows from %s libraries (%s)", len(shows), len(lib_ids or getattr(settings, "PLEX_TV_SHOW_LIB_IDS", []) or []), libs_str)
-        except Exception:
-            pass
-        cache.refresh_tv_from_list(shows)
-        return shows
+        # Always return from cache (which includes labels populated by scans)
+        cached = cache.get_cached_tv_shows(library_id=library_id)
+        return [
+            {
+                "key": s["rating_key"],
+                "title": s["title"],
+                "year": s["year"],
+                "addedAt": s["addedAt"],
+                "poster": s.get("poster_url"),
+                "tmdb_id": s.get("tmdb_id"),
+                "tvdb_id": s.get("tvdb_id"),
+                "labels": s.get("labels") or [],
+                "seasons": s.get("seasons") or [],
+                "updated_at": s.get("updated_at"),
+                "library_id": s.get("library_id"),
+            }
+            for s in cached
+        ]
     except Exception as e:
         logger.error(f"Failed to fetch TV shows: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch TV shows: {e}")
+
+
+@router.get("/tv-shows/labels/all")
+def api_all_tv_labels(library_id: str = None):
+    """Get all unique labels for TV shows (or all libraries if not specified)."""
+    if library_id in ("default", ""):
+        library_id = None
+    
+    cached = cache.get_cached_tv_shows(library_id=library_id)
+    labels_set = set()
+    
+    for show in cached:
+        if show.get("labels") and isinstance(show.get("labels"), list):
+            labels_set.update(show.get("labels"))
+    
+    return {"labels": sorted(list(labels_set))}
 
 
 @router.get("/tv-show/{rating_key}/poster")
