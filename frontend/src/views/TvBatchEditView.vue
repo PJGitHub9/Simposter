@@ -169,7 +169,7 @@ const statusLoading = ref(false)
 
 const syncLabelsFromSettings = () => {
   const libId = currentLibrary.value || 'default'
-  const defaults = settings.defaultLabelsToRemove.value?.[libId]
+  const defaults = settings.defaultTvLabelsToRemove.value?.[libId]
   labelsToRemove.value = new Set(Array.isArray(defaults) ? defaults : [])
 }
 

@@ -174,6 +174,11 @@ def pick_logo(logos: list, preference: str, white_fallback: str = "use_next", la
     if not logos:
         return None
 
+    # Filter out SVG logos since we don't have cairo/resvg dependencies
+    logos = [l for l in logos if not (l.get("url") or "").lower().endswith(".svg")]
+    if not logos:
+        return None
+
     if preference == "first":
         return logos[0]
 

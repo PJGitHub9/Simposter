@@ -405,12 +405,19 @@ def api_preview(req: PreviewRequest):
                                     template_id = fallback_poster_template
                                     req.preset_id = fallback_poster_preset  # Update preset_id to match fallback
                                     logger.info("[PREVIEW] Applied poster fallback: %s/%s", fallback_poster_template, fallback_poster_preset)
+                                    # After switching to fallback template, try to get ANY available poster
+                                    poster = pick_poster(posters, "all")
+                                    if poster:
+                                        logger.info("[PREVIEW] Using fallback poster from TMDB after template switch")
                                 else:
                                     logger.warning("[PREVIEW] Fallback poster preset '%s' not found for template '%s'", fallback_poster_preset, fallback_poster_template)
                             elif fallback_action == "skip":
                                 raise HTTPException(status_code=400, detail="Poster fallback is set to skip (no poster found).")
                             else:  # continue
-                                poster = posters[0] if posters else None
+                                # Re-pick with "all" filter to get any available poster
+                                poster = pick_poster(posters, "all")
+                                if not poster:
+                                    logger.warning("[PREVIEW] No posters available even with 'all' filter")
 
                         if poster:
                             background_url = poster.get("url")
