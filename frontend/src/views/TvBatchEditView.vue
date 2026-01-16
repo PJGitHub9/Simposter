@@ -1161,6 +1161,10 @@ const fetchPreview = async (isPreload = false) => {
 
     // Check if we should use poster selection based on preset's poster_filter
     let posterFilter = 'all'
+    let fallbackPosterAction: string | undefined
+    let fallbackPosterTemplate: string | undefined
+    let fallbackPosterPreset: string | undefined
+
     if (selectedPreset.value && selectedTemplate.value) {
       const templateData = presetsDataFull.value[selectedTemplate.value]
       if (templateData && templateData.presets) {
@@ -1171,15 +1175,32 @@ const fetchPreview = async (isPreload = false) => {
           if (seasonIndex !== undefined && preset.season_options && preset.season_options.poster_filter) {
             posterFilter = preset.season_options.poster_filter
             console.log('[TV BATCH PREVIEW] Using season_options poster_filter:', posterFilter)
+
+            // Also get fallback settings from season_options
+            if (preset.season_options.fallbackPosterAction) {
+              fallbackPosterAction = preset.season_options.fallbackPosterAction
+              fallbackPosterTemplate = preset.season_options.fallbackPosterTemplate
+              fallbackPosterPreset = preset.season_options.fallbackPosterPreset
+              console.log('[TV BATCH PREVIEW] Using season_options fallback:', fallbackPosterTemplate, fallbackPosterPreset)
+            }
           } else if (preset.options && preset.options.poster_filter) {
             posterFilter = preset.options.poster_filter
             console.log('[TV BATCH PREVIEW] Using options poster_filter:', posterFilter)
+
+            // Also get fallback settings from regular options
+            if (preset.options.fallbackPosterAction) {
+              fallbackPosterAction = preset.options.fallbackPosterAction
+              fallbackPosterTemplate = preset.options.fallbackPosterTemplate
+              fallbackPosterPreset = preset.options.fallbackPosterPreset
+              console.log('[TV BATCH PREVIEW] Using options fallback:', fallbackPosterTemplate, fallbackPosterPreset)
+            }
           }
         }
       }
     }
 
     // If we have a textless/text filter, use the new select-poster endpoint
+    let posterSelectionFailed = false
     if (posterFilter === 'textless' || posterFilter === 'text') {
       console.log('[TV BATCH PREVIEW] Fetching filtered poster with filter:', posterFilter)
       const selectParams = new URLSearchParams({
@@ -1187,7 +1208,7 @@ const fetchPreview = async (isPreload = false) => {
         ...(seasonIndex !== undefined && { season_index: seasonIndex.toString() }),
         ...(currentLibrary.value && { library_id: currentLibrary.value })
       })
-      
+
       try {
         // Use movie.key (the show's rating key) not targetKey (which could be a season)
         // The endpoint needs the show's key to look up TMDB ID
@@ -1199,14 +1220,18 @@ const fetchPreview = async (isPreload = false) => {
         } else {
           const errorText = await selectRes.text()
           console.warn('[TV BATCH PREVIEW] Poster selection failed:', selectRes.status, errorText)
+          posterSelectionFailed = true
+          posterUrl = undefined  // Clear poster URL so backend handles fallback
+          console.log('[TV BATCH PREVIEW] Will let backend handle fallback logic (not fetching Plex poster)')
         }
       } catch (err) {
         console.error('[TV BATCH PREVIEW] Error selecting poster:', err)
       }
     }
 
-    // Fetch poster if still not available
-    if (!posterUrl) {
+    // Fetch poster if still not available AND poster selection didn't fail
+    // (If poster selection failed, let the backend handle the fallback using tv_show_rating_key)
+    if (!posterUrl && !posterSelectionFailed) {
       const posterRes = await fetch(`${apiBase}/api/tv-show/${targetKey}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
       const posterData = await posterRes.json()
       if (posterData.url) {
@@ -1242,14 +1267,20 @@ const fetchPreview = async (isPreload = false) => {
 
     const payload = {
       template_id: selectedTemplate.value,
-      background_url: posterUrl || '',
+      background_url: posterUrl || null,  // Use null instead of undefined for proper JSON serialization
       logo_url: null,
       options,
-      preset_id: selectedPreset.value || undefined,
+      preset_id: selectedPreset.value || null,
       movie_title: movie.title,
-      movie_year: movie.year ? Number(movie.year) : undefined,
-      // Add TV show rating key so preview endpoint can fetch logos
-      tv_show_rating_key: movie.key
+      movie_year: movie.year ? Number(movie.year) : null,
+      // Add TV show rating key so preview endpoint can fetch logos and apply fallback logic
+      tv_show_rating_key: movie.key,
+      // Include season index if rendering a season (use null instead of undefined)
+      season_index: seasonIndex !== undefined ? seasonIndex : null,
+      // Include fallback settings from preset
+      fallbackPosterAction: fallbackPosterAction,
+      fallbackPosterTemplate: fallbackPosterTemplate,
+      fallbackPosterPreset: fallbackPosterPreset
     }
 
     console.log('[TV BATCH PREVIEW] Fetching preview with payload:', payload)

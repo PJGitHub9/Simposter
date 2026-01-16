@@ -136,69 +136,220 @@ def _solid_color_logo(logo: Image.Image, color: tuple[int, int, int]) -> Image.I
 
 def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     """
-    Load a font by name. First checks /config/fonts (mounted volume),
-    then repo config/fonts, then system fonts with sensible fallbacks.
-    """
-    font_extensions = ['.ttf', '.otf', '.TTF', '.OTF']
+    Load a font by name. Searches in this order:
+    1. /config/fonts (mounted volume for custom fonts)
+    2. repo config/fonts (bundled fonts)
+    3. System font directories
 
-    def try_paths(base_dir: Path):
+    Supports exact matches, partial matches, and weight-specific variants.
+    Users can upload custom .ttf or .otf files to /config/fonts/
+    """
+    font_extensions = ['.ttf', '.otf', '.TTF', '.OTF', '.ttc', '.TTC']
+    boldish = (font_weight or "").lower() in ("bold", "700", "800", "900")
+
+    def scan_directory(base_dir: Path):
+        """Scan directory for matching fonts with fuzzy matching."""
+        if not base_dir.exists():
+            return None
+
+        # Try exact match first
         for ext in font_extensions:
             font_path = base_dir / f"{font_family}{ext}"
             if font_path.exists():
                 try:
+                    print(f"[FONT] Loaded '{font_family}' from {font_path}")
                     return ImageFont.truetype(str(font_path), font_size)
-                except Exception:
+                except Exception as e:
+                    print(f"[FONT] Failed to load {font_path}: {e}")
+
+            # Try with weight suffix if bold requested
+            if boldish:
+                for suffix in ['-Bold', '-bold', 'Bold', 'bold', '-B', 'B', '-Heavy', 'Heavy']:
+                    font_path = base_dir / f"{font_family}{suffix}{ext}"
+                    if font_path.exists():
+                        try:
+                            print(f"[FONT] Loaded '{font_family}' (bold) from {font_path}")
+                            return ImageFont.truetype(str(font_path), font_size)
+                        except Exception as e:
+                            print(f"[FONT] Failed to load {font_path}: {e}")
+
+        # Try recursive search with fuzzy matching
+        try:
+            font_lower = font_family.lower().replace(' ', '').replace('-', '')
+            matched_fonts = []
+
+            # First pass: collect all matching fonts with metadata
+            for font_file in base_dir.rglob('*'):
+                if font_file.suffix.lower() not in ['.ttf', '.otf', '.ttc']:
                     continue
+
+                file_lower = font_file.stem.lower().replace(' ', '').replace('-', '')
+
+                # Match if font_family is in filename
+                if font_lower in file_lower or file_lower in font_lower:
+                    has_bold = any(w in file_lower for w in ['bold', 'heavy', 'black', 'bd'])
+                    has_italic = 'italic' in file_lower or 'oblique' in file_lower
+                    has_light = 'light' in file_lower or 'thin' in file_lower
+
+                    # Skip italics unless specifically requested
+                    if has_italic and 'italic' not in font_family.lower():
+                        continue
+
+                    matched_fonts.append({
+                        'path': font_file,
+                        'has_bold': has_bold,
+                        'has_light': has_light,
+                        'has_italic': has_italic,
+                        'is_exact_weight': (boldish and has_bold) or (not boldish and not has_bold and not has_light)
+                    })
+
+            # Sort by preference: exact weight match first
+            matched_fonts.sort(key=lambda x: (
+                not x['is_exact_weight'],  # Exact weight match first
+                x['has_italic'],  # Non-italic preferred
+                x['has_light']  # Non-light preferred
+            ))
+
+            # Try loading fonts in priority order
+            for font_info in matched_fonts:
+                try:
+                    font_obj = ImageFont.truetype(str(font_info['path']), font_size)
+                    match_type = "exact weight" if font_info['is_exact_weight'] else "fallback weight"
+                    print(f"[FONT] Loaded '{font_family}' via fuzzy match ({match_type}) from {font_info['path']}")
+                    return font_obj
+                except Exception as e:
+                    print(f"[FONT] Failed to load {font_info['path']}: {e}")
+
+        except Exception as e:
+            print(f"[FONT] Error scanning directory {base_dir}: {e}")
+
         return None
 
-    # 1) Mounted config volume fonts (/config/fonts by default)
+    # 1) Check /config/fonts (user custom fonts directory)
     volume_fonts_dir = Path(settings.CONFIG_DIR) / "fonts"
-    font_obj = try_paths(volume_fonts_dir)
+    # Create directory if it doesn't exist
+    try:
+        volume_fonts_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    font_obj = scan_directory(volume_fonts_dir)
     if font_obj:
         return font_obj
 
-    # 2) Repo config/fonts (for local dev)
-    repo_fonts_dir = Path(__file__).resolve().parent.parent / "config" / "fonts"
-    font_obj = try_paths(repo_fonts_dir)
+    # 2) Check repo config/fonts (bundled fonts)
+    repo_fonts_dir = Path(__file__).resolve().parent.parent.parent / "config" / "fonts"
+    font_obj = scan_directory(repo_fonts_dir)
     if font_obj:
         return font_obj
 
-    # 3) Common system font mappings for Windows/Linux/Mac
+    # 3) System font directories (Windows/Linux/macOS)
+    system_font_dirs = [
+        Path('/usr/share/fonts'),  # Linux
+        Path('/System/Library/Fonts'),  # macOS system
+        Path('/Library/Fonts'),  # macOS shared
+        Path('C:/Windows/Fonts'),  # Windows
+        Path(os.path.expanduser('~/Library/Fonts')),  # macOS user
+        Path(os.path.expanduser('~/.fonts')),  # Linux user
+    ]
+
+    for sys_dir in system_font_dirs:
+        if sys_dir.exists():
+            font_obj = scan_directory(sys_dir)
+            if font_obj:
+                return font_obj
+
+    # 4) Common font name aliases as fallback
+    # Map font families to their actual file names on different systems
     system_font_map = {
-        'Arial': ['arial.ttf', 'Arial.ttf', '/System/Library/Fonts/Supplemental/Arial.ttf'],
-        'Helvetica': ['Helvetica.ttc', 'helvetica.ttf', '/System/Library/Fonts/Helvetica.ttc'],
-        'Times New Roman': ['times.ttf', 'Times New Roman.ttf', '/System/Library/Fonts/Supplemental/Times New Roman.ttf'],
-        'Georgia': ['georgia.ttf', 'Georgia.ttf', '/System/Library/Fonts/Supplemental/Georgia.ttf'],
-        'Verdana': ['verdana.ttf', 'Verdana.ttf', '/System/Library/Fonts/Supplemental/Verdana.ttf'],
-        'Courier New': ['cour.ttf', 'Courier New.ttf', '/System/Library/Fonts/Supplemental/Courier New.ttf'],
-        'Impact': ['impact.ttf', 'Impact.ttf', '/System/Library/Fonts/Supplemental/Impact.ttf'],
-        # Debian/Pillow bundled fonts
-        'DejaVu Sans': ['DejaVuSans.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'],
-        'DejaVu Sans Bold': ['DejaVuSans-Bold.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'],
+        'Arial': {
+            'regular': ['arial.ttf', 'Arial.ttf'],
+            'bold': ['arialbd.ttf', 'Arial Bold.ttf', 'Arial-Bold.ttf']
+        },
+        'Helvetica': {
+            'regular': ['Helvetica.ttf', 'HelveticaNeue.ttc', 'Helvetica Neue.ttf', 'arial.ttf'],  # Fallback to Arial
+            'bold': ['Helvetica-Bold.ttf', 'HelveticaNeue-Bold.ttc', 'Helvetica Neue Bold.ttf', 'arialbd.ttf']
+        },
+        'Times New Roman': {
+            'regular': ['times.ttf', 'Times New Roman.ttf'],
+            'bold': ['timesbd.ttf', 'Times New Roman Bold.ttf']
+        },
+        'Georgia': {
+            'regular': ['georgia.ttf', 'Georgia.ttf'],
+            'bold': ['georgiab.ttf', 'Georgia Bold.ttf']
+        },
+        'Verdana': {
+            'regular': ['verdana.ttf', 'Verdana.ttf'],
+            'bold': ['verdanab.ttf', 'Verdana Bold.ttf']
+        },
+        'Courier New': {
+            'regular': ['cour.ttf', 'Courier New.ttf'],
+            'bold': ['courbd.ttf', 'Courier New Bold.ttf']
+        },
+        'Impact': {
+            'regular': ['impact.ttf', 'Impact.ttf'],
+            'bold': ['impact.ttf', 'Impact.ttf']  # Impact doesn't have bold
+        },
+        'Trebuchet MS': {
+            'regular': ['trebuc.ttf', 'Trebuchet MS.ttf'],
+            'bold': ['trebucbd.ttf', 'Trebuchet MS Bold.ttf']
+        },
+        'Comic Sans MS': {
+            'regular': ['comic.ttf', 'Comic Sans MS.ttf'],
+            'bold': ['comicbd.ttf', 'Comic Sans MS Bold.ttf']
+        },
+        'DejaVu Sans': {
+            'regular': ['DejaVuSans.ttf'],
+            'bold': ['DejaVuSans-Bold.ttf']
+        },
+        'Liberation Sans': {
+            'regular': ['LiberationSans-Regular.ttf'],
+            'bold': ['LiberationSans-Bold.ttf']
+        },
+        'Roboto': {
+            'regular': ['Roboto-Regular.ttf'],
+            'bold': ['Roboto-Bold.ttf']
+        },
     }
 
-    boldish = (font_weight or "").lower() in ("bold", "700", "800", "900")
+    # Build candidate list based on weight
     candidates = []
-    candidates.extend(system_font_map.get(font_family, [font_family + '.ttf']))
+    if font_family in system_font_map:
+        weight_key = 'bold' if boldish else 'regular'
+        # Try requested weight first
+        candidates.extend(system_font_map[font_family].get(weight_key, []))
+        # Then try opposite weight as fallback
+        fallback_key = 'regular' if boldish else 'bold'
+        candidates.extend(system_font_map[font_family].get(fallback_key, []))
+
+    # Add generic fallbacks (weight-aware)
     if boldish:
         candidates.extend([
-            font_family + '-Bold.ttf',
-            font_family + '-Bold.otf',
             'DejaVuSans-Bold.ttf',
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            'LiberationSans-Bold.ttf',
+            'FreeSansBold.ttf',
+            'arialbd.ttf',  # Windows Arial Bold
+            'Arial-Bold.ttf',
         ])
-    candidates.extend([
-        'DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-    ])
+    else:
+        candidates.extend([
+            'DejaVuSans.ttf',
+            'LiberationSans-Regular.ttf',
+            'FreeSans.ttf',
+            'arial.ttf',  # Windows Arial
+            'Arial.ttf',
+        ])
 
     for font_name in candidates:
         try:
-            return ImageFont.truetype(font_name, font_size)
+            font_obj = ImageFont.truetype(font_name, font_size)
+            print(f"[FONT] Loaded system font: {font_name} (weight={'bold' if boldish else 'regular'})")
+            return font_obj
         except Exception:
             continue
 
-    print("[DEBUG] Falling back to Pillow default font; text may render very small. Install fonts in /config/fonts or add fonts-dejavu to the image.")
+    print(f"[FONT] WARNING: Could not load '{font_family}' (weight={'bold' if boldish else 'regular'}). Using Pillow default.")
+    print(f"[FONT] To fix: Upload .ttf/.otf files to {volume_fonts_dir}")
     return ImageFont.load_default()
 
 
@@ -231,7 +382,7 @@ def _render_text_overlay(
     position_y = float(options.get("position_y", 0.75))
 
     # Shadow options
-    shadow_enabled = bool(options.get("shadow_enabled", True))
+    shadow_enabled = bool(options.get("shadow_enabled", False))  # Default: disabled
     shadow_blur = int(options.get("shadow_blur", 10))
     shadow_offset_x = int(options.get("shadow_offset_x", 0))
     shadow_offset_y = int(options.get("shadow_offset_y", 4))

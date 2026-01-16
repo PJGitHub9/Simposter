@@ -23,13 +23,13 @@ class MovieTMDbResponse(BaseModel):
 
 class PreviewRequest(BaseModel):
     template_id: str
-    background_url: str
+    background_url: Optional[str] = None  # Optional to allow backend to fetch from TMDb using tv_show_rating_key
     logo_url: Optional[str] = None
     options: Optional[Dict[str, Any]] = None
-    preset_id: Optional[str] = None   # <-- MAKE OPTIONAL
+    preset_id: Optional[str] = None
     movie_title: Optional[str] = None
     movie_year: Optional[int] = None
-    tv_show_rating_key: Optional[str] = None  # For TV show logo fetching
+    tv_show_rating_key: Optional[str] = None  # For TV show logo fetching and poster fallback
     season_index: Optional[int] = None  # For TV show season poster fetching (1, 2, 3, etc.)
     fallbackPosterAction: Optional[str] = None
     fallbackPosterTemplate: Optional[str] = None

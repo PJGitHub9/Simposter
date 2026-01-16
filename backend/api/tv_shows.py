@@ -327,9 +327,8 @@ def api_tv_show_select_poster(
             all_posters = season_posters + series_posters
             poster = pick_poster(all_posters, poster_filter)
 
-        if not poster and (season_posters or series_posters):
-            # Fallback to first available
-            poster = season_posters[0] if season_posters else series_posters[0] if series_posters else None
+        # When no poster matches the filter, return 404 to trigger template fallback
+        # (Don't silently fallback to first available poster)
     else:
         # Get series-level images only
         series_imgs = get_images_for_tv_show(tmdb_id, original_lang)
@@ -349,8 +348,8 @@ def api_tv_show_select_poster(
         else:
             poster = pick_poster(posters, poster_filter)
 
-        if not poster and posters:
-            poster = posters[0]
+        # When no poster matches the filter, return 404 to trigger template fallback
+        # (Don't silently fallback to first available poster)
 
     if not poster:
         raise HTTPException(status_code=404, detail="No poster found")

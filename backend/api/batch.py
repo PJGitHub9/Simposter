@@ -991,15 +991,16 @@ def _render_and_save_poster(
 
             # Record history
             try:
-                db.add_history(
+                db.record_poster_history(
                     rating_key=rating_key,
                     library_id=str(req.library_id or ""),
                     title=title,
                     year=year,
                     template_id=template_id,
                     preset_id=preset_id,
-                    action="saved_locally",
+                    action="saved_local",
                     save_path=str(save_path),
+                    source='batch',
                 )
             except Exception:
                 pass
@@ -1048,7 +1049,7 @@ def _render_and_save_poster(
 
             # Record history
             try:
-                db.add_history(
+                db.record_poster_history(
                     rating_key=rating_key,
                     library_id=str(req.library_id or ""),
                     title=title,
@@ -1057,6 +1058,7 @@ def _render_and_save_poster(
                     preset_id=preset_id,
                     action="sent_to_plex",
                     save_path=str(save_path) if save_path else None,
+                    source='batch',
                 )
             except Exception:
                 pass

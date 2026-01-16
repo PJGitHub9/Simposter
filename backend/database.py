@@ -278,40 +278,39 @@ def init_database():
                 # Load existing season options or create from base
                 season_raw = row["season_options_json"] if "season_options_json" in row.keys() else None
                 base_opts = json.loads(row["options_json"]) if row["options_json"] else {}
-                
+
                 # Check if season_options is empty (newly created column defaults to '{}')
                 # or if it's a non-empty user-customized value
                 is_empty = not season_raw or season_raw.strip() in ("", "{}", "null", "NULL")
-                
-                if not is_empty:
-                    # User has custom season options - merge with base but don't override custom values
-                    season_opts = json.loads(season_raw)
-                    # Merge with base to ensure all base fields are present
-                    season_opts = {**base_opts, **season_opts}
-                else:
-                    # Empty season options - start fresh from base
+
+                if is_empty:
+                    # Empty season options - initialize from base with season-specific defaults
                     season_opts = dict(base_opts or {})
-                
-                # Apply season-specific overrides (these always override base options)
-                season_defaults = {
-                    "logo_mode": "none",
-                    "poster_filter": "textless",
-                    "text_overlay_enabled": True,
-                    "custom_text": "{season}",
-                    "font_family": "Arial",
-                    "font_size": 150,
-                    "shadow_enabled": False,
-                    "shadow_blur": 0,
-                    "letter_spacing": 1,
-                    "position_y": 0.85,
-                }
-                # Always override these specific fields for season posters
-                season_opts.update(season_defaults)
-                
-                cursor.execute(
-                    "UPDATE presets SET season_options_json = ? WHERE id = ?",
-                    (json.dumps(season_opts), row["id"]),
-                )
+
+                    # Apply season-specific overrides for initial setup
+                    season_defaults = {
+                        "logo_mode": "none",
+                        "poster_filter": "textless",
+                        "text_overlay_enabled": True,
+                        "custom_text": "{season}",
+                        "font_family": "Arial",
+                        "font_size": 150,
+                        "shadow_enabled": False,
+                        "shadow_blur": 0,
+                        "letter_spacing": 1,
+                        "position_y": 0.85,
+                    }
+                    season_opts.update(season_defaults)
+
+                    cursor.execute(
+                        "UPDATE presets SET season_options_json = ? WHERE id = ?",
+                        (json.dumps(season_opts), row["id"]),
+                    )
+                else:
+                    # User has custom season options - DO NOT overwrite them
+                    # Just ensure it's valid JSON by loading and re-saving
+                    season_opts = json.loads(season_raw)
+                    # No changes - preserve user settings exactly as they are
             except Exception as backfill_err:
                 logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row["id"], backfill_err)
 
