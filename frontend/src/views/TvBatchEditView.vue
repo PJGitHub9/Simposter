@@ -675,6 +675,26 @@ const processBatch = async () => {
     const ratingKeys = Array.from(selectedShows.value)
     const selectedForStatus = selectedShowsList.value
 
+    // Extract fallback settings from preset (similar to preview logic)
+    let fallbackPosterAction: string | undefined
+    let fallbackPosterTemplate: string | undefined
+    let fallbackPosterPreset: string | undefined
+
+    if (selectedPreset.value && selectedTemplate.value) {
+      const templateData = presetsDataFull.value[selectedTemplate.value]
+      if (templateData && templateData.presets) {
+        const preset = templateData.presets.find((p: any) => p.id === selectedPreset.value)
+        if (preset) {
+          // Get fallback settings from regular options (for series)
+          if (preset.options && preset.options.fallbackPosterAction) {
+            fallbackPosterAction = preset.options.fallbackPosterAction
+            fallbackPosterTemplate = preset.options.fallbackPosterTemplate
+            fallbackPosterPreset = preset.options.fallbackPosterPreset
+          }
+        }
+      }
+    }
+
     const payload = {
       rating_keys: ratingKeys,
       template_id: selectedTemplate.value,
@@ -684,7 +704,11 @@ const processBatch = async () => {
       save_locally: saveLocally.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
       library_id: currentLibrary.value || undefined,
-      include_seasons: includeSeasons.value
+      include_seasons: includeSeasons.value,
+      // Include fallback settings so batch endpoint can handle template fallbacks
+      fallbackPosterAction: fallbackPosterAction,
+      fallbackPosterTemplate: fallbackPosterTemplate,
+      fallbackPosterPreset: fallbackPosterPreset
     }
 
     // Simulate progress

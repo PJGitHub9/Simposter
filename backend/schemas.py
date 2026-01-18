@@ -179,6 +179,9 @@ class TVShowBatchRequest(BaseModel):
     labels: List[str] = []
     library_id: Optional[str] = None
     include_seasons: bool = True  # Always true for TV shows: render all seasons instead of series poster
+    fallbackPosterAction: Optional[str] = None
+    fallbackPosterTemplate: Optional[str] = None
+    fallbackPosterPreset: Optional[str] = None
 
 
 # Legacy batch request - kept for backward compatibility

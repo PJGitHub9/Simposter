@@ -628,18 +628,36 @@ def _render_tv_series_poster(
         "current_step": "Selecting assets",
     })
 
-    # Select poster and logo with textless fallback logic
-    poster = None
-    if poster_filter == "textless":
-        # Try to find a textless poster
-        poster = next((p for p in posters if p.get("has_text") == False), None)
-        if not poster:
-            logger.debug("[BATCH TV] No textless series poster found, using first available")
-    else:
-        poster = pick_poster(posters, poster_filter)
+    # Select poster with template fallback logic (matching preview.py behavior)
+    poster = pick_poster(posters, poster_filter)
     
     if not poster:
-        poster = posters[0] if posters else None
+        # Apply template fallback if no poster found with filter
+        fallback_action = render_options.get("fallbackPosterAction") or req.fallbackPosterAction or "continue"
+        fallback_template = render_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
+        fallback_preset = render_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
+        
+        if fallback_action == "template" and fallback_template:
+            logger.info("[BATCH TV] Applying template fallback: %s/%s", fallback_template, fallback_preset)
+            # Load fallback preset and merge options
+            from ..config import load_presets
+            presets_data = load_presets()
+            tpl_presets = presets_data.get(fallback_template, {}).get("presets", [])
+            fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None) if fallback_preset else None
+            if fpreset:
+                fp_opts = fpreset.get("options", {})
+                render_options = {**render_options, **fp_opts}
+                template_id = fallback_template
+                preset_id = fallback_preset
+                # Now try to get ANY available poster
+                poster = pick_poster(posters, "all")
+                logger.info("[BATCH TV] Using fallback poster from TMDB after template switch")
+            else:
+                logger.warning("[BATCH TV] Fallback preset '%s' not found for template '%s'", fallback_preset, fallback_template)
+        else:
+            # continue action - try to get any available poster
+            poster = pick_poster(posters, "all")
+    
     if not poster:
         raise Exception("No poster found for series")
 
@@ -733,17 +751,39 @@ def _render_all_tv_seasons(
     })
     
     try:
-        # Select series poster with textless fallback logic
-        series_poster = None
-        if poster_filter == "textless":
-            series_poster = next((p for p in series_posters if p.get("has_text") == False), None)
-            if not series_poster:
-                logger.debug("[BATCH TV] No textless series poster found, using first available")
-        else:
-            series_poster = pick_poster(series_posters, poster_filter)
+        # Select series poster with template fallback logic (matching _render_tv_series_poster)
+        series_poster = pick_poster(series_posters, poster_filter)
+        
+        series_template_id = template_id
+        series_preset_id = preset_id
+        series_render_options = dict(render_options)
         
         if not series_poster:
-            series_poster = series_posters[0] if series_posters else None
+            # Apply template fallback if no poster found with filter
+            fallback_action = render_options.get("fallbackPosterAction") or req.fallbackPosterAction or "continue"
+            fallback_template = render_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
+            fallback_preset = render_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
+            
+            if fallback_action == "template" and fallback_template:
+                logger.info("[BATCH TV] Applying template fallback for series: %s/%s", fallback_template, fallback_preset)
+                # Load fallback preset and merge options
+                from ..config import load_presets
+                presets_data = load_presets()
+                tpl_presets = presets_data.get(fallback_template, {}).get("presets", [])
+                fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None) if fallback_preset else None
+                if fpreset:
+                    fp_opts = fpreset.get("options", {})
+                    series_render_options = {**render_options, **fp_opts}
+                    series_template_id = fallback_template
+                    series_preset_id = fallback_preset
+                    # Now try to get ANY available poster
+                    series_poster = pick_poster(series_posters, "all")
+                    logger.info("[BATCH TV] Using fallback poster from TMDB after template switch")
+                else:
+                    logger.warning("[BATCH TV] Fallback preset '%s' not found for template '%s'", fallback_preset, fallback_template)
+            else:
+                # continue action - try to get any available poster
+                series_poster = pick_poster(series_posters, "all")
         
         if series_poster:
             # Select logo for series
@@ -751,9 +791,9 @@ def _render_all_tv_seasons(
             series_poster_url = series_poster.get("url")
             series_logo_url = series_logo.get("url") if series_logo else None
             
-            # Render series poster
+            # Render series poster with potentially updated template/preset from fallback
             series_result = _render_and_save_poster(
-                rating_key, series_poster_url, series_logo_url, render_options, template_id, preset_id,
+                rating_key, series_poster_url, series_logo_url, series_render_options, series_template_id, series_preset_id,
                 show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
                 req, is_tv=True
             )
@@ -811,19 +851,40 @@ def _render_all_tv_seasons(
                     season_index, len(all_posters), len(season_posters), len(series_posters),
                     len(series_logos), season_poster_filter)
 
-        # Select poster with textless fallback logic using season-specific filter
-        poster = None
-        if season_poster_filter == "textless":
-            # Try season textless first
-            poster = next((p for p in season_posters if p.get("has_text") == False), None)
-            # Fall back to series textless
-            if not poster:
-                poster = next((p for p in series_posters if p.get("has_text") == False), None)
-        else:
-            poster = pick_poster(all_posters, season_poster_filter)
-
+        # Select poster with template fallback logic (matching preview.py behavior)
+        poster = pick_poster(all_posters, season_poster_filter)
+        
+        season_template_id = template_id
+        season_preset_id = preset_id
+        season_render_options = dict(final_season_options)
+        
         if not poster:
-            poster = all_posters[0] if all_posters else None
+            # Apply template fallback if no poster found with filter
+            fallback_action = final_season_options.get("fallbackPosterAction") or req.fallbackPosterAction or "continue"
+            fallback_template = final_season_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
+            fallback_preset = final_season_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
+            
+            if fallback_action == "template" and fallback_template:
+                logger.info("[BATCH TV] Applying template fallback for season %s: %s/%s", season_title, fallback_template, fallback_preset)
+                # Load fallback preset and merge options
+                from ..config import load_presets
+                presets_data = load_presets()
+                tpl_presets = presets_data.get(fallback_template, {}).get("presets", [])
+                fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None) if fallback_preset else None
+                if fpreset:
+                    # Use season_options from fallback preset since this is a season
+                    fp_opts = fpreset.get("season_options", {}) if "season_options" in fpreset else fpreset.get("options", {})
+                    season_render_options = {**final_season_options, **fp_opts}
+                    season_template_id = fallback_template
+                    season_preset_id = fallback_preset
+                    # Now try to get ANY available poster
+                    poster = pick_poster(all_posters, "all")
+                    logger.info("[BATCH TV] Using fallback poster from TMDB after template switch")
+                else:
+                    logger.warning("[BATCH TV] Fallback preset '%s' not found for template '%s'", fallback_preset, fallback_template)
+            else:
+                # continue action - try to get any available poster
+                poster = pick_poster(all_posters, "all")
 
         if not poster:
             logger.warning("[BATCH TV] No poster found for %s - %s, skipping", show_title, season_title)
@@ -835,8 +896,8 @@ def _render_all_tv_seasons(
             continue
 
         # Extract logo mode from season options (may differ from series logo mode)
-        season_logo_mode = final_season_options.get("logo_mode", logo_mode)
-        season_logo_preference = final_season_options.get("logo_preference") or season_logo_mode or logo_preference
+        season_logo_mode = season_render_options.get("logo_mode", logo_mode)
+        season_logo_preference = season_render_options.get("logo_preference") or season_logo_mode or logo_preference
         season_logo_preference = map_logo_mode_to_preference(season_logo_preference)
 
         # Select logo using season-specific logo mode
@@ -846,12 +907,11 @@ def _render_all_tv_seasons(
         logo_url = logo.get("url") if logo else None
 
         # Add season_text to season-specific options
-        season_options_final = dict(final_season_options)
-        season_options_final["season_text"] = season_title
+        season_render_options["season_text"] = season_title
 
-        # Render the poster
+        # Render the poster with potentially updated template/preset from fallback
         result = _render_and_save_poster(
-            season_key, poster_url, logo_url, season_options_final, template_id, preset_id,
+            season_key, poster_url, logo_url, season_render_options, season_template_id, season_preset_id,
             show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
             req, is_tv=True, season_title=season_title, season_index=season_index
         )
