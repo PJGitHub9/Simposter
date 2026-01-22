@@ -203,7 +203,8 @@ def process_webhook_poster_generation(
             if result.get("status") == "success":
                 logger.info(f"[WEBHOOK] Successfully processed TV show {rating_key}")
             else:
-                logger.error(f"[WEBHOOK] Failed to process TV show {rating_key}: {result.get('error')}")
+                error_msg = result.get('error', 'Unknown error')
+                logger.error(f"[WEBHOOK] Failed to process TV show {rating_key}: {error_msg}")
 
         else:
             # Create movie batch request
@@ -243,7 +244,8 @@ def process_webhook_poster_generation(
             if result.get("status") == "success":
                 logger.info(f"[WEBHOOK] Successfully processed movie {rating_key}")
             else:
-                logger.error(f"[WEBHOOK] Failed to process movie {rating_key}: {result.get('error')}")
+                error_msg = result.get('error', 'Unknown error')
+                logger.error(f"[WEBHOOK] Failed to process movie {rating_key}: {error_msg}")
 
     except Exception as e:
         logger.error(f"[WEBHOOK] Error in background poster generation: {e}", exc_info=True)
