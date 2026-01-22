@@ -541,16 +541,19 @@ def tautulli_webhook(
         # Map Tautulli event names to our categories
         event_map = {
             "library.new": "added",
+            "created": "added",  # Tautulli sometimes sends "created" for new items
             "library.update": "updated",
             "playback.stop": "watched"
         }
 
         event_category = event_map.get(event, "unknown")
-        processing_events = [e.strip() for e in event_types.split(",")]
+        processing_events = [e.strip().lower() for e in event_types.split(",")]
+
+        logger.info(f"[TAUTULLI_WEBHOOK] Event category: '{event_category}', Processing events: {processing_events}")
 
         # Check if we should process this event
         if event_category not in processing_events:
-            logger.debug(f"[TAUTULLI_WEBHOOK] Event '{event_category}' not in processing list: {processing_events}")
+            logger.info(f"[TAUTULLI_WEBHOOK] Event '{event_category}' not in processing list: {processing_events} - IGNORING")
             return {"status": "ignored", "reason": f"Event type {event_category} not in processing list"}
 
         if media_type not in ["movie", "episode", "show"]:
