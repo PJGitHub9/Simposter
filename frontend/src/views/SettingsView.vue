@@ -20,6 +20,9 @@ interface LibraryMapping {
   id: string
   title?: string
   displayName?: string
+  autoGenerateEnabled?: boolean
+  autoGeneratePresetId?: string | null
+  autoGenerateTemplateId?: string | null
 }
 
 interface PlexLibrary {
@@ -78,15 +81,16 @@ const localTimezone = ref('UTC')
 const localSaveLocation = ref('')  // Legacy, kept for backwards compatibility
 const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
 const localTvShowSaveLocation = ref('/config/output/{library}/{title}.jpg')
+const localTvShowSaveMode = ref('flat')
 const localSaveBatch = ref(false)
 const localDefaultLabelsToRemove = ref<Record<string, string[]>>({})
 const localDefaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
-const localLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
+const localLibraries = ref<LibraryMapping[]>([])
 const savedLibraryIds = ref<Set<string>>(new Set())
-const localTvShowLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
+const localTvShowLibraries = ref<LibraryMapping[]>([])
 const savedTvShowLibraryIds = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
@@ -159,6 +163,7 @@ const loadLocalSettings = async () => {
   localSaveLocation.value = settings.saveLocation.value
   localMovieSaveLocation.value = settings.movieSaveLocation.value
   localTvShowSaveLocation.value = settings.tvShowSaveLocation.value
+  localTvShowSaveMode.value = settings.tvShowSaveMode.value || 'flat'
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
   localDefaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultTvLabelsToRemove.value))
@@ -179,7 +184,7 @@ const loadLocalSettings = async () => {
         : [{ id: '', title: '', displayName: '' }]
       )
 
-  localLibraries.value = JSON.parse(JSON.stringify(libraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
+  localLibraries.value = JSON.parse(JSON.stringify(libraryMappings)) as LibraryMapping[]
 
   savedLibraryIds.value = hasPersistedLibraries
     ? new Set(
@@ -202,7 +207,7 @@ const loadLocalSettings = async () => {
         : [{ id: '', title: '', displayName: '' }]
       )
 
-  localTvShowLibraries.value = JSON.parse(JSON.stringify(tvShowLibraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
+  localTvShowLibraries.value = JSON.parse(JSON.stringify(tvShowLibraryMappings)) as LibraryMapping[]
 
   savedTvShowLibraryIds.value = hasPersistedTvShowLibraries
     ? new Set(
@@ -241,6 +246,7 @@ const captureSettingsSnapshot = () => {
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
     tvShowSaveLocation: localTvShowSaveLocation.value,
+    tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
     defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
@@ -291,6 +297,7 @@ const checkForChanges = () => {
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
     tvShowSaveLocation: localTvShowSaveLocation.value,
+    tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
     defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
@@ -330,6 +337,7 @@ const checkForChanges = () => {
     localSaveLocation.value !== initial.saveLocation ||
     localMovieSaveLocation.value !== initial.movieSaveLocation ||
     localTvShowSaveLocation.value !== initial.tvShowSaveLocation ||
+    localTvShowSaveMode.value !== initial.tvShowSaveMode ||
     localSaveBatch.value !== initial.saveBatch
 
   sectionsWithChanges.value.connections =
@@ -357,6 +365,7 @@ const saveSettings = async () => {
   settings.saveLocation.value = localSaveLocation.value
   settings.movieSaveLocation.value = localMovieSaveLocation.value
   settings.tvShowSaveLocation.value = localTvShowSaveLocation.value
+  settings.tvShowSaveMode.value = localTvShowSaveMode.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
   settings.defaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultTvLabelsToRemove.value))
@@ -372,6 +381,9 @@ const saveSettings = async () => {
       id: l.id || '',
       title: l.title || l.id || '',
       displayName: l.displayName || l.title || l.id || '',
+      autoGenerateEnabled: l.autoGenerateEnabled || false,
+      autoGeneratePresetId: l.autoGeneratePresetId || null,
+      autoGenerateTemplateId: l.autoGenerateTemplateId || null,
     })),
     tvShowLibraryName: tvShowLibs[0]?.id || '',
     tvShowLibraryNames: tvShowLibs.length > 0 ? tvShowLibs.map(l => l.id) : undefined,
@@ -379,6 +391,9 @@ const saveSettings = async () => {
       id: l.id || '',
       title: l.title || l.id || '',
       displayName: l.displayName || l.title || l.id || '',
+      autoGenerateEnabled: l.autoGenerateEnabled || false,
+      autoGeneratePresetId: l.autoGeneratePresetId || null,
+      autoGenerateTemplateId: l.autoGenerateTemplateId || null,
     }))
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }
@@ -1114,10 +1129,12 @@ onMounted(() => {
         v-if="activeTab === 'save-locations'"
         :movieSaveLocation="localMovieSaveLocation"
         :tvShowSaveLocation="localTvShowSaveLocation"
+        :tvShowSaveMode="localTvShowSaveMode"
         :saveBatchInSubfolder="localSaveBatch"
         :unsavedChanges="hasUnsavedChanges"
         @update:movieSaveLocation="localMovieSaveLocation = $event"
         @update:tvShowSaveLocation="localTvShowSaveLocation = $event"
+        @update:tvShowSaveMode="localTvShowSaveMode = $event"
         @update:saveBatchInSubfolder="localSaveBatch = $event"
         @save="saveSettings"
       />

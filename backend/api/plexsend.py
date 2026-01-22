@@ -24,12 +24,27 @@ def api_plex_send(req: PlexSendRequest):
     ):
         raise HTTPException(400, "Invalid background_url")
 
-    # Render poster using template + preset
+    # Load preset options if preset_id is provided
+    options = req.options or {}
+    if req.preset_id:
+        from ..config import load_presets
+        presets_data = load_presets()
+        template_presets = presets_data.get(req.template_id, {}).get("presets", [])
+        preset = next((p for p in template_presets if p.get("id") == req.preset_id), None)
+        if preset:
+            # Use preset options, but allow req.options to override
+            preset_options = preset.get("options", {})
+            options = {**preset_options, **options}
+            logger.debug("[PLEX] Using preset '%s' options for template '%s'", req.preset_id, req.template_id)
+        else:
+            logger.warning("[PLEX] Preset '%s' not found for template '%s', using provided options", req.preset_id, req.template_id)
+
+    # Render poster using template + preset options
     img = render_poster_image(
         req.template_id,
         req.background_url,
         req.logo_url,
-        req.options,
+        options,
     )
 
     # Encode for Plex

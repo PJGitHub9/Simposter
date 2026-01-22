@@ -121,8 +121,9 @@ class UISettings(BaseModel):
     timezone: str = "UTC"
     saveLocation: str = "/config/output/{library}/{title}.jpg"  # Legacy field for backwards compatibility
     movieSaveLocation: str = "/config/output/{library}/{title}.jpg"
-    tvShowSaveLocation: str = "/config/output/{library}/{title}.jpg"
+    tvShowSaveLocation: str = "/config/output/{library}/{title} ({year}).jpg"
     saveBatchInSubfolder: bool = False
+    tvShowSaveMode: str = "flat"  # "flat" (all in one folder with prefixes) or "nested" (each show in its own folder)
     defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     defaultTvLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)

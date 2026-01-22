@@ -44,6 +44,9 @@ def _normalize_plex_payload(data: dict) -> dict:
                 "id": str(m.get("id", "")),
                 "title": str(m.get("title", "")),
                 "displayName": str(m.get("displayName", "")),
+                "autoGenerateEnabled": m.get("autoGenerateEnabled", False),
+                "autoGeneratePresetId": m.get("autoGeneratePresetId"),
+                "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
             }
             for m in normalized["libraryMappings"]
             if isinstance(m, dict)
@@ -67,6 +70,9 @@ def _normalize_plex_payload(data: dict) -> dict:
                 "id": str(m.get("id", "")),
                 "title": str(m.get("title", "")),
                 "displayName": str(m.get("displayName", "")),
+                "autoGenerateEnabled": m.get("autoGenerateEnabled", False),
+                "autoGeneratePresetId": m.get("autoGeneratePresetId"),
+                "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
             }
             for m in normalized["tvShowLibraryMappings"]
             if isinstance(m, dict)

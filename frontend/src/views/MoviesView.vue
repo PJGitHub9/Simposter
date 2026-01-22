@@ -158,18 +158,22 @@ const forcePosterRefresh = async () => {
   if (forceRefreshingPosters.value || loading.value) return
   forceRefreshingPosters.value = true
   try {
-    await fetch(`${apiBase}/api/cache`, { method: 'DELETE' })
-  } catch {
-    /* ignore errors; proceed to refetch */
+    // Force refresh posters from Plex for current library by fetching with force_refresh flag
+    const currentMovies = paged.value
+    for (const movie of currentMovies) {
+      try {
+        await fetch(`${apiBase}/api/movie/${movie.key}/poster?force_refresh=1`)
+      } catch (e) {
+        console.warn(`Failed to refresh poster for ${movie.title}:`, e)
+      }
+    }
+    // Re-fetch posters to update display
+    await fetchPosters(paged.value)
+  } catch (e) {
+    console.error('Force poster refresh failed:', e)
+  } finally {
+    forceRefreshingPosters.value = false
   }
-  clearAllCaches()
-  sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
-  movies.value = []
-  moviesLoaded.value = false
-  await fetchMovies(true)
-  await fetchPosters(paged.value)
-  await fetchLabels(paged.value)
-  forceRefreshingPosters.value = false
 }
 
 // NOTE: Initial cache load moved to onMounted to ensure route is ready

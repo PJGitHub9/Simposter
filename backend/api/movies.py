@@ -787,10 +787,32 @@ def api_scan_library(library_id: Optional[str] = Query(None)):
                 logger.info("[SCAN] Movies progress %d/%d", processed, len(movies))
             scan_status.update({"processed": processed, "current": movie.title or ""})
         
-        # Bulk refresh movie cache per library
+        # Bulk refresh movie cache per library and detect new content
+        from .. import auto_generate
         for lib_id, cached_movies in movie_cache_by_lib.items():
+            # Get existing cache to detect new items
+            existing_cache = cache.get_cached_movies(library_id=lib_id)
+            existing_keys = {item.get("rating_key") for item in existing_cache}
+
+            # Detect new movies
+            new_movies = [m for m in cached_movies if m.get("rating_key") not in existing_keys]
+
+            # Refresh cache
             cache.refresh_from_list(cached_movies)
-            logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id}")
+            logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id} ({len(new_movies)} new)")
+
+            # Trigger auto-generation for new movies
+            if new_movies:
+                try:
+                    results = auto_generate.process_new_content_for_library(
+                        library_id=lib_id,
+                        new_movies=new_movies,
+                        new_tv_shows=[],
+                        auto_send=True
+                    )
+                    logger.info(f"[SCAN] Auto-generation complete for library {lib_id}: {results}")
+                except Exception as e:
+                    logger.error(f"[SCAN] Auto-generation failed for library {lib_id}: {e}")
         
         # Process TV shows per library
         tv_cache_by_lib = {}
@@ -831,10 +853,31 @@ def api_scan_library(library_id: Optional[str] = Query(None)):
                 logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
             scan_status.update({"processed": processed, "current": show.get("title") or ""})
         
-        # Bulk refresh TV cache per library
+        # Bulk refresh TV cache per library and detect new content
         for lib_id, cached_shows in tv_cache_by_lib.items():
+            # Get existing cache to detect new items
+            existing_cache = cache.get_cached_tv_shows(library_id=lib_id)
+            existing_keys = {item.get("rating_key") for item in existing_cache}
+
+            # Detect new TV shows
+            new_shows = [s for s in cached_shows if s.get("rating_key") not in existing_keys]
+
+            # Refresh cache
             cache.refresh_tv_from_list(cached_shows)
-            logger.info(f"[SCAN] Cached {len(cached_shows)} TV shows for library {lib_id}")
+            logger.info(f"[SCAN] Cached {len(cached_shows)} TV shows for library {lib_id} ({len(new_shows)} new)")
+
+            # Trigger auto-generation for new TV shows
+            if new_shows:
+                try:
+                    results = auto_generate.process_new_content_for_library(
+                        library_id=lib_id,
+                        new_movies=[],
+                        new_tv_shows=new_shows,
+                        auto_send=True
+                    )
+                    logger.info(f"[SCAN] Auto-generation complete for library {lib_id}: {results}")
+                except Exception as e:
+                    logger.error(f"[SCAN] Auto-generation failed for library {lib_id}: {e}")
         
         # Process collections per library
         coll_cache_by_lib = {}

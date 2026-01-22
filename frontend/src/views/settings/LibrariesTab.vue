@@ -85,13 +85,57 @@ const localPlexToken = computed({
 })
 
 const localLibraries = computed({
-  get: () => props.libraries,
-  set: (val) => emit('update:libraries', val)
+  get: () => {
+    // Reconstruct the template:preset format for display
+    return props.libraries.map(lib => ({
+      ...lib,
+      autoGeneratePresetId: lib.autoGenerateTemplateId && lib.autoGeneratePresetId
+        ? `${lib.autoGenerateTemplateId}:${lib.autoGeneratePresetId.split(':')[1] || lib.autoGeneratePresetId}`
+        : lib.autoGeneratePresetId
+    }))
+  },
+  set: (val) => {
+    // Parse template:preset format and split into separate fields before emitting
+    const parsed = val.map(lib => {
+      if (lib.autoGeneratePresetId && lib.autoGeneratePresetId.includes(':')) {
+        const [templateId, presetId] = lib.autoGeneratePresetId.split(':')
+        return {
+          ...lib,
+          autoGenerateTemplateId: templateId,
+          autoGeneratePresetId: presetId
+        }
+      }
+      return lib
+    })
+    emit('update:libraries', parsed)
+  }
 })
 
 const localTvShowLibraries = computed({
-  get: () => props.tvShowLibraries,
-  set: (val) => emit('update:tvShowLibraries', val)
+  get: () => {
+    // Reconstruct the template:preset format for display
+    return props.tvShowLibraries.map(lib => ({
+      ...lib,
+      autoGeneratePresetId: lib.autoGenerateTemplateId && lib.autoGeneratePresetId
+        ? `${lib.autoGenerateTemplateId}:${lib.autoGeneratePresetId.split(':')[1] || lib.autoGeneratePresetId}`
+        : lib.autoGeneratePresetId
+    }))
+  },
+  set: (val) => {
+    // Parse template:preset format and split into separate fields before emitting
+    const parsed = val.map(lib => {
+      if (lib.autoGeneratePresetId && lib.autoGeneratePresetId.includes(':')) {
+        const [templateId, presetId] = lib.autoGeneratePresetId.split(':')
+        return {
+          ...lib,
+          autoGenerateTemplateId: templateId,
+          autoGeneratePresetId: presetId
+        }
+      }
+      return lib
+    })
+    emit('update:tvShowLibraries', parsed)
+  }
 })
 
 const localSchedulerEnabled = computed({
@@ -118,6 +162,17 @@ const localTvLabelsToRemove = computed({
   get: () => props.defaultTvLabelsToRemove,
   set: (val) => emit('update:defaultTvLabelsToRemove', val)
 })
+
+// Force change detection for library automation settings
+const updateLibraries = () => {
+  // Trigger the computed setter by reassigning the value
+  localLibraries.value = [...localLibraries.value]
+}
+
+const updateTvShowLibraries = () => {
+  // Trigger the computed setter by reassigning the value
+  localTvShowLibraries.value = [...localTvShowLibraries.value]
+}
 
 const availableLabels = ref<Record<string, string[]>>({})
 const labelsLoading = ref(false)
@@ -243,7 +298,14 @@ const removeLibrary = (idx: number) => {
 }
 
 const addTvShowLibrary = () => {
-  localTvShowLibraries.value = [...localTvShowLibraries.value, { id: '', title: '', displayName: '' }]
+  localTvShowLibraries.value = [...localTvShowLibraries.value, {
+    id: '',
+    title: '',
+    displayName: '',
+    autoGenerateEnabled: false,
+    autoGeneratePresetId: null,
+    autoGenerateTemplateId: null
+  }]
 }
 
 const removeTvShowLibrary = (idx: number) => {
@@ -473,14 +535,14 @@ const webhookInstructions = computed(() => {
         <!-- Auto-Generation Settings -->
         <div v-if="lib.id" class="auto-gen-section">
           <label class="checkbox-label">
-            <input type="checkbox" v-model="lib.autoGenerateEnabled" />
+            <input type="checkbox" v-model="lib.autoGenerateEnabled" @change="updateLibraries" />
             <span>Enable automatic poster generation for new content</span>
           </label>
 
           <div v-if="lib.autoGenerateEnabled" class="preset-selection">
             <label>
               <span class="label-text">Template & Preset</span>
-              <select v-model="lib.autoGeneratePresetId">
+              <select v-model="lib.autoGeneratePresetId" @change="updateLibraries">
                 <option value="">Select a preset...</option>
                 <option
                   v-for="preset in allPresets"
@@ -558,14 +620,14 @@ const webhookInstructions = computed(() => {
 
         <div v-if="lib.id" class="auto-gen-section">
           <label class="checkbox-label">
-            <input type="checkbox" v-model="lib.autoGenerateEnabled" />
+            <input type="checkbox" v-model="lib.autoGenerateEnabled" @change="updateTvShowLibraries" />
             <span>Enable automatic poster generation for new content</span>
           </label>
 
           <div v-if="lib.autoGenerateEnabled" class="preset-selection">
             <label>
               <span class="label-text">Template & Preset</span>
-              <select v-model="lib.autoGeneratePresetId">
+              <select v-model="lib.autoGeneratePresetId" @change="updateTvShowLibraries">
                 <option value="">Select a preset...</option>
                 <option
                   v-for="preset in allPresets"

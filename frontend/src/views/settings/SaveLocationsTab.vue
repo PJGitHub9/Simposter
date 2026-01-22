@@ -4,6 +4,7 @@ import { computed } from 'vue'
 const props = defineProps<{
   movieSaveLocation: string
   tvShowSaveLocation: string
+  tvShowSaveMode: string
   saveBatchInSubfolder: boolean
   unsavedChanges: boolean
 }>()
@@ -11,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:movieSaveLocation': [value: string]
   'update:tvShowSaveLocation': [value: string]
+  'update:tvShowSaveMode': [value: string]
   'update:saveBatchInSubfolder': [value: boolean]
   'save': []
 }>()
@@ -23,6 +25,11 @@ const localMovieSaveLocation = computed({
 const localTvShowSaveLocation = computed({
   get: () => props.tvShowSaveLocation,
   set: (val) => emit('update:tvShowSaveLocation', val)
+})
+
+const localTvShowSaveMode = computed({
+  get: () => props.tvShowSaveMode,
+  set: (val) => emit('update:tvShowSaveMode', val)
 })
 
 const localSaveBatchInSubfolder = computed({
@@ -59,13 +66,24 @@ const localSaveBatchInSubfolder = computed({
         <input
           v-model="localTvShowSaveLocation"
           type="text"
-          placeholder="/config/output/{library}/{title}.jpg"
+          placeholder="/config/output/{library}/{title} ({year}).jpg"
         />
         <span class="help-text">
-          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{year}</code>, <code>{key}</code>, <code>{season}</code>
+          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{year}</code>
         </span>
         <span class="help-text extra-note">
-          Note: <code>{season}</code> will be formatted as "s01", "s02", etc.
+          Note: Season and series naming is controlled by the "TV Show File Structure" setting below
+        </span>
+      </label>
+
+      <label>
+        <span class="label-text">TV Show File Structure</span>
+        <select v-model="localTvShowSaveMode">
+          <option value="flat">Flat - All in one folder (e.g., "Show - series.jpg", "Show - s01.jpg")</option>
+          <option value="nested">Nested - Each show in its own folder (e.g., "Show/series.jpg", "Show/s01.jpg")</option>
+        </select>
+        <span class="help-text">
+          Controls how TV show posters are organized within the save location
         </span>
       </label>
 
@@ -94,9 +112,17 @@ const localSaveBatchInSubfolder = computed({
         </div>
 
         <div class="example-item">
-          <div class="example-label">TV shows by season:</div>
-          <code>/config/output/{library}/{title} - {season}.jpg</code>
-          <div class="example-result">→ /config/output/TV Shows/Breaking Bad - s01.jpg</div>
+          <div class="example-label">TV shows with year (flat structure):</div>
+          <code>/config/output/{library}/{title} ({year}).jpg</code>
+          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008) - series.jpg</div>
+          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008) - s01.jpg</div>
+        </div>
+
+        <div class="example-item">
+          <div class="example-label">TV shows with year (nested structure):</div>
+          <code>/config/output/{library}/{title} ({year}).jpg</code>
+          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008)/series.jpg</div>
+          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008)/s01.jpg</div>
         </div>
 
         <div class="example-item">
@@ -210,7 +236,8 @@ label {
   margin-top: 0;
 }
 
-input[type="text"] {
+input[type="text"],
+select {
   width: 100%;
   padding: 10px;
   border: 1px solid var(--border);
@@ -218,7 +245,19 @@ input[type="text"] {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
   font-size: 14px;
+}
+
+input[type="text"] {
   font-family: 'Courier New', monospace;
+}
+
+select {
+  cursor: pointer;
+}
+
+select option {
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 .examples {

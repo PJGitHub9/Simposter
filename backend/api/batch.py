@@ -979,7 +979,8 @@ def _render_and_save_poster(
                 int(year) if year else None,
                 rating_key,
                 library_label,
-                season=season_index if is_tv else None
+                season=season_index if is_tv else None,
+                is_tv_show=is_tv
             )
 
             # Sanitize path components
