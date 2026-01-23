@@ -133,6 +133,13 @@ def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> O
         if r.status_code == 200:
             content_type = r.headers.get('content-type', 'image/jpeg')
             saved = _save_poster_cache(rating_key, r.content, content_type, "tv")
+            if saved:
+                # Store the Simposter proxy URL in cache, not the direct Plex URL
+                proxy_url = _poster_cache_url(rating_key, saved)
+                try:
+                    cache.update_tv_poster(rating_key, proxy_url)
+                except Exception as e:
+                    logger.debug("[CACHE] update_tv_poster failed for %s: %s", rating_key, e, exc_info=True)
             return saved
     except Exception as e:
         logger.debug(f"Failed to fetch TV show poster directly for {rating_key}: {e}")
@@ -151,6 +158,13 @@ def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> O
                 if poster_r.status_code == 200:
                     content_type = poster_r.headers.get('content-type', 'image/jpeg')
                     saved = _save_poster_cache(rating_key, poster_r.content, content_type, "tv")
+                    if saved:
+                        # Store the Simposter proxy URL in cache, not the direct Plex URL
+                        proxy_url = _poster_cache_url(rating_key, saved)
+                        try:
+                            cache.update_tv_poster(rating_key, proxy_url)
+                        except Exception as e:
+                            logger.debug("[CACHE] update_tv_poster failed for %s: %s", rating_key, e, exc_info=True)
                     return saved
     except Exception as e:
         logger.debug(f"Failed to fetch TV show poster via metadata for {rating_key}: {e}")

@@ -174,11 +174,14 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
         r = plex_session.get(direct, headers=plex_headers(), timeout=5)
         if r.status_code == 200:
             content_type = r.headers.get('content-type', 'image/jpeg')
-            try:
-                cache.update_poster(rating_key, direct)
-            except (sqlite3.Error, AttributeError) as e:
-                logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
             saved = _save_poster_cache(rating_key, r.content, content_type)
+            if saved:
+                # Store the Simposter proxy URL in cache, not the direct Plex URL
+                proxy_url = _poster_cache_url(rating_key, saved)
+                try:
+                    cache.update_poster(rating_key, proxy_url)
+                except (sqlite3.Error, AttributeError) as e:
+                    logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
             return saved
     except Exception as e:
         logger.debug(f"Failed to fetch poster directly for {rating_key}: {e}")
@@ -196,11 +199,14 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
                 poster_r = plex_session.get(thumb_url, headers=plex_headers(), timeout=5)
                 if poster_r.status_code == 200:
                     content_type = poster_r.headers.get('content-type', 'image/jpeg')
-                    try:
-                        cache.update_poster(rating_key, thumb_url)
-                    except (sqlite3.Error, AttributeError) as e:
-                        logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
                     saved = _save_poster_cache(rating_key, poster_r.content, content_type)
+                    if saved:
+                        # Store the Simposter proxy URL in cache, not the direct Plex URL
+                        proxy_url = _poster_cache_url(rating_key, saved)
+                        try:
+                            cache.update_poster(rating_key, proxy_url)
+                        except (sqlite3.Error, AttributeError) as e:
+                            logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
                     return saved
     except Exception as e:
         logger.debug(f"Failed to fetch poster via metadata for {rating_key}: {e}")
