@@ -570,6 +570,12 @@ def tautulli_webhook(
             logger.warning(f"[TAUTULLI_WEBHOOK] Unknown media type: {media_type}")
             raise HTTPException(status_code=400, detail=f"Unknown media type: {media_type}")
 
+        # Skip episode events for "added" category to avoid duplicate processing
+        # (Tautulli sends an event for each episode, but we only want to process once per show/season)
+        if media_type == "episode" and event_category == "added":
+            logger.info(f"[TAUTULLI_WEBHOOK] Skipping episode '{title}' for 'added' event - only process show-level events to avoid duplicates")
+            return {"status": "ignored", "reason": "Episode events for 'added' category are skipped to avoid duplicates. Configure Tautulli to send show-level events instead."}
+
         title = payload.get("title", "Unknown")
         year = payload.get("year")
 

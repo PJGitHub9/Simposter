@@ -321,6 +321,12 @@ http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-pr
 
 **Triggers:** Configure which events to trigger on (e.g., "Recently Added")
 
+**Important for TV Shows:**
+- **Episode events are automatically ignored** for the `added` category to prevent duplicate processing
+- Configure Tautulli to send **show-level or season-level** events, not episode-level events
+- When a new episode is added, Tautulli may send an event for each episode, but Simposter will skip these to avoid regenerating the same show poster multiple times
+- Use library scan notifications (show/season level) instead of episode notifications for best results
+
 ### Supported Event Types
 
 Tautulli sends various event types that Simposter maps automatically:
@@ -357,14 +363,20 @@ curl -X POST "http://localhost:8686/api/webhook/tautulli?template_id=universal&p
 
 ### Troubleshooting
 
-**No poster generated?**
+**No poster generated for TV shows?**
+- **Episode events are ignored by design** - Configure Tautulli to send show-level events instead
+- Check that your notification trigger is set to "Recently Added" for shows, not episodes
+- Review logs for `[TAUTULLI_WEBHOOK] Skipping episode` messages
+- Verify template_id and preset_id exist in your settings
+
+**No poster generated for movies?**
 - Check that `event_types` parameter includes the event category (e.g., `added`)
 - Verify template_id and preset_id exist in your settings
 - Review logs for errors: `[TAUTULLI_WEBHOOK]` prefix
 
 **Duplicate processing?**
-- Tautulli may send multiple events for the same item
-- This is normal behavior; Simposter will process each event
+- For movies: Tautulli may send multiple events for the same item, which is normal
+- For TV shows: Episode events are automatically skipped to prevent duplicates
 
 **Event not recognized?**
 - Check logs to see what event type Tautulli is sending
