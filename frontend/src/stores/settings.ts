@@ -68,6 +68,7 @@ export type AutomationSettings = {
 export type UISettings = {
   theme: Theme
   posterDensity: number
+  deduplicateMovies?: boolean
   timezone?: string
   defaultLabelsToRemove?: string[] | Record<string, string[]>
   defaultTvLabelsToRemove?: string[] | Record<string, string[]>
@@ -89,6 +90,7 @@ export type UISettings = {
 
 const theme = ref<Theme>('neon')
 const posterDensity = ref(20)
+const deduplicateMovies = ref(false)
 const timezone = ref('UTC')
 const defaultLabelsToRemove = ref<Record<string, string[]>>({})
 const defaultTvLabelsToRemove = ref<Record<string, string[]>>({})
@@ -119,6 +121,7 @@ async function loadSettings() {
     const data = (await res.json()) as UISettings
     theme.value = data.theme || 'neon'
     posterDensity.value = Number(data.posterDensity) || 20
+    deduplicateMovies.value = data.deduplicateMovies ?? false
     timezone.value = data.timezone || 'UTC'
     // Handle both legacy array format and new Record format
     if (Array.isArray(data.defaultLabelsToRemove)) {
@@ -193,6 +196,7 @@ async function saveSettings() {
     const payload: UISettings = {
       theme: theme.value,
       posterDensity: posterDensity.value,
+      deduplicateMovies: deduplicateMovies.value,
       timezone: timezone.value,
       defaultLabelsToRemove: defaultLabelsToRemove.value,
       defaultTvLabelsToRemove: defaultTvLabelsToRemove.value,
@@ -233,6 +237,7 @@ export function useSettingsStore() {
   return {
     theme,
     posterDensity,
+    deduplicateMovies,
     timezone,
     defaultLabelsToRemove,
     defaultTvLabelsToRemove,

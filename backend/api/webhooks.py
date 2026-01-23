@@ -200,11 +200,15 @@ def process_webhook_poster_generation(
                 presets_data=presets_data
             )
 
-            if result.get("status") == "success":
+            # Check result status
+            result_status = result.get("status")
+            if result_status == "success":
                 logger.info(f"[WEBHOOK] Successfully processed TV show {rating_key}")
             else:
-                error_msg = result.get('error', 'Unknown error')
-                logger.error(f"[WEBHOOK] Failed to process TV show {rating_key}: {error_msg}")
+                # Log full result for debugging
+                logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")
+                error_msg = result.get('error') or result.get('message', 'Unknown error')
+                logger.warning(f"[WEBHOOK] Unexpected result status for TV show {rating_key}: status={result_status}, error={error_msg}")
 
         else:
             # Create movie batch request
@@ -241,11 +245,15 @@ def process_webhook_poster_generation(
                 presets_data=presets_data
             )
 
-            if result.get("status") == "success":
+            # Check result status
+            result_status = result.get("status")
+            if result_status == "success":
                 logger.info(f"[WEBHOOK] Successfully processed movie {rating_key}")
             else:
-                error_msg = result.get('error', 'Unknown error')
-                logger.error(f"[WEBHOOK] Failed to process movie {rating_key}: {error_msg}")
+                # Log full result for debugging
+                logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")
+                error_msg = result.get('error') or result.get('message', 'Unknown error')
+                logger.warning(f"[WEBHOOK] Unexpected result status for movie {rating_key}: status={result_status}, error={error_msg}")
 
     except Exception as e:
         logger.error(f"[WEBHOOK] Error in background poster generation: {e}", exc_info=True)

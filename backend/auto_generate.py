@@ -78,7 +78,8 @@ def process_new_content_for_library(
                                 preset_id=preset_id,
                                 send_to_plex=auto_send,
                                 library_id=library_id,
-                                labels=auto_labels if auto_send else []
+                                labels=auto_labels if auto_send else [],
+                                source='auto_generate'
                             )
 
                             if success:
@@ -126,7 +127,8 @@ def process_new_content_for_library(
                                 send_to_plex=auto_send,
                                 library_id=library_id,
                                 labels=auto_labels if auto_send else [],
-                                include_seasons=True  # Generate all season posters
+                                include_seasons=True,  # Generate all season posters
+                                source='auto_generate'
                             )
 
                             if success:

@@ -59,6 +59,7 @@ def _process_single_movie(
     white_logo_fallback: str,
     language_pref: str,
     presets_data: dict,
+    source: str = "batch",
 ):
     """Process a single movie in the batch. Returns result dict."""
     try:
@@ -403,7 +404,7 @@ def _process_single_movie(
                     preset_id=preset_id,
                     action="saved_local",
                     save_path=str(save_path),
-                    source='batch',
+                    source=source,
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for local save: {history_err}")
@@ -456,7 +457,7 @@ def _process_single_movie(
                     preset_id=preset_id,
                     action="sent_to_plex",
                     save_path=str(save_path) if save_path else None,
-                    source='batch',
+                    source=source,
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for plex send: {history_err}")
@@ -504,6 +505,7 @@ def _process_single_tv_show(
     presets_data: dict,
     season_poster_filter: Optional[str] = None,
     season_options: Optional[dict] = None,
+    source: str = "batch",
 ):
     """Process a single TV show in the batch. Returns result dict."""
     try:
@@ -1061,7 +1063,7 @@ def _render_and_save_poster(
                     preset_id=preset_id,
                     action="saved_local",
                     save_path=str(save_path),
-                    source='batch',
+                    source=source,
                 )
             except Exception:
                 pass
@@ -1119,7 +1121,7 @@ def _render_and_save_poster(
                     preset_id=preset_id,
                     action="sent_to_plex",
                     save_path=str(save_path) if save_path else None,
-                    source='batch',
+                    source=source,
                 )
             except Exception:
                 pass
@@ -1307,3 +1309,162 @@ def api_batch(req: BatchRequest):
     is_tv_batch = getattr(req, 'include_seasons', False)
     logger.info("[BATCH LEGACY] Processing %d items (TV: %s)", len(req.rating_keys), is_tv_batch)
     return _execute_batch(req, is_tv_batch=is_tv_batch)
+
+
+# ==============================================================================
+# Public wrapper functions for programmatic use (auto_generate, webhooks, etc.)
+# ==============================================================================
+
+def process_single_movie_poster(
+    rating_key: str,
+    template_id: str,
+    preset_id: str,
+    send_to_plex: bool = False,
+    library_id: str = "",
+    labels: list = None,
+    source: str = "webhook"
+) -> bool:
+    """
+    Process a single movie poster programmatically.
+    Used by auto_generate and webhook handlers.
+
+    Args:
+        rating_key: Plex rating key
+        template_id: Template to use
+        preset_id: Preset to use
+        send_to_plex: Whether to upload to Plex
+        library_id: Library ID for history tracking
+        labels: Labels to apply if sending to Plex
+        source: Source identifier for history ('webhook', 'auto_generate', etc.)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Create a minimal request object
+        req = MovieBatchRequest(
+            rating_keys=[rating_key],
+            template_id=template_id,
+            preset_id=preset_id,
+            options={},
+            send_to_plex=send_to_plex,
+            labels=labels or [],
+            library_id=library_id
+        )
+
+        # Load presets for options
+        from ..config import load_presets
+        presets_data = load_presets()
+        template_presets = presets_data.get(template_id, {}).get("presets", [])
+        preset = next((p for p in template_presets if p.get("id") == preset_id), None)
+
+        if not preset:
+            logger.error(f"[{source.upper()}] Preset {preset_id} not found for template {template_id}")
+            return False
+
+        base_options = preset.get("options", {})
+        base_poster_filter = preset.get("poster_filter", "any")
+        base_logo_preference = preset.get("logo_preference", "white")
+        base_logo_mode = base_options.get("logo_mode", "stock")
+        white_logo_fallback = preset.get("white_logo_fallback", "continue")
+        language_pref = preset.get("language", "en")
+
+        # Process the movie with proper source tracking
+        result = _process_single_movie(
+            idx=0,
+            rating_key=rating_key,
+            req=req,
+            base_options=base_options,
+            base_poster_filter=base_poster_filter,
+            base_logo_preference=base_logo_preference,
+            base_logo_mode=base_logo_mode,
+            white_logo_fallback=white_logo_fallback,
+            language_pref=language_pref,
+            presets_data=presets_data,
+            source=source  # Pass source for history tracking
+        )
+
+        return result.get("status") == "success"
+
+    except Exception as e:
+        logger.error(f"[{source.upper()}] Error processing movie poster: {e}", exc_info=True)
+        return False
+
+
+def process_single_tv_show_poster(
+    rating_key: str,
+    template_id: str,
+    preset_id: str,
+    send_to_plex: bool = False,
+    library_id: str = "",
+    labels: list = None,
+    include_seasons: bool = True,
+    source: str = "webhook"
+) -> bool:
+    """
+    Process a single TV show poster programmatically.
+    Used by auto_generate and webhook handlers.
+
+    Args:
+        rating_key: Plex rating key
+        template_id: Template to use
+        preset_id: Preset to use
+        send_to_plex: Whether to upload to Plex
+        library_id: Library ID for history tracking
+        labels: Labels to apply if sending to Plex
+        include_seasons: Whether to generate season posters
+        source: Source identifier for history ('webhook', 'auto_generate', etc.)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Create a minimal request object
+        req = TVShowBatchRequest(
+            rating_keys=[rating_key],
+            template_id=template_id,
+            preset_id=preset_id,
+            options={},
+            send_to_plex=send_to_plex,
+            labels=labels or [],
+            include_seasons=include_seasons,
+            library_id=library_id
+        )
+
+        # Load presets for options
+        from ..config import load_presets
+        presets_data = load_presets()
+        template_presets = presets_data.get(template_id, {}).get("presets", [])
+        preset = next((p for p in template_presets if p.get("id") == preset_id), None)
+
+        if not preset:
+            logger.error(f"[{source.upper()}] Preset {preset_id} not found for template {template_id}")
+            return False
+
+        base_options = preset.get("options", {})
+        base_poster_filter = preset.get("poster_filter", "any")
+        base_logo_preference = preset.get("logo_preference", "white")
+        base_logo_mode = base_options.get("logo_mode", "stock")
+        white_logo_fallback = preset.get("white_logo_fallback", "continue")
+        language_pref = preset.get("language", "en")
+
+        # Process the TV show with proper source tracking
+        result = _process_single_tv_show(
+            idx=0,
+            rating_key=rating_key,
+            req=req,
+            base_options=base_options,
+            base_poster_filter=base_poster_filter,
+            base_logo_preference=base_logo_preference,
+            base_logo_mode=base_logo_mode,
+            white_logo_fallback=white_logo_fallback,
+            language_pref=language_pref,
+            presets_data=presets_data,
+            source=source  # Pass source for history tracking
+        )
+
+        return result.get("status") == "success"
+
+    except Exception as e:
+        logger.error(f"[{source.upper()}] Error processing TV show poster: {e}", exc_info=True)
+        return False

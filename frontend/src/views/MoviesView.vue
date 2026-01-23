@@ -308,7 +308,11 @@ const fetchMovies = async (forceRefresh = false) => {
   error.value = null
   try {
     // Always fetch to ensure we have the correct library's data
-    const url = `${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}${forceRefresh ? `${currentLibrary.value ? '&' : '?'}force_refresh=true` : ''}`
+    const params = new URLSearchParams()
+    if (currentLibrary.value) params.set('library_id', currentLibrary.value)
+    if (forceRefresh) params.set('force_refresh', 'true')
+    if (settings.deduplicateMovies.value) params.set('deduplicate', 'true')
+    const url = `${apiBase}/api/movies${params.toString() ? '?' + params.toString() : ''}`
     console.log('[MoviesView] fetchMovies - Current library:', currentLibrary.value)
     console.log('[MoviesView] fetchMovies - URL:', url)
     const res = await fetch(url)

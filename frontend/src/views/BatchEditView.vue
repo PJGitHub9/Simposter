@@ -383,7 +383,10 @@ const fetchMovies = async () => {
   error.value = null
   try {
     if (!moviesLoadedFlag.value) {
-      const res = await fetch(`${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+      const params = new URLSearchParams()
+      if (currentLibrary.value) params.set('library_id', currentLibrary.value)
+      if (settings.deduplicateMovies.value) params.set('deduplicate', 'true')
+      const res = await fetch(`${apiBase}/api/movies${params.toString() ? '?' + params.toString() : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = (await res.json()) as Movie[]
       moviesCache.value = data

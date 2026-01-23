@@ -4,6 +4,7 @@ import { ref, computed } from 'vue'
 const props = defineProps<{
   theme: string
   posterDensity: number
+  deduplicateMovies: boolean
   timezone: string
   tmdbApiKey: string
   tvdbApiKey: string
@@ -16,6 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:theme': [value: string]
   'update:posterDensity': [value: number]
+  'update:deduplicateMovies': [value: boolean]
   'update:timezone': [value: string]
   'update:tmdbApiKey': [value: string]
   'update:tvdbApiKey': [value: string]
@@ -32,6 +34,11 @@ const localTheme = computed({
 const localPosterDensity = computed({
   get: () => props.posterDensity,
   set: (val) => emit('update:posterDensity', val)
+})
+
+const localDeduplicateMovies = computed({
+  get: () => props.deduplicateMovies,
+  set: (val) => emit('update:deduplicateMovies', val)
 })
 
 const localTimezone = computed({
@@ -117,6 +124,21 @@ const timezones = [
         </select>
         <span class="help-text">Used for scheduling and timestamps in history</span>
       </label>
+    </div>
+
+    <div class="section">
+      <h3>Library Display</h3>
+      <p class="section-description">
+        Configure how movies are displayed in the library view.
+      </p>
+
+      <label class="checkbox-label">
+        <input type="checkbox" v-model="localDeduplicateMovies" />
+        <span>Hide duplicate movies (multiple editions)</span>
+      </label>
+      <span class="help-text checkbox-help">
+        When enabled, only shows the most recently added version when you have multiple editions of the same movie (e.g., Extended Edition, Director's Cut). Useful for cleaner library views when you have duplicate movies with the same TMDb ID.
+      </span>
     </div>
 
     <div class="section">

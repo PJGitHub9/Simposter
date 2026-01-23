@@ -35,6 +35,7 @@
 - 🎙️ **Tautulli support** — Generate posters on Plex events (added, watched, updated)
 - ⚙️ **Flexible configuration** — Choose templates, presets, and event types per integration
 - 📤 **Auto-upload** — Automatically send generated posters to Plex
+- 🧪 **Test mode** — Dry-run testing with detailed logging (`?test=true`)
 
 ### 🎞 **Multi-Source Artwork**
 - 🎬 **TMDb integration** — Movies & TV show posters with textless/text variants
@@ -231,7 +232,144 @@ Log preferences are stored in the database (auto-migrated from `/config/settings
 ![Image](https://github.com/user-attachments/assets/e6e60d93-5913-4054-aa47-b38a04bd5435)
 ---
 
-<!-- Integrations (Radarr/Sonarr/Tautulli) removed in vNext -->
+## 🎙️ Tautulli Webhook Configuration
+
+Tautulli can automatically trigger poster generation when Plex events occur (new media added, watched, etc.). Configure a webhook in Tautulli to send events to Simposter.
+
+### Setup Steps
+
+1. **In Simposter Settings** (Performance Tab):
+   - Enable "Automatically Send to Plex" if you want webhooks to automatically upload posters
+   - Configure "Default Labels for Webhook Posters" (e.g., "Overlay, Auto")
+   - Save your settings
+
+2. **In Tautulli Settings** > **Notification Agents** > **Add a new notification agent** > **Webhook**:
+
+### Webhook URL Format
+
+```
+http://your-server:8686/api/webhook/tautulli?template_id=TEMPLATE_ID&preset_id=PRESET_ID&event_types=added
+```
+
+**Query Parameters:**
+- `template_id` — Your template ID (required)
+- `preset_id` — Your preset ID (required)
+- `event_types` — Comma-separated list: `added`, `updated`, `watched` (default: `added`)
+- `test=true` — Optional: dry-run mode with detailed logging (no actual poster generation)
+
+**Example URLs:**
+```
+# Generate posters for newly added content only
+http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-preset&event_types=added
+
+# Test mode (dry-run with logging)
+http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-preset&event_types=added&test=true
+
+# Multiple event types
+http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-preset&event_types=added,watched
+```
+
+### Webhook Configuration (Movies)
+
+**Webhook Method:** `POST`
+
+**JSON Headers:**
+```json
+{
+  "Content-Type": "application/json"
+}
+```
+
+**JSON Data:**
+```json
+{
+  "event": "{action}",
+  "media_type": "{media_type}",
+  "title": "{title}",
+  "year": "{year}",
+  "rating_key": "{rating_key}",
+  "tmdb_id": "{themoviedb_id}",
+  "thetvdb_id": "{thetvdb_id}"
+}
+```
+
+**Triggers:** Configure which events to trigger on (e.g., "Recently Added")
+
+### Webhook Configuration (TV Shows)
+
+**Webhook Method:** `POST`
+
+**JSON Headers:**
+```json
+{
+  "Content-Type": "application/json"
+}
+```
+
+**JSON Data:**
+```json
+{
+  "event": "{action}",
+  "media_type": "{media_type}",
+  "title": "{show_name}",
+  "year": "{year}",
+  "rating_key": "{rating_key}",
+  "tmdb_id": "{themoviedb_id}",
+  "thetvdb_id": "{thetvdb_id}"
+}
+```
+
+**Triggers:** Configure which events to trigger on (e.g., "Recently Added")
+
+### Supported Event Types
+
+Tautulli sends various event types that Simposter maps automatically:
+
+| Tautulli Event | Simposter Category | Description |
+|---------------|-------------------|-------------|
+| `library.new` | `added` | New media added to library |
+| `created` | `added` | Alternative event for new media |
+| `library.update` | `updated` | Media metadata updated |
+| `playback.stop` | `watched` | Media finished playing |
+
+Configure `event_types` in the URL to control which events trigger poster generation.
+
+### Testing Your Webhook
+
+1. **Use Test Mode**: Add `&test=true` to your webhook URL for dry-run testing
+2. **Check Logs**: Monitor `/config/logs/simposter.log` for webhook events
+3. **Manual Test**: Use Tautulli's "Test Notification" button to send a test event
+
+**Example Test Payload** (for manual API testing):
+```bash
+curl -X POST "http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-preset&event_types=added&test=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event": "created",
+    "media_type": "movie",
+    "title": "Catch Me If You Can",
+    "year": "2002",
+    "rating_key": "60996",
+    "tmdb_id": "640",
+    "thetvdb_id": ""
+  }'
+```
+
+### Troubleshooting
+
+**No poster generated?**
+- Check that `event_types` parameter includes the event category (e.g., `added`)
+- Verify template_id and preset_id exist in your settings
+- Review logs for errors: `[TAUTULLI_WEBHOOK]` prefix
+
+**Duplicate processing?**
+- Tautulli may send multiple events for the same item
+- This is normal behavior; Simposter will process each event
+
+**Event not recognized?**
+- Check logs to see what event type Tautulli is sending
+- Verify the event maps to a supported category (see table above)
+
 ---
 
 # 📁 Project Structure

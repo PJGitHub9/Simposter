@@ -77,6 +77,7 @@ const isScanInProgress = computed(() => scan.running.value || scan.checking.valu
 // Local state that will only be applied when save is clicked
 const localTheme = ref<Theme>('neon')
 const localPosterDensity = ref(20)
+const localDeduplicateMovies = ref(false)
 const localTimezone = ref('UTC')
 const localSaveLocation = ref('')  // Legacy, kept for backwards compatibility
 const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
@@ -159,6 +160,7 @@ const loadLocalSettings = async () => {
 
   localTheme.value = settings.theme.value
   localPosterDensity.value = settings.posterDensity.value
+  localDeduplicateMovies.value = settings.deduplicateMovies.value
   localTimezone.value = settings.timezone.value || 'UTC'
   localSaveLocation.value = settings.saveLocation.value
   localMovieSaveLocation.value = settings.movieSaveLocation.value
@@ -361,6 +363,7 @@ const checkForChanges = () => {
 const saveSettings = async () => {
   settings.theme.value = localTheme.value
   settings.posterDensity.value = localPosterDensity.value
+  settings.deduplicateMovies.value = localDeduplicateMovies.value
   settings.timezone.value = localTimezone.value
   settings.saveLocation.value = localSaveLocation.value
   settings.movieSaveLocation.value = localMovieSaveLocation.value
@@ -1072,6 +1075,7 @@ onMounted(() => {
         v-if="activeTab === 'general'"
         :theme="localTheme"
         :posterDensity="localPosterDensity"
+        :deduplicateMovies="localDeduplicateMovies"
         :timezone="localTimezone"
         :tmdbApiKey="localTmdbApiKey"
         :tvdbApiKey="localTvdbApiKey"
@@ -1081,6 +1085,7 @@ onMounted(() => {
         :unsavedChanges="hasUnsavedChanges"
         @update:theme="localTheme = $event as Theme"
         @update:posterDensity="localPosterDensity = $event"
+        @update:deduplicateMovies="localDeduplicateMovies = $event"
         @update:timezone="localTimezone = $event"
         @update:tmdbApiKey="localTmdbApiKey = $event"
         @update:tvdbApiKey="localTvdbApiKey = $event"

@@ -352,10 +352,13 @@ def _get_plex_collections(lib_ids: Optional[List[str]] = None) -> List[dict]:
 
 
 @router.get("/movies", response_model=List[Movie])
-def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
+def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None, deduplicate: bool = False):
     """
     Return movies from cache. Always returns from cache - use /scan-library to refresh.
     The force_refresh parameter is deprecated but kept for backwards compatibility.
+
+    Args:
+        deduplicate: If True, removes duplicate movies with the same TMDb ID (keeps most recently added)
     """
     # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
     if library_id in ("default", ""):
@@ -363,7 +366,8 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
 
     # Always return from cache (which includes labels populated by scans)
     cached = cache.get_cached_movies(library_id=library_id)
-    return [
+
+    movies = [
         {
             "key": m["rating_key"],
             "title": m["title"],
@@ -377,6 +381,41 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
         }
         for m in cached
     ]
+
+    # Deduplicate by TMDb ID if requested (keep most recently added)
+    if deduplicate:
+        seen_tmdb = {}
+        deduped = []
+
+        for movie in movies:
+            tmdb_id = movie.get("tmdb_id")
+
+            # If no TMDb ID, always include (can't deduplicate)
+            if not tmdb_id:
+                deduped.append(movie)
+                continue
+
+            # If we haven't seen this TMDb ID, add it
+            if tmdb_id not in seen_tmdb:
+                seen_tmdb[tmdb_id] = movie
+                deduped.append(movie)
+            else:
+                # If this version is more recent, replace the older one
+                existing = seen_tmdb[tmdb_id]
+                current_added = movie.get("addedAt", 0) or 0
+                existing_added = existing.get("addedAt", 0) or 0
+
+                if current_added > existing_added:
+                    # Remove old version and add new one
+                    deduped.remove(existing)
+                    seen_tmdb[tmdb_id] = movie
+                    deduped.append(movie)
+                    logger.debug(f"[DEDUPE] Replaced {existing['title']} (key={existing['key']}) with newer edition (key={movie['key']})")
+
+        logger.info(f"[DEDUPE] Deduplication reduced {len(movies)} movies to {len(deduped)} unique movies")
+        return deduped
+
+    return movies
 
 
 @router.get("/movies/labels/all")

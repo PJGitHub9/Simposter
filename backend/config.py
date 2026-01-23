@@ -513,10 +513,15 @@ def get_plex_movies(library_ids: Optional[List[str]] = None):
             title = video.get("title") or ""
             year = video.get("year")
             added_at = video.get("addedAt")
+            edition_title = video.get("editionTitle")  # e.g., "Director's Cut", "Extended Edition"
+
+            # Append edition to title if present for better display
+            display_title = f"{title} ({edition_title})" if edition_title else title
+
             out.append(
                 Movie(
                     key=key,
-                    title=title,
+                    title=display_title,
                     year=int(year) if year else None,
                     addedAt=int(added_at) if added_at else None,
                     library_id=lib_id,
