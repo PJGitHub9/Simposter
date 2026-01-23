@@ -162,12 +162,16 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
     """
     if force_refresh:
         _remove_poster_cache(rating_key)
+    else:
+        # Only use cached version if not forcing refresh
+        cached = _poster_cache_path(rating_key)
+        if cached:
+            return cached
 
-    cached = _poster_cache_path(rating_key)
-    if cached:
-        return cached
-
-    direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
+    # Add cache-busting parameter when force refreshing to bypass Plex's cache
+    import time
+    cache_buster = f"?X-Plex-Token={settings.PLEX_TOKEN}&t={int(time.time())}" if force_refresh else ""
+    direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb{cache_buster}"
 
     # Try direct poster URL
     try:

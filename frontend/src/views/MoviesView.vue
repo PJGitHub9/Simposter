@@ -158,17 +158,33 @@ const forcePosterRefresh = async () => {
   if (forceRefreshingPosters.value || loading.value) return
   forceRefreshingPosters.value = true
   try {
-    // Force refresh posters from Plex for current library by fetching with force_refresh flag
+    // Force refresh posters from Plex and get updated URLs
     const currentMovies = paged.value
-    for (const movie of currentMovies) {
-      try {
-        await fetch(`${apiBase}/api/movie/${movie.key}/poster?force_refresh=1`)
-      } catch (e) {
-        console.warn(`Failed to refresh poster for ${movie.title}:`, e)
-      }
-    }
-    // Re-fetch posters to update display
-    await fetchPosters(paged.value)
+    const results = await Promise.all(
+      currentMovies.map(async (m) => {
+        try {
+          // Force refresh the poster file from Plex and get the new URL with timestamp
+          const posterMetaUrl = `${apiBase}/api/movie/${m.key}/poster?meta=1&force_refresh=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
+          const posterRes = await fetch(posterMetaUrl)
+          if (posterRes.ok) {
+            const data = await posterRes.json()
+            const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+            return { key: m.key, url }
+          }
+          return { key: m.key, url: null }
+        } catch (e) {
+          console.warn(`Failed to refresh poster for ${m.title}:`, e)
+          return { key: m.key, url: null }
+        }
+      })
+    )
+
+    // Update poster cache with new URLs (with updated timestamps)
+    results.forEach((r) => {
+      posterCache.value[r.key] = r.url
+      setMoviePoster(r.key, r.url)
+    })
+    savePosterCache()
   } catch (e) {
     console.error('Force poster refresh failed:', e)
   } finally {
