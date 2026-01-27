@@ -212,20 +212,6 @@ const tvShows = ref<TvShow[]>(tvShowsCache.value)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
-// Initialize from URL query parameters (route already declared on line 27)
-const router = useRouter()
-const page = ref(Number(route.query.page) || 1)
-
-// Use URL query parameters if present, otherwise use settings default
-const defaultSortSettings = getDefaultSort()
-const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || defaultSortSettings.sortBy)
-const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || defaultSortSettings.sortOrder)
-const filterLabel = ref<string>((route.query.label as string) || '')
-
-const posterCache = posterCacheStore
-const labelCache = labelCacheStore
-const forceRefreshingPosters = ref(false)
-
 const apiBase = getApiBase()
 const settings = useSettingsStore()
 
@@ -244,6 +230,20 @@ const getDefaultSort = () => {
     sortOrder: order as 'asc' | 'desc'
   }
 }
+
+// Initialize from URL query parameters (route already declared on line 27)
+const router = useRouter()
+const page = ref(Number(route.query.page) || 1)
+
+// Use URL query parameters if present, otherwise use settings default
+const defaultSortSettings = getDefaultSort()
+const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || defaultSortSettings.sortBy)
+const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || defaultSortSettings.sortOrder)
+const filterLabel = ref<string>((route.query.label as string) || '')
+
+const posterCache = posterCacheStore
+const labelCache = labelCacheStore
+const forceRefreshingPosters = ref(false)
 
 // Get all unique labels from cache
 const allLabels = computed(() => {
