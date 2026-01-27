@@ -39,6 +39,46 @@ def api_plex_send(req: PlexSendRequest):
         else:
             logger.warning("[PLEX] Preset '%s' not found for template '%s', using provided options", req.preset_id, req.template_id)
 
+    # Fetch movie details BEFORE rendering so {title} and {year} can be substituted
+    import xml.etree.ElementTree as ET
+    movie_details = {}
+    try:
+        metadata_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}"
+        resp = requests.get(metadata_url, headers=plex_headers(), timeout=5)
+        if resp.ok:
+            root = ET.fromstring(resp.text)
+            item = root.find('.//Video') or root.find('.//Directory')
+            if item is not None:
+                title = item.get('title', '')
+                year = item.get('year')
+                movie_details = {
+                    'title': title,
+                    'year': int(year) if year and year.isdigit() else None,
+                    'library_id': req.library_id
+                }
+    except Exception as plex_err:
+        logger.debug("[PLEX] Failed to get metadata from Plex for template vars: %s", plex_err)
+        # Fallback to cache
+        try:
+            from .. import database as db
+            cached_movies = db.get_cached_movies()
+            for m in cached_movies:
+                if m.get("rating_key") == req.rating_key:
+                    movie_details = m
+                    break
+            if not movie_details:
+                cached_tv = db.get_cached_tv_shows()
+                for s in cached_tv:
+                    if s.get("rating_key") == req.rating_key:
+                        movie_details = s
+                        break
+        except Exception as cache_err:
+            logger.debug("[PLEX] Failed to get details from cache: %s", cache_err)
+
+    # Add movie details to options for template variable substitution
+    options["movie_title"] = movie_details.get("title", "")
+    options["movie_year"] = movie_details.get("year", "")
+
     # Render poster using template + preset options
     img = render_poster_image(
         req.template_id,
@@ -85,57 +125,9 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as e:
         logger.debug("[CACHE] poster refresh after send failed for %s: %s", req.rating_key, e)
 
-    # Record history entry for manual send
+    # Record history entry for manual send (movie_details already fetched above)
     try:
         from .. import database as db
-        import xml.etree.ElementTree as ET
-
-        # Get metadata from Plex API directly
-        movie_details = {}
-        try:
-            metadata_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}"
-            resp = requests.get(metadata_url, headers=plex_headers(), timeout=5)
-            if resp.ok:
-                root = ET.fromstring(resp.text)
-                # Could be Video (movie/episode) or Directory (show/season)
-                item = root.find('.//Video') or root.find('.//Directory')
-                if item is not None:
-                    title = item.get('title', '')
-                    year = item.get('year')
-                    parent_title = item.get('parentTitle')  # For seasons/episodes
-                    grandparent_title = item.get('grandparentTitle')  # For episodes
-
-                    # Build display title based on type
-                    if grandparent_title:  # Episode
-                        title = f"{grandparent_title} - {parent_title} - {title}"
-                    elif parent_title:  # Season
-                        title = f"{parent_title} - {title}"
-
-                    movie_details = {
-                        'title': title,
-                        'year': int(year) if year and year.isdigit() else None,
-                        'library_id': req.library_id
-                    }
-        except Exception as plex_err:
-            logger.debug("[HISTORY] Failed to get metadata from Plex: %s", plex_err)
-
-            # Fallback to cache
-            try:
-                from .. import cache
-                cached_movies = cache.get_cached_movies()
-                for m in cached_movies:
-                    if m.get("rating_key") == req.rating_key:
-                        movie_details = m
-                        break
-                if not movie_details:
-                    cached_tv = cache.get_cached_tv_shows()
-                    for s in cached_tv:
-                        if s.get("rating_key") == req.rating_key:
-                            movie_details = s
-                            break
-            except Exception as cache_err:
-                logger.debug("[HISTORY] Failed to get details from cache: %s", cache_err)
-
         db.record_poster_history(
             rating_key=req.rating_key,
             library_id=req.library_id or movie_details.get("library_id"),
