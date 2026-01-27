@@ -40,14 +40,30 @@ const { success, error: showError } = useNotification()
 const { movies: moviesCache, moviesLoaded: moviesLoadedFlag } = useMovies()
 const settings = useSettingsStore()
 
+// Parse defaultSort from settings (format: "field-order" like "title-asc" or "added-desc")
+const getDefaultSort = () => {
+  const defaultSort = settings.defaultSort?.value || 'title-asc'
+  const [field, order] = defaultSort.split('-')
+
+  // Map "added" to "addedAt" for internal use
+  const sortField = field === 'added' ? 'addedAt' : field
+
+  return {
+    sortBy: sortField as 'title' | 'year' | 'addedAt',
+    sortOrder: order as 'asc' | 'desc'
+  }
+}
+
+const defaultSortSettings = getDefaultSort()
+
 const movies = ref<Movie[]>(moviesCache.value)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const selectedMovies = ref<Set<string>>(new Set())
 const searchQuery = ref('')
 const filterLabel = ref<string>('')
-const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
-const sortOrder = ref<'asc' | 'desc'>('asc')
+const sortBy = ref<'title' | 'year' | 'addedAt'>(defaultSortSettings.sortBy)
+const sortOrder = ref<'asc' | 'desc'>(defaultSortSettings.sortOrder)
 const posterLimit = ref<number>(50)
 const currentPage = ref<number>(1)
 

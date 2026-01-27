@@ -224,7 +224,7 @@ def api_preview(req: PreviewRequest):
                     poster = pick_poster(posters, poster_filter)
                     poster_fallback_action_used = None
 
-                    # Poster fallback handling (precedes any logo fallback)
+                    # Poster fallback handling
                     if not poster:
                         fallback_action = render_options.get("fallbackPosterAction") or "continue"
                         poster_fallback_action_used = fallback_action
@@ -262,11 +262,14 @@ def api_preview(req: PreviewRequest):
 
                     # Pick logo based on preference (only if logo_mode is not 'none')
                     logo_mode = render_options.get("logo_mode", "first")
+                    # Disable logo fallback only if poster fallback was actually used
+                    # (not just configured - only when it actually triggered)
                     allow_logo_fallback = poster_fallback_action_used in (None, "continue")
                     if not logo_url and logo_mode != "none":
                         logo = pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
 
-                        # If no logo, try fallback template/preset (append mode, similar to batch) — only when poster allowed it
+                        # If no logo, try logo fallback — only if poster fallback wasn't already used
+                        # (poster fallback takes precedence when it triggers)
                         if not logo and allow_logo_fallback:
                             logger.info(
                                 "[PREVIEW] No logo before fallback; action=%s template=%s preset=%s logos=%s",

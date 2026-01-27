@@ -230,20 +230,37 @@ const movies = ref<Movie[]>(moviesCache.value)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
-// Initialize from URL query parameters (route already declared on line 25)
-const router = useRouter()
-const page = ref(Number(route.query.page) || 1)
-const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || 'title')
-const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || 'asc')
-const filterLabel = ref<string>((route.query.label as string) || '')
-
-const posterCache = posterCacheStore
-const labelCache = labelCacheStore
-
 const apiBase = getApiBase()
 const settings = useSettingsStore()
 
 const pageSize = computed(() => settings.posterDensity.value || 20)
+
+// Parse defaultSort from settings (format: "field-order" like "title-asc" or "added-desc")
+const getDefaultSort = () => {
+  const defaultSort = settings.defaultSort?.value || 'title-asc'
+  const [field, order] = defaultSort.split('-')
+
+  // Map "added" to "addedAt" for internal use
+  const sortField = field === 'added' ? 'addedAt' : field
+
+  return {
+    sortBy: sortField as 'title' | 'year' | 'addedAt',
+    sortOrder: order as 'asc' | 'desc'
+  }
+}
+
+// Initialize from URL query parameters (route already declared on line 25)
+const router = useRouter()
+const page = ref(Number(route.query.page) || 1)
+
+// Use URL query parameters if present, otherwise use settings default
+const defaultSortSettings = getDefaultSort()
+const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || defaultSortSettings.sortBy)
+const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || defaultSortSettings.sortOrder)
+const filterLabel = ref<string>((route.query.label as string) || '')
+
+const posterCache = posterCacheStore
+const labelCache = labelCacheStore
 
 // Get all unique labels from cache
 const allLabels = computed(() => {
@@ -457,8 +474,11 @@ watch([page, sortBy, sortOrder, filterLabel], () => {
   }
 
   if (page.value > 1) query.page = String(page.value)
-  if (sortBy.value !== 'title') query.sortBy = sortBy.value
-  if (sortOrder.value !== 'asc') query.sortOrder = sortOrder.value
+
+  // Only add sort parameters if they differ from settings default
+  const defaults = getDefaultSort()
+  if (sortBy.value !== defaults.sortBy) query.sortBy = sortBy.value
+  if (sortOrder.value !== defaults.sortOrder) query.sortOrder = sortOrder.value
   if (filterLabel.value) query.label = filterLabel.value
 
   // Update URL without triggering navigation
@@ -467,9 +487,10 @@ watch([page, sortBy, sortOrder, filterLabel], () => {
 
 // Watch for route query changes (browser back/forward buttons)
 watch(() => route.query, (newQuery) => {
+  const defaults = getDefaultSort()
   page.value = Number(newQuery.page) || 1
-  sortBy.value = (newQuery.sortBy as any) || 'title'
-  sortOrder.value = (newQuery.sortOrder as any) || 'asc'
+  sortBy.value = (newQuery.sortBy as any) || defaults.sortBy
+  sortOrder.value = (newQuery.sortOrder as any) || defaults.sortOrder
   filterLabel.value = (newQuery.label as string) || ''
 }, { deep: true })
 

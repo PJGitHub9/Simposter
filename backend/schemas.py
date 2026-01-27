@@ -168,6 +168,12 @@ class MovieBatchRequest(BaseModel):
     save_locally: bool = False
     labels: List[str] = []
     library_id: Optional[str] = None
+    fallbackPosterAction: Optional[str] = None
+    fallbackPosterTemplate: Optional[str] = None
+    fallbackPosterPreset: Optional[str] = None
+    fallbackLogoAction: Optional[str] = None
+    fallbackLogoTemplate: Optional[str] = None
+    fallbackLogoPreset: Optional[str] = None
 
 
 class TVShowBatchRequest(BaseModel):
