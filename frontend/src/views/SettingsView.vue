@@ -78,6 +78,7 @@ const isScanInProgress = computed(() => scan.running.value || scan.checking.valu
 const localTheme = ref<Theme>('neon')
 const localPosterDensity = ref(20)
 const localDeduplicateMovies = ref(false)
+const localDefaultSort = ref('added-desc')
 const localTimezone = ref('UTC')
 const localSaveLocation = ref('')  // Legacy, kept for backwards compatibility
 const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
@@ -161,6 +162,7 @@ const loadLocalSettings = async () => {
   localTheme.value = settings.theme.value
   localPosterDensity.value = settings.posterDensity.value
   localDeduplicateMovies.value = settings.deduplicateMovies.value
+  localDefaultSort.value = settings.defaultSort.value || 'added-desc'
   localTimezone.value = settings.timezone.value || 'UTC'
   localSaveLocation.value = settings.saveLocation.value
   localMovieSaveLocation.value = settings.movieSaveLocation.value
@@ -244,6 +246,8 @@ const captureSettingsSnapshot = () => {
   initialSettingsSnapshot.value = JSON.stringify({
     theme: localTheme.value,
     posterDensity: localPosterDensity.value,
+    deduplicateMovies: localDeduplicateMovies.value,
+    defaultSort: localDefaultSort.value,
     timezone: localTimezone.value,
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
@@ -295,6 +299,8 @@ const checkForChanges = () => {
   const currentSnapshot = JSON.stringify({
     theme: localTheme.value,
     posterDensity: localPosterDensity.value,
+    deduplicateMovies: localDeduplicateMovies.value,
+    defaultSort: localDefaultSort.value,
     timezone: localTimezone.value,
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
@@ -333,7 +339,9 @@ const checkForChanges = () => {
 
   sectionsWithChanges.value.appearance =
     localTheme.value !== initial.theme ||
-    localPosterDensity.value !== initial.posterDensity
+    localPosterDensity.value !== initial.posterDensity ||
+    localDeduplicateMovies.value !== initial.deduplicateMovies ||
+    localDefaultSort.value !== initial.defaultSort
 
   sectionsWithChanges.value.output =
     localSaveLocation.value !== initial.saveLocation ||
@@ -364,6 +372,7 @@ const saveSettings = async () => {
   settings.theme.value = localTheme.value
   settings.posterDensity.value = localPosterDensity.value
   settings.deduplicateMovies.value = localDeduplicateMovies.value
+  settings.defaultSort.value = localDefaultSort.value
   settings.timezone.value = localTimezone.value
   settings.saveLocation.value = localSaveLocation.value
   settings.movieSaveLocation.value = localMovieSaveLocation.value
@@ -935,6 +944,8 @@ watch(
 watch([
   localTheme,
   localPosterDensity,
+  localDeduplicateMovies,
+  localDefaultSort,
   localTimezone,
   localSaveLocation,
   localMovieSaveLocation,
@@ -1076,6 +1087,7 @@ onMounted(() => {
         :theme="localTheme"
         :posterDensity="localPosterDensity"
         :deduplicateMovies="localDeduplicateMovies"
+        :defaultSort="localDefaultSort"
         :timezone="localTimezone"
         :tmdbApiKey="localTmdbApiKey"
         :tvdbApiKey="localTvdbApiKey"
@@ -1086,6 +1098,7 @@ onMounted(() => {
         @update:theme="localTheme = $event as Theme"
         @update:posterDensity="localPosterDensity = $event"
         @update:deduplicateMovies="localDeduplicateMovies = $event"
+        @update:defaultSort="localDefaultSort = $event"
         @update:timezone="localTimezone = $event"
         @update:tmdbApiKey="localTmdbApiKey = $event"
         @update:tvdbApiKey="localTvdbApiKey = $event"

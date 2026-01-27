@@ -197,7 +197,8 @@ def process_webhook_poster_generation(
                 base_logo_mode=base_logo_mode,
                 white_logo_fallback=white_logo_fallback,
                 language_pref=language_pref,
-                presets_data=presets_data
+                presets_data=presets_data,
+                source='webhook'
             )
 
             # Check result status
@@ -242,7 +243,8 @@ def process_webhook_poster_generation(
                 base_logo_mode=base_logo_mode,
                 white_logo_fallback=white_logo_fallback,
                 language_pref=language_pref,
-                presets_data=presets_data
+                presets_data=presets_data,
+                source='webhook'
             )
 
             # Check result status

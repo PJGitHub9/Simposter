@@ -118,6 +118,8 @@ class AutomationSettings(BaseModel):
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
+    deduplicateMovies: bool = False
+    defaultSort: str = "added-desc"
     timezone: str = "UTC"
     saveLocation: str = "/config/output/{library}/{title}.jpg"  # Legacy field for backwards compatibility
     movieSaveLocation: str = "/config/output/{library}/{title}.jpg"

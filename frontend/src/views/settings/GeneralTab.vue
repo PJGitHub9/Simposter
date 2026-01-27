@@ -5,6 +5,7 @@ const props = defineProps<{
   theme: string
   posterDensity: number
   deduplicateMovies: boolean
+  defaultSort: string
   timezone: string
   tmdbApiKey: string
   tvdbApiKey: string
@@ -18,6 +19,7 @@ const emit = defineEmits<{
   'update:theme': [value: string]
   'update:posterDensity': [value: number]
   'update:deduplicateMovies': [value: boolean]
+  'update:defaultSort': [value: string]
   'update:timezone': [value: string]
   'update:tmdbApiKey': [value: string]
   'update:tvdbApiKey': [value: string]
@@ -39,6 +41,11 @@ const localPosterDensity = computed({
 const localDeduplicateMovies = computed({
   get: () => props.deduplicateMovies,
   set: (val) => emit('update:deduplicateMovies', val)
+})
+
+const localDefaultSort = computed({
+  get: () => props.defaultSort,
+  set: (val) => emit('update:defaultSort', val)
 })
 
 const localTimezone = computed({
@@ -129,16 +136,33 @@ const timezones = [
     <div class="section">
       <h3>Library Display</h3>
       <p class="section-description">
-        Configure how movies are displayed in the library view.
+        Configure how movies and TV shows are displayed in library and batch edit views.
       </p>
 
-      <label class="checkbox-label">
-        <input type="checkbox" v-model="localDeduplicateMovies" />
-        <span>Hide duplicate movies (multiple editions)</span>
-      </label>
-      <span class="help-text checkbox-help">
-        When enabled, only shows the most recently added version when you have multiple editions of the same movie (e.g., Extended Edition, Director's Cut). Useful for cleaner library views when you have duplicate movies with the same TMDb ID.
-      </span>
+      <div class="display-options">
+        <label class="checkbox-option">
+          <input type="checkbox" v-model="localDeduplicateMovies" />
+          <div class="checkbox-content">
+            <span class="checkbox-label-text">Hide duplicate movies (multiple editions)</span>
+            <span class="checkbox-description">
+              Only shows the most recently added version when you have multiple editions of the same movie (e.g., Extended Edition, Director's Cut)
+            </span>
+          </div>
+        </label>
+
+        <label>
+          <span class="label-text">Default Sort Order</span>
+          <select v-model="localDefaultSort">
+            <option value="title-asc">Title (A-Z)</option>
+            <option value="title-desc">Title (Z-A)</option>
+            <option value="year-desc">Year (Newest First)</option>
+            <option value="year-asc">Year (Oldest First)</option>
+            <option value="added-desc">Recently Added</option>
+            <option value="added-asc">Oldest Added</option>
+          </select>
+          <span class="help-text">Default sorting for library and batch edit screens</span>
+        </label>
+      </div>
     </div>
 
     <div class="section">
@@ -451,5 +475,55 @@ button.primary:hover:not(:disabled) {
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.display-options {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.checkbox-option {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 0;
+}
+
+.checkbox-option:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--accent);
+}
+
+.checkbox-option input[type="checkbox"] {
+  margin-top: 2px;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.checkbox-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.checkbox-label-text {
+  font-weight: 500;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.checkbox-description {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 </style>
