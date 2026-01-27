@@ -471,6 +471,12 @@ def init_database():
                 action TEXT NOT NULL, -- saved_local | sent_to_plex
                 save_path TEXT,
                 source TEXT DEFAULT 'manual', -- manual | batch | auto
+                poster_fallback_used INTEGER DEFAULT 0, -- 0/1 boolean
+                poster_fallback_template TEXT,
+                poster_fallback_preset TEXT,
+                logo_fallback_used INTEGER DEFAULT 0, -- 0/1 boolean
+                logo_fallback_template TEXT,
+                logo_fallback_preset TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -497,6 +503,26 @@ def init_database():
         if "source" not in history_cols:
             cursor.execute("ALTER TABLE poster_history ADD COLUMN source TEXT DEFAULT 'manual'")
             logger.info("[DB] Added 'source' column to poster_history table")
+
+        # Migration: add fallback tracking columns if they don't exist
+        if "poster_fallback_used" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN poster_fallback_used INTEGER DEFAULT 0")
+            logger.info("[DB] Added 'poster_fallback_used' column to poster_history table")
+        if "poster_fallback_template" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN poster_fallback_template TEXT")
+            logger.info("[DB] Added 'poster_fallback_template' column to poster_history table")
+        if "poster_fallback_preset" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN poster_fallback_preset TEXT")
+            logger.info("[DB] Added 'poster_fallback_preset' column to poster_history table")
+        if "logo_fallback_used" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN logo_fallback_used INTEGER DEFAULT 0")
+            logger.info("[DB] Added 'logo_fallback_used' column to poster_history table")
+        if "logo_fallback_template" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN logo_fallback_template TEXT")
+            logger.info("[DB] Added 'logo_fallback_template' column to poster_history table")
+        if "logo_fallback_preset" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN logo_fallback_preset TEXT")
+            logger.info("[DB] Added 'logo_fallback_preset' column to poster_history table")
 
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
@@ -1640,8 +1666,14 @@ def record_poster_history(
     action: str,
     save_path: Optional[str] = None,
     source: str = 'manual',
+    poster_fallback_used: bool = False,
+    poster_fallback_template: Optional[str] = None,
+    poster_fallback_preset: Optional[str] = None,
+    logo_fallback_used: bool = False,
+    logo_fallback_template: Optional[str] = None,
+    logo_fallback_preset: Optional[str] = None,
 ) -> None:
-    """Record a poster-related action for tracking."""
+    """Record a poster-related action for tracking, including fallback information."""
     with get_db() as conn:
         cursor = conn.cursor()
         # Keep only the most recent record per rating_key/action (scoped by library)
@@ -1662,8 +1694,10 @@ def record_poster_history(
         cursor.execute(
             """
             INSERT INTO poster_history
-            (rating_key, library_id, title, year, template_id, preset_id, action, save_path, source, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            (rating_key, library_id, title, year, template_id, preset_id, action, save_path, source,
+             poster_fallback_used, poster_fallback_template, poster_fallback_preset,
+             logo_fallback_used, logo_fallback_template, logo_fallback_preset, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 rating_key,
@@ -1675,6 +1709,12 @@ def record_poster_history(
                 action,
                 save_path,
                 source,
+                1 if poster_fallback_used else 0,
+                poster_fallback_template,
+                poster_fallback_preset,
+                1 if logo_fallback_used else 0,
+                logo_fallback_template,
+                logo_fallback_preset,
             ),
         )
 
@@ -1713,6 +1753,7 @@ def get_poster_history(
 
     out: List[Dict[str, Any]] = []
     for row in rows:
+        row_keys = row.keys()
         out.append({
             "id": row["id"],
             "rating_key": row["rating_key"],
@@ -1723,6 +1764,13 @@ def get_poster_history(
             "preset_id": row["preset_id"],
             "action": row["action"],
             "save_path": row["save_path"],
+            "source": row["source"] if "source" in row_keys else "manual",
+            "poster_fallback_used": bool(row["poster_fallback_used"]) if "poster_fallback_used" in row_keys else False,
+            "poster_fallback_template": row["poster_fallback_template"] if "poster_fallback_template" in row_keys else None,
+            "poster_fallback_preset": row["poster_fallback_preset"] if "poster_fallback_preset" in row_keys else None,
+            "logo_fallback_used": bool(row["logo_fallback_used"]) if "logo_fallback_used" in row_keys else False,
+            "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
+            "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
             "created_at": row["created_at"],
         })
     return out

@@ -117,6 +117,11 @@ def _process_single_movie(
         logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
 
         poster_fallback_action_used = None
+        poster_fallback_template_used = None
+        poster_fallback_preset_used = None
+        logo_fallback_used = False
+        logo_fallback_template_used = None
+        logo_fallback_preset_used = None
 
         # Fallback handling for poster preference (runs before any logo fallback)
         if not poster:
@@ -125,6 +130,8 @@ def _process_single_movie(
             fallback_template = render_options_base.get("fallbackPosterTemplate")
             fallback_preset = render_options_base.get("fallbackPosterPreset")
             if fallback_action == "template" and fallback_template:
+                poster_fallback_template_used = fallback_template
+                poster_fallback_preset_used = fallback_preset
                 template_id = fallback_template
                 if fallback_preset:
                     tpl_presets = presets_data.get(fallback_template, {}).get("presets", [])
@@ -171,6 +178,9 @@ def _process_single_movie(
             fallback_logo_template = render_options_base.get("fallbackLogoTemplate")
             fallback_logo_preset = render_options_base.get("fallbackLogoPreset")
             if fallback_logo_action == "template" and fallback_logo_template:
+                logo_fallback_used = True
+                logo_fallback_template_used = fallback_logo_template
+                logo_fallback_preset_used = fallback_logo_preset
                 template_id = fallback_logo_template
                 if fallback_logo_preset:
                     tpl_presets = presets_data.get(fallback_logo_template, {}).get("presets", [])
@@ -405,6 +415,12 @@ def _process_single_movie(
                     action="saved_local",
                     save_path=str(save_path),
                     source=source,
+                    poster_fallback_used=poster_fallback_action_used == "template",
+                    poster_fallback_template=poster_fallback_template_used,
+                    poster_fallback_preset=poster_fallback_preset_used,
+                    logo_fallback_used=logo_fallback_used,
+                    logo_fallback_template=logo_fallback_template_used,
+                    logo_fallback_preset=logo_fallback_preset_used,
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for local save: {history_err}")
@@ -458,6 +474,12 @@ def _process_single_movie(
                     action="sent_to_plex",
                     save_path=str(save_path) if save_path else None,
                     source=source,
+                    poster_fallback_used=poster_fallback_action_used == "template",
+                    poster_fallback_template=poster_fallback_template_used,
+                    poster_fallback_preset=poster_fallback_preset_used,
+                    logo_fallback_used=logo_fallback_used,
+                    logo_fallback_template=logo_fallback_template_used,
+                    logo_fallback_preset=logo_fallback_preset_used,
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for plex send: {history_err}")
@@ -630,16 +652,24 @@ def _render_tv_series_poster(
         "current_step": "Selecting assets",
     })
 
+    # Track fallback usage
+    poster_fallback_used = False
+    poster_fallback_template_used = None
+    poster_fallback_preset_used = None
+
     # Select poster with template fallback logic (matching preview.py behavior)
     poster = pick_poster(posters, poster_filter)
-    
+
     if not poster:
         # Apply template fallback if no poster found with filter
         fallback_action = render_options.get("fallbackPosterAction") or req.fallbackPosterAction or "continue"
         fallback_template = render_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
         fallback_preset = render_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
-        
+
         if fallback_action == "template" and fallback_template:
+            poster_fallback_used = True
+            poster_fallback_template_used = fallback_template
+            poster_fallback_preset_used = fallback_preset
             logger.info("[BATCH TV] Applying template fallback: %s/%s", fallback_template, fallback_preset)
             # Load fallback preset and merge options
             from ..config import load_presets
@@ -659,7 +689,7 @@ def _render_tv_series_poster(
         else:
             # continue action - try to get any available poster
             poster = pick_poster(posters, "all")
-    
+
     if not poster:
         raise Exception("No poster found for series")
 
@@ -672,7 +702,10 @@ def _render_tv_series_poster(
     return _render_and_save_poster(
         rating_key, poster_url, logo_url, render_options, template_id, preset_id,
         show_details.get("name"), show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
-        req, is_tv=True
+        req, is_tv=True,
+        poster_fallback_used=poster_fallback_used,
+        poster_fallback_template=poster_fallback_template_used,
+        poster_fallback_preset=poster_fallback_preset_used,
     )
 
 
@@ -755,18 +788,26 @@ def _render_all_tv_seasons(
     try:
         # Select series poster with template fallback logic (matching _render_tv_series_poster)
         series_poster = pick_poster(series_posters, poster_filter)
-        
+
         series_template_id = template_id
         series_preset_id = preset_id
         series_render_options = dict(render_options)
-        
+
+        # Track fallback usage for series
+        series_poster_fallback_used = False
+        series_poster_fallback_template = None
+        series_poster_fallback_preset = None
+
         if not series_poster:
             # Apply template fallback if no poster found with filter
             fallback_action = render_options.get("fallbackPosterAction") or req.fallbackPosterAction or "continue"
             fallback_template = render_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
             fallback_preset = render_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
-            
+
             if fallback_action == "template" and fallback_template:
+                series_poster_fallback_used = True
+                series_poster_fallback_template = fallback_template
+                series_poster_fallback_preset = fallback_preset
                 logger.info("[BATCH TV] Applying template fallback for series: %s/%s", fallback_template, fallback_preset)
                 # Load fallback preset and merge options
                 from ..config import load_presets
@@ -786,18 +827,21 @@ def _render_all_tv_seasons(
             else:
                 # continue action - try to get any available poster
                 series_poster = pick_poster(series_posters, "all")
-        
+
         if series_poster:
             # Select logo for series
             series_logo = None if str(logo_mode).lower() == "none" else pick_logo(series_logos, logo_preference, white_logo_fallback, language_pref)
             series_poster_url = series_poster.get("url")
             series_logo_url = series_logo.get("url") if series_logo else None
-            
+
             # Render series poster with potentially updated template/preset from fallback
             series_result = _render_and_save_poster(
                 rating_key, series_poster_url, series_logo_url, series_render_options, series_template_id, series_preset_id,
                 show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
-                req, is_tv=True
+                req, is_tv=True,
+                poster_fallback_used=series_poster_fallback_used,
+                poster_fallback_template=series_poster_fallback_template,
+                poster_fallback_preset=series_poster_fallback_preset,
             )
             results.append({
                 **series_result,
@@ -855,18 +899,26 @@ def _render_all_tv_seasons(
 
         # Select poster with template fallback logic (matching preview.py behavior)
         poster = pick_poster(all_posters, season_poster_filter)
-        
+
         season_template_id = template_id
         season_preset_id = preset_id
         season_render_options = dict(final_season_options)
-        
+
+        # Track fallback usage for season
+        season_poster_fallback_used = False
+        season_poster_fallback_template = None
+        season_poster_fallback_preset = None
+
         if not poster:
             # Apply template fallback if no poster found with filter
             fallback_action = final_season_options.get("fallbackPosterAction") or req.fallbackPosterAction or "continue"
             fallback_template = final_season_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
             fallback_preset = final_season_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
-            
+
             if fallback_action == "template" and fallback_template:
+                season_poster_fallback_used = True
+                season_poster_fallback_template = fallback_template
+                season_poster_fallback_preset = fallback_preset
                 logger.info("[BATCH TV] Applying template fallback for season %s: %s/%s", season_title, fallback_template, fallback_preset)
                 # Load fallback preset and merge options
                 from ..config import load_presets
@@ -915,7 +967,10 @@ def _render_all_tv_seasons(
         result = _render_and_save_poster(
             season_key, poster_url, logo_url, season_render_options, season_template_id, season_preset_id,
             show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
-            req, is_tv=True, season_title=season_title, season_index=season_index
+            req, is_tv=True, season_title=season_title, season_index=season_index,
+            poster_fallback_used=season_poster_fallback_used,
+            poster_fallback_template=season_poster_fallback_template,
+            poster_fallback_preset=season_poster_fallback_preset,
         )
         results.append(result)
 
@@ -940,7 +995,13 @@ def _render_and_save_poster(
     req: Union[BatchRequest, MovieBatchRequest, TVShowBatchRequest],
     is_tv: bool = False,
     season_title: Optional[str] = None,
-    season_index: Optional[int] = None
+    season_index: Optional[int] = None,
+    poster_fallback_used: bool = False,
+    poster_fallback_template: Optional[str] = None,
+    poster_fallback_preset: Optional[str] = None,
+    logo_fallback_used: bool = False,
+    logo_fallback_template: Optional[str] = None,
+    logo_fallback_preset: Optional[str] = None,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     _update_batch_status({
@@ -1064,6 +1125,12 @@ def _render_and_save_poster(
                     action="saved_local",
                     save_path=str(save_path),
                     source=source,
+                    poster_fallback_used=poster_fallback_used,
+                    poster_fallback_template=poster_fallback_template,
+                    poster_fallback_preset=poster_fallback_preset,
+                    logo_fallback_used=logo_fallback_used,
+                    logo_fallback_template=logo_fallback_template,
+                    logo_fallback_preset=logo_fallback_preset,
                 )
             except Exception:
                 pass
@@ -1122,6 +1189,12 @@ def _render_and_save_poster(
                     action="sent_to_plex",
                     save_path=str(save_path) if save_path else None,
                     source=source,
+                    poster_fallback_used=poster_fallback_used,
+                    poster_fallback_template=poster_fallback_template,
+                    poster_fallback_preset=poster_fallback_preset,
+                    logo_fallback_used=logo_fallback_used,
+                    logo_fallback_template=logo_fallback_template,
+                    logo_fallback_preset=logo_fallback_preset,
                 )
             except Exception:
                 pass
