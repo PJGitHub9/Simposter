@@ -14,6 +14,12 @@ interface HistoryRecord {
   action: string
   save_path: string | null
   source: string | null
+  poster_fallback_used: boolean
+  poster_fallback_template: string | null
+  poster_fallback_preset: string | null
+  logo_fallback_used: boolean
+  logo_fallback_template: string | null
+  logo_fallback_preset: string | null
   created_at: string
 }
 
@@ -198,6 +204,26 @@ const getSourceClass = (source: string | null) => {
   }
 }
 
+const getFallbackInfo = (record: HistoryRecord): string | null => {
+  const parts: string[] = []
+
+  if (record.poster_fallback_used && record.poster_fallback_template) {
+    const preset = record.poster_fallback_preset ? `/${record.poster_fallback_preset}` : ''
+    parts.push(`Poster: ${record.poster_fallback_template}${preset}`)
+  }
+
+  if (record.logo_fallback_used && record.logo_fallback_template) {
+    const preset = record.logo_fallback_preset ? `/${record.logo_fallback_preset}` : ''
+    parts.push(`Logo: ${record.logo_fallback_template}${preset}`)
+  }
+
+  return parts.length > 0 ? parts.join(', ') : null
+}
+
+const hasFallback = (record: HistoryRecord): boolean => {
+  return record.poster_fallback_used || record.logo_fallback_used
+}
+
 const clearFilters = () => {
   selectedLibrary.value = 'all'
   selectedTemplate.value = 'all'
@@ -302,6 +328,7 @@ onMounted(async () => {
             <th>Preset</th>
             <th>Source</th>
             <th>Action</th>
+            <th>Fallback</th>
             <th>Path</th>
           </tr>
         </thead>
@@ -334,6 +361,12 @@ onMounted(async () => {
               <span :class="['action-badge', getActionClass(record.action)]">
                 {{ getActionLabel(record.action) }}
               </span>
+            </td>
+            <td class="fallback-cell">
+              <span v-if="hasFallback(record)" class="fallback-badge" :title="getFallbackInfo(record) || ''">
+                {{ getFallbackInfo(record) }}
+              </span>
+              <span v-else class="no-fallback">—</span>
             </td>
             <td class="path-cell">
               <span v-if="record.save_path" :title="record.save_path" class="path-text">
@@ -584,6 +617,29 @@ onMounted(async () => {
 .action-local {
   background: rgba(59, 130, 246, 0.15);
   color: #3b82f6;
+}
+
+.fallback-cell {
+  max-width: 200px;
+  font-size: 12px;
+}
+
+.fallback-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  background: rgba(251, 146, 60, 0.15);
+  color: #fb923c;
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+  cursor: help;
+}
+
+.no-fallback {
+  color: var(--text-tertiary);
 }
 
 .path-cell {
