@@ -174,6 +174,8 @@ const getSourceLabel = (source: string | null) => {
       return 'Auto'
     case 'batch':
       return 'Batch'
+    case 'webhook':
+      return 'Webhook'
     case 'manual':
       return 'Manual'
     default:
@@ -187,6 +189,8 @@ const getSourceClass = (source: string | null) => {
       return 'source-auto'
     case 'batch':
       return 'source-batch'
+    case 'webhook':
+      return 'source-webhook'
     case 'manual':
       return 'source-manual'
     default:
@@ -254,6 +258,7 @@ onMounted(async () => {
             <option value="all">All Sources</option>
             <option value="manual">Manual</option>
             <option value="batch">Batch</option>
+            <option value="webhook">Webhook</option>
             <option value="auto">Auto</option>
           </select>
         </label>
@@ -559,6 +564,11 @@ onMounted(async () => {
 .source-batch {
   background: rgba(168, 85, 247, 0.15);
   color: #a855f7;
+}
+
+.source-webhook {
+  background: rgba(14, 165, 233, 0.15);
+  color: #0ea5e9;
 }
 
 .source-manual {

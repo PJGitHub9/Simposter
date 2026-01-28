@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
@@ -811,37 +811,41 @@ watch(selectedMoviesList, (list) => {
 const previewImage = ref<string | null>(null)
 const previewLoading = ref(false)
 const previewCache = ref<Record<string, string>>({})
+let previewAbortController: AbortController | null = null
+let previewDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 const fetchPreview = async () => {
+  // Cancel any in-flight preview request
+  if (previewAbortController) {
+    previewAbortController.abort()
+    previewAbortController = null
+  }
+
   if (!currentPreviewMovie.value || !selectedTemplate.value) {
     previewImage.value = null
     return
   }
 
-  const cacheKey = `${currentPreviewMovie.value.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}`
+  const movie = currentPreviewMovie.value
+  const cacheKey = `${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}`
   if (previewCache.value[cacheKey]) {
     previewImage.value = previewCache.value[cacheKey]
     return
   }
 
+  // Create new abort controller for this request
+  previewAbortController = new AbortController()
+  const signal = previewAbortController.signal
+
   previewLoading.value = true
   try {
-    const movie = currentPreviewMovie.value
-
-    // Ensure we have a valid poster URL
-    let posterUrl = movie.poster
-    if (!posterUrl) {
-      // Fetch the poster if not cached
-      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
-      const posterData = await posterRes.json()
-      if (posterData.url) {
-        posterUrl = posterData.url.startsWith('http') ? posterData.url : `${apiBase}${posterData.url}`
-      }
-    }
+    // Always construct a valid poster URL using the rating key
+    // The preview API will extract the rating_key and do TMDB lookup
+    const posterUrl = `${apiBase}/api/movie/${movie.key}/poster${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
 
     const payload = {
       template_id: selectedTemplate.value,
-      background_url: posterUrl || '',
+      background_url: posterUrl,
       logo_url: null,
       options: {},
       preset_id: selectedPreset.value || undefined,
@@ -852,8 +856,12 @@ const fetchPreview = async () => {
     const response = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal
     })
+
+    // Check if request was aborted before processing response
+    if (signal.aborted) return
 
     if (response.ok) {
       const data = await response.json()
@@ -865,11 +873,25 @@ const fetchPreview = async () => {
       previewImage.value = null
     }
   } catch (err) {
+    // Ignore abort errors - they're expected when switching movies quickly
+    if (err instanceof Error && err.name === 'AbortError') {
+      return
+    }
     console.error('Preview failed:', err)
     previewImage.value = null
   } finally {
     previewLoading.value = false
   }
+}
+
+// Debounced version for watchers to avoid rapid re-renders
+const debouncedFetchPreview = () => {
+  if (previewDebounceTimer) {
+    clearTimeout(previewDebounceTimer)
+  }
+  previewDebounceTimer = setTimeout(() => {
+    fetchPreview()
+  }, 150)
 }
 
 // Watch for changes to fetch posters and labels
@@ -905,11 +927,23 @@ watch(selectedPreset, () => {
 })
 
 watch(currentPreviewMovie, () => {
-  fetchPreview()
+  debouncedFetchPreview()
+})
+
+// Cleanup on unmount - cancel any pending preview requests
+onUnmounted(() => {
+  if (previewAbortController) {
+    previewAbortController.abort()
+    previewAbortController = null
+  }
+  if (previewDebounceTimer) {
+    clearTimeout(previewDebounceTimer)
+    previewDebounceTimer = null
+  }
 })
 
 onMounted(async () => {
-  // Wait for route to be ready 
+  // Wait for route to be ready
   await new Promise(resolve => setTimeout(resolve, 0))
 
   // Ensure settings are loaded so defaults are available

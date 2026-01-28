@@ -21,10 +21,110 @@ from typing import Dict, Any, Optional, List
 import xml.etree.ElementTree as ET
 
 from ..config import logger, settings, plex_headers, plex_session, load_presets
-from ..schemas import MovieBatchRequest, TVShowBatchRequest
+from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
 from .. import database as db
+from .. import cache
 
 router = APIRouter()
+
+
+# ============================================================================
+# HELPER FUNCTIONS - Cache updates
+# ============================================================================
+
+def _update_movie_cache(rating_key: str, library_id: Optional[str] = None):
+    """
+    Fetch movie metadata from Plex and update the cache.
+    This ensures newly added movies appear in the library view.
+    """
+    try:
+        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        r = plex_session.get(url, headers=plex_headers(), timeout=10)
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
+
+        video = root.find(".//Video")
+        if video is not None:
+            # Get library_id from the metadata if not provided
+            actual_library_id = library_id
+            if not actual_library_id:
+                actual_library_id = video.get("librarySectionID")
+
+            # Create Movie object for cache
+            movie = Movie(
+                key=rating_key,
+                title=video.get("title", "Unknown"),
+                year=int(video.get("year")) if video.get("year") else None,
+                addedAt=int(video.get("addedAt", 0)),
+                library_id=actual_library_id or "default"
+            )
+
+            # Get TMDB ID if available
+            tmdb_id = None
+            for guid in video.findall(".//Guid"):
+                guid_id = guid.get("id", "")
+                if "tmdb://" in guid_id:
+                    try:
+                        tmdb_id = int(guid_id.split("tmdb://")[1])
+                    except (ValueError, IndexError):
+                        pass
+                    break
+
+            cache.upsert_movie(movie, tmdb_id=tmdb_id)
+            logger.info(f"[WEBHOOK] Updated movie cache for {rating_key} ({movie.title})")
+
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Failed to update movie cache for {rating_key}: {e}")
+
+
+def _update_tv_cache(rating_key: str, library_id: Optional[str] = None):
+    """
+    Fetch TV show metadata from Plex and update the cache.
+    This ensures newly added shows appear in the library view.
+    """
+    try:
+        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        r = plex_session.get(url, headers=plex_headers(), timeout=10)
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
+
+        directory = root.find(".//Directory[@type='show']")
+        if directory is not None:
+            # Get library_id from the metadata if not provided
+            actual_library_id = library_id
+            if not actual_library_id:
+                actual_library_id = directory.get("librarySectionID")
+
+            # Get external IDs
+            tmdb_id = None
+            tvdb_id = None
+            for guid in directory.findall(".//Guid"):
+                guid_id = guid.get("id", "")
+                if "tmdb://" in guid_id:
+                    try:
+                        tmdb_id = int(guid_id.split("tmdb://")[1])
+                    except (ValueError, IndexError):
+                        pass
+                elif "tvdb://" in guid_id:
+                    try:
+                        tvdb_id = int(guid_id.split("tvdb://")[1])
+                    except (ValueError, IndexError):
+                        pass
+
+            # Create show dict for cache
+            show = {
+                "key": rating_key,
+                "title": directory.get("title", "Unknown"),
+                "year": int(directory.get("year")) if directory.get("year") else None,
+                "addedAt": int(directory.get("addedAt", 0)),
+                "library_id": actual_library_id or "default"
+            }
+
+            cache.upsert_tv_show(show, tmdb_id=tmdb_id, tvdb_id=tvdb_id)
+            logger.info(f"[WEBHOOK] Updated TV cache for {rating_key} ({show['title']})")
+
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {e}")
 
 
 # ============================================================================
@@ -205,6 +305,11 @@ def process_webhook_poster_generation(
             result_status = result.get("status")
             if result_status == "success":
                 logger.info(f"[WEBHOOK] Successfully processed TV show {rating_key}")
+                # Update cache so the show appears in library view
+                try:
+                    _update_tv_cache(rating_key, library_id)
+                except Exception as cache_err:
+                    logger.debug(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {cache_err}")
             else:
                 # Log full result for debugging
                 logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")
@@ -251,6 +356,11 @@ def process_webhook_poster_generation(
             result_status = result.get("status")
             if result_status == "success":
                 logger.info(f"[WEBHOOK] Successfully processed movie {rating_key}")
+                # Update cache so the movie appears in library view
+                try:
+                    _update_movie_cache(rating_key, library_id)
+                except Exception as cache_err:
+                    logger.debug(f"[WEBHOOK] Failed to update movie cache for {rating_key}: {cache_err}")
             else:
                 # Log full result for debugging
                 logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")
@@ -568,18 +678,24 @@ def tautulli_webhook(
             logger.info(f"[TAUTULLI_WEBHOOK] Event '{event_category}' not in processing list: {processing_events} - IGNORING")
             return {"status": "ignored", "reason": f"Event type {event_category} not in processing list"}
 
-        if media_type not in ["movie", "episode", "show"]:
+        if media_type not in ["movie", "episode", "show", "season"]:
             logger.warning(f"[TAUTULLI_WEBHOOK] Unknown media type: {media_type}")
             raise HTTPException(status_code=400, detail=f"Unknown media type: {media_type}")
+
+        # Extract title early for logging
+        title = payload.get("title", "Unknown")
+        year = payload.get("year")
+
+        # Handle season media type - ignore gracefully as we process seasons via the show
+        if media_type == "season":
+            logger.info(f"[TAUTULLI_WEBHOOK] Ignoring season event for '{title}' - seasons are processed via their parent show")
+            return {"status": "ignored", "reason": "Season events are handled when processing their parent TV show"}
 
         # Skip episode events for "added" category to avoid duplicate processing
         # (Tautulli sends an event for each episode, but we only want to process once per show/season)
         if media_type == "episode" and event_category == "added":
             logger.info(f"[TAUTULLI_WEBHOOK] Skipping episode '{title}' for 'added' event - only process show-level events to avoid duplicates")
             return {"status": "ignored", "reason": "Episode events for 'added' category are skipped to avoid duplicates. Configure Tautulli to send show-level events instead."}
-
-        title = payload.get("title", "Unknown")
-        year = payload.get("year")
 
         # Get automation settings
         auto_send = settings.WEBHOOK_AUTO_SEND
