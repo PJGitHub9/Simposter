@@ -503,9 +503,10 @@ def api_preview(req: PreviewRequest):
                     # Fallback 2: Try Plex poster directly
                     if not background_url:
                         try:
-                            plex_poster_url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
+                            plex_base = config_settings.PLEX_URL.rstrip('/')
+                            plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
                             background_url = plex_poster_url
-                            logger.info("[PREVIEW] Using Plex poster as fallback: %s", plex_poster_url)
+                            logger.info("[PREVIEW] Using Plex poster as fallback: %s", plex_poster_url.split('?')[0])
                         except Exception as plex_err:
                             logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
@@ -514,9 +515,10 @@ def api_preview(req: PreviewRequest):
                 if not background_url and rating_key:
                     try:
                         from ..config import settings as config_settings
-                        plex_poster_url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
+                        plex_base = config_settings.PLEX_URL.rstrip('/')
+                        plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
                         background_url = plex_poster_url
-                        logger.info("[PREVIEW] Using Plex poster as fallback after error: %s", plex_poster_url)
+                        logger.info("[PREVIEW] Using Plex poster as fallback after error: %s", plex_poster_url.split('?')[0])
                     except Exception as plex_err:
                         logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
 
