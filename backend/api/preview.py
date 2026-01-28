@@ -321,9 +321,29 @@ def api_preview(req: PreviewRequest):
                     elif logo_mode == "none":
                         logger.debug("[PREVIEW] Skipping logo fetch because logo_mode='none'")
                 else:
-                    logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s", rating_key)
+                    logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s, trying Plex poster", rating_key)
+                    # Fallback: Try Plex poster directly
+                    if not background_url:
+                        try:
+                            from ..config import settings as config_settings
+                            plex_base = config_settings.PLEX_URL.rstrip('/')
+                            plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
+                            background_url = plex_poster_url
+                            logger.info("[PREVIEW] Using Plex poster as fallback for movie: %s", plex_poster_url.split('?')[0])
+                        except Exception as plex_err:
+                            logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
-                logger.warning("[PREVIEW] TMDB lookup failed, using original URL: %s", e)
+                logger.warning("[PREVIEW] TMDB lookup failed: %s", e)
+                # Fallback: try to fetch poster directly from Plex
+                if not background_url and rating_key:
+                    try:
+                        from ..config import settings as config_settings
+                        plex_base = config_settings.PLEX_URL.rstrip('/')
+                        plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
+                        background_url = plex_poster_url
+                        logger.info("[PREVIEW] Using Plex poster as fallback after error: %s", plex_poster_url.split('?')[0])
+                    except Exception as plex_err:
+                        logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
 
         elif rating_key and is_tv_show:
             # Handle TV show logo and poster fetching (including seasons)
