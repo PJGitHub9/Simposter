@@ -473,9 +473,57 @@ def api_preview(req: PreviewRequest):
                     elif logo_mode == "none":
                         logger.debug("[PREVIEW] Skipping TV show logo fetch because logo_mode='none'")
                 else:
-                    logger.warning("[PREVIEW] Could not find TMDB ID for TV show rating_key=%s", rating_key)
+                    logger.warning("[PREVIEW] Could not find TMDB ID for TV show rating_key=%s, trying TVDB", rating_key)
+                    # Fallback 1: Try TVDB if we have a tvdb_id
+                    if tvdb_id and not background_url:
+                        try:
+                            logger.info("[PREVIEW] Trying TVDB poster lookup for tvdb_id=%s", tvdb_id)
+                            tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
+                            tvdb_posters = tvdb_imgs.get("posters", [])
+                            if tvdb_posters:
+                                poster = pick_poster(tvdb_posters, poster_filter)
+                                if poster:
+                                    background_url = poster.get("url")
+                                    logger.info("[PREVIEW] Using TVDB poster: %s", background_url)
+                                else:
+                                    # Try any poster
+                                    background_url = tvdb_posters[0].get("url") if tvdb_posters else None
+                                    if background_url:
+                                        logger.info("[PREVIEW] Using first TVDB poster: %s", background_url)
+                            # Also try to get logos from TVDB
+                            tvdb_logos = tvdb_imgs.get("logos", [])
+                            if tvdb_logos and not logo_url:
+                                logo = pick_logo(tvdb_logos, logo_preference, white_logo_fallback, language_pref)
+                                if logo:
+                                    logo_url = logo.get("url")
+                                    logger.info("[PREVIEW] Using TVDB logo: %s", logo_url)
+                        except Exception as tvdb_err:
+                            logger.warning("[PREVIEW] TVDB lookup failed: %s", tvdb_err)
+
+                    # Fallback 2: Try Plex poster directly
+                    if not background_url:
+                        try:
+                            plex_poster_url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
+                            background_url = plex_poster_url
+                            logger.info("[PREVIEW] Using Plex poster as fallback: %s", plex_poster_url)
+                        except Exception as plex_err:
+                            logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
-                logger.warning("[PREVIEW] TV show lookup failed, using original URL: %s", e)
+                logger.warning("[PREVIEW] TV show lookup failed: %s", e)
+                # Fallback: try to fetch poster directly from Plex
+                if not background_url and rating_key:
+                    try:
+                        from ..config import settings as config_settings
+                        plex_poster_url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
+                        background_url = plex_poster_url
+                        logger.info("[PREVIEW] Using Plex poster as fallback after error: %s", plex_poster_url)
+                    except Exception as plex_err:
+                        logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
+
+        # Final check: if we still don't have a background_url, raise a clear error
+        if not background_url:
+            logger.error("[PREVIEW] No background URL available after all lookups (rating_key=%s, is_tv=%s)", rating_key, is_tv_show)
+            raise HTTPException(status_code=400, detail="Could not find a poster image. Check that the item has a valid TMDB/TVDB ID or Plex poster.")
 
         logo_mode_val = render_options.get("logo_mode", "first")
         effective_logo_url = None if logo_mode_val == "none" else logo_url
