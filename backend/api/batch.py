@@ -583,7 +583,8 @@ def _process_single_tv_show(
             return _render_tv_series_poster(
                 rating_key, tmdb_id, tvdb_id, show_details, template_id, preset_id,
                 render_options_base, poster_filter, logo_preference, logo_mode,
-                white_logo_fallback, language_pref, req
+                white_logo_fallback, language_pref, req,
+                source=source
             )
         else:
             # Fetch seasons and render all with season-specific options
@@ -591,7 +592,8 @@ def _process_single_tv_show(
                 rating_key, tmdb_id, tvdb_id, show_details, template_id, preset_id,
                 render_options_base, poster_filter, logo_preference, logo_mode,
                 white_logo_fallback, language_pref, req,
-                season_poster_filter_final, season_options_final
+                season_poster_filter_final, season_options_final,
+                source=source
             )
 
     except Exception as e:
@@ -617,6 +619,7 @@ def _render_tv_series_poster(
     white_logo_fallback: str,
     language_pref: str,
     req: Union[BatchRequest, TVShowBatchRequest],
+    source: str = "batch",
 ):
     """Render series-level poster for a TV show."""
     _update_batch_status({
@@ -706,6 +709,7 @@ def _render_tv_series_poster(
         poster_fallback_used=poster_fallback_used,
         poster_fallback_template=poster_fallback_template_used,
         poster_fallback_preset=poster_fallback_preset_used,
+        source=source,
     )
 
 
@@ -725,6 +729,7 @@ def _render_all_tv_seasons(
     req: Union[BatchRequest, TVShowBatchRequest],
     season_poster_filter: str = "all",
     season_options: Optional[dict] = None,
+    source: str = "batch",
 ):
     """Render all seasons for a TV show."""
     show_title = show_details.get("name", "Unknown")
@@ -842,6 +847,7 @@ def _render_all_tv_seasons(
                 poster_fallback_used=series_poster_fallback_used,
                 poster_fallback_template=series_poster_fallback_template,
                 poster_fallback_preset=series_poster_fallback_preset,
+                source=source,
             )
             results.append({
                 **series_result,
@@ -971,6 +977,7 @@ def _render_all_tv_seasons(
             poster_fallback_used=season_poster_fallback_used,
             poster_fallback_template=season_poster_fallback_template,
             poster_fallback_preset=season_poster_fallback_preset,
+            source=source,
         )
         results.append(result)
 
@@ -1002,8 +1009,12 @@ def _render_and_save_poster(
     logo_fallback_used: bool = False,
     logo_fallback_template: Optional[str] = None,
     logo_fallback_preset: Optional[str] = None,
+    source: str = "batch",
 ):
     """Common rendering and saving logic for both movies and TV shows."""
+    # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
+    display_title = f"{title} - {season_title}" if season_title else title
+
     _update_batch_status({
         "current_step": "Rendering poster",
     })
@@ -1118,7 +1129,7 @@ def _render_and_save_poster(
                 db.record_poster_history(
                     rating_key=rating_key,
                     library_id=str(req.library_id or ""),
-                    title=title,
+                    title=display_title,
                     year=year,
                     template_id=template_id,
                     preset_id=preset_id,
@@ -1135,7 +1146,7 @@ def _render_and_save_poster(
             except Exception:
                 pass
         except Exception as save_err:
-            logger.error("[BATCH] Save error for %s: %s", title, save_err)
+            logger.error("[BATCH] Save error for %s: %s", display_title, save_err)
 
     # Send to Plex if requested
     if req.send_to_plex:
@@ -1182,7 +1193,7 @@ def _render_and_save_poster(
                 db.record_poster_history(
                     rating_key=rating_key,
                     library_id=str(req.library_id or ""),
-                    title=title,
+                    title=display_title,
                     year=year,
                     template_id=template_id,
                     preset_id=preset_id,
@@ -1200,7 +1211,7 @@ def _render_and_save_poster(
                 pass
 
         except Exception as upload_err:
-            logger.error("[BATCH] Plex upload failed for %s: %s", title, upload_err)
+            logger.error("[BATCH] Plex upload failed for %s: %s", display_title, upload_err)
             raise
 
     result = {

@@ -160,7 +160,8 @@ def _load_ui_settings_fallback():
         # Load Plex settings - database/JSON takes priority over defaults
         plex_data = data.get("plex", {})
         if plex_data.get("url"):
-            settings.PLEX_URL = plex_data["url"]
+            # Strip trailing slashes to prevent double-slash URLs like //library/metadata
+            settings.PLEX_URL = plex_data["url"].rstrip("/")
         if plex_data.get("token"):
             settings.PLEX_TOKEN = plex_data["token"]
         if plex_data.get("movieLibraryName"):
@@ -183,7 +184,7 @@ def _load_ui_settings_fallback():
         tmdb_key_env = os.getenv("TMDB_API_KEY")
 
         if plex_url_env:
-            settings.PLEX_URL = plex_url_env
+            settings.PLEX_URL = plex_url_env.rstrip("/")
         if plex_token_env:
             settings.PLEX_TOKEN = plex_token_env
         if plex_lib_env:

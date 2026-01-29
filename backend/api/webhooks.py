@@ -148,7 +148,7 @@ def _update_tv_cache(rating_key: str, library_id: Optional[str] = None):
 # HELPER FUNCTIONS - Find Plex items by external IDs
 # ============================================================================
 
-def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -> Optional[str]:
+def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -> Optional[tuple]:
     """
     Find a Plex movie's rating_key by its TMDb ID.
 
@@ -157,7 +157,7 @@ def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -
         library_id: Optional library ID to search in (defaults to all movie libraries)
 
     Returns:
-        rating_key if found, None otherwise
+        Tuple of (rating_key, library_id) if found, None otherwise
     """
     try:
         # Get Plex library to search
@@ -189,8 +189,8 @@ def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -
                 for guid in video.findall("Guid"):
                     guid_id = guid.get("id", "")
                     if f"tmdb://{tmdb_id}" in guid_id:
-                        logger.info(f"[WEBHOOK] Found movie rating_key={rating_key} for TMDb ID {tmdb_id}")
-                        return rating_key
+                        logger.info(f"[WEBHOOK] Found movie rating_key={rating_key} in library={lib_key} for TMDb ID {tmdb_id}")
+                        return (rating_key, lib_key)
 
         logger.warning(f"[WEBHOOK] Could not find Plex movie with TMDb ID {tmdb_id}")
         return None
@@ -200,7 +200,7 @@ def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -
         return None
 
 
-def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) -> Optional[str]:
+def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) -> Optional[tuple]:
     """
     Find a Plex TV show's rating_key by its TVDb ID.
 
@@ -209,7 +209,7 @@ def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) ->
         library_id: Optional library ID to search in (defaults to all TV libraries)
 
     Returns:
-        rating_key if found, None otherwise
+        Tuple of (rating_key, library_id) if found, None otherwise
     """
     try:
         # Get Plex library to search
@@ -241,8 +241,8 @@ def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) ->
                 for guid in video.findall("Guid"):
                     guid_id = guid.get("id", "")
                     if f"tvdb://{tvdb_id}" in guid_id:
-                        logger.info(f"[WEBHOOK] Found TV show rating_key={rating_key} for TVDb ID {tvdb_id}")
-                        return rating_key
+                        logger.info(f"[WEBHOOK] Found TV show rating_key={rating_key} in library={lib_key} for TVDb ID {tvdb_id}")
+                        return (rating_key, lib_key)
 
         logger.warning(f"[WEBHOOK] Could not find Plex TV show with TVDb ID {tvdb_id}")
         return None
@@ -260,7 +260,7 @@ def find_plex_item_with_retry(
     initial_delay: int = 30,
     max_retries: int = 5,
     retry_delay: int = 15
-) -> Optional[str]:
+) -> Optional[tuple]:
     """
     Find a Plex item with retry logic to handle cases where Plex hasn't
     imported the file yet when the webhook fires.
@@ -275,18 +275,18 @@ def find_plex_item_with_retry(
         retry_delay: Seconds between retries (default 15)
 
     Returns:
-        rating_key if found, None if not found after all retries
+        Tuple of (rating_key, library_id) if found, None if not found after all retries
     """
     # Initial delay to give Plex time to import the file
     logger.info(f"[WEBHOOK] Waiting {initial_delay}s for Plex to import {item_type} (ID: {external_id})")
     time.sleep(initial_delay)
 
     for attempt in range(max_retries + 1):
-        rating_key = find_func(external_id, library_id)
-        if rating_key:
+        result = find_func(external_id, library_id)
+        if result:
             if attempt > 0:
                 logger.info(f"[WEBHOOK] Found {item_type} on retry {attempt} (ID: {external_id})")
-            return rating_key
+            return result
 
         if attempt < max_retries:
             logger.info(f"[WEBHOOK] {item_type} not found (ID: {external_id}), retry {attempt + 1}/{max_retries} in {retry_delay}s")
@@ -310,8 +310,8 @@ def process_radarr_webhook_with_retry(
     """
     logger.info(f"[RADARR_WEBHOOK] Starting delayed processing for: {title} ({year}) - TMDb ID: {tmdb_id}")
 
-    # Find movie with retry logic
-    rating_key = find_plex_item_with_retry(
+    # Find movie with retry logic - returns (rating_key, library_id) tuple
+    result = find_plex_item_with_retry(
         find_func=find_plex_movie_by_tmdb_id,
         external_id=tmdb_id,
         item_type="movie",
@@ -321,9 +321,11 @@ def process_radarr_webhook_with_retry(
         retry_delay=15
     )
 
-    if not rating_key:
+    if not result:
         logger.error(f"[RADARR_WEBHOOK] Could not find movie in Plex after retries: {title} (TMDb ID: {tmdb_id})")
         return
+
+    rating_key, library_id = result
 
     # Now process the poster generation
     process_webhook_poster_generation(
@@ -332,7 +334,7 @@ def process_radarr_webhook_with_retry(
         preset_id=preset_id,
         auto_send=auto_send,
         auto_labels=auto_labels,
-        library_id=None,
+        library_id=library_id,
         is_tv=False
     )
 
@@ -352,8 +354,8 @@ def process_sonarr_webhook_with_retry(
     """
     logger.info(f"[SONARR_WEBHOOK] Starting delayed processing for: {title} ({year}) - TVDb ID: {tvdb_id}")
 
-    # Find TV show with retry logic
-    rating_key = find_plex_item_with_retry(
+    # Find TV show with retry logic - returns (rating_key, library_id) tuple
+    result = find_plex_item_with_retry(
         find_func=find_plex_show_by_tvdb_id,
         external_id=tvdb_id,
         item_type="TV show",
@@ -363,9 +365,11 @@ def process_sonarr_webhook_with_retry(
         retry_delay=15
     )
 
-    if not rating_key:
+    if not result:
         logger.error(f"[SONARR_WEBHOOK] Could not find TV show in Plex after retries: {title} (TVDb ID: {tvdb_id})")
         return
+
+    rating_key, library_id = result
 
     # Now process the poster generation
     process_webhook_poster_generation(
@@ -374,7 +378,7 @@ def process_sonarr_webhook_with_retry(
         preset_id=preset_id,
         auto_send=auto_send,
         auto_labels=auto_labels,
-        library_id=None,
+        library_id=library_id,
         is_tv=True,
         include_seasons=include_seasons
     )
@@ -433,6 +437,16 @@ def process_webhook_poster_generation(
             white_logo_fallback = base_options.get("fallbackLogoAction", "use_next")
             language_pref = base_options.get("language_preference", "en")
 
+            # Extract season_options from preset if available (matching batch.py behavior)
+            season_opts = preset.get("season_options", {})
+            if season_opts:
+                season_options = {**season_opts}
+                season_poster_filter = season_options.get("poster_filter", base_poster_filter)
+                logger.debug("[WEBHOOK] Extracted season_options with poster_filter='%s'", season_poster_filter)
+            else:
+                season_options = dict(base_options)
+                season_poster_filter = base_poster_filter
+
             # Process the TV show
             result = _process_single_tv_show(
                 idx=0,
@@ -445,6 +459,8 @@ def process_webhook_poster_generation(
                 white_logo_fallback=white_logo_fallback,
                 language_pref=language_pref,
                 presets_data=presets_data,
+                season_poster_filter=season_poster_filter,
+                season_options=season_options,
                 source='webhook'
             )
 
@@ -577,10 +593,13 @@ def radarr_webhook(
             logger.info(f"[RADARR_WEBHOOK_TEST] Labels to apply: {auto_labels}")
 
             # Try to find the movie in Plex
-            rating_key = find_plex_movie_by_tmdb_id(tmdb_id)
-            if rating_key:
-                logger.info(f"[RADARR_WEBHOOK_TEST] Found in Plex with rating_key: {rating_key}")
+            result = find_plex_movie_by_tmdb_id(tmdb_id)
+            if result:
+                rating_key, lib_id = result
+                logger.info(f"[RADARR_WEBHOOK_TEST] Found in Plex with rating_key: {rating_key}, library: {lib_id}")
             else:
+                rating_key = None
+                lib_id = None
                 logger.warning(f"[RADARR_WEBHOOK_TEST] Movie NOT found in Plex library")
 
             return {
@@ -589,6 +608,7 @@ def radarr_webhook(
                 "year": year,
                 "tmdb_id": tmdb_id,
                 "rating_key": rating_key,
+                "library_id": lib_id,
                 "template_id": template_id,
                 "preset_id": preset_id,
                 "auto_send": auto_send,
@@ -697,10 +717,13 @@ def sonarr_webhook(
             logger.info(f"[SONARR_WEBHOOK_TEST] Labels to apply: {auto_labels}")
 
             # Try to find the show in Plex
-            rating_key = find_plex_show_by_tvdb_id(tvdb_id)
-            if rating_key:
-                logger.info(f"[SONARR_WEBHOOK_TEST] Found in Plex with rating_key: {rating_key}")
+            result = find_plex_show_by_tvdb_id(tvdb_id)
+            if result:
+                rating_key, lib_id = result
+                logger.info(f"[SONARR_WEBHOOK_TEST] Found in Plex with rating_key: {rating_key}, library: {lib_id}")
             else:
+                rating_key = None
+                lib_id = None
                 logger.warning(f"[SONARR_WEBHOOK_TEST] TV show NOT found in Plex library")
 
             return {
@@ -709,6 +732,7 @@ def sonarr_webhook(
                 "year": year,
                 "tvdb_id": tvdb_id,
                 "rating_key": rating_key,
+                "library_id": lib_id,
                 "template_id": template_id,
                 "preset_id": preset_id,
                 "include_seasons": include_seasons,
@@ -842,20 +866,25 @@ def tautulli_webhook(
             logger.info(f"[TAUTULLI_WEBHOOK_TEST] Labels to apply: {auto_labels}")
 
             rating_key = payload.get("rating_key")
+            lib_id = None
             if media_type == "movie":
                 tmdb_id = payload.get("tmdb_id")
                 logger.info(f"[TAUTULLI_WEBHOOK_TEST] TMDb ID: {tmdb_id}")
                 logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from payload: {rating_key}")
                 if not rating_key and tmdb_id:
-                    rating_key = find_plex_movie_by_tmdb_id(int(tmdb_id))
-                    logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from TMDb lookup: {rating_key}")
+                    result = find_plex_movie_by_tmdb_id(int(tmdb_id))
+                    if result:
+                        rating_key, lib_id = result
+                    logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from TMDb lookup: {rating_key}, library: {lib_id}")
             else:
                 tvdb_id = payload.get("tvdb_id")
                 logger.info(f"[TAUTULLI_WEBHOOK_TEST] TVDb ID: {tvdb_id}")
                 logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from payload: {rating_key}")
                 if not rating_key and tvdb_id:
-                    rating_key = find_plex_show_by_tvdb_id(int(tvdb_id))
-                    logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from TVDb lookup: {rating_key}")
+                    result = find_plex_show_by_tvdb_id(int(tvdb_id))
+                    if result:
+                        rating_key, lib_id = result
+                    logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from TVDb lookup: {rating_key}, library: {lib_id}")
 
             return {
                 "status": "test_success",
@@ -865,6 +894,7 @@ def tautulli_webhook(
                 "title": title,
                 "year": year,
                 "rating_key": rating_key,
+                "library_id": lib_id,
                 "template_id": template_id,
                 "preset_id": preset_id,
                 "include_seasons": include_seasons if media_type != "movie" else None,
@@ -875,19 +905,22 @@ def tautulli_webhook(
 
         # Tautulli often provides rating_key directly
         rating_key = payload.get("rating_key")
+        library_id = None
 
         if media_type == "movie":
             tmdb_id = payload.get("tmdb_id")
 
             # If no rating_key but have TMDb ID, search for it
             if not rating_key and tmdb_id:
-                rating_key = find_plex_movie_by_tmdb_id(int(tmdb_id))
+                result = find_plex_movie_by_tmdb_id(int(tmdb_id))
+                if result:
+                    rating_key, library_id = result
 
             if not rating_key:
                 logger.warning("[TAUTULLI_WEBHOOK] No rating_key found for movie")
                 raise HTTPException(status_code=400, detail="Missing rating_key for movie")
 
-            logger.info(f"[TAUTULLI_WEBHOOK] Movie: {title} ({year}) - rating_key: {rating_key}")
+            logger.info(f"[TAUTULLI_WEBHOOK] Movie: {title} ({year}) - rating_key: {rating_key}, library: {library_id}")
 
             # Queue background task to generate and send poster
             background_tasks.add_task(
@@ -897,7 +930,7 @@ def tautulli_webhook(
                 preset_id=preset_id,
                 auto_send=auto_send,
                 auto_labels=auto_labels,
-                library_id=None,
+                library_id=library_id,
                 is_tv=False
             )
 
@@ -908,6 +941,7 @@ def tautulli_webhook(
                 "media_type": media_type,
                 "title": title,
                 "rating_key": rating_key,
+                "library_id": library_id,
                 "template_id": template_id,
                 "preset_id": preset_id,
                 "auto_send": auto_send,
@@ -920,24 +954,27 @@ def tautulli_webhook(
             # For episodes, we need the show's rating_key, not the episode's
             # If rating_key is provided, it might be the episode - we need the show
             if rating_key and media_type == "episode":
-                # Get the show's rating_key from the episode
+                # Get the show's rating_key and library_id from the episode
                 try:
                     ep_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
                     r = plex_session.get(ep_url, headers=plex_headers(), timeout=10)
                     r.raise_for_status()
                     root = ET.fromstring(r.content)
-                    # Get grandparentRatingKey (show's rating key)
+                    # Get grandparentRatingKey (show's rating key) and librarySectionID
                     video = root.find(".//Video")
                     if video is not None:
                         rating_key = video.get("grandparentRatingKey")
-                        logger.debug(f"[TAUTULLI_WEBHOOK] Got show rating_key {rating_key} from episode")
+                        library_id = video.get("librarySectionID")
+                        logger.debug(f"[TAUTULLI_WEBHOOK] Got show rating_key {rating_key}, library {library_id} from episode")
                 except Exception as e:
                     logger.warning(f"[TAUTULLI_WEBHOOK] Failed to get show rating_key from episode: {e}")
                     rating_key = None
 
             # If still no rating_key but have TVDb ID, search for it
             if not rating_key and tvdb_id:
-                rating_key = find_plex_show_by_tvdb_id(int(tvdb_id))
+                result = find_plex_show_by_tvdb_id(int(tvdb_id))
+                if result:
+                    rating_key, library_id = result
 
             if not rating_key:
                 logger.warning("[TAUTULLI_WEBHOOK] No rating_key found for TV show")
@@ -946,7 +983,7 @@ def tautulli_webhook(
             season_num = payload.get("season")
             episode_num = payload.get("episode")
 
-            logger.info(f"[TAUTULLI_WEBHOOK] TV Show: {title} - rating_key: {rating_key}")
+            logger.info(f"[TAUTULLI_WEBHOOK] TV Show: {title} - rating_key: {rating_key}, library: {library_id}")
 
             # Queue background task to generate and send poster
             background_tasks.add_task(
@@ -956,7 +993,7 @@ def tautulli_webhook(
                 preset_id=preset_id,
                 auto_send=auto_send,
                 auto_labels=auto_labels,
-                library_id=None,
+                library_id=library_id,
                 is_tv=True,
                 include_seasons=include_seasons
             )
@@ -968,6 +1005,7 @@ def tautulli_webhook(
                 "media_type": media_type,
                 "title": title,
                 "rating_key": rating_key,
+                "library_id": library_id,
                 "season": season_num,
                 "episode": episode_num,
                 "template_id": template_id,
