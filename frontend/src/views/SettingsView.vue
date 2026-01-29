@@ -1127,6 +1127,8 @@ onMounted(() => {
         :defaultLabelsToRemove="localDefaultLabelsToRemove"
         :defaultTvLabelsToRemove="localDefaultTvLabelsToRemove"
         :unsavedChanges="hasUnsavedChanges"
+        :schedulerChanged="sectionsWithChanges.scheduler"
+        :connectionsChanged="sectionsWithChanges.connections"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
         @update:libraries="localLibraries = $event"

@@ -6,7 +6,8 @@ from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
 
-logger = logging.getLogger(__name__)
+# Use the shared logger so logs appear in the main log
+logger = logging.getLogger("simposter")
 
 
 def process_new_content_for_library(

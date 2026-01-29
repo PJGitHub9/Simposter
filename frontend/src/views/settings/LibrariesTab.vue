@@ -53,6 +53,8 @@ const props = defineProps<{
   defaultLabelsToRemove: Record<string, string[]>
   defaultTvLabelsToRemove: Record<string, string[]>
   unsavedChanges: boolean
+  schedulerChanged?: boolean
+  connectionsChanged?: boolean
 }>()
 
 const apiBase = getApiBase()
@@ -444,7 +446,7 @@ const webhookInstructions = computed(() => {
     <h2>Libraries</h2>
 
     <!-- Plex Connection -->
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': connectionsChanged }]">
       <h3>Plex Connection</h3>
 
       <div class="plex-connection-grid">
@@ -727,7 +729,7 @@ const webhookInstructions = computed(() => {
     </div>
 
     <!-- Scheduled Scans -->
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': schedulerChanged }]">
       <h3>Scheduled Scans</h3>
 
       <div class="scheduler-header">
@@ -896,6 +898,12 @@ h4 {
   border-radius: 12px;
   padding: 20px;
   margin-bottom: 24px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.section-unsaved {
+  border-color: rgba(255, 193, 7, 0.5);
+  background: rgba(255, 193, 7, 0.05);
 }
 
 .plex-connection-grid {

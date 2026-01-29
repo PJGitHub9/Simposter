@@ -39,6 +39,7 @@ def _update_movie_cache(rating_key: str, library_id: Optional[str] = None):
     """
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        logger.debug(f"[WEBHOOK] Fetching Plex metadata from: {url}")
         r = plex_session.get(url, headers=plex_headers(), timeout=10)
         r.raise_for_status()
         root = ET.fromstring(r.content)
@@ -49,6 +50,11 @@ def _update_movie_cache(rating_key: str, library_id: Optional[str] = None):
             actual_library_id = library_id
             if not actual_library_id:
                 actual_library_id = video.get("librarySectionID")
+                logger.debug(f"[WEBHOOK] Extracted librarySectionID from Plex: {actual_library_id}")
+
+            if not actual_library_id:
+                logger.warning(f"[WEBHOOK] No library_id found for movie {rating_key}, using 'default'")
+                actual_library_id = "default"
 
             # Create Movie object for cache
             movie = Movie(
@@ -56,7 +62,7 @@ def _update_movie_cache(rating_key: str, library_id: Optional[str] = None):
                 title=video.get("title", "Unknown"),
                 year=int(video.get("year")) if video.get("year") else None,
                 addedAt=int(video.get("addedAt", 0)),
-                library_id=actual_library_id or "default"
+                library_id=actual_library_id
             )
 
             # Get TMDB ID if available
@@ -71,10 +77,12 @@ def _update_movie_cache(rating_key: str, library_id: Optional[str] = None):
                     break
 
             cache.upsert_movie(movie, tmdb_id=tmdb_id)
-            logger.info(f"[WEBHOOK] Updated movie cache for {rating_key} ({movie.title})")
+            logger.info(f"[WEBHOOK] Updated movie cache for {rating_key} ({movie.title}) in library {actual_library_id}")
+        else:
+            logger.warning(f"[WEBHOOK] No Video element found in Plex response for {rating_key}")
 
     except Exception as e:
-        logger.warning(f"[WEBHOOK] Failed to update movie cache for {rating_key}: {e}")
+        logger.warning(f"[WEBHOOK] Failed to update movie cache for {rating_key}: {e}", exc_info=True)
 
 
 def _update_tv_cache(rating_key: str, library_id: Optional[str] = None):
@@ -84,6 +92,7 @@ def _update_tv_cache(rating_key: str, library_id: Optional[str] = None):
     """
     try:
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        logger.debug(f"[WEBHOOK] Fetching Plex TV metadata from: {url}")
         r = plex_session.get(url, headers=plex_headers(), timeout=10)
         r.raise_for_status()
         root = ET.fromstring(r.content)
@@ -94,6 +103,11 @@ def _update_tv_cache(rating_key: str, library_id: Optional[str] = None):
             actual_library_id = library_id
             if not actual_library_id:
                 actual_library_id = directory.get("librarySectionID")
+                logger.debug(f"[WEBHOOK] Extracted librarySectionID from Plex: {actual_library_id}")
+
+            if not actual_library_id:
+                logger.warning(f"[WEBHOOK] No library_id found for TV show {rating_key}, using 'default'")
+                actual_library_id = "default"
 
             # Get external IDs
             tmdb_id = None
@@ -117,14 +131,16 @@ def _update_tv_cache(rating_key: str, library_id: Optional[str] = None):
                 "title": directory.get("title", "Unknown"),
                 "year": int(directory.get("year")) if directory.get("year") else None,
                 "addedAt": int(directory.get("addedAt", 0)),
-                "library_id": actual_library_id or "default"
+                "library_id": actual_library_id
             }
 
             cache.upsert_tv_show(show, tmdb_id=tmdb_id, tvdb_id=tvdb_id)
-            logger.info(f"[WEBHOOK] Updated TV cache for {rating_key} ({show['title']})")
+            logger.info(f"[WEBHOOK] Updated TV cache for {rating_key} ({show['title']}) in library {actual_library_id}")
+        else:
+            logger.warning(f"[WEBHOOK] No Directory[@type='show'] element found in Plex response for {rating_key}")
 
     except Exception as e:
-        logger.warning(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {e}")
+        logger.warning(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {e}", exc_info=True)
 
 
 # ============================================================================
@@ -307,9 +323,10 @@ def process_webhook_poster_generation(
                 logger.info(f"[WEBHOOK] Successfully processed TV show {rating_key}")
                 # Update cache so the show appears in library view
                 try:
+                    logger.info(f"[WEBHOOK] Updating TV cache for {rating_key} (library_id={library_id})")
                     _update_tv_cache(rating_key, library_id)
                 except Exception as cache_err:
-                    logger.debug(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {cache_err}")
+                    logger.warning(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {cache_err}", exc_info=True)
             else:
                 # Log full result for debugging
                 logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")
@@ -358,9 +375,10 @@ def process_webhook_poster_generation(
                 logger.info(f"[WEBHOOK] Successfully processed movie {rating_key}")
                 # Update cache so the movie appears in library view
                 try:
+                    logger.info(f"[WEBHOOK] Updating movie cache for {rating_key} (library_id={library_id})")
                     _update_movie_cache(rating_key, library_id)
                 except Exception as cache_err:
-                    logger.debug(f"[WEBHOOK] Failed to update movie cache for {rating_key}: {cache_err}")
+                    logger.warning(f"[WEBHOOK] Failed to update movie cache for {rating_key}: {cache_err}", exc_info=True)
             else:
                 # Log full result for debugging
                 logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")

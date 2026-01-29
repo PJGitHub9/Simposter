@@ -12,7 +12,8 @@ from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
 import logging
 
-logger = logging.getLogger(__name__)
+# Use the shared logger so logs appear in the main log
+logger = logging.getLogger("simposter")
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

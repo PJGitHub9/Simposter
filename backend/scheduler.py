@@ -5,17 +5,15 @@ Uses APScheduler for cron-style scheduling.
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
-from datetime import datetime, timezone
-import requests
+from datetime import datetime
 from typing import Optional, List
 
-logger = logging.getLogger(__name__)
+# Use the shared logger from config so scheduler logs appear in the main log
+logger = logging.getLogger("simposter")
 
 # Global scheduler instance
 _scheduler: Optional[BackgroundScheduler] = None
 _scan_job_id = "library_scan_job"
-_integration_poll_job_id = "integration_poll_job"
 
 
 def init_scheduler(restore_from_settings: bool = True):
@@ -38,6 +36,10 @@ def init_scheduler(restore_from_settings: bool = True):
 
             # Restore library scan schedule
             scheduler_settings = settings_dict.get("scheduler", {})
+            logger.info("[SCHEDULER] Scheduler settings: enabled=%s, cronExpression=%s",
+                       scheduler_settings.get("enabled", False),
+                       scheduler_settings.get("cronExpression", "not set"))
+
             if scheduler_settings.get("enabled", False):
                 # Support both legacy libraryId and new libraryIds
                 library_ids = scheduler_settings.get("libraryIds", [])
@@ -45,17 +47,18 @@ def init_scheduler(restore_from_settings: bool = True):
                     library_id = scheduler_settings.get("libraryId")
                     library_ids = [library_id] if library_id else []
 
-                schedule_library_scan(
-                    scheduler_settings.get("cronExpression", "0 1 * * *"),
-                    library_ids
-                )
-                logger.info("[SCHEDULER] Restored library scan schedule from settings: %s", scheduler_settings.get("cronExpression"))
-
-            # Integration polling removed
-            # (Radarr/Sonarr/Tautulli integrations deprecated)
+                cron_expr = scheduler_settings.get("cronExpression", "0 1 * * *")
+                success = schedule_library_scan(cron_expr, library_ids)
+                if success:
+                    logger.info("[SCHEDULER] Restored library scan schedule: cron=%s, libraries=%s",
+                               cron_expr, library_ids or "all")
+                else:
+                    logger.error("[SCHEDULER] Failed to restore library scan schedule")
+            else:
+                logger.info("[SCHEDULER] Scheduled scans are disabled in settings")
 
         except Exception as e:
-            logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e)
+            logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e, exc_info=True)
 
     return _scheduler
 
@@ -237,160 +240,50 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
     Internal function to execute a library scan.
     This is called by the scheduler.
     """
+    import time
+    from fastapi import HTTPException
+    scan_start = time.time()
+
     try:
-        from .config import settings
+        # Import the scan function directly - no HTTP request needed
+        from .api.movies import api_scan_library
 
-        logger.info("[SCHEDULER] Starting scheduled library scan (library_ids=%s)", library_ids or "all")
+        logger.info("[SCHEDULER] ========== SCHEDULED SCAN TRIGGERED ==========")
+        logger.info("[SCHEDULER] Starting scheduled library scan at %s (library_ids=%s)",
+                   datetime.now().strftime("%Y-%m-%d %H:%M:%S"), library_ids or "all")
 
-        # Make internal API call to trigger scan
-        # If library_ids is empty/None, scan all libraries
+        # Call the scan function directly
         if library_ids:
             # Scan each library individually
             for library_id in library_ids:
-                url = f"http://localhost:{settings.PORT}/api/scan-library?library_id={library_id}"
                 try:
-                    response = requests.post(url, timeout=300)  # 5 minute timeout per library
-                    if response.status_code == 200:
-                        logger.info("[SCHEDULER] Library scan completed successfully for library_id=%s", library_id)
-                    elif response.status_code == 409:
+                    result = api_scan_library(library_id=library_id)
+                    logger.info("[SCHEDULER] Library scan completed for library_id=%s: %s movies, %s TV shows, %s collections",
+                               library_id, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
+                except HTTPException as e:
+                    if e.status_code == 409:
                         logger.warning("[SCHEDULER] Library scan already in progress for library_id=%s", library_id)
                     else:
-                        logger.error("[SCHEDULER] Library scan failed for library_id=%s with status %s: %s",
-                                    library_id, response.status_code, response.text)
+                        logger.error("[SCHEDULER] Library scan failed for library_id=%s: %s", library_id, e.detail)
                 except Exception as e:
                     logger.error("[SCHEDULER] Failed to scan library_id=%s: %s", library_id, e)
         else:
             # Scan all libraries
-            url = f"http://localhost:{settings.PORT}/api/scan-library"
-            response = requests.post(url, timeout=300)  # 5 minute timeout
+            try:
+                result = api_scan_library(library_id=None)
+                elapsed = time.time() - scan_start
+                logger.info("[SCHEDULER] Library scan completed in %.1f seconds: %s movies, %s TV shows, %s collections",
+                           elapsed, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
+            except HTTPException as e:
+                if e.status_code == 409:
+                    logger.warning("[SCHEDULER] Library scan already in progress")
+                else:
+                    logger.error("[SCHEDULER] Library scan failed: %s", e.detail)
 
-            if response.status_code == 200:
-                logger.info("[SCHEDULER] Library scan completed successfully")
-            elif response.status_code == 409:
-                logger.warning("[SCHEDULER] Library scan already in progress")
-            else:
-                logger.error("[SCHEDULER] Library scan failed with status %s: %s",
-                            response.status_code, response.text)
+        logger.info("[SCHEDULER] ========== SCHEDULED SCAN FINISHED ==========")
 
-    except requests.Timeout:
-        logger.error("[SCHEDULER] Library scan timed out after 5 minutes")
-    except requests.ConnectionError as e:
-        logger.error("[SCHEDULER] Connection error during library scan (server may be down): %s", e)
-    except requests.RequestException as e:
-        logger.error("[SCHEDULER] Network error during library scan: %s", e)
     except Exception as e:
         logger.error("[SCHEDULER] Unexpected error during scheduled library scan: %s", e, exc_info=True)
-
-
-def schedule_integration_polling(interval_minutes: int = 10):
-    """
-    Schedule integration polling to run at regular intervals.
-
-    Args:
-        interval_minutes: How often to poll (in minutes). Default is 10 minutes.
-    """
-    if _scheduler is None:
-        logger.error("[SCHEDULER] Scheduler not initialized, call init_scheduler() first")
-        return False
-
-    try:
-        # Remove existing job if present
-        if _scheduler.get_job(_integration_poll_job_id):
-            _scheduler.remove_job(_integration_poll_job_id)
-            logger.info("[SCHEDULER] Removed existing integration polling job")
-
-        # Create interval trigger
-        trigger = IntervalTrigger(minutes=interval_minutes)
-
-        # Add new job
-        _scheduler.add_job(
-            func=_run_integration_poll,
-            trigger=trigger,
-            id=_integration_poll_job_id,
-            name="Integration Polling",
-            replace_existing=True
-        )
-
-        logger.info(f"[SCHEDULER] Scheduled integration polling every {interval_minutes} minutes")
-
-        # Log next run time
-        next_run = _scheduler.get_job(_integration_poll_job_id).next_run_time
-        logger.info("[SCHEDULER] Next integration poll scheduled for: %s", next_run)
-
-        return True
-
-    except Exception as e:
-        logger.error("[SCHEDULER] Failed to schedule integration polling: %s", e)
-        return False
-
-
-def cancel_integration_polling():
-    """Cancel the scheduled integration polling job."""
-    if _scheduler is None:
-        return False
-
-    try:
-        if _scheduler.get_job(_integration_poll_job_id):
-            _scheduler.remove_job(_integration_poll_job_id)
-            logger.info("[SCHEDULER] Cancelled integration polling job")
-            return True
-        return False
-    except Exception as e:
-        logger.error("[SCHEDULER] Failed to cancel integration polling: %s", e)
-        return False
-
-
-def get_integration_poll_schedule() -> Optional[dict]:
-    """Get information about the current integration polling schedule."""
-    if _scheduler is None:
-        return None
-
-    job = _scheduler.get_job(_integration_poll_job_id)
-    if job is None:
-        return None
-
-    return {
-        "job_id": job.id,
-        "name": job.name,
-        "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
-        "trigger": str(job.trigger)
-    }
-
-
-def _run_integration_poll():
-    """
-    Internal function to execute integration polling.
-    This is called by the scheduler.
-    """
-    try:
-        from . import integrations_poller
-
-        logger.info("[SCHEDULER] Starting scheduled integration poll")
-
-        # Poll all integrations
-        new_content = integrations_poller.poll_all_integrations()
-
-        movies = new_content.get("movies", [])
-        tv_shows = new_content.get("tv_shows", [])
-
-        if not movies and not tv_shows:
-            logger.info("[SCHEDULER] No new content detected")
-            return
-
-        logger.info(f"[SCHEDULER] Processing {len(movies)} new movies and {len(tv_shows)} new TV shows")
-
-        # Process movies
-        if movies:
-            movie_results = integrations_poller.process_new_content(movies)
-            logger.info(f"[SCHEDULER] Movie processing complete: {movie_results['success']} succeeded, {movie_results['failed']} failed")
-
-        # Process TV shows
-        if tv_shows:
-            tv_results = integrations_poller.process_new_content(tv_shows)
-            logger.info(f"[SCHEDULER] TV show processing complete: {tv_results['success']} succeeded, {tv_results['failed']} failed")
-
-    except Exception as e:
-        logger.error("[SCHEDULER] Unexpected error during integration poll: %s", e, exc_info=True)
 
 
 def shutdown_scheduler():
