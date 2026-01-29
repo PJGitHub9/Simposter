@@ -177,7 +177,8 @@ def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -
         # Search each library for the TMDb ID
         for lib in libraries:
             lib_key = lib["key"]
-            url = f"{settings.PLEX_URL}/library/sections/{lib_key}/all"
+            # includeGuids=1 is required to get external IDs (TMDb, IMDB, etc.) in the response
+            url = f"{settings.PLEX_URL}/library/sections/{lib_key}/all?includeGuids=1"
             r = plex_session.get(url, headers=plex_headers(), timeout=10)
             r.raise_for_status()
             root = ET.fromstring(r.content)
@@ -228,7 +229,8 @@ def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) ->
         # Search each library for the TVDb ID
         for lib in libraries:
             lib_key = lib["key"]
-            url = f"{settings.PLEX_URL}/library/sections/{lib_key}/all"
+            # includeGuids=1 is required to get external IDs (TVDb, IMDB, etc.) in the response
+            url = f"{settings.PLEX_URL}/library/sections/{lib_key}/all?includeGuids=1"
             r = plex_session.get(url, headers=plex_headers(), timeout=10)
             r.raise_for_status()
             root = ET.fromstring(r.content)
