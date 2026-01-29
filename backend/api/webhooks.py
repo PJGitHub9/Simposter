@@ -17,8 +17,9 @@ Example webhook URLs:
 """
 
 from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 import xml.etree.ElementTree as ET
+import time
 
 from ..config import logger, settings, plex_headers, plex_session, load_presets
 from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
@@ -249,6 +250,134 @@ def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) ->
         return None
 
 
+def find_plex_item_with_retry(
+    find_func: Callable,
+    external_id: int,
+    item_type: str,
+    library_id: Optional[str] = None,
+    initial_delay: int = 30,
+    max_retries: int = 5,
+    retry_delay: int = 15
+) -> Optional[str]:
+    """
+    Find a Plex item with retry logic to handle cases where Plex hasn't
+    imported the file yet when the webhook fires.
+
+    Args:
+        find_func: The function to call (find_plex_movie_by_tmdb_id or find_plex_show_by_tvdb_id)
+        external_id: The external ID (TMDb or TVDb)
+        item_type: Type for logging ("movie" or "TV show")
+        library_id: Optional library ID to search in
+        initial_delay: Seconds to wait before first lookup attempt (default 30)
+        max_retries: Maximum number of retry attempts (default 5)
+        retry_delay: Seconds between retries (default 15)
+
+    Returns:
+        rating_key if found, None if not found after all retries
+    """
+    # Initial delay to give Plex time to import the file
+    logger.info(f"[WEBHOOK] Waiting {initial_delay}s for Plex to import {item_type} (ID: {external_id})")
+    time.sleep(initial_delay)
+
+    for attempt in range(max_retries + 1):
+        rating_key = find_func(external_id, library_id)
+        if rating_key:
+            if attempt > 0:
+                logger.info(f"[WEBHOOK] Found {item_type} on retry {attempt} (ID: {external_id})")
+            return rating_key
+
+        if attempt < max_retries:
+            logger.info(f"[WEBHOOK] {item_type} not found (ID: {external_id}), retry {attempt + 1}/{max_retries} in {retry_delay}s")
+            time.sleep(retry_delay)
+
+    logger.warning(f"[WEBHOOK] {item_type} not found after {max_retries} retries (ID: {external_id})")
+    return None
+
+
+def process_radarr_webhook_with_retry(
+    tmdb_id: int,
+    title: str,
+    year: Optional[int],
+    template_id: str,
+    preset_id: str,
+    auto_send: bool,
+    auto_labels: List[str]
+):
+    """
+    Background task for Radarr webhooks that waits for Plex import, then generates poster.
+    """
+    logger.info(f"[RADARR_WEBHOOK] Starting delayed processing for: {title} ({year}) - TMDb ID: {tmdb_id}")
+
+    # Find movie with retry logic
+    rating_key = find_plex_item_with_retry(
+        find_func=find_plex_movie_by_tmdb_id,
+        external_id=tmdb_id,
+        item_type="movie",
+        library_id=None,
+        initial_delay=30,
+        max_retries=5,
+        retry_delay=15
+    )
+
+    if not rating_key:
+        logger.error(f"[RADARR_WEBHOOK] Could not find movie in Plex after retries: {title} (TMDb ID: {tmdb_id})")
+        return
+
+    # Now process the poster generation
+    process_webhook_poster_generation(
+        rating_key=rating_key,
+        template_id=template_id,
+        preset_id=preset_id,
+        auto_send=auto_send,
+        auto_labels=auto_labels,
+        library_id=None,
+        is_tv=False
+    )
+
+
+def process_sonarr_webhook_with_retry(
+    tvdb_id: int,
+    title: str,
+    year: Optional[int],
+    template_id: str,
+    preset_id: str,
+    auto_send: bool,
+    auto_labels: List[str],
+    include_seasons: bool
+):
+    """
+    Background task for Sonarr webhooks that waits for Plex import, then generates poster.
+    """
+    logger.info(f"[SONARR_WEBHOOK] Starting delayed processing for: {title} ({year}) - TVDb ID: {tvdb_id}")
+
+    # Find TV show with retry logic
+    rating_key = find_plex_item_with_retry(
+        find_func=find_plex_show_by_tvdb_id,
+        external_id=tvdb_id,
+        item_type="TV show",
+        library_id=None,
+        initial_delay=30,
+        max_retries=5,
+        retry_delay=15
+    )
+
+    if not rating_key:
+        logger.error(f"[SONARR_WEBHOOK] Could not find TV show in Plex after retries: {title} (TVDb ID: {tvdb_id})")
+        return
+
+    # Now process the poster generation
+    process_webhook_poster_generation(
+        rating_key=rating_key,
+        template_id=template_id,
+        preset_id=preset_id,
+        auto_send=auto_send,
+        auto_labels=auto_labels,
+        library_id=None,
+        is_tv=True,
+        include_seasons=include_seasons
+    )
+
+
 def process_webhook_poster_generation(
     rating_key: str,
     template_id: str,
@@ -465,28 +594,17 @@ def radarr_webhook(
                 "message": "Test mode - no poster generated"
             }
 
-        # Find the movie in Plex by TMDb ID
-        rating_key = find_plex_movie_by_tmdb_id(tmdb_id)
-
-        if not rating_key:
-            logger.warning(f"[RADARR_WEBHOOK] Could not find movie in Plex library (TMDb ID: {tmdb_id})")
-            return {
-                "status": "error",
-                "error": "Movie not found in Plex library",
-                "tmdb_id": tmdb_id,
-                "title": title
-            }
-
-        # Queue background task to generate and send poster
+        # Queue background task with delay/retry logic
+        # This allows Plex time to import the file before we try to find it
         background_tasks.add_task(
-            process_webhook_poster_generation,
-            rating_key=rating_key,
+            process_radarr_webhook_with_retry,
+            tmdb_id=tmdb_id,
+            title=title,
+            year=year,
             template_id=template_id,
             preset_id=preset_id,
             auto_send=auto_send,
-            auto_labels=auto_labels,
-            library_id=None,
-            is_tv=False
+            auto_labels=auto_labels
         )
 
         return {
@@ -494,11 +612,11 @@ def radarr_webhook(
             "event_type": event_type,
             "title": title,
             "tmdb_id": tmdb_id,
-            "rating_key": rating_key,
             "template_id": template_id,
             "preset_id": preset_id,
             "auto_send": auto_send,
-            "labels": auto_labels
+            "labels": auto_labels,
+            "message": "Poster generation queued (will wait for Plex import)"
         }
 
     except Exception as e:
@@ -598,28 +716,17 @@ def sonarr_webhook(
                 "message": "Test mode - no poster generated"
             }
 
-        # Find the TV show in Plex by TVDb ID
-        rating_key = find_plex_show_by_tvdb_id(tvdb_id)
-
-        if not rating_key:
-            logger.warning(f"[SONARR_WEBHOOK] Could not find TV show in Plex library (TVDb ID: {tvdb_id})")
-            return {
-                "status": "error",
-                "error": "TV show not found in Plex library",
-                "tvdb_id": tvdb_id,
-                "title": title
-            }
-
-        # Queue background task to generate and send poster
+        # Queue background task with delay/retry logic
+        # This allows Plex time to import the file before we try to find it
         background_tasks.add_task(
-            process_webhook_poster_generation,
-            rating_key=rating_key,
+            process_sonarr_webhook_with_retry,
+            tvdb_id=tvdb_id,
+            title=title,
+            year=year,
             template_id=template_id,
             preset_id=preset_id,
             auto_send=auto_send,
             auto_labels=auto_labels,
-            library_id=None,
-            is_tv=True,
             include_seasons=include_seasons
         )
 
@@ -628,13 +735,13 @@ def sonarr_webhook(
             "event_type": event_type,
             "title": title,
             "tvdb_id": tvdb_id,
-            "rating_key": rating_key,
             "template_id": template_id,
             "preset_id": preset_id,
             "include_seasons": include_seasons,
             "affected_seasons": sorted(list(affected_seasons)),
             "auto_send": auto_send,
-            "labels": auto_labels
+            "labels": auto_labels,
+            "message": "Poster generation queued (will wait for Plex import)"
         }
 
     except Exception as e:

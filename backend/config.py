@@ -290,6 +290,33 @@ level_name = settings.LOG_LEVEL.upper()
 level = getattr(logging, level_name, logging.INFO)
 logger.setLevel(level)
 
+def _get_log_max_backups() -> int:
+    """
+    Read maxBackups from database settings, falling back to 7 if unavailable.
+    This is called early during config load, so database might not exist yet.
+    """
+    try:
+        import sqlite3
+        db_path = Path(settings.SETTINGS_DIR) / "simposter.db"
+        if not db_path.exists():
+            return 7  # Default if DB doesn't exist yet
+
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        cursor = conn.cursor()
+        # Try both key formats (with and without logs. prefix)
+        cursor.execute(
+            "SELECT value FROM settings WHERE key IN ('logs.maxBackups', 'maxBackups') LIMIT 1"
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row[0]:
+            return int(row[0])
+        return 7  # Default
+    except Exception:
+        return 7  # Default on any error
+
+
 if not logger.handlers:
     log_dir = os.path.dirname(settings.LOG_FILE)
     os.makedirs(log_dir, exist_ok=True)
@@ -302,16 +329,47 @@ if not logger.handlers:
         base_stem = Path(settings.LOG_FILE).stem
         return str(p.with_name(f"{base_stem}-{date_part}.log"))
 
+    # Read maxBackups from database settings (user's UI setting)
+    _max_backups = _get_log_max_backups()
+
     fh = TimedRotatingFileHandler(
         settings.LOG_FILE,
         when="midnight",
         interval=1,
-        backupCount=14,
+        backupCount=_max_backups,
         encoding="utf-8",
         utc=False,
     )
     fh.suffix = "%Y-%m-%d"
     fh.namer = _rotate_namer
+
+    # Clean up excess old log files on startup (if more than maxBackups exist)
+    def _cleanup_old_logs(max_backups: int):
+        """Delete excess rotated log files if more than max_backups exist."""
+        try:
+            log_path = Path(settings.LOG_FILE)
+            log_dir_path = log_path.parent
+            base_stem = log_path.stem  # e.g., "simposter"
+
+            # Find all rotated log files matching pattern: simposter-YYYYMMDD.log
+            rotated_logs = sorted(
+                [f for f in log_dir_path.glob(f"{base_stem}-*.log") if f != log_path],
+                key=lambda f: f.stat().st_mtime,
+                reverse=True  # Newest first
+            )
+
+            # Keep only max_backups files, delete the rest
+            if len(rotated_logs) > max_backups:
+                for old_log in rotated_logs[max_backups:]:
+                    try:
+                        old_log.unlink()
+                    except OSError:
+                        pass  # Ignore deletion errors
+        except Exception:
+            pass  # Don't fail startup on cleanup errors
+
+    _cleanup_old_logs(_max_backups)
+
     sh = logging.StreamHandler()
 
     fmt = RedactingFormatter("%(asctime)s %(api_tag)s[%(levelname)s] %(message)s")
