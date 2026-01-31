@@ -528,8 +528,15 @@ def _process_single_tv_show(
     season_poster_filter: Optional[str] = None,
     season_options: Optional[dict] = None,
     source: str = "batch",
+    affected_seasons: Optional[List[int]] = None,
 ):
-    """Process a single TV show in the batch. Returns result dict."""
+    """Process a single TV show in the batch. Returns result dict.
+
+    Args:
+        affected_seasons: If provided, only process these specific season numbers.
+                         Used by webhooks to only generate posters for newly added seasons.
+                         If None or empty, process all seasons.
+    """
     try:
         template_id = req.template_id
         preset_id = req.preset_id
@@ -593,7 +600,8 @@ def _process_single_tv_show(
                 render_options_base, poster_filter, logo_preference, logo_mode,
                 white_logo_fallback, language_pref, req,
                 season_poster_filter_final, season_options_final,
-                source=source
+                source=source,
+                affected_seasons=affected_seasons
             )
 
     except Exception as e:
@@ -669,7 +677,15 @@ def _render_tv_series_poster(
         fallback_template = render_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
         fallback_preset = render_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
 
-        if fallback_action == "template" and fallback_template:
+        if fallback_action == "skip":
+            # Skip action - do not render this series
+            logger.info("[BATCH TV] Skipping series poster (fallbackPosterAction=skip, no poster found with filter)")
+            return {
+                "rating_key": rating_key,
+                "status": "skipped",
+                "reason": "No poster found with filter, fallback action is skip"
+            }
+        elif fallback_action == "template" and fallback_template:
             poster_fallback_used = True
             poster_fallback_template_used = fallback_template
             poster_fallback_preset_used = fallback_preset
@@ -730,8 +746,15 @@ def _render_all_tv_seasons(
     season_poster_filter: str = "all",
     season_options: Optional[dict] = None,
     source: str = "batch",
+    affected_seasons: Optional[List[int]] = None,
 ):
-    """Render all seasons for a TV show."""
+    """Render all seasons for a TV show.
+
+    Args:
+        affected_seasons: If provided, only process these specific season numbers.
+                         Used by webhooks to only generate posters for newly added seasons.
+                         If None or empty, process all seasons (batch mode).
+    """
     show_title = show_details.get("name", "Unknown")
     # Use season-specific options if provided
     final_season_options = dict(season_options or render_options)
@@ -761,6 +784,14 @@ def _render_all_tv_seasons(
     seasons.sort(key=lambda s: s["index"])
     logger.info("[BATCH TV] Found %d seasons for %s", len(seasons), show_title)
 
+    # Filter seasons if affected_seasons is provided (webhook mode)
+    # This prevents re-rendering all seasons when only one season has new episodes
+    if affected_seasons:
+        original_count = len(seasons)
+        seasons = [s for s in seasons if s["index"] in affected_seasons]
+        logger.info("[BATCH TV] Filtered to %d affected seasons from %d total: %s",
+                    len(seasons), original_count, affected_seasons)
+
     # Get series-level logos (reused for all seasons)
     show_imgs = get_images_for_tv_show(tmdb_id, show_details.get("original_language"))
     series_logos = show_imgs.get("logos", [])
@@ -782,90 +813,101 @@ def _render_all_tv_seasons(
             pass
 
     results = []
-    
-    # Render series poster first before processing seasons
-    logger.info("[BATCH TV] Rendering series poster for %s before seasons", show_title)
-    _update_batch_status({
-        "current_movie": f"{show_title} - Series Poster",
-        "current_step": "Rendering series poster",
-    })
-    
-    try:
-        # Select series poster with template fallback logic (matching _render_tv_series_poster)
-        series_poster = pick_poster(series_posters, poster_filter)
 
-        series_template_id = template_id
-        series_preset_id = preset_id
-        series_render_options = dict(render_options)
+    # Only render series poster if not in webhook mode with affected_seasons
+    # (webhooks with affected_seasons should only render the specific seasons, not series poster)
+    should_render_series = not affected_seasons
 
-        # Track fallback usage for series
-        series_poster_fallback_used = False
-        series_poster_fallback_template = None
-        series_poster_fallback_preset = None
-
-        if not series_poster:
-            # Apply template fallback if no poster found with filter
-            fallback_action = render_options.get("fallbackPosterAction") or req.fallbackPosterAction or "continue"
-            fallback_template = render_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
-            fallback_preset = render_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
-
-            if fallback_action == "template" and fallback_template:
-                series_poster_fallback_used = True
-                series_poster_fallback_template = fallback_template
-                series_poster_fallback_preset = fallback_preset
-                logger.info("[BATCH TV] Applying template fallback for series: %s/%s", fallback_template, fallback_preset)
-                # Load fallback preset and merge options
-                from ..config import load_presets
-                presets_data = load_presets()
-                tpl_presets = presets_data.get(fallback_template, {}).get("presets", [])
-                fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None) if fallback_preset else None
-                if fpreset:
-                    fp_opts = fpreset.get("options", {})
-                    series_render_options = {**render_options, **fp_opts}
-                    series_template_id = fallback_template
-                    series_preset_id = fallback_preset
-                    # Now try to get ANY available poster
-                    series_poster = pick_poster(series_posters, "all")
-                    logger.info("[BATCH TV] Using fallback poster from TMDB after template switch")
-                else:
-                    logger.warning("[BATCH TV] Fallback preset '%s' not found for template '%s'", fallback_preset, fallback_template)
-            else:
-                # continue action - try to get any available poster
-                series_poster = pick_poster(series_posters, "all")
-
-        if series_poster:
-            # Select logo for series
-            series_logo = None if str(logo_mode).lower() == "none" else pick_logo(series_logos, logo_preference, white_logo_fallback, language_pref)
-            series_poster_url = series_poster.get("url")
-            series_logo_url = series_logo.get("url") if series_logo else None
-
-            # Render series poster with potentially updated template/preset from fallback
-            series_result = _render_and_save_poster(
-                rating_key, series_poster_url, series_logo_url, series_render_options, series_template_id, series_preset_id,
-                show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
-                req, is_tv=True,
-                poster_fallback_used=series_poster_fallback_used,
-                poster_fallback_template=series_poster_fallback_template,
-                poster_fallback_preset=series_poster_fallback_preset,
-                source=source,
-            )
-            results.append({
-                **series_result,
-                "season": "Series",
-                "is_series": True
-            })
-            logger.info("[BATCH TV] Series poster rendered successfully for %s", show_title)
-        else:
-            logger.warning("[BATCH TV] No series poster found for %s", show_title)
-    except Exception as e:
-        logger.error("[BATCH TV] Failed to render series poster for %s: %s", show_title, e)
-        results.append({
-            "rating_key": rating_key,
-            "season": "Series",
-            "is_series": True,
-            "status": "error",
-            "error": str(e)
+    if should_render_series:
+        # Render series poster first before processing seasons
+        logger.info("[BATCH TV] Rendering series poster for %s before seasons", show_title)
+        _update_batch_status({
+            "current_movie": f"{show_title} - Series Poster",
+            "current_step": "Rendering series poster",
         })
+
+        try:
+            # Select series poster with template fallback logic (matching _render_tv_series_poster)
+            series_poster = pick_poster(series_posters, poster_filter)
+
+            series_template_id = template_id
+            series_preset_id = preset_id
+            series_render_options = dict(render_options)
+
+            # Track fallback usage for series
+            series_poster_fallback_used = False
+            series_poster_fallback_template = None
+            series_poster_fallback_preset = None
+
+            if not series_poster:
+                # Apply template fallback if no poster found with filter
+                fallback_action = render_options.get("fallbackPosterAction") or req.fallbackPosterAction or "continue"
+                fallback_template = render_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
+                fallback_preset = render_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
+
+                if fallback_action == "skip":
+                    # Skip action - do not render this item
+                    logger.info("[BATCH TV] Skipping series poster (fallbackPosterAction=skip, no poster found with filter)")
+                elif fallback_action == "template" and fallback_template:
+                    series_poster_fallback_used = True
+                    series_poster_fallback_template = fallback_template
+                    series_poster_fallback_preset = fallback_preset
+                    logger.info("[BATCH TV] Applying template fallback for series: %s/%s", fallback_template, fallback_preset)
+                    # Load fallback preset and merge options
+                    from ..config import load_presets
+                    presets_data = load_presets()
+                    tpl_presets = presets_data.get(fallback_template, {}).get("presets", [])
+                    fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None) if fallback_preset else None
+                    if fpreset:
+                        fp_opts = fpreset.get("options", {})
+                        series_render_options = {**render_options, **fp_opts}
+                        series_template_id = fallback_template
+                        series_preset_id = fallback_preset
+                        # Now try to get ANY available poster
+                        series_poster = pick_poster(series_posters, "all")
+                        logger.info("[BATCH TV] Using fallback poster from TMDB after template switch")
+                    else:
+                        logger.warning("[BATCH TV] Fallback preset '%s' not found for template '%s'", fallback_preset, fallback_template)
+                else:
+                    # continue action - try to get any available poster
+                    series_poster = pick_poster(series_posters, "all")
+
+            if series_poster:
+                # Select logo for series
+                series_logo = None if str(logo_mode).lower() == "none" else pick_logo(series_logos, logo_preference, white_logo_fallback, language_pref)
+                series_poster_url = series_poster.get("url")
+                series_logo_url = series_logo.get("url") if series_logo else None
+
+                # Render series poster with potentially updated template/preset from fallback
+                series_result = _render_and_save_poster(
+                    rating_key, series_poster_url, series_logo_url, series_render_options, series_template_id, series_preset_id,
+                    show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
+                    req, is_tv=True,
+                    poster_fallback_used=series_poster_fallback_used,
+                    poster_fallback_template=series_poster_fallback_template,
+                    poster_fallback_preset=series_poster_fallback_preset,
+                    source=source,
+                )
+                results.append({
+                    **series_result,
+                    "season": "Series",
+                    "is_series": True
+                })
+                logger.info("[BATCH TV] Series poster rendered successfully for %s", show_title)
+            else:
+                logger.warning("[BATCH TV] No series poster found for %s", show_title)
+        except Exception as e:
+            logger.error("[BATCH TV] Failed to render series poster for %s: %s", show_title, e)
+            results.append({
+                "rating_key": rating_key,
+                "season": "Series",
+                "is_series": True,
+                "status": "error",
+                "error": str(e)
+            })
+    else:
+        # Webhook mode with affected_seasons - skip series poster
+        logger.info("[BATCH TV] Skipping series poster for %s (webhook mode, affected_seasons=%s)", show_title, affected_seasons)
     
     # Now process individual seasons
     for season in seasons:
@@ -921,7 +963,10 @@ def _render_all_tv_seasons(
             fallback_template = final_season_options.get("fallbackPosterTemplate") or req.fallbackPosterTemplate
             fallback_preset = final_season_options.get("fallbackPosterPreset") or req.fallbackPosterPreset
 
-            if fallback_action == "template" and fallback_template:
+            if fallback_action == "skip":
+                # Skip action - do not render this season
+                logger.info("[BATCH TV] Skipping %s (fallbackPosterAction=skip, no poster found with filter)", season_title)
+            elif fallback_action == "template" and fallback_template:
                 season_poster_fallback_used = True
                 season_poster_fallback_template = fallback_template
                 season_poster_fallback_preset = fallback_preset

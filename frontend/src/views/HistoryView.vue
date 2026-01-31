@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, onUnmounted } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -28,6 +28,14 @@ const settings = useSettingsStore()
 const records = ref<HistoryRecord[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// Preview popup state
+const previewRecord = ref<HistoryRecord | null>(null)
+const previewPosition = ref({ x: 0, y: 0 })
+const previewLoading = ref(false)
+const previewError = ref<string | null>(null)
+const previewImageUrl = ref<string | null>(null)
+let hoverTimeout: ReturnType<typeof setTimeout> | null = null
 
 // Filters
 const selectedLibrary = ref<string>('all')
@@ -231,6 +239,91 @@ const clearFilters = () => {
   selectedSource.value = 'all'
 }
 
+// Check if a record can be previewed
+const canPreview = (record: HistoryRecord): boolean => {
+  // Can preview if we have a save_path (local file) or if it was sent to Plex (rating_key)
+  return !!(record.save_path || (record.action === 'sent_to_plex' && record.rating_key))
+}
+
+// Get the preview image URL for a record
+const getPreviewUrl = (record: HistoryRecord): string | null => {
+  if (record.save_path) {
+    // Use the history preview endpoint for locally saved files
+    return `${apiBase}/api/poster-history/${record.id}/preview`
+  } else if (record.action === 'sent_to_plex' && record.rating_key) {
+    // Use the Plex poster endpoint
+    // Determine if it's a TV show based on title containing season info
+    const isTv = record.title?.includes(' - Season') || record.title?.includes(' - S0')
+    if (isTv) {
+      return `${apiBase}/api/library/tv-shows/${record.rating_key}/poster`
+    }
+    return `${apiBase}/api/library/movies/${record.rating_key}/poster`
+  }
+  return null
+}
+
+// Show preview on hover
+const showPreview = (record: HistoryRecord, event: MouseEvent) => {
+  if (!canPreview(record)) return
+
+  // Clear any existing timeout
+  if (hoverTimeout) {
+    clearTimeout(hoverTimeout)
+  }
+
+  // Small delay before showing preview
+  hoverTimeout = setTimeout(() => {
+    previewRecord.value = record
+    previewError.value = null
+    previewLoading.value = true
+
+    // Position the popup near the button
+    const rect = (event.target as HTMLElement).getBoundingClientRect()
+    previewPosition.value = {
+      x: rect.left - 220,  // Position to the left of the button
+      y: rect.top - 100    // Position above the button slightly
+    }
+
+    // Get the preview URL
+    previewImageUrl.value = getPreviewUrl(record)
+    if (previewImageUrl.value) {
+      previewLoading.value = false
+    } else {
+      previewError.value = 'No preview available'
+      previewLoading.value = false
+    }
+  }, 200)
+}
+
+// Hide preview
+const hidePreview = () => {
+  if (hoverTimeout) {
+    clearTimeout(hoverTimeout)
+    hoverTimeout = null
+  }
+  previewRecord.value = null
+  previewImageUrl.value = null
+  previewError.value = null
+}
+
+// Handle image load error
+const handlePreviewError = () => {
+  previewError.value = 'Failed to load preview'
+  previewLoading.value = false
+}
+
+// Handle image load success
+const handlePreviewLoad = () => {
+  previewLoading.value = false
+}
+
+// Cleanup on unmount
+onUnmounted(() => {
+  if (hoverTimeout) {
+    clearTimeout(hoverTimeout)
+  }
+})
+
 onMounted(async () => {
   // Ensure settings are loaded before fetching history (for timezone)
   if (!settings.loaded.value) {
@@ -320,6 +413,7 @@ onMounted(async () => {
       <table class="history-table">
         <thead>
           <tr>
+            <th class="preview-th">Preview</th>
             <th>Date & Time</th>
             <th>Title</th>
             <th>Year</th>
@@ -334,6 +428,17 @@ onMounted(async () => {
         </thead>
         <tbody>
           <tr v-for="record in filteredRecords" :key="record.id">
+            <td class="preview-cell">
+              <button
+                v-if="canPreview(record)"
+                class="btn-preview"
+                @mouseenter="showPreview(record, $event)"
+                @mouseleave="hidePreview"
+              >
+                View
+              </button>
+              <span v-else class="no-preview">—</span>
+            </td>
             <td class="date-cell">
               {{ formatDate(record.created_at) }}
             </td>
@@ -378,6 +483,36 @@ onMounted(async () => {
         </tbody>
       </table>
     </div>
+
+    <!-- Preview Popup -->
+    <Teleport to="body">
+      <div
+        v-if="previewRecord"
+        class="preview-popup"
+        :style="{
+          left: `${previewPosition.x}px`,
+          top: `${previewPosition.y}px`
+        }"
+      >
+        <div class="preview-content">
+          <div v-if="previewLoading" class="preview-loading">
+            Loading...
+          </div>
+          <div v-else-if="previewError" class="preview-error">
+            {{ previewError }}
+          </div>
+          <img
+            v-else-if="previewImageUrl"
+            :src="previewImageUrl"
+            :alt="previewRecord.title || 'Poster preview'"
+            class="preview-image"
+            @error="handlePreviewError"
+            @load="handlePreviewLoad"
+          />
+        </div>
+        <div class="preview-title">{{ previewRecord.title }}</div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -654,5 +789,104 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-tertiary);
   font-family: monospace;
+}
+
+/* Preview button and popup styles */
+.preview-th {
+  width: 70px;
+  text-align: center;
+}
+
+.preview-cell {
+  text-align: center;
+  width: 70px;
+}
+
+.btn-preview {
+  padding: 4px 10px;
+  border: 1px solid rgba(61, 214, 183, 0.4);
+  border-radius: 4px;
+  background: rgba(61, 214, 183, 0.1);
+  color: #3dd6b7;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.btn-preview:hover {
+  background: rgba(61, 214, 183, 0.2);
+  border-color: rgba(61, 214, 183, 0.6);
+}
+
+.no-preview {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.preview-popup {
+  position: fixed;
+  z-index: 10000;
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  padding: 8px;
+  pointer-events: none;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.preview-content {
+  width: 180px;
+  height: 270px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.preview-loading,
+.preview-error {
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+  padding: 12px;
+}
+
+.preview-error {
+  color: #ef4444;
+}
+
+.preview-title {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
 }
 </style>

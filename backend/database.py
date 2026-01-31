@@ -1776,6 +1776,38 @@ def get_poster_history(
     return out
 
 
+def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
+    """Fetch a single poster history record by ID."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM poster_history WHERE id = ?", (history_id,))
+        row = cursor.fetchone()
+
+    if not row:
+        return None
+
+    row_keys = row.keys()
+    return {
+        "id": row["id"],
+        "rating_key": row["rating_key"],
+        "library_id": row["library_id"],
+        "title": row["title"],
+        "year": row["year"],
+        "template_id": row["template_id"],
+        "preset_id": row["preset_id"],
+        "action": row["action"],
+        "save_path": row["save_path"],
+        "source": row["source"] if "source" in row_keys else "manual",
+        "poster_fallback_used": bool(row["poster_fallback_used"]) if "poster_fallback_used" in row_keys else False,
+        "poster_fallback_template": row["poster_fallback_template"] if "poster_fallback_template" in row_keys else None,
+        "poster_fallback_preset": row["poster_fallback_preset"] if "poster_fallback_preset" in row_keys else None,
+        "logo_fallback_used": bool(row["logo_fallback_used"]) if "logo_fallback_used" in row_keys else False,
+        "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
+        "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
+        "created_at": row["created_at"],
+    }
+
+
 def get_poster_status(
     library_id: Optional[str] = None,
     rating_keys: Optional[List[str]] = None,

@@ -347,12 +347,13 @@ def process_sonarr_webhook_with_retry(
     preset_id: str,
     auto_send: bool,
     auto_labels: List[str],
-    include_seasons: bool
+    include_seasons: bool,
+    affected_seasons: Optional[List[int]] = None
 ):
     """
     Background task for Sonarr webhooks that waits for Plex import, then generates poster.
     """
-    logger.info(f"[SONARR_WEBHOOK] Starting delayed processing for: {title} ({year}) - TVDb ID: {tvdb_id}")
+    logger.info(f"[SONARR_WEBHOOK] Starting delayed processing for: {title} ({year}) - TVDb ID: {tvdb_id}, affected_seasons: {affected_seasons}")
 
     # Find TV show with retry logic - returns (rating_key, library_id) tuple
     result = find_plex_item_with_retry(
@@ -380,7 +381,8 @@ def process_sonarr_webhook_with_retry(
         auto_labels=auto_labels,
         library_id=library_id,
         is_tv=True,
-        include_seasons=include_seasons
+        include_seasons=include_seasons,
+        affected_seasons=affected_seasons
     )
 
 
@@ -392,11 +394,16 @@ def process_webhook_poster_generation(
     auto_labels: List[str],
     library_id: Optional[str],
     is_tv: bool = False,
-    include_seasons: bool = False
+    include_seasons: bool = False,
+    affected_seasons: Optional[List[int]] = None
 ):
     """
     Background task to generate and send poster to Plex.
     This runs asynchronously after the webhook returns a response.
+
+    Args:
+        affected_seasons: For TV shows, only process these specific seasons.
+                         If None or empty, process all seasons (for new series).
     """
     try:
         from .batch import _process_single_movie, _process_single_tv_show
@@ -461,12 +468,13 @@ def process_webhook_poster_generation(
                 presets_data=presets_data,
                 season_poster_filter=season_poster_filter,
                 season_options=season_options,
-                source='webhook'
+                source='webhook',
+                affected_seasons=affected_seasons
             )
 
-            # Check result status
+            # Check result status - batch functions return "ok" on success
             result_status = result.get("status")
-            if result_status == "success":
+            if result_status == "ok":
                 logger.info(f"[WEBHOOK] Successfully processed TV show {rating_key}")
                 # Update cache so the show appears in library view
                 try:
@@ -516,9 +524,9 @@ def process_webhook_poster_generation(
                 source='webhook'
             )
 
-            # Check result status
+            # Check result status - batch functions return "ok" on success
             result_status = result.get("status")
-            if result_status == "success":
+            if result_status == "ok":
                 logger.info(f"[WEBHOOK] Successfully processed movie {rating_key}")
                 # Update cache so the movie appears in library view
                 try:
@@ -753,7 +761,8 @@ def sonarr_webhook(
             preset_id=preset_id,
             auto_send=auto_send,
             auto_labels=auto_labels,
-            include_seasons=include_seasons
+            include_seasons=include_seasons,
+            affected_seasons=list(affected_seasons) if affected_seasons else None
         )
 
         return {
