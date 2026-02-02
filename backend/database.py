@@ -477,6 +477,7 @@ def init_database():
                 logo_fallback_used INTEGER DEFAULT 0, -- 0/1 boolean
                 logo_fallback_template TEXT,
                 logo_fallback_preset TEXT,
+                thumbnail_path TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -523,6 +524,9 @@ def init_database():
         if "logo_fallback_preset" not in history_cols:
             cursor.execute("ALTER TABLE poster_history ADD COLUMN logo_fallback_preset TEXT")
             logger.info("[DB] Added 'logo_fallback_preset' column to poster_history table")
+        if "thumbnail_path" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN thumbnail_path TEXT")
+            logger.info("[DB] Added 'thumbnail_path' column to poster_history table")
 
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
@@ -1672,32 +1676,49 @@ def record_poster_history(
     logo_fallback_used: bool = False,
     logo_fallback_template: Optional[str] = None,
     logo_fallback_preset: Optional[str] = None,
+    poster_data: Optional[bytes] = None,
 ) -> None:
     """Record a poster-related action for tracking, including fallback information."""
+    from .config import HISTORY_THUMBNAIL_DIR
+    from PIL import Image
+    from io import BytesIO
+    import uuid
+
+    thumbnail_path = None
+
+    # Save a thumbnail copy if poster_data is provided
+    if poster_data:
+        try:
+            # Generate unique filename
+            thumb_filename = f"{rating_key}_{uuid.uuid4().hex[:8]}.jpg"
+            thumb_path = Path(HISTORY_THUMBNAIL_DIR) / thumb_filename
+
+            # Create a smaller thumbnail (max 400px wide) to save space
+            img = Image.open(BytesIO(poster_data))
+            max_width = 400
+            if img.width > max_width:
+                ratio = max_width / img.width
+                new_size = (max_width, int(img.height * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+            # Save as JPEG with moderate quality
+            img.convert("RGB").save(str(thumb_path), "JPEG", quality=80)
+            thumbnail_path = str(thumb_path)
+            logger.debug(f"[HISTORY] Saved thumbnail: {thumbnail_path}")
+        except Exception as e:
+            logger.warning(f"[HISTORY] Failed to save thumbnail for {rating_key}: {e}")
+
     with get_db() as conn:
         cursor = conn.cursor()
-        # Keep only the most recent record per rating_key/action (scoped by library)
-        cursor.execute(
-            """
-            DELETE FROM poster_history
-            WHERE rating_key = ?
-              AND action = ?
-              AND (
-                    (library_id IS NULL AND ? IS NULL)
-                 OR (library_id = ?)
-                 OR (library_id IS NULL AND ? = '')
-                 OR (library_id = '' AND ? IS NULL)
-              )
-            """,
-            (rating_key, action, library_id, library_id or '', library_id, library_id),
-        )
+
+        # Insert new history record (keep all records for full history)
         cursor.execute(
             """
             INSERT INTO poster_history
             (rating_key, library_id, title, year, template_id, preset_id, action, save_path, source,
              poster_fallback_used, poster_fallback_template, poster_fallback_preset,
-             logo_fallback_used, logo_fallback_template, logo_fallback_preset, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             logo_fallback_used, logo_fallback_template, logo_fallback_preset, thumbnail_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 rating_key,
@@ -1715,6 +1736,7 @@ def record_poster_history(
                 1 if logo_fallback_used else 0,
                 logo_fallback_template,
                 logo_fallback_preset,
+                thumbnail_path,
             ),
         )
 
@@ -1804,6 +1826,7 @@ def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
         "logo_fallback_used": bool(row["logo_fallback_used"]) if "logo_fallback_used" in row_keys else False,
         "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
         "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
+        "thumbnail_path": row["thumbnail_path"] if "thumbnail_path" in row_keys else None,
         "created_at": row["created_at"],
     }
 

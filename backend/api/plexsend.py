@@ -139,6 +139,7 @@ def api_plex_send(req: PlexSendRequest):
             action="sent_to_plex",
             save_path=None,
             source='manual',
+            poster_data=payload,  # Save thumbnail for history preview
         )
     except Exception as history_err:
         logger.debug("[HISTORY] Failed to record manual send: %s", history_err)

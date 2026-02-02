@@ -247,19 +247,9 @@ const canPreview = (record: HistoryRecord): boolean => {
 
 // Get the preview image URL for a record
 const getPreviewUrl = (record: HistoryRecord): string | null => {
-  if (record.save_path) {
-    // Use the history preview endpoint for locally saved files
-    return `${apiBase}/api/poster-history/${record.id}/preview`
-  } else if (record.action === 'sent_to_plex' && record.rating_key) {
-    // Use the Plex poster endpoint with raw=1 to get the actual image
-    // Determine if it's a TV show based on title containing season info
-    const isTv = record.title?.includes(' - Season') || record.title?.includes(' - S0')
-    if (isTv) {
-      return `${apiBase}/api/tv-show/${record.rating_key}/poster?raw=1`
-    }
-    return `${apiBase}/api/movie/${record.rating_key}/poster?raw=1`
-  }
-  return null
+  // Always try the history preview endpoint first - it serves thumbnail or save_path
+  // The backend saves thumbnails for sent_to_plex records now
+  return `${apiBase}/api/poster-history/${record.id}/preview`
 }
 
 // Show preview on hover

@@ -50,22 +50,30 @@ def api_poster_status(payload: PosterStatusRequest):
 def api_poster_history_preview(history_id: int):
     """
     Serve the saved poster file for a history record.
-    Returns the poster image if it exists on disk.
+    Priority: 1) saved thumbnail, 2) save_path file, 3) 404
     """
-    # Get the history record
-    records = db.get_poster_history(limit=1)
-    # We need to fetch the specific record by ID
     record = db.get_poster_history_by_id(history_id)
 
     if not record:
         raise HTTPException(status_code=404, detail="History record not found")
 
+    # First try thumbnail_path (historical snapshot)
+    thumbnail_path = record.get("thumbnail_path")
     save_path = record.get("save_path")
-    if not save_path:
-        raise HTTPException(status_code=404, detail="No saved file for this record")
 
-    # Convert path to Path object and resolve
-    file_path = Path(save_path)
+    # Determine which file to serve (prefer thumbnail)
+    file_to_serve = None
+    if thumbnail_path:
+        thumb = Path(thumbnail_path)
+        if thumb.exists():
+            file_to_serve = thumb
+    if not file_to_serve and save_path:
+        saved = Path(save_path)
+        if saved.exists():
+            file_to_serve = saved
+
+    if not file_to_serve:
+        raise HTTPException(status_code=404, detail="No saved file for this record")
 
     # Security: Ensure the file is within allowed directories
     allowed_roots = [
@@ -76,23 +84,20 @@ def api_poster_history_preview(history_id: int):
     allowed_roots = [r for r in allowed_roots if r is not None]
 
     try:
-        resolved_path = file_path.resolve()
+        resolved_path = file_to_serve.resolve()
         is_allowed = any(
             str(resolved_path).startswith(str(root))
             for root in allowed_roots
         )
         if not is_allowed:
-            logger.warning(f"[HISTORY] Attempted to access file outside allowed directories: {save_path}")
+            logger.warning(f"[HISTORY] Attempted to access file outside allowed directories: {file_to_serve}")
             raise HTTPException(status_code=403, detail="Access denied")
     except Exception as e:
-        logger.error(f"[HISTORY] Error resolving path {save_path}: {e}")
+        logger.error(f"[HISTORY] Error resolving path {file_to_serve}: {e}")
         raise HTTPException(status_code=400, detail="Invalid file path")
 
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found on disk")
-
     # Determine media type
-    suffix = file_path.suffix.lower()
+    suffix = file_to_serve.suffix.lower()
     media_type = "image/jpeg"
     if suffix == ".png":
         media_type = "image/png"
@@ -100,8 +105,8 @@ def api_poster_history_preview(history_id: int):
         media_type = "image/webp"
 
     return FileResponse(
-        path=str(file_path),
+        path=str(file_to_serve),
         media_type=media_type,
-        filename=file_path.name
+        filename=file_to_serve.name
     )
 

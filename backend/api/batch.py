@@ -481,6 +481,7 @@ def _process_single_movie(
                     logo_fallback_used=logo_fallback_used,
                     logo_fallback_template=logo_fallback_template_used,
                     logo_fallback_preset=logo_fallback_preset_used,
+                    poster_data=payload,  # Save thumbnail for history preview
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for plex send: {history_err}")
@@ -1252,6 +1253,7 @@ def _render_and_save_poster(
                     logo_fallback_used=logo_fallback_used,
                     logo_fallback_template=logo_fallback_template,
                     logo_fallback_preset=logo_fallback_preset,
+                    poster_data=payload,  # Save thumbnail for history preview
                 )
             except Exception:
                 pass
