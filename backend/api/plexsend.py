@@ -143,7 +143,7 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as history_err:
         logger.debug("[HISTORY] Failed to record manual send: %s", history_err)
 
-    # Send Discord notification for manual send
+    # Send Discord notification for manual send (include poster image)
     try:
         send_discord_notification(
             title=movie_details.get("title", "Unknown"),
@@ -152,7 +152,8 @@ def api_plex_send(req: PlexSendRequest):
             preset_id=req.preset_id or "",
             library_id=req.library_id or movie_details.get("library_id"),
             source="manual",
-            action="sent_to_plex"
+            action="sent_to_plex",
+            poster_data=payload  # Include the rendered poster image
         )
     except Exception as notif_err:
         logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)

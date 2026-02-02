@@ -140,12 +140,16 @@ def send_discord_notification(
     source: str = "manual",
     action: str = "sent_to_plex",
     poster_url: Optional[str] = None,
+    poster_data: Optional[bytes] = None,
     count: int = 1,
     success_count: int = 0,
     failed_count: int = 0
 ) -> bool:
     """
     Send a Discord webhook notification for poster generation.
+
+    Args:
+        poster_data: Optional bytes of the poster image to attach directly to Discord
 
     Returns:
         True if notification was sent successfully, False otherwise
@@ -214,19 +218,37 @@ def send_discord_notification(
             "timestamp": datetime.utcnow().isoformat()
         }
 
-        # Add poster thumbnail if available
-        if poster_url:
+        # Add poster thumbnail - either from attached file or URL
+        if poster_data:
+            # Use attachment reference for embedded image
+            embed["thumbnail"] = {"url": "attachment://poster.jpg"}
+        elif poster_url:
             embed["thumbnail"] = {"url": poster_url}
 
-        payload = {
-            "embeds": [embed]
-        }
-
-        response = requests.post(
-            webhook_url,
-            json=payload,
-            timeout=10
-        )
+        # Send with or without file attachment
+        if poster_data:
+            # Use multipart/form-data to include the image
+            import json
+            files = {
+                "file": ("poster.jpg", poster_data, "image/jpeg")
+            }
+            payload_json = json.dumps({"embeds": [embed]})
+            response = requests.post(
+                webhook_url,
+                data={"payload_json": payload_json},
+                files=files,
+                timeout=15
+            )
+        else:
+            # Simple JSON request without file
+            payload = {
+                "embeds": [embed]
+            }
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                timeout=10
+            )
 
         if response.status_code in (200, 204):
             logger.info(f"[DISCORD] Notification sent: {title} ({source})")

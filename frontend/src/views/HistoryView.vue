@@ -251,13 +251,13 @@ const getPreviewUrl = (record: HistoryRecord): string | null => {
     // Use the history preview endpoint for locally saved files
     return `${apiBase}/api/poster-history/${record.id}/preview`
   } else if (record.action === 'sent_to_plex' && record.rating_key) {
-    // Use the Plex poster endpoint
+    // Use the Plex poster endpoint with raw=1 to get the actual image
     // Determine if it's a TV show based on title containing season info
     const isTv = record.title?.includes(' - Season') || record.title?.includes(' - S0')
     if (isTv) {
-      return `${apiBase}/api/library/tv-shows/${record.rating_key}/poster`
+      return `${apiBase}/api/tv-show/${record.rating_key}/poster?raw=1`
     }
-    return `${apiBase}/api/library/movies/${record.rating_key}/poster`
+    return `${apiBase}/api/movie/${record.rating_key}/poster?raw=1`
   }
   return null
 }
