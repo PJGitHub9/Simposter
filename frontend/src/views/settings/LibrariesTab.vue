@@ -274,6 +274,7 @@ const toggleIgnoreLabel = (libraryIdx: number, label: string, isTv: boolean) => 
   if (isTv) {
     const libs = [...localTvShowLibraries.value]
     const lib = libs[libraryIdx]
+    if (!lib) return
     const current = lib.webhookIgnoreLabels || []
     const index = current.indexOf(label)
     if (index > -1) {
@@ -285,6 +286,7 @@ const toggleIgnoreLabel = (libraryIdx: number, label: string, isTv: boolean) => 
   } else {
     const libs = [...localLibraries.value]
     const lib = libs[libraryIdx]
+    if (!lib) return
     const current = lib.webhookIgnoreLabels || []
     const index = current.indexOf(label)
     if (index > -1) {
