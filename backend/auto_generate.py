@@ -5,9 +5,35 @@ import logging
 from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
+from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
+
+
+def _should_skip_auto_generate(rating_key: str, library_id: str, is_tv: bool = False) -> bool:
+    """
+    Check if auto-generation should be skipped based on item labels.
+
+    Returns:
+        True if the item should be skipped (has an ignore label), False otherwise
+    """
+    ignore_labels = _get_webhook_ignore_labels(library_id, is_tv)
+    if not ignore_labels:
+        return False
+
+    item_labels = _get_item_labels(rating_key)
+    if not item_labels:
+        return False
+
+    # Check if any item label matches an ignore label (case-insensitive)
+    ignore_labels_lower = [label.lower() for label in ignore_labels]
+    for label in item_labels:
+        if label.lower() in ignore_labels_lower:
+            logger.info(f"[AUTO_GEN] Skipping {rating_key} - has ignore label '{label}'")
+            return True
+
+    return False
 
 
 def process_new_content_for_library(
@@ -32,9 +58,11 @@ def process_new_content_for_library(
         "movies_processed": 0,
         "movies_succeeded": 0,
         "movies_failed": 0,
+        "movies_skipped": 0,
         "tv_shows_processed": 0,
         "tv_shows_succeeded": 0,
         "tv_shows_failed": 0,
+        "tv_shows_skipped": 0,
     }
 
     # Get UI settings to check library automation config
@@ -69,6 +97,12 @@ def process_new_content_for_library(
                             rating_key = movie.get("rating_key") or movie.get("key")
                             title = movie.get("title")
                             year = movie.get("year")
+
+                            # Check if item has ignore labels - skip generation but item is still scanned/added
+                            if _should_skip_auto_generate(rating_key, library_id, is_tv=False):
+                                results["movies_skipped"] += 1
+                                logger.info(f"[AUTO_GEN] Skipping poster generation for {title} ({year}) - has ignore label")
+                                continue
 
                             logger.info(f"[AUTO_GEN] Generating poster for movie: {title} ({year}) [key={rating_key}]")
 
@@ -116,6 +150,12 @@ def process_new_content_for_library(
                             rating_key = show.get("rating_key") or show.get("key")
                             title = show.get("title")
                             year = show.get("year")
+
+                            # Check if item has ignore labels - skip generation but item is still scanned/added
+                            if _should_skip_auto_generate(rating_key, library_id, is_tv=True):
+                                results["tv_shows_skipped"] += 1
+                                logger.info(f"[AUTO_GEN] Skipping poster generation for {title} ({year}) - has ignore label")
+                                continue
 
                             logger.info(f"[AUTO_GEN] Generating posters for TV show: {title} ({year}) [key={rating_key}]")
 

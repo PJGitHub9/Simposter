@@ -36,6 +36,7 @@
 - ⚙️ **Flexible configuration** — Choose templates, presets, and event types per integration
 - 📤 **Auto-upload** — Automatically send generated posters to Plex
 - 🧪 **Test mode** — Dry-run testing with detailed logging (`?test=true`)
+- 🏷️ **Ignore Labels** — Skip poster generation for items with specific Plex labels (per-library)
 
 ### 🎞 **Multi-Source Artwork**
 - 🎬 **TMDb integration** — Movies & TV show posters with textless/text variants
@@ -47,6 +48,12 @@
 ### 🧪 **Experimental Features**
 - 📝 **Custom text overlay** — Add template variables like {title} and {year}
 - 🏷️ **Library-specific label removal** — Configure which labels to remove per library
+
+### 📜 **History & Tracking**
+- 📋 **Poster history** — Complete log of all generated posters with filtering
+- 👁️ **Preview on hover** — View button shows poster preview popup without leaving page
+- 🔍 **Filter by library, template, source, action** — Find specific history records quickly
+- 📊 **Fallback tracking** — See which posters used template fallback
 
 ---
 
@@ -190,6 +197,37 @@ UI settings live alongside presets:
 Log preferences are stored in the database (auto-migrated from `/config/settings/log_config.json` if present).
 
 ![Image](https://github.com/user-attachments/assets/2e7b7b23-770e-463e-91e6-62f0d061fff1)
+
+---
+
+## 📜 History View
+
+Track all generated posters with comprehensive filtering and preview capabilities.
+
+### Features
+- **Complete history** — Every poster generation is logged with timestamp, template, preset, and source
+- **Filtering** — Filter by library, template, action (sent to Plex, saved locally), and source (manual, batch, webhook, auto-generate)
+- **Preview on hover** — Hover over the "View" button to see a popup preview of the generated poster
+- **Fallback tracking** — See which posters used template fallback due to missing logos/posters
+
+### Preview Sources
+- **Locally saved posters** — Preview from saved file on disk
+- **Sent to Plex** — Preview fetches current poster from Plex
+
+### Columns
+| Column | Description |
+|--------|-------------|
+| Preview | Hover to see poster thumbnail |
+| Date & Time | When the poster was generated |
+| Title | Movie or TV show title |
+| Year | Release year |
+| Library | Which Plex library |
+| Template | Template used |
+| Preset | Preset applied |
+| Source | manual, batch, webhook, auto_generate |
+| Action | sent_to_plex or saved |
+| Fallback | Shows if template fallback was used |
+| Path | Local save path (if saved) |
 
 ---
 
@@ -384,6 +422,41 @@ curl -X POST "http://localhost:8686/api/webhook/tautulli?template_id=universal&p
 
 ---
 
+## 🏷️ Webhook Ignore Labels
+
+Skip automatic poster generation for specific items by assigning Plex labels. This feature works with both webhooks (Radarr, Sonarr, Tautulli) and auto-generate during library scans.
+
+### Use Cases
+- **Preserve custom artwork** — Mark items with labels like "AURA" or "Custom" to keep their existing posters
+- **Exclude collections** — Use labels to prevent poster generation for specific collections
+- **Temporary exclusions** — Add labels to skip items during bulk processing
+
+### Configuration
+
+1. **In Plex** — Add labels to movies/TV shows you want to exclude (e.g., "NoOverlay", "Custom", "Manual")
+
+2. **In Simposter Settings** (Libraries Tab):
+   - Expand the library card (Movie or TV Show library)
+   - Find the "Webhook Ignore Labels" section
+   - Check the labels that should skip poster generation
+   - Save settings
+
+### How It Works
+
+| Trigger | Behavior |
+|---------|----------|
+| **Webhook (Radarr/Sonarr/Tautulli)** | Checks item labels before processing; skips if ignore label found |
+| **Auto-Generate (Library Scan)** | Checks item labels before processing; item is still scanned/added to database, but poster generation is skipped |
+| **Manual Batch** | Ignore labels do NOT apply; you have full control |
+
+### Notes
+- Label matching is **case-insensitive** ("AURA" matches "aura", "Aura", etc.)
+- Items with ignore labels are still scanned into Simposter's database
+- Only poster generation is skipped — metadata is still tracked
+- Configure different ignore labels per library (movies vs TV shows)
+
+---
+
 # 📁 Project Structure
 
 ```
@@ -446,6 +519,8 @@ Simposter settings are organized into 5 tabs for easy navigation:
 ### **📚 Libraries Tab**
 - **Plex Connection** — Server URL, API token, SSL verification
 - **Library Configuration** — Enable/disable per-library processing, set output folders
+- **Auto-Generate** — Enable automatic poster generation for new content with template/preset selection
+- **Webhook Ignore Labels** — Skip poster generation for items with specific labels (webhooks & auto-generate)
 - **Label Removal** — Choose which Plex labels to remove per library (checkboxes)
 - **Scheduled Scans** — Configure cron schedule for automatic library scanning
 

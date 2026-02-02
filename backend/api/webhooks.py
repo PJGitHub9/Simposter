@@ -145,6 +145,98 @@ def _update_tv_cache(rating_key: str, library_id: Optional[str] = None):
 
 
 # ============================================================================
+# HELPER FUNCTIONS - Label checking for webhook ignore
+# ============================================================================
+
+def _get_item_labels(rating_key: str) -> List[str]:
+    """
+    Get labels for a Plex item by rating_key.
+
+    Returns:
+        List of label names (strings), empty list if no labels or error
+    """
+    try:
+        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        r = plex_session.get(url, headers=plex_headers(), timeout=10)
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
+
+        labels = []
+        # Look for labels in Video (movies) or Directory (TV shows)
+        for elem in root.findall(".//*[@ratingKey]"):
+            for label in elem.findall(".//Label"):
+                tag = label.get("tag")
+                if tag:
+                    labels.append(tag)
+
+        logger.debug(f"[WEBHOOK] Found labels for {rating_key}: {labels}")
+        return labels
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Failed to get labels for {rating_key}: {e}")
+        return []
+
+
+def _get_webhook_ignore_labels(library_id: str, is_tv: bool = False) -> List[str]:
+    """
+    Get the list of labels to ignore for webhook processing for a library.
+
+    Args:
+        library_id: The library ID
+        is_tv: True for TV libraries, False for movie libraries
+
+    Returns:
+        List of label names to ignore
+    """
+    try:
+        ui_settings = db.get_ui_settings()
+        if not ui_settings:
+            return []
+
+        plex_settings = ui_settings.get("plex", {})
+
+        if is_tv:
+            mappings = plex_settings.get("tvShowLibraryMappings", []) or []
+        else:
+            mappings = plex_settings.get("libraryMappings", []) or []
+
+        for mapping in mappings:
+            if mapping.get("id") == library_id:
+                ignore_labels = mapping.get("webhookIgnoreLabels", []) or []
+                logger.debug(f"[WEBHOOK] Ignore labels for library {library_id}: {ignore_labels}")
+                return ignore_labels
+
+        return []
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Failed to get ignore labels for library {library_id}: {e}")
+        return []
+
+
+def _should_skip_webhook(rating_key: str, library_id: str, is_tv: bool = False) -> bool:
+    """
+    Check if a webhook should be skipped based on item labels.
+
+    Returns:
+        True if the item should be skipped (has an ignore label), False otherwise
+    """
+    ignore_labels = _get_webhook_ignore_labels(library_id, is_tv)
+    if not ignore_labels:
+        return False
+
+    item_labels = _get_item_labels(rating_key)
+    if not item_labels:
+        return False
+
+    # Check if any item label matches an ignore label (case-insensitive)
+    ignore_labels_lower = [l.lower() for l in ignore_labels]
+    for label in item_labels:
+        if label.lower() in ignore_labels_lower:
+            logger.info(f"[WEBHOOK] Skipping {rating_key} - has ignore label '{label}'")
+            return True
+
+    return False
+
+
+# ============================================================================
 # HELPER FUNCTIONS - Find Plex items by external IDs
 # ============================================================================
 
@@ -327,6 +419,11 @@ def process_radarr_webhook_with_retry(
 
     rating_key, library_id = result
 
+    # Check if item has ignore labels
+    if library_id and _should_skip_webhook(rating_key, library_id, is_tv=False):
+        logger.info(f"[RADARR_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
+        return
+
     # Now process the poster generation
     process_webhook_poster_generation(
         rating_key=rating_key,
@@ -371,6 +468,11 @@ def process_sonarr_webhook_with_retry(
         return
 
     rating_key, library_id = result
+
+    # Check if item has ignore labels
+    if library_id and _should_skip_webhook(rating_key, library_id, is_tv=True):
+        logger.info(f"[SONARR_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
+        return
 
     # Now process the poster generation
     process_webhook_poster_generation(

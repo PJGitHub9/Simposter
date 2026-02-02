@@ -47,6 +47,7 @@ def _normalize_plex_payload(data: dict) -> dict:
                 "autoGenerateEnabled": m.get("autoGenerateEnabled", False),
                 "autoGeneratePresetId": m.get("autoGeneratePresetId"),
                 "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
+                "webhookIgnoreLabels": m.get("webhookIgnoreLabels", []) or [],
             }
             for m in normalized["libraryMappings"]
             if isinstance(m, dict)
@@ -73,6 +74,7 @@ def _normalize_plex_payload(data: dict) -> dict:
                 "autoGenerateEnabled": m.get("autoGenerateEnabled", False),
                 "autoGeneratePresetId": m.get("autoGeneratePresetId"),
                 "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
+                "webhookIgnoreLabels": m.get("webhookIgnoreLabels", []) or [],
             }
             for m in normalized["tvShowLibraryMappings"]
             if isinstance(m, dict)

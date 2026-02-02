@@ -9,6 +9,7 @@ interface LibraryMapping {
   autoGenerateEnabled?: boolean
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
+  webhookIgnoreLabels?: string[]
 }
 
 interface PlexLibrary {
@@ -268,6 +269,32 @@ const isLabelChecked = (libraryId: string, label: string, isTv: boolean) => {
   return targetObj[libraryId]?.includes(label) || false
 }
 
+// Toggle ignore label for webhook processing
+const toggleIgnoreLabel = (libraryIdx: number, label: string, isTv: boolean) => {
+  if (isTv) {
+    const libs = [...localTvShowLibraries.value]
+    const lib = libs[libraryIdx]
+    const current = lib.webhookIgnoreLabels || []
+    const index = current.indexOf(label)
+    if (index > -1) {
+      lib.webhookIgnoreLabels = current.filter(l => l !== label)
+    } else {
+      lib.webhookIgnoreLabels = [...current, label]
+    }
+    localTvShowLibraries.value = libs
+  } else {
+    const libs = [...localLibraries.value]
+    const lib = libs[libraryIdx]
+    const current = lib.webhookIgnoreLabels || []
+    const index = current.indexOf(label)
+    if (index > -1) {
+      lib.webhookIgnoreLabels = current.filter(l => l !== label)
+    } else {
+      lib.webhookIgnoreLabels = [...current, label]
+    }
+    localLibraries.value = libs
+  }
+}
 
 const toggleLibrarySelection = (libraryId: string) => {
   const current = [...localSchedulerLibraryIds.value]
@@ -559,6 +586,31 @@ const webhookInstructions = computed(() => {
           </div>
         </div>
 
+        <!-- Webhook Ignore Labels -->
+        <div v-if="lib.id" class="webhook-ignore-section">
+          <label>
+            <span class="label-text">Webhook Ignore Labels</span>
+            <span class="help-text">Items with these labels will be skipped when webhooks trigger poster generation</span>
+          </label>
+          <div v-if="(availableLabels[lib.id] || []).length > 0" class="ignore-labels-grid">
+            <label
+              v-for="label in availableLabels[lib.id] || []"
+              :key="`ignore-${lib.id}-${label}`"
+              class="label-checkbox ignore-label-checkbox"
+            >
+              <input
+                type="checkbox"
+                :checked="(lib.webhookIgnoreLabels || []).includes(label)"
+                @change="toggleIgnoreLabel(idx, label, false)"
+              />
+              <span>{{ label }}</span>
+            </label>
+          </div>
+          <p v-else class="no-labels-hint">
+            No labels available. Scan the library and click "Refresh Labels" in the Labels section below.
+          </p>
+        </div>
+
         <div class="library-actions">
           <button
             v-if="lib.id"
@@ -642,6 +694,31 @@ const webhookInstructions = computed(() => {
               <span class="help-text">Choose which template/preset to use for auto-generation</span>
             </label>
           </div>
+        </div>
+
+        <!-- Webhook Ignore Labels -->
+        <div v-if="lib.id" class="webhook-ignore-section">
+          <label>
+            <span class="label-text">Webhook Ignore Labels</span>
+            <span class="help-text">Items with these labels will be skipped when webhooks trigger poster generation</span>
+          </label>
+          <div v-if="(availableLabels[lib.id] || []).length > 0" class="ignore-labels-grid">
+            <label
+              v-for="label in availableLabels[lib.id] || []"
+              :key="`ignore-tv-${lib.id}-${label}`"
+              class="label-checkbox ignore-label-checkbox"
+            >
+              <input
+                type="checkbox"
+                :checked="(lib.webhookIgnoreLabels || []).includes(label)"
+                @change="toggleIgnoreLabel(idx, label, true)"
+              />
+              <span>{{ label }}</span>
+            </label>
+          </div>
+          <p v-else class="no-labels-hint">
+            No labels available. Scan the library and click "Refresh Labels" in the Labels section below.
+          </p>
         </div>
 
         <div class="library-actions">
@@ -1055,6 +1132,47 @@ select:disabled {
 .preset-selection {
   margin-top: 10px;
   margin-left: 24px;
+}
+
+.webhook-ignore-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.webhook-ignore-section > label {
+  margin-bottom: 10px;
+}
+
+.ignore-labels-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ignore-label-checkbox {
+  background: rgba(255, 107, 107, 0.08);
+  border: 1px solid rgba(255, 107, 107, 0.2);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.ignore-label-checkbox:has(input:checked) {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.ignore-label-checkbox:hover {
+  border-color: rgba(255, 107, 107, 0.4);
+}
+
+.no-labels-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 0;
 }
 
 .library-fields {
