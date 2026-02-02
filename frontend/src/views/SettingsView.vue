@@ -15,6 +15,7 @@ import LibrariesTab from './settings/LibrariesTab.vue'
 import SaveLocationsTab from './settings/SaveLocationsTab.vue'
 import PerformanceTab from './settings/PerformanceTab.vue'
 import AdvancedTab from './settings/AdvancedTab.vue'
+import NotificationsTab from './settings/NotificationsTab.vue'
 
 interface LibraryMapping {
   id: string
@@ -46,7 +47,7 @@ const route = useRoute()
 const router = useRouter()
 
 // Active tab state - initialize from URL or default to 'general'
-const activeTab = ref<'general' | 'libraries' | 'save-locations' | 'performance' | 'advanced'>(
+const activeTab = ref<'general' | 'libraries' | 'save-locations' | 'performance' | 'notifications' | 'advanced'>(
   (route.query.tab as any) || 'general'
 )
 
@@ -116,6 +117,15 @@ let scanPoller: number | null = null
 // Automation settings
 const localWebhookAutoSend = ref(true)
 const localWebhookAutoLabels = ref('Overlay')
+
+// Notification settings
+const localDiscordEnabled = ref(false)
+const localDiscordWebhookUrl = ref('')
+const localDiscordNotifyLibraries = ref<string[]>([])
+const localDiscordNotifyBatch = ref(true)
+const localDiscordNotifyManual = ref(true)
+const localDiscordNotifyWebhook = ref(true)
+const localDiscordNotifyAutoGenerate = ref(true)
 
 // API key testing
 const testingApiKeys = ref<Record<string, boolean>>({})
@@ -239,6 +249,15 @@ const loadLocalSettings = async () => {
   localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
   localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
 
+  // Notification settings
+  localDiscordEnabled.value = settings.notifications?.value?.discordEnabled ?? false
+  localDiscordWebhookUrl.value = settings.notifications?.value?.discordWebhookUrl ?? ''
+  localDiscordNotifyLibraries.value = settings.notifications?.value?.discordNotifyLibraries ?? []
+  localDiscordNotifyBatch.value = settings.notifications?.value?.discordNotifyBatch ?? true
+  localDiscordNotifyManual.value = settings.notifications?.value?.discordNotifyManual ?? true
+  localDiscordNotifyWebhook.value = settings.notifications?.value?.discordNotifyWebhook ?? true
+  localDiscordNotifyAutoGenerate.value = settings.notifications?.value?.discordNotifyAutoGenerate ?? true
+
   await nextTick()
 }
 
@@ -277,7 +296,14 @@ const captureSettingsSnapshot = () => {
     schedulerCronExpression: localSchedulerCronExpression.value,
     schedulerLibraryIds: localSchedulerLibraryIds.value,
     webhookAutoSend: localWebhookAutoSend.value,
-    webhookAutoLabels: localWebhookAutoLabels.value
+    webhookAutoLabels: localWebhookAutoLabels.value,
+    discordEnabled: localDiscordEnabled.value,
+    discordWebhookUrl: localDiscordWebhookUrl.value,
+    discordNotifyLibraries: localDiscordNotifyLibraries.value,
+    discordNotifyBatch: localDiscordNotifyBatch.value,
+    discordNotifyManual: localDiscordNotifyManual.value,
+    discordNotifyWebhook: localDiscordNotifyWebhook.value,
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
   })
   hasUnsavedChanges.value = false
 
@@ -330,7 +356,14 @@ const checkForChanges = () => {
     schedulerCronExpression: localSchedulerCronExpression.value,
     schedulerLibraryIds: localSchedulerLibraryIds.value,
     webhookAutoSend: localWebhookAutoSend.value,
-    webhookAutoLabels: localWebhookAutoLabels.value
+    webhookAutoLabels: localWebhookAutoLabels.value,
+    discordEnabled: localDiscordEnabled.value,
+    discordWebhookUrl: localDiscordWebhookUrl.value,
+    discordNotifyLibraries: localDiscordNotifyLibraries.value,
+    discordNotifyBatch: localDiscordNotifyBatch.value,
+    discordNotifyManual: localDiscordNotifyManual.value,
+    discordNotifyWebhook: localDiscordNotifyWebhook.value,
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -432,6 +465,15 @@ const saveSettings = async () => {
   settings.automation.value = {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value
+  }
+  settings.notifications.value = {
+    discordEnabled: localDiscordEnabled.value,
+    discordWebhookUrl: localDiscordWebhookUrl.value,
+    discordNotifyLibraries: localDiscordNotifyLibraries.value,
+    discordNotifyBatch: localDiscordNotifyBatch.value,
+    discordNotifyManual: localDiscordNotifyManual.value,
+    discordNotifyWebhook: localDiscordNotifyWebhook.value,
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
   }
 
   await settings.save()
@@ -972,7 +1014,14 @@ watch([
   localUseOverlayCache,
   localSchedulerEnabled,
   localSchedulerCronExpression,
-  localSchedulerLibraryIds
+  localSchedulerLibraryIds,
+  localDiscordEnabled,
+  localDiscordWebhookUrl,
+  localDiscordNotifyLibraries,
+  localDiscordNotifyBatch,
+  localDiscordNotifyManual,
+  localDiscordNotifyWebhook,
+  localDiscordNotifyAutoGenerate
 ], () => {
   if (watchersEnabled.value) {
     checkForChanges()
@@ -1070,6 +1119,12 @@ onMounted(() => {
           @click="activeTab = 'performance'"
         >
           Performance
+        </button>
+        <button
+          :class="['tab', { active: activeTab === 'notifications' }]"
+          @click="activeTab = 'notifications'"
+        >
+          Notifications
         </button>
         <button
           :class="['tab', { active: activeTab === 'advanced' }]"
@@ -1190,6 +1245,28 @@ onMounted(() => {
         @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @clear-frontend-cache="clearCache"
         @clear-backend-cache="clearBackendCache"
+        @save="saveSettings"
+      />
+
+      <NotificationsTab
+        v-if="activeTab === 'notifications'"
+        :discordEnabled="localDiscordEnabled"
+        :discordWebhookUrl="localDiscordWebhookUrl"
+        :discordNotifyLibraries="localDiscordNotifyLibraries"
+        :discordNotifyBatch="localDiscordNotifyBatch"
+        :discordNotifyManual="localDiscordNotifyManual"
+        :discordNotifyWebhook="localDiscordNotifyWebhook"
+        :discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate"
+        :libraries="localLibraries"
+        :tvShowLibraries="localTvShowLibraries"
+        :unsavedChanges="hasUnsavedChanges"
+        @update:discordEnabled="localDiscordEnabled = $event; hasUnsavedChanges = true"
+        @update:discordWebhookUrl="localDiscordWebhookUrl = $event; hasUnsavedChanges = true"
+        @update:discordNotifyLibraries="localDiscordNotifyLibraries = $event; hasUnsavedChanges = true"
+        @update:discordNotifyBatch="localDiscordNotifyBatch = $event; hasUnsavedChanges = true"
+        @update:discordNotifyManual="localDiscordNotifyManual = $event; hasUnsavedChanges = true"
+        @update:discordNotifyWebhook="localDiscordNotifyWebhook = $event; hasUnsavedChanges = true"
+        @update:discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate = $event; hasUnsavedChanges = true"
         @save="saveSettings"
       />
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
 from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
 from ..config import load_presets
+from .notifications import send_batch_notification
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_tv_show_details, get_images_for_tv_show, get_tv_season_images, get_tv_external_ids
 from ..rendering import render_poster_image, render_with_overlay_cache
 from io import BytesIO
@@ -1405,6 +1406,23 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "current_step": "Finished",
     })
+
+    # Calculate success/failure counts
+    success_count = sum(1 for r in results if r.get("status") == "ok")
+    failed_count = len(results) - success_count
+
+    # Send Discord notification for batch completion
+    try:
+        send_batch_notification(
+            library_id=req.library_id,
+            template_id=req.template_id,
+            preset_id=req.preset_id or "",
+            success_count=success_count,
+            failed_count=failed_count,
+            source="batch"
+        )
+    except Exception as notif_err:
+        logger.debug("[BATCH] Failed to send Discord notification: %s", notif_err)
 
     return {"results": results}
 

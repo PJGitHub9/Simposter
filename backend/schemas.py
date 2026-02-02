@@ -112,7 +112,18 @@ class SchedulerSettings(BaseModel):
 class AutomationSettings(BaseModel):
     """Settings for automatic poster generation via webhooks"""
     webhookAutoSend: bool = True  # Automatically send generated posters to Plex
-    webhookAutoLabels: str = "Overlay"  # Comma-separated labels to apply to webhook-generated posters
+    webhookAutoLabels: str = "Simposter"  # Comma-separated labels to apply to webhook-generated posters
+
+
+class NotificationSettings(BaseModel):
+    """Settings for Discord and other notifications"""
+    discordEnabled: bool = False
+    discordWebhookUrl: str = ""
+    discordNotifyLibraries: List[str] = Field(default_factory=list)  # Library IDs to notify for
+    discordNotifyBatch: bool = True  # Notify on batch completion
+    discordNotifyManual: bool = True  # Notify on manual send
+    discordNotifyWebhook: bool = True  # Notify on webhook sends
+    discordNotifyAutoGenerate: bool = True  # Notify on auto-generate
 
 
 class UISettings(BaseModel):
@@ -136,6 +147,7 @@ class UISettings(BaseModel):
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     automation: AutomationSettings = Field(default_factory=AutomationSettings)
+    notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
 
 class PlexSendRequest(BaseModel):

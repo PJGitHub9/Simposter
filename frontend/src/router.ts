@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import MoviesView from './views/MoviesView.vue'
-import TvShowsView from './views/TvShowsView.vue'
+import TvShowsView from './views/TVShowsView.vue'
 import SettingsView from './views/SettingsView.vue'
 import LogsView from './views/LogsView.vue'
 import BatchEditView from './views/BatchEditView.vue'

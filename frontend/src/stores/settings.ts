@@ -65,6 +65,16 @@ export type AutomationSettings = {
   webhookAutoLabels: string
 }
 
+export type NotificationSettings = {
+  discordEnabled: boolean
+  discordWebhookUrl: string
+  discordNotifyLibraries: string[]
+  discordNotifyBatch: boolean
+  discordNotifyManual: boolean
+  discordNotifyWebhook: boolean
+  discordNotifyAutoGenerate: boolean
+}
+
 export type UISettings = {
   theme: Theme
   posterDensity: number
@@ -87,6 +97,7 @@ export type UISettings = {
   apiOrder?: string[]
   scheduler?: SchedulerSettings
   automation?: AutomationSettings
+  notifications?: NotificationSettings
 }
 
 const theme = ref<Theme>('neon')
@@ -112,7 +123,16 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Overlay' })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter' })
+const notifications = ref<NotificationSettings>({
+  discordEnabled: false,
+  discordWebhookUrl: '',
+  discordNotifyLibraries: [],
+  discordNotifyBatch: true,
+  discordNotifyManual: true,
+  discordNotifyWebhook: true,
+  discordNotifyAutoGenerate: true
+})
 
 async function loadSettings() {
   loading.value = true
@@ -181,7 +201,16 @@ async function loadSettings() {
     }
     automation.value = {
       webhookAutoSend: data.automation?.webhookAutoSend ?? true,
-      webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Overlay'
+      webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Simposter'
+    }
+    notifications.value = {
+      discordEnabled: data.notifications?.discordEnabled ?? false,
+      discordWebhookUrl: data.notifications?.discordWebhookUrl ?? '',
+      discordNotifyLibraries: data.notifications?.discordNotifyLibraries ?? [],
+      discordNotifyBatch: data.notifications?.discordNotifyBatch ?? true,
+      discordNotifyManual: data.notifications?.discordNotifyManual ?? true,
+      discordNotifyWebhook: data.notifications?.discordNotifyWebhook ?? true,
+      discordNotifyAutoGenerate: data.notifications?.discordNotifyAutoGenerate ?? true
     }
 
   } catch (e: unknown) {
@@ -217,7 +246,8 @@ async function saveSettings() {
       performance: { ...performance.value },
       apiOrder: apiOrder.value,
       scheduler: { ...scheduler.value },
-      automation: { ...automation.value }
+      automation: { ...automation.value },
+      notifications: { ...notifications.value }
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -255,6 +285,7 @@ export function useSettingsStore() {
     apiOrder,
     scheduler,
     automation,
+    notifications,
     loading,
     error,
     loaded,

@@ -252,9 +252,9 @@ const localWebhookAutoLabels = computed({
         <input
           type="text"
           v-model="localWebhookAutoLabels"
-          placeholder="Overlay, Generated"
+          placeholder="Simposter, Auto"
         />
-        <span class="help-text">Comma-separated list of labels to apply to webhook-generated posters (e.g., "Overlay, Auto")</span>
+        <span class="help-text">Comma-separated list of labels to apply to webhook-generated posters (e.g., "Simposter, Auto")</span>
       </label>
     </div>
 

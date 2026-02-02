@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
 from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels
+from .api.notifications import send_batch_notification
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
@@ -76,7 +77,7 @@ def process_new_content_for_library(
 
         # Get automation settings for this library
         automation_config = ui_settings.get("automation", {})
-        auto_labels = automation_config.get("webhookAutoLabels", "Overlay").split(",")
+        auto_labels = automation_config.get("webhookAutoLabels", "Simposter").split(",")
         auto_labels = [label.strip() for label in auto_labels if label.strip()]
 
         # Process movies
@@ -189,5 +190,35 @@ def process_new_content_for_library(
 
     except Exception as e:
         logger.error(f"[AUTO_GEN] Error processing new content for library {library_id}: {e}", exc_info=True)
+
+    # Send Discord notification for auto-generation completion
+    total_succeeded = results["movies_succeeded"] + results["tv_shows_succeeded"]
+    total_failed = results["movies_failed"] + results["tv_shows_failed"]
+    if total_succeeded > 0 or total_failed > 0:
+        try:
+            # Get the template_id/preset_id from the library config
+            template_id = ""
+            preset_id = ""
+            try:
+                plex_settings = ui_settings.get("plex", {}) if ui_settings else {}
+                library_mappings = plex_settings.get("libraryMappings", [])
+                tv_mappings = plex_settings.get("tvShowLibraryMappings", [])
+                config = next((lib for lib in library_mappings + tv_mappings if lib.get("id") == library_id), None)
+                if config:
+                    template_id = config.get("autoGenerateTemplateId", "")
+                    preset_id = config.get("autoGeneratePresetId", "")
+            except Exception:
+                pass
+
+            send_batch_notification(
+                library_id=library_id,
+                template_id=template_id,
+                preset_id=preset_id,
+                success_count=total_succeeded,
+                failed_count=total_failed,
+                source="auto_generate"
+            )
+        except Exception as notif_err:
+            logger.debug(f"[AUTO_GEN] Failed to send Discord notification: {notif_err}")
 
     return results

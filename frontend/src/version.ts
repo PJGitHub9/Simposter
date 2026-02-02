@@ -1,2 +1,2 @@
 // Global app version badge
-export const APP_VERSION = 'v1.4.97.4'
+export const APP_VERSION = 'v1.4.97.5'

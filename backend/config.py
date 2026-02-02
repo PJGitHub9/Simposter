@@ -84,7 +84,7 @@ class Settings(BaseSettings):
 
     WEBHOOK_DEFAULT_PRESET: str = "default"
     WEBHOOK_AUTO_SEND: bool = True
-    WEBHOOK_AUTO_LABELS: str = "Overlay"
+    WEBHOOK_AUTO_LABELS: str = "Simposter"
     WEBHOOK_SECRET: str = ""
 
     # Optional: path to resvg binary for SVG rasterization fallback on systems

@@ -6,6 +6,7 @@ from ..config import settings, plex_headers, plex_remove_label, logger
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest
 from .movies import fetch_and_cache_poster
+from .notifications import send_discord_notification
 
 router = APIRouter()
 
@@ -141,6 +142,20 @@ def api_plex_send(req: PlexSendRequest):
         )
     except Exception as history_err:
         logger.debug("[HISTORY] Failed to record manual send: %s", history_err)
+
+    # Send Discord notification for manual send
+    try:
+        send_discord_notification(
+            title=movie_details.get("title", "Unknown"),
+            year=movie_details.get("year"),
+            template_id=req.template_id,
+            preset_id=req.preset_id or "",
+            library_id=req.library_id or movie_details.get("library_id"),
+            source="manual",
+            action="sent_to_plex"
+        )
+    except Exception as notif_err:
+        logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
 
     logger.info(f"Sent poster to Plex for ratingKey={req.rating_key}")
     return {"status": "ok"}
