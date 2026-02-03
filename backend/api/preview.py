@@ -27,7 +27,15 @@ def api_preview(req: PreviewRequest):
         if req.preset_id:
             req.preset_id = validate_preset_id(req.preset_id)
         if req.background_url:
-            req.background_url = validate_url(req.background_url, allow_data_uri=True)
+            # Internal API patterns (/api/movie/.../poster, /api/tv-show/.../poster)
+            # are parsed for the rating_key and never fetched directly as HTTP requests,
+            # so skip URL validation for them (avoids blocking private-network app URLs).
+            is_internal_api = (
+                "/api/movie/" in req.background_url or
+                "/api/tv-show/" in req.background_url
+            )
+            if not is_internal_api:
+                req.background_url = validate_url(req.background_url, allow_data_uri=True)
         if req.logo_url:
             req.logo_url = validate_url(req.logo_url, allow_data_uri=True)
         if req.options:

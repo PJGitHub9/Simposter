@@ -1140,6 +1140,16 @@ def tautulli_webhook(
                     "rating_key": rating_key,
                 }
 
+            # Check if item has ignore labels
+            if library_id and _should_skip_webhook(rating_key, library_id, is_tv=False):
+                logger.info(f"[TAUTULLI_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
+                return {
+                    "status": "skipped",
+                    "reason": "Item has webhook ignore label",
+                    "title": title,
+                    "rating_key": rating_key,
+                }
+
             # Queue background task to generate and send poster
             background_tasks.add_task(
                 process_webhook_poster_generation,
@@ -1209,6 +1219,16 @@ def tautulli_webhook(
                 return {
                     "status": "skipped",
                     "reason": "Duplicate webhook within cooldown period",
+                    "title": title,
+                    "rating_key": rating_key,
+                }
+
+            # Check if item has ignore labels
+            if library_id and _should_skip_webhook(rating_key, library_id, is_tv=True):
+                logger.info(f"[TAUTULLI_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
+                return {
+                    "status": "skipped",
+                    "reason": "Item has webhook ignore label",
                     "title": title,
                     "rating_key": rating_key,
                 }

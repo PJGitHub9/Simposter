@@ -336,14 +336,15 @@ def validate_url(url: str, allow_data_uri: bool = False) -> str:
 
     for pattern in private_patterns:
         if re.search(pattern, url, re.IGNORECASE):
-            # Allow private network URLs if they appear to be from Plex
-            # Common patterns: port 32400, .plex.direct domain, localhost
+            # Allow private network URLs if they appear to be from Plex or this app
+            # Common patterns: port 32400, .plex.direct domain, localhost, Plex metadata paths
             is_plex_url = (
                 'localhost' in url or
                 '127.0.0.1' in url or
                 ':32400' in url or
                 '.plex.direct' in url or
-                'X-Plex-Token' in url  # URL contains Plex auth token
+                'X-Plex-Token' in url or  # URL contains Plex auth token
+                '/library/metadata/' in url  # Plex metadata path (may be behind reverse proxy)
             )
             if not is_plex_url:
                 raise HTTPException(

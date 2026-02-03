@@ -931,11 +931,33 @@ def _render_all_tv_seasons(
         # Webhook mode with affected_seasons - skip series poster
         logger.info("[BATCH TV] Skipping series poster for %s (webhook mode, affected_seasons=%s)", show_title, affected_seasons)
     
+    # For webhook mode, check if we should skip seasons that already have posters
+    skip_existing_seasons = False
+    if source == "webhook":
+        try:
+            ui_settings = db.get_ui_settings()
+            always_regen = (ui_settings or {}).get("automation", {}).get("webhookAlwaysRegenerateSeason", False)
+            skip_existing_seasons = not always_regen
+        except Exception:
+            skip_existing_seasons = True  # Default: skip existing
+
     # Now process individual seasons
     for season in seasons:
         season_index = season["index"]
         season_key = season["key"]
         season_title = season["title"]
+
+        # Skip season if poster already sent (webhook mode only)
+        if skip_existing_seasons and db.has_poster_been_sent(season_key):
+            logger.info("[BATCH TV] Season poster already sent for %s - %s (season_key=%s), skipping", show_title, season_title, season_key)
+            results.append({
+                "rating_key": season_key,
+                "season": season_title,
+                "status": "skipped_existing",
+                "poster_fallback": False,
+                "logo_fallback": False,
+            })
+            continue
 
         logger.info("[BATCH TV] Processing %s - %s", show_title, season_title)
 

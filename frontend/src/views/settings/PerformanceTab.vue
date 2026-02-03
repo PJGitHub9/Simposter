@@ -15,6 +15,7 @@ const props = defineProps<{
   memoryLimit: number
   webhookAutoSend: boolean
   webhookAutoLabels: string
+  webhookAlwaysRegenerateSeason: boolean
   imageQualityChanged?: boolean
   performanceChanged?: boolean
   automationChanged?: boolean
@@ -32,6 +33,7 @@ const emit = defineEmits<{
   'update:memoryLimit': [value: number]
   'update:webhookAutoSend': [value: boolean]
   'update:webhookAutoLabels': [value: string]
+  'update:webhookAlwaysRegenerateSeason': [value: boolean]
   'clear-frontend-cache': []
   'clear-backend-cache': []
   'save': []
@@ -90,6 +92,11 @@ const localWebhookAutoSend = computed({
 const localWebhookAutoLabels = computed({
   get: () => props.webhookAutoLabels,
   set: (val) => emit('update:webhookAutoLabels', val)
+})
+
+const localWebhookAlwaysRegenerateSeason = computed({
+  get: () => props.webhookAlwaysRegenerateSeason,
+  set: (val) => emit('update:webhookAlwaysRegenerateSeason', val)
 })
 
 </script>
@@ -245,6 +252,14 @@ const localWebhookAutoLabels = computed({
       </label>
       <p class="help-text" style="margin: -8px 0 16px 0;">
         When enabled, webhook-generated posters are automatically sent to Plex and replace the existing poster
+      </p>
+
+      <label class="checkbox-label">
+        <input type="checkbox" v-model="localWebhookAlwaysRegenerateSeason" />
+        <span>Always Regenerate Season Poster</span>
+      </label>
+      <p class="help-text" style="margin: -8px 0 16px 0;">
+        When enabled, a new season poster is generated every time a new episode webhook is received. When disabled, season posters that have already been sent to Plex are skipped.
       </p>
 
       <label>

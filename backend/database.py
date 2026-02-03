@@ -1893,6 +1893,17 @@ def get_poster_status(
     return result
 
 
+def has_poster_been_sent(rating_key: str) -> bool:
+    """Check if a poster has already been sent to Plex for this rating_key."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM poster_history WHERE rating_key = ? AND action = 'sent_to_plex' LIMIT 1",
+            (rating_key,),
+        )
+        return cursor.fetchone() is not None
+
+
 # Initialize database on module import
 init_database()
 # Copy environment variables to UI settings on startup

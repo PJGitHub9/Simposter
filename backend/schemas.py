@@ -113,6 +113,7 @@ class AutomationSettings(BaseModel):
     """Settings for automatic poster generation via webhooks"""
     webhookAutoSend: bool = True  # Automatically send generated posters to Plex
     webhookAutoLabels: str = "Simposter"  # Comma-separated labels to apply to webhook-generated posters
+    webhookAlwaysRegenerateSeason: bool = False  # Always regenerate season poster on new episode webhook
 
 
 class NotificationSettings(BaseModel):
