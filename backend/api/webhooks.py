@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks
 from typing import Dict, Any, Optional, List, Callable
 import xml.etree.ElementTree as ET
 import time
+import threading
 
 from ..config import logger, settings, plex_headers, plex_session, load_presets
 from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
@@ -28,6 +29,45 @@ from .. import cache
 from .notifications import send_discord_notification
 
 router = APIRouter()
+
+
+# ============================================================================
+# WEBHOOK COOLDOWN - Prevent duplicate poster generation
+# ============================================================================
+# When Sonarr imports multiple episodes for the same season, each episode
+# fires a separate webhook. This cooldown coalesces them so only one
+# poster generation runs per show+season combo within the cooldown window.
+
+_webhook_cooldowns: Dict[str, float] = {}
+_webhook_cooldown_lock = threading.Lock()
+WEBHOOK_COOLDOWN_SECONDS = 300  # 5 minutes
+
+
+def _check_webhook_cooldown(key: str) -> bool:
+    """
+    Check if a webhook with this key was recently processed.
+
+    Returns True if the webhook should be SKIPPED (within cooldown period).
+    Returns False if the webhook should be PROCESSED (first occurrence or cooldown expired).
+    """
+    with _webhook_cooldown_lock:
+        now = time.time()
+        last_processed = _webhook_cooldowns.get(key)
+
+        if last_processed and (now - last_processed) < WEBHOOK_COOLDOWN_SECONDS:
+            logger.info(f"[WEBHOOK] Cooldown active for key '{key}' - skipping duplicate (last processed {int(now - last_processed)}s ago)")
+            return True  # Skip - duplicate within cooldown
+
+        # Record this webhook and allow processing
+        _webhook_cooldowns[key] = now
+
+        # Cleanup old entries to prevent memory growth
+        cutoff = now - WEBHOOK_COOLDOWN_SECONDS * 2
+        expired = [k for k, v in _webhook_cooldowns.items() if v < cutoff]
+        for k in expired:
+            del _webhook_cooldowns[k]
+
+        return False  # Process this webhook
 
 
 # ============================================================================
@@ -757,6 +797,17 @@ def radarr_webhook(
                 "message": "Test mode - no poster generated"
             }
 
+        # Cooldown check - prevent duplicate poster generation
+        cooldown_key = f"radarr:{tmdb_id}:{template_id}:{preset_id}"
+        if _check_webhook_cooldown(cooldown_key):
+            return {
+                "status": "skipped",
+                "reason": "Duplicate webhook within cooldown period",
+                "event_type": event_type,
+                "title": title,
+                "tmdb_id": tmdb_id,
+            }
+
         # Queue background task with delay/retry logic
         # This allows Plex time to import the file before we try to find it
         background_tasks.add_task(
@@ -881,6 +932,21 @@ def sonarr_webhook(
                 "auto_send": auto_send,
                 "labels": auto_labels,
                 "message": "Test mode - no poster generated"
+            }
+
+        # Cooldown check - prevent duplicate poster generation when multiple
+        # episodes for the same season arrive in quick succession
+        seasons_key = ",".join(str(s) for s in sorted(affected_seasons)) if affected_seasons else "all"
+        cooldown_key = f"sonarr:{tvdb_id}:{template_id}:{preset_id}:{seasons_key}"
+
+        if _check_webhook_cooldown(cooldown_key):
+            return {
+                "status": "skipped",
+                "reason": "Duplicate webhook within cooldown period",
+                "event_type": event_type,
+                "title": title,
+                "tvdb_id": tvdb_id,
+                "affected_seasons": sorted(list(affected_seasons)),
             }
 
         # Queue background task with delay/retry logic
@@ -1064,6 +1130,16 @@ def tautulli_webhook(
 
             logger.info(f"[TAUTULLI_WEBHOOK] Movie: {title} ({year}) - rating_key: {rating_key}, library: {library_id}")
 
+            # Cooldown check - prevent duplicate poster generation
+            cooldown_key = f"tautulli:movie:{rating_key}:{template_id}:{preset_id}"
+            if _check_webhook_cooldown(cooldown_key):
+                return {
+                    "status": "skipped",
+                    "reason": "Duplicate webhook within cooldown period",
+                    "title": title,
+                    "rating_key": rating_key,
+                }
+
             # Queue background task to generate and send poster
             background_tasks.add_task(
                 process_webhook_poster_generation,
@@ -1126,6 +1202,16 @@ def tautulli_webhook(
             episode_num = payload.get("episode")
 
             logger.info(f"[TAUTULLI_WEBHOOK] TV Show: {title} - rating_key: {rating_key}, library: {library_id}")
+
+            # Cooldown check - prevent duplicate poster generation
+            cooldown_key = f"tautulli:tv:{rating_key}:{template_id}:{preset_id}"
+            if _check_webhook_cooldown(cooldown_key):
+                return {
+                    "status": "skipped",
+                    "reason": "Duplicate webhook within cooldown period",
+                    "title": title,
+                    "rating_key": rating_key,
+                }
 
             # Queue background task to generate and send poster
             background_tasks.add_task(

@@ -24,6 +24,7 @@ interface LibraryMapping {
   autoGenerateEnabled?: boolean
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
+  webhookIgnoreLabels?: string[]
 }
 
 interface PlexLibrary {
@@ -429,6 +430,7 @@ const saveSettings = async () => {
       autoGenerateEnabled: l.autoGenerateEnabled || false,
       autoGeneratePresetId: l.autoGeneratePresetId || null,
       autoGenerateTemplateId: l.autoGenerateTemplateId || null,
+      webhookIgnoreLabels: l.webhookIgnoreLabels || [],
     })),
     tvShowLibraryName: tvShowLibs[0]?.id || '',
     tvShowLibraryNames: tvShowLibs.length > 0 ? tvShowLibs.map(l => l.id) : undefined,
@@ -439,6 +441,7 @@ const saveSettings = async () => {
       autoGenerateEnabled: l.autoGenerateEnabled || false,
       autoGeneratePresetId: l.autoGeneratePresetId || null,
       autoGenerateTemplateId: l.autoGenerateTemplateId || null,
+      webhookIgnoreLabels: l.webhookIgnoreLabels || [],
     }))
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }

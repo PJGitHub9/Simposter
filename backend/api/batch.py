@@ -2,7 +2,8 @@ from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
 from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
 from ..config import load_presets
-from .notifications import send_batch_notification
+from .notifications import send_batch_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
+import time
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_tv_show_details, get_images_for_tv_show, get_tv_season_images, get_tv_external_ids
 from ..rendering import render_poster_image, render_with_overlay_cache
 from io import BytesIO
@@ -158,7 +159,10 @@ def _process_single_movie(
             elif fallback_action == "skip":
                 return {
                     "rating_key": rating_key,
-                    "status": "skipped_no_poster"
+                    "title": movie_details.get("title", ""),
+                    "status": "skipped_no_poster",
+                    "poster_fallback": False,
+                    "logo_fallback": False,
                 }
             else:  # continue
                 poster = posters[0] if posters else None
@@ -220,7 +224,10 @@ def _process_single_movie(
             elif fallback_logo_action == "skip":
                 return {
                     "rating_key": rating_key,
-                    "status": "skipped_no_logo"
+                    "title": movie_details.get("title", ""),
+                    "status": "skipped_no_logo",
+                    "poster_fallback": False,
+                    "logo_fallback": False,
                 }
             # else continue without logo
 
@@ -494,9 +501,12 @@ def _process_single_movie(
 
         result = {
             "rating_key": rating_key,
+            "title": movie_details.get("title", ""),
             "poster_used": poster_url,
             "logo_used": logo_url,
             "status": "ok",
+            "poster_fallback": poster_fallback_action_used == "template",
+            "logo_fallback": logo_fallback_used,
         }
         if save_path:
             result["save_path"] = str(save_path)
@@ -511,8 +521,11 @@ def _process_single_movie(
         logger.error(f"[BATCH] Error for {rating_key}\n{e}")
         return {
             "rating_key": rating_key,
+            "title": "",
             "status": "error",
             "error": str(e),
+            "poster_fallback": False,
+            "logo_fallback": False,
         }
 
 
@@ -610,8 +623,11 @@ def _process_single_tv_show(
         logger.error(f"[BATCH TV] Error for {rating_key}\n{e}")
         return {
             "rating_key": rating_key,
+            "show_title": "",
             "status": "error",
             "error": str(e),
+            "poster_fallback": False,
+            "logo_fallback": False,
         }
 
 
@@ -685,7 +701,9 @@ def _render_tv_series_poster(
             return {
                 "rating_key": rating_key,
                 "status": "skipped",
-                "reason": "No poster found with filter, fallback action is skip"
+                "reason": "No poster found with filter, fallback action is skip",
+                "poster_fallback": False,
+                "logo_fallback": False,
             }
         elif fallback_action == "template" and fallback_template:
             poster_fallback_used = True
@@ -905,7 +923,9 @@ def _render_all_tv_seasons(
                 "season": "Series",
                 "is_series": True,
                 "status": "error",
-                "error": str(e)
+                "error": str(e),
+                "poster_fallback": False,
+                "logo_fallback": False,
             })
     else:
         # Webhook mode with affected_seasons - skip series poster
@@ -998,7 +1018,9 @@ def _render_all_tv_seasons(
             results.append({
                 "rating_key": season_key,
                 "season": season_title,
-                "status": "skipped_no_poster"
+                "status": "skipped_no_poster",
+                "poster_fallback": False,
+                "logo_fallback": False,
             })
             continue
 
@@ -1267,6 +1289,8 @@ def _render_and_save_poster(
         "poster_used": poster_url,
         "logo_used": logo_url,
         "status": "ok",
+        "poster_fallback": poster_fallback_used,
+        "logo_fallback": logo_fallback_used,
     }
     if season_title:
         result["season"] = season_title
@@ -1345,7 +1369,28 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
             logger.warning("[BATCH] Template '%s' not found in presets", req.template_id)
 
     item_type = "TV shows" if is_tv_batch else "movies"
-    logger.info("[BATCH] Processing %d %s with %d concurrent workers", len(req.rating_keys), item_type, max_workers)
+    total_count = len(req.rating_keys)
+    logger.info("[BATCH] Processing %d %s with %d concurrent workers", total_count, item_type, max_workers)
+
+    # Start Discord progress notification (returns message_id for updates)
+    discord_message_id = None
+    try:
+        discord_message_id = start_batch_progress_notification(
+            library_id=req.library_id,
+            template_id=req.template_id,
+            total_count=total_count,
+            source="batch"
+        )
+    except Exception as notif_err:
+        logger.debug("[BATCH] Failed to start Discord progress: %s", notif_err)
+
+    last_discord_update = time.time()
+    discord_update_interval = 15  # seconds
+    last_title = ""
+    success_count = 0
+    failed_count = 0
+    poster_fallback_count = 0
+    logo_fallback_count = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
@@ -1389,6 +1434,24 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
             try:
                 result = future.result()
                 results.append(result)
+                # Track success/failure
+                if result.get("status") == "ok":
+                    success_count += 1
+                else:
+                    failed_count += 1
+                # Track fallback usage (direct flags for movies, nested results for TV shows)
+                if result.get("poster_fallback"):
+                    poster_fallback_count += 1
+                if result.get("logo_fallback"):
+                    logo_fallback_count += 1
+                # For TV shows with season results, aggregate from sub-results
+                for sub in result.get("results", []):
+                    if sub.get("poster_fallback"):
+                        poster_fallback_count += 1
+                    if sub.get("logo_fallback"):
+                        logo_fallback_count += 1
+                # Track title for Discord updates
+                last_title = result.get("title") or result.get("show_title") or ""
                 # Update processed count
                 with batch_status_lock:
                     batch_status["processed"] = len(results)
@@ -1396,11 +1459,33 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                 logger.error(f"[BATCH] Unexpected error in future for movie {idx}: {e}")
                 results.append({
                     "rating_key": req.rating_keys[idx-1],
+                    "title": "",
                     "status": "error",
                     "error": str(e),
                 })
+                failed_count += 1
                 with batch_status_lock:
                     batch_status["processed"] = len(results)
+
+            # Update Discord progress every N seconds
+            if discord_message_id and (time.time() - last_discord_update) >= discord_update_interval:
+                try:
+                    update_batch_progress_notification(
+                        message_id=discord_message_id,
+                        library_id=req.library_id,
+                        template_id=req.template_id,
+                        current_index=len(results),
+                        total_count=total_count,
+                        current_title=last_title,
+                        success_count=success_count,
+                        failed_count=failed_count,
+                        source="batch",
+                        poster_fallback_count=poster_fallback_count,
+                        logo_fallback_count=logo_fallback_count,
+                    )
+                    last_discord_update = time.time()
+                except Exception as update_err:
+                    logger.debug("[BATCH] Failed to update Discord progress: %s", update_err)
 
     # Mark batch as complete
     _update_batch_status({
@@ -1409,22 +1494,35 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
         "current_step": "Finished",
     })
 
-    # Calculate success/failure counts
-    success_count = sum(1 for r in results if r.get("status") == "ok")
-    failed_count = len(results) - success_count
-
-    # Send Discord notification for batch completion
-    try:
-        send_batch_notification(
-            library_id=req.library_id,
-            template_id=req.template_id,
-            preset_id=req.preset_id or "",
-            success_count=success_count,
-            failed_count=failed_count,
-            source="batch"
-        )
-    except Exception as notif_err:
-        logger.debug("[BATCH] Failed to send Discord notification: %s", notif_err)
+    # Send Discord completion notification
+    if discord_message_id:
+        try:
+            complete_batch_progress_notification(
+                message_id=discord_message_id,
+                library_id=req.library_id,
+                template_id=req.template_id,
+                total_count=total_count,
+                success_count=success_count,
+                failed_count=failed_count,
+                source="batch",
+                poster_fallback_count=poster_fallback_count,
+                logo_fallback_count=logo_fallback_count,
+            )
+        except Exception as notif_err:
+            logger.debug("[BATCH] Failed to complete Discord progress: %s", notif_err)
+    else:
+        # Fallback to simple notification if progress tracking wasn't started
+        try:
+            send_batch_notification(
+                library_id=req.library_id,
+                template_id=req.template_id,
+                preset_id=req.preset_id or "",
+                success_count=success_count,
+                failed_count=failed_count,
+                source="batch"
+            )
+        except Exception as notif_err:
+            logger.debug("[BATCH] Failed to send Discord notification: %s", notif_err)
 
     return {"results": results}
 

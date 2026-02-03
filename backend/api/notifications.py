@@ -298,6 +298,316 @@ def send_batch_notification(
     )
 
 
+def start_batch_progress_notification(
+    library_id: Optional[str],
+    template_id: str,
+    total_count: int,
+    source: str = "batch"
+) -> Optional[str]:
+    """
+    Send initial batch progress notification and return the message ID for updates.
+
+    Returns:
+        Message ID if successful, None otherwise
+    """
+    if not _should_notify(source, library_id):
+        return None
+
+    settings = _get_notification_settings()
+    webhook_url = settings.get("discordWebhookUrl", "")
+    if not webhook_url:
+        return None
+
+    try:
+        library_name = _get_library_name(library_id)
+        emoji = _get_source_emoji(source)
+        source_label = _get_source_label(source)
+
+        embed = {
+            "title": f"{emoji} {source_label} Started",
+            "description": f"Processing **0/{total_count}** posters...",
+            "color": 0x3DD6B7,  # Simposter accent color
+            "fields": [
+                {
+                    "name": "Library",
+                    "value": library_name,
+                    "inline": True
+                },
+                {
+                    "name": "Template",
+                    "value": template_id or "N/A",
+                    "inline": True
+                },
+                {
+                    "name": "Status",
+                    "value": "Starting...",
+                    "inline": True
+                }
+            ],
+            "footer": {
+                "text": "Simposter"
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        # Add ?wait=true to get the message object back (including ID)
+        response = requests.post(
+            f"{webhook_url}?wait=true",
+            json={"embeds": [embed]},
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            message_id = data.get("id")
+            logger.info(f"[DISCORD] Batch progress started, message_id={message_id}")
+            return message_id
+        else:
+            logger.warning(f"[DISCORD] Failed to start batch progress: HTTP {response.status_code}")
+            return None
+
+    except Exception as e:
+        logger.error(f"[DISCORD] Error starting batch progress: {e}")
+        return None
+
+
+def update_batch_progress_notification(
+    message_id: str,
+    library_id: Optional[str],
+    template_id: str,
+    current_index: int,
+    total_count: int,
+    current_title: str,
+    success_count: int,
+    failed_count: int,
+    source: str = "batch",
+    poster_data: Optional[bytes] = None,
+    poster_fallback_count: int = 0,
+    logo_fallback_count: int = 0,
+) -> bool:
+    """
+    Update an existing batch progress notification.
+
+    Args:
+        message_id: The Discord message ID to update
+        poster_data: Optional poster image bytes to show as thumbnail
+
+    Returns:
+        True if update was successful
+    """
+    settings = _get_notification_settings()
+    webhook_url = settings.get("discordWebhookUrl", "")
+    if not webhook_url or not message_id:
+        return False
+
+    try:
+        library_name = _get_library_name(library_id)
+        emoji = _get_source_emoji(source)
+        source_label = _get_source_label(source)
+
+        # Progress bar
+        progress_pct = int((current_index / total_count) * 100) if total_count > 0 else 0
+        filled = int(progress_pct / 10)
+        progress_bar = "█" * filled + "░" * (10 - filled)
+
+        embed = {
+            "title": f"{emoji} {source_label} In Progress",
+            "description": f"**{current_index}/{total_count}** - {current_title}\n\n`{progress_bar}` {progress_pct}%",
+            "color": 0x3DD6B7,
+            "fields": [
+                {
+                    "name": "Library",
+                    "value": library_name,
+                    "inline": True
+                },
+                {
+                    "name": "Template",
+                    "value": template_id or "N/A",
+                    "inline": True
+                },
+                {
+                    "name": "Success",
+                    "value": str(success_count),
+                    "inline": True
+                }
+            ],
+            "footer": {
+                "text": "Simposter"
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        if failed_count > 0:
+            embed["fields"].append({
+                "name": "Failed",
+                "value": str(failed_count),
+                "inline": True
+            })
+
+        # Show fallback counts if any were used
+        if poster_fallback_count > 0 or logo_fallback_count > 0:
+            fallback_parts = []
+            if poster_fallback_count > 0:
+                fallback_parts.append(f"Poster: {poster_fallback_count}")
+            if logo_fallback_count > 0:
+                fallback_parts.append(f"Logo: {logo_fallback_count}")
+            embed["fields"].append({
+                "name": "\U0001F504 Fallbacks",
+                "value": " | ".join(fallback_parts),
+                "inline": True
+            })
+
+        # Add poster thumbnail if provided
+        if poster_data:
+            embed["thumbnail"] = {"url": "attachment://poster.jpg"}
+
+        edit_url = f"{webhook_url}/messages/{message_id}"
+
+        if poster_data:
+            import json
+            files = {
+                "file": ("poster.jpg", poster_data, "image/jpeg")
+            }
+            payload_json = json.dumps({"embeds": [embed]})
+            response = requests.patch(
+                edit_url,
+                data={"payload_json": payload_json},
+                files=files,
+                timeout=15
+            )
+        else:
+            response = requests.patch(
+                edit_url,
+                json={"embeds": [embed]},
+                timeout=10
+            )
+
+        if response.status_code == 200:
+            return True
+        else:
+            logger.warning(f"[DISCORD] Failed to update batch progress: HTTP {response.status_code}")
+            return False
+
+    except Exception as e:
+        logger.error(f"[DISCORD] Error updating batch progress: {e}")
+        return False
+
+
+def complete_batch_progress_notification(
+    message_id: str,
+    library_id: Optional[str],
+    template_id: str,
+    total_count: int,
+    success_count: int,
+    failed_count: int,
+    source: str = "batch",
+    poster_data: Optional[bytes] = None,
+    poster_fallback_count: int = 0,
+    logo_fallback_count: int = 0,
+) -> bool:
+    """
+    Update batch progress notification with final completion status.
+    """
+    settings = _get_notification_settings()
+    webhook_url = settings.get("discordWebhookUrl", "")
+    if not webhook_url or not message_id:
+        return False
+
+    try:
+        library_name = _get_library_name(library_id)
+        emoji = _get_source_emoji(source)
+        source_label = _get_source_label(source)
+
+        # Color based on results
+        if failed_count > 0 and success_count == 0:
+            color = 0xFF4757  # Red for all failures
+        elif failed_count > 0:
+            color = 0xFFA502  # Orange for partial failures
+        else:
+            color = 0x3DD6B7  # Green for success
+
+        description = f"**{success_count}** posters generated successfully"
+        if failed_count > 0:
+            description += f"\n**{failed_count}** failed"
+
+        fields = [
+            {
+                "name": "Library",
+                "value": library_name,
+                "inline": True
+            },
+            {
+                "name": "Template",
+                "value": template_id or "N/A",
+                "inline": True
+            },
+            {
+                "name": "Total",
+                "value": str(total_count),
+                "inline": True
+            }
+        ]
+
+        # Show fallback counts if any were used
+        if poster_fallback_count > 0 or logo_fallback_count > 0:
+            fallback_parts = []
+            if poster_fallback_count > 0:
+                fallback_parts.append(f"Poster: {poster_fallback_count}")
+            if logo_fallback_count > 0:
+                fallback_parts.append(f"Logo: {logo_fallback_count}")
+            fields.append({
+                "name": "\U0001F504 Fallbacks",
+                "value": " | ".join(fallback_parts),
+                "inline": True
+            })
+
+        embed = {
+            "title": f"{emoji} {source_label} Complete",
+            "description": description,
+            "color": color,
+            "fields": fields,
+            "footer": {
+                "text": "Simposter"
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+        if poster_data:
+            embed["thumbnail"] = {"url": "attachment://poster.jpg"}
+
+        edit_url = f"{webhook_url}/messages/{message_id}"
+
+        if poster_data:
+            import json
+            files = {
+                "file": ("poster.jpg", poster_data, "image/jpeg")
+            }
+            payload_json = json.dumps({"embeds": [embed]})
+            response = requests.patch(
+                edit_url,
+                data={"payload_json": payload_json},
+                files=files,
+                timeout=15
+            )
+        else:
+            response = requests.patch(
+                edit_url,
+                json={"embeds": [embed]},
+                timeout=10
+            )
+
+        if response.status_code == 200:
+            logger.info(f"[DISCORD] Batch progress completed")
+            return True
+        else:
+            logger.warning(f"[DISCORD] Failed to complete batch progress: HTTP {response.status_code}")
+            return False
+
+    except Exception as e:
+        logger.error(f"[DISCORD] Error completing batch progress: {e}")
+        return False
+
+
 @router.post("/notifications/test-discord")
 def test_discord_webhook(request: TestWebhookRequest):
     """Test a Discord webhook by sending a test message."""
