@@ -336,17 +336,20 @@ def validate_url(url: str, allow_data_uri: bool = False) -> str:
 
     for pattern in private_patterns:
         if re.search(pattern, url, re.IGNORECASE):
-            # Allow private network URLs if they appear to be from Plex or this app
-            # Common patterns: port 32400, .plex.direct domain, localhost, Plex metadata paths
-            is_plex_url = (
+            # Allow private network URLs if they appear to be from Plex or this app's own API
+            # Common patterns: port 32400, .plex.direct domain, localhost, Plex metadata paths,
+            # and internal API endpoints (parsed for rating_key extraction, never fetched as HTTP)
+            is_safe_url = (
                 'localhost' in url or
                 '127.0.0.1' in url or
                 ':32400' in url or
                 '.plex.direct' in url or
                 'X-Plex-Token' in url or  # URL contains Plex auth token
-                '/library/metadata/' in url  # Plex metadata path (may be behind reverse proxy)
+                '/library/metadata/' in url or  # Plex metadata path (may be behind reverse proxy)
+                '/api/movie/' in url or  # Internal API URL (parsed, not fetched)
+                '/api/tv-show/' in url  # Internal API URL (parsed, not fetched)
             )
-            if not is_plex_url:
+            if not is_safe_url:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Private network URLs are not allowed"
