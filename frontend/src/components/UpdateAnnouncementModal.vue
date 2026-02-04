@@ -6,17 +6,28 @@ import { releaseNotes, type ReleaseNote } from '../releaseNotes'
 const STORAGE_KEY = 'simposter-last-seen-version'
 
 const visible = ref(false)
-const currentNote = ref<ReleaseNote | null>(null)
+const missedNotes = ref<ReleaseNote[]>([])
 
 onMounted(() => {
   const lastSeen = localStorage.getItem(STORAGE_KEY)
   if (lastSeen === APP_VERSION) return
 
-  // Find release notes for the current version
-  const note = releaseNotes.find(n => n.version === APP_VERSION)
-  if (!note) return
+  // Collect all release notes newer than the last seen version.
+  // releaseNotes is ordered newest-first. If no lastSeen, only show the current version.
+  const notes: ReleaseNote[] = []
+  for (const note of releaseNotes) {
+    if (note.version === lastSeen) break
+    notes.push(note)
+  }
 
-  currentNote.value = note
+  // If user has never seen any version, just show the latest
+  if (!lastSeen && notes.length > 1) {
+    notes.length = 1
+  }
+
+  if (notes.length === 0) return
+
+  missedNotes.value = notes
   visible.value = true
 })
 
@@ -28,19 +39,26 @@ function dismiss() {
 
 <template>
   <Teleport to="body">
-    <div v-if="visible && currentNote" class="announcement-overlay" @click.self="dismiss">
+    <div v-if="visible && missedNotes.length" class="announcement-overlay" @click.self="dismiss">
       <div class="announcement-modal glass">
         <div class="announcement-header">
-          <h2>What's New in {{ currentNote.version }}</h2>
+          <h2 v-if="missedNotes.length === 1">What's New in {{ missedNotes[0]!.version }}</h2>
+          <h2 v-else>What's New</h2>
           <button class="close-btn" @click="dismiss">&times;</button>
         </div>
         <div class="announcement-body">
-          <p class="release-date">{{ currentNote.date }}</p>
-          <div v-for="section in currentNote.sections" :key="section.title" class="release-section">
-            <h3>{{ section.title }}</h3>
-            <ul>
-              <li v-for="item in section.items" :key="item">{{ item }}</li>
-            </ul>
+          <div v-for="note in missedNotes" :key="note.version" class="version-block">
+            <div v-if="missedNotes.length > 1" class="version-header">
+              <span class="version-badge">{{ note.version }}</span>
+              <span class="release-date">{{ note.date }}</span>
+            </div>
+            <p v-else class="release-date">{{ note.date }}</p>
+            <div v-for="section in note.sections" :key="section.title" class="release-section">
+              <h3>{{ section.title }}</h3>
+              <ul>
+                <li v-for="item in section.items" :key="item">{{ item }}</li>
+              </ul>
+            </div>
           </div>
         </div>
         <div class="announcement-footer">
@@ -112,6 +130,35 @@ function dismiss() {
   margin: 0 0 16px;
   font-size: 13px;
   color: #8892b0;
+}
+
+.version-block {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.version-block:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.version-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.version-badge {
+  background: linear-gradient(120deg, var(--accent), var(--accent-2));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 6px;
+  letter-spacing: 0.3px;
 }
 
 .release-section {
