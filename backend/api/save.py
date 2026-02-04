@@ -152,15 +152,58 @@ def apply_save_location_variables(
     year: Optional[int],
     key: Optional[str],
     library: Optional[str] = None,
-    season: Optional[int] = None
+    season: Optional[int] = None,
+    is_tv_show: bool = False
 ) -> str:
-    """Replace variables in save location template with actual values."""
-    # Replace variables
-    result = template.replace("{title}", title)
+    """
+    Replace variables in save location template with actual values.
+
+    For TV shows, uses tvShowSaveMode setting to determine file structure:
+    - "flat": All posters in one folder with title prefix (e.g., "Breaking Bad (2008) - series.jpg", "Breaking Bad (2008) - s01.jpg")
+    - "nested": Each show gets its own folder (e.g., "Breaking Bad (2008)/series.jpg", "Breaking Bad (2008)/s01.jpg")
+
+    Supports variables: {library}, {title}, {year}, {season}
+    """
+    # Get TV show save mode if this is a TV show
+    tv_save_mode = "flat"
+    if is_tv_show:
+        try:
+            from .. import database as db
+            ui_settings = db.get_ui_settings()
+            if ui_settings:
+                tv_save_mode = ui_settings.get("tvShowSaveMode", "flat")
+        except Exception:
+            pass
+
+    # First, replace library and year in the template (these are common to all modes)
+    result = template.replace("{library}", library if library else "")
     result = result.replace("{year}", str(year) if year else "")
     result = result.replace("{key}", key if key else "")
-    result = result.replace("{library}", library if library else "")
-    result = result.replace("{season}", f"s{season:02d}" if season else "")
+
+    # For TV shows, apply the save mode logic to {title} variable
+    if is_tv_show and season is not None:
+        # Season poster
+        season_str = f"s{season:02d}"
+        if tv_save_mode == "nested":
+            # Nested: /library/Breaking Bad (2008)/s01.jpg
+            result = result.replace("{title}", f"{title}/{season_str}")
+        else:
+            # Flat: /library/Breaking Bad (2008) - s01.jpg
+            result = result.replace("{title}", f"{title} - {season_str}")
+        result = result.replace("{season}", season_str)
+    elif is_tv_show:
+        # Series poster
+        if tv_save_mode == "nested":
+            # Nested: /library/Breaking Bad (2008)/series.jpg
+            result = result.replace("{title}", f"{title}/series")
+        else:
+            # Flat: /library/Breaking Bad (2008) - series.jpg
+            result = result.replace("{title}", f"{title} - series")
+        result = result.replace("{season}", "")
+    else:
+        # Movie - normal title replacement
+        result = result.replace("{title}", title)
+        result = result.replace("{season}", f"s{season:02d}" if season else "")
 
     # Clean up any double slashes or trailing spaces
     result = result.replace("//", "/")
@@ -226,7 +269,8 @@ def api_save(req: SaveRequest):
         req.movie_year,
         req.rating_key,
         library_label,
-        season=req.season_index if req.is_tv else None
+        season=req.season_index if req.is_tv else None,
+        is_tv_show=req.is_tv
     )
 
     # Sanitize path components (keep dots so we can detect filenames)

@@ -41,7 +41,7 @@ def _configure_conn(conn: sqlite3.Connection):
     """Set safe defaults for concurrency on SQLite."""
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=5000;")  # 5s wait if locked
+    conn.execute("PRAGMA busy_timeout=30000;")  # 30s wait if locked
     conn.row_factory = sqlite3.Row
 
 
@@ -149,11 +149,28 @@ def check_and_update_version() -> None:
 
 def init_database():
     """Initialize the database with required tables."""
+    import time
+    
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH, timeout=10.0, check_same_thread=False)
-    _configure_conn(conn)
-    cursor = conn.cursor()
+    # Retry logic for database lock
+    max_retries = 5
+    retry_delay = 1.0
+    
+    for attempt in range(max_retries):
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
+            _configure_conn(conn)
+            cursor = conn.cursor()
+            break
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and attempt < max_retries - 1:
+                logger.warning(f"[DB] Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+                continue
+            else:
+                raise
 
     try:
         # Check if old ui_settings table exists (needs migration)
@@ -261,42 +278,41 @@ def init_database():
                 # Load existing season options or create from base
                 season_raw = row["season_options_json"] if "season_options_json" in row.keys() else None
                 base_opts = json.loads(row["options_json"]) if row["options_json"] else {}
-                
+
                 # Check if season_options is empty (newly created column defaults to '{}')
                 # or if it's a non-empty user-customized value
                 is_empty = not season_raw or season_raw.strip() in ("", "{}", "null", "NULL")
-                
-                if not is_empty:
-                    # User has custom season options - merge with base but don't override custom values
-                    season_opts = json.loads(season_raw)
-                    # Merge with base to ensure all base fields are present
-                    season_opts = {**base_opts, **season_opts}
-                else:
-                    # Empty season options - start fresh from base
+
+                if is_empty:
+                    # Empty season options - initialize from base with season-specific defaults
                     season_opts = dict(base_opts or {})
-                
-                # Apply season-specific overrides (these always override base options)
-                season_defaults = {
-                    "logo_mode": "none",
-                    "poster_filter": "textless",
-                    "text_overlay_enabled": True,
-                    "custom_text": "{season}",
-                    "font_family": "Arial",
-                    "font_size": 150,
-                    "shadow_enabled": False,
-                    "shadow_blur": 0,
-                    "letter_spacing": 1,
-                    "position_y": 0.85,
-                }
-                # Always override these specific fields for season posters
-                season_opts.update(season_defaults)
-                
-                cursor.execute(
-                    "UPDATE presets SET season_options_json = ? WHERE id = ?",
-                    (json.dumps(season_opts), row["id"]),
-                )
+
+                    # Apply season-specific overrides for initial setup
+                    season_defaults = {
+                        "logo_mode": "none",
+                        "poster_filter": "textless",
+                        "text_overlay_enabled": True,
+                        "custom_text": "{season}",
+                        "font_family": "Arial",
+                        "font_size": 150,
+                        "shadow_enabled": False,
+                        "shadow_blur": 0,
+                        "letter_spacing": 1,
+                        "position_y": 0.85,
+                    }
+                    season_opts.update(season_defaults)
+
+                    cursor.execute(
+                        "UPDATE presets SET season_options_json = ? WHERE id = ?",
+                        (json.dumps(season_opts), row["id"]),
+                    )
+                else:
+                    # User has custom season options - DO NOT overwrite them
+                    # Just ensure it's valid JSON by loading and re-saving
+                    season_opts = json.loads(season_raw)
+                    # No changes - preserve user settings exactly as they are
             except Exception as backfill_err:
-                logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row.get("id"), backfill_err)
+                logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row["id"], backfill_err)
 
         # Create indexes for better query performance
         cursor.execute("""
@@ -426,6 +442,22 @@ def init_database():
             ON collection_cache(library_id)
         """)
 
+        # Label cache tables for Plex labels
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS label_cache (
+                rating_key TEXT PRIMARY KEY,
+                labels TEXT, -- JSON array of label names
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tv_label_cache (
+                rating_key TEXT PRIMARY KEY,
+                labels TEXT, -- JSON array of label names
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Poster history table - track poster actions (local save / send to Plex)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS poster_history (
@@ -438,6 +470,14 @@ def init_database():
                 preset_id TEXT,
                 action TEXT NOT NULL, -- saved_local | sent_to_plex
                 save_path TEXT,
+                source TEXT DEFAULT 'manual', -- manual | batch | auto
+                poster_fallback_used INTEGER DEFAULT 0, -- 0/1 boolean
+                poster_fallback_template TEXT,
+                poster_fallback_preset TEXT,
+                logo_fallback_used INTEGER DEFAULT 0, -- 0/1 boolean
+                logo_fallback_template TEXT,
+                logo_fallback_preset TEXT,
+                thumbnail_path TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -457,6 +497,36 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_poster_history_template_preset
             ON poster_history(template_id, preset_id)
         """)
+
+        # Migration: add source column to poster_history if it doesn't exist
+        cursor.execute("PRAGMA table_info(poster_history)")
+        history_cols = [row["name"] for row in cursor.fetchall()]
+        if "source" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN source TEXT DEFAULT 'manual'")
+            logger.info("[DB] Added 'source' column to poster_history table")
+
+        # Migration: add fallback tracking columns if they don't exist
+        if "poster_fallback_used" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN poster_fallback_used INTEGER DEFAULT 0")
+            logger.info("[DB] Added 'poster_fallback_used' column to poster_history table")
+        if "poster_fallback_template" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN poster_fallback_template TEXT")
+            logger.info("[DB] Added 'poster_fallback_template' column to poster_history table")
+        if "poster_fallback_preset" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN poster_fallback_preset TEXT")
+            logger.info("[DB] Added 'poster_fallback_preset' column to poster_history table")
+        if "logo_fallback_used" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN logo_fallback_used INTEGER DEFAULT 0")
+            logger.info("[DB] Added 'logo_fallback_used' column to poster_history table")
+        if "logo_fallback_template" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN logo_fallback_template TEXT")
+            logger.info("[DB] Added 'logo_fallback_template' column to poster_history table")
+        if "logo_fallback_preset" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN logo_fallback_preset TEXT")
+            logger.info("[DB] Added 'logo_fallback_preset' column to poster_history table")
+        if "thumbnail_path" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN thumbnail_path TEXT")
+            logger.info("[DB] Added 'thumbnail_path' column to poster_history table")
 
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
@@ -940,14 +1010,54 @@ def update_movie_poster(rating_key: str, poster_url: Optional[str], library_id: 
         """, (poster_url, rating_key, library_id))
 
 
+def _cleanup_orphaned_posters(rating_keys: List[str]) -> None:
+    """Remove poster files for deleted items."""
+    try:
+        # Import here to avoid circular dependency
+        from . import config
+        poster_dir = Path(config.POSTER_CACHE_DIR)
+        if not poster_dir.exists():
+            return
+
+        removed_count = 0
+        for rating_key in rating_keys:
+            for ext in ("jpg", "jpeg", "png", "webp"):
+                poster_file = poster_dir / f"{rating_key}.{ext}"
+                if poster_file.exists():
+                    try:
+                        poster_file.unlink()
+                        removed_count += 1
+                        logger.debug("[DB] Deleted orphaned poster: %s", poster_file.name)
+                    except OSError as e:
+                        logger.warning("[DB] Failed to delete poster %s: %s", poster_file, e)
+
+        if removed_count > 0:
+            logger.info("[DB] Removed %d orphaned poster files", removed_count)
+    except Exception as e:
+        logger.warning("[DB] Failed to clean up orphaned posters: %s", e)
+
+
 def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default") -> None:
     """
     Replace cache entries to match the provided movies list.
     Each movie dict should include rating_key, title, year, added_at, tmdb_id?, poster_url?, labels?.
+    Also removes orphaned poster files and label cache entries.
     """
     keys = [m["rating_key"] for m in movies]
     with get_db() as conn:
         cursor = conn.cursor()
+
+        # Get rating_keys that will be deleted (orphaned entries)
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM movie_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+            """, keys + [library_id])
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+        else:
+            cursor.execute("SELECT rating_key FROM movie_cache WHERE library_id = ?", (library_id,))
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
         for m in movies:
             labels_json = json.dumps(m.get("labels") or [])
             cursor.execute("""
@@ -976,12 +1086,24 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
                 library_id,
             ))
 
-        # Drop entries that are no longer present
+        # Drop database entries that are no longer present
         if keys:
             cursor.execute(f"""
                 DELETE FROM movie_cache
                 WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
             """, keys + [library_id])
+
+        # Also delete from label_cache (Plex labels cache)
+        if orphaned_keys:
+            cursor.execute(f"""
+                DELETE FROM label_cache
+                WHERE rating_key IN ({",".join("?" for _ in orphaned_keys)})
+            """, orphaned_keys)
+
+    # Clean up orphaned poster files on disk
+    if orphaned_keys:
+        _cleanup_orphaned_posters(orphaned_keys)
+        logger.info("[DB] Cleaned up %d orphaned movie entries and posters for library %s", len(orphaned_keys), library_id)
 
 
 def get_cached_movies(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1144,10 +1266,25 @@ def update_tv_seasons(rating_key: str, seasons: List[Dict[str, Any]], library_id
 
 
 def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "default") -> None:
-    """Replace cache entries to match the provided TV shows list."""
+    """
+    Replace cache entries to match the provided TV shows list.
+    Also removes orphaned poster files and label cache entries.
+    """
     keys = [m["rating_key"] for m in shows]
     with get_db() as conn:
         cursor = conn.cursor()
+
+        # Get rating_keys that will be deleted (orphaned entries)
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM tv_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+            """, keys + [library_id])
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+        else:
+            cursor.execute("SELECT rating_key FROM tv_cache WHERE library_id = ?", (library_id,))
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
         for m in shows:
             labels_json = json.dumps(m.get("labels") or [])
             seasons_json = json.dumps(m.get("seasons") or [])
@@ -1184,11 +1321,24 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
                 library_id,
             ))
 
+        # Drop database entries that are no longer present
         if keys:
             cursor.execute(f"""
                 DELETE FROM tv_cache
                 WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
             """, keys + [library_id])
+
+        # Also delete from tv_label_cache (Plex labels cache for TV shows)
+        if orphaned_keys:
+            cursor.execute(f"""
+                DELETE FROM tv_label_cache
+                WHERE rating_key IN ({",".join("?" for _ in orphaned_keys)})
+            """, orphaned_keys)
+
+    # Clean up orphaned poster files on disk
+    if orphaned_keys:
+        _cleanup_orphaned_posters(orphaned_keys)
+        logger.info("[DB] Cleaned up %d orphaned TV show entries and posters for library %s", len(orphaned_keys), library_id)
 
 
 def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1319,9 +1469,25 @@ def upsert_collection_cache(
 
 
 def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id: str = "default") -> None:
+    """
+    Replace cache entries to match the provided collections list.
+    Also removes orphaned poster files.
+    """
     keys = [c["rating_key"] for c in collections]
     with get_db() as conn:
         cursor = conn.cursor()
+
+        # Get rating_keys that will be deleted (orphaned entries)
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM collection_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+            """, keys + [library_id])
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+        else:
+            cursor.execute("SELECT rating_key FROM collection_cache WHERE library_id = ?", (library_id,))
+            orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
         for c in collections:
             cursor.execute("""
                 INSERT INTO collection_cache (rating_key, title, year, added_at, poster_url, updated_at, library_id)
@@ -1342,11 +1508,17 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
                 library_id,
             ))
 
+        # Drop database entries that are no longer present
         if keys:
             cursor.execute(f"""
                 DELETE FROM collection_cache
                 WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
             """, keys + [library_id])
+
+    # Clean up orphaned poster files on disk
+    if orphaned_keys:
+        _cleanup_orphaned_posters(orphaned_keys)
+        logger.info("[DB] Cleaned up %d orphaned collection entries and posters for library %s", len(orphaned_keys), library_id)
 
 
 def get_cached_collections(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1497,30 +1669,56 @@ def record_poster_history(
     preset_id: Optional[str],
     action: str,
     save_path: Optional[str] = None,
+    source: str = 'manual',
+    poster_fallback_used: bool = False,
+    poster_fallback_template: Optional[str] = None,
+    poster_fallback_preset: Optional[str] = None,
+    logo_fallback_used: bool = False,
+    logo_fallback_template: Optional[str] = None,
+    logo_fallback_preset: Optional[str] = None,
+    poster_data: Optional[bytes] = None,
 ) -> None:
-    """Record a poster-related action for tracking."""
+    """Record a poster-related action for tracking, including fallback information."""
+    from .config import HISTORY_THUMBNAIL_DIR
+    from PIL import Image
+    from io import BytesIO
+    import uuid
+
+    thumbnail_path = None
+
+    # Save a thumbnail copy if poster_data is provided
+    if poster_data:
+        try:
+            # Generate unique filename
+            thumb_filename = f"{rating_key}_{uuid.uuid4().hex[:8]}.jpg"
+            thumb_path = Path(HISTORY_THUMBNAIL_DIR) / thumb_filename
+
+            # Create a smaller thumbnail (max 400px wide) to save space
+            img = Image.open(BytesIO(poster_data))
+            max_width = 400
+            if img.width > max_width:
+                ratio = max_width / img.width
+                new_size = (max_width, int(img.height * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+            # Save as JPEG with moderate quality
+            img.convert("RGB").save(str(thumb_path), "JPEG", quality=80)
+            thumbnail_path = str(thumb_path)
+            logger.debug(f"[HISTORY] Saved thumbnail: {thumbnail_path}")
+        except Exception as e:
+            logger.warning(f"[HISTORY] Failed to save thumbnail for {rating_key}: {e}")
+
     with get_db() as conn:
         cursor = conn.cursor()
-        # Keep only the most recent record per rating_key/action (scoped by library)
-        cursor.execute(
-            """
-            DELETE FROM poster_history
-            WHERE rating_key = ?
-              AND action = ?
-              AND (
-                    (library_id IS NULL AND ? IS NULL)
-                 OR (library_id = ?)
-                 OR (library_id IS NULL AND ? = '')
-                 OR (library_id = '' AND ? IS NULL)
-              )
-            """,
-            (rating_key, action, library_id, library_id or '', library_id, library_id),
-        )
+
+        # Insert new history record (keep all records for full history)
         cursor.execute(
             """
             INSERT INTO poster_history
-            (rating_key, library_id, title, year, template_id, preset_id, action, save_path, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            (rating_key, library_id, title, year, template_id, preset_id, action, save_path, source,
+             poster_fallback_used, poster_fallback_template, poster_fallback_preset,
+             logo_fallback_used, logo_fallback_template, logo_fallback_preset, thumbnail_path, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 rating_key,
@@ -1531,6 +1729,14 @@ def record_poster_history(
                 preset_id,
                 action,
                 save_path,
+                source,
+                1 if poster_fallback_used else 0,
+                poster_fallback_template,
+                poster_fallback_preset,
+                1 if logo_fallback_used else 0,
+                logo_fallback_template,
+                logo_fallback_preset,
+                thumbnail_path,
             ),
         )
 
@@ -1569,6 +1775,7 @@ def get_poster_history(
 
     out: List[Dict[str, Any]] = []
     for row in rows:
+        row_keys = row.keys()
         out.append({
             "id": row["id"],
             "rating_key": row["rating_key"],
@@ -1579,9 +1786,49 @@ def get_poster_history(
             "preset_id": row["preset_id"],
             "action": row["action"],
             "save_path": row["save_path"],
+            "source": row["source"] if "source" in row_keys else "manual",
+            "poster_fallback_used": bool(row["poster_fallback_used"]) if "poster_fallback_used" in row_keys else False,
+            "poster_fallback_template": row["poster_fallback_template"] if "poster_fallback_template" in row_keys else None,
+            "poster_fallback_preset": row["poster_fallback_preset"] if "poster_fallback_preset" in row_keys else None,
+            "logo_fallback_used": bool(row["logo_fallback_used"]) if "logo_fallback_used" in row_keys else False,
+            "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
+            "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
             "created_at": row["created_at"],
         })
     return out
+
+
+def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
+    """Fetch a single poster history record by ID."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM poster_history WHERE id = ?", (history_id,))
+        row = cursor.fetchone()
+
+    if not row:
+        return None
+
+    row_keys = row.keys()
+    return {
+        "id": row["id"],
+        "rating_key": row["rating_key"],
+        "library_id": row["library_id"],
+        "title": row["title"],
+        "year": row["year"],
+        "template_id": row["template_id"],
+        "preset_id": row["preset_id"],
+        "action": row["action"],
+        "save_path": row["save_path"],
+        "source": row["source"] if "source" in row_keys else "manual",
+        "poster_fallback_used": bool(row["poster_fallback_used"]) if "poster_fallback_used" in row_keys else False,
+        "poster_fallback_template": row["poster_fallback_template"] if "poster_fallback_template" in row_keys else None,
+        "poster_fallback_preset": row["poster_fallback_preset"] if "poster_fallback_preset" in row_keys else None,
+        "logo_fallback_used": bool(row["logo_fallback_used"]) if "logo_fallback_used" in row_keys else False,
+        "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
+        "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
+        "thumbnail_path": row["thumbnail_path"] if "thumbnail_path" in row_keys else None,
+        "created_at": row["created_at"],
+    }
 
 
 def get_poster_status(
@@ -1644,6 +1891,17 @@ def get_poster_status(
             }
 
     return result
+
+
+def has_poster_been_sent(rating_key: str) -> bool:
+    """Check if a poster has already been sent to Plex for this rating_key."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM poster_history WHERE rating_key = ? AND action = 'sent_to_plex' LIMIT 1",
+            (rating_key,),
+        )
+        return cursor.fetchone() is not None
 
 
 # Initialize database on module import

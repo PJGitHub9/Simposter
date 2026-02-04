@@ -44,6 +44,10 @@ def _normalize_plex_payload(data: dict) -> dict:
                 "id": str(m.get("id", "")),
                 "title": str(m.get("title", "")),
                 "displayName": str(m.get("displayName", "")),
+                "autoGenerateEnabled": m.get("autoGenerateEnabled", False),
+                "autoGeneratePresetId": m.get("autoGeneratePresetId"),
+                "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
+                "webhookIgnoreLabels": m.get("webhookIgnoreLabels", []) or [],
             }
             for m in normalized["libraryMappings"]
             if isinstance(m, dict)
@@ -67,6 +71,10 @@ def _normalize_plex_payload(data: dict) -> dict:
                 "id": str(m.get("id", "")),
                 "title": str(m.get("title", "")),
                 "displayName": str(m.get("displayName", "")),
+                "autoGenerateEnabled": m.get("autoGenerateEnabled", False),
+                "autoGeneratePresetId": m.get("autoGeneratePresetId"),
+                "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
+                "webhookIgnoreLabels": m.get("webhookIgnoreLabels", []) or [],
             }
             for m in normalized["tvShowLibraryMappings"]
             if isinstance(m, dict)
@@ -96,7 +104,8 @@ def _apply_runtime_settings(merged: dict):
     names = [str(n) for n in names if str(n).strip()]
 
     # Use object.__setattr__ to avoid pydantic field restrictions
-    object.__setattr__(settings, "PLEX_URL", url)
+    # Strip trailing slashes to prevent double-slash URLs like //library/metadata
+    object.__setattr__(settings, "PLEX_URL", url.rstrip("/") if url else "")
     object.__setattr__(settings, "PLEX_TOKEN", token)
     object.__setattr__(settings, "PLEX_MOVIE_LIBRARY_NAMES", names or ["1"])
     object.__setattr__(settings, "PLEX_MOVIE_LIBRARY_NAME", (names or ["1"])[0])

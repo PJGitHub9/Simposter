@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
@@ -40,14 +40,30 @@ const { success, error: showError } = useNotification()
 const { movies: moviesCache, moviesLoaded: moviesLoadedFlag } = useMovies()
 const settings = useSettingsStore()
 
+// Parse defaultSort from settings (format: "field-order" like "title-asc" or "added-desc")
+const getDefaultSort = () => {
+  const defaultSort = settings.defaultSort?.value || 'title-asc'
+  const [field, order] = defaultSort.split('-')
+
+  // Map "added" to "addedAt" for internal use
+  const sortField = field === 'added' ? 'addedAt' : field
+
+  return {
+    sortBy: sortField as 'title' | 'year' | 'addedAt',
+    sortOrder: order as 'asc' | 'desc'
+  }
+}
+
+const defaultSortSettings = getDefaultSort()
+
 const movies = ref<Movie[]>(moviesCache.value)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const selectedMovies = ref<Set<string>>(new Set())
 const searchQuery = ref('')
 const filterLabel = ref<string>('')
-const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
-const sortOrder = ref<'asc' | 'desc'>('asc')
+const sortBy = ref<'title' | 'year' | 'addedAt'>(defaultSortSettings.sortBy)
+const sortOrder = ref<'asc' | 'desc'>(defaultSortSettings.sortOrder)
 const posterLimit = ref<number>(50)
 const currentPage = ref<number>(1)
 
@@ -61,6 +77,7 @@ const getLabelsCacheKey = () => {
 }
 const labelCache = ref<Record<string, string[]>>({})
 const labelInFlight = new Set<string>()
+const allAvailableLabels = ref<string[]>([]) // All labels available in current library
 
 const loadLabelCache = () => {
   if (typeof sessionStorage === 'undefined') return
@@ -121,6 +138,7 @@ watch(currentLibrary, async (newLib, oldLib) => {
   if (newLib) {
     await fetchMovies()
     // Use efficient bulk cache loading first
+    await fetchAllAvailableLabels() // Fetch all labels for library first
     await fetchLabelsFromCache()
     loadLabelCache()
     loadPosterCache()
@@ -196,6 +214,11 @@ const savePosterCache = () => {
 
 // Get all unique labels from cache
 const allLabels = computed(() => {
+  // Prefer all available labels from library if we have them
+  if (allAvailableLabels.value.length > 0) {
+    return allAvailableLabels.value
+  }
+  // Fallback to labels from loaded movies
   const labels = new Set<string>()
   Object.values(labelCache.value).forEach(movieLabels => {
     movieLabels.forEach(label => labels.add(label))
@@ -376,7 +399,10 @@ const fetchMovies = async () => {
   error.value = null
   try {
     if (!moviesLoadedFlag.value) {
-      const res = await fetch(`${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+      const params = new URLSearchParams()
+      if (currentLibrary.value) params.set('library_id', currentLibrary.value)
+      if (settings.deduplicateMovies.value) params.set('deduplicate', 'true')
+      const res = await fetch(`${apiBase}/api/movies${params.toString() ? '?' + params.toString() : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = (await res.json()) as Movie[]
       moviesCache.value = data
@@ -416,6 +442,24 @@ const fetchPosters = async () => {
     posterInFlight.delete(r.key)
   })
   savePosterCache()
+}
+
+const fetchAllAvailableLabels = async () => {
+  try {
+    if (!currentLibrary.value) {
+      allAvailableLabels.value = []
+      return
+    }
+    
+    const res = await fetch(`${apiBase}/api/movies/labels/all?library_id=${encodeURIComponent(currentLibrary.value)}`)
+    if (res.ok) {
+      const data = await res.json()
+      allAvailableLabels.value = data.labels || []
+      console.log(`[BatchEdit] Loaded ${allAvailableLabels.value.length} unique labels for library ${currentLibrary.value}`)
+    }
+  } catch (e) {
+    console.warn('[BatchEdit] Failed to fetch all labels:', e)
+  }
 }
 
 const fetchLabelsFromCache = async () => {
@@ -767,37 +811,41 @@ watch(selectedMoviesList, (list) => {
 const previewImage = ref<string | null>(null)
 const previewLoading = ref(false)
 const previewCache = ref<Record<string, string>>({})
+let previewAbortController: AbortController | null = null
+let previewDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 const fetchPreview = async () => {
+  // Cancel any in-flight preview request
+  if (previewAbortController) {
+    previewAbortController.abort()
+    previewAbortController = null
+  }
+
   if (!currentPreviewMovie.value || !selectedTemplate.value) {
     previewImage.value = null
     return
   }
 
-  const cacheKey = `${currentPreviewMovie.value.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}`
+  const movie = currentPreviewMovie.value
+  const cacheKey = `${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}`
   if (previewCache.value[cacheKey]) {
     previewImage.value = previewCache.value[cacheKey]
     return
   }
 
+  // Create new abort controller for this request
+  previewAbortController = new AbortController()
+  const signal = previewAbortController.signal
+
   previewLoading.value = true
   try {
-    const movie = currentPreviewMovie.value
-
-    // Ensure we have a valid poster URL
-    let posterUrl = movie.poster
-    if (!posterUrl) {
-      // Fetch the poster if not cached
-      const posterRes = await fetch(`${apiBase}/api/movie/${movie.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
-      const posterData = await posterRes.json()
-      if (posterData.url) {
-        posterUrl = posterData.url.startsWith('http') ? posterData.url : `${apiBase}${posterData.url}`
-      }
-    }
+    // Always construct a valid poster URL using the rating key
+    // The preview API will extract the rating_key and do TMDB lookup
+    const posterUrl = `${apiBase}/api/movie/${movie.key}/poster${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
 
     const payload = {
       template_id: selectedTemplate.value,
-      background_url: posterUrl || '',
+      background_url: posterUrl,
       logo_url: null,
       options: {},
       preset_id: selectedPreset.value || undefined,
@@ -808,8 +856,12 @@ const fetchPreview = async () => {
     const response = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal
     })
+
+    // Check if request was aborted before processing response
+    if (signal.aborted) return
 
     if (response.ok) {
       const data = await response.json()
@@ -821,11 +873,25 @@ const fetchPreview = async () => {
       previewImage.value = null
     }
   } catch (err) {
+    // Ignore abort errors - they're expected when switching movies quickly
+    if (err instanceof Error && err.name === 'AbortError') {
+      return
+    }
     console.error('Preview failed:', err)
     previewImage.value = null
   } finally {
     previewLoading.value = false
   }
+}
+
+// Debounced version for watchers to avoid rapid re-renders
+const debouncedFetchPreview = () => {
+  if (previewDebounceTimer) {
+    clearTimeout(previewDebounceTimer)
+  }
+  previewDebounceTimer = setTimeout(() => {
+    fetchPreview()
+  }, 150)
 }
 
 // Watch for changes to fetch posters and labels
@@ -861,11 +927,23 @@ watch(selectedPreset, () => {
 })
 
 watch(currentPreviewMovie, () => {
-  fetchPreview()
+  debouncedFetchPreview()
+})
+
+// Cleanup on unmount - cancel any pending preview requests
+onUnmounted(() => {
+  if (previewAbortController) {
+    previewAbortController.abort()
+    previewAbortController = null
+  }
+  if (previewDebounceTimer) {
+    clearTimeout(previewDebounceTimer)
+    previewDebounceTimer = null
+  }
 })
 
 onMounted(async () => {
-  // Wait for route to be ready 
+  // Wait for route to be ready
   await new Promise(resolve => setTimeout(resolve, 0))
 
   // Ensure settings are loaded so defaults are available

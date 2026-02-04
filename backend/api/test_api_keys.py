@@ -10,26 +10,34 @@ async def test_tmdb_api_key(api_key: str = Query(..., description="TMDb API key 
     """Test a TMDb API key by making a simple API call."""
     try:
         import requests
+        from ..config import mask_sensitive
 
         # Test with a simple movie lookup (The Matrix - ID: 603)
         # TMDb API v3 uses api_key query parameter
         url = f"https://api.themoviedb.org/3/movie/603"
         params = {"api_key": api_key}
 
+        # Log with masked key
+        redacted = mask_sensitive(api_key)
+        logger.info("[TEST_TMDB] Testing API key: %s", redacted)
+
         response = requests.get(url, params=params, timeout=10)
 
         if response.status_code == 200:
             data = response.json()
+            logger.info("[TEST_TMDB] API key valid: %s", redacted)
             return {
                 "status": "ok",
                 "example": f"{data.get('title', 'Unknown')} ({data.get('release_date', '')[:4]})"
             }
         elif response.status_code == 401:
+            logger.warning("[TEST_TMDB] Invalid API key: %s", redacted)
             return {
                 "status": "error",
                 "error": "Invalid API key"
             }
         else:
+            logger.warning("[TEST_TMDB] API returned status %d for key: %s", response.status_code, redacted)
             return {
                 "status": "error",
                 "error": f"API returned status {response.status_code}"
@@ -47,7 +55,18 @@ async def test_tvdb_api_key(api_key: str = Query(..., description="TVDB API key 
     """Test a TVDB API key by performing a login call."""
     try:
         from .. import tvdb_client
+        from ..config import mask_sensitive
+
+        redacted = mask_sensitive(api_key)
+        logger.info("[TEST_TVDB] Testing API key: %s", redacted)
+
         result = tvdb_client.test_tvdb_key(api_key)
+
+        if result.get("status") == "ok":
+            logger.info("[TEST_TVDB] API key valid: %s", redacted)
+        else:
+            logger.warning("[TEST_TVDB] API key test failed: %s - %s", redacted, result.get("error"))
+
         return result
     except Exception as e:
         logger.error(f"[TEST_TVDB] Error testing API key: {e}")

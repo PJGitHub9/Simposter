@@ -1,4 +1,4 @@
-# **Simposter 🎬🖼️ — Template-Based Poster Builder with TMDb + Plex + Radarr Automation**
+# **Simposter 🎬🖼️ — Template-Based Poster Builder with TMDb + Plex**
 
 > **Simposter** is a fast, modern poster-generation tool for Plex users who want **clean, consistent, template-driven artwork** — now with a **completely redesigned UI**, **enhanced batch editing**, **real-time preview**, **TMDB-integrated rendering**, and **intelligent caching**.
 
@@ -12,7 +12,7 @@
 - 👁️ **Real-time preview sidebar** — See rendered output with template + preset applied
 - 🔄 **Preview navigation** — Cycle through selected movies with prev/next controls
 - 📋 **Quick movie list** — Jump to any selected movie instantly
-- 🏷️ **Smart label selector** — Choose specific labels to remove (replaces auto-remove)
+- 🏷️ **Smart label selector** — Choose specific labels to remove per library
 
 ### ⚡ **Performance & Caching**
 - 💾 **Smart sessionStorage caching** — LRU eviction prevents quota errors, cache works indefinitely
@@ -22,14 +22,38 @@
 - 🔍 **Label filtering** — Filter movies by existing labels in batch edit
 - ⏰ **Scheduled library scans** — Automatic cron-based scanning to keep Simposter synced with Plex
 - 🧹 **Memory leak protection** — Automatic cleanup prevents memory leaks on navigation
+- 🎬 **Overlay caching** — Pre-generated template overlays for 3-5x faster batch rendering
 
 ### 🎬 **Enhanced Preview System**
 - 🖼️ **TMDB integration** — Preview uses TMDB posters based on preset filter (textless, text, any)
 - 🎭 **Logo mode support** — Respects 'none' setting (no logo fetch when disabled)
 - 📐 **Accurate rendering** — Preview shows exact output with all preset options applied
 
+### 🔗 **Webhook Integration**
+- 🤖 **Radarr support** — Auto-generate posters for new movies
+- 📺 **Sonarr support** — Auto-generate posters for new TV shows (with season support)
+- 🎙️ **Tautulli support** — Generate posters on Plex events (added, watched, updated)
+- ⚙️ **Flexible configuration** — Choose templates, presets, and event types per integration
+- 📤 **Auto-upload** — Automatically send generated posters to Plex
+- 🧪 **Test mode** — Dry-run testing with detailed logging (`?test=true`)
+- 🏷️ **Ignore Labels** — Skip poster generation for items with specific Plex labels (per-library)
+
+### 🎞 **Multi-Source Artwork**
+- 🎬 **TMDb integration** — Movies & TV show posters with textless/text variants
+- 🖼️ **Fanart.tv logos** — HD clearlogos and artwork for movies
+- 📺 **TVDB support** — TV show posters, season artwork, logos, and coming-soon indicators
+- 🔀 **Source priority** — Reorder API sources (TMDb, TVDB, Fanart) - configurable in Advanced Settings
+- 🔄 **Smart fallback** — Switch sources if preferred artwork unavailable
+
 ### 🧪 **Experimental Features**
-- 📝 **Custom text overlay** — Add template variables like {title} and {year} (experimental)
+- 📝 **Custom text overlay** — Add template variables like {title} and {year}
+- 🏷️ **Library-specific label removal** — Configure which labels to remove per library
+
+### 📜 **History & Tracking**
+- 📋 **Poster history** — Complete log of all generated posters with filtering
+- 👁️ **Preview on hover** — View button shows poster preview popup without leaving page
+- 🔍 **Filter by library, template, source, action** — Find specific history records quickly
+- 📊 **Fallback tracking** — See which posters used template fallback
 
 ---
 
@@ -176,6 +200,37 @@ Log preferences are stored in the database (auto-migrated from `/config/settings
 
 ---
 
+## 📜 History View
+
+Track all generated posters with comprehensive filtering and preview capabilities.
+
+### Features
+- **Complete history** — Every poster generation is logged with timestamp, template, preset, and source
+- **Filtering** — Filter by library, template, action (sent to Plex, saved locally), and source (manual, batch, webhook, auto-generate)
+- **Preview on hover** — Hover over the "View" button to see a popup preview of the generated poster
+- **Fallback tracking** — See which posters used template fallback due to missing logos/posters
+
+### Preview Sources
+- **Locally saved posters** — Preview from saved file on disk
+- **Sent to Plex** — Preview fetches current poster from Plex
+
+### Columns
+| Column | Description |
+|--------|-------------|
+| Preview | Hover to see poster thumbnail |
+| Date & Time | When the poster was generated |
+| Title | Movie or TV show title |
+| Year | Release year |
+| Library | Which Plex library |
+| Template | Template used |
+| Preset | Preset applied |
+| Source | manual, batch, webhook, auto_generate |
+| Action | sent_to_plex or saved |
+| Fallback | Shows if template fallback was used |
+| Path | Local save path (if saved) |
+
+---
+
 ## 📡 Plex Upload
 
 - Upload poster  
@@ -215,11 +270,190 @@ Log preferences are stored in the database (auto-migrated from `/config/settings
 ![Image](https://github.com/user-attachments/assets/e6e60d93-5913-4054-aa47-b38a04bd5435)
 ---
 
-## 🔗 Radarr Webhook
+## 🎙️ Tautulli Webhook Configuration
+
+Tautulli can automatically trigger poster generation when Plex events occur (new media added, watched, etc.). Configure a webhook in Tautulli to send events to Simposter.
+
+### Setup Steps
+
+1. **In Simposter Settings** (Performance Tab):
+   - Enable "Automatically Send to Plex" if you want webhooks to automatically upload posters
+   - Configure "Default Labels for Webhook Posters" (e.g., "Overlay, Auto")
+   - Save your settings
+
+2. **In Tautulli Settings** > **Notification Agents** > **Add a new notification agent** > **Webhook**:
+
+### Webhook URL Format
 
 ```
-POST /api/webhook/radarr/{template_id}/{preset_id}
+http://your-server:8686/api/webhook/tautulli?template_id=TEMPLATE_ID&preset_id=PRESET_ID&event_types=added
 ```
+
+**Query Parameters:**
+- `template_id` — Your template ID (required)
+- `preset_id` — Your preset ID (required)
+- `event_types` — Comma-separated list: `added`, `updated`, `watched` (default: `added`)
+- `test=true` — Optional: dry-run mode with detailed logging (no actual poster generation)
+
+**Example URLs:**
+```
+# Generate posters for newly added content only
+http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-preset&event_types=added
+
+# Test mode (dry-run with logging)
+http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-preset&event_types=added&test=true
+
+# Multiple event types
+http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-preset&event_types=added,watched
+```
+
+### Webhook Configuration (Movies)
+
+**Webhook Method:** `POST`
+
+**JSON Headers:**
+```json
+{
+  "Content-Type": "application/json"
+}
+```
+
+**JSON Data:**
+```json
+{
+  "event": "{action}",
+  "media_type": "{media_type}",
+  "title": "{title}",
+  "year": "{year}",
+  "rating_key": "{rating_key}",
+  "tmdb_id": "{themoviedb_id}",
+  "thetvdb_id": "{thetvdb_id}"
+}
+```
+
+**Triggers:** Configure which events to trigger on (e.g., "Recently Added")
+
+### Webhook Configuration (TV Shows)
+
+**Webhook Method:** `POST`
+
+**JSON Headers:**
+```json
+{
+  "Content-Type": "application/json"
+}
+```
+
+**JSON Data:**
+```json
+{
+  "event": "{action}",
+  "media_type": "{media_type}",
+  "title": "{show_name}",
+  "year": "{year}",
+  "rating_key": "{rating_key}",
+  "tmdb_id": "{themoviedb_id}",
+  "thetvdb_id": "{thetvdb_id}"
+}
+```
+
+**Triggers:** Configure which events to trigger on (e.g., "Recently Added")
+
+**Important for TV Shows:**
+- **Episode events are automatically ignored** for the `added` category to prevent duplicate processing
+- Configure Tautulli to send **show-level or season-level** events, not episode-level events
+- When a new episode is added, Tautulli may send an event for each episode, but Simposter will skip these to avoid regenerating the same show poster multiple times
+- Use library scan notifications (show/season level) instead of episode notifications for best results
+
+### Supported Event Types
+
+Tautulli sends various event types that Simposter maps automatically:
+
+| Tautulli Event | Simposter Category | Description |
+|---------------|-------------------|-------------|
+| `library.new` | `added` | New media added to library |
+| `created` | `added` | Alternative event for new media |
+| `library.update` | `updated` | Media metadata updated |
+| `playback.stop` | `watched` | Media finished playing |
+
+Configure `event_types` in the URL to control which events trigger poster generation.
+
+### Testing Your Webhook
+
+1. **Use Test Mode**: Add `&test=true` to your webhook URL for dry-run testing
+2. **Check Logs**: Monitor `/config/logs/simposter.log` for webhook events
+3. **Manual Test**: Use Tautulli's "Test Notification" button to send a test event
+
+**Example Test Payload** (for manual API testing):
+```bash
+curl -X POST "http://localhost:8686/api/webhook/tautulli?template_id=universal&preset_id=my-preset&event_types=added&test=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event": "created",
+    "media_type": "movie",
+    "title": "Catch Me If You Can",
+    "year": "2002",
+    "rating_key": "60996",
+    "tmdb_id": "640",
+    "thetvdb_id": ""
+  }'
+```
+
+### Troubleshooting
+
+**No poster generated for TV shows?**
+- **Episode events are ignored by design** - Configure Tautulli to send show-level events instead
+- Check that your notification trigger is set to "Recently Added" for shows, not episodes
+- Review logs for `[TAUTULLI_WEBHOOK] Skipping episode` messages
+- Verify template_id and preset_id exist in your settings
+
+**No poster generated for movies?**
+- Check that `event_types` parameter includes the event category (e.g., `added`)
+- Verify template_id and preset_id exist in your settings
+- Review logs for errors: `[TAUTULLI_WEBHOOK]` prefix
+
+**Duplicate processing?**
+- For movies: Tautulli may send multiple events for the same item, which is normal
+- For TV shows: Episode events are automatically skipped to prevent duplicates
+
+**Event not recognized?**
+- Check logs to see what event type Tautulli is sending
+- Verify the event maps to a supported category (see table above)
+
+---
+
+## 🏷️ Webhook Ignore Labels
+
+Skip automatic poster generation for specific items by assigning Plex labels. This feature works with both webhooks (Radarr, Sonarr, Tautulli) and auto-generate during library scans.
+
+### Use Cases
+- **Preserve custom artwork** — Mark items with labels like "AURA" or "Custom" to keep their existing posters
+- **Exclude collections** — Use labels to prevent poster generation for specific collections
+- **Temporary exclusions** — Add labels to skip items during bulk processing
+
+### Configuration
+
+1. **In Plex** — Add labels to movies/TV shows you want to exclude (e.g., "NoOverlay", "Custom", "Manual")
+
+2. **In Simposter Settings** (Libraries Tab):
+   - Expand the library card (Movie or TV Show library)
+   - Find the "Webhook Ignore Labels" section
+   - Check the labels that should skip poster generation
+   - Save settings
+
+### How It Works
+
+| Trigger | Behavior |
+|---------|----------|
+| **Webhook (Radarr/Sonarr/Tautulli)** | Checks item labels before processing; skips if ignore label found |
+| **Auto-Generate (Library Scan)** | Checks item labels before processing; item is still scanned/added to database, but poster generation is skipped |
+| **Manual Batch** | Ignore labels do NOT apply; you have full control |
+
+### Notes
+- Label matching is **case-insensitive** ("AURA" matches "aura", "Aura", etc.)
+- Items with ignore labels are still scanned into Simposter's database
+- Only poster generation is skipped — metadata is still tracked
+- Configure different ignore labels per library (movies vs TV shows)
 
 ---
 
@@ -246,7 +480,7 @@ simposter/
 │       ├── presets.py
 │       ├── templates.py         # Template listing (v1.4)
 │       ├── uploads.py
-│       └── webhooks.py
+│       └── ui_settings.py
 ├── frontend/
 │   ├── src/
 │   │   ├── views/
@@ -270,6 +504,52 @@ simposter/
 │   └── output/                  # Saved posters
 └── Dockerfile
 ```
+
+---
+
+## 🎯 Settings Guide
+
+Simposter settings are organized into 5 tabs for easy navigation:
+
+### **🏠 General Tab**
+- Theme selection (Light/Dark mode)
+- Poster display density (Grid view)
+- Library refresh interval
+
+### **📚 Libraries Tab**
+- **Plex Connection** — Server URL, API token, SSL verification
+- **Library Configuration** — Enable/disable per-library processing, set output folders
+- **Auto-Generate** — Enable automatic poster generation for new content with template/preset selection
+- **Webhook Ignore Labels** — Skip poster generation for items with specific labels (webhooks & auto-generate)
+- **Label Removal** — Choose which Plex labels to remove per library (checkboxes)
+- **Scheduled Scans** — Configure cron schedule for automatic library scanning
+
+### **💾 Save Locations Tab**
+- **Movie Output** — Where to save generated posters (default: Plex poster folder)
+- **TV Show Output** — Separate folder for TV posters
+- **Batch Subfolder** — Organize batch-generated posters in subfolders
+
+### **⚡ Performance Tab**
+- **Image Quality** — Choose output format (JPEG/PNG/WebP) with per-format quality sliders
+  - JPEG quality: 0-100%
+  - PNG compression: 0-9 (0=no compression, 9=best)
+  - WebP quality: 0-100%
+- **Rendering Performance**
+  - Concurrent renders: 1-4 (balance speed vs memory)
+  - Memory limit: 512MB-4GB
+  - Overlay cache: Pre-generate overlays for faster rendering
+- **API Rate Limiting** — Configure request limits per API (5-100 requests/10 seconds)
+  - TMDb rate limit
+  - TVDB rate limit
+- **Cache Management** — Clear application cache, image cache, or database
+
+### **🔧 Advanced Tab**
+- **API Source Priority** — Drag to reorder (TMDb, TVDB, Fanart)
+  - Lock/unlock sources to prevent reordering
+  - Set which source takes priority for artwork lookup
+- **Database Management**
+  - Export settings database
+  - Import settings from backup
 
 ---
 
@@ -368,7 +648,6 @@ uvicorn backend.main:app --reload --port 8003
 6. **Process batch** — Send to Plex and/or save locally
 
 ## Automation
-- **Radarr webhook** — Automatic poster generation on import
 - **Scheduled scans** — Configure cron schedule in Settings to automatically scan your Plex library
 
 ---

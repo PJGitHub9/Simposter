@@ -110,7 +110,8 @@ export function useRenderService() {
     const payload: Record<string, unknown> = {
       ...basePayload(movie, bgUrl, logoUrl, templateId, presetId, options),
       rating_key: movie.key,
-      send_to_plex: true
+      send_to_plex: true,
+      library_id: movie.library_id ?? null
     }
     if (labels?.length) {
       payload.labels = labels

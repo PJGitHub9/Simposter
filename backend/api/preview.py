@@ -27,7 +27,15 @@ def api_preview(req: PreviewRequest):
         if req.preset_id:
             req.preset_id = validate_preset_id(req.preset_id)
         if req.background_url:
-            req.background_url = validate_url(req.background_url, allow_data_uri=True)
+            # Internal API patterns (/api/movie/.../poster, /api/tv-show/.../poster)
+            # are parsed for the rating_key and never fetched directly as HTTP requests,
+            # so skip URL validation for them (avoids blocking private-network app URLs).
+            is_internal_api = (
+                "/api/movie/" in req.background_url or
+                "/api/tv-show/" in req.background_url
+            )
+            if not is_internal_api:
+                req.background_url = validate_url(req.background_url, allow_data_uri=True)
         if req.logo_url:
             req.logo_url = validate_url(req.logo_url, allow_data_uri=True)
         if req.options:
@@ -146,6 +154,21 @@ def api_preview(req: PreviewRequest):
         if req.movie_year:
             render_options["movie_year"] = str(req.movie_year)
 
+        # Merge top-level fallback fields from request into render_options
+        # Only add if not already present (preset values take precedence)
+        if req.fallbackPosterAction and "fallbackPosterAction" not in render_options:
+            render_options["fallbackPosterAction"] = req.fallbackPosterAction
+        if req.fallbackPosterTemplate and "fallbackPosterTemplate" not in render_options:
+            render_options["fallbackPosterTemplate"] = req.fallbackPosterTemplate
+        if req.fallbackPosterPreset and "fallbackPosterPreset" not in render_options:
+            render_options["fallbackPosterPreset"] = req.fallbackPosterPreset
+        if req.fallbackLogoAction and "fallbackLogoAction" not in render_options:
+            render_options["fallbackLogoAction"] = req.fallbackLogoAction
+        if req.fallbackLogoTemplate and "fallbackLogoTemplate" not in render_options:
+            render_options["fallbackLogoTemplate"] = req.fallbackLogoTemplate
+        if req.fallbackLogoPreset and "fallbackLogoPreset" not in render_options:
+            render_options["fallbackLogoPreset"] = req.fallbackLogoPreset
+
         # Allow per-request opt-out of overlay cache for live editing
         # Only disable cache if explicitly requested; respect global setting otherwise
         disable_overlay_cache = render_options.get("disableOverlayCache")
@@ -167,16 +190,17 @@ def api_preview(req: PreviewRequest):
         # Check if this is a Plex URL or API URL - if so, extract rating key and fetch from TMDB
         rating_key = None
         is_tv_show = False
-        if "/library/metadata/" in background_url and "/thumb" in background_url:
-            # Plex URL format
-            rating_key = background_url.split("/library/metadata/")[1].split("/")[0]
-        elif "/api/movie/" in background_url and "/poster" in background_url:
-            # API URL format: /api/movie/{rating_key}/poster
-            rating_key = background_url.split("/api/movie/")[1].split("/")[0]
-        elif "/api/tv-show/" in background_url and "/poster" in background_url:
-            # API URL format: /api/tv-show/{rating_key}/poster
-            rating_key = background_url.split("/api/tv-show/")[1].split("/")[0]
-            is_tv_show = True
+        if background_url:
+            if "/library/metadata/" in background_url and "/thumb" in background_url:
+                # Plex URL format
+                rating_key = background_url.split("/library/metadata/")[1].split("/")[0]
+            elif "/api/movie/" in background_url and "/poster" in background_url:
+                # API URL format: /api/movie/{rating_key}/poster
+                rating_key = background_url.split("/api/movie/")[1].split("/")[0]
+            elif "/api/tv-show/" in background_url and "/poster" in background_url:
+                # API URL format: /api/tv-show/{rating_key}/poster
+                rating_key = background_url.split("/api/tv-show/")[1].split("/")[0]
+                is_tv_show = True
 
         # Also check if tv_show_rating_key was explicitly provided
         if req.tv_show_rating_key and not rating_key:
@@ -208,7 +232,7 @@ def api_preview(req: PreviewRequest):
                     poster = pick_poster(posters, poster_filter)
                     poster_fallback_action_used = None
 
-                    # Poster fallback handling (precedes any logo fallback)
+                    # Poster fallback handling
                     if not poster:
                         fallback_action = render_options.get("fallbackPosterAction") or "continue"
                         poster_fallback_action_used = fallback_action
@@ -246,11 +270,14 @@ def api_preview(req: PreviewRequest):
 
                     # Pick logo based on preference (only if logo_mode is not 'none')
                     logo_mode = render_options.get("logo_mode", "first")
+                    # Disable logo fallback only if poster fallback was actually used
+                    # (not just configured - only when it actually triggered)
                     allow_logo_fallback = poster_fallback_action_used in (None, "continue")
                     if not logo_url and logo_mode != "none":
                         logo = pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
 
-                        # If no logo, try fallback template/preset (append mode, similar to batch) — only when poster allowed it
+                        # If no logo, try logo fallback — only if poster fallback wasn't already used
+                        # (poster fallback takes precedence when it triggers)
                         if not logo and allow_logo_fallback:
                             logger.info(
                                 "[PREVIEW] No logo before fallback; action=%s template=%s preset=%s logos=%s",
@@ -302,9 +329,29 @@ def api_preview(req: PreviewRequest):
                     elif logo_mode == "none":
                         logger.debug("[PREVIEW] Skipping logo fetch because logo_mode='none'")
                 else:
-                    logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s", rating_key)
+                    logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s, trying Plex poster", rating_key)
+                    # Fallback: Try Plex poster directly
+                    if not background_url:
+                        try:
+                            from ..config import settings as config_settings
+                            plex_base = config_settings.PLEX_URL.rstrip('/')
+                            plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
+                            background_url = plex_poster_url
+                            logger.info("[PREVIEW] Using Plex poster as fallback for movie: %s", plex_poster_url.split('?')[0])
+                        except Exception as plex_err:
+                            logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
-                logger.warning("[PREVIEW] TMDB lookup failed, using original URL: %s", e)
+                logger.warning("[PREVIEW] TMDB lookup failed: %s", e)
+                # Fallback: try to fetch poster directly from Plex
+                if not background_url and rating_key:
+                    try:
+                        from ..config import settings as config_settings
+                        plex_base = config_settings.PLEX_URL.rstrip('/')
+                        plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
+                        background_url = plex_poster_url
+                        logger.info("[PREVIEW] Using Plex poster as fallback after error: %s", plex_poster_url.split('?')[0])
+                    except Exception as plex_err:
+                        logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
 
         elif rating_key and is_tv_show:
             # Handle TV show logo and poster fetching (including seasons)
@@ -339,21 +386,90 @@ def api_preview(req: PreviewRequest):
                     show_details = get_tv_show_details(tmdb_id)
                     original_language = show_details.get("original_language")
 
-                    # If season_index is provided, fetch season poster instead of series poster
-                    if req.season_index is not None:
-                        logger.info("[PREVIEW] Fetching season %d poster for tmdb_id=%s", req.season_index, tmdb_id)
-                        season_imgs = get_tv_season_images(tmdb_id, req.season_index, original_language)
-                        season_posters = season_imgs.get("posters", [])
+                    # Only fetch posters if background_url is not already a direct image URL
+                    # (Frontend may have already selected a specific poster via /select-poster endpoint)
+                    should_fetch_poster = not background_url or background_url.startswith(config_settings.PLEX_URL) or "/api/" in background_url
 
-                        if season_posters:
-                            season_poster = pick_poster(season_posters, poster_filter)
-                            if season_poster:
-                                background_url = season_poster.get("url")
-                                logger.info("[PREVIEW] Picked season %d poster: %s", req.season_index, background_url)
-                            else:
-                                logger.warning("[PREVIEW] No season %d poster found after filtering", req.season_index)
+                    if should_fetch_poster:
+                        # Fetch series or season posters based on season_index
+                        posters = []
+                        if req.season_index is not None:
+                            # Fetch season posters
+                            logger.info("[PREVIEW] Fetching season %d poster for tmdb_id=%s", req.season_index, tmdb_id)
+                            try:
+                                season_imgs = get_tv_season_images(tmdb_id, req.season_index, original_language)
+                                posters = season_imgs.get("posters", [])
+                            except Exception as e:
+                                logger.warning("[PREVIEW] Failed to fetch season %d images: %s", req.season_index, e)
+                                posters = []  # Empty list will trigger series fallback logic below
                         else:
-                            logger.warning("[PREVIEW] No posters found for season %d", req.season_index)
+                            # Fetch series posters
+                            show_imgs = get_images_for_tv_show(tmdb_id, original_language)
+                            posters = show_imgs.get("posters", [])
+
+                        # Pick poster based on filter
+                        poster = pick_poster(posters, poster_filter)
+                        poster_fallback_action_used = None
+
+                        # Poster fallback handling
+                        if not poster:
+                            fallback_action = render_options.get("fallbackPosterAction") or "continue"
+                            poster_fallback_action_used = fallback_action
+                            fallback_poster_template = render_options.get("fallbackPosterTemplate")
+                            fallback_poster_preset = render_options.get("fallbackPosterPreset")
+                            if fallback_action == "template" and fallback_poster_template:
+                                presets = load_presets()
+                                tpl_presets = presets.get(fallback_poster_template, {}).get("presets", [])
+                                fpreset = next((p for p in tpl_presets if p.get("id") == fallback_poster_preset), None) if fallback_poster_preset else None
+                                if fpreset:
+                                    # Use season_options if this is a season poster, otherwise use regular options
+                                    if req.season_index is not None and "season_options" in fpreset:
+                                        fp_opts = fpreset.get("season_options", {})
+                                        logger.debug("[PREVIEW] Using season_options from fallback preset")
+                                    else:
+                                        fp_opts = fpreset.get("options", {})
+                                    render_options = {**render_options, **fp_opts}
+                                    # NOTE: Don't update poster_filter here - we already tried with the original filter and failed
+                                    # The fallback template will be used to render whatever poster we find below
+                                    logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
+                                    logo_preference = map_logo_mode_to_preference(logo_preference)
+                                    template_id = fallback_poster_template
+                                    req.preset_id = fallback_poster_preset  # Update preset_id to match fallback
+                                    logger.info("[PREVIEW] Applied poster fallback: %s/%s", fallback_poster_template, fallback_poster_preset)
+                                    # After switching to fallback template, try to get ANY available poster
+                                    poster = pick_poster(posters, "all")
+                                    if poster:
+                                        logger.info("[PREVIEW] Using fallback poster from TMDB after template switch")
+                                else:
+                                    logger.warning("[PREVIEW] Fallback poster preset '%s' not found for template '%s'", fallback_poster_preset, fallback_poster_template)
+                            elif fallback_action == "skip":
+                                raise HTTPException(status_code=400, detail="Poster fallback is set to skip (no poster found).")
+                            else:  # continue
+                                # Re-pick with "all" filter to get any available poster
+                                poster = pick_poster(posters, "all")
+                                if not poster:
+                                    logger.warning("[PREVIEW] No posters available even with 'all' filter")
+
+                        if poster:
+                            background_url = poster.get("url")
+                            logger.info("[PREVIEW] Picked TV show poster with filter='%s': %s", poster_filter, background_url)
+                        else:
+                            # If no season poster found, fall back to series poster as last resort
+                            if req.season_index is not None:
+                                logger.warning("[PREVIEW] No season %d poster found, falling back to series poster", req.season_index)
+                                show_imgs = get_images_for_tv_show(tmdb_id, original_language)
+                                series_posters = show_imgs.get("posters", [])
+                                series_poster = pick_poster(series_posters, "all")  # Use "all" to get any poster
+                                if series_poster:
+                                    background_url = series_poster.get("url")
+                                    logger.info("[PREVIEW] Using series poster as fallback: %s", background_url)
+                                else:
+                                    logger.warning("[PREVIEW] No valid TV show poster found (even series poster)")
+                            else:
+                                logger.warning("[PREVIEW] No valid TV show poster found (even after fallback)")
+                    else:
+                        # background_url is already a direct image URL (from frontend /select-poster)
+                        logger.info("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
 
                     # Fetch logos (always from series, not season-specific)
                     show_imgs = get_images_for_tv_show(tmdb_id, original_language)
@@ -385,14 +501,65 @@ def api_preview(req: PreviewRequest):
                     elif logo_mode == "none":
                         logger.debug("[PREVIEW] Skipping TV show logo fetch because logo_mode='none'")
                 else:
-                    logger.warning("[PREVIEW] Could not find TMDB ID for TV show rating_key=%s", rating_key)
+                    logger.warning("[PREVIEW] Could not find TMDB ID for TV show rating_key=%s, trying TVDB", rating_key)
+                    # Fallback 1: Try TVDB if we have a tvdb_id
+                    if tvdb_id and not background_url:
+                        try:
+                            logger.info("[PREVIEW] Trying TVDB poster lookup for tvdb_id=%s", tvdb_id)
+                            tvdb_imgs = tvdb_client.get_series_images(int(tvdb_id))
+                            tvdb_posters = tvdb_imgs.get("posters", [])
+                            if tvdb_posters:
+                                poster = pick_poster(tvdb_posters, poster_filter)
+                                if poster:
+                                    background_url = poster.get("url")
+                                    logger.info("[PREVIEW] Using TVDB poster: %s", background_url)
+                                else:
+                                    # Try any poster
+                                    background_url = tvdb_posters[0].get("url") if tvdb_posters else None
+                                    if background_url:
+                                        logger.info("[PREVIEW] Using first TVDB poster: %s", background_url)
+                            # Also try to get logos from TVDB
+                            tvdb_logos = tvdb_imgs.get("logos", [])
+                            if tvdb_logos and not logo_url:
+                                logo = pick_logo(tvdb_logos, logo_preference, white_logo_fallback, language_pref)
+                                if logo:
+                                    logo_url = logo.get("url")
+                                    logger.info("[PREVIEW] Using TVDB logo: %s", logo_url)
+                        except Exception as tvdb_err:
+                            logger.warning("[PREVIEW] TVDB lookup failed: %s", tvdb_err)
+
+                    # Fallback 2: Try Plex poster directly
+                    if not background_url:
+                        try:
+                            plex_base = config_settings.PLEX_URL.rstrip('/')
+                            plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
+                            background_url = plex_poster_url
+                            logger.info("[PREVIEW] Using Plex poster as fallback: %s", plex_poster_url.split('?')[0])
+                        except Exception as plex_err:
+                            logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
-                logger.warning("[PREVIEW] TV show lookup failed, using original URL: %s", e)
+                logger.warning("[PREVIEW] TV show lookup failed: %s", e)
+                # Fallback: try to fetch poster directly from Plex
+                if not background_url and rating_key:
+                    try:
+                        from ..config import settings as config_settings
+                        plex_base = config_settings.PLEX_URL.rstrip('/')
+                        plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
+                        background_url = plex_poster_url
+                        logger.info("[PREVIEW] Using Plex poster as fallback after error: %s", plex_poster_url.split('?')[0])
+                    except Exception as plex_err:
+                        logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
+
+        # Final check: if we still don't have a background_url, raise a clear error
+        if not background_url:
+            logger.error("[PREVIEW] No background URL available after all lookups (rating_key=%s, is_tv=%s)", rating_key, is_tv_show)
+            raise HTTPException(status_code=400, detail="Could not find a poster image. Check that the item has a valid TMDB/TVDB ID or Plex poster.")
 
         logo_mode_val = render_options.get("logo_mode", "first")
         effective_logo_url = None if logo_mode_val == "none" else logo_url
 
-        if req.preset_id:
+        # Use overlay cache only if we have a background_url (can't use cache when fetching from TMDb)
+        if req.preset_id and background_url:
             img = render_with_overlay_cache(
                 template_id,
                 req.preset_id,

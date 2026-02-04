@@ -1,5 +1,70 @@
 # Changelog
 
+## v1.5.0 (2026-01-11)
+### Major Features
+- **Poster Generation History Tracking**: Complete audit log of all poster operations
+  - New History page with filterable table view
+  - Tracks manual and batch poster generations
+  - Source column distinguishes between manual/batch operations
+  - Color-coded badges (purple=batch, gray=manual)
+  - Library-aware filtering with display name resolution
+  - Template, preset, and action filtering capabilities
+  - Records save path and timestamps for all operations
+
+### Removed Features
+- **Radarr/Sonarr Integration Polling** (removed in v1.6.0): Integration polling and webhooks have been removed
+  - Simposter now focuses on core poster generation with scheduled Plex library scans
+  - Use scheduled scans in Settings → Automation for keeping poster library in sync
+  - Manual batch processing remains the primary workflow
+
+- **Automatic Cache Cleanup** (`backend/database.py`):
+  - Orphaned entries are automatically removed when items are deleted from Plex/Radarr/Sonarr
+  - Cleans up database cache (`movie_cache`, `tv_cache`, `collection_cache`)
+  - Removes orphaned label cache entries (`label_cache`, `tv_label_cache`)
+  - Deletes orphaned poster files from disk
+  - Triggered automatically during library scans and cache refreshes
+  - Prevents stale data from showing in the UI
+
+- **Database Schema Updates**:
+  - Added `source` column to `poster_history` table (manual/batch/auto)
+  - Automatic migration for existing databases
+  - Integration settings stored in UI settings
+  - Last poll timestamps stored per integration instance
+
+- **History API** (`backend/api/history.py`):
+  - Enhanced filtering by library, template, and action
+  - Pagination support (up to 2000 records)
+  - Status endpoint for bulk poster status queries
+
+### Frontend Enhancements
+- **UI Polish & Modern Interactions** (`frontend/src/assets/main.css`):
+  - Smooth transitions on all interactive elements (buttons, inputs, panels)
+  - Enhanced button hover effects with lift animations
+  - Improved input focus states with accent-colored glow
+  - Refined glass panel hover effects
+  - Better disabled states with visual feedback
+  - Card hover animations with shadow depth
+  - Accessibility improvements (focus-visible outlines)
+  - Custom scrollbar styling across all themes
+  - Loading and badge pulse animations
+  - Smooth scroll behavior
+
+- **History View** (`frontend/src/views/HistoryView.vue`):
+  - Full-featured history table with sortable columns
+  - Multi-filter support (library, template, action)
+  - Library name resolution from settings
+  - Real-time refresh capability
+  - Clear filters button
+  - Results count display
+  - Clock icon in sidebar navigation
+
+### Technical Improvements
+- Batch operations record source='batch' in history
+- Manual operations record source='manual' (default)
+- Settings store exports LibraryMapping type for reuse
+- Router includes /history route with component import
+- Sidebar icon system extended with clock SVG
+
 ## v1.4.9 (2026-01-07)
 ### Major Features
 - **Separate Save Locations for Movies and TV Shows**: Enhanced local asset saving with media-type-specific save locations

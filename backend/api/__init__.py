@@ -18,6 +18,8 @@ from . import (
     cache as cache_api,
     test_api_keys,
     scheduler,
+    database,
+    notifications,
 )
 
 router = APIRouter()
@@ -39,3 +41,5 @@ router.include_router(template_manager.router)
 router.include_router(cache_api.router)
 router.include_router(test_api_keys.router)
 router.include_router(scheduler.router)
+router.include_router(database.router)
+router.include_router(notifications.router)

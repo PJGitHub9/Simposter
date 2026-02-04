@@ -158,18 +158,38 @@ const forcePosterRefresh = async () => {
   if (forceRefreshingPosters.value || loading.value) return
   forceRefreshingPosters.value = true
   try {
-    await fetch(`${apiBase}/api/cache`, { method: 'DELETE' })
-  } catch {
-    /* ignore errors; proceed to refetch */
+    // Force refresh posters from Plex and get updated URLs
+    const currentMovies = paged.value
+    const results = await Promise.all(
+      currentMovies.map(async (m) => {
+        try {
+          // Force refresh the poster file from Plex and get the new URL with timestamp
+          const posterMetaUrl = `${apiBase}/api/movie/${m.key}/poster?meta=1&force_refresh=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
+          const posterRes = await fetch(posterMetaUrl)
+          if (posterRes.ok) {
+            const data = await posterRes.json()
+            const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+            return { key: m.key, url }
+          }
+          return { key: m.key, url: null }
+        } catch (e) {
+          console.warn(`Failed to refresh poster for ${m.title}:`, e)
+          return { key: m.key, url: null }
+        }
+      })
+    )
+
+    // Update poster cache with new URLs (with updated timestamps)
+    results.forEach((r) => {
+      posterCache.value[r.key] = r.url
+      setMoviePoster(r.key, r.url)
+    })
+    savePosterCache()
+  } catch (e) {
+    console.error('Force poster refresh failed:', e)
+  } finally {
+    forceRefreshingPosters.value = false
   }
-  clearAllCaches()
-  sessionStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION)
-  movies.value = []
-  moviesLoaded.value = false
-  await fetchMovies(true)
-  await fetchPosters(paged.value)
-  await fetchLabels(paged.value)
-  forceRefreshingPosters.value = false
 }
 
 // NOTE: Initial cache load moved to onMounted to ensure route is ready
@@ -210,20 +230,37 @@ const movies = ref<Movie[]>(moviesCache.value)
 const loading = ref(false)
 const error = ref<string | null>(null)
 
-// Initialize from URL query parameters (route already declared on line 25)
-const router = useRouter()
-const page = ref(Number(route.query.page) || 1)
-const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || 'title')
-const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || 'asc')
-const filterLabel = ref<string>((route.query.label as string) || '')
-
-const posterCache = posterCacheStore
-const labelCache = labelCacheStore
-
 const apiBase = getApiBase()
 const settings = useSettingsStore()
 
 const pageSize = computed(() => settings.posterDensity.value || 20)
+
+// Parse defaultSort from settings (format: "field-order" like "title-asc" or "added-desc")
+const getDefaultSort = () => {
+  const defaultSort = settings.defaultSort?.value || 'title-asc'
+  const [field, order] = defaultSort.split('-')
+
+  // Map "added" to "addedAt" for internal use
+  const sortField = field === 'added' ? 'addedAt' : field
+
+  return {
+    sortBy: sortField as 'title' | 'year' | 'addedAt',
+    sortOrder: order as 'asc' | 'desc'
+  }
+}
+
+// Initialize from URL query parameters (route already declared on line 25)
+const router = useRouter()
+const page = ref(Number(route.query.page) || 1)
+
+// Use URL query parameters if present, otherwise use settings default
+const defaultSortSettings = getDefaultSort()
+const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || defaultSortSettings.sortBy)
+const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || defaultSortSettings.sortOrder)
+const filterLabel = ref<string>((route.query.label as string) || '')
+
+const posterCache = posterCacheStore
+const labelCache = labelCacheStore
 
 // Get all unique labels from cache
 const allLabels = computed(() => {
@@ -304,7 +341,11 @@ const fetchMovies = async (forceRefresh = false) => {
   error.value = null
   try {
     // Always fetch to ensure we have the correct library's data
-    const url = `${apiBase}/api/movies${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}${forceRefresh ? `${currentLibrary.value ? '&' : '?'}force_refresh=true` : ''}`
+    const params = new URLSearchParams()
+    if (currentLibrary.value) params.set('library_id', currentLibrary.value)
+    if (forceRefresh) params.set('force_refresh', 'true')
+    if (settings.deduplicateMovies.value) params.set('deduplicate', 'true')
+    const url = `${apiBase}/api/movies${params.toString() ? '?' + params.toString() : ''}`
     console.log('[MoviesView] fetchMovies - Current library:', currentLibrary.value)
     console.log('[MoviesView] fetchMovies - URL:', url)
     const res = await fetch(url)
@@ -433,8 +474,11 @@ watch([page, sortBy, sortOrder, filterLabel], () => {
   }
 
   if (page.value > 1) query.page = String(page.value)
-  if (sortBy.value !== 'title') query.sortBy = sortBy.value
-  if (sortOrder.value !== 'asc') query.sortOrder = sortOrder.value
+
+  // Only add sort parameters if they differ from settings default
+  const defaults = getDefaultSort()
+  if (sortBy.value !== defaults.sortBy) query.sortBy = sortBy.value
+  if (sortOrder.value !== defaults.sortOrder) query.sortOrder = sortOrder.value
   if (filterLabel.value) query.label = filterLabel.value
 
   // Update URL without triggering navigation
@@ -443,9 +487,10 @@ watch([page, sortBy, sortOrder, filterLabel], () => {
 
 // Watch for route query changes (browser back/forward buttons)
 watch(() => route.query, (newQuery) => {
+  const defaults = getDefaultSort()
   page.value = Number(newQuery.page) || 1
-  sortBy.value = (newQuery.sortBy as any) || 'title'
-  sortOrder.value = (newQuery.sortOrder as any) || 'asc'
+  sortBy.value = (newQuery.sortBy as any) || defaults.sortBy
+  sortOrder.value = (newQuery.sortOrder as any) || defaults.sortOrder
   filterLabel.value = (newQuery.label as string) || ''
 }, { deep: true })
 

@@ -5,12 +5,11 @@ Uses APScheduler for cron-style scheduling.
 import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
-from datetime import datetime, timezone
-import requests
-from typing import Optional
+from datetime import datetime
+from typing import Optional, List
 
-logger = logging.getLogger(__name__)
+# Use the shared logger from config so scheduler logs appear in the main log
+logger = logging.getLogger("simposter")
 
 # Global scheduler instance
 _scheduler: Optional[BackgroundScheduler] = None
@@ -34,15 +33,32 @@ def init_scheduler(restore_from_settings: bool = True):
             from .api.ui_settings import _read_settings
             settings = _read_settings()
             settings_dict = settings.model_dump(exclude_none=False)
+
+            # Restore library scan schedule
             scheduler_settings = settings_dict.get("scheduler", {})
+            logger.info("[SCHEDULER] Scheduler settings: enabled=%s, cronExpression=%s",
+                       scheduler_settings.get("enabled", False),
+                       scheduler_settings.get("cronExpression", "not set"))
+
             if scheduler_settings.get("enabled", False):
-                schedule_library_scan(
-                    scheduler_settings.get("cronExpression", "0 1 * * *"),
-                    scheduler_settings.get("libraryId", None)
-                )
-                logger.info("[SCHEDULER] Restored schedule from settings: %s", scheduler_settings.get("cronExpression"))
+                # Support both legacy libraryId and new libraryIds
+                library_ids = scheduler_settings.get("libraryIds", [])
+                if not library_ids:
+                    library_id = scheduler_settings.get("libraryId")
+                    library_ids = [library_id] if library_id else []
+
+                cron_expr = scheduler_settings.get("cronExpression", "0 1 * * *")
+                success = schedule_library_scan(cron_expr, library_ids)
+                if success:
+                    logger.info("[SCHEDULER] Restored library scan schedule: cron=%s, libraries=%s",
+                               cron_expr, library_ids or "all")
+                else:
+                    logger.error("[SCHEDULER] Failed to restore library scan schedule")
+            else:
+                logger.info("[SCHEDULER] Scheduled scans are disabled in settings")
+
         except Exception as e:
-            logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e)
+            logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e, exc_info=True)
 
     return _scheduler
 
@@ -52,13 +68,13 @@ def get_scheduler() -> Optional[BackgroundScheduler]:
     return _scheduler
 
 
-def schedule_library_scan(cron_expression: str, library_id: Optional[str] = None):
+def schedule_library_scan(cron_expression: str, library_ids: Optional[List[str]] = None):
     """
     Schedule a library scan using a cron expression.
 
     Args:
         cron_expression: Cron expression (e.g., "0 2 * * *" for 2 AM daily)
-        library_id: Optional library ID to scan (None = all libraries)
+        library_ids: Optional list of library IDs to scan (None or empty = all libraries)
 
     Cron format: minute hour day month day_of_week
     Examples:
@@ -168,12 +184,12 @@ def schedule_library_scan(cron_expression: str, library_id: Optional[str] = None
             trigger=trigger,
             id=_scan_job_id,
             name="Library Scan",
-            args=[library_id],
+            args=[library_ids],
             replace_existing=True
         )
 
-        logger.info("[SCHEDULER] Scheduled library scan with cron: %s (library_id=%s)",
-                   cron_expression, library_id or "all")
+        logger.info("[SCHEDULER] Scheduled library scan with cron: %s (library_ids=%s)",
+                   cron_expression, library_ids or "all")
 
         # Log next run time
         next_run = _scheduler.get_job(_scan_job_id).next_run_time
@@ -219,37 +235,53 @@ def get_scan_schedule() -> Optional[dict]:
     }
 
 
-def _run_library_scan(library_id: Optional[str] = None):
+def _run_library_scan(library_ids: Optional[List[str]] = None):
     """
     Internal function to execute a library scan.
     This is called by the scheduler.
     """
+    import time
+    from fastapi import HTTPException
+    scan_start = time.time()
+
     try:
-        from .config import settings
+        # Import the scan function directly - no HTTP request needed
+        from .api.movies import api_scan_library
 
-        logger.info("[SCHEDULER] Starting scheduled library scan (library_id=%s)", library_id or "all")
+        logger.info("[SCHEDULER] ========== SCHEDULED SCAN TRIGGERED ==========")
+        logger.info("[SCHEDULER] Starting scheduled library scan at %s (library_ids=%s)",
+                   datetime.now().strftime("%Y-%m-%d %H:%M:%S"), library_ids or "all")
 
-        # Make internal API call to trigger scan
-        url = f"http://localhost:{settings.PORT}/api/scan-library"
-        if library_id:
-            url += f"?library_id={library_id}"
-
-        response = requests.post(url, timeout=300)  # 5 minute timeout
-
-        if response.status_code == 200:
-            logger.info("[SCHEDULER] Library scan completed successfully")
-        elif response.status_code == 409:
-            logger.warning("[SCHEDULER] Library scan already in progress")
+        # Call the scan function directly
+        if library_ids:
+            # Scan each library individually
+            for library_id in library_ids:
+                try:
+                    result = api_scan_library(library_id=library_id)
+                    logger.info("[SCHEDULER] Library scan completed for library_id=%s: %s movies, %s TV shows, %s collections",
+                               library_id, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
+                except HTTPException as e:
+                    if e.status_code == 409:
+                        logger.warning("[SCHEDULER] Library scan already in progress for library_id=%s", library_id)
+                    else:
+                        logger.error("[SCHEDULER] Library scan failed for library_id=%s: %s", library_id, e.detail)
+                except Exception as e:
+                    logger.error("[SCHEDULER] Failed to scan library_id=%s: %s", library_id, e)
         else:
-            logger.error("[SCHEDULER] Library scan failed with status %s: %s",
-                        response.status_code, response.text)
+            # Scan all libraries
+            try:
+                result = api_scan_library(library_id=None)
+                elapsed = time.time() - scan_start
+                logger.info("[SCHEDULER] Library scan completed in %.1f seconds: %s movies, %s TV shows, %s collections",
+                           elapsed, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
+            except HTTPException as e:
+                if e.status_code == 409:
+                    logger.warning("[SCHEDULER] Library scan already in progress")
+                else:
+                    logger.error("[SCHEDULER] Library scan failed: %s", e.detail)
 
-    except requests.Timeout:
-        logger.error("[SCHEDULER] Library scan timed out after 5 minutes")
-    except requests.ConnectionError as e:
-        logger.error("[SCHEDULER] Connection error during library scan (server may be down): %s", e)
-    except requests.RequestException as e:
-        logger.error("[SCHEDULER] Network error during library scan: %s", e)
+        logger.info("[SCHEDULER] ========== SCHEDULED SCAN FINISHED ==========")
+
     except Exception as e:
         logger.error("[SCHEDULER] Unexpected error during scheduled library scan: %s", e, exc_info=True)
 

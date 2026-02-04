@@ -8,6 +8,7 @@ export type MovieInput = {
   year?: number | string
   poster?: string | null
   mediaType?: MediaType
+  library_id?: string | number
 }
 
 export type Movie = {
@@ -17,4 +18,5 @@ export type Movie = {
   addedAt?: number
   poster?: string | null
   mediaType?: MediaType
+  library_id?: string | number
 }

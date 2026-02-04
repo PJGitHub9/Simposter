@@ -162,23 +162,30 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
     """
     if force_refresh:
         _remove_poster_cache(rating_key)
+    else:
+        # Only use cached version if not forcing refresh
+        cached = _poster_cache_path(rating_key)
+        if cached:
+            return cached
 
-    cached = _poster_cache_path(rating_key)
-    if cached:
-        return cached
-
-    direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
+    # Add cache-busting parameter when force refreshing to bypass Plex's cache
+    import time
+    cache_buster = f"?X-Plex-Token={settings.PLEX_TOKEN}&t={int(time.time())}" if force_refresh else ""
+    direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb{cache_buster}"
 
     # Try direct poster URL
     try:
         r = plex_session.get(direct, headers=plex_headers(), timeout=5)
         if r.status_code == 200:
             content_type = r.headers.get('content-type', 'image/jpeg')
-            try:
-                cache.update_poster(rating_key, direct)
-            except (sqlite3.Error, AttributeError) as e:
-                logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
             saved = _save_poster_cache(rating_key, r.content, content_type)
+            if saved:
+                # Store the Simposter proxy URL in cache, not the direct Plex URL
+                proxy_url = _poster_cache_url(rating_key, saved)
+                try:
+                    cache.update_poster(rating_key, proxy_url)
+                except (sqlite3.Error, AttributeError) as e:
+                    logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
             return saved
     except Exception as e:
         logger.debug(f"Failed to fetch poster directly for {rating_key}: {e}")
@@ -196,11 +203,14 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
                 poster_r = plex_session.get(thumb_url, headers=plex_headers(), timeout=5)
                 if poster_r.status_code == 200:
                     content_type = poster_r.headers.get('content-type', 'image/jpeg')
-                    try:
-                        cache.update_poster(rating_key, thumb_url)
-                    except (sqlite3.Error, AttributeError) as e:
-                        logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
                     saved = _save_poster_cache(rating_key, poster_r.content, content_type)
+                    if saved:
+                        # Store the Simposter proxy URL in cache, not the direct Plex URL
+                        proxy_url = _poster_cache_url(rating_key, saved)
+                        try:
+                            cache.update_poster(rating_key, proxy_url)
+                        except (sqlite3.Error, AttributeError) as e:
+                            logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
                     return saved
     except Exception as e:
         logger.debug(f"Failed to fetch poster via metadata for {rating_key}: {e}")
@@ -352,36 +362,86 @@ def _get_plex_collections(lib_ids: Optional[List[str]] = None) -> List[dict]:
 
 
 @router.get("/movies", response_model=List[Movie])
-def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
+def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None, deduplicate: bool = False):
     """
-    Return movies. Uses cached DB if it is fresh (default 15 minutes) unless force_refresh=true.
+    Return movies from cache. Always returns from cache - use /scan-library to refresh.
+    The force_refresh parameter is deprecated but kept for backwards compatibility.
+
+    Args:
+        deduplicate: If True, removes duplicate movies with the same TMDb ID (keeps most recently added)
     """
     # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
     if library_id in ("default", ""):
         library_id = None
 
-    if not force_refresh and _cache_fresh(max_age, library_id=library_id):
-        cached = cache.get_cached_movies(library_id=library_id)
-        if cached:
-            return [
-                {
-                    "key": m["rating_key"],
-                    "title": m["title"],
-                    "year": m["year"],
-                    "addedAt": m["addedAt"],
-                    "poster": m.get("poster_url"),
-                    "tmdb_id": m.get("tmdb_id"),
-                    "labels": m.get("labels") or [],
-                    "updated_at": m.get("updated_at"),
-                    "library_id": m.get("library_id"),
-                }
-                for m in cached
-            ]
+    # Always return from cache (which includes labels populated by scans)
+    cached = cache.get_cached_movies(library_id=library_id)
 
-    # Otherwise hit Plex and refresh the cache
-    lib_ids = [library_id] if library_id else None
-    movies = get_plex_movies(lib_ids)
-    return [{**m.model_dump(), "poster": None} for m in movies]
+    movies = [
+        {
+            "key": m["rating_key"],
+            "title": m["title"],
+            "year": m["year"],
+            "addedAt": m["addedAt"],
+            "poster": m.get("poster_url"),
+            "tmdb_id": m.get("tmdb_id"),
+            "labels": m.get("labels") or [],
+            "updated_at": m.get("updated_at"),
+            "library_id": m.get("library_id"),
+        }
+        for m in cached
+    ]
+
+    # Deduplicate by TMDb ID if requested (keep most recently added)
+    if deduplicate:
+        seen_tmdb = {}
+        deduped = []
+
+        for movie in movies:
+            tmdb_id = movie.get("tmdb_id")
+
+            # If no TMDb ID, always include (can't deduplicate)
+            if not tmdb_id:
+                deduped.append(movie)
+                continue
+
+            # If we haven't seen this TMDb ID, add it
+            if tmdb_id not in seen_tmdb:
+                seen_tmdb[tmdb_id] = movie
+                deduped.append(movie)
+            else:
+                # If this version is more recent, replace the older one
+                existing = seen_tmdb[tmdb_id]
+                current_added = movie.get("addedAt", 0) or 0
+                existing_added = existing.get("addedAt", 0) or 0
+
+                if current_added > existing_added:
+                    # Remove old version and add new one
+                    deduped.remove(existing)
+                    seen_tmdb[tmdb_id] = movie
+                    deduped.append(movie)
+                    logger.debug(f"[DEDUPE] Replaced {existing['title']} (key={existing['key']}) with newer edition (key={movie['key']})")
+
+        logger.info(f"[DEDUPE] Deduplication reduced {len(movies)} movies to {len(deduped)} unique movies")
+        return deduped
+
+    return movies
+
+
+@router.get("/movies/labels/all")
+def api_all_movie_labels(library_id: str = None):
+    """Get all unique labels for a movie library (or all libraries if not specified)."""
+    if library_id in ("default", ""):
+        library_id = None
+    
+    cached = cache.get_cached_movies(library_id=library_id)
+    labels_set = set()
+    
+    for movie in cached:
+        if movie.get("labels") and isinstance(movie.get("labels"), list):
+            labels_set.update(movie.get("labels"))
+    
+    return {"labels": sorted(list(labels_set))}
 
 
 @router.get("/collections")
@@ -776,10 +836,32 @@ def api_scan_library(library_id: Optional[str] = Query(None)):
                 logger.info("[SCAN] Movies progress %d/%d", processed, len(movies))
             scan_status.update({"processed": processed, "current": movie.title or ""})
         
-        # Bulk refresh movie cache per library
+        # Bulk refresh movie cache per library and detect new content
+        from .. import auto_generate
         for lib_id, cached_movies in movie_cache_by_lib.items():
+            # Get existing cache to detect new items
+            existing_cache = cache.get_cached_movies(library_id=lib_id)
+            existing_keys = {item.get("rating_key") for item in existing_cache}
+
+            # Detect new movies
+            new_movies = [m for m in cached_movies if m.get("rating_key") not in existing_keys]
+
+            # Refresh cache
             cache.refresh_from_list(cached_movies)
-            logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id}")
+            logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id} ({len(new_movies)} new)")
+
+            # Trigger auto-generation for new movies
+            if new_movies:
+                try:
+                    results = auto_generate.process_new_content_for_library(
+                        library_id=lib_id,
+                        new_movies=new_movies,
+                        new_tv_shows=[],
+                        auto_send=True
+                    )
+                    logger.info(f"[SCAN] Auto-generation complete for library {lib_id}: {results}")
+                except Exception as e:
+                    logger.error(f"[SCAN] Auto-generation failed for library {lib_id}: {e}")
         
         # Process TV shows per library
         tv_cache_by_lib = {}
@@ -820,10 +902,31 @@ def api_scan_library(library_id: Optional[str] = Query(None)):
                 logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
             scan_status.update({"processed": processed, "current": show.get("title") or ""})
         
-        # Bulk refresh TV cache per library
+        # Bulk refresh TV cache per library and detect new content
         for lib_id, cached_shows in tv_cache_by_lib.items():
+            # Get existing cache to detect new items
+            existing_cache = cache.get_cached_tv_shows(library_id=lib_id)
+            existing_keys = {item.get("rating_key") for item in existing_cache}
+
+            # Detect new TV shows
+            new_shows = [s for s in cached_shows if s.get("rating_key") not in existing_keys]
+
+            # Refresh cache
             cache.refresh_tv_from_list(cached_shows)
-            logger.info(f"[SCAN] Cached {len(cached_shows)} TV shows for library {lib_id}")
+            logger.info(f"[SCAN] Cached {len(cached_shows)} TV shows for library {lib_id} ({len(new_shows)} new)")
+
+            # Trigger auto-generation for new TV shows
+            if new_shows:
+                try:
+                    results = auto_generate.process_new_content_for_library(
+                        library_id=lib_id,
+                        new_movies=[],
+                        new_tv_shows=new_shows,
+                        auto_send=True
+                    )
+                    logger.info(f"[SCAN] Auto-generation complete for library {lib_id}: {results}")
+                except Exception as e:
+                    logger.error(f"[SCAN] Auto-generation failed for library {lib_id}: {e}")
         
         # Process collections per library
         coll_cache_by_lib = {}

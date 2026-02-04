@@ -5,13 +5,26 @@ import { useMovies } from '../composables/useMovies'
 import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { setSessionStorage, getSessionStorage } from '../composables/useSessionStorage'
+
+// Import tab components
+import GeneralTab from './settings/GeneralTab.vue'
+import LibrariesTab from './settings/LibrariesTab.vue'
+// IntegrationsTab removed
+import SaveLocationsTab from './settings/SaveLocationsTab.vue'
+import PerformanceTab from './settings/PerformanceTab.vue'
+import AdvancedTab from './settings/AdvancedTab.vue'
+import NotificationsTab from './settings/NotificationsTab.vue'
 
 interface LibraryMapping {
   id: string
   title?: string
   displayName?: string
+  autoGenerateEnabled?: boolean
+  autoGeneratePresetId?: string | null
+  autoGenerateTemplateId?: string | null
+  webhookIgnoreLabels?: string[]
 }
 
 interface PlexLibrary {
@@ -31,11 +44,18 @@ const allLibraryLabels = ref<Record<string, { type: 'movie' | 'show'; name: stri
 const labelsLoading = ref(false)
 const { movies: moviesCache, moviesLoaded } = useMovies()
 const scan = useScanStore()
+const route = useRoute()
+const router = useRouter()
+
+// Active tab state - initialize from URL or default to 'general'
+const activeTab = ref<'general' | 'libraries' | 'save-locations' | 'performance' | 'notifications' | 'advanced'>(
+  (route.query.tab as any) || 'general'
+)
 
 // Track unsaved changes
 const hasUnsavedChanges = ref(false)
 const initialSettingsSnapshot = ref('')
-const watchersEnabled = ref(false) // Flag to control when change detection is active
+const watchersEnabled = ref(false)
 
 // Track which sections have unsaved changes
 const sectionsWithChanges = ref({
@@ -45,7 +65,8 @@ const sectionsWithChanges = ref({
   apiKeys: false,
   imageQuality: false,
   performance: false,
-  scheduler: false
+  scheduler: false,
+  automation: false
 })
 
 // Cooldown state to prevent rapid clicking
@@ -58,18 +79,22 @@ const isScanInProgress = computed(() => scan.running.value || scan.checking.valu
 // Local state that will only be applied when save is clicked
 const localTheme = ref<Theme>('neon')
 const localPosterDensity = ref(20)
+const localDeduplicateMovies = ref(false)
+const localDefaultSort = ref('added-desc')
+const localTimezone = ref('UTC')
 const localSaveLocation = ref('')  // Legacy, kept for backwards compatibility
 const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
 const localTvShowSaveLocation = ref('/config/output/{library}/{title}.jpg')
+const localTvShowSaveMode = ref('flat')
 const localSaveBatch = ref(false)
 const localDefaultLabelsToRemove = ref<Record<string, string[]>>({})
 const localDefaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
-const localLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
+const localLibraries = ref<LibraryMapping[]>([])
 const savedLibraryIds = ref<Set<string>>(new Set())
-const localTvShowLibraries = ref<Array<{ id: string; title?: string; displayName?: string }>>([])
+const localTvShowLibraries = ref<LibraryMapping[]>([])
 const savedTvShowLibraryIds = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
@@ -90,118 +115,93 @@ const localMemoryLimit = ref(2048)
 const localUseOverlayCache = ref(true)
 let scanPoller: number | null = null
 
+// Automation settings
+const localWebhookAutoSend = ref(true)
+const localWebhookAutoLabels = ref('Overlay')
+const localWebhookAlwaysRegenerateSeason = ref(false)
+
+// Notification settings
+const localDiscordEnabled = ref(false)
+const localDiscordWebhookUrl = ref('')
+const localDiscordNotifyLibraries = ref<string[]>([])
+const localDiscordNotifyBatch = ref(true)
+const localDiscordNotifyManual = ref(true)
+const localDiscordNotifyWebhook = ref(true)
+const localDiscordNotifyAutoGenerate = ref(true)
+
+// API key testing
+const testingApiKeys = ref<Record<string, boolean>>({})
+const apiKeyTestResults = ref<Record<string, string>>({})
+
 // Scheduler - using local refs that sync with store
 const localSchedulerEnabled = ref(false)
 const localSchedulerCronExpression = ref('0 1 * * *')
-const localSchedulerLibraryId = ref('')
+const localSchedulerLibraryIds = ref<string[]>([])
 const schedulerNextRun = ref<string | null>(null)
 const schedulerStatus = ref<string>('not_initialized')
 
-// Preset import/export states
-const presetExporting = ref(false)
-const presetImporting = ref(false)
-const presetImportText = ref('')
-const showPresetImportModal = ref(false)
+// DB import/export states
+const dbExporting = ref(false)
+const dbImporting = ref(false)
+const showDbImportModal = ref(false)
+const dbImportText = ref('')
 
-// API key test states
-const testTmdbLoading = ref(false)
+// Presets data for tag mappings
+const presets = ref<Record<string, Record<string, any>>>({})
+
+// Integration testing states (tracks by instance ID)
+const testingInstances = ref<Set<string>>(new Set())
+const testResults = ref<Record<string, string>>({})
+
+// API key testing states
+const testTmdbApiKey = ref<() => Promise<void>>()
+const testTvdbApiKey = ref<() => Promise<void>>()
+const testFanartApiKey = ref<() => Promise<void>>()
 const testTmdbResult = ref('')
-const testTvdbLoading = ref(false)
 const testTvdbResult = ref('')
-const testFanartLoading = ref(false)
 const testFanartResult = ref('')
-const apiSources = computed(() => [
-  {
-    id: 'tmdb',
-    label: 'TMDb',
-    description: 'Primary posters, backdrops, and metadata.',
-    keyRef: localTmdbApiKey,
-    testLoading: testTmdbLoading,
-    testResult: testTmdbResult,
-    testHandler: testTmdbApiKey,
-    placeholder: 'TMDb API key'
-  },
-  {
-    id: 'fanart',
-    label: 'Fanart.tv',
-    description: 'High-quality clearlogos and alternate posters.',
-    keyRef: localFanartApiKey,
-    testLoading: testFanartLoading,
-    testResult: testFanartResult,
-    testHandler: testFanartApiKey,
-    placeholder: 'Fanart.tv API key'
-  },
-  {
-    id: 'tvdb',
-    label: 'TVDB',
-    description: 'Extra TV metadata and posters.',
-    keyRef: localTvdbApiKey,
-    testLoading: testTvdbLoading,
-    testResult: testTvdbResult,
-    testHandler: testTvdbApiKey,
-    placeholder: 'TVDB API key'
-  }
-])
-const orderedApiSources = computed(() => apiOrder.value.map((id) => apiSources.value.find((s) => s.id === id)).filter((s): s is NonNullable<typeof s> => !!s))
+const testTmdbLoading = ref(false)
+const testTvdbLoading = ref(false)
+const testFanartLoading = ref(false)
 
-const onApiDragStart = (id: string) => {
-  if (apiOrderLocked.value) return
-  draggingSource.value = id
-}
-
-const onApiDragOver = (targetId: string) => {
-  if (apiOrderLocked.value || !draggingSource.value || draggingSource.value === targetId) return
-  const order = [...apiOrder.value]
-  const from = order.indexOf(draggingSource.value)
-  const to = order.indexOf(targetId)
-  if (from === -1 || to === -1) return
-  const [removed] = order.splice(from, 1)
-  if (removed) order.splice(to, 0, removed)
-  apiOrder.value = order
-}
-
-const onApiDrop = () => {
-  draggingSource.value = null
-}
-
-const onApiDragEnd = () => {
-  draggingSource.value = null
-}
+const testConnection = ref('')
+const testConnectionLoading = ref(false)
+const plexLibraries = ref<Array<{ title: string; key: string; type: string }>>([])
 
 const loadLocalSettings = async () => {
-  // Disable watchers during load
   watchersEnabled.value = false
 
   localTheme.value = settings.theme.value
   localPosterDensity.value = settings.posterDensity.value
+  localDeduplicateMovies.value = settings.deduplicateMovies.value
+  localDefaultSort.value = settings.defaultSort.value || 'added-desc'
+  localTimezone.value = settings.timezone.value || 'UTC'
   localSaveLocation.value = settings.saveLocation.value
   localMovieSaveLocation.value = settings.movieSaveLocation.value
   localTvShowSaveLocation.value = settings.tvShowSaveLocation.value
+  localTvShowSaveMode.value = settings.tvShowSaveMode.value || 'flat'
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
   localDefaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultTvLabelsToRemove.value))
-  // API order
-  apiOrder.value = [...(settings.apiOrder.value || ['tmdb', 'fanart', 'tvdb'])]
-  // Connection settings
   localPlexUrl.value = settings.plex.value.url
   localPlexToken.value = settings.plex.value.token
-  localPlexLibrary.value = settings.plex.value.movieLibraryName
-  // Deep clone library mappings to prevent real-time updates
+  localPlexLibrary.value = settings.plex.value.movieLibraryName || ''
+
+  // Load movie libraries
   const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: LibraryMapping) => l && l.id)
   const libraryMappings = hasPersistedLibraries
     ? settings.plex.value.libraryMappings
     : (settings.plex.value.movieLibraryNames || settings.plex.value.movieLibraryName
-        ? (settings.plex.value.movieLibraryNames || [settings.plex.value.movieLibraryName]).map((n: string, idx: number) => ({
-            id: n,
-            title: n,
+        ? (settings.plex.value.movieLibraryNames || [settings.plex.value.movieLibraryName]).map((n: string | undefined, idx: number) => ({
+            id: n || '',
+            title: n || '',
             displayName: n || `Library ${idx + 1}`
           }))
         : [{ id: '', title: '', displayName: '' }]
       )
 
-  localLibraries.value = JSON.parse(JSON.stringify(libraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
+  localLibraries.value = JSON.parse(JSON.stringify(libraryMappings)) as LibraryMapping[]
 
-  // Lock only if libraries were already persisted (not the first-run fallback)
   savedLibraryIds.value = hasPersistedLibraries
     ? new Set(
         (libraryMappings || [])
@@ -223,9 +223,8 @@ const loadLocalSettings = async () => {
         : [{ id: '', title: '', displayName: '' }]
       )
 
-  localTvShowLibraries.value = JSON.parse(JSON.stringify(tvShowLibraryMappings)) as Array<{ id: string; title?: string; displayName?: string }>
+  localTvShowLibraries.value = JSON.parse(JSON.stringify(tvShowLibraryMappings)) as LibraryMapping[]
 
-  // Lock only if TV show libraries were already persisted
   savedTvShowLibraryIds.value = hasPersistedTvShowLibraries
     ? new Set(
         (tvShowLibraryMappings || [])
@@ -237,23 +236,31 @@ const loadLocalSettings = async () => {
   localTmdbApiKey.value = settings.tmdb.value.apiKey
   localTvdbApiKey.value = settings.tvdb.value.apiKey
   localFanartApiKey.value = settings.fanart.value.apiKey
-  // Image Quality
   localOutputFormat.value = settings.imageQuality.value.outputFormat
   localJpgQuality.value = settings.imageQuality.value.jpgQuality
   localPngCompression.value = settings.imageQuality.value.pngCompression
   localWebpQuality.value = settings.imageQuality.value.webpQuality
-  // Performance
   localConcurrentRenders.value = settings.performance.value.concurrentRenders
   localTmdbRateLimit.value = settings.performance.value.tmdbRateLimit
   localTvdbRateLimit.value = settings.performance.value.tvdbRateLimit
   localMemoryLimit.value = settings.performance.value.memoryLimit
   localUseOverlayCache.value = settings.performance.value.useOverlayCache
-  // Scheduler
   localSchedulerEnabled.value = settings.scheduler.value.enabled
   localSchedulerCronExpression.value = settings.scheduler.value.cronExpression
-  localSchedulerLibraryId.value = settings.scheduler.value.libraryId || ''
+  localSchedulerLibraryIds.value = settings.scheduler.value.libraryIds || []
+  localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
+  localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
+  localWebhookAlwaysRegenerateSeason.value = settings.automation?.value?.webhookAlwaysRegenerateSeason ?? false
 
-  // Wait for next tick to ensure all reactive updates are complete
+  // Notification settings
+  localDiscordEnabled.value = settings.notifications?.value?.discordEnabled ?? false
+  localDiscordWebhookUrl.value = settings.notifications?.value?.discordWebhookUrl ?? ''
+  localDiscordNotifyLibraries.value = settings.notifications?.value?.discordNotifyLibraries ?? []
+  localDiscordNotifyBatch.value = settings.notifications?.value?.discordNotifyBatch ?? true
+  localDiscordNotifyManual.value = settings.notifications?.value?.discordNotifyManual ?? true
+  localDiscordNotifyWebhook.value = settings.notifications?.value?.discordNotifyWebhook ?? true
+  localDiscordNotifyAutoGenerate.value = settings.notifications?.value?.discordNotifyAutoGenerate ?? true
+
   await nextTick()
 }
 
@@ -261,9 +268,13 @@ const captureSettingsSnapshot = () => {
   initialSettingsSnapshot.value = JSON.stringify({
     theme: localTheme.value,
     posterDensity: localPosterDensity.value,
+    deduplicateMovies: localDeduplicateMovies.value,
+    defaultSort: localDefaultSort.value,
+    timezone: localTimezone.value,
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
     tvShowSaveLocation: localTvShowSaveLocation.value,
+    tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
     defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
@@ -286,11 +297,20 @@ const captureSettingsSnapshot = () => {
     useOverlayCache: localUseOverlayCache.value,
     schedulerEnabled: localSchedulerEnabled.value,
     schedulerCronExpression: localSchedulerCronExpression.value,
-    schedulerLibraryId: localSchedulerLibraryId.value
+    schedulerLibraryIds: localSchedulerLibraryIds.value,
+    webhookAutoSend: localWebhookAutoSend.value,
+    webhookAutoLabels: localWebhookAutoLabels.value,
+    webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    discordEnabled: localDiscordEnabled.value,
+    discordWebhookUrl: localDiscordWebhookUrl.value,
+    discordNotifyLibraries: localDiscordNotifyLibraries.value,
+    discordNotifyBatch: localDiscordNotifyBatch.value,
+    discordNotifyManual: localDiscordNotifyManual.value,
+    discordNotifyWebhook: localDiscordNotifyWebhook.value,
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
   })
   hasUnsavedChanges.value = false
 
-  // Reset all section flags
   sectionsWithChanges.value.appearance = false
   sectionsWithChanges.value.output = false
   sectionsWithChanges.value.connections = false
@@ -298,8 +318,8 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.imageQuality = false
   sectionsWithChanges.value.performance = false
   sectionsWithChanges.value.scheduler = false
+  sectionsWithChanges.value.automation = false
 
-  // Enable watchers after a small delay to ensure all async updates have completed
   setTimeout(() => {
     watchersEnabled.value = true
   }, 100)
@@ -309,9 +329,13 @@ const checkForChanges = () => {
   const currentSnapshot = JSON.stringify({
     theme: localTheme.value,
     posterDensity: localPosterDensity.value,
+    deduplicateMovies: localDeduplicateMovies.value,
+    defaultSort: localDefaultSort.value,
+    timezone: localTimezone.value,
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
     tvShowSaveLocation: localTvShowSaveLocation.value,
+    tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
     defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
@@ -334,22 +358,34 @@ const checkForChanges = () => {
     useOverlayCache: localUseOverlayCache.value,
     schedulerEnabled: localSchedulerEnabled.value,
     schedulerCronExpression: localSchedulerCronExpression.value,
-    schedulerLibraryId: localSchedulerLibraryId.value
+    schedulerLibraryIds: localSchedulerLibraryIds.value,
+    webhookAutoSend: localWebhookAutoSend.value,
+    webhookAutoLabels: localWebhookAutoLabels.value,
+    webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    discordEnabled: localDiscordEnabled.value,
+    discordWebhookUrl: localDiscordWebhookUrl.value,
+    discordNotifyLibraries: localDiscordNotifyLibraries.value,
+    discordNotifyBatch: localDiscordNotifyBatch.value,
+    discordNotifyManual: localDiscordNotifyManual.value,
+    discordNotifyWebhook: localDiscordNotifyWebhook.value,
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
-  // Check individual sections
   if (!initialSettingsSnapshot.value) return
   const initial = JSON.parse(initialSettingsSnapshot.value)
 
   sectionsWithChanges.value.appearance =
     localTheme.value !== initial.theme ||
-    localPosterDensity.value !== initial.posterDensity
+    localPosterDensity.value !== initial.posterDensity ||
+    localDeduplicateMovies.value !== initial.deduplicateMovies ||
+    localDefaultSort.value !== initial.defaultSort
 
   sectionsWithChanges.value.output =
     localSaveLocation.value !== initial.saveLocation ||
     localMovieSaveLocation.value !== initial.movieSaveLocation ||
     localTvShowSaveLocation.value !== initial.tvShowSaveLocation ||
+    localTvShowSaveMode.value !== initial.tvShowSaveMode ||
     localSaveBatch.value !== initial.saveBatch
 
   sectionsWithChanges.value.connections =
@@ -358,38 +394,28 @@ const checkForChanges = () => {
     JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries) ||
     JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries)
 
-  sectionsWithChanges.value.apiKeys =
-    localTmdbApiKey.value !== initial.tmdbApiKey ||
-    localTvdbApiKey.value !== initial.tvdbApiKey ||
-    localFanartApiKey.value !== initial.fanartApiKey ||
-    JSON.stringify(apiOrder.value) !== JSON.stringify(initial.apiOrder)
-
-  sectionsWithChanges.value.imageQuality =
-    localOutputFormat.value !== initial.outputFormat ||
-    localJpgQuality.value !== initial.jpgQuality ||
-    localPngCompression.value !== initial.pngCompression ||
-    localWebpQuality.value !== initial.webpQuality
-
   sectionsWithChanges.value.performance =
     localConcurrentRenders.value !== initial.concurrentRenders ||
-    localTmdbRateLimit.value !== initial.tmdbRateLimit ||
-    localTvdbRateLimit.value !== initial.tvdbRateLimit ||
-    localMemoryLimit.value !== initial.memoryLimit ||
     localUseOverlayCache.value !== initial.useOverlayCache
 
   sectionsWithChanges.value.scheduler =
     localSchedulerEnabled.value !== initial.schedulerEnabled ||
     localSchedulerCronExpression.value !== initial.schedulerCronExpression ||
-    localSchedulerLibraryId.value !== initial.schedulerLibraryId
+    JSON.stringify(localSchedulerLibraryIds.value) !== JSON.stringify(initial.schedulerLibraryIds)
+
+
 }
 
 const saveSettings = async () => {
-  // Apply local settings to the store
   settings.theme.value = localTheme.value
   settings.posterDensity.value = localPosterDensity.value
+  settings.deduplicateMovies.value = localDeduplicateMovies.value
+  settings.defaultSort.value = localDefaultSort.value
+  settings.timezone.value = localTimezone.value
   settings.saveLocation.value = localSaveLocation.value
   settings.movieSaveLocation.value = localMovieSaveLocation.value
   settings.tvShowSaveLocation.value = localTvShowSaveLocation.value
+  settings.tvShowSaveMode.value = localTvShowSaveMode.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
   settings.defaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultTvLabelsToRemove.value))
@@ -405,6 +431,10 @@ const saveSettings = async () => {
       id: l.id || '',
       title: l.title || l.id || '',
       displayName: l.displayName || l.title || l.id || '',
+      autoGenerateEnabled: l.autoGenerateEnabled || false,
+      autoGeneratePresetId: l.autoGeneratePresetId || null,
+      autoGenerateTemplateId: l.autoGenerateTemplateId || null,
+      webhookIgnoreLabels: l.webhookIgnoreLabels || [],
     })),
     tvShowLibraryName: tvShowLibs[0]?.id || '',
     tvShowLibraryNames: tvShowLibs.length > 0 ? tvShowLibs.map(l => l.id) : undefined,
@@ -412,6 +442,10 @@ const saveSettings = async () => {
       id: l.id || '',
       title: l.title || l.id || '',
       displayName: l.displayName || l.title || l.id || '',
+      autoGenerateEnabled: l.autoGenerateEnabled || false,
+      autoGeneratePresetId: l.autoGeneratePresetId || null,
+      autoGenerateTemplateId: l.autoGenerateTemplateId || null,
+      webhookIgnoreLabels: l.webhookIgnoreLabels || [],
     }))
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }
@@ -433,44 +467,37 @@ const saveSettings = async () => {
   settings.scheduler.value = {
     enabled: localSchedulerEnabled.value,
     cronExpression: localSchedulerCronExpression.value,
-    libraryId: localSchedulerLibraryId.value || null
+    libraryIds: localSchedulerLibraryIds.value
+  }
+  settings.automation.value = {
+    webhookAutoSend: localWebhookAutoSend.value,
+    webhookAutoLabels: localWebhookAutoLabels.value,
+    webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value
+  }
+  settings.notifications.value = {
+    discordEnabled: localDiscordEnabled.value,
+    discordWebhookUrl: localDiscordWebhookUrl.value,
+    discordNotifyLibraries: localDiscordNotifyLibraries.value,
+    discordNotifyBatch: localDiscordNotifyBatch.value,
+    discordNotifyManual: localDiscordNotifyManual.value,
+    discordNotifyWebhook: localDiscordNotifyWebhook.value,
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
   }
 
-  // Save to backend
   await settings.save()
 
-  // Also update the scheduler via its API endpoint
   if (!settings.error.value) {
     await updateScheduler()
   }
 
   saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
-  // After save, lock current library selections
   savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
   savedTvShowLibraryIds.value = new Set(localTvShowLibraries.value.filter(l => l.id).map(l => String(l.id)))
 
-  // Reset unsaved changes flag after successful save
-  // Temporarily disable watchers while we reset the snapshot
   watchersEnabled.value = false
   await nextTick()
   captureSettingsSnapshot()
-}
-
-const testConnection = ref('')
-const testConnectionLoading = ref(false)
-const plexLibraries = ref<Array<{ title: string; key: string; type: string }>>([])
-const addLibrary = () => {
-  localLibraries.value = [...localLibraries.value, { id: '', title: '', displayName: '' }]
-}
-const removeLibrary = (idx: number) => {
-  localLibraries.value = localLibraries.value.filter((_, i) => i !== idx)
-}
-const addTvShowLibrary = () => {
-  localTvShowLibraries.value = [...localTvShowLibraries.value, { id: '', title: '', displayName: '' }]
-}
-const removeTvShowLibrary = (idx: number) => {
-  localTvShowLibraries.value = localTvShowLibraries.value.filter((_, i) => i !== idx)
 }
 
 const testPlexConnection = async () => {
@@ -480,7 +507,6 @@ const testPlexConnection = async () => {
 
   try {
     const apiBase = getApiBase()
-    // Send current input values as query parameters to test with them
     const params = new URLSearchParams({
       plex_url: localPlexUrl.value,
       plex_token: localPlexToken.value
@@ -496,7 +522,6 @@ const testPlexConnection = async () => {
       const tvShowSectionsList = tvShowLibs.map((s: PlexLibrary) => s.title).join(', ')
       testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${movieSectionsList}${tvShowLibs.length > 0 ? ` and ${tvShowLibs.length} TV show libraries: ${tvShowSectionsList}` : ''}`
       if (movieLibs.length > 0) {
-        // Seed libraries if none configured yet
         if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
           localLibraries.value = movieLibs.map((s: PlexLibrary, idx: number) => ({
             id: s.key,
@@ -506,7 +531,6 @@ const testPlexConnection = async () => {
         }
       }
       if (tvShowLibs.length > 0) {
-        // Seed TV show libraries if none configured yet
         if (!localTvShowLibraries.value.length || localTvShowLibraries.value.every(l => !l.id)) {
           localTvShowLibraries.value = tvShowLibs.map((s: PlexLibrary, idx: number) => ({
             id: s.key,
@@ -526,6 +550,88 @@ const testPlexConnection = async () => {
   }
 }
 
+const testApiKeys = async () => {
+  testingApiKeys.value = { tmdb: true, tvdb: true, fanart: true }
+  apiKeyTestResults.value = {}
+
+  try {
+    const apiBase = getApiBase()
+    const res = await fetch(`${apiBase}/api/test-api-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tmdb: localTmdbApiKey.value,
+        tvdb: localTvdbApiKey.value,
+        fanart: localFanartApiKey.value
+      })
+    })
+    const data = await res.json()
+
+    if (res.ok) {
+      const results = []
+      if (data.tmdb?.status === 'ok') results.push('✓ TMDb')
+      else if (data.tmdb?.status === 'error') results.push('✗ TMDb')
+      if (data.tvdb?.status === 'ok') results.push('✓ TVDB')
+      else if (data.tvdb?.status === 'error') results.push('✗ TVDB')
+      if (data.fanart?.status === 'ok') results.push('✓ Fanart.tv')
+      else if (data.fanart?.status === 'error') results.push('✗ Fanart.tv')
+      apiKeyTestResults.value.all = results.length > 0 ? results.join(' | ') : 'No keys to test'
+    } else {
+      apiKeyTestResults.value.all = `Error: ${data.detail || 'Failed to test API keys'}`
+    }
+  } catch (e) {
+    apiKeyTestResults.value.all = `Error: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testingApiKeys.value = {}
+    setTimeout(() => { apiKeyTestResults.value = {} }, 10000)
+  }
+}
+
+const testSingleApiKey = async (keyType: string, apiKey: string) => {
+  if (!apiKey) return
+
+  testingApiKeys.value[keyType] = true
+
+  try {
+    const apiBase = getApiBase()
+    let endpoint: string
+    let options: RequestInit
+
+    if (keyType === 'tmdb') {
+      endpoint = `/api/test-tmdb?api_key=${encodeURIComponent(apiKey)}`
+      options = { method: 'GET' }
+    } else if (keyType === 'tvdb') {
+      endpoint = `/api/test-tvdb?api_key=${encodeURIComponent(apiKey)}`
+      options = { method: 'GET' }
+    } else if (keyType === 'fanart') {
+      endpoint = '/api/test-fanart'
+      options = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: apiKey })
+      }
+    } else {
+      return
+    }
+
+    const res = await fetch(`${apiBase}${endpoint}`, options)
+    const data = await res.json()
+
+    if (data.status === 'ok') {
+      apiKeyTestResults.value[keyType] = `✓ Valid${data.example ? ` (${data.example})` : ''}`
+    } else {
+      apiKeyTestResults.value[keyType] = `Error: ${data.error || 'Invalid key'}`
+    }
+  } catch (e) {
+    apiKeyTestResults.value[keyType] = `Error: ${e instanceof Error ? e.message : 'Unknown error'}`
+  } finally {
+    testingApiKeys.value[keyType] = false
+    setTimeout(() => {
+      apiKeyTestResults.value[keyType] = ''
+    }, 10000)
+  }
+}
+
 const clearCache = () => {
   if (scan.running.value) {
     saved.value = 'Scan in progress - cannot clear session cache'
@@ -536,9 +642,7 @@ const clearCache = () => {
     return
   }
   try {
-    // Clear poster cache from sessionStorage
     sessionStorage.removeItem('simposter-poster-cache')
-    // Clear label cache from localStorage
     sessionStorage.removeItem('simposter-labels-cache')
     sessionStorage.removeItem('simposter-movies-cache')
     saved.value = 'Session cache cleared!'
@@ -560,20 +664,16 @@ const scanLibrary = async (libraryId?: string) => {
     setTimeout(() => (saved.value = ''), 2000)
     return
   }
-  
+
   try {
-    // Set scan state immediately to prevent double-clicks
     scan.running.value = true
     scanningLibraryId.value = libraryId || null
-    // Enable cooldown for 10 seconds
     scanCooldown.value = true
     setTimeout(() => {
-      // Only disable cooldown if scan is not still running
       if (!scan.running.value && !scan.checking.value) {
         scanCooldown.value = false
         scanningLibraryId.value = null
       } else {
-        // If scan is still running, check again in 5 seconds
         const checkScanStatus = () => {
           if (!scan.running.value && !scan.checking.value) {
             scanCooldown.value = false
@@ -591,7 +691,7 @@ const scanLibrary = async (libraryId?: string) => {
     scan.progress.value = { processed: 0, total: 0 }
     scan.current.value = ''
     startScanPolling()
-    
+
     const apiBase = getApiBase()
     const url = new URL(`${apiBase}/api/scan-library`)
     if (libraryId) url.searchParams.set('library_id', libraryId)
@@ -604,7 +704,6 @@ const scanLibrary = async (libraryId?: string) => {
     }
     const data = await res.json()
 
-    // Cache movies
     if (Array.isArray(data.movies)) {
       moviesCache.value = data.movies
       moviesLoaded.value = true
@@ -620,7 +719,6 @@ const scanLibrary = async (libraryId?: string) => {
       }
     }
 
-    // Cache posters
     if (data.posters && typeof sessionStorage !== 'undefined') {
       try {
         setSessionStorage('poster-cache', data.posters)
@@ -629,7 +727,6 @@ const scanLibrary = async (libraryId?: string) => {
       }
     }
 
-    // Cache labels
     if (data.labels && typeof sessionStorage !== 'undefined') {
       try {
         setSessionStorage('labels-cache', data.labels)
@@ -640,14 +737,9 @@ const scanLibrary = async (libraryId?: string) => {
 
     saved.value = `Rescanned ${data.count || 0} items`
     setTimeout(() => (saved.value = ''), 2000)
-    // Refresh label cache after scan
-    await fetchAllLibraryLabels()
-    // Mark scan done; overlay will auto-hide via scan store
     scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
     scan.running.value = false
-    // Clear cooldown when scan completes
     scanCooldown.value = false
-    // Ensure overlay hides even if no further poll events arrive
     setTimeout(() => {
       scan.visible.value = false
       scan.log.value = []
@@ -663,7 +755,6 @@ const scanLibrary = async (libraryId?: string) => {
   }
   stopScanPolling()
   scan.running.value = false
-  // Clear cooldown when function exits
   scanCooldown.value = false
 }
 
@@ -674,14 +765,12 @@ const fetchSchedulerStatus = async () => {
     if (!res.ok) return
     const data = await res.json()
 
-    // Load settings from the response
     if (data.settings) {
       localSchedulerEnabled.value = data.settings.enabled
       localSchedulerCronExpression.value = data.settings.cronExpression || '0 1 * * *'
-      localSchedulerLibraryId.value = data.settings.libraryId || ''
+      localSchedulerLibraryIds.value = data.settings.libraryIds || []
     }
 
-    // Update next run time if scheduled
     if (data.status === 'scheduled' && data.schedule) {
       schedulerNextRun.value = data.schedule.next_run_time || null
     } else {
@@ -697,13 +786,12 @@ const updateScheduler = async () => {
     const apiBase = getApiBase()
 
     if (localSchedulerEnabled.value) {
-      // Schedule the scan
       const res = await fetch(`${apiBase}/api/scheduler/library-scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           cron_expression: localSchedulerCronExpression.value,
-          library_id: localSchedulerLibraryId.value || null
+          library_ids: localSchedulerLibraryIds.value
         })
       })
 
@@ -716,7 +804,6 @@ const updateScheduler = async () => {
       schedulerNextRun.value = data.schedule?.next_run_time || null
       saved.value = 'Library scan scheduled successfully'
     } else {
-      // Cancel the scan
       const res = await fetch(`${apiBase}/api/scheduler/library-scan`, {
         method: 'DELETE'
       })
@@ -749,7 +836,6 @@ const clearBackendCache = async () => {
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     saved.value = `Backend cache cleared (${data.removed_posters || 0} poster files removed)`
-    // Also clear browser caches
     sessionStorage.removeItem('simposter-poster-cache')
     sessionStorage.removeItem('simposter-labels-cache')
     sessionStorage.removeItem('simposter-movies-cache')
@@ -760,11 +846,11 @@ const clearBackendCache = async () => {
   }
 }
 
-const handlePresetExport = async () => {
-  presetExporting.value = true
+const handleDbExport = async () => {
+  dbExporting.value = true
   try {
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/presets/export`)
+    const res = await fetch(`${apiBase}/api/database/export`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -772,381 +858,49 @@ const handlePresetExport = async () => {
     const a = document.createElement('a')
     a.href = url
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    a.download = `simposter-presets-${stamp}.json`
+    a.download = `simposter-db-backup-${stamp}.json`
     a.click()
     URL.revokeObjectURL(url)
-    saved.value = 'Presets exported'
+    saved.value = 'Database exported'
   } catch (e) {
     saved.value = `Export failed: ${e instanceof Error ? e.message : 'Unknown error'}`
   } finally {
-    presetExporting.value = false
+    dbExporting.value = false
     setTimeout(() => (saved.value = ''), 2000)
   }
 }
 
-const handlePresetImport = async () => {
-  if (!presetImportText.value.trim()) {
-    saved.value = 'Paste preset JSON to import'
+const handleDbImport = async () => {
+  if (!dbImportText.value.trim()) {
+    saved.value = 'Paste database JSON to import'
     setTimeout(() => (saved.value = ''), 2000)
     return
   }
-  presetImporting.value = true
+  if (!window.confirm('⚠️ This will completely replace your current database. Are you sure?')) {
+    return
+  }
+  dbImporting.value = true
   try {
-    const json = JSON.parse(presetImportText.value)
+    const json = JSON.parse(dbImportText.value)
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/presets/import`, {
+    const res = await fetch(`${apiBase}/api/database/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(json)
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
-    saved.value = 'Presets imported'
-    showPresetImportModal.value = false
-    presetImportText.value = ''
+    saved.value = 'Database imported successfully! Reloading...'
+    showDbImportModal.value = false
+    dbImportText.value = ''
+    setTimeout(() => {
+      window.location.reload()
+    }, 2000)
   } catch (e) {
     saved.value = `Import failed: ${e instanceof Error ? e.message : 'Invalid JSON'}`
   } finally {
-    presetImporting.value = false
+    dbImporting.value = false
     setTimeout(() => (saved.value = ''), 2500)
   }
-}
-
-// Fetch all available labels from both movies and TV shows, organized by library
-const fetchAllLibraryLabels = async () => {
-  labelsLoading.value = true
-  try {
-    const apiBase = getApiBase()
-    const movieLibs = settings.plex.value.libraryMappings || []
-    const tvLibs = settings.plex.value.tvShowLibraryMappings || []
-    const combined: Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }> = {}
-
-    // Get all valid library IDs
-    const validMovieLibIds = new Set(movieLibs.map(l => l.id).filter(Boolean))
-    const validTvLibIds = new Set(tvLibs.map(l => l.id).filter(Boolean))
-
-    // Clear stale caches for movies
-    if (typeof sessionStorage !== 'undefined') {
-      const keysToRemove: string[] = []
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const key = sessionStorage.key(i)
-        if (key && key.startsWith('simposter-labels-cache-')) {
-          const libId = key.replace('simposter-labels-cache-', '')
-          if (libId !== 'default' && !validMovieLibIds.has(libId)) {
-            keysToRemove.push(key)
-          }
-        }
-        if (key && key.startsWith('simposter-tv-labels-cache-')) {
-          const libId = key.replace('simposter-tv-labels-cache-', '')
-          if (libId !== 'default' && !validTvLibIds.has(libId)) {
-            keysToRemove.push(key)
-          }
-        }
-      }
-      keysToRemove.forEach(key => sessionStorage.removeItem(key))
-    }
-
-    // Process movie libraries
-    for (const lib of movieLibs) {
-      const libId = lib.id || 'default'
-      const labelCacheKey = `labels-cache-${libId}`
-      let labelCache = getSessionStorage<Record<string, string[]>>(labelCacheKey)
-
-      const labels = new Set<string>()
-
-      // If cache is empty, fetch from API
-      if (!labelCache) {
-        try {
-          const moviesUrl = new URL(`${apiBase}/api/movies`)
-          if (libId) moviesUrl.searchParams.set('library_id', libId)
-          const moviesRes = await fetch(moviesUrl.toString())
-          if (moviesRes.ok) {
-            const moviesData = await moviesRes.json()
-            const movies = Array.isArray(moviesData) ? moviesData : []
-
-            // Use bulk endpoint to get all labels efficiently
-            if (movies.length > 0) {
-              const movieKeys = movies.map((m: any) => m.key)
-              const bulkRes = await fetch(`${apiBase}/api/movies/labels/bulk`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(movieKeys)
-              })
-
-              if (bulkRes.ok) {
-                const bulkData = await bulkRes.json()
-                const labelsCache: Record<string, string[]> = bulkData.labels || {}
-
-                // Save to sessionStorage with LRU eviction
-                setSessionStorage(labelCacheKey, labelsCache)
-                labelCache = labelsCache
-              } else {
-                console.warn(`[Settings] Failed to fetch labels for library ${libId}: ${bulkRes.status}`)
-              }
-            } else {
-              console.warn(`[Settings] No movies found in library ${libId}, labels will be empty`)
-              // Cache empty result to avoid repeated failed fetches
-              setSessionStorage(labelCacheKey, {})
-              labelCache = {}
-            }
-          } else {
-            console.error(`[Settings] Failed to fetch movies for library ${libId}: ${moviesRes.status}`)
-          }
-        } catch (err) {
-          console.error(`[Settings] Failed to fetch labels for movie library ${libId}:`, err)
-        }
-      }
-
-      if (labelCache) {
-        Object.values(labelCache).forEach((movieLabels) => {
-          if (Array.isArray(movieLabels)) {
-            movieLabels.forEach((label) => labels.add(label))
-          }
-        })
-      }
-
-      combined[libId] = {
-        type: 'movie',
-        name: lib.displayName || lib.title || libId,
-        labels: Array.from(labels).sort()
-      }
-
-      // Initialize empty labels if library not in settings yet
-      if (!localDefaultLabelsToRemove.value[libId]) {
-        localDefaultLabelsToRemove.value[libId] = []
-      }
-    }
-
-    // Process TV show libraries
-    for (const lib of tvLibs) {
-      const libId = lib.id || 'default'
-      const labelCacheKey = `tv-labels-cache-${libId}`
-      let labelCache = getSessionStorage<Record<string, string[]>>(labelCacheKey)
-
-      const labels = new Set<string>()
-
-      // If cache is empty, fetch from API
-      if (!labelCache) {
-        try {
-          const showsUrl = new URL(`${apiBase}/api/tv-shows`)
-          if (libId) showsUrl.searchParams.set('library_id', libId)
-          const showsRes = await fetch(showsUrl.toString())
-          if (showsRes.ok) {
-            const showsData = await showsRes.json()
-            const shows = Array.isArray(showsData) ? showsData : []
-
-            // Fetch labels for each TV show (no bulk endpoint for TV)
-            const labelsCache: Record<string, string[]> = {}
-            for (const show of shows) {
-              try {
-                const labelsRes = await fetch(`${apiBase}/api/tv-show/${show.key}/labels`)
-                if (labelsRes.ok) {
-                  const labelsData = await labelsRes.json()
-                  labelsCache[show.key] = labelsData.labels || []
-                }
-              } catch {
-                labelsCache[show.key] = []
-              }
-            }
-
-            // Save to sessionStorage with LRU eviction
-            if (Object.keys(labelsCache).length > 0) {
-              setSessionStorage(labelCacheKey, labelsCache)
-              labelCache = labelsCache
-            } else if (shows.length === 0) {
-              console.warn(`[Settings] No TV shows found in library ${libId}, labels will be empty`)
-              // Cache empty result to avoid repeated failed fetches
-              setSessionStorage(labelCacheKey, {})
-              labelCache = {}
-            }
-          } else {
-            console.error(`[Settings] Failed to fetch TV shows for library ${libId}: ${showsRes.status}`)
-          }
-        } catch (err) {
-          console.error(`[Settings] Failed to fetch labels for TV library ${libId}:`, err)
-        }
-      }
-
-      if (labelCache) {
-        Object.values(labelCache).forEach((showLabels) => {
-          if (Array.isArray(showLabels)) {
-            showLabels.forEach((label) => labels.add(label))
-          }
-        })
-      }
-
-      combined[libId] = {
-        type: 'show',
-        name: lib.displayName || lib.title || libId,
-        labels: Array.from(labels).sort()
-      }
-
-      // Initialize empty labels if TV library not in settings yet
-      if (!localDefaultTvLabelsToRemove.value[libId]) {
-        localDefaultTvLabelsToRemove.value[libId] = []
-      }
-    }
-
-    allLibraryLabels.value = combined
-  } catch (e) {
-    console.error('Failed to fetch library labels', e)
-  } finally {
-    labelsLoading.value = false
-  }
-}
-
-onMounted(async () => {
-  // Explicitly disable watchers at the start
-  watchersEnabled.value = false
-
-  // Ensure settings are loaded from API before syncing local form state
-  if (!settings.loaded.value) {
-    await settings.load()
-  }
-
-  // Load local settings first
-  await loadLocalSettings()
-
-  // Load Plex libraries if credentials exist to populate dropdowns
-  // Do this BEFORE capturing snapshot since it modifies localLibraries
-  if (settings.plex.value.url && settings.plex.value.token) {
-    await testPlexConnection()
-    // Fetch labels for both movies and TV (only if Plex is configured)
-    await fetchAllLibraryLabels()
-  }
-
-  // Fetch scheduler status
-  await fetchSchedulerStatus()
-
-  // Now capture the snapshot after everything has loaded
-  await nextTick()
-  captureSettingsSnapshot()
-})
-
-// If settings finish loading after initial render, sync the local form
-watch(
-  () => settings.loaded.value,
-  async (val) => {
-    if (val) {
-      // Disable watchers before reloading
-      watchersEnabled.value = false
-      await loadLocalSettings()
-
-      // Load Plex libraries if credentials exist
-      if (settings.plex.value.url && settings.plex.value.token) {
-        await testPlexConnection()
-        await fetchAllLibraryLabels()
-      }
-
-      // Recapture snapshot after reload
-      await nextTick()
-      captureSettingsSnapshot()
-    }
-  }
-)
-
-// Refetch labels when library mappings change
-watch(
-  [() => settings.plex.value.libraryMappings, () => settings.plex.value.tvShowLibraryMappings],
-  () => {
-    // Only fetch labels if Plex is configured
-    if (settings.plex.value.url && settings.plex.value.token) {
-      fetchAllLibraryLabels()
-    }
-  },
-  { deep: true }
-)
-
-// Watch all local settings for changes
-watch([
-  localTheme,
-  localPosterDensity,
-  localSaveLocation,
-  localSaveBatch,
-  localDefaultLabelsToRemove,
-  localDefaultTvLabelsToRemove,
-  localPlexUrl,
-  localPlexToken,
-  localLibraries,
-  localTvShowLibraries,
-  localTmdbApiKey,
-  localTvdbApiKey,
-  localFanartApiKey,
-  apiOrder,
-  localOutputFormat,
-  localJpgQuality,
-  localPngCompression,
-  localWebpQuality,
-  localConcurrentRenders,
-  localTmdbRateLimit,
-  localTvdbRateLimit,
-  localMemoryLimit,
-  localUseOverlayCache,
-  localSchedulerEnabled,
-  localSchedulerCronExpression,
-  localSchedulerLibraryId
-], () => {
-  // Only check for changes if watchers are enabled (after initial load)
-  if (watchersEnabled.value) {
-    checkForChanges()
-  }
-}, {
-  deep: true,
-  flush: 'post'
-})
-
-// Navigation guard - warn before leaving with unsaved changes
-onBeforeRouteLeave((_to, _from, next) => {
-  // Stop scan polling to prevent memory leak
-  stopScanPolling()
-
-  if (hasUnsavedChanges.value) {
-    const answer = window.confirm('You have unsaved changes. Are you sure you want to leave?')
-    if (answer) {
-      next()
-    } else {
-      next(false)
-    }
-  } else {
-    next()
-  }
-})
-
-// Warn before closing/refreshing page with unsaved changes
-onMounted(() => {
-  const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-    if (hasUnsavedChanges.value) {
-      e.preventDefault()
-      e.returnValue = ''
-    }
-  }
-  window.addEventListener('beforeunload', handleBeforeUnload)
-
-  onBeforeUnmount(() => {
-    stopScanPolling()
-    window.removeEventListener('beforeunload', handleBeforeUnload)
-  })
-})
-
-const toggleLabel = (libraryId: string, label: string) => {
-  const libInfo = allLibraryLabels.value[libraryId]
-  const labelsRef = libInfo?.type === 'show' ? localDefaultTvLabelsToRemove : localDefaultLabelsToRemove
-
-  if (!labelsRef.value[libraryId]) {
-    labelsRef.value[libraryId] = []
-  }
-  const set = new Set(labelsRef.value[libraryId])
-  if (set.has(label)) {
-    set.delete(label)
-  } else {
-    set.add(label)
-  }
-  labelsRef.value[libraryId] = Array.from(set)
-}
-
-const isLabelSelected = (libraryId: string, label: string) => {
-  const libInfo = allLibraryLabels.value[libraryId]
-  const labelsRef = libInfo?.type === 'show' ? localDefaultTvLabelsToRemove : localDefaultLabelsToRemove
-  return labelsRef.value[libraryId]?.includes(label) || false
 }
 
 const startScanPolling = () => {
@@ -1186,129 +940,151 @@ const stopScanPolling = () => {
   }
 }
 
-const testTmdbApiKey = async () => {
-  if (!localTmdbApiKey.value.trim()) {
-    testTmdbResult.value = 'Please enter a TMDb API key'
-    setTimeout(() => (testTmdbResult.value = ''), 3000)
-    return
-  }
-
-  testTmdbLoading.value = true
-  testTmdbResult.value = 'Testing...'
-
+const fetchPresets = async () => {
   try {
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/test-tmdb?api_key=${encodeURIComponent(localTmdbApiKey.value)}`)
-    const data = await res.json()
-
-    if (data.status === 'ok') {
-      testTmdbResult.value = `✓ Valid! Found movie: ${data.example || 'API key works'}`
-    } else {
-      testTmdbResult.value = `✗ ${data.error || 'Invalid API key'}`
+    const response = await fetch(`${apiBase}/api/presets`)
+    if (response.ok) {
+      const data = await response.json()
+      presets.value = data || {}
     }
-  } catch (e) {
-    testTmdbResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
-  } finally {
-    testTmdbLoading.value = false
-    setTimeout(() => (testTmdbResult.value = ''), 10000)
+  } catch (error) {
+    console.error('Failed to fetch presets:', error)
+    presets.value = {}
   }
 }
 
-const testTvdbApiKey = async () => {
-  if (!localTvdbApiKey.value.trim()) {
-    testTvdbResult.value = 'Please enter a TVDB API key'
-    setTimeout(() => (testTvdbResult.value = ''), 3000)
-    return
+onMounted(async () => {
+  watchersEnabled.value = false
+
+  if (!settings.loaded.value) {
+    await settings.load()
   }
 
-  testTvdbLoading.value = true
-  testTvdbResult.value = 'Testing...'
+  await loadLocalSettings()
+  await fetchPresets()
 
-  try {
-    const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/test-tvdb?api_key=${encodeURIComponent(localTvdbApiKey.value)}`)
-    const data = await res.json()
+  if (settings.plex.value.url && settings.plex.value.token) {
+    await testPlexConnection()
+  }
 
-    if (data.status === 'ok') {
-      testTvdbResult.value = `✓ Valid! ${data.message || 'API key works'}`
+  await fetchSchedulerStatus()
+
+  await nextTick()
+  captureSettingsSnapshot()
+})
+
+watch(
+  () => settings.loaded.value,
+  async (val) => {
+    if (val) {
+      watchersEnabled.value = false
+      await loadLocalSettings()
+
+      if (settings.plex.value.url && settings.plex.value.token) {
+        await testPlexConnection()
+      }
+
+      await nextTick()
+      captureSettingsSnapshot()
+    }
+  }
+)
+
+watch([
+  localTheme,
+  localPosterDensity,
+  localDeduplicateMovies,
+  localDefaultSort,
+  localTimezone,
+  localSaveLocation,
+  localMovieSaveLocation,
+  localTvShowSaveLocation,
+  localSaveBatch,
+  localDefaultLabelsToRemove,
+  localDefaultTvLabelsToRemove,
+  localPlexUrl,
+  localPlexToken,
+  localLibraries,
+  localTvShowLibraries,
+  localTmdbApiKey,
+  localTvdbApiKey,
+  localFanartApiKey,
+  apiOrder,
+  localOutputFormat,
+  localJpgQuality,
+  localPngCompression,
+  localWebpQuality,
+  localConcurrentRenders,
+  localTmdbRateLimit,
+  localTvdbRateLimit,
+  localMemoryLimit,
+  localUseOverlayCache,
+  localSchedulerEnabled,
+  localSchedulerCronExpression,
+  localSchedulerLibraryIds,
+  localDiscordEnabled,
+  localDiscordWebhookUrl,
+  localDiscordNotifyLibraries,
+  localDiscordNotifyBatch,
+  localDiscordNotifyManual,
+  localDiscordNotifyWebhook,
+  localDiscordNotifyAutoGenerate,
+  localWebhookAlwaysRegenerateSeason
+], () => {
+  if (watchersEnabled.value) {
+    checkForChanges()
+  }
+}, {
+  deep: true,
+  flush: 'post'
+})
+
+// Watch for tab changes and update URL
+watch(activeTab, (newTab) => {
+  router.replace({ query: { ...route.query, tab: newTab } })
+})
+
+// Watch for URL changes and update active tab
+watch(() => route.query.tab, (newTab) => {
+  if (newTab && typeof newTab === 'string') {
+    activeTab.value = newTab as any
+  }
+})
+
+onBeforeRouteLeave((_to, _from, next) => {
+  stopScanPolling()
+
+  if (hasUnsavedChanges.value) {
+    const answer = window.confirm('You have unsaved changes. Are you sure you want to leave?')
+    if (answer) {
+      next()
     } else {
-      testTvdbResult.value = `✗ ${data.error || 'Invalid API key'}`
+      next(false)
     }
-  } catch (e) {
-    testTvdbResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
-  } finally {
-    testTvdbLoading.value = false
-    setTimeout(() => (testTvdbResult.value = ''), 10000)
+  } else {
+    next()
   }
-}
+})
 
-const testFanartApiKey = async () => {
-  if (!localFanartApiKey.value.trim()) {
-    testFanartResult.value = 'Please enter a Fanart.tv API key'
-    setTimeout(() => (testFanartResult.value = ''), 3000)
-    return
-  }
-
-  testFanartLoading.value = true
-  testFanartResult.value = 'Testing...'
-
-  try {
-    const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/test-fanart`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key: localFanartApiKey.value })
-    })
-    const data = await res.json()
-
-    if (data.status === 'ok') {
-      testFanartResult.value = `✓ Valid! Found ${data.logo_count || 0} logos for test movie`
-    } else {
-      testFanartResult.value = `✗ ${data.error || 'Invalid API key'}`
+onMounted(() => {
+  const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (hasUnsavedChanges.value) {
+      e.preventDefault()
+      e.returnValue = ''
     }
-  } catch (e) {
-    testFanartResult.value = `✗ Test failed: ${e instanceof Error ? e.message : 'Unknown error'}`
-  } finally {
-    testFanartLoading.value = false
-    setTimeout(() => (testFanartResult.value = ''), 10000)
   }
-}
+  window.addEventListener('beforeunload', handleBeforeUnload)
 
-// Backend health check
-const backendStatus = ref('')
-const checkBackendHealth = async () => {
-  try {
-    const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/ping`)
-
-    // Check if response is OK first
-    if (!res.ok) {
-      const text = await res.text()
-      backendStatus.value = `✗ Backend error ${res.status}: ${text.substring(0, 100)}`
-      setTimeout(() => (backendStatus.value = ''), 8000)
-      return
-    }
-
-    const data = await res.json()
-
-    if (data.status === 'ok') {
-      // Strip leading 'v' from versions if present, then add single 'v' prefix
-      const appVer = data.app_version?.replace(/^v/, '') || 'unknown'
-      const dbVer = data.db_version ? data.db_version.replace(/^v/, '') : 'not-set'
-      backendStatus.value = `✓ Backend healthy! App: v${appVer}, DB: v${dbVer}`
-    } else {
-      backendStatus.value = '✗ Backend returned unexpected status'
-    }
-  } catch (e) {
-    backendStatus.value = `✗ Backend unreachable: ${e instanceof Error ? e.message : 'Unknown error'}`
-  } finally {
-    setTimeout(() => (backendStatus.value = ''), 8000)
-  }
-}
+  onBeforeUnmount(() => {
+    stopScanPolling()
+    window.removeEventListener('beforeunload', handleBeforeUnload)
+  })
+})
 </script>
 
 <template>
-  <div class="view" @click.stop @mouseup.stop @mousedown.stop @select.stop @selectstart.stop>
+  <div class="view">
     <div class="settings-header">
       <div class="settings-title-row">
         <div>
@@ -1317,657 +1093,244 @@ const checkBackendHealth = async () => {
         </div>
         <div class="header-status">
           <span v-if="hasUnsavedChanges" class="unsaved-badge">Unsaved Changes</span>
-          <span class="version-chip clickable" @click="checkBackendHealth" :title="'Click to check backend status'">
-            {{ APP_VERSION }}
-          </span>
-          <span v-if="backendStatus" :class="['backend-status', backendStatus.startsWith('✓') ? 'success' : 'error']">
-            {{ backendStatus }}
+          <span class="version-chip">{{ APP_VERSION }}</span>
+          <span v-if="saved" :class="['save-status', saved.startsWith('Error') ? 'error' : 'success']">
+            {{ saved }}
           </span>
         </div>
       </div>
     </div>
 
-    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.appearance }">
-      <h3 class="section-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-          <path d="M2 17l10 5 10-5"/>
-          <path d="M2 12l10 5 10-5"/>
-        </svg>
-        Appearance
-      </h3>
-      <div class="grid">
-        <label>
-          <span class="label-text">Theme</span>
-          <select v-model="localTheme">
-            <option value="neon">Neon</option>
-            <option value="slate">Slate</option>
-            <option value="dracula">Dracula</option>
-            <option value="nord">Nord</option>
-            <option value="oled">OLED</option>
-            <option value="light">Light</option>
-          </select>
-        </label>
-        <label>
-          <span class="label-text">Movies per page</span>
-          <input
-            v-model.number="localPosterDensity"
-            type="number"
-            min="5"
-            max="100"
-            @select.stop
-            @selectstart.stop
-          />
-        </label>
-      </div>
-    </div>
-
-    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.output }">
-      <h3 class="section-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
-          <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
-          <line x1="12" y1="22.08" x2="12" y2="12"/>
-        </svg>
-        Output
-      </h3>
-      <div class="grid">
-        <label class="full-width" @mousedown.stop @click.stop>
-          <span class="label-text">Movie Save Location</span>
-          <input
-            v-model="localMovieSaveLocation"
-            type="text"
-            placeholder="/config/output/{library}/{title}.jpg"
-            @input="checkForChanges"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">Available variables: {library}, {title}, {year}, {key}</span>
-        </label>
-
-        <label class="full-width" @mousedown.stop @click.stop>
-          <span class="label-text">TV Show Save Location</span>
-          <input
-            v-model="localTvShowSaveLocation"
-            type="text"
-            placeholder="/config/output/{library}/{title}.jpg"
-            @input="checkForChanges"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">Available variables: {library}, {title}, {year}, {key}, {season}</span>
-        </label>
-      </div>
-    </div>
-
-    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.connections }">
-      <h3 class="section-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-        </svg>
-        Connections
-      </h3>
-      <div class="plex-connection-grid">
-        <label>
-          <span class="label-text">Plex URL</span>
-          <input
-            v-model="localPlexUrl"
-            type="text"
-            placeholder="http://localhost:32400"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-        </label>
-        <label>
-          <span class="label-text">Plex Token</span>
-          <input
-            v-model="localPlexToken"
-            type="password"
-            placeholder="Plex token"
-            @mousedown.stop
-            @click.stop
-            @mouseup.stop
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">Use the Plex token or future auto-discovery once available.</span>
-        </label>
-        <div class="test-button-wrapper">
-          <button
-            class="btn-test-connection"
-            @click="testPlexConnection"
-            :disabled="testConnectionLoading"
-          >
-            {{ testConnectionLoading ? 'Testing...' : 'Test Plex Connection' }}
-          </button>
-        </div>
-        <p v-if="testConnection" :class="['test-result', testConnection.startsWith('✓') ? 'success' : 'error']">
-          {{ testConnection }}
-        </p>
-      </div>
-      
-      <div class="libraries-container">
-        <div class="library-section">
-          <h4 class="subsection-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-            </svg>
-            Movie Libraries
-          </h4>
-          <div class="library-list">
-            <div
-              v-for="(lib, idx) in localLibraries"
-              :key="idx"
-              class="library-row"
-            >
-              <div class="library-header">
-                <span class="label-text">{{ lib.displayName || lib.title || `Library ${idx + 1}` }}</span>
-                <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
-              </div>
-              <select
-                v-model="lib.id"
-                class="form-control"
-                :class="{ 'locked': savedLibraryIds.has(lib.id) }"
-                :disabled="savedLibraryIds.has(lib.id)"
-                @change="(e) => {
-                  const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
-                  if (selected && !lib.displayName) {
-                    lib.title = selected.title
-                    lib.displayName = selected.title
-                  }
-                }"
-              >
-                <option value="">Select a library...</option>
-                <option
-                  v-for="p in plexLibraries.filter(s => s.type === 'movie')"
-                  :key="p.key"
-                  :value="p.key"
-                >
-                  {{ p.title }} (ID: {{ p.key }})
-                </option>
-              </select>
-              <input
-                v-model="lib.displayName"
-                type="text"
-                placeholder="Display name (e.g., 4K Movies)"
-                @mousedown.stop
-                @click.stop
-                @mouseup.stop
-                @select.stop
-                @selectstart.stop
-              />
-              <button v-if="lib.id" class="secondary small" type="button" :disabled="isScanInProgress" @click="scanLibrary(lib.id)">
-                <span v-if="scanningLibraryId === lib.id && scan.running.value">Scanning...</span>
-                <span v-else>Scan</span>
-              </button>
-              <button class="secondary small" type="button" @click="removeLibrary(idx)">Remove</button>
-            </div>
-            <button class="secondary small" type="button" @click="addLibrary">+ Add Library</button>
-            <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
-          </div>
-        </div>
-
-        <div class="library-section">
-          <h4 class="subsection-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
-              <polyline points="17 2 12 7 7 2"/>
-            </svg>
-            TV Show Libraries
-          </h4>
-          <div class="library-list">
-            <div
-              v-for="(lib, idx) in localTvShowLibraries"
-              :key="idx"
-              class="library-row"
-            >
-              <div class="library-header">
-                <span class="label-text">{{ lib.displayName || lib.title || `TV Library ${idx + 1}` }}</span>
-                <span v-if="lib.id" class="library-id-badge">ID: {{ lib.id }}</span>
-              </div>
-              <select
-                v-model="lib.id"
-                class="form-control"
-                :class="{ 'locked': savedTvShowLibraryIds.has(lib.id) }"
-                :disabled="savedTvShowLibraryIds.has(lib.id)"
-                @change="(e) => {
-                  const selected = plexLibraries.find(p => p.key === (e.target as HTMLSelectElement).value)
-                  if (selected && !lib.displayName) {
-                    lib.title = selected.title
-                    lib.displayName = selected.title
-                  }
-                }"
-              >
-                <option value="">Select a library...</option>
-                <option
-                  v-for="p in plexLibraries.filter(s => s.type === 'show')"
-                  :key="p.key"
-                  :value="p.key"
-                >
-                  {{ p.title }} (ID: {{ p.key }})
-                </option>
-              </select>
-              <input
-                v-model="lib.displayName"
-                type="text"
-                placeholder="Display name (e.g., 4K TV Shows)"
-                @mousedown.stop
-                @click.stop
-                @mouseup.stop
-                @select.stop
-                @selectstart.stop
-              />
-              <button v-if="lib.id" class="secondary small" type="button" :disabled="isScanInProgress" @click="scanLibrary(lib.id)">
-                <span v-if="scanningLibraryId === lib.id && scan.running.value">Scanning...</span>
-                <span v-else>Scan</span>
-              </button>
-              <button class="secondary small" type="button" @click="removeTvShowLibrary(idx)">Remove</button>
-            </div>
-            <button class="secondary small" type="button" @click="addTvShowLibrary">+ Add Library</button>
-            <span class="help-text">First entry is treated as the default. Use Plex dropdowns or IDs; display names show in Simposter.</span>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.apiKeys }">
-      <div class="section-title-row">
-        <h3 class="section-title">
-          <svg class="key-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
-          </svg>
-          API Keys / Poster & Logo Sources
-        </h3>
-        <button class="icon-btn lock-btn" type="button" @click="apiOrderLocked = !apiOrderLocked" :aria-pressed="!apiOrderLocked" :class="{ 'unlocked': !apiOrderLocked }">
-          <svg v-if="apiOrderLocked" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-          </svg>
-          <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
-          </svg>
-          <span>{{ apiOrderLocked ? 'Locked order' : 'Drag to reorder' }}</span>
-        </button>
-      </div>
-      <p class="section-subtitle">Drag sources to reorder when unlocked. This order is used for poster/logo selection.</p>
-      <div class="api-keys-section">
-        <div
-          v-for="source in orderedApiSources"
-          :key="source.id"
-          class="api-card"
-          :draggable="!apiOrderLocked"
-          @dragstart="onApiDragStart(source.id)"
-          @dragover.prevent="onApiDragOver(source.id)"
-          @drop.prevent="onApiDrop"
-          @dragend="onApiDragEnd"
+    <!-- Tab Navigation -->
+    <div class="tabs-container">
+      <div class="tabs">
+        <button
+          :class="['tab', { active: activeTab === 'general' }]"
+          @click="activeTab = 'general'"
         >
-          <div class="api-card-header">
-            <span class="drag-handle" v-if="!apiOrderLocked">⠿</span>
-            <div class="api-card-title">
-              <span class="api-name">{{ source.label }}</span>
-              <span class="api-desc">{{ source.description }}</span>
-            </div>
-            <span class="order-badge">#{{ apiOrder.indexOf(source.id) + 1 }}</span>
-          </div>
-          <div class="api-card-body">
-            <label class="api-key-input">
-              <span class="label-text">{{ source.label }} API Key</span>
-              <input
-                v-model="source.keyRef.value"
-                type="password"
-                :placeholder="source.placeholder"
-                @mousedown.stop
-                @click.stop
-                @mouseup.stop
-                @select.stop
-                @selectstart.stop
-              />
-            </label>
-            <div class="api-actions">
-              <button
-                class="btn-test-api secondary small"
-                @click="source.testHandler"
-                :disabled="source.testLoading.value || !source.keyRef.value.trim()"
-              >
-                {{ source.testLoading.value ? 'Testing...' : 'Test' }}
-              </button>
-              <span
-                v-if="source.testResult.value"
-                :class="['api-test-result', source.testResult.value.startsWith('✓') ? 'success' : 'error']"
-              >
-                {{ source.testResult.value }}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.imageQuality }">
-      <h3 class="section-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-          <circle cx="8.5" cy="8.5" r="1.5"/>
-          <polyline points="21 15 16 10 5 21"/>
-        </svg>
-        Image Quality
-      </h3>
-      <div class="grid">
-        <label>
-          <span class="label-text">Output Format</span>
-          <select v-model="localOutputFormat">
-            <option value="jpg">JPEG</option>
-            <option value="png">PNG</option>
-            <option value="webp">WebP</option>
-          </select>
-        </label>
-        <label v-if="localOutputFormat === 'jpg'">
-          <span class="label-text">JPEG Quality</span>
-          <input
-            v-model.number="localJpgQuality"
-            type="range"
-            min="60"
-            max="100"
-            class="quality-slider"
-          />
-          <div class="slider-value">{{ localJpgQuality }}%</div>
-        </label>
-        <label v-if="localOutputFormat === 'png'">
-          <span class="label-text">PNG Compression</span>
-          <input
-            v-model.number="localPngCompression"
-            type="range"
-            min="0"
-            max="9"
-            class="quality-slider"
-          />
-          <div class="slider-value">Level {{ localPngCompression }}</div>
-        </label>
-        <label v-if="localOutputFormat === 'webp'">
-          <span class="label-text">WebP Quality</span>
-          <input
-            v-model.number="localWebpQuality"
-            type="range"
-            min="60"
-            max="100"
-            class="quality-slider"
-          />
-          <div class="slider-value">{{ localWebpQuality }}%</div>
-        </label>
-      </div>
-    </div>
-
-    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.performance }">
-      <h3 class="section-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-        </svg>
-        Performance
-      </h3>
-      <div class="grid">
-        <label>
-          <span class="label-text">Concurrent Renders</span>
-          <input
-            v-model.number="localConcurrentRenders"
-            type="number"
-            min="1"
-            max="8"
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">How many posters to render at the same time</span>
-        </label>
-        <label>
-          <span class="label-text">TMDb Rate Limit</span>
-          <input
-            v-model.number="localTmdbRateLimit"
-            type="number"
-            min="10"
-            max="100"
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">Requests per 10 seconds</span>
-        </label>
-        <label>
-          <span class="label-text">TVDB Rate Limit</span>
-          <input
-            v-model.number="localTvdbRateLimit"
-            type="number"
-            min="5"
-            max="50"
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">Requests per 10 seconds</span>
-        </label>
-        <label>
-          <span class="label-text">Memory Limit (MB)</span>
-          <input
-            v-model.number="localMemoryLimit"
-            type="number"
-            min="512"
-            max="8192"
-            step="256"
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">Maximum memory for image processing</span>
-        </label>
-        <label class="checkbox-label">
-          <input
-            type="checkbox"
-            v-model="localUseOverlayCache"
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="label-text">Use Overlay Cache</span>
-          <span class="help-text">Pre-render template effects for faster preview generation</span>
-        </label>
-      </div>
-    </div>
-
-    <!-- Scheduler Section -->
-    <div class="settings-section" :class="{ 'has-unsaved-changes': sectionsWithChanges.scheduler }">
-      <h3 class="section-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/>
-          <polyline points="12 6 12 12 16 14"/>
-        </svg>
-        Automatic Library Scan
-      </h3>
-      <p class="section-subtitle">Schedule automatic library scans to keep Simposter in sync with Plex</p>
-
-      <div class="grid">
-        <label class="checkbox-label">
-          <input
-            type="checkbox"
-            v-model="localSchedulerEnabled"
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="label-text">Enable Scheduled Scans</span>
-          <span class="help-text">Automatically scan library on a schedule</span>
-        </label>
-
-        <label v-if="localSchedulerEnabled">
-          <span class="label-text">Cron Expression</span>
-          <input
-            v-model="localSchedulerCronExpression"
-            type="text"
-            placeholder="0 1 * * *"
-            @select.stop
-            @selectstart.stop
-          />
-          <span class="help-text">minute hour day month day_of_week (e.g., "0 1 * * *" = 1:00 AM daily)</span>
-        </label>
-
-        <label v-if="localSchedulerEnabled">
-          <span class="label-text">Library (Optional)</span>
-          <select v-model="localSchedulerLibraryId">
-            <option value="">All Libraries</option>
-            <option v-for="lib in localLibraries" :key="lib.id" :value="lib.id">
-              {{ lib.displayName || lib.title || lib.id }}
-            </option>
-            <option v-for="lib in localTvShowLibraries" :key="lib.id" :value="lib.id">
-              {{ lib.displayName || lib.title || lib.id }}
-            </option>
-          </select>
-          <span class="help-text">Leave as "All Libraries" to scan everything</span>
-        </label>
-      </div>
-
-      <div v-if="localSchedulerEnabled && schedulerNextRun" class="scheduler-status">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="20 6 9 17 4 12"/>
-        </svg>
-        <span>Next scan: {{ new Date(schedulerNextRun).toLocaleString() }}</span>
-      </div>
-
-      <div class="cron-examples">
-        <strong>Common Cron Examples:</strong>
-        <ul>
-          <li><code>0 1 * * *</code> - Every day at 1:00 AM</li>
-          <li><code>0 */6 * * *</code> - Every 6 hours</li>
-          <li><code>0 0 * * 0</code> - Every Sunday at midnight</li>
-          <li><code>30 3 * * 1-5</code> - Weekdays at 3:30 AM</li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="settings-section labels-section">
-      <h3 class="section-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-          <line x1="7" y1="7" x2="7.01" y2="7"/>
-        </svg>
-        Default Labels to Remove
-      </h3>
-      <p class="section-subtitle">When sending to Plex, these labels will be removed by default for each library</p>
-
-      <div v-if="labelsLoading" class="labels-loading">
-        <svg class="spinner" width="20" height="20" viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="3" opacity="0.25"/>
-          <path fill="currentColor" d="M12 2a10 10 0 0 1 10 10h-3a7 7 0 0 0-7-7V2z"/>
-        </svg>
-        <span>Loading labels...</span>
-      </div>
-
-      <div v-else-if="Object.keys(allLibraryLabels).length === 0" class="no-labels">
-        <p>No labels found. Make sure you have libraries configured and have scanned them.</p>
-        <button @click="fetchAllLibraryLabels()" class="refresh-labels-btn">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="23 4 23 10 17 10"/>
-            <polyline points="1 20 1 14 7 14"/>
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
-          Refresh Labels
+          General
+        </button>
+        <button
+          :class="['tab', { active: activeTab === 'libraries' }]"
+          @click="activeTab = 'libraries'"
+        >
+          Libraries
+        </button>
+        <!-- Integrations tab removed -->
+        <button
+          :class="['tab', { active: activeTab === 'save-locations' }]"
+          @click="activeTab = 'save-locations'"
+        >
+          Save Locations
+        </button>
+        <button
+          :class="['tab', { active: activeTab === 'performance' }]"
+          @click="activeTab = 'performance'"
+        >
+          Performance
+        </button>
+        <button
+          :class="['tab', { active: activeTab === 'notifications' }]"
+          @click="activeTab = 'notifications'"
+        >
+          Notifications
+        </button>
+        <button
+          :class="['tab', { active: activeTab === 'advanced' }]"
+          @click="activeTab = 'advanced'"
+        >
+          Advanced
         </button>
       </div>
-
-      <!-- Library-specific label sections (unified for both movies and TV shows) -->
-      <div v-for="(libInfo, libId) in allLibraryLabels" :key="libId" class="library-labels-section">
-        <h4 class="library-labels-title">
-          {{ libInfo.name }}
-          <span class="library-type-badge" :class="libInfo.type">{{ libInfo.type === 'show' ? 'TV' : 'Movies' }}</span>
-        </h4>
-        <div v-if="libInfo.labels.length > 0" class="labels-grid">
-          <label v-for="label in libInfo.labels" :key="`${libId}-${label}`" class="label-checkbox">
-            <input type="checkbox" :checked="isLabelSelected(libId, label)" @change="toggleLabel(libId, label)" />
-            <span>{{ label }}</span>
-          </label>
-        </div>
-        <p v-else class="no-labels-message">No labels found for this library yet. Scan the library to discover labels.</p>
-      </div>
     </div>
 
-    <div class="actions">
-      <button @click="saveSettings" class="primary" :class="{ 'has-changes': hasUnsavedChanges }">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-          <polyline points="17 21 17 13 7 13 7 21"/>
-          <polyline points="7 3 7 8 15 8"/>
-        </svg>
-        {{ hasUnsavedChanges ? 'Save Changes' : 'Save Settings' }}
-      </button>
-      <button @click="clearCache" class="secondary" :disabled="isScanInProgress">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="1 4 1 10 7 10"/>
-          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
-        </svg>
-        Clear Session Cache
-      </button>
-      <button @click="clearBackendCache" class="secondary" :disabled="isScanInProgress">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/>
-          <polyline points="18 9 12 15"/>
-          <polyline points="12 9 18 15"/>
-        </svg>
-        Clear Backend Cache
-      </button>
-      <button @click="() => scanLibrary()" class="secondary" :disabled="isScanInProgress">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-          <polyline points="9 22 9 12 15 12 15 22"/>
-        </svg>
-        {{ scanCooldown ? 'Please Wait...' : scan.running.value ? 'Scanning...' : 'Rescan Library' }}
-      </button>
-      <span v-if="saved" class="status">{{ saved }}</span>
-    </div>
+    <!-- Tab Content -->
+    <div class="tab-content-wrapper">
+      <GeneralTab
+        v-if="activeTab === 'general'"
+        :theme="localTheme"
+        :posterDensity="localPosterDensity"
+        :deduplicateMovies="localDeduplicateMovies"
+        :defaultSort="localDefaultSort"
+        :timezone="localTimezone"
+        :tmdbApiKey="localTmdbApiKey"
+        :tvdbApiKey="localTvdbApiKey"
+        :fanartApiKey="localFanartApiKey"
+        :testingKeys="testingApiKeys"
+        :apiKeyTestResults="apiKeyTestResults"
+        :unsavedChanges="hasUnsavedChanges"
+        @update:theme="localTheme = $event as Theme"
+        @update:posterDensity="localPosterDensity = $event"
+        @update:deduplicateMovies="localDeduplicateMovies = $event"
+        @update:defaultSort="localDefaultSort = $event"
+        @update:timezone="localTimezone = $event"
+        @update:tmdbApiKey="localTmdbApiKey = $event"
+        @update:tvdbApiKey="localTvdbApiKey = $event"
+        @update:fanartApiKey="localFanartApiKey = $event"
+        @test-api-key="testSingleApiKey"
+        @save="saveSettings"
+      />
 
-    <!-- Overlay now global in App.vue -->
+      <LibrariesTab
+        v-if="activeTab === 'libraries'"
+        :plexUrl="localPlexUrl"
+        :plexToken="localPlexToken"
+        :libraries="localLibraries"
+        :tvShowLibraries="localTvShowLibraries"
+        :savedLibraryIds="savedLibraryIds"
+        :savedTvShowLibraryIds="savedTvShowLibraryIds"
+        :testConnection="testConnection"
+        :testConnectionLoading="testConnectionLoading"
+        :plexLibraries="plexLibraries"
+        :scanCooldown="scanCooldown"
+        :scanningLibraryId="scanningLibraryId"
+        :schedulerEnabled="localSchedulerEnabled"
+        :schedulerCronExpression="localSchedulerCronExpression"
+        :schedulerLibraryIds="localSchedulerLibraryIds"
+        :schedulerNextRun="schedulerNextRun"
+        :defaultLabelsToRemove="localDefaultLabelsToRemove"
+        :defaultTvLabelsToRemove="localDefaultTvLabelsToRemove"
+        :unsavedChanges="hasUnsavedChanges"
+        :schedulerChanged="sectionsWithChanges.scheduler"
+        :connectionsChanged="sectionsWithChanges.connections"
+        @update:plexUrl="localPlexUrl = $event"
+        @update:plexToken="localPlexToken = $event"
+        @update:libraries="localLibraries = $event; hasUnsavedChanges = true"
+        @update:tvShowLibraries="localTvShowLibraries = $event; hasUnsavedChanges = true"
+        @update:schedulerEnabled="localSchedulerEnabled = $event"
+        @update:schedulerCronExpression="localSchedulerCronExpression = $event"
+        @update:schedulerLibraryIds="localSchedulerLibraryIds = $event"
+        @update:defaultLabelsToRemove="localDefaultLabelsToRemove = $event; hasUnsavedChanges = true"
+        @update:defaultTvLabelsToRemove="localDefaultTvLabelsToRemove = $event; hasUnsavedChanges = true"
+        @test-connection="testPlexConnection"
+        @scan-library="scanLibrary"
+        @save="saveSettings"
+      />
+
+      <!-- Integrations content removed -->
+
+      <SaveLocationsTab
+        v-if="activeTab === 'save-locations'"
+        :movieSaveLocation="localMovieSaveLocation"
+        :tvShowSaveLocation="localTvShowSaveLocation"
+        :tvShowSaveMode="localTvShowSaveMode"
+        :saveBatchInSubfolder="localSaveBatch"
+        :unsavedChanges="hasUnsavedChanges"
+        @update:movieSaveLocation="localMovieSaveLocation = $event"
+        @update:tvShowSaveLocation="localTvShowSaveLocation = $event"
+        @update:tvShowSaveMode="localTvShowSaveMode = $event"
+        @update:saveBatchInSubfolder="localSaveBatch = $event"
+        @save="saveSettings"
+      />
+
+      <PerformanceTab
+        v-if="activeTab === 'performance'"
+        :concurrentRenders="localConcurrentRenders"
+        :useOverlayCache="localUseOverlayCache"
+        :unsavedChanges="hasUnsavedChanges"
+        :scanRunning="scan.running.value"
+        :outputFormat="localOutputFormat"
+        :jpgQuality="localJpgQuality"
+        :pngCompression="localPngCompression"
+        :webpQuality="localWebpQuality"
+        :tmdbRateLimit="localTmdbRateLimit"
+        :tvdbRateLimit="localTvdbRateLimit"
+        :memoryLimit="localMemoryLimit"
+        :webhookAutoSend="localWebhookAutoSend"
+        :webhookAutoLabels="localWebhookAutoLabels"
+        :webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason"
+        :imageQualityChanged="sectionsWithChanges.imageQuality"
+        :performanceChanged="sectionsWithChanges.performance"
+        :automationChanged="sectionsWithChanges.automation"
+        @update:concurrentRenders="localConcurrentRenders = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:useOverlayCache="localUseOverlayCache = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:outputFormat="localOutputFormat = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:jpgQuality="localJpgQuality = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:pngCompression="localPngCompression = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:webpQuality="localWebpQuality = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:tmdbRateLimit="localTmdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:tvdbRateLimit="localTvdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:memoryLimit="localMemoryLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @clear-frontend-cache="clearCache"
+        @clear-backend-cache="clearBackendCache"
+        @save="saveSettings"
+      />
+
+      <NotificationsTab
+        v-if="activeTab === 'notifications'"
+        :discordEnabled="localDiscordEnabled"
+        :discordWebhookUrl="localDiscordWebhookUrl"
+        :discordNotifyLibraries="localDiscordNotifyLibraries"
+        :discordNotifyBatch="localDiscordNotifyBatch"
+        :discordNotifyManual="localDiscordNotifyManual"
+        :discordNotifyWebhook="localDiscordNotifyWebhook"
+        :discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate"
+        :libraries="localLibraries"
+        :tvShowLibraries="localTvShowLibraries"
+        :unsavedChanges="hasUnsavedChanges"
+        @update:discordEnabled="localDiscordEnabled = $event; hasUnsavedChanges = true"
+        @update:discordWebhookUrl="localDiscordWebhookUrl = $event; hasUnsavedChanges = true"
+        @update:discordNotifyLibraries="localDiscordNotifyLibraries = $event; hasUnsavedChanges = true"
+        @update:discordNotifyBatch="localDiscordNotifyBatch = $event; hasUnsavedChanges = true"
+        @update:discordNotifyManual="localDiscordNotifyManual = $event; hasUnsavedChanges = true"
+        @update:discordNotifyWebhook="localDiscordNotifyWebhook = $event; hasUnsavedChanges = true"
+        @update:discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate = $event; hasUnsavedChanges = true"
+        @save="saveSettings"
+      />
+
+      <AdvancedTab
+        v-if="activeTab === 'advanced'"
+        :dbExporting="dbExporting"
+        :dbImporting="dbImporting"
+        :showDbImportModal="showDbImportModal"
+        :dbImportText="dbImportText"
+        :apiOrder="apiOrder"
+        :unsavedChanges="hasUnsavedChanges"
+        @update:showDbImportModal="showDbImportModal = $event"
+        @update:dbImportText="dbImportText = $event"
+        @update:apiOrder="apiOrder = $event; sectionsWithChanges.apiKeys = true; hasUnsavedChanges = true"
+        @export-db="handleDbExport"
+        @import-db="handleDbImport"
+        @save="saveSettings"
+      />
+    </div>
   </div>
 </template>
 
 <style scoped>
 .view {
-  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  max-width: 1200px;
-  margin: 0 auto;
+  height: 100%;
+  overflow: hidden;
 }
 
 .settings-header {
-  margin-bottom: 8px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
 }
 
 .settings-title-row {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  align-items: center;
 }
 
-.settings-header h2 {
-  margin: 0 0 8px 0;
+.settings-title-row h2 {
+  margin: 0;
+  color: var(--text-primary);
   font-size: 28px;
-  font-weight: 700;
-  background: linear-gradient(120deg, #3dd6b7, #5b8dee);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font-weight: 600;
 }
 
 .header-subtitle {
-  margin: 0;
+  margin: 4px 0 0 0;
+  color: var(--text-muted);
   font-size: 14px;
-  color: var(--muted);
-  font-weight: 400;
 }
 
 .header-status {
@@ -1979,1018 +1342,82 @@ const checkBackendHealth = async () => {
 .unsaved-badge {
   padding: 6px 12px;
   background: rgba(255, 193, 7, 0.15);
-  border: 1px solid rgba(255, 193, 7, 0.4);
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #ffc107;
-  animation: pulse-warning 2s ease-in-out infinite;
-}
-
-@keyframes pulse-warning {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 6px rgba(255, 193, 7, 0);
-  }
-}
-
-.settings-section {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 20px;
-  transition: all 0.2s;
-}
-
-.settings-section.has-unsaved-changes {
-  border-color: rgba(255, 193, 7, 0.3);
-  background: rgba(255, 193, 7, 0.03);
-}
-.section-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.settings-section:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(61, 214, 183, 0.15);
-}
-
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 0 16px 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: #eef2ff;
-}
-
-.section-title svg {
-  color: var(--accent);
-  flex-shrink: 0;
-}
-
-.section-title .key-icon {
-  filter: drop-shadow(0 0 8px rgba(61, 214, 183, 0.4));
-  transition: all 0.3s ease;
-}
-
-.settings-section:hover .key-icon {
-  filter: drop-shadow(0 0 12px rgba(61, 214, 183, 0.6));
-  transform: rotate(-5deg);
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 14px;
-}
-
-.plex-connection-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 14px;
-  align-items: start;
-}
-
-.libraries-container {
-  margin-top: 24px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-
-.library-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.subsection-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #3dd6b7;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.subsection-title svg {
-  width: 16px;
-  height: 16px;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
-  color: #dbe4ff;
-  transition: all 0.2s;
-}
-
-label:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(61, 214, 183, 0.2);
-}
-
-.label-text {
-  font-size: 13px;
-  font-weight: 500;
-  color: #c9d6ff;
-}
-
-label.inline {
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-}
-
-label.inline input[type="checkbox"] {
-  width: auto;
-  margin: 0;
-  cursor: pointer;
-}
-
-label.full-width {
-  grid-column: 1 / -1;
-}
-
-input,
-select,
-textarea {
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.2);
-  color: #e6edff;
-  font-size: 14px;
-  transition: all 0.2s;
-}
-
-input:focus,
-select:focus {
-  outline: none;
-  border-color: rgba(61, 214, 183, 0.5);
-  background: rgba(0, 0, 0, 0.3);
-  box-shadow: 0 0 0 3px rgba(61, 214, 183, 0.1);
-}
-
-input[type="number"] {
-  appearance: textfield;
-}
-
-input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  cursor: pointer;
-  accent-color: var(--accent);
-}
-
-.quality-slider {
-  width: 100%;
-  height: 6px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.1);
-  outline: none;
-  cursor: pointer;
-}
-
-.quality-slider::-webkit-slider-thumb {
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: pointer;
-  box-shadow: 0 2px 6px rgba(61, 214, 183, 0.3);
-}
-
-.quality-slider::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--accent);
-  cursor: pointer;
-  border: none;
-  box-shadow: 0 2px 6px rgba(61, 214, 183, 0.3);
-}
-
-.slider-value {
-  margin-top: 6px;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--accent);
-}
-
-.labels-section {
-  background: rgba(61, 214, 183, 0.03);
-  border-color: rgba(61, 214, 183, 0.15);
-}
-
-.section-subtitle {
-  margin: 0 0 16px 0;
-  font-size: 13px;
-  color: var(--muted);
-  font-weight: 400;
-}
-
-.library-labels-section {
-  margin-bottom: 24px;
-  padding-bottom: 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.library-labels-section:last-child {
-  border-bottom: none;
-  margin-bottom: 0;
-  padding-bottom: 0;
-}
-
-.library-labels-title {
-  margin: 0 0 12px 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: #eef2ff;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.library-type-badge {
-  font-size: 11px;
-  padding: 2px 8px;
+  border: 1px solid rgba(255, 193, 7, 0.3);
   border-radius: 6px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-left: auto;
-}
-
-.library-type-badge.movie {
-  background: rgba(91, 141, 238, 0.15);
-  color: #7b9bff;
-  border: 1px solid rgba(91, 141, 238, 0.3);
-}
-
-.library-type-badge.show {
-  background: rgba(255, 152, 0, 0.15);
-  color: #ffb74d;
-  border: 1px solid rgba(255, 152, 0, 0.3);
-}
-
-.no-labels-message {
-  margin: 0;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  color: var(--muted);
+  color: #ffb000;
   font-size: 13px;
-  font-style: italic;
-}
-
-.labels-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
-}
-
-.label-checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.label-checkbox:hover {
-  background: rgba(61, 214, 183, 0.08);
-  border-color: rgba(61, 214, 183, 0.3);
-}
-
-.label-checkbox input {
-  cursor: pointer;
-  width: auto;
-  padding: 0;
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.label-checkbox span {
-  font-size: 13px;
-  flex: 1;
-  user-select: none;
-}
-
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-top: 8px;
-  flex-wrap: wrap;
-}
-
-button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px 18px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #dce6ff;
-  cursor: pointer;
-  font-size: 14px;
   font-weight: 500;
-  transition: all 0.2s;
-}
-
-button svg {
-  flex-shrink: 0;
-}
-
-.scan-overlay {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  z-index: 2000;
-}
-
-.scan-card {
-  display: flex;
-  gap: 10px;
-  padding: 12px 14px;
-  background: rgba(0, 0, 0, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  color: #eef2ff;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  max-width: 320px;
-}
-
-.scan-title {
-  margin: 0 0 4px 0;
-  font-weight: 600;
-}
-
-.scan-current {
-  margin: 2px 0 6px;
-  font-size: 13px;
-  color: #dbe4ff;
-  opacity: 0.9;
-}
-
-.scan-list {
-  margin: 0;
-  padding-left: 18px;
-  max-height: 200px;
-  overflow-y: auto;
-  font-size: 13px;
-}
-
-.progress-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 0 8px;
-}
-
-.progress-bar {
-  flex: 1;
-  height: 6px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #3dd6b7, #5b8dee);
-  border-radius: 4px;
-  transition: width 0.2s ease;
-}
-
-.progress-text {
-  font-size: 12px;
-  color: #dbe4ff;
-  min-width: 80px;
-  text-align: right;
-}
-
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  border-top-color: var(--accent, #3dd6b7);
-  border-radius: 50%;
-  animation: spin 0.9s linear infinite;
-  flex-shrink: 0;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-button.primary {
-  background: linear-gradient(135deg, rgba(61, 214, 183, 0.2), rgba(91, 141, 238, 0.15));
-  border-color: rgba(61, 214, 183, 0.4);
-  color: #eef2ff;
-}
-
-button.primary:hover {
-  background: linear-gradient(135deg, rgba(61, 214, 183, 0.3), rgba(91, 141, 238, 0.25));
-  border-color: rgba(61, 214, 183, 0.6);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(61, 214, 183, 0.15);
-}
-
-button.primary.has-changes {
-  background: linear-gradient(135deg, rgba(255, 193, 7, 0.25), rgba(255, 152, 0, 0.2));
-  border-color: rgba(255, 193, 7, 0.5);
-  animation: pulse-button 2s ease-in-out infinite;
-}
-
-button.primary.has-changes:hover {
-  background: linear-gradient(135deg, rgba(255, 193, 7, 0.35), rgba(255, 152, 0, 0.3));
-  border-color: rgba(255, 193, 7, 0.7);
-  box-shadow: 0 4px 12px rgba(255, 193, 7, 0.3);
-}
-
-@keyframes pulse-button {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(255, 193, 7, 0);
-  }
-}
-
-button.secondary {
-  background: rgba(255, 255, 255, 0.02);
-  color: #b8c5e0;
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-button.secondary:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.15);
-  transform: translateY(-1px);
-}
-
-.status {
-  color: var(--accent);
-  font-size: 14px;
-  font-weight: 500;
-  padding: 0 8px;
-  animation: fadeIn 0.3s ease-in;
 }
 
 .version-chip {
-  align-self: flex-start;
-  padding: 6px 10px;
-  border-radius: 12px;
-  background: rgba(61, 214, 183, 0.12);
-  color: #a9f0dd;
-  border: 1px solid rgba(61, 214, 183, 0.35);
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.version-chip.clickable {
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.version-chip.clickable:hover {
-  background: rgba(61, 214, 183, 0.2);
-  border-color: rgba(61, 214, 183, 0.5);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(61, 214, 183, 0.2);
-}
-
-.backend-status {
   padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  animation: fadeIn 0.3s ease-in;
-}
-
-.backend-status.success {
-  background: rgba(61, 214, 183, 0.1);
-  color: #3dd6b7;
-  border: 1px solid rgba(61, 214, 183, 0.3);
-}
-
-.backend-status.error {
-  background: rgba(255, 107, 107, 0.1);
-  color: #ff6b6b;
-  border: 1px solid rgba(255, 107, 107, 0.3);
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.help-text {
-  font-size: 12px;
-  color: var(--muted);
-  opacity: 0.8;
-  font-style: italic;
-  margin-top: -2px;
-}
-
-@media (max-width: 768px) {
-  .view {
-    padding: 16px;
-  }
-
-  .grid {
-    grid-template-columns: 1fr;
-  }
-
-  .plex-connection-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .test-button-wrapper {
-    align-items: flex-start;
-    padding-bottom: 0;
-  }
-
-  .btn-test-connection {
-    width: 100%;
-  }
-
-  .libraries-container {
-    grid-template-columns: 1fr;
-  }
-
-  .actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  button {
-    width: 100%;
-    justify-content: center;
-  }
-}
-
-/* Plex Connection Test */
-.test-button-wrapper {
-  display: flex;
-  align-items: flex-end;
-  padding-bottom: 12px;
-}
-
-.btn-test-connection {
-  padding: 10px 18px;
-  background: var(--accent, #3dd6b7);
-  color: #000;
-  border: none;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-  height: 42px;
-}
-
-.btn-test-connection:hover:not(:disabled) {
-  background: #2bc4a3;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(61, 214, 183, 0.3);
-}
-
-.btn-test-connection:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.test-result {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding: 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.test-result.success {
-  background: rgba(61, 214, 183, 0.1);
-  color: var(--accent, #3dd6b7);
-  border: 1px solid rgba(61, 214, 183, 0.3);
-}
-
-.test-result.error {
-  background: rgba(255, 107, 107, 0.1);
-  color: #ff6b6b;
-  border: 1px solid rgba(255, 107, 107, 0.3);
-}
-
-.library-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.library-row {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.library-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.library-id-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 6px;
   background: rgba(61, 214, 183, 0.15);
-  color: #a9f0dd;
   border: 1px solid rgba(61, 214, 183, 0.3);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 13px;
   font-weight: 500;
-}
-
-/* Locked library dropdown */
-.library-row select.locked {
-  opacity: 0.6;
-  cursor: not-allowed;
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.05);
-}
-
-.library-row select.locked:hover {
-  border-color: rgba(255, 255, 255, 0.05);
-}
-
-.secondary.small {
-  padding: 8px 10px;
-  font-size: 12px;
-  align-self: flex-start;
-}
-
-.upload-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.upload-button input {
-  display: none;
-}
-
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1200;
-  padding: 1rem;
-}
-
-.modal {
-  background: var(--surface, #1a1f2e);
-  border: 1px solid var(--border, #2a2f3e);
-  border-radius: 10px;
-  padding: 1rem;
-  max-width: 600px;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
-}
-
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.modal textarea {
-  width: 100%;
-  resize: vertical;
-  min-height: 200px;
-  background: var(--input-bg, #111623);
-  color: var(--text-primary, #fff);
-  border: 1px solid var(--border, #2a2f3e);
-  border-radius: 8px;
-  padding: 0.75rem;
   font-family: monospace;
 }
 
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
+.save-status {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.close-btn {
+.save-status.success {
+  background: rgba(0, 255, 0, 0.15);
+  border: 1px solid rgba(0, 255, 0, 0.3);
+  color: #00ff00;
+}
+
+.save-status.error {
+  background: rgba(255, 0, 0, 0.15);
+  border: 1px solid rgba(255, 0, 0, 0.3);
+  color: #ff6b6b;
+}
+
+.tabs-container {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.tab {
+  padding: 12px 20px;
   background: transparent;
   border: none;
-  color: var(--text-secondary, #98a1b3);
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
-  font-size: 20px;
-}
-
-.api-keys-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 12px;
-}
-.api-card {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 14px;
-  background: rgba(255, 255, 255, 0.02);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.api-card-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.drag-handle {
-  font-size: 18px;
-  cursor: grab;
-  color: var(--muted);
-  user-select: none;
-}
-.api-card-title {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.api-name {
-  font-weight: 600;
-  color: #eef2ff;
-}
-.api-desc {
-  font-size: 12px;
-  color: var(--muted);
-}
-.order-badge {
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: rgba(61, 214, 183, 0.12);
-  border: 1px solid rgba(61, 214, 183, 0.3);
-  color: #a9f0dd;
-  font-weight: 600;
-  font-size: 12px;
-}
-.api-card-body {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  align-items: center;
-}
-.api-key-input {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.api-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-end;
-}
-.btn-test-api {
+  transition: all 0.2s;
   white-space: nowrap;
-  min-width: 80px;
-  justify-content: center;
-}
-.api-test-result {
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.4;
-}
-.api-test-result.success {
-  background: rgba(61, 214, 183, 0.1);
-  color: var(--accent, #3dd6b7);
-  border: 1px solid rgba(61, 214, 183, 0.3);
-}
-.api-test-result.error {
-  background: rgba(255, 107, 107, 0.1);
-  color: #ff6b6b;
-  border: 1px solid rgba(255, 107, 107, 0.3);
-}
-.lock-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: rgba(255, 107, 107, 0.1);
-  border: 1px solid rgba(255, 107, 107, 0.3);
-  transition: all 0.3s ease;
-}
-.lock-btn svg {
-  flex-shrink: 0;
-  color: #ff6b6b;
-  transition: all 0.3s ease;
-}
-.lock-btn span {
-  font-size: 12px;
-  color: #ff9999;
-  font-weight: 500;
-  transition: all 0.3s ease;
-}
-.lock-btn:hover {
-  background: rgba(255, 107, 107, 0.15);
-  border-color: rgba(255, 107, 107, 0.5);
-  transform: translateY(-1px);
 }
 
-/* Unlocked state - green/cyan */
-.lock-btn.unlocked {
-  background: rgba(61, 214, 183, 0.1);
-  border: 1px solid rgba(61, 214, 183, 0.3);
-}
-.lock-btn.unlocked svg {
-  color: #3dd6b7;
-}
-.lock-btn.unlocked span {
-  color: #6ee7d3;
-}
-.lock-btn.unlocked:hover {
-  background: rgba(61, 214, 183, 0.15);
-  border-color: rgba(61, 214, 183, 0.5);
-}
-
-/* Scheduler Section Styles */
-.scheduler-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  background: rgba(61, 214, 183, 0.1);
-  border: 1px solid rgba(61, 214, 183, 0.3);
-  border-radius: 10px;
-  margin-top: 16px;
-  color: var(--accent);
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.scheduler-status svg {
-  flex-shrink: 0;
-  color: var(--accent);
-}
-
-.cron-examples {
-  margin-top: 16px;
-  padding: 16px;
+.tab:hover {
+  color: var(--text-secondary);
   background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  font-size: 13px;
 }
 
-.cron-examples strong {
-  display: block;
-  margin-bottom: 8px;
+.tab.active {
   color: var(--accent);
-  font-weight: 600;
-}
-
-.cron-examples ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.cron-examples li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.cron-examples code {
-  background: rgba(61, 214, 183, 0.1);
-  border: 1px solid rgba(61, 214, 183, 0.3);
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 600;
-  min-width: 120px;
-}
-
-/* Labels Loading State */
-.labels-loading {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 20px;
+  border-bottom-color: var(--accent);
   background: rgba(61, 214, 183, 0.05);
-  border-radius: 10px;
-  margin: 16px 0;
-  color: var(--text-secondary);
-  font-size: 14px;
 }
 
-.labels-loading .spinner {
-  animation: spin 1s linear infinite;
-  color: var(--accent);
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.no-labels {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  padding: 30px;
-  background: rgba(255, 193, 7, 0.05);
-  border: 1px solid rgba(255, 193, 7, 0.2);
-  border-radius: 10px;
-  margin: 16px 0;
-  text-align: center;
-}
-
-.no-labels p {
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.refresh-labels-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 20px;
-  background: var(--background-elevated);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.refresh-labels-btn:hover {
-  background: var(--button-hover);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-
-.refresh-labels-btn svg {
-  color: var(--accent);
+.tab-content-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-primary);
 }
 </style>

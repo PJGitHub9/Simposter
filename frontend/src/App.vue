@@ -6,6 +6,7 @@ import TopNav from './components/layout/TopNav.vue'
 import EditorPane from './components/editor/EditorPane.vue'
 import TvShowEditorPane from './components/editor/TvShowEditorPane.vue'
 import NotificationContainer from './components/NotificationContainer.vue'
+import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
@@ -56,6 +57,7 @@ const tabs = computed<MenuItem[]>(() => {
     ...movieTabs,
     ...tvShowTabs,
     { key: 'template-manager', label: 'Template Manager' },
+    { key: 'history', label: 'History' },
     { key: 'settings', label: 'Settings' },
     { key: 'logs', label: 'Logs' }
   ]
@@ -544,6 +546,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 <template>
   <div class="shell">
     <NotificationContainer />
+    <UpdateAnnouncementModal />
     <TopNav
       :search="searchQuery"
       :show-back="showBackButton"

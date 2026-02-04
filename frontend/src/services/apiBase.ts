@@ -5,6 +5,11 @@ function isLocalhost(url: string) {
 }
 
 export function getApiBase() {
+  // In development, always use the backend port directly to bypass Vite proxy issues
+  if (import.meta.env.DEV) {
+    return 'http://localhost:8003'
+  }
+  
   // If VITE_API_URL is set and not pointing to localhost, use it. Otherwise, use current origin.
   if (rawBase && !isLocalhost(rawBase)) return rawBase
   return window.location.origin

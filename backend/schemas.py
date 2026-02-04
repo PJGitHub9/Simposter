@@ -10,6 +10,10 @@ class Movie(BaseModel):
     year: Optional[int] = None
     addedAt: Optional[int] = None
     library_id: Optional[str] = None
+    poster: Optional[str] = None
+    tmdb_id: Optional[int] = None
+    labels: Optional[List[str]] = None
+    updated_at: Optional[str] = None
 
 
 class MovieTMDbResponse(BaseModel):
@@ -19,13 +23,13 @@ class MovieTMDbResponse(BaseModel):
 
 class PreviewRequest(BaseModel):
     template_id: str
-    background_url: str
+    background_url: Optional[str] = None  # Optional to allow backend to fetch from TMDb using tv_show_rating_key
     logo_url: Optional[str] = None
     options: Optional[Dict[str, Any]] = None
-    preset_id: Optional[str] = None   # <-- MAKE OPTIONAL
+    preset_id: Optional[str] = None
     movie_title: Optional[str] = None
     movie_year: Optional[int] = None
-    tv_show_rating_key: Optional[str] = None  # For TV show logo fetching
+    tv_show_rating_key: Optional[str] = None  # For TV show logo fetching and poster fallback
     season_index: Optional[int] = None  # For TV show season poster fetching (1, 2, 3, etc.)
     fallbackPosterAction: Optional[str] = None
     fallbackPosterTemplate: Optional[str] = None
@@ -64,10 +68,10 @@ class PlexSettings(BaseModel):
     token: str = ""
     movieLibraryName: str = ""
     movieLibraryNames: List[str] = Field(default_factory=list)
-    libraryMappings: List[Dict[str, str]] = Field(default_factory=list)
+    libraryMappings: List[Dict[str, Any]] = Field(default_factory=list)
     tvShowLibraryName: str = ""
     tvShowLibraryNames: List[str] = Field(default_factory=list)
-    tvShowLibraryMappings: List[Dict[str, str]] = Field(default_factory=list)
+    tvShowLibraryMappings: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class TMDBSettings(BaseModel):
@@ -102,15 +106,38 @@ class SchedulerSettings(BaseModel):
     enabled: bool = False
     cronExpression: str = "0 1 * * *"
     libraryId: Optional[Union[str, int]] = None
+    libraryIds: List[str] = Field(default_factory=list)
+
+
+class AutomationSettings(BaseModel):
+    """Settings for automatic poster generation via webhooks"""
+    webhookAutoSend: bool = True  # Automatically send generated posters to Plex
+    webhookAutoLabels: str = "Simposter"  # Comma-separated labels to apply to webhook-generated posters
+    webhookAlwaysRegenerateSeason: bool = False  # Always regenerate season poster on new episode webhook
+
+
+class NotificationSettings(BaseModel):
+    """Settings for Discord and other notifications"""
+    discordEnabled: bool = False
+    discordWebhookUrl: str = ""
+    discordNotifyLibraries: List[str] = Field(default_factory=list)  # Library IDs to notify for
+    discordNotifyBatch: bool = True  # Notify on batch completion
+    discordNotifyManual: bool = True  # Notify on manual send
+    discordNotifyWebhook: bool = True  # Notify on webhook sends
+    discordNotifyAutoGenerate: bool = True  # Notify on auto-generate
 
 
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
+    deduplicateMovies: bool = False
+    defaultSort: str = "added-desc"
+    timezone: str = "UTC"
     saveLocation: str = "/config/output/{library}/{title}.jpg"  # Legacy field for backwards compatibility
     movieSaveLocation: str = "/config/output/{library}/{title}.jpg"
-    tvShowSaveLocation: str = "/config/output/{library}/{title}.jpg"
+    tvShowSaveLocation: str = "/config/output/{library}/{title} ({year}).jpg"
     saveBatchInSubfolder: bool = False
+    tvShowSaveMode: str = "flat"  # "flat" (all in one folder with prefixes) or "nested" (each show in its own folder)
     defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     defaultTvLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)
@@ -120,6 +147,8 @@ class UISettings(BaseModel):
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
+    automation: AutomationSettings = Field(default_factory=AutomationSettings)
+    notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
 
 class PlexSendRequest(BaseModel):
@@ -130,6 +159,7 @@ class PlexSendRequest(BaseModel):
     logo_url: Optional[str] = None  # Can be removed
     options: Optional[Dict[str, Any]] = None  # Can be removed
     labels: Optional[List[str]] = None
+    library_id: Optional[str] = None  # For history tracking
 
 
 class LabelsResponse(BaseModel):
@@ -151,6 +181,12 @@ class MovieBatchRequest(BaseModel):
     save_locally: bool = False
     labels: List[str] = []
     library_id: Optional[str] = None
+    fallbackPosterAction: Optional[str] = None
+    fallbackPosterTemplate: Optional[str] = None
+    fallbackPosterPreset: Optional[str] = None
+    fallbackLogoAction: Optional[str] = None
+    fallbackLogoTemplate: Optional[str] = None
+    fallbackLogoPreset: Optional[str] = None
 
 
 class TVShowBatchRequest(BaseModel):
@@ -165,6 +201,9 @@ class TVShowBatchRequest(BaseModel):
     labels: List[str] = []
     library_id: Optional[str] = None
     include_seasons: bool = True  # Always true for TV shows: render all seasons instead of series poster
+    fallbackPosterAction: Optional[str] = None
+    fallbackPosterTemplate: Optional[str] = None
+    fallbackPosterPreset: Optional[str] = None
 
 
 # Legacy batch request - kept for backward compatibility
@@ -183,12 +222,4 @@ class BatchRequest(BaseModel):
 
 
 
-class RadarrWebhookMovie(BaseModel):
-    title: str
-    year: Optional[int] = None
-    tmdbId: Optional[int] = None
-
-
-class RadarrWebhook(BaseModel):
-    eventType: str
-    movie: RadarrWebhookMovie
+# Radarr webhook schemas removed
