@@ -436,6 +436,7 @@ def _process_single_movie(
         # ---------------------------
         # Upload to Plex (if requested)
         # ---------------------------
+        payload = None
         if req.send_to_plex:
             _update_batch_status({
                 "current_step": "Sending to Plex",
@@ -510,6 +511,9 @@ def _process_single_movie(
         }
         if save_path:
             result["save_path"] = str(save_path)
+        # Include poster bytes for webhook Discord notifications (single-item, not batch)
+        if source == "webhook" and req.send_to_plex and payload:
+            result["poster_data"] = payload
 
         _update_batch_status({
             "current_step": "Complete",
@@ -1240,6 +1244,7 @@ def _render_and_save_poster(
             logger.error("[BATCH] Save error for %s: %s", display_title, save_err)
 
     # Send to Plex if requested
+    payload = None
     if req.send_to_plex:
         _update_batch_status({
             "current_step": "Uploading to Plex",
@@ -1318,6 +1323,9 @@ def _render_and_save_poster(
         result["season"] = season_title
     if save_path:
         result["save_path"] = str(save_path)
+    # Include poster bytes for webhook Discord notifications (single-item, not batch)
+    if source == "webhook" and req.send_to_plex and payload:
+        result["poster_data"] = payload
 
     return result
 

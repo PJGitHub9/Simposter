@@ -625,15 +625,21 @@ def process_webhook_poster_generation(
                     _update_tv_cache(rating_key, library_id)
                 except Exception as cache_err:
                     logger.warning(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {cache_err}", exc_info=True)
-                # Send Discord notification
+                # Send Discord notification (include poster image from first successful season)
                 try:
+                    tv_poster_data = None
+                    for sub in result.get("results", []):
+                        if sub.get("poster_data"):
+                            tv_poster_data = sub["poster_data"]
+                            break
                     send_discord_notification(
                         title=result.get("show_title", "Unknown TV Show"),
                         template_id=template_id,
                         preset_id=preset_id,
                         library_id=library_id,
                         source="webhook",
-                        action="sent_to_plex" if auto_send else "saved"
+                        action="sent_to_plex" if auto_send else "saved",
+                        poster_data=tv_poster_data
                     )
                 except Exception as notif_err:
                     logger.debug(f"[WEBHOOK] Failed to send Discord notification: {notif_err}")
@@ -689,7 +695,7 @@ def process_webhook_poster_generation(
                     _update_movie_cache(rating_key, library_id)
                 except Exception as cache_err:
                     logger.warning(f"[WEBHOOK] Failed to update movie cache for {rating_key}: {cache_err}", exc_info=True)
-                # Send Discord notification
+                # Send Discord notification (include poster image)
                 try:
                     # Get movie title from cache if available
                     cached_movies = db.get_cached_movies()
@@ -703,7 +709,8 @@ def process_webhook_poster_generation(
                         preset_id=preset_id,
                         library_id=library_id,
                         source="webhook",
-                        action="sent_to_plex" if auto_send else "saved"
+                        action="sent_to_plex" if auto_send else "saved",
+                        poster_data=result.get("poster_data")
                     )
                 except Exception as notif_err:
                     logger.debug(f"[WEBHOOK] Failed to send Discord notification: {notif_err}")
@@ -1128,6 +1135,20 @@ def tautulli_webhook(
                 logger.warning("[TAUTULLI_WEBHOOK] No rating_key found for movie")
                 raise HTTPException(status_code=400, detail="Missing rating_key for movie")
 
+            # If we have a rating_key but no library_id, look it up from Plex metadata
+            if rating_key and not library_id:
+                try:
+                    meta_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+                    r = plex_session.get(meta_url, headers=plex_headers(), timeout=10)
+                    r.raise_for_status()
+                    root = ET.fromstring(r.content)
+                    video = root.find(".//Video")
+                    if video is not None:
+                        library_id = video.get("librarySectionID")
+                        logger.debug(f"[TAUTULLI_WEBHOOK] Got library_id {library_id} from Plex metadata for movie {rating_key}")
+                except Exception as e:
+                    logger.warning(f"[TAUTULLI_WEBHOOK] Failed to get library_id from Plex metadata: {e}")
+
             logger.info(f"[TAUTULLI_WEBHOOK] Movie: {title} ({year}) - rating_key: {rating_key}, library: {library_id}")
 
             # Cooldown check - prevent duplicate poster generation
@@ -1203,6 +1224,21 @@ def tautulli_webhook(
                 result = find_plex_show_by_tvdb_id(int(tvdb_id))
                 if result:
                     rating_key, library_id = result
+
+            # If we have rating_key but still no library_id, fetch from Plex metadata
+            if rating_key and not library_id:
+                try:
+                    meta_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+                    r = plex_session.get(meta_url, headers=plex_headers(), timeout=10)
+                    r.raise_for_status()
+                    root = ET.fromstring(r.content)
+                    # TV shows use <Directory> element, not <Video>
+                    directory = root.find(".//Directory")
+                    if directory is not None:
+                        library_id = directory.get("librarySectionID")
+                        logger.debug(f"[TAUTULLI_WEBHOOK] Got library_id {library_id} from Plex metadata for show {rating_key}")
+                except Exception as e:
+                    logger.warning(f"[TAUTULLI_WEBHOOK] Failed to get library_id from Plex metadata for show: {e}")
 
             if not rating_key:
                 logger.warning("[TAUTULLI_WEBHOOK] No rating_key found for TV show")
