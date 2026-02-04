@@ -457,13 +457,25 @@ const copyWebhookUrl = () => {
   }, 2000)
 }
 
+const tautulliHeaders = JSON.stringify({ "Content-Type": "application/json" }, null, 2)
+
+const tautulliJsonData = JSON.stringify({
+  event: "{action}",
+  media_type: "{media_type}",
+  title: "{title}",
+  year: "{year}",
+  rating_key: "{rating_key}",
+  tmdb_id: "{tmdb_id}",
+  tvdb_id: "{thetvdb_id}"
+}, null, 2)
+
 const webhookInstructions = computed(() => {
   if (webhookType.value === 'radarr') {
     return 'In Radarr: Settings → Connect → Webhook. Set URL above, triggers: "On Import" and "On Upgrade"'
   } else if (webhookType.value === 'sonarr') {
-    return 'In Sonarr: Settings → Connect → Webhook. Set URL above, triggers: "On Import" and "On Upgrade"'
+    return 'In Sonarr: Settings → Connect → Webhook. Set URL above, triggers: "On Import Complete"'
   } else if (webhookType.value === 'tautulli') {
-    return 'In Tautulli: Settings → Notification Agents → Webhook. Set URL above, triggers: "Recently Added" and/or "Watched"'
+    return 'In Tautulli: Settings → Notification Agents → Add Webhook. Trigger: "Recently Added". Use the JSON headers and data below.'
   }
   return ''
 })
@@ -931,6 +943,22 @@ const webhookInstructions = computed(() => {
           <div class="webhook-instructions">
             <strong>Setup Instructions:</strong>
             <p>{{ webhookInstructions }}</p>
+          </div>
+
+          <!-- Tautulli JSON config -->
+          <div v-if="webhookType === 'tautulli'" class="tautulli-config">
+            <div class="config-block">
+              <span class="config-label">Trigger</span>
+              <div class="config-value">Recently Added</div>
+            </div>
+            <div class="config-block">
+              <span class="config-label">JSON Headers</span>
+              <pre class="config-code">{{ tautulliHeaders }}</pre>
+            </div>
+            <div class="config-block">
+              <span class="config-label">JSON Data</span>
+              <pre class="config-code">{{ tautulliJsonData }}</pre>
+            </div>
           </div>
         </div>
       </div>
@@ -1596,6 +1624,50 @@ button:disabled {
 
 .webhook-instructions p {
   margin: 0;
+  line-height: 1.5;
+}
+
+.tautulli-config {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.config-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.config-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-2);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.config-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.config-code {
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: monospace;
+  color: #c9d1e3;
+  white-space: pre;
+  overflow-x: auto;
   line-height: 1.5;
 }
 
