@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.02',
+    date: '2026-02-06',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed webhook/auto-generate fallback logic not reading preset settings correctly (poster_filter, logo_preference, etc.)',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.01',
     date: '2026-02-05',
     sections: [

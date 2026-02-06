@@ -1640,11 +1640,12 @@ def process_single_movie_poster(
             return False
 
         base_options = preset.get("options", {})
-        base_poster_filter = preset.get("poster_filter", "any")
-        base_logo_preference = preset.get("logo_preference", "white")
+        # Read settings from options (where they're stored), not from preset root
+        base_poster_filter = base_options.get("poster_filter", "any")
+        base_logo_preference = base_options.get("logo_preference", "white")
         base_logo_mode = base_options.get("logo_mode", "stock")
-        white_logo_fallback = preset.get("white_logo_fallback", "continue")
-        language_pref = preset.get("language", "en")
+        white_logo_fallback = base_options.get("white_logo_fallback", "continue")
+        language_pref = base_options.get("language", "en")
 
         # Process the movie with proper source tracking
         result = _process_single_movie(
@@ -1719,11 +1720,12 @@ def process_single_tv_show_poster(
             return False
 
         base_options = preset.get("options", {})
-        base_poster_filter = preset.get("poster_filter", "any")
-        base_logo_preference = preset.get("logo_preference", "white")
+        # Read settings from options (where they're stored), not from preset root
+        base_poster_filter = base_options.get("poster_filter", "any")
+        base_logo_preference = base_options.get("logo_preference", "white")
         base_logo_mode = base_options.get("logo_mode", "stock")
-        white_logo_fallback = preset.get("white_logo_fallback", "continue")
-        language_pref = preset.get("language", "en")
+        white_logo_fallback = base_options.get("white_logo_fallback", "continue")
+        language_pref = base_options.get("language", "en")
 
         # Process the TV show with proper source tracking
         result = _process_single_tv_show(
