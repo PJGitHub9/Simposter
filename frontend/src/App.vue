@@ -67,6 +67,15 @@ const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
 const searchQuery = ref('')
+const sidebarOpen = ref(false)
+
+const toggleSidebar = () => {
+  sidebarOpen.value = !sidebarOpen.value
+}
+
+const closeSidebar = () => {
+  sidebarOpen.value = false
+}
 const { movies, hydratePostersFromSession } = useMovies()
 const { tvShows } = useTvShows()
 const settings = useSettingsStore()
@@ -547,6 +556,10 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   <div class="shell">
     <NotificationContainer />
     <UpdateAnnouncementModal />
+
+    <!-- Mobile sidebar overlay -->
+    <div v-if="sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>
+
     <TopNav
       :search="searchQuery"
       :show-back="showBackButton"
@@ -554,7 +567,21 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       @update:search="searchQuery = $event"
       @back="handleBack"
       @select-movie="handleSearchSelect"
-    />
+    >
+      <template #menu-toggle>
+        <button class="hamburger-btn" @click="toggleSidebar" aria-label="Toggle menu">
+          <svg v-if="!sidebarOpen" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+          <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </template>
+    </TopNav>
     <!-- Legacy scan overlay (for backwards compatibility) -->
     <div v-if="scan.visible.value" class="global-scan-overlay glass">
       <div v-if="scan.running.value" class="spinner"></div>
@@ -627,7 +654,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
     <!-- Normal workspace (movies/settings/logs) -->
     <div v-if="!ui.selectedMovie.value" class="workspace">
-      <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" @select="handleTabSelect" @submenu-click="handleSubmenuClick" />
+      <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" :mobile-open="sidebarOpen" @select="(tab) => { handleTabSelect(tab); closeSidebar() }" @submenu-click="(parentKey, submenuKey) => { handleSubmenuClick(parentKey, submenuKey); closeSidebar() }" />
       <section class="main-pane glass">
         <router-view :key="activeTab" :search="searchQuery" @select="handleSelect" />
       </section>
@@ -635,7 +662,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
     <!-- Inline editor when a movie is selected -->
     <div v-else class="workspace">
-      <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" @select="handleTabSelect" @submenu-click="handleSubmenuClick" />
+      <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" :mobile-open="sidebarOpen" @select="(tab) => { handleTabSelect(tab); closeSidebar() }" @submenu-click="(parentKey, submenuKey) => { handleSubmenuClick(parentKey, submenuKey); closeSidebar() }" />
       <section class="main-pane glass">
         <TvShowEditorPane
           v-if="ui.selectedMovie.value.mediaType === 'tv-show'"
@@ -913,9 +940,141 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   font-weight: 500;
 }
 
+/* Mobile hamburger button */
+.hamburger-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #e6edff;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.hamburger-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(61, 214, 183, 0.4);
+}
+
+/* Mobile sidebar overlay */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 99;
+  backdrop-filter: blur(2px);
+}
+
+/* Tablet breakpoint - sidebar collapses to hamburger */
 @media (max-width: 900px) {
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .hamburger-btn {
+    display: flex;
+  }
+
+  .sidebar-overlay {
+    display: block;
+  }
+
+  .main-pane {
+    padding: 12px;
+  }
+
+  .global-scan-overlay,
+  .global-operation-overlay {
+    left: 16px;
+    right: 16px;
+    max-width: none;
+    width: auto;
+  }
+}
+
+/* Mobile breakpoint - smaller adjustments */
+@media (max-width: 600px) {
+  .shell {
+    gap: 8px;
+    min-height: calc(100vh - 16px);
+  }
+
+  .workspace {
+    gap: 8px;
+  }
+
+  .main-pane {
+    padding: 10px;
+    border-radius: 10px;
+  }
+
+  .global-scan-overlay,
+  .global-operation-overlay {
+    top: auto;
+    bottom: 16px;
+    left: 12px;
+    right: 12px;
+    padding: 8px 10px;
+    font-size: 12px;
+    gap: 8px;
+    border-radius: 8px;
+  }
+
+  .global-scan-overlay .spinner,
+  .global-scan-overlay .checkmark,
+  .global-operation-overlay .spinner,
+  .global-operation-overlay .checkmark,
+  .global-operation-overlay .error-icon {
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+  }
+
+  .global-scan-overlay .title,
+  .global-operation-overlay .title {
+    font-size: 12px;
+    margin-bottom: 2px;
+  }
+
+  .global-scan-overlay .current,
+  .global-operation-overlay .current,
+  .global-operation-overlay .step {
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+
+  .global-scan-overlay .progress-row,
+  .global-operation-overlay .progress-row {
+    margin: 4px 0;
+  }
+
+  .global-scan-overlay .progress-bar,
+  .global-operation-overlay .progress-bar {
+    height: 4px;
+  }
+
+  .global-scan-overlay .progress-text,
+  .global-operation-overlay .progress-text {
+    min-width: 50px;
+    font-size: 10px;
+  }
+
+  .global-operation-overlay .batch-status {
+    font-size: 11px;
+    gap: 4px;
+  }
+
+  .global-scan-overlay .scan-list {
+    display: none;
   }
 }
 </style>

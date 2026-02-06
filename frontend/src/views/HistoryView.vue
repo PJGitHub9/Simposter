@@ -252,7 +252,13 @@ const getPreviewUrl = (record: HistoryRecord): string | null => {
   return `${apiBase}/api/poster-history/${record.id}/preview`
 }
 
-// Show preview on hover
+// Detect mobile/touch device
+const isMobile = ref(false)
+const checkMobile = () => {
+  isMobile.value = window.innerWidth <= 768 || 'ontouchstart' in window
+}
+
+// Show preview on hover (desktop) or click (mobile)
 const showPreview = (record: HistoryRecord, event: MouseEvent) => {
   if (!canPreview(record)) return
 
@@ -261,7 +267,8 @@ const showPreview = (record: HistoryRecord, event: MouseEvent) => {
     clearTimeout(hoverTimeout)
   }
 
-  // Small delay before showing preview
+  // Small delay before showing preview (skip on mobile click)
+  const delay = isMobile.value ? 0 : 200
   hoverTimeout = setTimeout(() => {
     previewRecord.value = record
     previewError.value = null
@@ -269,9 +276,18 @@ const showPreview = (record: HistoryRecord, event: MouseEvent) => {
 
     // Position the popup near the button
     const rect = (event.target as HTMLElement).getBoundingClientRect()
-    previewPosition.value = {
-      x: rect.left - 220,  // Position to the left of the button
-      y: rect.top - 100    // Position above the button slightly
+
+    // On mobile, center the popup
+    if (isMobile.value) {
+      previewPosition.value = {
+        x: Math.max(10, (window.innerWidth - 200) / 2),
+        y: Math.max(60, rect.top - 300)
+      }
+    } else {
+      previewPosition.value = {
+        x: rect.left - 220,  // Position to the left of the button
+        y: rect.top - 100    // Position above the button slightly
+      }
     }
 
     // Get the preview URL
@@ -282,7 +298,16 @@ const showPreview = (record: HistoryRecord, event: MouseEvent) => {
       previewError.value = 'No preview available'
       previewLoading.value = false
     }
-  }, 200)
+  }, delay)
+}
+
+// Toggle preview on click (for mobile)
+const togglePreview = (record: HistoryRecord, event: MouseEvent) => {
+  if (previewRecord.value?.id === record.id) {
+    hidePreview()
+  } else {
+    showPreview(record, event)
+  }
 }
 
 // Hide preview
@@ -312,9 +337,14 @@ onUnmounted(() => {
   if (hoverTimeout) {
     clearTimeout(hoverTimeout)
   }
+  window.removeEventListener('resize', checkMobile)
 })
 
 onMounted(async () => {
+  // Check if mobile on mount
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+
   // Ensure settings are loaded before fetching history (for timezone)
   if (!settings.loaded.value) {
     await settings.load()
@@ -422,8 +452,9 @@ onMounted(async () => {
               <button
                 v-if="canPreview(record)"
                 class="btn-preview"
-                @mouseenter="showPreview(record, $event)"
-                @mouseleave="hidePreview"
+                @click="togglePreview(record, $event)"
+                @mouseenter="!isMobile && showPreview(record, $event)"
+                @mouseleave="!isMobile && hidePreview()"
               >
                 View
               </button>
@@ -476,6 +507,8 @@ onMounted(async () => {
 
     <!-- Preview Popup -->
     <Teleport to="body">
+      <!-- Mobile backdrop -->
+      <div v-if="previewRecord && isMobile" class="preview-backdrop" @click="hidePreview"></div>
       <div
         v-if="previewRecord"
         class="preview-popup"
@@ -484,6 +517,7 @@ onMounted(async () => {
           top: `${previewPosition.y}px`
         }"
       >
+        <button v-if="isMobile" class="preview-close" @click="hidePreview">✕</button>
         <div class="preview-content">
           <div v-if="previewLoading" class="preview-loading">
             Loading...
@@ -878,5 +912,207 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
+}
+
+.preview-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 9999;
+  backdrop-filter: blur(2px);
+}
+
+.preview-close {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg-secondary, #1a1a2e);
+  border: 1px solid var(--border, #333);
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.preview-close:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+/* Mobile Responsive Styles */
+@media (max-width: 1024px) {
+  .history-view {
+    padding: 16px;
+  }
+
+  .header h1 {
+    font-size: 22px;
+  }
+
+  .filter-group {
+    gap: 12px;
+  }
+
+  .filter-group label {
+    min-width: 140px;
+    flex: 1;
+  }
+
+  .history-table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .history-table {
+    min-width: 1200px;
+  }
+
+  .history-table th,
+  .history-table td {
+    padding: 10px 12px;
+  }
+}
+
+@media (max-width: 768px) {
+  .history-view {
+    padding: 12px;
+  }
+
+  .header {
+    margin-bottom: 16px;
+  }
+
+  .header h1 {
+    font-size: 20px;
+  }
+
+  .subtitle {
+    font-size: 13px;
+  }
+
+  .filters {
+    padding: 12px;
+    margin-bottom: 16px;
+  }
+
+  .filter-group {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .filter-group label {
+    width: 100%;
+    min-width: unset;
+  }
+
+  .filter-group select {
+    width: 100%;
+  }
+
+  .btn-clear,
+  .btn-refresh {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .history-table-container {
+    border-radius: 6px;
+  }
+
+  .history-table {
+    min-width: 900px;
+  }
+
+  .history-table th,
+  .history-table td {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .title-cell {
+    max-width: 150px;
+  }
+
+  .path-cell {
+    max-width: 150px;
+  }
+
+  .fallback-cell {
+    max-width: 120px;
+  }
+
+  .results-count {
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  .history-view {
+    padding: 8px;
+  }
+
+  .header h1 {
+    font-size: 18px;
+  }
+
+  .filters {
+    padding: 10px;
+  }
+
+  .history-table {
+    min-width: 800px;
+  }
+
+  .history-table th,
+  .history-table td {
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+
+  .source-badge,
+  .action-badge {
+    padding: 3px 8px;
+    font-size: 10px;
+  }
+
+  .fallback-badge {
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+
+  .btn-preview {
+    padding: 3px 8px;
+    font-size: 10px;
+  }
+
+  /* Mobile preview popup - show as modal on click */
+  .preview-popup {
+    position: fixed;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%);
+    z-index: 10001;
+    pointer-events: auto;
+  }
+
+  .preview-content {
+    width: 160px;
+    height: 240px;
+  }
+
+  .preview-title {
+    max-width: 160px;
+  }
 }
 </style>

@@ -695,4 +695,113 @@ button {
   color: #dce6ff;
   cursor: pointer;
 }
+
+/* Mobile responsive styles */
+@media (max-width: 900px) {
+  .view {
+    gap: 12px;
+  }
+
+  .toolbar {
+    padding: 10px;
+  }
+
+  .controls {
+    gap: 10px;
+    width: 100%;
+  }
+
+  .control-group {
+    flex: 1;
+    min-width: 120px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .control-group label {
+    font-size: 11px;
+  }
+
+  .control-select {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .refresh-btn {
+    flex: 1;
+    min-width: 100px;
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+
+  .pager {
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .pager button {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 600px) {
+  .view {
+    gap: 10px;
+  }
+
+  .toolbar {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .control-group {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .control-group label {
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .control-select {
+    flex: 1;
+    max-width: 160px;
+  }
+
+  .refresh-btn {
+    width: 100%;
+    padding: 10px;
+  }
+
+  .toolbar.pagination {
+    padding: 10px;
+  }
+
+  .pager {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .pager button {
+    flex: 1;
+    max-width: 100px;
+  }
+
+  .callout {
+    padding: 10px;
+    font-size: 13px;
+  }
+}
 </style>

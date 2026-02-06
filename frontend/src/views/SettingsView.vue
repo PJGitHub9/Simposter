@@ -1420,4 +1420,78 @@ onMounted(() => {
   overflow-y: auto;
   background: var(--bg-primary);
 }
+
+/* Mobile responsive styles */
+@media (max-width: 900px) {
+  .settings-header {
+    padding: 16px;
+  }
+
+  .settings-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .settings-title-row h2 {
+    font-size: 24px;
+  }
+
+  .header-status {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .tabs-container {
+    padding: 0 12px;
+  }
+
+  .tabs {
+    gap: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tab {
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 600px) {
+  .settings-header {
+    padding: 12px;
+  }
+
+  .settings-title-row h2 {
+    font-size: 20px;
+  }
+
+  .header-subtitle {
+    font-size: 13px;
+  }
+
+  .header-status {
+    width: 100%;
+  }
+
+  .unsaved-badge,
+  .version-chip,
+  .save-status {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .tabs-container {
+    padding: 0 8px;
+  }
+
+  .tabs {
+    gap: 0;
+  }
+
+  .tab {
+    padding: 10px 12px;
+    font-size: 12px;
+  }
+}
 </style>

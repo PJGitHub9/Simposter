@@ -10,6 +10,21 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.1',
+    date: '2026-02-06',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Mobile responsive UI overhaul — improved usability on phones and tablets',
+          'Mobile responsive History view — horizontal scrolling table, stacked filters on small screens',
+          'Mobile responsive Editor panes — stacked layout for movie and TV show poster editing',
+          'Mobile responsive grid layouts — adaptive card sizing across all views',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.02',
     date: '2026-02-06',
     sections: [

@@ -110,4 +110,72 @@ const emit = defineEmits<{
   font-size: 12px;
   font-weight: 500;
 }
+
+/* Mobile responsive styles */
+@media (max-width: 900px) {
+  .card {
+    gap: 8px;
+    padding: 8px;
+    border-radius: 10px;
+  }
+
+  .thumb {
+    border-radius: 8px;
+  }
+
+  .refresh-btn {
+    opacity: 1;
+    transform: translateY(0);
+    top: 6px;
+    right: 6px;
+    padding: 5px;
+    border-radius: 6px;
+  }
+
+  .meta .title {
+    font-size: 13px;
+  }
+
+  .muted {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 600px) {
+  .card {
+    gap: 6px;
+    padding: 6px;
+    border-radius: 8px;
+  }
+
+  .card:hover {
+    transform: none;
+  }
+
+  .thumb {
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  }
+
+  .refresh-btn {
+    top: 4px;
+    right: 4px;
+    padding: 4px;
+    border-radius: 4px;
+  }
+
+  .refresh-btn svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .meta .title {
+    font-size: 11px;
+    -webkit-line-clamp: 1;
+  }
+
+  .muted {
+    font-size: 10px;
+  }
+}
 </style>

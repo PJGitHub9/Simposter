@@ -4180,4 +4180,278 @@ button:disabled {
   color: #86efac;
   border: 1px solid rgba(34, 197, 94, 0.4);
 }
+
+/* Mobile responsive styles */
+@media (max-width: 1200px) {
+  .editor-shell {
+    grid-template-columns: 380px 180px 1fr;
+  }
+
+  .preview-actions {
+    width: 260px;
+  }
+
+  .btn-inline {
+    min-width: 100px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 900px) {
+  .editor-shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: calc(100vh - 60px);
+  }
+
+  .controls-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .season-panel {
+    display: none;
+  }
+
+  .controls-scroll {
+    max-height: none;
+    padding-bottom: 80px;
+  }
+
+  .preview-pane {
+    padding: 12px;
+    min-height: 400px;
+  }
+
+  .preview-inner {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .preview-existing {
+    display: none;
+  }
+
+  .preview-main {
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .preview-label {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .preview-actions {
+    width: 100%;
+    justify-content: center;
+    margin-top: 8px;
+  }
+
+  .btn-inline {
+    flex: 1;
+    max-width: 160px;
+  }
+
+  .preview-container {
+    width: 100%;
+    max-height: 60vh;
+  }
+
+  .preview-img {
+    max-height: 55vh;
+  }
+
+  .thumb-strip {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pane-header h2 {
+    font-size: 16px;
+  }
+
+  .section-title {
+    font-size: 13px;
+  }
+
+  .rendered-previews-section {
+    max-width: 100%;
+  }
+
+  .carousel-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .carousel-item {
+    width: 80px;
+  }
+
+  .carousel-thumb {
+    height: 120px;
+  }
+}
+
+@media (max-width: 600px) {
+  .editor-shell {
+    min-height: auto;
+  }
+
+  .pane-header {
+    padding: 12px 14px;
+  }
+
+  .kicker {
+    font-size: 10px;
+  }
+
+  .pane-header h2 {
+    font-size: 14px;
+  }
+
+  .controls-scroll {
+    padding: 0 14px 60px;
+  }
+
+  .section {
+    margin-top: 12px;
+  }
+
+  .field-label {
+    font-size: 12px;
+    margin-bottom: 10px;
+  }
+
+  .field-label select,
+  .field-label input {
+    padding: 6px;
+    font-size: 12px;
+  }
+
+  .divider {
+    margin: 14px 0;
+  }
+
+  .thumb-strip {
+    gap: 4px;
+    padding: 4px 0;
+  }
+
+  .poster-thumb {
+    width: 60px;
+    height: 90px;
+  }
+
+  .logo-thumb {
+    min-width: 80px;
+    max-width: 120px;
+    height: 55px;
+    padding: 6px;
+  }
+
+  .source-badge {
+    font-size: 8px;
+    padding: 1px 4px;
+  }
+
+  .inline-controls {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .inline-field {
+    font-size: 11px;
+  }
+
+  .inline-field select {
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+
+  .slider label {
+    font-size: 11px;
+  }
+
+  .slider-row {
+    grid-template-columns: 1fr 55px;
+    gap: 6px;
+  }
+
+  .slider-num {
+    padding: 4px;
+    font-size: 11px;
+  }
+
+  .btn-primary {
+    padding: 8px;
+    font-size: 13px;
+  }
+
+  .preset-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .preview-pane {
+    padding: 10px;
+    min-height: 320px;
+  }
+
+  .preview-container {
+    border-radius: 10px;
+    max-height: 50vh;
+  }
+
+  .preview-img {
+    max-height: 45vh;
+    border-radius: 8px;
+  }
+
+  .preview-label {
+    font-size: 11px;
+  }
+
+  .preview-actions {
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .btn-inline {
+    padding: 8px;
+    font-size: 12px;
+    border-radius: 8px;
+  }
+
+  .btn-label {
+    display: none;
+  }
+
+  .empty-preview {
+    padding: 24px;
+  }
+
+  .empty-preview.large {
+    min-height: 200px;
+  }
+
+  .carousel-item {
+    width: 70px;
+  }
+
+  .carousel-thumb {
+    height: 105px;
+  }
+
+  .carousel-item-label {
+    font-size: 9px;
+    padding: 4px 6px;
+  }
+
+  .carousel-label {
+    font-size: 10px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}
 </style>

@@ -128,6 +128,8 @@ onUnmounted(() => {
 <template>
   <header class="top-nav glass">
     <div class="nav-left">
+      <!-- Mobile hamburger menu slot -->
+      <slot name="menu-toggle"></slot>
       <button v-if="showBack" class="back-btn" @click="emit('back')">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 12H5M12 19l-7-7 7-7" />
@@ -367,5 +369,88 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--muted);
   margin-top: 2px;
+}
+
+/* Mobile responsive styles */
+@media (max-width: 900px) {
+  .top-nav {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .logo-text {
+    display: none;
+  }
+
+  .version-badge {
+    display: none;
+  }
+
+  .search-container {
+    max-width: none;
+  }
+
+  .search-input {
+    padding: 9px 12px 9px 38px;
+    font-size: 14px;
+  }
+
+  .search-input::placeholder {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 600px) {
+  .top-nav {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  .nav-left {
+    gap: 8px;
+  }
+
+  .back-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .search-input {
+    padding: 8px 10px 8px 36px;
+    font-size: 13px;
+  }
+
+  .search-icon {
+    left: 10px;
+    width: 16px;
+    height: 16px;
+  }
+
+  .search-dropdown {
+    max-height: 320px;
+  }
+
+  .search-result {
+    padding: 8px 10px;
+    gap: 10px;
+  }
+
+  .result-poster {
+    width: 32px;
+    height: 48px;
+  }
+
+  .result-title {
+    font-size: 13px;
+  }
+
+  .result-year {
+    font-size: 11px;
+  }
+
+  .search-separator {
+    padding: 6px 10px;
+    font-size: 10px;
+  }
 }
 </style>

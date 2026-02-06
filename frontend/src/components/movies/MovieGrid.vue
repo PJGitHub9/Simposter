@@ -77,4 +77,47 @@ const emit = defineEmits<{
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 14px;
 }
+
+/* Mobile responsive styles */
+@media (max-width: 900px) {
+  .grid-block {
+    gap: 12px;
+  }
+
+  .heading-row h2 {
+    font-size: 18px;
+  }
+
+  .count {
+    font-size: 12px;
+  }
+
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 10px;
+  }
+}
+
+@media (max-width: 600px) {
+  .grid-block {
+    gap: 10px;
+  }
+
+  .heading-row {
+    padding-bottom: 6px;
+  }
+
+  .heading-row h2 {
+    font-size: 16px;
+  }
+
+  .count {
+    font-size: 11px;
+  }
+
+  .grid {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+  }
+}
 </style>
