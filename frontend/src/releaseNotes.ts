@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.11',
+    date: '2026-02-06',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Click version badge to view full changelog (last 10 releases)',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed scan progress overlay blocking UI on mobile — now displays at bottom of screen',
+          'Fixed History view "View" button not working on mobile — now uses tap-to-preview',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.1',
     date: '2026-02-06',
     sections: [

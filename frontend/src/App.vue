@@ -7,6 +7,7 @@ import EditorPane from './components/editor/EditorPane.vue'
 import TvShowEditorPane from './components/editor/TvShowEditorPane.vue'
 import NotificationContainer from './components/NotificationContainer.vue'
 import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
+import ChangelogModal from './components/ChangelogModal.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
@@ -68,6 +69,7 @@ const route = useRoute()
 const router = useRouter()
 const searchQuery = ref('')
 const sidebarOpen = ref(false)
+const showChangelog = ref(false)
 
 const toggleSidebar = () => {
   sidebarOpen.value = !sidebarOpen.value
@@ -560,6 +562,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <!-- Mobile sidebar overlay -->
     <div v-if="sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>
 
+    <ChangelogModal :visible="showChangelog" @close="showChangelog = false" />
+
     <TopNav
       :search="searchQuery"
       :show-back="showBackButton"
@@ -567,6 +571,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       @update:search="searchQuery = $event"
       @back="handleBack"
       @select-movie="handleSearchSelect"
+      @show-changelog="showChangelog = true"
     >
       <template #menu-toggle>
         <button class="hamburger-btn" @click="toggleSidebar" aria-label="Toggle menu">

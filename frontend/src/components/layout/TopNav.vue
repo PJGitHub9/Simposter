@@ -21,6 +21,7 @@ const emit = defineEmits<{
   (e: 'update:search', value: string): void
   (e: 'back'): void
   (e: 'selectMovie', movie: Movie): void
+  (e: 'showChangelog'): void
 }>()
 
 const searchFocused = ref(false)
@@ -137,7 +138,7 @@ onUnmounted(() => {
       </button>
       <div class="logo">
         <span class="logo-text">Simposter</span>
-        <span class="version-badge">{{ APP_VERSION }}</span>
+        <button class="version-badge" @click="emit('showChangelog')" title="View changelog">{{ APP_VERSION }}</button>
       </div>
     </div>
     <div class="search-container">
@@ -248,6 +249,16 @@ onUnmounted(() => {
   background: rgba(61, 214, 183, 0.12);
   color: #a9f0dd;
   border: 1px solid rgba(61, 214, 183, 0.35);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.version-badge:hover {
+  background: rgba(61, 214, 183, 0.25);
+  border-color: rgba(61, 214, 183, 0.6);
+  color: #3dd6b7;
 }
 
 .search-container {
