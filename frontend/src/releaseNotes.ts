@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.01',
+    date: '2026-02-05',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed scheduled scans not scanning in new posters',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5',
     date: '2026-02-04',
     sections: [

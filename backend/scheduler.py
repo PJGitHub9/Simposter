@@ -252,12 +252,13 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
         logger.info("[SCHEDULER] Starting scheduled library scan at %s (library_ids=%s)",
                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"), library_ids or "all")
 
-        # Call the scan function directly
+        # Call the scan function directly with force_poster_refresh=True
+        # This ensures posters are re-downloaded from Plex during scheduled scans
         if library_ids:
             # Scan each library individually
             for library_id in library_ids:
                 try:
-                    result = api_scan_library(library_id=library_id)
+                    result = api_scan_library(library_id=library_id, force_poster_refresh=True)
                     logger.info("[SCHEDULER] Library scan completed for library_id=%s: %s movies, %s TV shows, %s collections",
                                library_id, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
                 except HTTPException as e:
@@ -270,7 +271,7 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
         else:
             # Scan all libraries
             try:
-                result = api_scan_library(library_id=None)
+                result = api_scan_library(library_id=None, force_poster_refresh=True)
                 elapsed = time.time() - scan_start
                 logger.info("[SCHEDULER] Library scan completed in %.1f seconds: %s movies, %s TV shows, %s collections",
                            elapsed, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))

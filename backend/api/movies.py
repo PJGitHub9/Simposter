@@ -723,8 +723,8 @@ def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
 
 
 @router.post("/scan-library")
-def api_scan_library(library_id: Optional[str] = Query(None)):
-    """Comprehensive full-library sync: fetch movies, TV shows, and collections. If library_id provided, scan only that library."""
+def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refresh: bool = Query(True)):
+    """Comprehensive full-library sync: fetch movies, TV shows, and collections. If library_id provided, scan only that library. force_poster_refresh re-downloads all posters from Plex (default: True)."""
     try:
         # Prevent multiple simultaneous scans
         if scan_status.get("state") == "running":
@@ -799,7 +799,7 @@ def api_scan_library(library_id: Optional[str] = Query(None)):
 
         def fetch_poster_for_movie(movie_key):
             try:
-                poster_path = fetch_and_cache_poster(movie_key, force_refresh=False)
+                poster_path = fetch_and_cache_poster(movie_key, force_refresh=force_poster_refresh)
                 if poster_path:
                     return movie_key, _poster_cache_url(movie_key, poster_path)
             except Exception as e:
@@ -873,7 +873,7 @@ def api_scan_library(library_id: Optional[str] = Query(None)):
             # Fetch poster
             poster_url = None
             try:
-                poster_path = fetch_and_cache_poster(show.get("key"), force_refresh=False)
+                poster_path = fetch_and_cache_poster(show.get("key"), force_refresh=force_poster_refresh)
                 if poster_path:
                     poster_url = _poster_cache_url(show.get("key"), poster_path)
             except Exception as e:
