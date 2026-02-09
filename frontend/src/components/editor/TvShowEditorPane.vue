@@ -2366,9 +2366,17 @@ watch(
   { deep: true }
 )
 
-watch(currentSeason, () => {
-  fetchImagesForCurrentSeason()
+watch(currentSeason, async () => {
+  // Cancel any pending auto-preview that would fire with stale settings
+  if (previewTimer) {
+    clearTimeout(previewTimer)
+    previewTimer = null
+  }
+  await fetchImagesForCurrentSeason()
   syncRenderedPlaceholders()
+  // Explicitly trigger preview after season data + settings are loaded
+  // to avoid race condition where auto-preview fires before season settings apply
+  doPreview()
 })
 
 watch(tmdbId, () => {

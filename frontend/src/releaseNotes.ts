@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.2',
+    date: '2026-02-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed TV show batch edit using movie TMDB endpoints — TV show IDs were being looked up as movies, returning wrong (potentially NSFW) posters (sorry chadwpalm)',
+          'Fixed TVDB ID extraction regex never matching — TV shows now correctly resolve TVDB IDs for supplementary images',
+          'Fixed TV show season preview not updating when switching seasons in the editor',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.11',
     date: '2026-02-06',
     sections: [

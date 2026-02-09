@@ -346,7 +346,7 @@ const processBatch = async () => {
       }
     }, 300);
 
-    const response = await fetch("/api/batch", {
+    const response = await fetch("/api/batch-movies", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),

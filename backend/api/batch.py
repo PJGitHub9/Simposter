@@ -1580,11 +1580,14 @@ def api_batch_tv_shows(req: TVShowBatchRequest):
 @router.post("/batch")
 def api_batch(req: BatchRequest):
     """
-    Legacy batch endpoint that handles both movies and TV shows.
-    Kept for backward compatibility. Use /batch-movies or /batch-tv-shows for new code.
+    Legacy batch endpoint — DEPRECATED.
+    Use /batch-movies or /batch-tv-shows instead.
+    This endpoint uses include_seasons to guess media type, which can cause
+    TV show TMDB IDs to be looked up as movies (returning wrong posters).
     """
     is_tv_batch = getattr(req, 'include_seasons', False)
-    logger.info("[BATCH LEGACY] Processing %d items (TV: %s)", len(req.rating_keys), is_tv_batch)
+    logger.warning("[BATCH LEGACY] Deprecated /batch endpoint called with %d items (TV: %s). "
+                   "Use /batch-movies or /batch-tv-shows instead.", len(req.rating_keys), is_tv_batch)
     return _execute_batch(req, is_tv_batch=is_tv_batch)
 
 
