@@ -816,4 +816,205 @@ const clearLogs = async () => {
 .btn-cancel:hover {
   background: rgba(255, 255, 255, 0.06);
 }
+
+/* Mobile responsive styles */
+@media (max-width: 900px) {
+  .view {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .config-panel,
+  .logs-panel {
+    padding: 12px;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .header-controls {
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .filter-group {
+    flex: 1;
+    min-width: 45%;
+  }
+
+  .log-search {
+    min-width: auto;
+    width: 100%;
+  }
+
+  .log-filter {
+    width: 100%;
+  }
+
+  .log-tabs {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .auto-refresh-btn,
+  .ghost {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .log-output {
+    max-height: 50vh;
+  }
+
+  .log-line {
+    padding: 6px 10px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .log-timestamp {
+    min-width: auto;
+    font-size: 10px;
+  }
+
+  .log-text {
+    width: 100%;
+    order: 3;
+    font-size: 11px;
+  }
+
+  .log-level-badge {
+    min-width: 45px;
+    font-size: 8px;
+  }
+
+  .log-category-badge {
+    min-width: 40px;
+    font-size: 8px;
+  }
+}
+
+@media (max-width: 600px) {
+  .view {
+    padding: 8px;
+    gap: 10px;
+  }
+
+  .config-panel,
+  .logs-panel {
+    padding: 10px;
+  }
+
+  .config-panel h3,
+  .header h2 {
+    font-size: 16px;
+  }
+
+  .config-subtitle {
+    font-size: 11px;
+  }
+
+  .settings-grid {
+    gap: 10px;
+  }
+
+  .setting-item label {
+    font-size: 12px;
+  }
+
+  .setting-input {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .btn-save {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+
+  .header-controls {
+    gap: 6px;
+  }
+
+  .filter-group {
+    min-width: 100%;
+  }
+
+  .filter-label {
+    font-size: 11px;
+  }
+
+  .log-search,
+  .log-filter {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .log-tab {
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+
+  .auto-refresh-btn,
+  .ghost {
+    flex: 1;
+    justify-content: center;
+    padding: 8px;
+    font-size: 11px;
+  }
+
+  .log-output {
+    max-height: 45vh;
+    font-size: 11px;
+  }
+
+  .log-line {
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+
+  .log-level-badge {
+    padding: 2px 4px;
+    font-size: 7px;
+    min-width: 40px;
+  }
+
+  .log-category-badge {
+    padding: 2px 4px;
+    font-size: 7px;
+    min-width: 35px;
+  }
+
+  .log-timestamp {
+    font-size: 9px;
+  }
+
+  .log-text {
+    font-size: 10px;
+    line-height: 1.4;
+  }
+
+  .empty-state {
+    padding: 40px 16px;
+  }
+
+  .empty-state svg {
+    width: 40px;
+    height: 40px;
+  }
+
+  .empty-state p {
+    font-size: 13px;
+  }
+}
 </style>

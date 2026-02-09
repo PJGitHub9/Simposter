@@ -1271,4 +1271,193 @@ input:focus {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* Mobile responsive styles */
+@media (max-width: 900px) {
+  .container {
+    padding: 16px;
+    gap: 16px;
+  }
+
+  .header-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .header-row h2 {
+    font-size: 1.4rem;
+    text-align: center;
+  }
+
+  .header-actions {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .btn {
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    flex: 1;
+    min-width: 120px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+
+  .card h3 {
+    font-size: 1rem;
+    margin-bottom: 12px;
+  }
+
+  .preset-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .preset-card {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .preset-name {
+    font-size: 0.9rem;
+  }
+
+  .preview-box {
+    min-height: 300px;
+    padding: 16px;
+  }
+
+  .preview-box img {
+    max-height: 400px;
+  }
+
+  .modal {
+    padding: 16px;
+    width: 95vw;
+  }
+
+  .modal-header h4 {
+    font-size: 1.1rem;
+  }
+
+  .input-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .form-input {
+    width: 100%;
+  }
+
+  .form-select {
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .container {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .header-row h2 {
+    font-size: 1.2rem;
+  }
+
+  .btn {
+    padding: 8px 10px;
+    font-size: 0.8rem;
+  }
+
+  .card {
+    padding: 12px;
+  }
+
+  .card h3 {
+    font-size: 0.95rem;
+  }
+
+  .template-block {
+    padding: 12px;
+  }
+
+  .template-header h4 {
+    font-size: 0.9rem;
+  }
+
+  .preset-card {
+    padding: 8px;
+    grid-template-columns: auto 1fr auto;
+    gap: 8px;
+  }
+
+  .preset-name {
+    font-size: 0.85rem;
+  }
+
+  .preset-id {
+    font-size: 0.75rem;
+  }
+
+  .icon-btn {
+    padding: 4px 8px;
+    font-size: 0.9rem;
+  }
+
+  .preview-panel {
+    position: static;
+  }
+
+  .preview-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .preview-box {
+    min-height: 250px;
+    padding: 12px;
+  }
+
+  .preview-box img {
+    max-height: 320px;
+  }
+
+  .modal {
+    padding: 12px;
+  }
+
+  .modal-header h4 {
+    font-size: 1rem;
+  }
+
+  .modal-actions {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .modal-actions .btn {
+    width: 100%;
+  }
+
+  .search-results {
+    max-height: 250px;
+  }
+
+  .search-result {
+    padding: 8px 10px;
+  }
+
+  .fallback-chain-info {
+    padding: 12px;
+    font-size: 0.9rem;
+  }
+
+  .fallback-chain-info ol {
+    padding-left: 16px;
+  }
+}
 </style>

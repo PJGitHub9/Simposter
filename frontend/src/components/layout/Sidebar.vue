@@ -18,11 +18,13 @@ const props = withDefaults(
     tabs: MenuItem[]
     active: TabKey
     activeSubmenu?: string
+    mobileOpen?: boolean
   }>(),
   {
     tabs: () => [],
     active: 'movies',
-    activeSubmenu: ''
+    activeSubmenu: '',
+    mobileOpen: false
   }
 )
 
@@ -63,7 +65,7 @@ const getIcon = (key: TabKey | string) => {
 </script>
 
 <template>
-  <aside class="sidebar glass">
+  <aside :class="['sidebar', 'glass', { 'mobile-open': mobileOpen }]">
     <div class="sidebar__title">Simposter</div>
     <nav>
       <div v-for="tab in tabs" :key="tab.key" class="nav-item">
@@ -229,5 +231,81 @@ nav {
 .submenu-btn:hover:not(.active) .submenu-icon {
   opacity: 1;
   color: var(--accent);
+}
+
+/* Mobile responsive styles */
+@media (max-width: 900px) {
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    max-width: 85vw;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    padding-top: 16px;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+    overflow-y: auto;
+  }
+
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar__title {
+    padding: 0 16px 16px;
+    font-size: 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+
+  nav {
+    padding: 0 8px;
+  }
+
+  .nav-btn {
+    padding: 14px 16px;
+    font-size: 15px;
+  }
+
+  .submenu {
+    margin-left: 16px;
+    padding-left: 16px;
+  }
+
+  .submenu-btn {
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 600px) {
+  .sidebar {
+    width: 260px;
+    padding: 12px 8px;
+  }
+
+  .sidebar__title {
+    font-size: 18px;
+    padding: 0 12px 12px;
+  }
+
+  .nav-btn {
+    padding: 12px 14px;
+    font-size: 14px;
+    border-radius: 8px;
+  }
+
+  .nav-btn .icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .submenu-btn {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
 }
 </style>

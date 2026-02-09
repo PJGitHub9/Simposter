@@ -705,7 +705,7 @@ const processBatch = async () => {
       }
     }, 300)
 
-    const response = await fetch(`${apiBase}/api/batch`, {
+    const response = await fetch(`${apiBase}/api/batch-movies`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -2051,5 +2051,285 @@ onMounted(async () => {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Mobile responsive styles */
+@media (max-width: 1200px) {
+  .content-area {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-sidebar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    max-height: 50vh;
+    overflow-y: auto;
+    border-radius: 12px 12px 0 0;
+    z-index: 50;
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.4);
+  }
+}
+
+@media (max-width: 900px) {
+  .batch-edit-view {
+    padding: 1rem;
+  }
+
+  .controls-panel {
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .selection-row.template-row {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .actions-row {
+    gap: 0.75rem;
+  }
+
+  .checkboxes {
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .label-selector {
+    width: 100%;
+  }
+
+  .btn-process {
+    width: 100%;
+    padding: 0.8rem 1rem;
+  }
+
+  .movie-controls {
+    padding: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .filter-row {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .filter-groups {
+    width: 100%;
+    gap: 0.5rem;
+  }
+
+  .limit-control,
+  .sort-control {
+    flex: 1;
+    min-width: 45%;
+  }
+
+  .filter-select {
+    width: 100%;
+    min-width: auto;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .filter-input {
+    width: 100%;
+    min-width: auto;
+  }
+
+  .selection-summary h3 {
+    font-size: 0.9rem;
+  }
+
+  .selection-actions {
+    gap: 0.5rem;
+  }
+
+  .btn-small {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+  }
+
+  .movie-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 0.75rem;
+  }
+
+  .movie-info {
+    padding: 0.5rem;
+  }
+
+  .title {
+    font-size: 0.8rem;
+  }
+
+  .year {
+    font-size: 0.75rem;
+  }
+
+  .pill {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+  }
+
+  .pagination-controls {
+    padding: 0.75rem;
+    gap: 0.5rem;
+  }
+
+  .page-btn {
+    padding: 0.5rem 0.8rem;
+    font-size: 0.85rem;
+    min-width: 80px;
+  }
+
+  .page-info {
+    font-size: 0.85rem;
+    min-width: 100px;
+  }
+
+  .preview-sidebar {
+    padding: 1rem;
+    max-height: 40vh;
+  }
+}
+
+@media (max-width: 600px) {
+  .batch-edit-view {
+    padding: 0.75rem;
+  }
+
+  .controls-panel {
+    padding: 0.75rem;
+  }
+
+  .controls-panel h2 {
+    font-size: 1.2rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .form-group label {
+    font-size: 0.8rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .form-control {
+    padding: 0.6rem;
+    font-size: 0.9rem;
+  }
+
+  .checkbox-label {
+    font-size: 0.85rem;
+  }
+
+  .movie-controls {
+    padding: 0.5rem;
+    gap: 0.5rem;
+  }
+
+  .limit-control,
+  .sort-control {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+    min-width: 100%;
+  }
+
+  .limit-control label,
+  .sort-control label {
+    font-size: 0.8rem;
+  }
+
+  .filter-select {
+    width: 100%;
+  }
+
+  .selection-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .selection-summary {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+
+  .selection-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .btn-small {
+    flex: 1;
+  }
+
+  .movie-grid {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 0.5rem;
+  }
+
+  .movie-card:hover {
+    transform: none;
+  }
+
+  .movie-info {
+    padding: 0.4rem;
+  }
+
+  .title {
+    font-size: 0.75rem;
+  }
+
+  .year {
+    font-size: 0.7rem;
+  }
+
+  .status-row {
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  .pill {
+    font-size: 0.65rem;
+    padding: 2px 4px;
+  }
+
+  .preview-sidebar {
+    padding: 0.75rem;
+    max-height: 35vh;
+  }
+
+  .preview-sidebar h3 {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .preview-nav {
+    padding: 0.4rem;
+  }
+
+  .nav-btn {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .nav-counter {
+    font-size: 0.8rem;
+  }
+
+  .status-overlay {
+    bottom: 10px;
+    right: 10px;
+    left: 10px;
+  }
+
+  .status-card {
+    padding: 10px;
+    font-size: 0.9rem;
+  }
 }
 </style>

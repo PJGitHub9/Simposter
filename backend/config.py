@@ -629,7 +629,7 @@ def extract_tvdb_id_from_metadata(xml_text: str) -> Optional[int]:
 
     for g in root.findall(".//Guid"):
         gid = g.get("id") or ""
-        match = re.search(r"(?:tvdb|thetvdb)://(\\d+)", gid)
+        match = re.search(r"(?:tvdb|thetvdb)://(\d+)", gid)
         if match:
             return int(match.group(1))
     return None

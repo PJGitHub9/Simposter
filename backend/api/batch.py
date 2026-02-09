@@ -1580,11 +1580,14 @@ def api_batch_tv_shows(req: TVShowBatchRequest):
 @router.post("/batch")
 def api_batch(req: BatchRequest):
     """
-    Legacy batch endpoint that handles both movies and TV shows.
-    Kept for backward compatibility. Use /batch-movies or /batch-tv-shows for new code.
+    Legacy batch endpoint — DEPRECATED.
+    Use /batch-movies or /batch-tv-shows instead.
+    This endpoint uses include_seasons to guess media type, which can cause
+    TV show TMDB IDs to be looked up as movies (returning wrong posters).
     """
     is_tv_batch = getattr(req, 'include_seasons', False)
-    logger.info("[BATCH LEGACY] Processing %d items (TV: %s)", len(req.rating_keys), is_tv_batch)
+    logger.warning("[BATCH LEGACY] Deprecated /batch endpoint called with %d items (TV: %s). "
+                   "Use /batch-movies or /batch-tv-shows instead.", len(req.rating_keys), is_tv_batch)
     return _execute_batch(req, is_tv_batch=is_tv_batch)
 
 
@@ -1640,11 +1643,12 @@ def process_single_movie_poster(
             return False
 
         base_options = preset.get("options", {})
-        base_poster_filter = preset.get("poster_filter", "any")
-        base_logo_preference = preset.get("logo_preference", "white")
+        # Read settings from options (where they're stored), not from preset root
+        base_poster_filter = base_options.get("poster_filter", "any")
+        base_logo_preference = base_options.get("logo_preference", "white")
         base_logo_mode = base_options.get("logo_mode", "stock")
-        white_logo_fallback = preset.get("white_logo_fallback", "continue")
-        language_pref = preset.get("language", "en")
+        white_logo_fallback = base_options.get("white_logo_fallback", "continue")
+        language_pref = base_options.get("language", "en")
 
         # Process the movie with proper source tracking
         result = _process_single_movie(
@@ -1719,11 +1723,12 @@ def process_single_tv_show_poster(
             return False
 
         base_options = preset.get("options", {})
-        base_poster_filter = preset.get("poster_filter", "any")
-        base_logo_preference = preset.get("logo_preference", "white")
+        # Read settings from options (where they're stored), not from preset root
+        base_poster_filter = base_options.get("poster_filter", "any")
+        base_logo_preference = base_options.get("logo_preference", "white")
         base_logo_mode = base_options.get("logo_mode", "stock")
-        white_logo_fallback = preset.get("white_logo_fallback", "continue")
-        language_pref = preset.get("language", "en")
+        white_logo_fallback = base_options.get("white_logo_fallback", "continue")
+        language_pref = base_options.get("language", "en")
 
         # Process the TV show with proper source tracking
         result = _process_single_tv_show(

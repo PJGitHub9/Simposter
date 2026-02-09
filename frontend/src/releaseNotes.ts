@@ -10,6 +10,78 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.2',
+    date: '2026-02-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed TV show batch edit using movie TMDB endpoints — TV show IDs were being looked up as movies, returning wrong (potentially NSFW) posters (sorry chadwpalm)',
+          'Fixed TVDB ID extraction regex never matching — TV shows now correctly resolve TVDB IDs for supplementary images',
+          'Fixed TV show season preview not updating when switching seasons in the editor',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.11',
+    date: '2026-02-06',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Click version badge to view full changelog (last 10 releases)',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed scan progress overlay blocking UI on mobile — now displays at bottom of screen',
+          'Fixed History view "View" button not working on mobile — now uses tap-to-preview',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.1',
+    date: '2026-02-06',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Mobile responsive UI overhaul — improved usability on phones and tablets',
+          'Mobile responsive History view — horizontal scrolling table, stacked filters on small screens',
+          'Mobile responsive Editor panes — stacked layout for movie and TV show poster editing',
+          'Mobile responsive grid layouts — adaptive card sizing across all views',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.02',
+    date: '2026-02-06',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed webhook/auto-generate fallback logic not reading preset settings correctly (poster_filter, logo_preference, etc.)',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.01',
+    date: '2026-02-05',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed scheduled scans not scanning in new posters',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5',
     date: '2026-02-04',
     sections: [
