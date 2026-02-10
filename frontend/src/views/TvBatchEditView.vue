@@ -163,7 +163,6 @@ const savedFilter = ref<'all' | 'saved' | 'unsaved'>('all')
 const labelsToRemove = ref<Set<string>>(new Set())
 const processing = ref(false)
 const currentIndex = ref(0)
-const statusOverlay = ref<{ visible: boolean; message: string; detail?: string }>({ visible: false, message: '' })
 const posterStatus = ref<Record<string, PosterStatus>>({})
 const statusLoading = ref(false)
 
@@ -669,11 +668,9 @@ const processBatch = async () => {
 
   processing.value = true
   currentIndex.value = 0
-  statusOverlay.value = { visible: true, message: 'Starting batch…' }
 
   try {
     const ratingKeys = Array.from(selectedShows.value)
-    const selectedForStatus = selectedShowsList.value
 
     // Extract fallback settings from preset (similar to preview logic)
     let fallbackPosterAction: string | undefined
@@ -711,26 +708,10 @@ const processBatch = async () => {
       fallbackPosterPreset: fallbackPosterPreset
     }
 
-    // Simulate progress
-    const progressInterval = setInterval(() => {
-      const idx = Math.min(currentIndex.value, selectedShows.value.size - 1)
-      const movie = selectedForStatus[idx]
-      if (movie) {
-        statusOverlay.value = {
-          visible: true,
-          message: `Rendering ${movie.title}`,
-          detail: sendToPlex.value && saveLocally.value
-            ? 'Sending to Plex and saving locally'
-            : sendToPlex.value
-              ? 'Sending to Plex'
-              : 'Saving locally'
-        }
-      }
-      currentIndex.value = Math.min(currentIndex.value + 1, selectedShows.value.size)
-      if (currentIndex.value >= selectedShows.value.size) {
-        clearInterval(progressInterval)
-      }
-    }, 300)
+    // Use the global batch progress overlay (polls real backend status, persists across pages)
+    if (typeof (window as any).startBatchPolling === 'function') {
+      (window as any).startBatchPolling()
+    }
 
     const response = await fetch(`${apiBase}/api/batch-tv-shows`, {
       method: 'POST',
@@ -738,16 +719,13 @@ const processBatch = async () => {
       body: JSON.stringify(payload)
     })
 
-    clearInterval(progressInterval)
-    currentIndex.value = selectedShows.value.size
-
     if (!response.ok) {
       throw new Error('Failed to process batch')
     }
 
     await response.json()
 
-    let message = `Successfully processed ${selectedShows.value.size} movies`
+    let message = `Successfully processed ${selectedShows.value.size} TV shows`
     if (sendToPlex.value && saveLocally.value) {
       message += ' (sent to Plex and saved locally)'
     } else if (sendToPlex.value) {
@@ -756,7 +734,6 @@ const processBatch = async () => {
       message += ' (saved locally)'
     }
     success(message)
-    statusOverlay.value = { visible: true, message }
 
     // Refresh status for sent/saved indicators
     await fetchPosterStatus()
@@ -774,13 +751,11 @@ const processBatch = async () => {
       selectedShows.value.clear()
       selectedTemplate.value = ''
       selectedPreset.value = ''
-      statusOverlay.value = { visible: false, message: '' }
     }, 1500)
   } catch (err) {
     showError(`Batch processing failed: ${err}`)
     console.error(err)
     processing.value = false
-    statusOverlay.value = { visible: false, message: '' }
   }
 }
 
@@ -1782,15 +1757,6 @@ onMounted(async () => {
     </div>
   </div>
 
-  <div v-if="statusOverlay.visible" class="status-overlay">
-    <div class="status-card">
-      <div class="spinner"></div>
-      <div>
-        <p class="status-title">{{ statusOverlay.message }}</p>
-        <p v-if="statusOverlay.detail" class="status-detail">{{ statusOverlay.detail }}</p>
-      </div>
-    </div>
-  </div>
 </template>
 
 <style scoped>
@@ -2558,50 +2524,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.status-overlay {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  z-index: 2000;
-}
-
-.status-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  background: rgba(0, 0, 0, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  color: #eef2ff;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  border-top-color: var(--accent, #3dd6b7);
-  border-radius: 50%;
-  animation: spin 0.9s linear infinite;
-}
-
-.status-title {
-  margin: 0;
-  font-weight: 600;
-  font-size: 0.95rem;
-}
-
-.status-detail {
-  margin: 2px 0 0 0;
-  font-size: 0.8rem;
-  color: #cdd4e0;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
 /* Mobile responsive styles */
 @media (max-width: 1200px) {
   .content-area {
@@ -2880,15 +2802,5 @@ onMounted(async () => {
     min-width: 100px;
   }
 
-  .status-overlay {
-    bottom: 10px;
-    right: 10px;
-    left: 10px;
-  }
-
-  .status-card {
-    padding: 10px;
-    font-size: 0.9rem;
-  }
 }
 </style>

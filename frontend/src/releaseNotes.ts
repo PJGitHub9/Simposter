@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.21',
+    date: '2026-02-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed image output format setting not being respected — posters now save in the correct format (JPG/PNG/WebP) as configured in Settings',
+          'Fixed compression/quality slider not affecting output file size — JPEG quality, PNG compression, and WebP quality now apply correctly across all save paths',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Batch progress overlay now floats at top-right and persists across page navigation with real-time backend status',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.2',
     date: '2026-02-09',
     sections: [
