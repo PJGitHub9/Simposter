@@ -308,10 +308,15 @@ def _process_single_movie(
             safe_path = "".join(c for c in save_path_template if c.isalnum() or c in " _-/().")
             safe_path = safe_path.strip()
 
+            from .save import get_output_format_settings
+            fmt_settings = get_output_format_settings()
+
             candidate = Path(safe_path)
             if candidate.suffix:
                 base_dir = candidate.parent
-                filename = candidate.name
+                # Override extension to match user's output format setting
+                stem = Path(candidate.name).stem
+                filename = f"{stem}{fmt_settings['ext']}"
             else:
                 base_dir = candidate
                 # Sanitize the title for filename
@@ -321,7 +326,7 @@ def _process_single_movie(
                 yr = movie_details.get("year", "")
                 if yr:
                     filename += f" ({yr})"
-                filename += ".jpg"
+                filename += fmt_settings["ext"]
 
             # Map explicit /output to configured OUTPUT_ROOT
             base_dir_str = str(base_dir).replace("\\", "/")
@@ -369,17 +374,19 @@ def _process_single_movie(
                 str(movie_details.get("year", "")) if movie_details.get("year") else None,
             )
 
-            # Determine output format from filename extension
-            file_ext = save_path.suffix.lower()
+            # Save in user's preferred format using fmt_settings
+            pil_format = fmt_settings["pil_format"]
 
-            if file_ext == '.png':
+            if pil_format == "PNG":
                 # For PNG, properly embed metadata in PNG chunks
                 pnginfo = PngImagePlugin.PngInfo()
                 pnginfo.add_text("simposter_library_id", str(req.library_id or ""))
                 pnginfo.add_text("simposter_library_name", str(library_label or ""))
                 pnginfo.add_text("simposter_movie_title", str(movie_details.get("title", "")))
                 pnginfo.add_text("simposter_movie_year", str(movie_details.get("year", "")))
-                img.save(save_path, "PNG", pnginfo=pnginfo)
+                img.save(save_path, "PNG", pnginfo=pnginfo, compress_level=fmt_settings["quality"])
+            elif pil_format == "WEBP":
+                img.convert("RGB").save(save_path, "WEBP", quality=fmt_settings["quality"])
             else:
                 # For JPEG, embed metadata in EXIF UserComment field
                 img_rgb = img.convert("RGB")
@@ -400,15 +407,7 @@ def _process_single_movie(
                 })
                 exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
                 exif_bytes = exif.tobytes()
-
-                # Get JPEG quality from settings
-                quality = 95
-                try:
-                    if ui_settings and ui_settings.imageQuality:
-                        quality = ui_settings.imageQuality.jpgQuality
-                except Exception:
-                    pass
-                img_rgb.save(save_path, "JPEG", quality=quality, exif=exif_bytes)
+                img_rgb.save(save_path, "JPEG", quality=fmt_settings["quality"], exif=exif_bytes)
 
             logger.info(f"[BATCH] Saved locally: {save_path} (library: {library_label})")
             # Record history entry for local save
@@ -442,14 +441,15 @@ def _process_single_movie(
                 "current_step": "Sending to Plex",
             })
             buf = BytesIO()
-            # Get JPEG quality from settings
-            quality = 95
+            # Read JPEG quality from user settings (Plex always receives JPEG)
+            plex_quality = 95
             try:
-                if ui_settings and ui_settings.imageQuality:
-                    quality = ui_settings.imageQuality.jpgQuality
+                plex_ui = db.get_ui_settings()
+                if plex_ui and "imageQuality" in plex_ui:
+                    plex_quality = plex_ui["imageQuality"].get("jpgQuality", 95)
             except Exception:
                 pass
-            img.convert("RGB").save(buf, "JPEG", quality=quality)
+            img.convert("RGB").save(buf, "JPEG", quality=plex_quality)
             payload = buf.getvalue()
 
             plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
@@ -1157,10 +1157,16 @@ def _render_and_save_poster(
             safe_path = safe_path.strip()
 
             from pathlib import Path
+            from .save import get_output_format_settings
+            fmt_settings = get_output_format_settings()
+            file_ext = fmt_settings["ext"]
+
             candidate = Path(safe_path)
             if candidate.suffix:
                 base_dir = candidate.parent
-                filename = candidate.name
+                # Override extension to match user's output format setting
+                stem = Path(candidate.name).stem
+                filename = f"{stem}{file_ext}"
             else:
                 base_dir = candidate
                 # Sanitize the title for filename
@@ -1174,13 +1180,13 @@ def _render_and_save_poster(
                     season_match = re.search(r'(\d+)', season_title)
                     if season_match:
                         season_num = int(season_match.group(1))
-                        filename = f"{safe_title} - S{season_num:02d}.png"
+                        filename = f"{safe_title} - S{season_num:02d}{file_ext}"
                     else:
                         # Fallback: use sanitized season title
                         safe_season = "".join(c for c in season_title if c.isalnum() or c in " _-()")
-                        filename = f"{safe_title} - {safe_season}.png"
+                        filename = f"{safe_title} - {safe_season}{file_ext}"
                 else:
-                    filename = f"{safe_title}.png"
+                    filename = f"{safe_title}{file_ext}"
 
             save_path = base_dir / filename
 
@@ -1203,20 +1209,26 @@ def _render_and_save_poster(
                 str(year) if year else None
             )
 
-            # Save as PNG with metadata
-            pnginfo = PngImagePlugin.PngInfo()
-            pnginfo.add_text("simposter_library_id", str(req.library_id or ""))
-            pnginfo.add_text("simposter_library_name", library_label or "")
-            if title:
-                pnginfo.add_text("simposter_movie_title", title)
-            if year:
-                pnginfo.add_text("simposter_movie_year", str(year))
-            if template_id:
-                pnginfo.add_text("simposter_template_id", template_id)
-            if preset_id:
-                pnginfo.add_text("simposter_preset_id", preset_id)
+            # Save in the user's preferred format
+            pil_format = fmt_settings["pil_format"]
 
-            rendered.save(str(save_path), "PNG", pnginfo=pnginfo, optimize=False)
+            if pil_format == "PNG":
+                pnginfo = PngImagePlugin.PngInfo()
+                pnginfo.add_text("simposter_library_id", str(req.library_id or ""))
+                pnginfo.add_text("simposter_library_name", library_label or "")
+                if title:
+                    pnginfo.add_text("simposter_movie_title", title)
+                if year:
+                    pnginfo.add_text("simposter_movie_year", str(year))
+                if template_id:
+                    pnginfo.add_text("simposter_template_id", template_id)
+                if preset_id:
+                    pnginfo.add_text("simposter_preset_id", preset_id)
+                rendered.save(str(save_path), "PNG", pnginfo=pnginfo, optimize=False, compress_level=fmt_settings["quality"])
+            elif pil_format == "WEBP":
+                rendered.convert("RGB").save(str(save_path), "WEBP", quality=fmt_settings["quality"])
+            else:
+                rendered.convert("RGB").save(str(save_path), "JPEG", quality=fmt_settings["quality"])
             logger.info("[BATCH] Saved %s to: %s", title, save_path)
 
             # Record history
@@ -1251,7 +1263,15 @@ def _render_and_save_poster(
         })
 
         buf = BytesIO()
-        rendered.convert("RGB").save(buf, "JPEG", quality=95)
+        # Read JPEG quality from user settings (Plex always receives JPEG)
+        plex_quality = 95
+        try:
+            plex_ui = db.get_ui_settings()
+            if plex_ui and "imageQuality" in plex_ui:
+                plex_quality = plex_ui["imageQuality"].get("jpgQuality", 95)
+        except Exception:
+            pass
+        rendered.convert("RGB").save(buf, "JPEG", quality=plex_quality)
         payload = buf.getvalue()
 
         try:

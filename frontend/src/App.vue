@@ -487,25 +487,34 @@ const fetchBatchStatus = async () => {
 const startBatchPolling = () => {
   stopBatchPolling()
   const apiBase = getApiBase()
+  const startedAt = Date.now()
+  const GRACE_PERIOD = 3000 // 3s grace period for backend to receive request and set state to "running"
 
-  // Fetch immediately first
   const pollOnce = async () => {
     try {
       const res = await fetch(`${apiBase}/api/batch-progress`)
       if (!res.ok) return
       const data = await res.json()
-      operationStatus.applyStatus(data, 'batch')
-      if (data.state && data.state !== 'running') {
+      const inGracePeriod = Date.now() - startedAt < GRACE_PERIOD
+
+      if (data.state === 'running') {
+        // Batch is running — show progress immediately
+        operationStatus.applyStatus(data, 'batch')
+      } else if (!inGracePeriod) {
+        // Grace period elapsed — batch is truly done (or never started), apply final state and stop
+        operationStatus.applyStatus(data, 'batch')
         stopBatchPolling()
       }
+      // During grace period with non-running state: skip — old "done" from previous batch
     } catch {
       /* ignore */
     }
   }
 
-  pollOnce() // Immediate first fetch
+  // Delay first poll slightly so the batch request reaches the backend first
+  setTimeout(pollOnce, 300)
 
-  batchPoller = window.setInterval(pollOnce, 200) // Poll every 200ms for very fast updates
+  batchPoller = window.setInterval(pollOnce, 200)
 }
 
 const stopBatchPolling = () => {

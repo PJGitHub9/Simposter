@@ -16,6 +16,36 @@ router = APIRouter()
 DEFAULT_SAVE_TEMPLATE = "/config/output/{library}/{title}.jpg"
 
 
+def get_output_format_settings() -> dict:
+    """Read the user's output format preference from settings.
+    Returns dict with keys: format ('jpg'|'png'|'webp'), ext ('.jpg'|'.png'|'.webp'),
+    pil_format ('JPEG'|'PNG'|'WEBP'), quality (int)."""
+    from .. import database as db
+
+    fmt = "jpg"
+    jpg_quality = 95
+    png_compression = 6
+    webp_quality = 90
+
+    try:
+        settings_data = db.get_ui_settings()
+        if settings_data and "imageQuality" in settings_data:
+            iq = settings_data["imageQuality"]
+            fmt = iq.get("outputFormat", "jpg").lower()
+            jpg_quality = iq.get("jpgQuality", 95)
+            png_compression = iq.get("pngCompression", 6)
+            webp_quality = iq.get("webpQuality", 90)
+    except Exception:
+        pass
+
+    if fmt == "png":
+        return {"format": "png", "ext": ".png", "pil_format": "PNG", "quality": png_compression}
+    elif fmt == "webp":
+        return {"format": "webp", "ext": ".webp", "pil_format": "WEBP", "quality": webp_quality}
+    else:
+        return {"format": "jpg", "ext": ".jpg", "pil_format": "JPEG", "quality": jpg_quality}
+
+
 def resolve_library_label(library_id: Optional[str]) -> str:
     """Return a human-friendly library label (display name/title) given an id."""
     from .. import database as db
@@ -279,12 +309,19 @@ def api_save(req: SaveRequest):
 
     # Determine if the template included a filename (suffix present)
     candidate = Path(safe_path)
+    # Get user's preferred output format
+    fmt_settings = get_output_format_settings()
+
     if candidate.suffix:  # treat as full file path
         base_dir = candidate.parent
         filename = candidate.name
     else:
         base_dir = candidate
         filename = req.filename or "poster.jpg"
+
+    # Override file extension to match user's output format setting
+    stem = Path(filename).stem
+    filename = f"{stem}{fmt_settings['ext']}"
 
     # Map explicit /output/* to configured OUTPUT_ROOT to respect template defaults
     base_dir_str = str(base_dir).replace("\\", "/")
@@ -319,17 +356,22 @@ def api_save(req: SaveRequest):
     # Embed library metadata into the image
     img = embed_library_metadata(img, req.library_id, library_label, req.movie_title, str(req.movie_year) if req.movie_year else None)
 
-    # Determine output format from filename extension
+    # Save using the correct format based on user's output format setting
+    pil_format = fmt_settings["pil_format"]
     file_ext = out_path.suffix.lower()
 
-    if file_ext == '.png':
+    if pil_format == "PNG" or file_ext == '.png':
         # For PNG, properly embed metadata in PNG chunks
         pnginfo = PngImagePlugin.PngInfo()
         pnginfo.add_text("simposter_library_id", str(req.library_id or ""))
         pnginfo.add_text("simposter_library_name", str(library_label or ""))
         pnginfo.add_text("simposter_movie_title", str(req.movie_title or ""))
         pnginfo.add_text("simposter_movie_year", str(req.movie_year or ""))
-        img.save(out_path, "PNG", pnginfo=pnginfo)
+        img.save(out_path, "PNG", pnginfo=pnginfo, compress_level=fmt_settings["quality"])
+    elif pil_format == "WEBP" or file_ext == '.webp':
+        # For WebP, convert to RGB and save with quality setting
+        img_rgb = img.convert("RGB")
+        img_rgb.save(out_path, "WEBP", quality=fmt_settings["quality"])
     else:
         # For JPEG, embed metadata in EXIF UserComment field
         img_rgb = img.convert("RGB")
@@ -350,16 +392,7 @@ def api_save(req: SaveRequest):
         })
         exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
         exif_bytes = exif.tobytes()
-
-        # Get JPEG quality from settings
-        quality = 95
-        try:
-            settings_data = db.get_ui_settings()
-            if settings_data and "imageQuality" in settings_data:
-                quality = settings_data["imageQuality"].get("jpgQuality", 95)
-        except Exception:
-            pass
-        img_rgb.save(out_path, "JPEG", quality=quality, exif=exif_bytes)
+        img_rgb.save(out_path, "JPEG", quality=fmt_settings["quality"], exif=exif_bytes)
 
     logger.info("Saved poster to %s (library: %s)", out_path, library_label)
     return {"status": "ok", "saved_path": out_path}
