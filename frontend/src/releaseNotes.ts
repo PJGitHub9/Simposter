@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.23',
+    date: '2026-02-23',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed Sonarr webhook not generating series poster for newly added TV shows — now creates both series and season posters for new shows',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.22',
     date: '2026-02-23',
     sections: [

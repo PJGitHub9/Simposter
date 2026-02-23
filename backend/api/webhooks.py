@@ -515,7 +515,35 @@ def process_sonarr_webhook_with_retry(
         logger.info(f"[SONARR_WEBHOOK] Skipping poster generation for {title} - has webhook ignore label")
         return
 
-    # Now process the poster generation
+    # Check if this is a NEW show (not in cache) - if so, generate series poster too
+    is_new_show = False
+    if library_id:
+        try:
+            cached_shows = db.get_cached_tv_shows(library_id=library_id)
+            # Check if this show exists in cache
+            show_in_cache = any(show.get("rating_key") == rating_key for show in cached_shows)
+            is_new_show = not show_in_cache
+            if is_new_show:
+                logger.info(f"[SONARR_WEBHOOK] Detected NEW show - will generate series poster + season posters")
+        except Exception as e:
+            logger.warning(f"[SONARR_WEBHOOK] Could not check cache for new show detection: {e}")
+
+    # If it's a new show and include_seasons is True, generate series poster first
+    if is_new_show and include_seasons:
+        logger.info(f"[SONARR_WEBHOOK] Generating series poster for NEW show: {title}")
+        process_webhook_poster_generation(
+            rating_key=rating_key,
+            template_id=template_id,
+            preset_id=preset_id,
+            auto_send=auto_send,
+            auto_labels=auto_labels,
+            library_id=library_id,
+            is_tv=True,
+            include_seasons=False,  # Series poster only
+            affected_seasons=None
+        )
+
+    # Now process the poster generation (season posters if include_seasons=True)
     process_webhook_poster_generation(
         rating_key=rating_key,
         template_id=template_id,
