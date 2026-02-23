@@ -20,6 +20,7 @@ from . import (
     scheduler,
     database,
     notifications,
+    backup,
 )
 
 router = APIRouter()
@@ -43,3 +44,4 @@ router.include_router(test_api_keys.router)
 router.include_router(scheduler.router)
 router.include_router(database.router)
 router.include_router(notifications.router)
+router.include_router(backup.router)

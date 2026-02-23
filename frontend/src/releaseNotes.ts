@@ -10,6 +10,21 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.22',
+    date: '2026-02-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Backup & Restore — save original Plex posters before making changes and restore them later with smart auto-matching',
+          'Manual assignment for unmatched backup files — click any backup file to assign it to any Plex library item',
+          'TV show season poster backup & restore support — optionally include season posters in backups',
+          'Human-readable backup filenames — posters saved as "Title (Year).jpg" or "Show Name (Year) - Season 01.jpg"',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.21',
     date: '2026-02-09',
     sections: [
