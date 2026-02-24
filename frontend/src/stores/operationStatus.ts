@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 
-export type OperationType = 'scan' | 'batch' | null
+export type OperationType = 'scan' | 'batch' | 'backup' | null
 export type OperationState = 'idle' | 'running' | 'done' | 'error'
 
 export type StatusData = {

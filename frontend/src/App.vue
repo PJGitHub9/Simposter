@@ -37,7 +37,8 @@ const tabs = computed<MenuItem[]>(() => {
     submenu: [
       { key: `batch-${lib.id || idx}`, label: 'Batch Edit' },
       { key: `collections-${lib.id || idx}`, label: 'Collections' },
-      { key: `assets-${lib.id || idx}`, label: 'Local Assets' }
+      { key: `assets-${lib.id || idx}`, label: 'Local Assets' },
+      { key: `backup-${lib.id || idx}`, label: 'Backup / Restore' }
     ]
   }))
 
@@ -50,7 +51,8 @@ const tabs = computed<MenuItem[]>(() => {
     label: lib.displayName || lib.title || `TV Library ${idx + 1}`,
     submenu: [
       { key: `tv-batch-${lib.id || idx}`, label: 'Batch Edit' },
-      { key: `tv-assets-${lib.id || idx}`, label: 'Local Assets' }
+      { key: `tv-assets-${lib.id || idx}`, label: 'Local Assets' },
+      { key: `tv-backup-${lib.id || idx}`, label: 'Backup / Restore' }
     ]
   })) : []
 
@@ -85,6 +87,7 @@ const scan = useScanStore()
 const operationStatus = useOperationStatus()
 let scanPoller: number | null = null
 let batchPoller: number | null = null
+let backupPoller: number | null = null
 
 // State for all-libraries search
 const allLibrariesMovies = ref<{ libraryName: string; mediaType: string; movies: any[] }[]>([])
@@ -290,7 +293,12 @@ const groupedContentForSearch = computed(() => {
 
 const activeTab = computed<TabKey>(() => {
   const libQuery = (route.query.library as string) || ''
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections') {
+  if (route.name === 'backup' && (route.query.type as string) === 'tv-show') {
+    if (libQuery) return `tv-shows-${libQuery}`
+    const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
+    return `tv-shows-${firstTvLib?.id || 'default'}`
+  }
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
@@ -312,6 +320,10 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
+  if (route.name === 'backup') {
+    const type = route.query.type as string
+    return type === 'tv-show' ? `tv-backup-${libQuery || 'default'}` : `backup-${libQuery || 'default'}`
+  }
   return ''
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
@@ -395,6 +407,10 @@ onMounted(async () => {
   fetchBatchStatus().then((running) => {
     if (running) startBatchPolling()
   })
+  // Check if backup operation is running
+  fetchBackupStatus().then((running) => {
+    if (running) startBackupPolling()
+  })
 
   // Restore edit state from URL if present
   if (route.query.edit) {
@@ -428,6 +444,7 @@ watch(() => route.query.edit, (editId) => {
 onUnmounted(() => {
   stopScanPolling()
   stopBatchPolling()
+  stopBackupPolling()
 })
 
 const fetchScanStatus = async () => {
@@ -527,6 +544,57 @@ const stopBatchPolling = () => {
 // Export for use by BatchEditModal
 ;(window as any).startBatchPolling = startBatchPolling
 
+// --- Backup progress polling (same pattern as batch) ---
+const fetchBackupStatus = async () => {
+  const apiBase = getApiBase()
+  try {
+    const res = await fetch(`${apiBase}/api/backup/progress`)
+    if (!res.ok) return false
+    const data = await res.json()
+    operationStatus.applyStatus(data, 'backup')
+    return data.state === 'running'
+  } catch {
+    return false
+  }
+}
+
+const startBackupPolling = () => {
+  stopBackupPolling()
+  const apiBase = getApiBase()
+  const startedAt = Date.now()
+  const GRACE_PERIOD = 3000
+
+  const pollOnce = async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/backup/progress`)
+      if (!res.ok) return
+      const data = await res.json()
+      const inGracePeriod = Date.now() - startedAt < GRACE_PERIOD
+
+      if (data.state === 'running') {
+        operationStatus.applyStatus(data, 'backup')
+      } else if (!inGracePeriod) {
+        operationStatus.applyStatus(data, 'backup')
+        stopBackupPolling()
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  setTimeout(pollOnce, 300)
+  backupPoller = window.setInterval(pollOnce, 500)
+}
+
+const stopBackupPolling = () => {
+  if (backupPoller !== null) {
+    clearInterval(backupPoller)
+    backupPoller = null
+  }
+}
+
+;(window as any).startBackupPolling = startBackupPolling
+
 const handleSearchSelect = (item: { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show' }) => {
   const mediaType = item.mediaType || 'movie'
   if (mediaType === 'tv-show') {
@@ -551,6 +619,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'collections', query: { library: libId } })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: { library: libId } })
+    } else if (submenuKey.startsWith('backup-')) {
+      router.push({ name: 'backup', query: { library: libId, type: 'movie' } })
     }
   } else if (parentKey.startsWith('tv-shows-')) {
     const libId = parentKey.replace('tv-shows-', '')
@@ -558,6 +628,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'tv-batch-edit', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-assets-')) {
       router.push({ name: 'tv-local-assets', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-backup-')) {
+      router.push({ name: 'backup', query: { library: libId, type: 'tv-show' } })
     }
   }
 }
@@ -633,10 +705,14 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
             {{ operationStatus.state.value === 'running' ? 'Processing batch...' :
                operationStatus.state.value === 'error' ? 'Batch failed!' : 'Batch complete!' }}
           </span>
+          <span v-else-if="operationStatus.type.value === 'backup'">
+            {{ operationStatus.state.value === 'running' ? 'Backup / Restore in progress...' :
+               operationStatus.state.value === 'error' ? 'Backup / Restore failed!' : 'Backup / Restore complete!' }}
+          </span>
         </p>
 
-        <!-- Combined status line for batch operations -->
-        <p v-if="operationStatus.type.value === 'batch' && operationStatus.state.value === 'running'" class="batch-status">
+        <!-- Combined status line for batch/backup operations -->
+        <p v-if="(operationStatus.type.value === 'batch' || operationStatus.type.value === 'backup') && operationStatus.state.value === 'running'" class="batch-status">
           <span class="batch-count">{{ operationStatus.progress.value.processed + 1 }}/{{ operationStatus.progress.value.total }}</span>
           <span v-if="operationStatus.currentStep.value" class="batch-step">{{ operationStatus.currentStep.value }}</span>
           <span v-if="operationStatus.currentMovie.value" class="batch-movie">{{ operationStatus.currentMovie.value }}</span>
