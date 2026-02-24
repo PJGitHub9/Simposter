@@ -1,0 +1,118 @@
+import { ref } from 'vue'
+import type { PresetOptions } from './types'
+import { getApiBase } from './apiBase'
+
+const apiBase = getApiBase()
+
+type PresetRecord = { id: string; name?: string; options?: PresetOptions; season_options?: PresetOptions }
+
+export function usePresetService() {
+  const templates = ref<string[]>(['default'])
+  const presets = ref<PresetRecord[]>([])
+  const selectedTemplate = ref('default')
+  const selectedPreset = ref('')
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+
+  const load = async () => {
+    loading.value = true
+    error.value = null
+    try {
+      const res = await fetch(`${apiBase}/api/presets`)
+      if (!res.ok) throw new Error(`API error ${res.status}`)
+      const data = await res.json()
+      const tplKeys = Object.keys(data)
+      templates.value = tplKeys.length ? tplKeys : ['default']
+      if (!tplKeys.includes(selectedTemplate.value)) {
+        selectedTemplate.value = templates.value[0] || 'default'
+      }
+      presets.value = data[selectedTemplate.value]?.presets || []
+      if (!presets.value.find((p) => p.id === selectedPreset.value)) {
+        selectedPreset.value = presets.value[0]?.id || ''
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to load presets'
+      error.value = message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const deriveSeasonOptions = (opts: PresetOptions): PresetOptions => {
+    const base = { ...(opts || {}) } as Record<string, any>
+    return {
+      ...base,
+      logo_mode: 'none',
+      text_overlay_enabled: true,
+      custom_text: '{season}',
+      font_family: 'Arial',
+      font_size: 150,
+      shadow_enabled: false,
+      shadow_blur: 0,
+      letter_spacing: 1,
+      position_y: 0.85,
+    }
+  }
+
+  const savePreset = async (options?: PresetOptions) => {
+    if (!selectedTemplate.value || !selectedPreset.value) return
+    loading.value = true
+    error.value = null
+    try {
+      const baseOptions = options ?? presets.value.find((p) => p.id === selectedPreset.value)?.options ?? {}
+      const payload = {
+        template_id: selectedTemplate.value,
+        preset_id: selectedPreset.value,
+        options: baseOptions,
+        season_options: deriveSeasonOptions(baseOptions)
+      }
+      const res = await fetch(`${apiBase}/api/presets/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      if (!res.ok) throw new Error(`API error ${res.status}`)
+      await load()
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to save preset'
+      error.value = message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const savePresetAs = async (presetId: string, options?: PresetOptions) => {
+    const targetId = presetId.trim()
+    if (!targetId) return
+
+    loading.value = true
+    error.value = null
+    try {
+      const baseOptions = options ?? presets.value.find((p) => p.id === selectedPreset.value)?.options ?? {}
+      const payload = {
+        template_id: selectedTemplate.value || 'default',
+        preset_id: targetId,
+        options: baseOptions,
+        season_options: deriveSeasonOptions(baseOptions)
+      }
+      const res = await fetch(`${apiBase}/api/presets/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      if (!res.ok) throw new Error(`API error ${res.status}`)
+      await load()
+      // Select the newly created preset if it now exists
+      if (presets.value.find((p) => p.id === targetId)) {
+        selectedPreset.value = targetId
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Failed to save preset'
+      error.value = message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { templates, presets, selectedTemplate, selectedPreset, loading, error, load, savePreset, savePresetAs }
+}

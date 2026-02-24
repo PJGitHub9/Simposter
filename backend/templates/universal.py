@@ -1,10 +1,13 @@
 # backend/templates/universal.py
-# V1.3.1 - behaves the same as your old V1.2 universal renderer
+# Universal template with full creative controls for cinematic posters
 
 from typing import Dict, Any, Optional
-from PIL import Image, ImageDraw, ImageOps, ImageEnhance, ImageFilter, ImageChops
+from PIL import Image, ImageDraw, ImageOps, ImageEnhance, ImageFilter, ImageChops, ImageFont
 import random
 import numpy as np
+import os
+from pathlib import Path
+from ..config import settings
 
 # ============================================================
 # Helpers
@@ -131,6 +134,469 @@ def _solid_color_logo(logo: Image.Image, color: tuple[int, int, int]) -> Image.I
     )
 
 
+def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
+    """
+    Load a font by name. Searches in this order:
+    1. /config/fonts (mounted volume for custom fonts)
+    2. repo config/fonts (bundled fonts)
+    3. System font directories
+
+    Supports exact matches, partial matches, and weight-specific variants.
+    Users can upload custom .ttf or .otf files to /config/fonts/
+    """
+    font_extensions = ['.ttf', '.otf', '.TTF', '.OTF', '.ttc', '.TTC']
+    boldish = (font_weight or "").lower() in ("bold", "700", "800", "900")
+
+    def scan_directory(base_dir: Path):
+        """Scan directory for matching fonts with fuzzy matching."""
+        if not base_dir.exists():
+            return None
+
+        # Try exact match first
+        for ext in font_extensions:
+            font_path = base_dir / f"{font_family}{ext}"
+            if font_path.exists():
+                try:
+                    print(f"[FONT] Loaded '{font_family}' from {font_path}")
+                    return ImageFont.truetype(str(font_path), font_size)
+                except Exception as e:
+                    print(f"[FONT] Failed to load {font_path}: {e}")
+
+            # Try with weight suffix if bold requested
+            if boldish:
+                for suffix in ['-Bold', '-bold', 'Bold', 'bold', '-B', 'B', '-Heavy', 'Heavy']:
+                    font_path = base_dir / f"{font_family}{suffix}{ext}"
+                    if font_path.exists():
+                        try:
+                            print(f"[FONT] Loaded '{font_family}' (bold) from {font_path}")
+                            return ImageFont.truetype(str(font_path), font_size)
+                        except Exception as e:
+                            print(f"[FONT] Failed to load {font_path}: {e}")
+
+        # Try recursive search with fuzzy matching
+        try:
+            font_lower = font_family.lower().replace(' ', '').replace('-', '')
+            matched_fonts = []
+
+            # First pass: collect all matching fonts with metadata
+            for font_file in base_dir.rglob('*'):
+                if font_file.suffix.lower() not in ['.ttf', '.otf', '.ttc']:
+                    continue
+
+                file_lower = font_file.stem.lower().replace(' ', '').replace('-', '')
+
+                # Match if font_family is in filename
+                if font_lower in file_lower or file_lower in font_lower:
+                    has_bold = any(w in file_lower for w in ['bold', 'heavy', 'black', 'bd'])
+                    has_italic = 'italic' in file_lower or 'oblique' in file_lower
+                    has_light = 'light' in file_lower or 'thin' in file_lower
+
+                    # Skip italics unless specifically requested
+                    if has_italic and 'italic' not in font_family.lower():
+                        continue
+
+                    matched_fonts.append({
+                        'path': font_file,
+                        'has_bold': has_bold,
+                        'has_light': has_light,
+                        'has_italic': has_italic,
+                        'is_exact_weight': (boldish and has_bold) or (not boldish and not has_bold and not has_light)
+                    })
+
+            # Sort by preference: exact weight match first
+            matched_fonts.sort(key=lambda x: (
+                not x['is_exact_weight'],  # Exact weight match first
+                x['has_italic'],  # Non-italic preferred
+                x['has_light']  # Non-light preferred
+            ))
+
+            # Try loading fonts in priority order
+            for font_info in matched_fonts:
+                try:
+                    font_obj = ImageFont.truetype(str(font_info['path']), font_size)
+                    match_type = "exact weight" if font_info['is_exact_weight'] else "fallback weight"
+                    print(f"[FONT] Loaded '{font_family}' via fuzzy match ({match_type}) from {font_info['path']}")
+                    return font_obj
+                except Exception as e:
+                    print(f"[FONT] Failed to load {font_info['path']}: {e}")
+
+        except Exception as e:
+            print(f"[FONT] Error scanning directory {base_dir}: {e}")
+
+        return None
+
+    # 1) Check /config/fonts (user custom fonts directory)
+    volume_fonts_dir = Path(settings.CONFIG_DIR) / "fonts"
+    # Create directory if it doesn't exist
+    try:
+        volume_fonts_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    font_obj = scan_directory(volume_fonts_dir)
+    if font_obj:
+        return font_obj
+
+    # 2) Check repo config/fonts (bundled fonts)
+    repo_fonts_dir = Path(__file__).resolve().parent.parent.parent / "config" / "fonts"
+    font_obj = scan_directory(repo_fonts_dir)
+    if font_obj:
+        return font_obj
+
+    # 3) System font directories (Windows/Linux/macOS)
+    system_font_dirs = [
+        Path('/usr/share/fonts'),  # Linux
+        Path('/System/Library/Fonts'),  # macOS system
+        Path('/Library/Fonts'),  # macOS shared
+        Path('C:/Windows/Fonts'),  # Windows
+        Path(os.path.expanduser('~/Library/Fonts')),  # macOS user
+        Path(os.path.expanduser('~/.fonts')),  # Linux user
+    ]
+
+    for sys_dir in system_font_dirs:
+        if sys_dir.exists():
+            font_obj = scan_directory(sys_dir)
+            if font_obj:
+                return font_obj
+
+    # 4) Common font name aliases as fallback
+    # Map font families to their actual file names on different systems
+    system_font_map = {
+        'Arial': {
+            'regular': ['arial.ttf', 'Arial.ttf'],
+            'bold': ['arialbd.ttf', 'Arial Bold.ttf', 'Arial-Bold.ttf']
+        },
+        'Helvetica': {
+            'regular': ['Helvetica.ttf', 'HelveticaNeue.ttc', 'Helvetica Neue.ttf', 'arial.ttf'],  # Fallback to Arial
+            'bold': ['Helvetica-Bold.ttf', 'HelveticaNeue-Bold.ttc', 'Helvetica Neue Bold.ttf', 'arialbd.ttf']
+        },
+        'Times New Roman': {
+            'regular': ['times.ttf', 'Times New Roman.ttf'],
+            'bold': ['timesbd.ttf', 'Times New Roman Bold.ttf']
+        },
+        'Georgia': {
+            'regular': ['georgia.ttf', 'Georgia.ttf'],
+            'bold': ['georgiab.ttf', 'Georgia Bold.ttf']
+        },
+        'Verdana': {
+            'regular': ['verdana.ttf', 'Verdana.ttf'],
+            'bold': ['verdanab.ttf', 'Verdana Bold.ttf']
+        },
+        'Courier New': {
+            'regular': ['cour.ttf', 'Courier New.ttf'],
+            'bold': ['courbd.ttf', 'Courier New Bold.ttf']
+        },
+        'Impact': {
+            'regular': ['impact.ttf', 'Impact.ttf'],
+            'bold': ['impact.ttf', 'Impact.ttf']  # Impact doesn't have bold
+        },
+        'Trebuchet MS': {
+            'regular': ['trebuc.ttf', 'Trebuchet MS.ttf'],
+            'bold': ['trebucbd.ttf', 'Trebuchet MS Bold.ttf']
+        },
+        'Comic Sans MS': {
+            'regular': ['comic.ttf', 'Comic Sans MS.ttf'],
+            'bold': ['comicbd.ttf', 'Comic Sans MS Bold.ttf']
+        },
+        'DejaVu Sans': {
+            'regular': ['DejaVuSans.ttf'],
+            'bold': ['DejaVuSans-Bold.ttf']
+        },
+        'Liberation Sans': {
+            'regular': ['LiberationSans-Regular.ttf'],
+            'bold': ['LiberationSans-Bold.ttf']
+        },
+        'Roboto': {
+            'regular': ['Roboto-Regular.ttf'],
+            'bold': ['Roboto-Bold.ttf']
+        },
+    }
+
+    # Build candidate list based on weight
+    candidates = []
+    if font_family in system_font_map:
+        weight_key = 'bold' if boldish else 'regular'
+        # Try requested weight first
+        candidates.extend(system_font_map[font_family].get(weight_key, []))
+        # Then try opposite weight as fallback
+        fallback_key = 'regular' if boldish else 'bold'
+        candidates.extend(system_font_map[font_family].get(fallback_key, []))
+
+    # Add generic fallbacks (weight-aware)
+    if boldish:
+        candidates.extend([
+            'DejaVuSans-Bold.ttf',
+            'LiberationSans-Bold.ttf',
+            'FreeSansBold.ttf',
+            'arialbd.ttf',  # Windows Arial Bold
+            'Arial-Bold.ttf',
+        ])
+    else:
+        candidates.extend([
+            'DejaVuSans.ttf',
+            'LiberationSans-Regular.ttf',
+            'FreeSans.ttf',
+            'arial.ttf',  # Windows Arial
+            'Arial.ttf',
+        ])
+
+    for font_name in candidates:
+        try:
+            font_obj = ImageFont.truetype(font_name, font_size)
+            print(f"[FONT] Loaded system font: {font_name} (weight={'bold' if boldish else 'regular'})")
+            return font_obj
+        except Exception:
+            continue
+
+    print(f"[FONT] WARNING: Could not load '{font_family}' (weight={'bold' if boldish else 'regular'}). Using Pillow default.")
+    print(f"[FONT] To fix: Upload .ttf/.otf files to {volume_fonts_dir}")
+    return ImageFont.load_default()
+
+
+def _render_text_overlay(
+    canvas: Image.Image,
+    text: str,
+    options: Dict[str, Any]
+) -> Image.Image:
+    """
+    Render custom text overlay on the canvas.
+    Supports font customization, positioning, shadows, and outlines.
+    """
+    if not text or not text.strip():
+        print(f"[DEBUG] Text overlay skipped - empty text: '{text}'")
+        return canvas
+
+    print(f"[DEBUG] Rendering text overlay: '{text}'")
+    W, H = canvas.size
+    print(f"[DEBUG] Canvas size: {W}x{H}")
+
+    # Extract text options
+    font_family = str(options.get("font_family", "Arial"))
+    font_size = int(options.get("font_size", 120))
+    font_weight = str(options.get("font_weight", "700"))
+    text_color = _hex_to_rgb(options.get("text_color", "#ffffff"))
+    text_align = str(options.get("text_align", "center"))
+    text_transform = str(options.get("text_transform", "uppercase"))
+    letter_spacing = int(options.get("letter_spacing", 2))
+    line_height = float(options.get("line_height", 1.2))
+    position_y = float(options.get("position_y", 0.75))
+
+    # Shadow options
+    shadow_enabled = bool(options.get("shadow_enabled", False))  # Default: disabled
+    shadow_blur = int(options.get("shadow_blur", 10))
+    shadow_offset_x = int(options.get("shadow_offset_x", 0))
+    shadow_offset_y = int(options.get("shadow_offset_y", 4))
+    shadow_color = _hex_to_rgb(options.get("shadow_color", "#000000"))
+    shadow_opacity = float(options.get("shadow_opacity", 0.8))
+
+    # Stroke options
+    stroke_enabled = bool(options.get("stroke_enabled", False))
+    stroke_width = int(options.get("stroke_width", 4))
+    stroke_color = _hex_to_rgb(options.get("stroke_color", "#000000"))
+
+    # Replace template variables
+    movie_title = str(options.get("movie_title", ""))
+    movie_year = str(options.get("movie_year", ""))
+    season_text = str(options.get("season_text", ""))
+
+    text = text.replace("{title}", movie_title)
+    text = text.replace("{year}", movie_year)
+    text = text.replace("{season}", season_text)
+    print(f"[DEBUG] Text after template substitution: '{text}'")
+
+    # Apply text transform
+    if text_transform == "uppercase":
+        text = text.upper()
+    elif text_transform == "lowercase":
+        text = text.lower()
+    elif text_transform == "capitalize":
+        text = text.title()
+
+    # Load font
+    font = _load_font(font_family, font_size, font_weight)
+    print(f"[DEBUG] Font loaded: {font_family} size {font_size}")
+
+    # Create a drawing context for text measurement (needs proper size for accurate bbox)
+    temp_img = Image.new("RGBA", (W, H))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    # Helper function to apply letter spacing
+    def apply_letter_spacing(text_line: str) -> str:
+        if letter_spacing > 0:
+            return ''.join(c + ' ' * letter_spacing for c in text_line).rstrip()
+        return text_line
+
+    # Helper function to measure text width
+    def measure_text_width(text_line: str) -> int:
+        spaced = apply_letter_spacing(text_line)
+        bbox = temp_draw.textbbox((0, 0), spaced, font=font)
+        return bbox[2] - bbox[0]
+
+    # Helper function to wrap a line if it's too wide
+    def wrap_line(line: str, max_width: int) -> list[str]:
+        """Wrap a line into multiple lines if it exceeds max_width"""
+        if not line:
+            return ['']
+
+        # Check if the whole line fits
+        if measure_text_width(line) <= max_width:
+            return [line]
+
+        # Split into words and wrap
+        words = line.split(' ')
+        wrapped_lines = []
+        current_line = ''
+
+        for word in words:
+            # Try adding the word
+            test_line = current_line + (' ' if current_line else '') + word
+
+            if measure_text_width(test_line) <= max_width:
+                current_line = test_line
+            else:
+                # Word doesn't fit, check if we need to break the word itself
+                if current_line:
+                    wrapped_lines.append(current_line)
+                    current_line = word
+                else:
+                    # Single word is too long, need to break it by characters
+                    if measure_text_width(word) > max_width:
+                        # Break word character by character
+                        for char in word:
+                            test_line = current_line + char
+                            if measure_text_width(test_line) <= max_width:
+                                current_line = test_line
+                            else:
+                                if current_line:
+                                    wrapped_lines.append(current_line)
+                                current_line = char
+                    else:
+                        current_line = word
+
+        if current_line:
+            wrapped_lines.append(current_line)
+
+        return wrapped_lines if wrapped_lines else ['']
+
+    # Calculate max width (canvas width minus margins)
+    margin_left = 100
+    margin_right = 100
+    max_text_width = W - margin_left - margin_right
+
+    # Split text into lines and wrap if needed
+    lines = text.split('\n')
+    wrapped_lines = []
+    for line in lines:
+        wrapped_lines.extend(wrap_line(line, max_text_width))
+
+    # Measure all wrapped lines
+    line_heights = []
+    line_widths = []
+
+    for line in wrapped_lines:
+        spaced_line = apply_letter_spacing(line)
+        bbox = temp_draw.textbbox((0, 0), spaced_line, font=font)
+        line_width = bbox[2] - bbox[0]
+        line_height_val = bbox[3] - bbox[1]
+
+        line_widths.append(line_width)
+        line_heights.append(line_height_val)
+
+    # Calculate total text block height with line spacing
+    total_height = sum(line_heights) + int(font_size * (line_height - 1) * (len(wrapped_lines) - 1))
+    max_width = max(line_widths) if line_widths else 0
+
+    print(f"[DEBUG] Text wrapped into {len(wrapped_lines)} lines (original: {len(lines)} lines)")
+    print(f"[DEBUG] Max text width allowed: {max_text_width}px")
+
+    # Calculate Y position
+    y_pos = int(H * position_y - total_height / 2)
+    print(f"[DEBUG] Text position: y={y_pos}, position_y={position_y}, total_height={total_height}")
+    print(f"[DEBUG] Text color: {text_color}, align: {text_align}")
+
+    # Create layer for text with extra space for shadow/stroke
+    padding = max(shadow_blur + abs(shadow_offset_x) + abs(shadow_offset_y), stroke_width) + 50
+    text_layer = Image.new("RGBA", (W + padding * 2, H + padding * 2), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(text_layer)
+
+    # Draw each line
+    current_y = y_pos + padding
+    for i, line in enumerate(wrapped_lines):
+        # Add letter spacing
+        spaced_line = apply_letter_spacing(line)
+
+        # Calculate X position based on alignment
+        line_width = line_widths[i]
+        if text_align == "center":
+            x_pos = (W - line_width) // 2 + padding
+        elif text_align == "right":
+            x_pos = W - line_width - 100 + padding  # 100px margin from right
+        else:  # left
+            x_pos = 100 + padding  # 100px margin from left
+
+        # Draw shadow if enabled
+        if shadow_enabled and shadow_blur > 0:
+            # Create shadow layer
+            shadow_layer = Image.new("RGBA", text_layer.size, (0, 0, 0, 0))
+            shadow_draw = ImageDraw.Draw(shadow_layer)
+
+            shadow_x = x_pos + shadow_offset_x
+            shadow_y = current_y + shadow_offset_y
+
+            # Draw shadow with stroke if stroke is enabled
+            if stroke_enabled:
+                shadow_draw.text(
+                    (shadow_x, shadow_y),
+                    spaced_line,
+                    font=font,
+                    fill=(*shadow_color, int(255 * shadow_opacity)),
+                    stroke_width=stroke_width,
+                    stroke_fill=(*shadow_color, int(255 * shadow_opacity))
+                )
+            else:
+                shadow_draw.text(
+                    (shadow_x, shadow_y),
+                    spaced_line,
+                    font=font,
+                    fill=(*shadow_color, int(255 * shadow_opacity))
+                )
+
+            # Blur shadow
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow_blur))
+            text_layer = Image.alpha_composite(text_layer, shadow_layer)
+
+        # Draw text with stroke/outline if enabled
+        if stroke_enabled:
+            draw.text(
+                (x_pos, current_y),
+                spaced_line,
+                font=font,
+                fill=(*text_color, 255),
+                stroke_width=stroke_width,
+                stroke_fill=(*stroke_color, 255)
+            )
+        else:
+            draw.text(
+                (x_pos, current_y),
+                spaced_line,
+                font=font,
+                fill=(*text_color, 255)
+            )
+
+        # Move to next line
+        current_y += line_heights[i] + int(font_size * (line_height - 1))
+
+    # Crop text layer back to canvas size
+    text_layer = text_layer.crop((padding, padding, W + padding, H + padding))
+
+    # Composite text onto canvas
+    canvas = canvas.convert("RGBA")
+    canvas = Image.alpha_composite(canvas, text_layer)
+    print(f"[DEBUG] Text overlay composited successfully")
+
+    return canvas
+
+
 # ============================================================
 # Base poster (used by universal + uniformlogo)
 # ============================================================
@@ -140,7 +606,7 @@ def build_base_poster(
     options: Dict[str, Any] | None,
 ) -> Image.Image:
     """
-    This reproduces the V1.2 look up to (but not including) logo + border.
+    Base poster builder with matte, fade, vignette, and grain effects.
     Used by:
       - universal template
       - uniformlogo template
@@ -217,10 +683,10 @@ def build_base_poster(
         base_rgb = _add_vignette(base_rgb, vignette_strength)
     base_rgb = _add_grain(base_rgb, grain_amount)
 
-    # --- V1.2 WASHOUT PATCH (fast & identical to old look) ---
+    # --- WASHOUT EFFECT (neutral grey tone overlay) ---
     v12_wash = float(options.get("v12_wash_strength", 0.0))  # Recommended: 0.08–0.15
     if v12_wash > 0:
-        # neutral grey tone similar to old V1.2 blend result
+        # Neutral grey tone for cinematic washout effect
         grey_layer = Image.new("RGB", (canvas_w, canvas_h), (32, 32, 32))
         base_rgb = Image.blend(base_rgb, grey_layer, v12_wash)
 
@@ -228,7 +694,7 @@ def build_base_poster(
 
 
 # ============================================================
-# Universal template (V1.2 behavior)
+# Universal template
 # ============================================================
 
 def render_universal(
@@ -238,7 +704,7 @@ def render_universal(
 ) -> Image.Image:
     """
     Primary "default" template renderer.
-    Matches the old V1.2 `render()` function’s behavior.
+    Full creative controls for cinematic posters with matte, fade, vignette, and effects.
     """
 
     if options is None:
@@ -289,6 +755,15 @@ def render_universal(
         x_logo = (W - logo.width) // 2
 
         canvas.alpha_composite(logo, (x_logo, y_logo))
+
+    # ------------- TEXT OVERLAY -------------
+    text_overlay_enabled = bool(options.get("text_overlay_enabled", False))
+    print(f"[DEBUG] Text overlay enabled: {text_overlay_enabled}")
+    if text_overlay_enabled:
+        custom_text = str(options.get("custom_text", ""))
+        print(f"[DEBUG] Custom text: '{custom_text}'")
+        if custom_text:
+            canvas = _render_text_overlay(canvas, custom_text, options)
 
     # ------------- ROUNDED CORNERS + BORDER -------------
     canvas = canvas.convert("RGBA")
