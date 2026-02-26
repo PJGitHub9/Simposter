@@ -260,7 +260,7 @@ def api_save(req: SaveRequest):
     # Load preset season_options if rendering a season (same logic as preview endpoint)
     if req.preset_id:
         from .. import database as db
-        preset = db.get_preset(req.template_id or "default", req.preset_id)
+        preset = db.get_preset(req.template_id or "uniformlogo", req.preset_id)
         if preset:
             # Check if this is a season render based on season_text presence
             is_season = False

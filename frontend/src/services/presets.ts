@@ -7,9 +7,9 @@ const apiBase = getApiBase()
 type PresetRecord = { id: string; name?: string; options?: PresetOptions; season_options?: PresetOptions }
 
 export function usePresetService() {
-  const templates = ref<string[]>(['default'])
+  const templates = ref<string[]>(['uniformlogo'])
   const presets = ref<PresetRecord[]>([])
-  const selectedTemplate = ref('default')
+  const selectedTemplate = ref('uniformlogo')
   const selectedPreset = ref('')
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -22,9 +22,9 @@ export function usePresetService() {
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = await res.json()
       const tplKeys = Object.keys(data)
-      templates.value = tplKeys.length ? tplKeys : ['default']
+      templates.value = tplKeys.length ? tplKeys : ['uniformlogo']
       if (!tplKeys.includes(selectedTemplate.value)) {
-        selectedTemplate.value = templates.value[0] || 'default'
+        selectedTemplate.value = templates.value[0] || 'uniformlogo'
       }
       presets.value = data[selectedTemplate.value]?.presets || []
       if (!presets.value.find((p) => p.id === selectedPreset.value)) {
@@ -90,7 +90,7 @@ export function usePresetService() {
     try {
       const baseOptions = options ?? presets.value.find((p) => p.id === selectedPreset.value)?.options ?? {}
       const payload = {
-        template_id: selectedTemplate.value || 'default',
+        template_id: selectedTemplate.value || 'uniformlogo',
         preset_id: targetId,
         options: baseOptions,
         season_options: deriveSeasonOptions(baseOptions)

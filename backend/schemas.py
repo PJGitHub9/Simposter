@@ -52,14 +52,14 @@ class SaveRequest(PreviewRequest):
 
 
 class PresetSaveRequest(BaseModel):
-    template_id: str = "default"
+    template_id: str = "uniformlogo"
     preset_id: str
     options: Dict[str, Any]
     season_options: Optional[Dict[str, Any]] = None
 
 
 class PresetDeleteRequest(BaseModel):
-    template_id: str = "default"
+    template_id: str = "uniformlogo"
     preset_id: str
 
 

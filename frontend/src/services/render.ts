@@ -42,8 +42,8 @@ export function useRenderService() {
     presetId?: string,
     options?: PresetOptions
   ) => ({
-    template_id: templateId || 'default',
-    preset_id: presetId || 'default',
+    template_id: templateId || 'uniformlogo',
+    preset_id: presetId || 'uniformlogo',
     background_url: bgUrl,
     logo_url: logoUrl || null,
     movie_title: movie.title,

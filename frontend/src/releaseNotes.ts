@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.3',
+    date: '2026-02-13',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Template consolidation — merged "Default" template into "Uniform Logo" for simplified template selection',
+          'Automatic migration — existing presets and history automatically converted to Uniform Logo template on startup',
+          'Logo positioning unified — all logo placement now uses consistent bounding box zones instead of scale/offset',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.23',
     date: '2026-02-23',
     sections: [
