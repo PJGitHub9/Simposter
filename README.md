@@ -469,8 +469,8 @@ simposter/
 │   ├── assets/
 │   │   └── selection.py         # Poster/logo picking logic
 │   ├── templates/
-│   │   ├── universal.py         # Default template
-│   │   └── uniformlogo.py       # Uniform logo template
+│   │   ├── universal.py         # Shared rendering utilities
+│   │   └── uniformlogo.py       # Main template (bounding box logo placement)
 │   └── api/
 │       ├── preview.py           # Enhanced with TMDB integration (v1.4)
 │       ├── save.py

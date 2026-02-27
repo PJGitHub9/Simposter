@@ -2565,7 +2565,8 @@ watch(tmdbId, () => {
         <div class="section sliders">
           <div class="section-title">Poster Settings</div>
 
-          <div class="slider">
+          <!-- Poster Zoom - Hidden -->
+          <div v-if="false" class="slider">
             <label>Poster Zoom %</label>
             <div class="slider-row">
               <input v-model.number="options.posterZoom" type="range" min="80" max="140" />
@@ -2741,12 +2742,13 @@ watch(tmdbId, () => {
             <input v-model="options.borderColor" type="color" />
           </div>
 
-          <div class="slider">
+          <!-- Overlay Settings - Hidden (kept for backward compatibility) -->
+          <div v-if="false" class="slider">
             <label>Overlay File</label>
             <input v-model="options.overlayFile" type="text" placeholder="e.g. grain_overlay.png" />
           </div>
 
-          <div class="slider">
+          <div v-if="false" class="slider">
             <label>Overlay Opacity %</label>
             <div class="slider-row">
               <input v-model.number="options.overlayOpacity" type="range" min="0" max="100" />
@@ -2754,7 +2756,7 @@ watch(tmdbId, () => {
             </div>
           </div>
 
-          <div class="slider">
+          <div v-if="false" class="slider">
             <label>Overlay Mode</label>
             <select v-model="options.overlayMode">
               <option value="screen">Screen</option>

@@ -1,12 +1,9 @@
 # backend/templates/__init__.py
-from .universal import render_universal
 from .uniformlogo import render_uniform_logo
 
 # Simple registry so we can grow later if needed
 # Map template IDs → renderer functions
 TEMPLATES = {
-    "default": render_universal,
-    "universal": render_universal,     # synonym
     "uniformlogo": render_uniform_logo
 }
 
@@ -26,7 +23,6 @@ def list_templates():
                 "id": "basic",
                 "label": "Basic",
                 "templates": [
-                    {"id": "default", "name": "Default Poster"},
                     {"id": "uniformlogo", "name": "Uniform Logo"},
                 ],
             }

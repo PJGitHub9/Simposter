@@ -528,6 +528,115 @@ def init_database():
             cursor.execute("ALTER TABLE poster_history ADD COLUMN thumbnail_path TEXT")
             logger.info("[DB] Added 'thumbnail_path' column to poster_history table")
 
+        # Migration: Consolidate 'default' and 'universal' templates into 'uniformlogo'
+        # Convert logo_scale/logo_offset to bounding box zones
+        try:
+            # Check if any presets use 'default' or 'universal' template_id
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM presets
+                WHERE template_id IN ('default', 'universal')
+            """)
+            presets_to_migrate = cursor.fetchone()["count"]
+
+            if presets_to_migrate > 0:
+                logger.info(f"[DB] Migrating {presets_to_migrate} presets from 'default'/'universal' to 'uniformlogo'")
+
+                # Get all presets that need migration
+                cursor.execute("""
+                    SELECT id, template_id, options_json, season_options_json FROM presets
+                    WHERE template_id IN ('default', 'universal')
+                """)
+                presets = cursor.fetchall()
+
+                for preset in presets:
+                    preset_id = preset["id"]
+                    old_template_id = preset["template_id"]
+                    options = json.loads(preset["options_json"])
+                    season_options_raw = preset["season_options_json"] if "season_options_json" in preset.keys() else "{}"
+                    season_options = json.loads(season_options_raw) if season_options_raw else {}
+
+                    # Convert logo_scale/logo_offset to uniform_logo bounding box if they exist
+                    # Canvas width is 2000px for the standard poster
+                    if "logo_scale" in options and "uniform_logo_max_w" not in options:
+                        logo_scale = float(options.get("logo_scale", 0.45))
+                        options["uniform_logo_max_w"] = int(logo_scale * 2000)
+                        logger.debug(f"[DB] Converted logo_scale {logo_scale} -> uniform_logo_max_w {options['uniform_logo_max_w']} for preset {preset_id}")
+
+                    if "logo_offset" in options and "uniform_logo_offset_y" not in options:
+                        options["uniform_logo_offset_y"] = float(options.get("logo_offset", 0.78))
+                        logger.debug(f"[DB] Converted logo_offset -> uniform_logo_offset_y for preset {preset_id}")
+
+                    # Set defaults for uniform_logo if not present
+                    if "uniform_logo_max_h" not in options:
+                        options["uniform_logo_max_h"] = 300  # Default height
+                    if "uniform_logo_offset_x" not in options:
+                        options["uniform_logo_offset_x"] = 0.5  # Centered
+
+                    # Do the same for season_options if it has logo positioning
+                    if season_options:
+                        if "logo_scale" in season_options and "uniform_logo_max_w" not in season_options:
+                            logo_scale = float(season_options.get("logo_scale", 0.45))
+                            season_options["uniform_logo_max_w"] = int(logo_scale * 2000)
+
+                        if "logo_offset" in season_options and "uniform_logo_offset_y" not in season_options:
+                            season_options["uniform_logo_offset_y"] = float(season_options.get("logo_offset", 0.78))
+
+                        if "uniform_logo_max_h" not in season_options:
+                            season_options["uniform_logo_max_h"] = 300
+                        if "uniform_logo_offset_x" not in season_options:
+                            season_options["uniform_logo_offset_x"] = 0.5
+
+                    # Update preset with new template_id and converted options
+                    cursor.execute("""
+                        UPDATE presets
+                        SET template_id = 'uniformlogo',
+                            options_json = ?,
+                            season_options_json = ?,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    """, (json.dumps(options), json.dumps(season_options), preset_id))
+
+                    logger.debug(f"[DB] Migrated preset '{preset_id}' from '{old_template_id}' to 'uniformlogo'")
+
+                logger.info(f"[DB] Successfully migrated {presets_to_migrate} presets to 'uniformlogo'")
+
+            # Migrate poster_history template references
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM poster_history
+                WHERE template_id IN ('default', 'universal')
+                   OR poster_fallback_template IN ('default', 'universal')
+                   OR logo_fallback_template IN ('default', 'universal')
+            """)
+            history_to_migrate = cursor.fetchone()["count"]
+
+            if history_to_migrate > 0:
+                logger.info(f"[DB] Migrating {history_to_migrate} poster_history entries to use 'uniformlogo'")
+
+                # Update main template_id
+                cursor.execute("""
+                    UPDATE poster_history
+                    SET template_id = 'uniformlogo'
+                    WHERE template_id IN ('default', 'universal')
+                """)
+
+                # Update fallback template references
+                cursor.execute("""
+                    UPDATE poster_history
+                    SET poster_fallback_template = 'uniformlogo'
+                    WHERE poster_fallback_template IN ('default', 'universal')
+                """)
+
+                cursor.execute("""
+                    UPDATE poster_history
+                    SET logo_fallback_template = 'uniformlogo'
+                    WHERE logo_fallback_template IN ('default', 'universal')
+                """)
+
+                logger.info(f"[DB] Successfully migrated {history_to_migrate} poster_history entries")
+
+        except Exception as migration_err:
+            logger.warning(f"[DB] Template consolidation migration failed (non-critical): {migration_err}")
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
         
