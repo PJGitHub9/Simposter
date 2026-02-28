@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.5.4 (2026-02-27)
+### Bug Fixes
+- **Fallback Settings Reset Fix**: Fixed fallback preset settings being reset to blank after v1.5.3 template consolidation
+  - `fallbackPosterTemplate` and `fallbackLogoTemplate` references to removed 'default'/'universal' templates now automatically migrate to 'uniformlogo' on startup
+  - Applies to both main preset options and season-specific options
+
+### New Features
+- **Overlay Config Manager**: Create reusable overlay templates with draggable elements (early testing)
+  - Resolution badges, codec badges, custom images, text labels, and label badges
+  - Overlay asset library — upload and manage badge images (4K, Atmos, etc.)
+  - Live canvas preview with drag-to-position, poster search, and value switcher
+  - Badge asset mapping — assign custom images per resolution/codec value with text fallback
+  - Percentage-based and pixel-based sizing for overlay elements
+
+### Improvements
+- Increased logo bounding box max height (thanks chadwpalm)
+
 ## v1.5.0 (2026-01-11)
 ### Major Features
 - **Poster Generation History Tracking**: Complete audit log of all poster operations

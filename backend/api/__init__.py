@@ -21,6 +21,7 @@ from . import (
     database,
     notifications,
     backup,
+    overlay_config,
 )
 
 router = APIRouter()
@@ -45,3 +46,4 @@ router.include_router(scheduler.router)
 router.include_router(database.router)
 router.include_router(notifications.router)
 router.include_router(backup.router)
+router.include_router(overlay_config.router)

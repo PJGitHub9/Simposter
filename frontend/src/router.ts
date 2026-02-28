@@ -10,6 +10,7 @@ import CollectionsView from './views/CollectionsView.vue'
 import TemplateManagerView from './views/TemplateManagerView.vue'
 import HistoryView from './views/HistoryView.vue'
 import BackupRestoreView from './views/BackupRestoreView.vue'
+import OverlayConfigManagerView from './views/OverlayConfigManagerView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -24,6 +25,7 @@ export const router = createRouter({
     { path: '/tv-shows/local-assets', name: 'tv-local-assets', component: LocalAssetsView },
     { path: '/backup', name: 'backup', component: BackupRestoreView },
     { path: '/templates', name: 'template-manager', component: TemplateManagerView },
+    { path: '/overlays', name: 'overlay-config-manager', component: OverlayConfigManagerView },
     { path: '/history', name: 'history', component: HistoryView },
     { path: '/settings', name: 'settings', component: SettingsView },
     { path: '/logs', name: 'logs', component: LogsView }

@@ -10,6 +10,31 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.4',
+    date: '2026-02-27',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed fallback preset settings being reset to blank after v1.5.3 template consolidation — fallback template references now automatically migrate',
+        ]
+      },
+      {
+        title: 'New Features',
+        items: [
+          'Overlay Config Manager — create reusable overlay templates with resolution badges, codec badges, custom images, text labels, and label badges (early testing)',
+          'Overlay asset library — upload and manage badge images (4K, Atmos, etc.) to use in overlay configs',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Increased logo bounding box max height (thanks chadwpalm)',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.3',
     date: '2026-02-13',
     sections: [

@@ -60,6 +60,7 @@ const tabs = computed<MenuItem[]>(() => {
     ...movieTabs,
     ...tvShowTabs,
     { key: 'template-manager', label: 'Template Manager' },
+    { key: 'overlay-config-manager', label: 'Overlay Config' },
     { key: 'history', label: 'History' },
     { key: 'settings', label: 'Settings' },
     { key: 'logs', label: 'Logs' }

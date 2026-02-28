@@ -221,5 +221,54 @@ class BatchRequest(BaseModel):
     include_seasons: bool = False  # TV shows: render all seasons instead of series poster
 
 
+# Overlay Configuration schemas
+class OverlayElement(BaseModel):
+    type: str  # "resolution_badge", "codec_badge", "custom_image", "text_label", "label_badge"
+    position_x: float = 0.5  # 0.0 to 1.0 (left to right)
+    position_y: float = 0.5  # 0.0 to 1.0 (top to bottom)
+    width: Optional[float] = None  # Width as percentage of poster width (0.0 to 1.0)
+    height: Optional[float] = None  # Height as percentage of poster height (0.0 to 1.0)
+    max_width: Optional[int] = None  # Max width in pixels
+    max_height: Optional[int] = None  # Max height in pixels
+    asset_id: Optional[str] = None  # For custom_image: reference to overlay_assets
+    text: Optional[str] = None  # For text_label: the text to display
+    font_family: Optional[str] = None  # For text_label
+    font_size: Optional[int] = None  # For text_label
+    font_color: Optional[str] = None  # For text_label
+    label_name: Optional[str] = None  # For label_badge: Plex label to check
+    show_if_label: Optional[str] = None  # Show only if this Plex label is present
+    hide_if_label: Optional[str] = None  # Hide if this Plex label is present
+    metadata_field: Optional[str] = None  # Metadata field to check (e.g., "video_resolution", "audio_codec")
+    badge_modes: Optional[Dict[str, str]] = None  # Maps metadata value -> "none" | "text" | "image"
+    badge_assets: Optional[Dict[str, str]] = None  # Maps metadata value -> asset_id (e.g., {"4k": "asset-123"})
+
+
+class OverlayConfigSaveRequest(BaseModel):
+    id: str
+    name: str
+    elements: List[OverlayElement]
+
+
+class OverlayConfigDeleteRequest(BaseModel):
+    id: str
+
+
+class OverlayAssetUploadRequest(BaseModel):
+    id: str
+    name: str
+    file_type: str
+    width: int
+    height: int
+
+
+class OverlayAssetDeleteRequest(BaseModel):
+    id: str
+
+
+class PresetOverlayLinkRequest(BaseModel):
+    template_id: str
+    preset_id: str
+    overlay_config_id: Optional[str] = None
+
 
 # Radarr webhook schemas removed

@@ -2661,8 +2661,8 @@ watch(tmdbId, () => {
             <div class="slider">
               <label>Max Height (px)</label>
               <div class="slider-row">
-                <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="600" />
-                <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="600" class="slider-num" />
+                <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
+                <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
               </div>
             </div>
 

@@ -802,3 +802,370 @@ def render_universal(
             canvas = Image.alpha_composite(canvas, border_layer)
 
     return canvas.convert("RGB")
+
+
+# ============================================================
+# Overlay Rendering
+# ============================================================
+
+def apply_overlay_config(canvas: Image.Image, preset_id: Optional[str], template_id: str, metadata: Optional[Dict[str, Any]] = None) -> Image.Image:
+    """
+    Apply overlay configuration to the canvas based on the preset's linked overlay_config_id.
+
+    Args:
+        canvas: The base poster image
+        preset_id: The preset ID (to look up overlay_config_id)
+        template_id: The template ID
+        metadata: Optional metadata dict with fields like video_resolution, audio_codec, labels, etc.
+
+    Returns:
+        Canvas with overlays applied
+    """
+    from .. import database as db
+    from ..config import logger
+
+    if not preset_id:
+        return canvas
+
+    try:
+        # Load preset to get overlay_config_id
+        preset = db.get_preset(template_id, preset_id)
+        if not preset:
+            return canvas
+
+        overlay_config_id = preset.get("overlay_config_id")
+        if not overlay_config_id:
+            return canvas
+
+        # Load overlay config
+        overlay_config = db.get_overlay_config(overlay_config_id)
+        if not overlay_config:
+            logger.warning(f"[OVERLAY] Overlay config {overlay_config_id} not found for preset {preset_id}")
+            return canvas
+
+        elements = overlay_config.get("elements", [])
+        if not elements:
+            return canvas
+
+        logger.info(f"[OVERLAY] Applying overlay config '{overlay_config['name']}' with {len(elements)} elements")
+
+        # Convert to RGBA for overlay compositing
+        if canvas.mode != "RGBA":
+            canvas = canvas.convert("RGBA")
+
+        W, H = canvas.size
+
+        # Apply each element
+        for element in elements:
+            try:
+                canvas = _apply_overlay_element(canvas, element, W, H, metadata or {})
+            except Exception as elem_err:
+                logger.error(f"[OVERLAY] Failed to apply element {element.get('type')}: {elem_err}")
+
+        return canvas
+
+    except Exception as e:
+        logger.error(f"[OVERLAY] Failed to apply overlay config: {e}")
+        return canvas
+
+
+def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int, H: int, metadata: Dict[str, Any]) -> Image.Image:
+    """Apply a single overlay element to the canvas."""
+    from ..config import logger
+
+    element_type = element.get("type")
+
+    # Check conditional rendering based on labels
+    if not _should_render_element(element, metadata):
+        return canvas
+
+    # Calculate position
+    pos_x = element.get("position_x", 0.5)
+    pos_y = element.get("position_y", 0.5)
+    x = int(W * pos_x)
+    y = int(H * pos_y)
+
+    if element_type == "resolution_badge":
+        return _apply_resolution_badge(canvas, element, x, y, metadata)
+    elif element_type == "codec_badge":
+        return _apply_codec_badge(canvas, element, x, y, metadata)
+    elif element_type == "custom_image":
+        return _apply_custom_image(canvas, element, x, y)
+    elif element_type == "text_label":
+        return _apply_text_label(canvas, element, x, y)
+    elif element_type == "label_badge":
+        return _apply_label_badge(canvas, element, x, y, metadata)
+
+    return canvas
+
+
+def _should_render_element(element: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+    """Check if element should be rendered based on conditional rules."""
+    show_if_label = element.get("show_if_label")
+    hide_if_label = element.get("hide_if_label")
+    labels = metadata.get("labels", [])
+
+    if show_if_label and show_if_label not in labels:
+        return False
+
+    if hide_if_label and hide_if_label in labels:
+        return False
+
+    return True
+
+
+def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, asset_id: str) -> bool:
+    """Try to render a badge using an asset image. Returns True if successful."""
+    from .. import database as db
+
+    asset = db.get_overlay_asset(asset_id)
+    if not asset:
+        return False
+
+    asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
+    if not asset_path.exists():
+        return False
+
+    overlay_img = Image.open(asset_path).convert("RGBA")
+
+    W, H = canvas.size
+    ow, oh = overlay_img.size
+
+    # Apply percentage-based width/height (relative to canvas)
+    pct_width = element.get("width")
+    pct_height = element.get("height")
+    if pct_width and pct_width > 0:
+        target_w = int(W * pct_width)
+        ratio = target_w / ow
+        ow = target_w
+        oh = int(oh * ratio)
+        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
+    if pct_height and pct_height > 0:
+        target_h = int(H * pct_height)
+        ratio = target_h / oh
+        oh = target_h
+        ow = int(ow * ratio)
+        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
+
+    # Apply max pixel constraints
+    max_width = element.get("max_width")
+    max_height = element.get("max_height")
+
+    if max_width or max_height:
+        ow, oh = overlay_img.size
+        scale = 1.0
+        if max_width and ow > max_width:
+            scale = min(scale, max_width / ow)
+        if max_height and oh > max_height:
+            scale = min(scale, max_height / oh)
+        if scale < 1.0:
+            new_w = int(ow * scale)
+            new_h = int(oh * scale)
+            overlay_img = overlay_img.resize((new_w, new_h), Image.LANCZOS)
+
+    ow, oh = overlay_img.size
+    paste_x = x - ow // 2
+    paste_y = y - oh // 2
+    canvas.paste(overlay_img, (paste_x, paste_y), overlay_img)
+    return True
+
+
+def _apply_resolution_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, metadata: Dict[str, Any]) -> Image.Image:
+    """Apply resolution badge (4K, 1080p, etc.). Respects per-value mode: none/text/image."""
+    from ..config import logger
+
+    metadata_field = element.get("metadata_field", "video_resolution")
+    resolution = metadata.get(metadata_field, "")
+    if not resolution:
+        return canvas
+
+    # Check per-value mode (default: "text" for backwards compatibility)
+    badge_modes = element.get("badge_modes") or {}
+    mode = badge_modes.get(resolution.lower(), "text")
+
+    if mode == "none":
+        return canvas
+
+    if mode == "image":
+        badge_assets = element.get("badge_assets") or {}
+        asset_id = badge_assets.get(resolution.lower())
+        if asset_id:
+            try:
+                if _render_badge_asset(canvas, element, x, y, asset_id):
+                    return canvas
+            except Exception as e:
+                logger.warning(f"[OVERLAY] Failed to render resolution badge asset: {e}")
+        # Image not found/failed — fall through to text
+
+    # Text rendering using element font settings
+    font_family = element.get("font_family", "arial")
+    font_size = element.get("font_size", 40)
+    font_color_hex = element.get("font_color", "#FFFFFF")
+    font = _load_font(font_family, font_size)
+
+    if font_color_hex and font_color_hex.startswith("#") and len(font_color_hex) >= 7:
+        rgb = tuple(int(font_color_hex[i:i+2], 16) for i in (1, 3, 5))
+    else:
+        rgb = (255, 255, 255)
+
+    draw = ImageDraw.Draw(canvas)
+    draw.text((x, y), resolution.upper(), fill=(*rgb, 255), font=font, anchor="mm")
+    return canvas
+
+
+def _apply_codec_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, metadata: Dict[str, Any]) -> Image.Image:
+    """Apply audio codec badge (Atmos, DTS-X, etc.). Respects per-value mode: none/text/image."""
+    from ..config import logger
+
+    metadata_field = element.get("metadata_field", "audio_codec")
+    codec = metadata.get(metadata_field, "")
+    if not codec:
+        return canvas
+
+    # Check per-value mode (default: "text" for backwards compatibility)
+    badge_modes = element.get("badge_modes") or {}
+    mode = badge_modes.get(codec.lower(), "text")
+
+    if mode == "none":
+        return canvas
+
+    if mode == "image":
+        badge_assets = element.get("badge_assets") or {}
+        asset_id = badge_assets.get(codec.lower())
+        if asset_id:
+            try:
+                if _render_badge_asset(canvas, element, x, y, asset_id):
+                    return canvas
+            except Exception as e:
+                logger.warning(f"[OVERLAY] Failed to render codec badge asset: {e}")
+        # Image not found/failed — fall through to text
+
+    # Text rendering using element font settings
+    font_family = element.get("font_family", "arial")
+    font_size = element.get("font_size", 30)
+    font_color_hex = element.get("font_color", "#FFFFFF")
+    font = _load_font(font_family, font_size)
+
+    if font_color_hex and font_color_hex.startswith("#") and len(font_color_hex) >= 7:
+        rgb = tuple(int(font_color_hex[i:i+2], 16) for i in (1, 3, 5))
+    else:
+        rgb = (255, 255, 255)
+
+    draw = ImageDraw.Draw(canvas)
+    draw.text((x, y), codec.upper(), fill=(*rgb, 255), font=font, anchor="mm")
+    return canvas
+
+
+def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y: int) -> Image.Image:
+    """Apply custom image overlay from asset library."""
+    from .. import database as db
+
+    asset_id = element.get("asset_id")
+    if not asset_id:
+        return canvas
+
+    asset = db.get_overlay_asset(asset_id)
+    if not asset:
+        return canvas
+
+    # Load asset image
+    asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
+    if not asset_path.exists():
+        return canvas
+
+    overlay_img = Image.open(asset_path).convert("RGBA")
+
+    W, H = canvas.size
+    ow, oh = overlay_img.size
+
+    # Apply percentage-based width/height (relative to canvas)
+    pct_width = element.get("width")
+    pct_height = element.get("height")
+    if pct_width and pct_width > 0:
+        target_w = int(W * pct_width)
+        ratio = target_w / ow
+        ow = target_w
+        oh = int(oh * ratio)
+        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
+    if pct_height and pct_height > 0:
+        target_h = int(H * pct_height)
+        ratio = target_h / oh
+        oh = target_h
+        ow = int(ow * ratio)
+        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
+
+    # Apply max pixel constraints
+    max_width = element.get("max_width")
+    max_height = element.get("max_height")
+
+    if max_width or max_height:
+        ow, oh = overlay_img.size
+        scale = 1.0
+        if max_width and ow > max_width:
+            scale = min(scale, max_width / ow)
+        if max_height and oh > max_height:
+            scale = min(scale, max_height / oh)
+
+        if scale < 1.0:
+            new_w = int(ow * scale)
+            new_h = int(oh * scale)
+            overlay_img = overlay_img.resize((new_w, new_h), Image.LANCZOS)
+
+    # Calculate paste position (centered on x, y)
+    ow, oh = overlay_img.size
+    paste_x = x - ow // 2
+    paste_y = y - oh // 2
+
+    # Composite onto canvas
+    canvas.paste(overlay_img, (paste_x, paste_y), overlay_img)
+    return canvas
+
+
+def _apply_text_label(canvas: Image.Image, element: Dict[str, Any], x: int, y: int) -> Image.Image:
+    """Apply text label overlay."""
+    text = element.get("text", "")
+    if not text:
+        return canvas
+
+    font_family = element.get("font_family", "arial")
+    font_size = element.get("font_size", 40)
+    font_color = element.get("font_color", "#FFFFFF")
+
+    # Parse color
+    if font_color.startswith("#"):
+        rgb = tuple(int(font_color[i:i+2], 16) for i in (1, 3, 5))
+    else:
+        rgb = (255, 255, 255)
+
+    draw = ImageDraw.Draw(canvas)
+    try:
+        font = ImageFont.truetype(f"{font_family}.ttf", font_size)
+    except:
+        try:
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except:
+            font = ImageFont.load_default()
+
+    draw.text((x, y), text, fill=(*rgb, 255), font=font, anchor="mm")
+    return canvas
+
+
+def _apply_label_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, metadata: Dict[str, Any]) -> Image.Image:
+    """Apply badge based on Plex label presence."""
+    label_name = element.get("label_name", "")
+    if not label_name:
+        return canvas
+
+    labels = metadata.get("labels", [])
+    if label_name not in labels:
+        return canvas
+
+    # Render the label as a badge
+    draw = ImageDraw.Draw(canvas)
+    try:
+        font = ImageFont.truetype("arial.ttf", 30)
+    except:
+        font = ImageFont.load_default()
+
+    draw.text((x, y), label_name, fill=(255, 255, 255, 255), font=font, anchor="mm")
+    return canvas
