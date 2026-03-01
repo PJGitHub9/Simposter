@@ -635,6 +635,117 @@ def extract_tvdb_id_from_metadata(xml_text: str) -> Optional[int]:
     return None
 
 
+def extract_media_info_from_metadata(xml_text: str) -> Dict[str, str]:
+    """
+    Extract media stream info from Plex metadata XML.
+    Returns a dict suitable for overlay metadata and DB caching.
+
+    Extracted fields:
+        video_resolution  — from <Media videoResolution="1080">
+        video_codec       — from <Media videoCodec="h264">
+        audio_codec       — from <Media audioCodec="aac">
+        audio_channels    — from <Media audioChannels="2">
+        audio_language    — from first <Stream streamType="2"> languageTag or language
+        edition           — from <Video editionTitle="..."> or <Movie editionTitle="...">
+
+    For TV shows at the series level there is no <Media>, so this may return
+    an empty dict.  Callers should treat missing keys as "not available".
+    """
+    if not xml_text or xml_text.startswith("<html"):
+        return {}
+
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return {}
+
+    # Pick the first <Media> element (highest quality stream Plex returns first)
+    media = root.find(".//Media")
+    if media is None:
+        return {}
+
+    info: Dict[str, str] = {}
+    vr = media.get("videoResolution")
+    if vr:
+        info["video_resolution"] = vr.lower()
+    vc = media.get("videoCodec")
+    if vc:
+        info["video_codec"] = vc.lower()
+    ac = media.get("audioCodec")
+    if ac:
+        info["audio_codec"] = ac.lower()
+    ach = media.get("audioChannels")
+    if ach:
+        info["audio_channels"] = ach
+
+    # Audio language from first audio stream (streamType="2")
+    for stream in media.iter("Stream"):
+        if stream.get("streamType") == "2":
+            lang = stream.get("languageTag") or stream.get("language")
+            if lang:
+                info["audio_language"] = lang.lower()
+            break
+
+    # Edition from the parent Video/Movie/Directory element
+    for tag in ("Video", "Movie", "Directory"):
+        item = root.find(f".//{tag}")
+        if item is not None:
+            edition = item.get("editionTitle")
+            if edition:
+                info["edition"] = edition
+            break
+
+    return info
+
+
+def get_plex_media_info(rating_key: str) -> Dict[str, str]:
+    """Return media stream info for *rating_key*, using DB cache when available."""
+    # 1. Check cache first
+    try:
+        from . import database as db
+        cached = db.get_cached_media_info(rating_key)
+        if cached:
+            logger.debug("[PLEX] Media info cache hit for %s: %s", rating_key, cached)
+            return cached
+    except Exception:
+        pass  # DB not available yet or import error
+
+    # 2. Fetch from Plex and cache the result
+    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+    try:
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
+        r.raise_for_status()
+        info = extract_media_info_from_metadata(r.text)
+        if info:
+            try:
+                from . import database as db
+                # Try movie first, then TV
+                db.update_movie_media_info(
+                    rating_key,
+                    info.get("video_resolution"),
+                    info.get("audio_codec"),
+                    info.get("audio_channels"),
+                    video_codec=info.get("video_codec"),
+                    audio_language=info.get("audio_language"),
+                    edition=info.get("edition"),
+                )
+                db.update_tv_media_info(
+                    rating_key,
+                    info.get("video_resolution"),
+                    info.get("audio_codec"),
+                    info.get("audio_channels"),
+                    video_codec=info.get("video_codec"),
+                    audio_language=info.get("audio_language"),
+                    edition=info.get("edition"),
+                )
+            except Exception:
+                pass  # Non-critical
+        return info
+    except Exception as e:
+        logger.debug("[PLEX] Failed to fetch media info for %s: %s", rating_key, e)
+        return {}
+
+
 def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
 
@@ -651,6 +762,24 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
         cache.update_tmdb(rating_key, tmdb_id)
     except (sqlite3.Error, AttributeError) as e:
         logger.debug("[CACHE] update_tmdb failed: %s", e, exc_info=True)
+
+    # Piggyback: extract and cache media info from the same response
+    try:
+        media_info = extract_media_info_from_metadata(r.text)
+        if media_info:
+            from . import database as db
+            db.update_movie_media_info(
+                rating_key,
+                media_info.get("video_resolution"),
+                media_info.get("audio_codec"),
+                media_info.get("audio_channels"),
+                video_codec=media_info.get("video_codec"),
+                audio_language=media_info.get("audio_language"),
+                edition=media_info.get("edition"),
+            )
+    except Exception as e:
+        logger.debug("[CACHE] media info update failed: %s", e)
+
     return tmdb_id
 
 

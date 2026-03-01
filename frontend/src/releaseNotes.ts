@@ -17,6 +17,7 @@ export const releaseNotes: ReleaseNote[] = [
         title: 'Bug Fixes',
         items: [
           'Fixed fallback preset settings being reset to blank after v1.5.3 template consolidation — fallback template references now automatically migrate',
+          'Fixed overlay badges not rendering — metadata injection, rating key passthrough, and value format mismatches resolved across all render paths',
         ]
       },
       {
@@ -24,12 +25,15 @@ export const releaseNotes: ReleaseNote[] = [
         items: [
           'Overlay Config Manager — create reusable overlay templates with resolution badges, codec badges, custom images, text labels, and label badges (early testing)',
           'Overlay asset library — upload and manage badge images (4K, Atmos, etc.) to use in overlay configs',
+          'Badge per-value mode selector — choose None, Text (with custom display text), or Image for each resolution/codec value',
+          'Dynamic Plex media metadata — overlay badges use real resolution, codec, and channel info from your Plex library (cached for performance)',
         ]
       },
       {
         title: 'Improvements',
         items: [
           'Increased logo bounding box max height (thanks chadwpalm)',
+          'Detailed overlay rendering logs for easier debugging',
         ]
       }
     ]

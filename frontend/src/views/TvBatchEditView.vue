@@ -1452,7 +1452,7 @@ onMounted(async () => {
   <div class="batch-edit-view">
     <!-- Top Controls -->
     <div class="controls-panel">
-      <h2>TV Show Batch Edit</h2>
+      <h2>&#x270F;&#xFE0F; TV Show Batch Edit</h2>
 
       <!-- Template & Preset Selection -->
       <div class="selection-row template-row">

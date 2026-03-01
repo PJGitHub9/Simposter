@@ -966,7 +966,7 @@ onMounted(async () => {
   <div class="batch-edit-view">
     <!-- Top Controls -->
     <div class="controls-panel">
-      <h2>Batch Edit</h2>
+      <h2>&#x270F;&#xFE0F; Batch Edit</h2>
 
       <!-- Template & Preset Selection -->
       <div class="selection-row template-row">

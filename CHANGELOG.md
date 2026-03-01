@@ -5,17 +5,25 @@
 - **Fallback Settings Reset Fix**: Fixed fallback preset settings being reset to blank after v1.5.3 template consolidation
   - `fallbackPosterTemplate` and `fallbackLogoTemplate` references to removed 'default'/'universal' templates now automatically migrate to 'uniformlogo' on startup
   - Applies to both main preset options and season-specific options
+- **Overlay badge rendering fixes**: Fixed multiple issues preventing overlay badges from appearing on posters
+  - Fixed metadata not being injected when background URL was a direct TMDB link (rating_key now sent explicitly from frontend)
+  - Fixed overlay badges not rendering in Send to Plex, Save, and Batch paths — all render paths now inject preset_id and Plex media metadata
+  - Fixed resolution value mismatch: frontend badge values now match Plex's actual `videoResolution` format (e.g., `1080` instead of `1080p`)
 
 ### New Features
 - **Overlay Config Manager**: Create reusable overlay templates with draggable elements (early testing)
   - Resolution badges, codec badges, custom images, text labels, and label badges
   - Overlay asset library — upload and manage badge images (4K, Atmos, etc.)
   - Live canvas preview with drag-to-position, poster search, and value switcher
-  - Badge asset mapping — assign custom images per resolution/codec value with text fallback
+  - Badge per-value mode selector: None (skip), Text (with custom display text and font settings), or Image (from asset library)
   - Percentage-based and pixel-based sizing for overlay elements
+- **Dynamic Plex media metadata**: Overlay badges use real media info (resolution, codec, channels) fetched from Plex instead of hardcoded values
+  - Media info is cached in the database for fast subsequent lookups
+  - Cached automatically during library scans and label fetches
 
 ### Improvements
 - Increased logo bounding box max height (thanks chadwpalm)
+- Detailed overlay rendering logs for easier debugging
 
 ## v1.5.0 (2026-01-11)
 ### Major Features

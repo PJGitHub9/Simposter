@@ -342,6 +342,18 @@ def init_database():
             cursor.execute("ALTER TABLE movie_cache ADD COLUMN library_id TEXT DEFAULT 'default'")
         if "tvdb_id" not in cols:
             cursor.execute("ALTER TABLE movie_cache ADD COLUMN tvdb_id INTEGER")
+        if "video_resolution" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN video_resolution TEXT")
+        if "audio_codec" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN audio_codec TEXT")
+        if "audio_channels" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN audio_channels TEXT")
+        if "video_codec" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN video_codec TEXT")
+        if "audio_language" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN audio_language TEXT")
+        if "edition" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN edition TEXT")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_movie_cache_updated
@@ -388,6 +400,18 @@ def init_database():
             cursor.execute("ALTER TABLE tv_cache ADD COLUMN seasons_json TEXT DEFAULT '[]'")
         if "tvdb_id" not in tv_cols:
             cursor.execute("ALTER TABLE tv_cache ADD COLUMN tvdb_id INTEGER")
+        if "video_resolution" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN video_resolution TEXT")
+        if "audio_codec" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN audio_codec TEXT")
+        if "audio_channels" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN audio_channels TEXT")
+        if "video_codec" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN video_codec TEXT")
+        if "audio_language" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN audio_language TEXT")
+        if "edition" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN edition TEXT")
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_tv_cache_updated
             ON tv_cache(updated_at)
@@ -1374,6 +1398,50 @@ def update_movie_poster(rating_key: str, poster_url: Optional[str], library_id: 
         """, (poster_url, rating_key, library_id))
 
 
+def update_movie_media_info(rating_key: str, video_resolution: Optional[str] = None,
+                            audio_codec: Optional[str] = None, audio_channels: Optional[str] = None,
+                            video_codec: Optional[str] = None, audio_language: Optional[str] = None,
+                            edition: Optional[str] = None) -> None:
+    """Update media stream info for a cached movie."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE movie_cache
+            SET video_resolution = ?, audio_codec = ?, audio_channels = ?,
+                video_codec = ?, audio_language = ?, edition = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE rating_key = ?
+        """, (video_resolution, audio_codec, audio_channels, video_codec, audio_language, edition, rating_key))
+
+
+def get_cached_media_info(rating_key: str) -> Optional[Dict[str, str]]:
+    """Get cached media info for a movie or TV show. Returns None if not cached."""
+    fields = "video_resolution, audio_codec, audio_channels, video_codec, audio_language, edition"
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Try movie_cache first
+        cursor.execute(
+            f"SELECT {fields} FROM movie_cache WHERE rating_key = ?",
+            (rating_key,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            # Try tv_cache
+            cursor.execute(
+                f"SELECT {fields} FROM tv_cache WHERE rating_key = ?",
+                (rating_key,)
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        # Only return if at least one field is populated
+        info: Dict[str, str] = {}
+        for field in ("video_resolution", "audio_codec", "audio_channels", "video_codec", "audio_language", "edition"):
+            if row[field]:
+                info[field] = row[field]
+        return info if info else None
+
+
 def _cleanup_orphaned_posters(rating_keys: List[str]) -> None:
     """Remove poster files for deleted items."""
     try:
@@ -1627,6 +1695,22 @@ def update_tv_seasons(rating_key: str, seasons: List[Dict[str, Any]], library_id
             SET seasons_json = ?, updated_at = CURRENT_TIMESTAMP
             WHERE rating_key = ? AND library_id = COALESCE(library_id, ?)
         """, (seasons_json, rating_key, library_id))
+
+
+def update_tv_media_info(rating_key: str, video_resolution: Optional[str] = None,
+                         audio_codec: Optional[str] = None, audio_channels: Optional[str] = None,
+                         video_codec: Optional[str] = None, audio_language: Optional[str] = None,
+                         edition: Optional[str] = None) -> None:
+    """Update media stream info for a cached TV show."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE tv_cache
+            SET video_resolution = ?, audio_codec = ?, audio_channels = ?,
+                video_codec = ?, audio_language = ?, edition = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE rating_key = ?
+        """, (video_resolution, audio_codec, audio_channels, video_codec, audio_language, edition, rating_key))
 
 
 def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "default") -> None:

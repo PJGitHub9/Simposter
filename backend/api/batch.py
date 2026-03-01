@@ -249,10 +249,21 @@ def _process_single_movie(
         render_options["movie_title"] = movie_details.get("title", "")
         render_options["movie_year"] = movie_details.get("year", "")
 
+        # Inject Plex media metadata for overlay badges
+        from ..config import get_plex_media_info
+        plex_media = get_plex_media_info(rating_key)
+        if plex_media:
+            existing_meta = render_options.get("metadata") or {}
+            render_options["metadata"] = {**existing_meta, **plex_media}
+
+        # Pass preset_id so the template renderer can look up linked overlay configs
+        if preset_id:
+            render_options["preset_id"] = preset_id
+
         # Check if overlay caching is enabled
         ui_settings = db.get_ui_settings()
         use_overlay_cache = ui_settings.get("performance", {}).get("useOverlayCache", True)
-        
+
         img = render_with_overlay_cache(
             template_id,
             preset_id,
@@ -587,6 +598,23 @@ def _process_single_tv_show(
 
         tmdb_id = extract_tmdb_id_from_metadata(r.text)
         tvdb_id = extract_tvdb_id_from_metadata(r.text)
+
+        # Piggyback: cache media info from the same response
+        try:
+            from ..config import extract_media_info_from_metadata
+            media_info = extract_media_info_from_metadata(r.text)
+            if media_info:
+                db.update_tv_media_info(
+                    rating_key,
+                    media_info.get("video_resolution"),
+                    media_info.get("audio_codec"),
+                    media_info.get("audio_channels"),
+                    video_codec=media_info.get("video_codec"),
+                    audio_language=media_info.get("audio_language"),
+                    edition=media_info.get("edition"),
+                )
+        except Exception:
+            pass  # Non-critical
 
         if tmdb_id and not tvdb_id:
             try:
@@ -1109,6 +1137,17 @@ def _render_and_save_poster(
     """Common rendering and saving logic for both movies and TV shows."""
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
     display_title = f"{title} - {season_title}" if season_title else title
+
+    # Inject Plex media metadata for overlay badges
+    from ..config import get_plex_media_info
+    plex_media = get_plex_media_info(rating_key)
+    if plex_media:
+        existing_meta = render_options.get("metadata") or {}
+        render_options["metadata"] = {**existing_meta, **plex_media}
+
+    # Pass preset_id so the template renderer can look up linked overlay configs
+    if preset_id:
+        render_options["preset_id"] = preset_id
 
     _update_batch_status({
         "current_step": "Rendering poster",

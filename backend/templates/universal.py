@@ -808,15 +808,26 @@ def render_universal(
 # Overlay Rendering
 # ============================================================
 
-def apply_overlay_config(canvas: Image.Image, preset_id: Optional[str], template_id: str, metadata: Optional[Dict[str, Any]] = None) -> Image.Image:
+def apply_overlay_config(
+    canvas: Image.Image,
+    preset_id: Optional[str],
+    template_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    overlay_config_ids: Optional[list] = None
+) -> Image.Image:
     """
-    Apply overlay configuration to the canvas based on the preset's linked overlay_config_id.
+    Apply overlay configurations to the canvas.
+
+    Overlay configs come from two sources (both are applied, deduped):
+    1. The preset's linked overlay_config_id (legacy single-link)
+    2. Explicit overlay_config_ids passed in render options (multi-select)
 
     Args:
         canvas: The base poster image
         preset_id: The preset ID (to look up overlay_config_id)
         template_id: The template ID
         metadata: Optional metadata dict with fields like video_resolution, audio_codec, labels, etc.
+        overlay_config_ids: Optional list of overlay config IDs to apply directly
 
     Returns:
         Canvas with overlays applied
@@ -824,49 +835,74 @@ def apply_overlay_config(canvas: Image.Image, preset_id: Optional[str], template
     from .. import database as db
     from ..config import logger
 
-    if not preset_id:
+    # Collect all config IDs to apply (deduped, ordered)
+    config_ids: list[str] = []
+    seen: set[str] = set()
+
+    # 1. From preset's linked overlay_config_id
+    if preset_id:
+        try:
+            preset = db.get_preset(template_id, preset_id)
+            if preset:
+                linked_id = preset.get("overlay_config_id")
+                if linked_id and linked_id not in seen:
+                    config_ids.append(linked_id)
+                    seen.add(linked_id)
+        except Exception as e:
+            logger.error(f"[OVERLAY] Failed to load preset {preset_id}: {e}")
+
+    # 2. From explicit overlay_config_ids
+    if overlay_config_ids:
+        for cid in overlay_config_ids:
+            if cid and cid not in seen:
+                config_ids.append(cid)
+                seen.add(cid)
+
+    if not config_ids:
+        logger.info("[OVERLAY] No overlay config IDs to apply (preset_id=%s, explicit_ids=%s)", preset_id, overlay_config_ids)
         return canvas
 
-    try:
-        # Load preset to get overlay_config_id
-        preset = db.get_preset(template_id, preset_id)
-        if not preset:
-            return canvas
+    # Log available metadata for overlay rendering
+    meta = metadata or {}
+    logger.info("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
 
-        overlay_config_id = preset.get("overlay_config_id")
-        if not overlay_config_id:
-            return canvas
+    # Convert to RGBA for overlay compositing
+    if canvas.mode != "RGBA":
+        canvas = canvas.convert("RGBA")
 
-        # Load overlay config
-        overlay_config = db.get_overlay_config(overlay_config_id)
-        if not overlay_config:
-            logger.warning(f"[OVERLAY] Overlay config {overlay_config_id} not found for preset {preset_id}")
-            return canvas
+    W, H = canvas.size
 
-        elements = overlay_config.get("elements", [])
-        if not elements:
-            return canvas
+    for config_id in config_ids:
+        try:
+            overlay_config = db.get_overlay_config(config_id)
+            if not overlay_config:
+                logger.warning(f"[OVERLAY] Overlay config {config_id} not found")
+                continue
 
-        logger.info(f"[OVERLAY] Applying overlay config '{overlay_config['name']}' with {len(elements)} elements")
+            elements = overlay_config.get("elements", [])
+            if not elements:
+                logger.info(f"[OVERLAY] Overlay config '{overlay_config['name']}' has no elements, skipping")
+                continue
 
-        # Convert to RGBA for overlay compositing
-        if canvas.mode != "RGBA":
-            canvas = canvas.convert("RGBA")
+            element_types = [e.get("type", "unknown") for e in elements]
+            logger.info(f"[OVERLAY] Applying overlay config '{overlay_config['name']}' with {len(elements)} elements: {element_types}")
 
-        W, H = canvas.size
+            for element in elements:
+                try:
+                    canvas = _apply_overlay_element(canvas, element, W, H, meta)
+                except Exception as elem_err:
+                    logger.error(f"[OVERLAY] Failed to apply element {element.get('type')}: {elem_err}")
 
-        # Apply each element
-        for element in elements:
-            try:
-                canvas = _apply_overlay_element(canvas, element, W, H, metadata or {})
-            except Exception as elem_err:
-                logger.error(f"[OVERLAY] Failed to apply element {element.get('type')}: {elem_err}")
+        except Exception as e:
+            logger.error(f"[OVERLAY] Failed to apply overlay config {config_id}: {e}")
 
-        return canvas
+    return canvas
 
-    except Exception as e:
-        logger.error(f"[OVERLAY] Failed to apply overlay config: {e}")
-        return canvas
+
+def _get_text_anchor(element: Dict[str, Any]) -> str:
+    """Map element text_align to PIL text anchor. Default is center ('mm')."""
+    align = (element.get("text_align") or "center").lower()
+    return {"left": "lm", "right": "rm"}.get(align, "mm")
 
 
 def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int, H: int, metadata: Dict[str, Any]) -> Image.Image:
@@ -874,9 +910,12 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
     from ..config import logger
 
     element_type = element.get("type")
+    logger.info("[OVERLAY] Processing element type='%s' at position=(%.2f, %.2f)",
+                element_type, element.get("position_x", 0.5), element.get("position_y", 0.5))
 
     # Check conditional rendering based on labels
     if not _should_render_element(element, metadata):
+        logger.info("[OVERLAY]   -> Skipped (conditional label filter)")
         return canvas
 
     # Calculate position
@@ -896,6 +935,7 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
     elif element_type == "label_badge":
         return _apply_label_badge(canvas, element, x, y, metadata)
 
+    logger.warning("[OVERLAY]   -> Unknown element type '%s', skipping", element_type)
     return canvas
 
 
@@ -977,13 +1017,17 @@ def _apply_resolution_badge(canvas: Image.Image, element: Dict[str, Any], x: int
     metadata_field = element.get("metadata_field", "video_resolution")
     resolution = metadata.get(metadata_field, "")
     if not resolution:
+        logger.info("[OVERLAY]   -> Resolution badge: no value for metadata field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
         return canvas
+
+    logger.info("[OVERLAY]   -> Resolution badge: %s = '%s'", metadata_field, resolution)
 
     # Check per-value mode (default: "text" for backwards compatibility)
     badge_modes = element.get("badge_modes") or {}
     mode = badge_modes.get(resolution.lower(), "text")
 
     if mode == "none":
+        logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", resolution)
         return canvas
 
     if mode == "image":
@@ -992,10 +1036,11 @@ def _apply_resolution_badge(canvas: Image.Image, element: Dict[str, Any], x: int
         if asset_id:
             try:
                 if _render_badge_asset(canvas, element, x, y, asset_id):
+                    logger.info("[OVERLAY]   -> Rendered resolution badge as image (asset=%s)", asset_id)
                     return canvas
             except Exception as e:
                 logger.warning(f"[OVERLAY] Failed to render resolution badge asset: {e}")
-        # Image not found/failed — fall through to text
+        logger.info("[OVERLAY]   -> Image mode but asset not found, falling through to text")
 
     # Text rendering using element font settings
     font_family = element.get("font_family", "arial")
@@ -1008,8 +1053,16 @@ def _apply_resolution_badge(canvas: Image.Image, element: Dict[str, Any], x: int
     else:
         rgb = (255, 255, 255)
 
+    # Use custom display text if set, otherwise uppercase the raw value
+    badge_texts = element.get("badge_texts") or {}
+    display_text = badge_texts.get(resolution.lower(), resolution.upper())
+
+    logger.info("[OVERLAY]   -> Rendering resolution text '%s' (font=%s size=%s color=%s) at (%d, %d)",
+                display_text, font_family, font_size, font_color_hex, x, y)
+
     draw = ImageDraw.Draw(canvas)
-    draw.text((x, y), resolution.upper(), fill=(*rgb, 255), font=font, anchor="mm")
+    anchor = _get_text_anchor(element)
+    draw.text((x, y), display_text, fill=(*rgb, 255), font=font, anchor=anchor)
     return canvas
 
 
@@ -1020,13 +1073,17 @@ def _apply_codec_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: 
     metadata_field = element.get("metadata_field", "audio_codec")
     codec = metadata.get(metadata_field, "")
     if not codec:
+        logger.info("[OVERLAY]   -> Codec badge: no value for metadata field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
         return canvas
+
+    logger.info("[OVERLAY]   -> Codec badge: %s = '%s'", metadata_field, codec)
 
     # Check per-value mode (default: "text" for backwards compatibility)
     badge_modes = element.get("badge_modes") or {}
     mode = badge_modes.get(codec.lower(), "text")
 
     if mode == "none":
+        logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", codec)
         return canvas
 
     if mode == "image":
@@ -1035,10 +1092,11 @@ def _apply_codec_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: 
         if asset_id:
             try:
                 if _render_badge_asset(canvas, element, x, y, asset_id):
+                    logger.info("[OVERLAY]   -> Rendered codec badge as image (asset=%s)", asset_id)
                     return canvas
             except Exception as e:
                 logger.warning(f"[OVERLAY] Failed to render codec badge asset: {e}")
-        # Image not found/failed — fall through to text
+        logger.info("[OVERLAY]   -> Image mode but asset not found, falling through to text")
 
     # Text rendering using element font settings
     font_family = element.get("font_family", "arial")
@@ -1051,8 +1109,16 @@ def _apply_codec_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: 
     else:
         rgb = (255, 255, 255)
 
+    # Use custom display text if set, otherwise uppercase the raw value
+    badge_texts = element.get("badge_texts") or {}
+    display_text = badge_texts.get(codec.lower(), codec.upper())
+
+    logger.info("[OVERLAY]   -> Rendering codec text '%s' (font=%s size=%s color=%s) at (%d, %d)",
+                display_text, font_family, font_size, font_color_hex, x, y)
+
     draw = ImageDraw.Draw(canvas)
-    draw.text((x, y), codec.upper(), fill=(*rgb, 255), font=font, anchor="mm")
+    anchor = _get_text_anchor(element)
+    draw.text((x, y), display_text, fill=(*rgb, 255), font=font, anchor=anchor)
     return canvas
 
 
@@ -1146,7 +1212,8 @@ def _apply_text_label(canvas: Image.Image, element: Dict[str, Any], x: int, y: i
         except:
             font = ImageFont.load_default()
 
-    draw.text((x, y), text, fill=(*rgb, 255), font=font, anchor="mm")
+    anchor = _get_text_anchor(element)
+    draw.text((x, y), text, fill=(*rgb, 255), font=font, anchor=anchor)
     return canvas
 
 
@@ -1167,5 +1234,6 @@ def _apply_label_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: 
     except:
         font = ImageFont.load_default()
 
-    draw.text((x, y), label_name, fill=(255, 255, 255, 255), font=font, anchor="mm")
+    anchor = _get_text_anchor(element)
+    draw.text((x, y), label_name, fill=(255, 255, 255, 255), font=font, anchor=anchor)
     return canvas

@@ -96,7 +96,7 @@ watch(defaultLibraryId, (val, oldVal) => {
   <div class="view glass">
     <div class="header">
       <div>
-        <p class="label">Collections</p>
+        <p class="label">&#x1F4DA; Collections</p>
         <h2>{{ libraryLabel }}</h2>
       </div>
     </div>

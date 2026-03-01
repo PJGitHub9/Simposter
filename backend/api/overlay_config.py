@@ -8,7 +8,7 @@ from typing import List
 from fastapi import APIRouter, Form, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 
-from ..config import settings, logger
+from ..config import settings, logger, BASE_DIR
 from .. import database as db
 from ..schemas import (
     OverlayConfigSaveRequest,
@@ -214,6 +214,31 @@ def api_delete_overlay_asset(asset_id: str):
     except Exception as e:
         logger.error(f"[OVERLAY] Error deleting overlay asset {asset_id}: {e}")
         raise HTTPException(500, "Failed to delete overlay asset")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Font Listing Endpoint
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/fonts")
+def api_list_fonts():
+    """List available font files from config and bundled font directories."""
+    font_extensions = {'.ttf', '.otf', '.ttc'}
+    font_names: set[str] = set()
+
+    search_dirs = [
+        Path(settings.CONFIG_DIR) / "fonts",   # User-uploaded fonts
+        BASE_DIR / "config" / "fonts",          # Bundled fonts
+    ]
+
+    for font_dir in search_dirs:
+        if not font_dir.exists():
+            continue
+        for font_file in font_dir.iterdir():
+            if font_file.suffix.lower() in font_extensions and font_file.is_file():
+                font_names.add(font_file.stem)
+
+    return {"fonts": sorted(font_names, key=str.lower)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

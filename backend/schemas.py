@@ -29,6 +29,7 @@ class PreviewRequest(BaseModel):
     preset_id: Optional[str] = None
     movie_title: Optional[str] = None
     movie_year: Optional[int] = None
+    rating_key: Optional[str] = None  # Plex rating key for media info lookup (overlay badges)
     tv_show_rating_key: Optional[str] = None  # For TV show logo fetching and poster fallback
     season_index: Optional[int] = None  # For TV show season poster fetching (1, 2, 3, etc.)
     fallbackPosterAction: Optional[str] = None
@@ -241,6 +242,8 @@ class OverlayElement(BaseModel):
     metadata_field: Optional[str] = None  # Metadata field to check (e.g., "video_resolution", "audio_codec")
     badge_modes: Optional[Dict[str, str]] = None  # Maps metadata value -> "none" | "text" | "image"
     badge_assets: Optional[Dict[str, str]] = None  # Maps metadata value -> asset_id (e.g., {"4k": "asset-123"})
+    badge_texts: Optional[Dict[str, str]] = None  # Maps metadata value -> custom display text (e.g., {"1080": "HD"})
+    text_align: Optional[str] = None  # "left" | "center" | "right" (default: "center")
 
 
 class OverlayConfigSaveRequest(BaseModel):

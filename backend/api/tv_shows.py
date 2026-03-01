@@ -411,6 +411,25 @@ def api_tv_show_labels(rating_key: str):
 
     labels_sorted = sorted(labels)
     cache.update_tv_labels(rating_key, labels_sorted)
+
+    # Piggyback: cache media info from the same response
+    try:
+        from ..config import extract_media_info_from_metadata
+        media_info = extract_media_info_from_metadata(r.text)
+        if media_info:
+            from .. import database as db
+            db.update_tv_media_info(
+                rating_key,
+                media_info.get("video_resolution"),
+                media_info.get("audio_codec"),
+                media_info.get("audio_channels"),
+                video_codec=media_info.get("video_codec"),
+                audio_language=media_info.get("audio_language"),
+                edition=media_info.get("edition"),
+            )
+    except Exception:
+        pass  # Non-critical
+
     return LabelsResponse(labels=labels_sorted)
 
 
@@ -440,6 +459,24 @@ def api_tv_show_tmdb(rating_key: str):
     cache.update_tv_tmdb(rating_key, tmdb_id)
     if tvdb_id:
         cache.update_tv_tvdb(rating_key, tvdb_id)
+
+    # Piggyback: cache media info from the same response
+    try:
+        from ..config import extract_media_info_from_metadata
+        media_info = extract_media_info_from_metadata(r.text)
+        if media_info:
+            db.update_tv_media_info(
+                rating_key,
+                media_info.get("video_resolution"),
+                media_info.get("audio_codec"),
+                media_info.get("audio_channels"),
+                video_codec=media_info.get("video_codec"),
+                audio_language=media_info.get("audio_language"),
+                edition=media_info.get("edition"),
+            )
+    except Exception:
+        pass  # Non-critical
+
     return {"tmdb_id": tmdb_id, "tvdb_id": tvdb_id}
 
 

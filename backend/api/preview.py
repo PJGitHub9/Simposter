@@ -208,7 +208,12 @@ def api_preview(req: PreviewRequest):
             is_tv_show = True
             logger.debug("[PREVIEW] Using explicitly provided TV show rating_key=%s", rating_key)
 
-        logger.debug("[PREVIEW] Detected rating_key=%s is_tv_show=%s", rating_key, is_tv_show)
+        # Fallback: use rating_key from request body (sent by frontend for media info lookup)
+        if req.rating_key and not rating_key:
+            rating_key = req.rating_key
+            logger.info("[PREVIEW] Using rating_key from request body: %s", rating_key)
+
+        logger.info("[PREVIEW] Detected rating_key=%s is_tv_show=%s", rating_key, is_tv_show)
 
         if rating_key and not is_tv_show:
             try:
@@ -554,6 +559,23 @@ def api_preview(req: PreviewRequest):
         if not background_url:
             logger.error("[PREVIEW] No background URL available after all lookups (rating_key=%s, is_tv=%s)", rating_key, is_tv_show)
             raise HTTPException(status_code=400, detail="Could not find a poster image. Check that the item has a valid TMDB/TVDB ID or Plex poster.")
+
+        # Inject real Plex media metadata (video_resolution, audio_codec, etc.)
+        # for overlay badge rendering. Always inject when we have a rating_key,
+        # because overlays can come from preset-linked configs OR explicit IDs.
+        if rating_key:
+            from ..config import get_plex_media_info
+            plex_media = get_plex_media_info(rating_key)
+            if plex_media:
+                existing_meta = render_options.get("metadata") or {}
+                render_options["metadata"] = {**existing_meta, **plex_media}
+                logger.info("[PREVIEW] Injected Plex media info for rating_key=%s: %s", rating_key, plex_media)
+            else:
+                logger.info("[PREVIEW] No media info found for rating_key=%s", rating_key)
+
+        # Pass preset_id so the template renderer can look up linked overlay configs
+        if req.preset_id:
+            render_options["preset_id"] = req.preset_id
 
         logo_mode_val = render_options.get("logo_mode", "first")
         effective_logo_url = None if logo_mode_val == "none" else logo_url

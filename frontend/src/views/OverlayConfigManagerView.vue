@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, watch, nextTick, type Ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 
 const apiBase = getApiBase()
@@ -25,6 +25,8 @@ interface OverlayElement {
   metadata_field?: string
   badge_modes?: Record<string, string>
   badge_assets?: Record<string, string>
+  badge_texts?: Record<string, string>
+  text_align?: string
 }
 
 interface OverlayConfig {
@@ -52,13 +54,31 @@ interface SimpleMovie {
 
 // --- Predefined badge values ---
 
-const RESOLUTION_VALUES = ['4k', '1080p', '720p', '480p', 'sd']
+const RESOLUTION_VALUES = ['4k', '1080', '720', '480', 'sd']
+const VIDEO_CODEC_VALUES = ['h264', 'hevc', 'av1', 'mpeg4', 'vc1', 'vp9']
 const CODEC_VALUES = ['atmos', 'dts-x', 'dts-hd ma', 'dts', 'truehd', 'aac', 'ac3', 'flac', 'eac3']
+const AUDIO_CHANNELS_VALUES = ['2', '6', '8']
+const AUDIO_LANGUAGE_VALUES = ['en', 'es', 'fr', 'de', 'ja', 'ko', 'zh', 'it', 'pt', 'ru']
+const EDITION_VALUES = ['theatrical', 'extended', "director's cut", 'unrated', 'imax']
+
+const METADATA_FIELD_VALUES: Record<string, string[]> = {
+  video_resolution: RESOLUTION_VALUES,
+  video_codec: VIDEO_CODEC_VALUES,
+  audio_codec: CODEC_VALUES,
+  audio_channels: AUDIO_CHANNELS_VALUES,
+  audio_language: AUDIO_LANGUAGE_VALUES,
+  edition: EDITION_VALUES,
+}
+
+const getValuesForField = (field: string): string[] => {
+  return METADATA_FIELD_VALUES[field] || RESOLUTION_VALUES
+}
 
 // --- State ---
 
 const configs = ref<OverlayConfig[]>([])
 const assets = ref<OverlayAsset[]>([])
+const fonts = ref<string[]>([])
 const loading = ref(false)
 const selectedConfig = ref<OverlayConfig | null>(null)
 const showEditor = ref(false)
@@ -92,7 +112,20 @@ const movieSearchResults = computed(() => {
 
 // Preview value switcher
 const previewResolution = ref('4k')
+const previewVideoCodec = ref('hevc')
 const previewCodec = ref('atmos')
+const previewAudioChannels = ref('6')
+const previewAudioLanguage = ref('en')
+const previewEdition = ref('theatrical')
+
+const previewMetadataValues: Record<string, Ref<string>> = {
+  video_resolution: previewResolution,
+  video_codec: previewVideoCodec,
+  audio_codec: previewCodec,
+  audio_channels: previewAudioChannels,
+  audio_language: previewAudioLanguage,
+  edition: previewEdition,
+}
 
 // Asset upload state
 const uploadFileName = ref('')
@@ -125,6 +158,18 @@ const loadAssets = async () => {
     }
   } catch (e) {
     console.error('Failed to load overlay assets:', e)
+  }
+}
+
+const loadFonts = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/fonts`)
+    if (res.ok) {
+      const data = await res.json()
+      fonts.value = data.fonts || []
+    }
+  } catch (e) {
+    console.error('Failed to load fonts:', e)
   }
 }
 
@@ -259,25 +304,27 @@ const addElement = (type: string) => {
     defaults.metadata_field = 'video_resolution'
     defaults.badge_modes = {}
     defaults.badge_assets = {}
+    defaults.badge_texts = {}
     defaults.font_size = 40
     defaults.font_color = '#FFFFFF'
-    defaults.font_family = 'arial'
+    defaults.font_family = 'Arial'
   } else if (type === 'codec_badge') {
     defaults.metadata_field = 'audio_codec'
     defaults.badge_modes = {}
     defaults.badge_assets = {}
+    defaults.badge_texts = {}
     defaults.font_size = 30
     defaults.font_color = '#FFFFFF'
-    defaults.font_family = 'arial'
+    defaults.font_family = 'Arial'
   } else if (type === 'text_label') {
     defaults.font_size = 40
     defaults.font_color = '#FFFFFF'
-    defaults.font_family = 'arial'
+    defaults.font_family = 'Arial'
     defaults.text = ''
   } else if (type === 'label_badge') {
     defaults.font_size = 30
     defaults.font_color = '#FFFFFF'
-    defaults.font_family = 'arial'
+    defaults.font_family = 'Arial'
     defaults.label_name = ''
   }
 
@@ -341,6 +388,19 @@ const setBadgeAsset = (element: OverlayElement, value: string, assetId: string |
 
 const getBadgeAsset = (element: OverlayElement, value: string): string | undefined => {
   return element.badge_assets?.[value]
+}
+
+const getBadgeText = (element: OverlayElement, value: string): string => {
+  return element.badge_texts?.[value] ?? ''
+}
+
+const setBadgeText = (element: OverlayElement, value: string, text: string) => {
+  if (!element.badge_texts) element.badge_texts = {}
+  if (text) {
+    element.badge_texts[value] = text
+  } else {
+    delete element.badge_texts[value]
+  }
 }
 
 const hasBadgeTextMode = (element: OverlayElement): boolean => {
@@ -592,7 +652,8 @@ const renderPreviewElement = async (
   const scale = PREVIEW_W / 2000
 
   if (el.type === 'resolution_badge') {
-    const value = previewResolution.value
+    const metaField = el.metadata_field || 'video_resolution'
+    const value = (previewMetadataValues[metaField] || previewResolution).value
     const mode = el.badge_modes?.[value] ?? 'text'
 
     if (mode === 'none') {
@@ -616,11 +677,13 @@ const renderPreviewElement = async (
       }
     }
     // Text mode (or image fallback)
-    const fontSize = Math.max(10, Math.round((el.font_size || 40) * scale))
+    const fontSize = Math.max(4, Math.round((el.font_size || 40) * scale))
     const color = el.font_color || '#60a5fa'
-    drawBadge(ctx, x, y, value.toUpperCase(), fontSize, color, 'rgba(96, 165, 250, 0.2)', idx, isHovered)
+    const displayText = el.badge_texts?.[value] || value.toUpperCase()
+    drawBadge(ctx, x, y, displayText, fontSize, color, 'rgba(96, 165, 250, 0.2)', idx, isHovered, el.text_align || 'center')
   } else if (el.type === 'codec_badge') {
-    const value = previewCodec.value
+    const metaField = el.metadata_field || 'audio_codec'
+    const value = (previewMetadataValues[metaField] || previewCodec).value
     const mode = el.badge_modes?.[value] ?? 'text'
 
     if (mode === 'none') {
@@ -643,9 +706,10 @@ const renderPreviewElement = async (
       }
     }
     // Text mode (or image fallback)
-    const fontSize = Math.max(10, Math.round((el.font_size || 30) * scale))
+    const fontSize = Math.max(4, Math.round((el.font_size || 30) * scale))
     const color = el.font_color || '#a78bfa'
-    drawBadge(ctx, x, y, value.toUpperCase(), fontSize, color, 'rgba(167, 139, 250, 0.2)', idx, isHovered)
+    const codecDisplayText = el.badge_texts?.[value] || value.toUpperCase()
+    drawBadge(ctx, x, y, codecDisplayText, fontSize, color, 'rgba(167, 139, 250, 0.2)', idx, isHovered, el.text_align || 'center')
   } else if (el.type === 'custom_image') {
     if (el.asset_id) {
       try {
@@ -659,20 +723,22 @@ const renderPreviewElement = async (
     }
   } else if (el.type === 'text_label') {
     const text = el.text || 'Text'
-    const fontSize = Math.max(8, Math.round((el.font_size || 40) * scale))
+    const fontSize = Math.max(4, Math.round((el.font_size || 40) * scale))
     const color = el.font_color || '#FFFFFF'
+    const align = (el.text_align || 'center') as CanvasTextAlign
 
     ctx.font = `bold ${fontSize}px sans-serif`
-    ctx.textAlign = 'center'
+    ctx.textAlign = align
     ctx.textBaseline = 'middle'
 
     if (isHovered) {
       const metrics = ctx.measureText(text)
       const tw = metrics.width + 8
       const th = fontSize + 6
+      const hx = align === 'left' ? x - 4 : align === 'right' ? x - tw + 4 : x - tw / 2
       ctx.strokeStyle = '#fbbf24'
       ctx.lineWidth = 1.5
-      ctx.strokeRect(x - tw / 2, y - th / 2, tw, th)
+      ctx.strokeRect(hx, y - th / 2, tw, th)
     }
 
     ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'
@@ -682,8 +748,8 @@ const renderPreviewElement = async (
     drawElementIndex(ctx, x - 10, y - fontSize / 2 - 4, idx)
   } else if (el.type === 'label_badge') {
     const text = el.label_name || 'LABEL'
-    const fontSize = Math.max(10, Math.round((el.font_size || 30) * scale))
-    drawBadge(ctx, x, y, text, fontSize, '#f472b6', 'rgba(244, 114, 182, 0.2)', idx, isHovered)
+    const fontSize = Math.max(4, Math.round((el.font_size || 30) * scale))
+    drawBadge(ctx, x, y, text, fontSize, '#f472b6', 'rgba(244, 114, 182, 0.2)', idx, isHovered, el.text_align || 'center')
   }
 }
 
@@ -750,27 +816,31 @@ const drawBadge = (
   x: number, y: number,
   text: string, fontSize: number,
   borderColor: string, bgColor: string,
-  idx: number, isHovered: boolean
+  idx: number, isHovered: boolean,
+  align: string = 'center'
 ) => {
   ctx.font = `bold ${fontSize}px sans-serif`
-  ctx.textAlign = 'center'
+  ctx.textAlign = align as CanvasTextAlign
   ctx.textBaseline = 'middle'
   const metrics = ctx.measureText(text)
-  const pw = 6, ph = 4
+  // Scale padding proportionally to font size so preview matches actual render proportions
+  const pw = Math.max(2, Math.round(fontSize * 0.15))
+  const ph = Math.max(1, Math.round(fontSize * 0.1))
   const bw = metrics.width + pw * 2
   const bh = fontSize + ph * 2
-  const bx = x - bw / 2
+  // Position badge background based on alignment
+  const bx = align === 'left' ? x - pw : align === 'right' ? x - bw + pw : x - bw / 2
   const by = y - bh / 2
 
   ctx.fillStyle = bgColor
   ctx.beginPath()
-  ctx.roundRect(bx, by, bw, bh, 3)
+  ctx.roundRect(bx, by, bw, bh, Math.max(1, Math.round(fontSize * 0.1)))
   ctx.fill()
 
   ctx.strokeStyle = isHovered ? '#fff' : borderColor
   ctx.lineWidth = isHovered ? 1.5 : 1
   ctx.beginPath()
-  ctx.roundRect(bx, by, bw, bh, 3)
+  ctx.roundRect(bx, by, bw, bh, Math.max(1, Math.round(fontSize * 0.1)))
   ctx.stroke()
 
   ctx.fillStyle = borderColor
@@ -800,7 +870,11 @@ watch(
 
 watch(hoveredElementIdx, () => { nextTick(renderPreview) })
 watch(previewResolution, () => { nextTick(renderPreview) })
+watch(previewVideoCodec, () => { nextTick(renderPreview) })
 watch(previewCodec, () => { nextTick(renderPreview) })
+watch(previewAudioChannels, () => { nextTick(renderPreview) })
+watch(previewAudioLanguage, () => { nextTick(renderPreview) })
+watch(previewEdition, () => { nextTick(renderPreview) })
 
 watch(showEditor, (val) => {
   if (val) {
@@ -818,6 +892,7 @@ watch(showEditor, (val) => {
 onMounted(() => {
   loadConfigs()
   loadAssets()
+  loadFonts()
 })
 </script>
 
@@ -825,12 +900,7 @@ onMounted(() => {
   <div class="overlay-manager">
     <div class="page-header">
       <div>
-        <h1>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>
-          </svg>
-          Overlay Configuration
-        </h1>
+        <h1>&#x1F9EA; Overlay Configuration <span style="font-size: 0.55em; opacity: 0.6; vertical-align: middle; font-weight: 400;">(experimental)</span></h1>
         <p class="page-subtitle">Create reusable overlay templates with badges, images, and text elements</p>
       </div>
     </div>
@@ -1000,13 +1070,17 @@ onMounted(() => {
                         <select v-model="element.metadata_field">
                           <option value="video_resolution">Video Resolution</option>
                           <option value="video_codec">Video Codec</option>
+                          <option value="audio_codec">Audio Codec</option>
+                          <option value="audio_channels">Audio Channels</option>
+                          <option value="audio_language">Audio Language</option>
+                          <option value="edition">Edition</option>
                         </select>
                       </label>
                       <div class="field-divider"></div>
                       <div class="field-full badge-assets-section">
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
-                          <div v-for="val in RESOLUTION_VALUES" :key="val" class="badge-asset-row">
+                          <div v-for="val in getValuesForField(element.metadata_field || 'video_resolution')" :key="val" class="badge-asset-row">
                             <span class="badge-value-label">{{ val.toUpperCase() }}</span>
                             <select
                               :value="getBadgeMode(element, val)"
@@ -1017,6 +1091,14 @@ onMounted(() => {
                               <option value="text">Text</option>
                               <option value="image">Image</option>
                             </select>
+                            <input
+                              v-if="getBadgeMode(element, val) === 'text'"
+                              type="text"
+                              :value="getBadgeText(element, val)"
+                              @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
+                              :placeholder="val.toUpperCase()"
+                              class="badge-text-input"
+                            />
                             <select
                               v-if="getBadgeMode(element, val) === 'image'"
                               :value="getBadgeAsset(element, val) || ''"
@@ -1044,7 +1126,28 @@ onMounted(() => {
                         </label>
                         <label class="field-full">
                           <span>Font Family</span>
-                          <input type="text" v-model="element.font_family" placeholder="arial" />
+                          <select v-model="element.font_family">
+                            <optgroup label="System Fonts">
+                              <option value="Arial">Arial</option>
+                              <option value="Helvetica">Helvetica</option>
+                              <option value="Times New Roman">Times New Roman</option>
+                              <option value="Georgia">Georgia</option>
+                              <option value="Verdana">Verdana</option>
+                              <option value="Courier New">Courier New</option>
+                              <option value="Impact">Impact</option>
+                            </optgroup>
+                            <optgroup v-if="fonts.length > 0" label="Custom Fonts">
+                              <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
+                            </optgroup>
+                          </select>
+                        </label>
+                        <label class="field-full">
+                          <span>Text Align</span>
+                          <div class="align-btn-group">
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
+                          </div>
                         </label>
                       </template>
                     </template>
@@ -1064,13 +1167,17 @@ onMounted(() => {
                         <select v-model="element.metadata_field">
                           <option value="audio_codec">Audio Codec</option>
                           <option value="audio_channels">Audio Channels</option>
+                          <option value="audio_language">Audio Language</option>
+                          <option value="video_resolution">Video Resolution</option>
+                          <option value="video_codec">Video Codec</option>
+                          <option value="edition">Edition</option>
                         </select>
                       </label>
                       <div class="field-divider"></div>
                       <div class="field-full badge-assets-section">
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
-                          <div v-for="val in CODEC_VALUES" :key="val" class="badge-asset-row">
+                          <div v-for="val in getValuesForField(element.metadata_field || 'audio_codec')" :key="val" class="badge-asset-row">
                             <span class="badge-value-label">{{ val.toUpperCase() }}</span>
                             <select
                               :value="getBadgeMode(element, val)"
@@ -1081,6 +1188,14 @@ onMounted(() => {
                               <option value="text">Text</option>
                               <option value="image">Image</option>
                             </select>
+                            <input
+                              v-if="getBadgeMode(element, val) === 'text'"
+                              type="text"
+                              :value="getBadgeText(element, val)"
+                              @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
+                              :placeholder="val.toUpperCase()"
+                              class="badge-text-input"
+                            />
                             <select
                               v-if="getBadgeMode(element, val) === 'image'"
                               :value="getBadgeAsset(element, val) || ''"
@@ -1108,7 +1223,28 @@ onMounted(() => {
                         </label>
                         <label class="field-full">
                           <span>Font Family</span>
-                          <input type="text" v-model="element.font_family" placeholder="arial" />
+                          <select v-model="element.font_family">
+                            <optgroup label="System Fonts">
+                              <option value="Arial">Arial</option>
+                              <option value="Helvetica">Helvetica</option>
+                              <option value="Times New Roman">Times New Roman</option>
+                              <option value="Georgia">Georgia</option>
+                              <option value="Verdana">Verdana</option>
+                              <option value="Courier New">Courier New</option>
+                              <option value="Impact">Impact</option>
+                            </optgroup>
+                            <optgroup v-if="fonts.length > 0" label="Custom Fonts">
+                              <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
+                            </optgroup>
+                          </select>
+                        </label>
+                        <label class="field-full">
+                          <span>Text Align</span>
+                          <div class="align-btn-group">
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
+                          </div>
                         </label>
                       </template>
                     </template>
@@ -1151,7 +1287,28 @@ onMounted(() => {
                       </label>
                       <label class="field-full">
                         <span>Font Family</span>
-                        <input type="text" v-model="element.font_family" placeholder="arial" />
+                        <select v-model="element.font_family">
+                            <optgroup label="System Fonts">
+                              <option value="Arial">Arial</option>
+                              <option value="Helvetica">Helvetica</option>
+                              <option value="Times New Roman">Times New Roman</option>
+                              <option value="Georgia">Georgia</option>
+                              <option value="Verdana">Verdana</option>
+                              <option value="Courier New">Courier New</option>
+                              <option value="Impact">Impact</option>
+                            </optgroup>
+                            <optgroup v-if="fonts.length > 0" label="Custom Fonts">
+                              <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
+                            </optgroup>
+                          </select>
+                      </label>
+                      <label class="field-full">
+                        <span>Text Align</span>
+                        <div class="align-btn-group">
+                          <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
+                          <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
+                          <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
+                        </div>
                       </label>
                     </template>
 
@@ -1174,7 +1331,28 @@ onMounted(() => {
                       </label>
                       <label class="field-full">
                         <span>Font Family</span>
-                        <input type="text" v-model="element.font_family" placeholder="arial" />
+                        <select v-model="element.font_family">
+                            <optgroup label="System Fonts">
+                              <option value="Arial">Arial</option>
+                              <option value="Helvetica">Helvetica</option>
+                              <option value="Times New Roman">Times New Roman</option>
+                              <option value="Georgia">Georgia</option>
+                              <option value="Verdana">Verdana</option>
+                              <option value="Courier New">Courier New</option>
+                              <option value="Impact">Impact</option>
+                            </optgroup>
+                            <optgroup v-if="fonts.length > 0" label="Custom Fonts">
+                              <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
+                            </optgroup>
+                          </select>
+                      </label>
+                      <label class="field-full">
+                        <span>Text Align</span>
+                        <div class="align-btn-group">
+                          <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
+                          <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
+                          <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
+                        </div>
                       </label>
                     </template>
 
@@ -1243,9 +1421,33 @@ onMounted(() => {
                     </select>
                   </label>
                   <label class="preview-value-field">
-                    <span>Codec</span>
+                    <span>Video Codec</span>
+                    <select v-model="previewVideoCodec">
+                      <option v-for="v in VIDEO_CODEC_VALUES" :key="v" :value="v">{{ v.toUpperCase() }}</option>
+                    </select>
+                  </label>
+                  <label class="preview-value-field">
+                    <span>Audio Codec</span>
                     <select v-model="previewCodec">
                       <option v-for="v in CODEC_VALUES" :key="v" :value="v">{{ v.toUpperCase() }}</option>
+                    </select>
+                  </label>
+                  <label class="preview-value-field">
+                    <span>Channels</span>
+                    <select v-model="previewAudioChannels">
+                      <option v-for="v in AUDIO_CHANNELS_VALUES" :key="v" :value="v">{{ v }}</option>
+                    </select>
+                  </label>
+                  <label class="preview-value-field">
+                    <span>Language</span>
+                    <select v-model="previewAudioLanguage">
+                      <option v-for="v in AUDIO_LANGUAGE_VALUES" :key="v" :value="v">{{ v.toUpperCase() }}</option>
+                    </select>
+                  </label>
+                  <label class="preview-value-field">
+                    <span>Edition</span>
+                    <select v-model="previewEdition">
+                      <option v-for="v in EDITION_VALUES" :key="v" :value="v">{{ v.charAt(0).toUpperCase() + v.slice(1) }}</option>
                     </select>
                   </label>
                 </div>
@@ -1434,7 +1636,16 @@ onMounted(() => {
 .badge-value-label { color: var(--text-secondary, #aaa); font-size: 0.72rem; font-weight: 600; min-width: 70px; text-align: right; }
 .badge-mode-select { width: 68px; flex-shrink: 0; padding: 0.3rem 0.3rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-asset-select { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
+.badge-text-input { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
+.badge-text-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 .badge-asset-row select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+
+/* Text align button group */
+.align-btn-group { display: flex; gap: 0; border-radius: 5px; overflow: hidden; border: 1px solid var(--border, #2a2f3e); }
+.align-btn-group button { flex: 1; padding: 0.3rem 0.5rem; background: rgba(255, 255, 255, 0.04); border: none; border-right: 1px solid var(--border, #2a2f3e); color: var(--text-secondary, #888); cursor: pointer; font-size: 0.72rem; font-weight: 500; transition: all 0.15s; }
+.align-btn-group button:last-child { border-right: none; }
+.align-btn-group button:hover { background: rgba(255, 255, 255, 0.08); color: var(--text-primary, #fff); }
+.align-btn-group button.active { background: rgba(61, 214, 183, 0.15); color: var(--accent, #3dd6b7); font-weight: 600; }
 
 /* Preview column */
 .preview-column { position: sticky; top: 0; }

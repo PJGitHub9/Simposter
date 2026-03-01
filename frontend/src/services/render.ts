@@ -66,6 +66,8 @@ export function useRenderService() {
     const disableOverlayCache = disableCache ?? false
     const data = await post('preview', {
       ...payload,
+      // Include rating_key so backend can fetch media info for overlay badges
+      rating_key: movie.key,
       // Only disable when explicitly requested
       disableOverlayCache
     })

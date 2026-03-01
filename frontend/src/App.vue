@@ -23,7 +23,7 @@ const tabs = computed<MenuItem[]>(() => {
   // If Plex not configured, only show Settings
   if (!plexConfigured) {
     return [
-      { key: 'settings', label: 'Settings' }
+      { key: 'settings', label: '\u{2699}\uFE0F Settings' }
     ]
   }
 
@@ -33,12 +33,12 @@ const tabs = computed<MenuItem[]>(() => {
 
   const movieTabs: MenuItem[] = libs.map((lib, idx) => ({
     key: `movies-${lib.id || idx}`,
-    label: lib.displayName || lib.title || `Library ${idx + 1}`,
+    label: `\u{1F3AC} ${lib.displayName || lib.title || `Library ${idx + 1}`}`,
     submenu: [
-      { key: `batch-${lib.id || idx}`, label: 'Batch Edit' },
-      { key: `collections-${lib.id || idx}`, label: 'Collections' },
-      { key: `assets-${lib.id || idx}`, label: 'Local Assets' },
-      { key: `backup-${lib.id || idx}`, label: 'Backup / Restore' }
+      { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
+      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
+      { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
+      { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
   }))
 
@@ -48,22 +48,22 @@ const tabs = computed<MenuItem[]>(() => {
 
   const tvShowTabs: MenuItem[] = tvLibs.length > 0 ? tvLibs.map((lib, idx) => ({
     key: `tv-shows-${lib.id || idx}`,
-    label: lib.displayName || lib.title || `TV Library ${idx + 1}`,
+    label: `\u{1F4FA} ${lib.displayName || lib.title || `TV Library ${idx + 1}`}`,
     submenu: [
-      { key: `tv-batch-${lib.id || idx}`, label: 'Batch Edit' },
-      { key: `tv-assets-${lib.id || idx}`, label: 'Local Assets' },
-      { key: `tv-backup-${lib.id || idx}`, label: 'Backup / Restore' }
+      { key: `tv-batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
+      { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
+      { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
   })) : []
 
   return [
     ...movieTabs,
     ...tvShowTabs,
-    { key: 'template-manager', label: 'Template Manager' },
-    { key: 'overlay-config-manager', label: 'Overlay Config' },
-    { key: 'history', label: 'History' },
-    { key: 'settings', label: 'Settings' },
-    { key: 'logs', label: 'Logs' }
+    { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
+    { key: 'overlay-config-manager', label: '\u{1F9EA} Overlay Config (experimental)' },
+    { key: 'history', label: '\u{1F4CB} History' },
+    { key: 'settings', label: '\u{2699}\uFE0F Settings' },
+    { key: 'logs', label: '\u{1F4DD} Logs' }
   ]
 })
 
