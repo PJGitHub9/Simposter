@@ -6,6 +6,11 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 COPY frontend ./
 
+# Extract version from version.ts and save for runtime stage
+RUN VERSION=$(grep "APP_VERSION" src/version.ts | sed "s/.*'\(.*\)'.*/\1/") \
+    && echo "{\"app_version\": \"${VERSION}\"}" > /tmp/version-info.json \
+    && echo "Extracted version: ${VERSION}"
+
 # Build with API pointing at container backend (same port)
 ARG VITE_API_URL=http://localhost:8003
 ENV VITE_API_URL=${VITE_API_URL}
@@ -29,16 +34,19 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Copy .git directory temporarily to detect branch
+# Copy .git directory and version info from frontend build
 COPY .git .git
+COPY --from=frontend-builder /tmp/version-info.json /tmp/version-info.json
 
-# Install git temporarily, detect branch, create build-info.json, then remove git and .git
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+# Install git temporarily, detect branch, create build-info.json with version and branch, then cleanup
+RUN apt-get update && apt-get install -y --no-install-recommends git jq \
     && DETECTED_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown") \
+    && APP_VERSION=$(jq -r '.app_version' /tmp/version-info.json) \
     && echo "Detected git branch: ${DETECTED_BRANCH}" \
-    && echo "{\"git_branch\": \"${DETECTED_BRANCH}\"}" > /app/build-info.json \
-    && rm -rf .git \
-    && apt-get purge -y git \
+    && echo "Detected app version: ${APP_VERSION}" \
+    && echo "{\"git_branch\": \"${DETECTED_BRANCH}\", \"app_version\": \"${APP_VERSION}\"}" > /app/build-info.json \
+    && rm -rf .git /tmp/version-info.json \
+    && apt-get purge -y git jq \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 

@@ -29,7 +29,7 @@ def parse_version(version_str: str) -> tuple:
 
 
 def get_current_version() -> str:
-    """Get current app version from version.ts"""
+    """Get current app version from version.ts or build-info.json"""
     try:
         version_file = REPO_ROOT / "frontend" / "src" / "version.ts"
         if version_file.exists():
@@ -41,10 +41,23 @@ def get_current_version() -> str:
                     parts = line.split("'")
                     if len(parts) >= 2:
                         return parts[1].strip()
-        return "unknown"
     except Exception as e:
-        logger.error(f"Failed to read version: {e}")
-        return "unknown"
+        logger.debug(f"Failed to read version.ts: {e}")
+
+    # Fallback: read from build-info.json (Docker build)
+    try:
+        import json
+        build_info_file = REPO_ROOT / "build-info.json"
+        if build_info_file.exists():
+            with open(build_info_file, 'r') as f:
+                build_info = json.load(f)
+                version = build_info.get('app_version')
+                if version and version != 'unknown':
+                    return version
+    except Exception as e:
+        logger.debug(f"Failed to read version from build-info.json: {e}")
+
+    return "unknown"
 
 
 def get_git_branch() -> Optional[str]:
