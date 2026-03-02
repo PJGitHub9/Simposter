@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.5.5 (2026-03-01)
+### UI Improvements
+- **Navigation Emoji Icons**: Added emojis to all page headings and navigation items for better visual distinction
+  - Movies 🎬, TV Shows 📺, Batch Edit ✏️, Template Manager 🎨, Overlay Manager 📐
+  - Local Assets 🗂️, History 📜, Logs 📝, Collections 📚, Settings ⚙️, Backup/Restore 💾
+  - Removed duplicate SVG + emoji icons from sidebar (was rendering both)
+
+### Overlay System Enhancements
+- **Overlay Element Type Refactor**: Reorganized element types for clearer metadata organization
+  - **New types**: `video_badge` (resolution, codec), `audio_badge` (codec, channels, language), `edition_badge` (theatrical, extended, etc.)
+  - **Legacy support**: `resolution_badge` and `codec_badge` still work (aliased to new types)
+  - **Removed from UI**: `label_badge` (still renders for backwards compatibility)
+  - **Metadata field dropdowns**: Now restricted to relevant fields per badge type
+    - Video badges: video_resolution, video_codec only
+    - Audio badges: audio_codec, audio_channels, audio_language only
+    - Edition badges: fixed to edition field (theatrical, extended, director's cut, unrated, imax)
+  - **Case-insensitive label matching**: `show_if_label` and `hide_if_label` now case-insensitive
+  - **Consolidated rendering**: Backend uses unified `_apply_metadata_badge` function for all badge types
+
+### Technical Improvements
+- Simplified overlay badge rendering pipeline with type-to-defaults mapping
+- Canvas preview rendering now uses lookup table for badge colors (blue for video, purple for audio, amber for edition)
+- Updated schema documentation with new element types
+
 ## v1.5.4 (2026-02-27)
 ### Bug Fixes
 - **Fallback Settings Reset Fix**: Fixed fallback preset settings being reset to blank after v1.5.3 template consolidation

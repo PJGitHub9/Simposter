@@ -1,171 +1,387 @@
 # Simposter Architecture & Execution Flow
 
-This doc explains how Simposter starts, how the backend and frontend interact, and what the key modules/functions do. It is written for developers who want a deeper, code-level understanding rather than a deploy guide.
+This document explains how Simposter starts, how the backend and frontend interact, and what the key modules/functions do. It is written for developers who want a deeper, code-level understanding rather than a deployment guide.
+
+---
 
 ## Runtime Overview
+
 - **Frontend**: Vue 3 + Vite (`frontend/`). Builds to static assets; during development Vite serves the SPA, in production FastAPI serves the built assets.
 - **Backend**: FastAPI (`backend/`) with routers under `backend/api/`. Entrypoint is `backend/main.py`.
 - **Database**: SQLite at `config/settings/simposter.db` (or `SETTINGS_DIR/simposter.db`). Accessed via helpers in `backend/database.py`.
-- **External services**: Plex (library metadata/posters), TMDb (movies metadata/posters/logos), TVDB (TV shows metadata/posters/logos), Fanart.tv (HD clearlogos), optional webhooks.
+- **External services**: Plex (library metadata/posters), TMDb (movies metadata/posters/logos), TVDB (TV shows metadata/posters/logos), Fanart.tv (HD clearlogos)
 - **Images**: Posters/logos fetched from multiple sources and cached; rendered via templates with fallback support; returned to the frontend or saved to disk and/or Plex.
 
-## Startup Flow (what runs)
-1. **Backend start** (`backend/main.py`)
-   - Loads config from `backend/config.py` (env + fallbacks to db/json).
-   - Mounts all routers from `backend/api/`.
-   - Calls `init_database()` to ensure tables exist and to run version checks.
-   - Initializes APScheduler (`init_scheduler()`) and restores any saved schedules from database.
-2. **Database init & versioning** (`backend/database.py`)
-   - `_get_db_path()` decides where `simposter.db` lives (uses `SETTINGS_DIR`/`CONFIG_DIR`).
-   - `init_database()` creates/migrates tables, migrates legacy `ui_settings` to `settings`, then calls `check_and_update_version()`.
-   - `check_and_update_version()` compares stored `app.version` (from `settings` table) with `frontend/src/version.ts`; on change it calls `_backup_database()` to create `simposter_vX.Y.Z.db.bak`, then updates the stored version.
-3. **Scheduler initialization** (`backend/scheduler.py`)
-   - `init_scheduler()` creates background scheduler daemon
-   - Reads scheduler settings from database
-   - If enabled, restores cron schedule for automatic library scans
-4. **Frontend** (dev vs prod)
-   - Dev: Vite serves the SPA and proxies API calls to FastAPI.
-   - Prod: FastAPI serves the built `dist/` assets; frontend calls `/api/*`.
+---
+
+## Startup Flow
+
+### 1. Backend Initialization (`backend/main.py`)
+- Loads configuration from `backend/config.py` (environment variables + database fallbacks)
+- Mounts all API routers from `backend/api/`
+- Calls `init_database()` to ensure tables exist and run version checks
+- Initializes APScheduler (`init_scheduler()`) and restores any saved schedules from database
+
+### 2. Database Initialization (`backend/database.py`)
+- `_get_db_path()` determines where `simposter.db` lives (uses `SETTINGS_DIR`/`CONFIG_DIR`)
+- `init_database()` creates/migrates tables, migrates legacy `ui_settings` to `settings`, then calls `check_and_update_version()`
+- `check_and_update_version()` compares stored `app.version` (from `settings` table) with `frontend/src/version.ts`
+- On version change: calls `_backup_database()` to create `simposter_vX.Y.Z.db.bak`, then updates the stored version
+
+**Tables created:**
+- `settings` — Key/value pairs + category for UI settings and app version
+- `presets` — Template/preset storage with options JSON
+- `history` — Poster generation history tracking
+- `movie_cache`, `poster_cache`, `label_cache` — Cached Plex/TMDb movie data
+- `tv_cache`, `tv_poster_cache`, `tv_label_cache` — Cached Plex/TVDB TV show data
+- `overlay_configs`, `overlay_assets` — Overlay configuration and badge assets
+- `media_metadata_cache` — Plex media metadata (resolution, codec, audio)
+
+### 3. Scheduler Initialization (`backend/scheduler.py`)
+- `init_scheduler()` creates background scheduler daemon
+- Reads scheduler settings from database
+- If enabled, restores cron schedule for automatic library scans
+
+### 4. Frontend Initialization (Dev vs Prod)
+- **Dev**: Vite serves the SPA and proxies API calls to FastAPI
+- **Prod**: FastAPI serves the built `dist/` assets; frontend calls `/api/*`
+
+---
 
 ## Backend Deep Dive
-### `backend/config.py`
-- **settings = Settings()**: Pydantic `BaseSettings` that reads `.env` and env vars. Normalizes paths (CONFIG_DIR, SETTINGS_DIR, OUTPUT_ROOT).
-- **_load_ui_settings_fallback()**: Loads UI settings from DB or JSON if env vars are absent; sets `settings.TMDB_API_KEY`, `settings.FANART_API_KEY`, etc.
-- **resolve_library_ids() / resolve_library_id()**: Map Plex library names/ids to numeric section IDs.
-- **plex_headers()**: Returns Plex auth headers.
-- **get_plex_movies()**: Hits Plex sections, builds `Movie` objects, caches them.
-- **fetch poster helpers**: In `api/movies.py` but rely on config paths such as `POSTER_CACHE_DIR`.
 
-### `backend/database.py`
-- **_get_db_path()**: Computes the SQLite path based on env/config.
-- **_configure_conn()**: Applies WAL, sync, busy_timeout defaults.
-- **get_db() (contextmanager)**: Yields a configured SQLite connection; used across API modules.
-- **get_db_version() / set_db_version()**: Store/read `app.version` in the `settings` table.
-- **get_app_version()**: Reads `frontend/src/version.ts`.
-- **_backup_database(db_version)**: Copies `simposter.db` to `simposter_v<db_version>.db.bak` before version bumps.
-- **check_and_update_version()**: Compares DB/app versions, triggers backup, then writes new version.
-- **init_database()**: Creates tables, migrates legacy `ui_settings`, seeds indexes, then calls `check_and_update_version()`.
+### Configuration (`backend/config.py`)
+- **`settings = Settings()`**: Pydantic `BaseSettings` that reads `.env` and environment variables
+- **`_load_ui_settings_fallback()`**: Loads UI settings from database or JSON if env vars are absent
+- **`resolve_library_ids()` / `resolve_library_id()`**: Map Plex library names/IDs to numeric section IDs
+- **`plex_headers()`**: Returns Plex authentication headers
+- **`get_plex_movies()`**: Hits Plex sections, builds `Movie` objects, caches them
 
-Tables created:
-- `settings` (key/value + category for UI settings and app version)
-- `presets` (template/preset storage with options JSON)
-- `history` (render/send events tracking)
-- `movie_cache`, `poster_cache`, `label_cache` (cached Plex/TMDb movie data)
-- `tv_cache`, `tv_poster_cache`, `tv_label_cache` (cached Plex/TVDB TV show data)
-- `webhooks` (outbound webhook configs)
+### Database (`backend/database.py`)
+- **`_get_db_path()`**: Computes the SQLite path based on env/config
+- **`_configure_conn()`**: Applies WAL mode, sync settings, busy_timeout defaults
+- **`get_db()` (context manager)**: Yields a configured SQLite connection; used across API modules
+- **`get_db_version()` / `set_db_version()`**: Store/read `app.version` in the `settings` table
+- **`get_app_version()`**: Reads `frontend/src/version.ts`
+- **`_backup_database(db_version)`**: Copies `simposter.db` to `simposter_v<db_version>.db.bak` before version bumps
+- **`check_and_update_version()`**: Compares database/app versions, triggers backup, then writes new version
+- **`init_database()`**: Creates tables, migrates legacy `ui_settings`, seeds indexes, then calls `check_and_update_version()`
 
 ### Key API Routers (`backend/api/`)
-- **movies.py**
-  - `api_movies`: List movies (cached DB if fresh, otherwise Plex); handles library_id normalization.
-  - `api_movie_poster`: Fetch/cached poster bytes or JSON meta; supports force refresh.
-  - `api_movie_labels` / `api_movie_labels_bulk`: Fetch Plex labels.
-  - `api_tmdb_images`: Merge TMDb + Fanart images respecting priority.
-  - `api_scan_library`: Walk Plex library, cache movies/posters/labels.
-  - Local assets handlers for listing/serving/deleting rendered files.
-- **tv_shows.py**
-  - `api_tv_shows`: List TV shows (cached DB if fresh, otherwise Plex); handles library_id normalization.
-  - `api_tv_show_poster`: Fetch/cached TV show poster with metadata.
-  - TVDB metadata integration with season/episode support.
-- **preview.py**
-  - `api_preview`: Compose poster with template/options; returns base64 JPEG.
-  - Supports logo fallback to different template/preset when logos missing.
-  - Respects JPEG quality settings from DB.
-- **save.py**
-  - `save_rendered`: Save rendered poster locally and/or send to Plex; optional label handling.
-  - Uses JPEG quality from settings.
-- **batch.py**
-  - `api_batch_render`: Process multiple movies with template/preset; supports concurrent rendering.
-  - Logo/poster fallback logic matching preview behavior.
-  - Uses ui_settings for quality and concurrency.
-- **scheduler.py (module)**
-  - `init_scheduler()`: Initializes APScheduler background instance on app startup.
-  - `schedule_library_scan()`: Schedules cron-based automatic library scans.
-  - `cancel_library_scan()`: Cancels scheduled scans.
-  - Integrations polling removed (Radarr/Sonarr).
-  - `cancel_integration_polling()` (v1.5.0): Cancels integration polling.
-  - Restores schedules from database on startup.
-- **scheduler.py (API router)**
-  - `api_schedule_library_scan` (POST): Schedule library scans with cron expression and optional library_id.
-  - `api_cancel_library_scan` (DELETE): Cancel scheduled scans.
-  - `api_get_library_scan_schedule` (GET): Get current schedule status and next run time.
-  - `api_schedule_integration_poll` (POST) (v1.5.0): Enable/disable integration polling with interval.
-  - `api_get_integration_poll_schedule` (GET) (v1.5.0): Get polling status and next run time.
-  - `api_scheduler_status` (GET): Check if scheduler is running.
-  - Settings persist to `ui_settings` in database.
-- **integrations_poller.py (v1.5.0)**
-  - Integration poller removed.
-  - `generate_poster_for_content()`: Generates poster for newly detected content.
-  - `process_new_content()`: Processes list of detected content items.
-  - Tracks last poll time per instance in database.
-  - Records history with source='auto'.
-- **presets.py / template_manager.py**
-  - CRUD for presets; import/export (merge mode); fallback rule configuration per preset/template.
-  - Global template preferences (logo source, poster filter, logo mode).
-- **ui_settings.py**
-  - `api_ui_settings` (GET/POST): Read/write UI settings (including scheduler config).
-  - `_apply_runtime_settings`: Immediately updates runtime keys/paths so new settings take effect without restart.
-- **logs.py, history.py, cache.py, webhooks.py**
-  - Logs retrieval, history listing, cache endpoints, webhook management.
 
-### Rendering Flow (what functions run)
-1. Frontend picks template/preset and movie → calls `/api/preview`.
-2. `preview.py::render_preview`:
-   - Resolves poster/logo URLs.
-   - Applies template options; calls renderer (see `backend/rendering.py`).
-   - Returns base64 image.
-3. On save, frontend calls `/api/save`:
-   - `save.py::save_rendered` writes to disk (respecting output path templating) and can send to Plex.
+#### `movies.py`
+- `api_movies` — List movies (cached DB if fresh, otherwise Plex)
+- `api_movie_poster` — Fetch/cached poster bytes or JSON metadata
+- `api_movie_labels` / `api_movie_labels_bulk` — Fetch Plex labels
+- `api_tmdb_images` — Merge TMDb + Fanart images respecting priority
+- `api_scan_library` — Walk Plex library, cache movies/posters/labels
 
-## Frontend Deep Dive (Vue 3 + Pinia)
-- **State stores** (Pinia): (JPEG quality, concurrent renders).
-  - `stores/scan.ts`: Scan progress and overlay state.
-  - `composables/useMovies.ts`: Shared movies cache + poster hydration from sessionStorage.
-- **Views**:
-  - `TemplateManagerView.vue`: Manage presets, fallbacks (poster/logo), preview rendering (with movie search/selection), export/import.
-  - `BatchEditView.vue`: Bulk select movies, apply templates, render/send in batches with progress tracking.
-  - `SettingsView.vue`: Configure Plex/API keys/perf options (JPEG quality, concurrent rendering); test keys; reorder API source priority; manage library mappings; configure integrations (v1.5.0).
-  - `MoviesView.vue`: Movie library grid with sessionStorage caching, library filtering, label filtering; validates cached movies by library_id.
-  - `TVView.vue`: TV show library (similar to movies).
-  - `HistoryView.vue` (v1.5.0): Poster generation history with filtering by library, template, action, and source.
-  - `LocalAssetsView.vue`, `LogsView.vue`, `CollectionsView.vue`: Asset management, log viewing, collection handling.
-- **API calls**: Built on `getApiBase()` to form `/api/*` requests; plain `fetch` used throughout.
-, TV shows to reduce Plex/TMDb/TVDB/Fanart calls.
-- **Disk poster cache**: Files in `POSTER_CACHE_DIR`; served via `/api/movie/{rating_key}/poster` and `/api/tv-show/{rating_key}/poster`.
-- **Browser caches**: SessionStorage for posters/labels/movies (per library) to speed UI; validates library_id on load to prevent cross-library contamination.
-- **Concurrent rendering**: ThreadPoolExecutor in batch operations with configurable worker count (default 2, respects `concurrentRenders` setting).
-- **JPEG quality**: Configurable quality (default 95) applied across all save/render operations (preview, save, batch, plexsend, webhooks).
-- **Rate limits**: TMDb/TVDB/Fanart limits configurable in settings; honored for pacing API callsster`.
-- **Browser caches**: SessionStorage for posters/labels/movies (per library) to speed UI.
-- **Rate limits**: TMDb/TVDB limits configurable in settings; honored client-side for pacing.
+#### `tv_shows.py`
+- `api_tv_shows` — List TV shows (cached DB if fresh, otherwise Plex)
+- `api_tv_show_poster` — Fetch/cached TV show poster with metadata
+- TVDB metadata integration with season/episode support
+
+#### `preview.py`
+- `api_preview` — Compose poster with template/options; returns base64 JPEG
+- Supports logo fallback to different template/preset when logos missing
+- Respects JPEG quality settings from database
+
+#### `save.py`
+- `save_rendered` — Save rendered poster locally and/or send to Plex
+- Optional label handling (add/remove Plex labels)
+- Uses JPEG quality from settings
+
+#### `batch.py`
+- `api_batch_render` — Process multiple movies with template/preset
+- Supports concurrent rendering via ThreadPoolExecutor
+- Logo/poster fallback logic matching preview behavior
+
+#### `overlay_config.py`
+- `api_list_overlay_configs` — List all overlay configurations
+- `api_create_overlay_config` — Create new overlay config
+- `api_update_overlay_config` — Update existing overlay config
+- `api_delete_overlay_config` — Delete overlay config
+- `api_list_overlay_assets` — List uploaded badge assets
+- `api_upload_overlay_asset` — Upload new badge asset (PNG/JPG)
+
+#### `scheduler.py`
+- `api_schedule_library_scan` (POST) — Schedule library scans with cron expression
+- `api_cancel_library_scan` (DELETE) — Cancel scheduled scans
+- `api_get_library_scan_schedule` (GET) — Get current schedule status and next run time
+- `api_scheduler_status` (GET) — Check if scheduler is running
+- Settings persist to database
+
+#### `webhooks.py`
+- `/webhook/tautulli` — Tautulli event handler (added/watched/updated events)
+- `/webhook/radarr` — Radarr movie webhook (deprecated, use Tautulli)
+- `/webhook/sonarr` — Sonarr TV webhook (deprecated, use Tautulli)
+
+#### `presets.py` / `template_manager.py`
+- CRUD for presets; import/export (merge mode)
+- Fallback rule configuration per preset/template
+- Global template preferences (logo source, poster filter, logo mode)
+
+#### `ui_settings.py`
+- `api_ui_settings` (GET/POST) — Read/write UI settings
+- `_apply_runtime_settings` — Immediately updates runtime keys/paths so new settings take effect without restart
+
+#### `history.py`
+- `api_poster_history` — List poster generation history with filtering
+- Tracks manual, batch, webhook, and auto-generate operations
+- Filterable by library, template, preset, action, source
+
+---
+
+## Rendering Flow
+
+### 1. Preview Rendering
+```
+User selects movie → Frontend calls /api/preview
+→ Backend resolves poster/logo URLs from TMDb/Fanart/TVDB
+→ Apply template options (matte/fade/vignette/logo positioning)
+→ Inject overlay badges if preset has overlayConfigId
+  → Fetch Plex media metadata (resolution, codec, audio)
+  → Render badges with text/image modes
+→ Generate final poster with PIL
+→ Return base64 JPEG to frontend
+```
+
+### 2. Save to Disk / Upload to Plex
+```
+User clicks "Save" or "Send to Plex" → Frontend calls /api/save
+→ Backend renders poster (same pipeline as preview)
+→ Save to disk at configured output path (supports {library}, {title}, {year}, {season} variables)
+→ (Optional) Upload to Plex via `/library/metadata/{rating_key}/posters`
+→ (Optional) Remove configured Plex labels
+→ Record history entry with action='sent_to_plex' or 'saved'
+```
+
+### 3. Batch Rendering
+```
+User selects movies + template/preset → Frontend calls /api/batch/render
+→ Backend creates ThreadPoolExecutor (concurrentRenders workers)
+→ For each movie:
+  → Render poster (with overlay badges if configured)
+  → Save locally and/or upload to Plex
+  → Record history entry with source='batch'
+→ Return progress updates to frontend
+```
+
+### 4. Overlay Badge Rendering
+```
+Backend receives render request with preset_id
+→ Load preset options from database
+→ If overlayConfigId present, load overlay config
+→ Fetch Plex media metadata for item:
+  - rating_key → /library/metadata/{rating_key}
+  - Extract: videoResolution, videoCodec, audioCodec, audioChannels, audioLanguageCode, editionTitle
+→ For each overlay element (video_badge, audio_badge, edition_badge, custom_image, text_label):
+  - Check show_if_label / hide_if_label conditions (case-insensitive)
+  - Get metadata value (e.g., resolution='4k', codec='hevc')
+  - Check badge_modes[value] (none/text/image)
+  - If 'text': render text with custom font/color/size
+  - If 'image': composite badge asset from overlay_assets table
+  - Position at element.position_x, element.position_y
+→ Composite all badges onto poster
+```
+
+---
+
+## Frontend Deep Dive
+
+### State Management (Pinia)
+- **`stores/ui.ts`**: SessionStorage cache with LRU eviction (4MB limit)
+  - Stores posters, labels, movies per library
+  - Auto-evicts least-recently-used items when quota exceeded
+
+### Key Views
+
+#### `MoviesView.vue` / `TvShowsView.vue`
+- Movie/TV show library grid with filtering and sorting
+- SessionStorage caching for instant load
+- Library-specific cache keys to prevent contamination
+
+#### `BatchEditView.vue` / `TvBatchEditView.vue`
+- Bulk poster generation interface
+- Preview sidebar with real-time rendering
+- Progress tracking during batch operations
+
+#### `TemplateManagerView.vue`
+- Preset CRUD (create, update, delete, import, export)
+- Fallback configuration (poster/logo missing → switch template/preset)
+- Preview rendering with movie search
+
+#### `OverlayConfigManagerView.vue`
+- Visual overlay editor with drag-and-drop positioning
+- Badge asset library (upload/manage badge images)
+- Live canvas preview with metadata value switcher
+- Per-value badge modes (none/text/image)
+
+#### `SettingsView.vue`
+- Plex/TMDb/TVDB/Fanart API key configuration
+- Performance settings (concurrent rendering, JPEG quality, overlay cache)
+- Library management (output paths, ignore labels, auto-generate)
+- Scheduled scans configuration
+
+#### `HistoryView.vue`
+- Poster generation history table
+- Filtering by library, template, preset, action, source
+- Preview on hover (loads poster from disk or Plex)
+
+---
+
+## Caching Strategy
+
+### Frontend Caching
+- **SessionStorage** with LRU eviction (4MB limit)
+- **Cache keys**: `movies_${library_id}`, `posters_${library_id}`, `labels_${library_id}`
+- **Validation**: On load, filter cached items by current `library_id` to prevent contamination
+
+### Backend Caching
+- **SQLite tables**:
+  - `movie_cache` / `tv_cache` — Item metadata (title, year, TMDb ID, etc.)
+  - `poster_cache` / `tv_poster_cache` — Poster metadata (URL, width, height)
+  - `label_cache` / `tv_label_cache` — Plex labels per item
+  - `media_metadata_cache` — Plex media metadata (resolution, codec, audio)
+- **Disk cache**: Downloaded poster/logo files in `POSTER_CACHE_DIR`
+- **Overlay cache**: Pre-rendered template effect layers (matte/fade/vignette) for faster batch rendering
+
+### Cache Invalidation
+- **Manual**: "Refresh Cache" button in Settings
+- **Automatic**: Cache refreshes when `forceRefresh=true` in API calls
+- **Scheduled**: Library scans update cache with new/changed items
+
+---
+
+## Request Tracing (Practical Steps)
+
+1. **Frontend action** triggers `fetch('/api/xyz')`
+2. **FastAPI router** handles request → may read/write database via `get_db()` or hit Plex/TMDb/TVDB/Fanart
+3. **Response** (JSON or image/base64) updates Pinia state and the view
+
+**Key API flows:**
+- **Movies**: `api/movies.py::api_movies`, `tmdb_client.py`, `fanart_client.py`, `logo_sources.py::get_logos_merged`
+- **TV shows**: `api/tv_shows.py::api_tv_shows`, `tvdb_client.py` for TVDB metadata
+- **Previews**: `api/preview.py::api_preview` (supports logo fallback to different template/preset)
+- **Save/upload**: `api/save.py::save_rendered`
+- **Batch rendering**: `api/batch.py::api_batch_render` (concurrent processing with fallback logic)
+- **Overlay configs**: `api/overlay_config.py` for badge/asset management
+- **Presets/fallbacks**: `api/presets.py` CRUD with merge import; `api/template_manager.py` fallback preferences
+- **Cache control**: `api/cache.py`, `cache.py` module, helpers in `config.py`/`movies.py`
+- **Webhooks**: `api/webhooks.py` with endpoints for Tautulli integration
+- **History tracking**: `api/history.py` provides poster history with source filtering
+
+---
 
 ## Configuration & Deployment
-- **Env/config**: `.env` or container env vars configure Plex URL/token, TMDb/Fanart keys, paths. Fallbacks pulled from DB/JSON via `config.py`.
-- **Docker**: `Dockerfile` + `docker-compose.yml` build the backend (which also serves the built frontend). Volumes map config/output.
-- **Paths**:
-  - Config/settings: `config/` (or `/config`) holds `settings/` and `ui_settings.json` fallback.
-  - Output: `/output` (configurable) for rendered assets.
-  - Uploads: `uploads/` for user-uploaded templates/assets.
 
-## Request Tracing (practical steps)
-1. Frontend action triggers `fetch('/api/xyz')`.
-2. FastAPI router handles → may read/write DB via `get_db()` or hit Plex/TMDb/Fanart.
-3. Response (JSON or image/base64) updates Pinia state and the view.
- with priority), `logo_sources.py::get_logos_merged`
-- TV shows: `api/tv_shows.py::api_tv_shows`, `tvdb_client.py` for TVDB metadata
-- Previews: `api/preview.py::api_preview` (supports logo fallback to different template/preset)
-- Save/post-processing: `api/save.py::save_rendered`
-- Batch rendering: `api/batch.py::api_batch_render` (concurrent processing with fallback logic)
-- Presets/fallbacks: `api/presets.py` CRUD with merge import; `api/template_manager.py` fallback preferences
-- Cache control: `api/cache.py`, `cache.py` module, helpers in `config.py`/`movies.py`
-- Webhooks: `api/webhooks.py` with endpoints for Radarr, Sonarr, Tautulli integration
-- History tracking (v1.5.0): `api/history.py` provides poster history with source filtering
+### Environment Variables
+```bash
+# Required
+PLEX_URL=http://plex:32400       # Plex server URL
+PLEX_TOKEN=xxxxxxxxxxxx          # Plex authentication token
+TMDB_API_KEY=xxxxxxxxxxxx        # TMDb API key
 
-## Tips for Exploring
-- Start at `backend/main.py` to see router wiring.
-- Grep for `/api/<route>` inside `backend/api/` to find handlers.
-- Frontend: check `frontend/src/views` for page logic; `stores/` for state shape.
-- For database schema/migrations, see `backend/database.py` (auto-migrations on version change with backups)
-- Start at `backend/main.py` to see router wiring.
-- Grep for `/api/<route>` inside `backend/api/` to find handlers.
-- Frontend: check `frontend/src/views` for page logic; `stores/` for state shape.
-- For migrations/version changes, see `backend/database.py` and `DATABASE_MIGRATION.md`.
+# Optional
+PLEX_MOVIE_LIBRARY_NAME=Movies   # Movie library name (or use library_id)
+PLEX_TV_LIBRARY_NAME=TV Shows    # TV library name (or use library_id)
+TVDB_API_KEY=xxxxxxxxxxxx        # TVDB API key (for TV shows)
+FANART_API_KEY=xxxxxxxxxxxx      # Fanart.tv API key (for logos)
+CONFIG_DIR=/config               # Config directory path (Docker)
+```
+
+### Docker Deployment
+```yaml
+services:
+  simposter:
+    image: simposter:latest
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./config:/config           # Persistent settings/database/logs
+    environment:
+      - PLEX_URL=http://plex:32400
+      - PLEX_TOKEN=xxxxxxxxxxxx
+      - TMDB_API_KEY=xxxxxxxxxxxx
+```
+
+### File Paths
+- **Config/settings**: `config/` (or `/config`) holds `settings/` and `ui_settings.json` fallback
+- **Output**: `/output` (configurable) for rendered assets
+- **Uploads**: `uploads/` for user-uploaded templates/assets
+- **Logs**: `config/logs/simposter.log`
+
+---
+
+## Tips for Exploring the Codebase
+
+### Start Here
+- **Backend**: `backend/main.py` to see router wiring
+- **Frontend**: `frontend/src/views` for page logic; `stores/` for state shape
+- **Database**: `backend/database.py` for schema and migrations
+
+### Finding Specific Functionality
+- **API routes**: Grep for `/api/<route>` inside `backend/api/`
+- **Rendering logic**: Check `backend/templates/uniformlogo.py` and `backend/rendering.py`
+- **Overlay badges**: `backend/templates/universal.py` for badge rendering
+
+### Understanding Data Flow
+1. User interacts with Vue component
+2. Component calls API endpoint via `fetch()`
+3. FastAPI router handles request (may read DB, hit external APIs)
+4. Response updates Pinia store
+5. Vue reactivity updates UI
+
+---
+
+## Performance Considerations
+
+### Rendering Optimization
+- **Overlay cache**: Pre-render template effects for 3-5x speedup (uniformlogo only)
+- **Logo selection**: Analyzes top 6 candidates using TMDb w300 thumbnails
+- **Concurrent batch**: ThreadPoolExecutor with configurable workers (default: 2)
+
+### Database Optimization
+- **Indexed queries**: Composite indexes on `library_id + rating_key` for 5-10x faster lookups
+- **WAL mode**: Better concurrency for simultaneous reads/writes
+- **Batch inserts**: Use `executemany()` for bulk cache updates
+
+### Frontend Optimization
+- **SessionStorage LRU cache**: 4MB limit with auto-eviction
+- **Lazy loading**: Images load on-demand with `loading="lazy"`
+- **Debounced saves**: 300ms delay on slider changes reduces I/O
+
+---
+
+## Testing & Debugging
+
+### Backend Debugging
+```bash
+# View logs in real-time
+tail -f config/logs/simposter.log
+
+# Inspect database
+sqlite3 config/settings/simposter.db
+> SELECT * FROM settings WHERE category = 'performance';
+> SELECT * FROM presets WHERE template_id = 'uniformlogo';
+
+# Test API endpoints
+curl http://localhost:8003/api/movies?library_id=1
+```
+
+### Frontend Debugging
+```javascript
+// Check sessionStorage cache in browser console
+JSON.parse(sessionStorage.getItem('movies_1'))
+
+// Clear all cache
+sessionStorage.clear()
+
+// Use Vue Devtools
+// Install: https://devtools.vuejs.org/
+```
+
+---
+
+**Last Updated**: 2026-03-01
+**Current Version**: v1.5.4

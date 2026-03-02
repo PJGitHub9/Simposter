@@ -924,10 +924,18 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
     x = int(W * pos_x)
     y = int(H * pos_y)
 
-    if element_type == "resolution_badge":
-        return _apply_resolution_badge(canvas, element, x, y, metadata)
-    elif element_type == "codec_badge":
-        return _apply_codec_badge(canvas, element, x, y, metadata)
+    # Metadata badge types (new + legacy aliases)
+    _BADGE_DEFAULTS = {
+        "video_badge":      ("video_resolution", 40),
+        "audio_badge":      ("audio_codec", 30),
+        "edition_badge":    ("edition", 30),
+        "resolution_badge": ("video_resolution", 40),  # legacy alias
+        "codec_badge":      ("audio_codec", 30),       # legacy alias
+    }
+
+    if element_type in _BADGE_DEFAULTS:
+        default_field, default_font_size = _BADGE_DEFAULTS[element_type]
+        return _apply_metadata_badge(canvas, element, x, y, metadata, default_field, default_font_size)
     elif element_type == "custom_image":
         return _apply_custom_image(canvas, element, x, y)
     elif element_type == "text_label":
@@ -940,15 +948,16 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
 
 
 def _should_render_element(element: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
-    """Check if element should be rendered based on conditional rules."""
+    """Check if element should be rendered based on conditional rules (case-insensitive)."""
     show_if_label = element.get("show_if_label")
     hide_if_label = element.get("hide_if_label")
     labels = metadata.get("labels", [])
+    labels_lower = [l.lower() for l in labels]
 
-    if show_if_label and show_if_label not in labels:
+    if show_if_label and show_if_label.lower() not in labels_lower:
         return False
 
-    if hide_if_label and hide_if_label in labels:
+    if hide_if_label and hide_if_label.lower() in labels_lower:
         return False
 
     return True
@@ -1010,41 +1019,45 @@ def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y:
     return True
 
 
-def _apply_resolution_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, metadata: Dict[str, Any]) -> Image.Image:
-    """Apply resolution badge (4K, 1080p, etc.). Respects per-value mode: none/text/image."""
+def _apply_metadata_badge(
+    canvas: Image.Image, element: Dict[str, Any], x: int, y: int,
+    metadata: Dict[str, Any], default_field: str = "video_resolution", default_font_size: int = 40,
+) -> Image.Image:
+    """Unified metadata badge renderer for video, audio, edition, and legacy types.
+    Supports per-value badge modes: none (skip), text (render text), image (render asset)."""
     from ..config import logger
 
-    metadata_field = element.get("metadata_field", "video_resolution")
-    resolution = metadata.get(metadata_field, "")
-    if not resolution:
-        logger.info("[OVERLAY]   -> Resolution badge: no value for metadata field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
+    metadata_field = element.get("metadata_field", default_field)
+    value = metadata.get(metadata_field, "")
+    if not value:
+        logger.info("[OVERLAY]   -> Metadata badge: no value for field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
         return canvas
 
-    logger.info("[OVERLAY]   -> Resolution badge: %s = '%s'", metadata_field, resolution)
+    logger.info("[OVERLAY]   -> Metadata badge: %s = '%s'", metadata_field, value)
 
     # Check per-value mode (default: "text" for backwards compatibility)
     badge_modes = element.get("badge_modes") or {}
-    mode = badge_modes.get(resolution.lower(), "text")
+    mode = badge_modes.get(value.lower(), "text")
 
     if mode == "none":
-        logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", resolution)
+        logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", value)
         return canvas
 
     if mode == "image":
         badge_assets = element.get("badge_assets") or {}
-        asset_id = badge_assets.get(resolution.lower())
+        asset_id = badge_assets.get(value.lower())
         if asset_id:
             try:
                 if _render_badge_asset(canvas, element, x, y, asset_id):
-                    logger.info("[OVERLAY]   -> Rendered resolution badge as image (asset=%s)", asset_id)
+                    logger.info("[OVERLAY]   -> Rendered metadata badge as image (asset=%s)", asset_id)
                     return canvas
             except Exception as e:
-                logger.warning(f"[OVERLAY] Failed to render resolution badge asset: {e}")
+                logger.warning(f"[OVERLAY] Failed to render metadata badge asset: {e}")
         logger.info("[OVERLAY]   -> Image mode but asset not found, falling through to text")
 
     # Text rendering using element font settings
     font_family = element.get("font_family", "arial")
-    font_size = element.get("font_size", 40)
+    font_size = element.get("font_size", default_font_size)
     font_color_hex = element.get("font_color", "#FFFFFF")
     font = _load_font(font_family, font_size)
 
@@ -1055,65 +1068,9 @@ def _apply_resolution_badge(canvas: Image.Image, element: Dict[str, Any], x: int
 
     # Use custom display text if set, otherwise uppercase the raw value
     badge_texts = element.get("badge_texts") or {}
-    display_text = badge_texts.get(resolution.lower(), resolution.upper())
+    display_text = badge_texts.get(value.lower(), value.upper())
 
-    logger.info("[OVERLAY]   -> Rendering resolution text '%s' (font=%s size=%s color=%s) at (%d, %d)",
-                display_text, font_family, font_size, font_color_hex, x, y)
-
-    draw = ImageDraw.Draw(canvas)
-    anchor = _get_text_anchor(element)
-    draw.text((x, y), display_text, fill=(*rgb, 255), font=font, anchor=anchor)
-    return canvas
-
-
-def _apply_codec_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, metadata: Dict[str, Any]) -> Image.Image:
-    """Apply audio codec badge (Atmos, DTS-X, etc.). Respects per-value mode: none/text/image."""
-    from ..config import logger
-
-    metadata_field = element.get("metadata_field", "audio_codec")
-    codec = metadata.get(metadata_field, "")
-    if not codec:
-        logger.info("[OVERLAY]   -> Codec badge: no value for metadata field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
-        return canvas
-
-    logger.info("[OVERLAY]   -> Codec badge: %s = '%s'", metadata_field, codec)
-
-    # Check per-value mode (default: "text" for backwards compatibility)
-    badge_modes = element.get("badge_modes") or {}
-    mode = badge_modes.get(codec.lower(), "text")
-
-    if mode == "none":
-        logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", codec)
-        return canvas
-
-    if mode == "image":
-        badge_assets = element.get("badge_assets") or {}
-        asset_id = badge_assets.get(codec.lower())
-        if asset_id:
-            try:
-                if _render_badge_asset(canvas, element, x, y, asset_id):
-                    logger.info("[OVERLAY]   -> Rendered codec badge as image (asset=%s)", asset_id)
-                    return canvas
-            except Exception as e:
-                logger.warning(f"[OVERLAY] Failed to render codec badge asset: {e}")
-        logger.info("[OVERLAY]   -> Image mode but asset not found, falling through to text")
-
-    # Text rendering using element font settings
-    font_family = element.get("font_family", "arial")
-    font_size = element.get("font_size", 30)
-    font_color_hex = element.get("font_color", "#FFFFFF")
-    font = _load_font(font_family, font_size)
-
-    if font_color_hex and font_color_hex.startswith("#") and len(font_color_hex) >= 7:
-        rgb = tuple(int(font_color_hex[i:i+2], 16) for i in (1, 3, 5))
-    else:
-        rgb = (255, 255, 255)
-
-    # Use custom display text if set, otherwise uppercase the raw value
-    badge_texts = element.get("badge_texts") or {}
-    display_text = badge_texts.get(codec.lower(), codec.upper())
-
-    logger.info("[OVERLAY]   -> Rendering codec text '%s' (font=%s size=%s color=%s) at (%d, %d)",
+    logger.info("[OVERLAY]   -> Rendering metadata badge text '%s' (font=%s size=%s color=%s) at (%d, %d)",
                 display_text, font_family, font_size, font_color_hex, x, y)
 
     draw = ImageDraw.Draw(canvas)

@@ -300,7 +300,7 @@ const addElement = (type: string) => {
   if (!selectedConfig.value) return
   const defaults: Partial<OverlayElement> = {}
 
-  if (type === 'resolution_badge') {
+  if (type === 'video_badge') {
     defaults.metadata_field = 'video_resolution'
     defaults.badge_modes = {}
     defaults.badge_assets = {}
@@ -308,8 +308,16 @@ const addElement = (type: string) => {
     defaults.font_size = 40
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
-  } else if (type === 'codec_badge') {
+  } else if (type === 'audio_badge') {
     defaults.metadata_field = 'audio_codec'
+    defaults.badge_modes = {}
+    defaults.badge_assets = {}
+    defaults.badge_texts = {}
+    defaults.font_size = 30
+    defaults.font_color = '#FFFFFF'
+    defaults.font_family = 'Arial'
+  } else if (type === 'edition_badge') {
+    defaults.metadata_field = 'edition'
     defaults.badge_modes = {}
     defaults.badge_assets = {}
     defaults.badge_texts = {}
@@ -321,11 +329,6 @@ const addElement = (type: string) => {
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
     defaults.text = ''
-  } else if (type === 'label_badge') {
-    defaults.font_size = 30
-    defaults.font_color = '#FFFFFF'
-    defaults.font_family = 'Arial'
-    defaults.label_name = ''
   }
 
   selectedConfig.value.elements.push({
@@ -343,22 +346,30 @@ const removeElement = (index: number) => {
 
 const elementTypeLabel = (type: string): string => {
   const labels: Record<string, string> = {
-    resolution_badge: 'Resolution Badge',
-    codec_badge: 'Codec Badge',
+    video_badge: 'Video Badge',
+    audio_badge: 'Audio Badge',
+    edition_badge: 'Edition Badge',
     custom_image: 'Custom Image',
     text_label: 'Text Label',
-    label_badge: 'Label Badge'
+    // Legacy types
+    resolution_badge: 'Resolution Badge',
+    codec_badge: 'Codec Badge',
+    label_badge: 'Label Badge',
   }
   return labels[type] || type
 }
 
 const elementTypeColor = (type: string): string => {
   const colors: Record<string, string> = {
-    resolution_badge: '#60a5fa',
-    codec_badge: '#a78bfa',
+    video_badge: '#60a5fa',
+    audio_badge: '#a78bfa',
+    edition_badge: '#f59e0b',
     custom_image: '#34d399',
     text_label: '#fbbf24',
-    label_badge: '#f472b6'
+    // Legacy types
+    resolution_badge: '#60a5fa',
+    codec_badge: '#a78bfa',
+    label_badge: '#f472b6',
   }
   return colors[type] || '#60a5fa'
 }
@@ -651,17 +662,27 @@ const renderPreviewElement = async (
 ) => {
   const scale = PREVIEW_W / 2000
 
-  if (el.type === 'resolution_badge') {
-    const metaField = el.metadata_field || 'video_resolution'
-    const value = (previewMetadataValues[metaField] || previewResolution).value
+  // Badge type rendering config
+  const badgeConfig: Record<string, { defaultField: string; defaultFontSize: number; accent: string; accentRgba: string }> = {
+    video_badge:      { defaultField: 'video_resolution', defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
+    resolution_badge: { defaultField: 'video_resolution', defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
+    audio_badge:      { defaultField: 'audio_codec',      defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
+    codec_badge:      { defaultField: 'audio_codec',      defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
+    edition_badge:    { defaultField: 'edition',           defaultFontSize: 30, accent: '#f59e0b', accentRgba: 'rgba(245, 158, 11, 0.2)' },
+  }
+
+  const cfg = badgeConfig[el.type]
+  if (cfg) {
+    const metaField = el.metadata_field || cfg.defaultField
+    const fallbackRef = previewMetadataValues[metaField] || previewResolution
+    const value = fallbackRef.value
     const mode = el.badge_modes?.[value] ?? 'text'
 
     if (mode === 'none') {
-      // Draw dimmed skip indicator
       ctx.font = 'bold 9px sans-serif'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillStyle = 'rgba(96, 165, 250, 0.3)'
+      ctx.fillStyle = cfg.accentRgba.replace('0.2)', '0.3)')
       ctx.fillText('—', x, y)
       drawElementIndex(ctx, x - 8, y - 6, idx)
       return
@@ -671,45 +692,16 @@ const renderPreviewElement = async (
       if (assetId) {
         try {
           const img = await loadAssetImage(assetId)
-          drawAssetOnCanvas(ctx, img, el, x, y, scale, idx, isHovered, '#60a5fa')
+          drawAssetOnCanvas(ctx, img, el, x, y, scale, idx, isHovered, cfg.accent)
           return
         } catch { /* fall through to text */ }
       }
     }
     // Text mode (or image fallback)
-    const fontSize = Math.max(4, Math.round((el.font_size || 40) * scale))
-    const color = el.font_color || '#60a5fa'
+    const fontSize = Math.max(4, Math.round((el.font_size || cfg.defaultFontSize) * scale))
+    const color = el.font_color || cfg.accent
     const displayText = el.badge_texts?.[value] || value.toUpperCase()
-    drawBadge(ctx, x, y, displayText, fontSize, color, 'rgba(96, 165, 250, 0.2)', idx, isHovered, el.text_align || 'center')
-  } else if (el.type === 'codec_badge') {
-    const metaField = el.metadata_field || 'audio_codec'
-    const value = (previewMetadataValues[metaField] || previewCodec).value
-    const mode = el.badge_modes?.[value] ?? 'text'
-
-    if (mode === 'none') {
-      ctx.font = 'bold 9px sans-serif'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillStyle = 'rgba(167, 139, 250, 0.3)'
-      ctx.fillText('—', x, y)
-      drawElementIndex(ctx, x - 8, y - 6, idx)
-      return
-    }
-    if (mode === 'image') {
-      const assetId = el.badge_assets?.[value]
-      if (assetId) {
-        try {
-          const img = await loadAssetImage(assetId)
-          drawAssetOnCanvas(ctx, img, el, x, y, scale, idx, isHovered, '#a78bfa')
-          return
-        } catch { /* fall through to text */ }
-      }
-    }
-    // Text mode (or image fallback)
-    const fontSize = Math.max(4, Math.round((el.font_size || 30) * scale))
-    const color = el.font_color || '#a78bfa'
-    const codecDisplayText = el.badge_texts?.[value] || value.toUpperCase()
-    drawBadge(ctx, x, y, codecDisplayText, fontSize, color, 'rgba(167, 139, 250, 0.2)', idx, isHovered, el.text_align || 'center')
+    drawBadge(ctx, x, y, displayText, fontSize, color, cfg.accentRgba, idx, isHovered, el.text_align || 'center')
   } else if (el.type === 'custom_image') {
     if (el.asset_id) {
       try {
@@ -999,11 +991,11 @@ onMounted(() => {
               <div class="elements-header">
                 <h3>Elements</h3>
                 <div class="add-element-buttons">
-                  <button class="btn-add" @click="addElement('resolution_badge')">+ Resolution</button>
-                  <button class="btn-add" @click="addElement('codec_badge')">+ Codec</button>
+                  <button class="btn-add" @click="addElement('video_badge')">+ Video</button>
+                  <button class="btn-add" @click="addElement('audio_badge')">+ Audio</button>
+                  <button class="btn-add" @click="addElement('edition_badge')">+ Edition</button>
                   <button class="btn-add" @click="addElement('custom_image')">+ Image</button>
                   <button class="btn-add" @click="addElement('text_label')">+ Text</button>
-                  <button class="btn-add" @click="addElement('label_badge')">+ Label Badge</button>
                 </div>
               </div>
 
@@ -1055,8 +1047,8 @@ onMounted(() => {
                       <input type="number" v-model.number="element.height" min="0" max="1" step="0.01" placeholder="auto" />
                     </label>
 
-                    <!-- Resolution Badge -->
-                    <template v-if="element.type === 'resolution_badge'">
+                    <!-- Video Badge (+ legacy resolution_badge) -->
+                    <template v-if="element.type === 'video_badge' || element.type === 'resolution_badge'">
                       <label>
                         <span>Max Width (px)</span>
                         <input type="number" v-model.number="element.max_width" min="0" step="10" placeholder="none" />
@@ -1070,10 +1062,6 @@ onMounted(() => {
                         <select v-model="element.metadata_field">
                           <option value="video_resolution">Video Resolution</option>
                           <option value="video_codec">Video Codec</option>
-                          <option value="audio_codec">Audio Codec</option>
-                          <option value="audio_channels">Audio Channels</option>
-                          <option value="audio_language">Audio Language</option>
-                          <option value="edition">Edition</option>
                         </select>
                       </label>
                       <div class="field-divider"></div>
@@ -1152,8 +1140,8 @@ onMounted(() => {
                       </template>
                     </template>
 
-                    <!-- Codec Badge -->
-                    <template v-if="element.type === 'codec_badge'">
+                    <!-- Audio Badge (+ legacy codec_badge) -->
+                    <template v-if="element.type === 'audio_badge' || element.type === 'codec_badge'">
                       <label>
                         <span>Max Width (px)</span>
                         <input type="number" v-model.number="element.max_width" min="0" step="10" placeholder="none" />
@@ -1168,9 +1156,6 @@ onMounted(() => {
                           <option value="audio_codec">Audio Codec</option>
                           <option value="audio_channels">Audio Channels</option>
                           <option value="audio_language">Audio Language</option>
-                          <option value="video_resolution">Video Resolution</option>
-                          <option value="video_codec">Video Codec</option>
-                          <option value="edition">Edition</option>
                         </select>
                       </label>
                       <div class="field-divider"></div>
@@ -1178,6 +1163,92 @@ onMounted(() => {
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
                           <div v-for="val in getValuesForField(element.metadata_field || 'audio_codec')" :key="val" class="badge-asset-row">
+                            <span class="badge-value-label">{{ val.toUpperCase() }}</span>
+                            <select
+                              :value="getBadgeMode(element, val)"
+                              @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
+                              class="badge-mode-select"
+                            >
+                              <option value="none">None</option>
+                              <option value="text">Text</option>
+                              <option value="image">Image</option>
+                            </select>
+                            <input
+                              v-if="getBadgeMode(element, val) === 'text'"
+                              type="text"
+                              :value="getBadgeText(element, val)"
+                              @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
+                              :placeholder="val.toUpperCase()"
+                              class="badge-text-input"
+                            />
+                            <select
+                              v-if="getBadgeMode(element, val) === 'image'"
+                              :value="getBadgeAsset(element, val) || ''"
+                              @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
+                              class="badge-asset-select"
+                            >
+                              <option value="">Select asset...</option>
+                              <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                      <template v-if="hasBadgeTextMode(element)">
+                        <div class="field-divider"></div>
+                        <label>
+                          <span>Font Size (px)</span>
+                          <input type="number" v-model.number="element.font_size" min="8" max="200" step="1" />
+                        </label>
+                        <label>
+                          <span>Font Color</span>
+                          <div class="color-input-wrap">
+                            <input type="color" v-model="element.font_color" class="color-picker" />
+                            <input type="text" v-model="element.font_color" class="color-text" placeholder="#FFFFFF" />
+                          </div>
+                        </label>
+                        <label class="field-full">
+                          <span>Font Family</span>
+                          <select v-model="element.font_family">
+                            <optgroup label="System Fonts">
+                              <option value="Arial">Arial</option>
+                              <option value="Helvetica">Helvetica</option>
+                              <option value="Times New Roman">Times New Roman</option>
+                              <option value="Georgia">Georgia</option>
+                              <option value="Verdana">Verdana</option>
+                              <option value="Courier New">Courier New</option>
+                              <option value="Impact">Impact</option>
+                            </optgroup>
+                            <optgroup v-if="fonts.length > 0" label="Custom Fonts">
+                              <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
+                            </optgroup>
+                          </select>
+                        </label>
+                        <label class="field-full">
+                          <span>Text Align</span>
+                          <div class="align-btn-group">
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
+                          </div>
+                        </label>
+                      </template>
+                    </template>
+
+                    <!-- Edition Badge -->
+                    <template v-if="element.type === 'edition_badge'">
+                      <label>
+                        <span>Max Width (px)</span>
+                        <input type="number" v-model.number="element.max_width" min="0" step="10" placeholder="none" />
+                      </label>
+                      <label>
+                        <span>Max Height (px)</span>
+                        <input type="number" v-model.number="element.max_height" min="0" step="10" placeholder="none" />
+                      </label>
+                      <div class="field-divider"></div>
+                      <div class="field-full badge-assets-section">
+                        <div class="badge-assets-label">Badge Rendering (per value)</div>
+                        <div class="badge-asset-rows">
+                          <div v-for="val in EDITION_VALUES" :key="val" class="badge-asset-row">
                             <span class="badge-value-label">{{ val.toUpperCase() }}</span>
                             <select
                               :value="getBadgeMode(element, val)"
@@ -1273,50 +1344,6 @@ onMounted(() => {
                       <label class="field-full">
                         <span>Text</span>
                         <input type="text" v-model="element.text" placeholder="Enter text..." />
-                      </label>
-                      <label>
-                        <span>Font Size (px)</span>
-                        <input type="number" v-model.number="element.font_size" min="8" max="200" step="1" />
-                      </label>
-                      <label>
-                        <span>Font Color</span>
-                        <div class="color-input-wrap">
-                          <input type="color" v-model="element.font_color" class="color-picker" />
-                          <input type="text" v-model="element.font_color" class="color-text" placeholder="#FFFFFF" />
-                        </div>
-                      </label>
-                      <label class="field-full">
-                        <span>Font Family</span>
-                        <select v-model="element.font_family">
-                            <optgroup label="System Fonts">
-                              <option value="Arial">Arial</option>
-                              <option value="Helvetica">Helvetica</option>
-                              <option value="Times New Roman">Times New Roman</option>
-                              <option value="Georgia">Georgia</option>
-                              <option value="Verdana">Verdana</option>
-                              <option value="Courier New">Courier New</option>
-                              <option value="Impact">Impact</option>
-                            </optgroup>
-                            <optgroup v-if="fonts.length > 0" label="Custom Fonts">
-                              <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
-                            </optgroup>
-                          </select>
-                      </label>
-                      <label class="field-full">
-                        <span>Text Align</span>
-                        <div class="align-btn-group">
-                          <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
-                          <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
-                          <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
-                        </div>
-                      </label>
-                    </template>
-
-                    <!-- Label Badge -->
-                    <template v-if="element.type === 'label_badge'">
-                      <label class="field-full">
-                        <span>Label Name</span>
-                        <input type="text" v-model="element.label_name" placeholder="e.g., Dolby Vision, HDR10+" />
                       </label>
                       <label>
                         <span>Font Size (px)</span>

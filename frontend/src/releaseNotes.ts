@@ -10,6 +10,32 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.5',
+    date: '2026-03-01',
+    sections: [
+      {
+        title: 'UI Improvements',
+        items: [
+          'Added emoji icons to all page headings and navigation items (🎬 Movies, 📺 TV Shows, ✏️ Batch Edit, 🎨 Template Manager, 📐 Overlay Manager, and more)',
+          'Removed duplicate SVG + emoji icons from sidebar — was rendering both icon types together',
+          'Version badge now shows git branch — displays "v1.5.5-dev" for dev branches, "v1.5.5" for main',
+          'Update available indicator — pulsing yellow badge when newer version exists on your branch',
+        ]
+      },
+      {
+        title: 'Overlay System Enhancements',
+        items: [
+          'Reorganized element types for clarity — Video Badge (resolution, codec), Audio Badge (codec, channels, language), Edition Badge (theatrical, extended, etc.)',
+          'Metadata field dropdowns now restricted to relevant fields per badge type',
+          'Case-insensitive label matching — show_if_label and hide_if_label now ignore case',
+          'Legacy support — resolution_badge and codec_badge still work as aliases',
+          'Consolidated rendering — backend uses unified _apply_metadata_badge function for all badge types',
+          'Canvas preview uses color-coded badges — blue for video, purple for audio, amber for edition',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.4',
     date: '2026-02-27',
     sections: [
