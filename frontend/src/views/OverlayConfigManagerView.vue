@@ -475,6 +475,7 @@ const hitTestElement = (normX: number, normY: number): number | null => {
   // Iterate in reverse so topmost element (last drawn) is hit first
   for (let i = selectedConfig.value.elements.length - 1; i >= 0; i--) {
     const el = selectedConfig.value.elements[i]
+    if (!el) continue
     const dx = normX - el.position_x
     const dy = normY - el.position_y
     if (Math.sqrt(dx * dx + dy * dy) < hitRadius) return i
@@ -524,6 +525,7 @@ const getTouchPos = (e: TouchEvent): { x: number; y: number } | null => {
   if (!canvas || !e.touches.length) return null
   const rect = canvas.getBoundingClientRect()
   const touch = e.touches[0]
+  if (!touch) return null
   return {
     x: (touch.clientX - rect.left) / rect.width,
     y: (touch.clientY - rect.top) / rect.height
@@ -644,6 +646,7 @@ const renderPreview = async () => {
   // Render each element
   for (let idx = 0; idx < selectedConfig.value.elements.length; idx++) {
     const el = selectedConfig.value.elements[idx]
+    if (!el) continue
     const x = el.position_x * PREVIEW_W
     const y = el.position_y * PREVIEW_H
     const isHovered = hoveredElementIdx.value === idx || draggingIdx.value === idx
