@@ -14,10 +14,6 @@ RUN npm ci && npm run build
 # ---------- Backend/runtime stage ----------
 FROM python:3.10-slim
 
-# Capture git branch at build time
-ARG GIT_BRANCH=unknown
-RUN echo "Git branch: ${GIT_BRANCH}"
-
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=8003 \
@@ -33,17 +29,27 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Copy .git directory temporarily to detect branch
+COPY .git .git
+
+# Install git temporarily, detect branch, create build-info.json, then remove git and .git
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && DETECTED_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown") \
+    && echo "Detected git branch: ${DETECTED_BRANCH}" \
+    && echo "{\"git_branch\": \"${DETECTED_BRANCH}\"}" > /app/build-info.json \
+    && rm -rf .git \
+    && apt-get purge -y git \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
 # Ensure usable fonts for text overlay (DejaVu) and gosu for PUID/PGID drop
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core gosu && rm -rf /var/lib/apt/lists/*
 
 # Ensure default folders exist in image (mount overrides are fine)
 RUN mkdir -p /config/output /config/uploads /config/settings /config/logs
-
-# Write build info with git branch
-ARG GIT_BRANCH=unknown
-RUN echo "{\"git_branch\": \"${GIT_BRANCH}\"}" > /app/build-info.json
 
 # Copy backend code
 COPY backend ./backend

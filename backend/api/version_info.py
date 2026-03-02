@@ -49,8 +49,13 @@ def get_current_version() -> str:
 
 def get_git_branch() -> Optional[str]:
     """Get current git branch name."""
+    # Check environment variable first (for runtime override in Docker)
+    env_branch = os.getenv('GIT_BRANCH')
+    if env_branch and env_branch not in ('unknown', ''):
+        return env_branch
+
     try:
-        # Try git command first
+        # Try git command
         result = subprocess.run(
             ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
             cwd=REPO_ROOT,
