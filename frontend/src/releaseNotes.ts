@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.51',
+    date: '2026-03-01',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed version API crash in Docker containers — subprocess exception handling corrected',
+          'Fixed branch detection in containerized environments — reads build-time branch info from build-info.json',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.5',
     date: '2026-03-01',
     sections: [

@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.51 (2026-03-01)
+### Bug Fixes
+- **Version API Docker Fix**: Fixed API crash in Docker containers due to incorrect subprocess exception handling
+  - Changed `subprocess.SubprocessTimeoutExpired` to `subprocess.TimeoutExpired` (correct Python stdlib name)
+- **Branch Detection in Containers**: Fixed git branch detection failing when `.git` directory is not present
+  - Added build-time branch capture via Docker build args
+  - Creates `build-info.json` file in image with git branch information
+  - Backend now falls back to `build-info.json` when git commands fail
+  - Added `build-docker.sh` and `build-docker.bat` scripts to automate branch capture
+
 ## v1.5.5 (2026-03-01)
 ### UI Improvements
 - **Navigation Emoji Icons**: Added emojis to all page headings and navigation items for better visual distinction

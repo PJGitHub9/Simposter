@@ -61,7 +61,7 @@ def get_git_branch() -> Optional[str]:
         if result.returncode == 0:
             branch = result.stdout.strip()
             return branch if branch else None
-    except (subprocess.SubprocessTimeoutExpired, subprocess.CalledProcessError, FileNotFoundError) as e:
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError) as e:
         logger.debug(f"Git command failed: {e}")
 
     # Fallback: read .git/HEAD file
