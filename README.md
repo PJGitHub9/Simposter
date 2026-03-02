@@ -67,6 +67,23 @@ services:
       - TMDB_API_KEY=your_tmdb_key
 ```
 
+### Building Docker Image
+
+To build the Docker image with git branch detection:
+
+```bash
+# Linux/Mac
+./build-docker.sh
+
+# Windows
+build-docker.bat
+
+# Manual build (specify branch)
+docker build --build-arg GIT_BRANCH=dev -t simposter:latest .
+```
+
+The build script automatically detects your current git branch and embeds it in the image, so the version badge displays correctly (e.g., `v1.5.5-dev`).
+
 ### Local Development
 
 ```bash

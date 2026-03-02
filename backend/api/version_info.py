@@ -74,6 +74,19 @@ def get_git_branch() -> Optional[str]:
     except Exception as e:
         logger.debug(f"Failed to read .git/HEAD: {e}")
 
+    # Final fallback: read build-info.json (set during Docker build)
+    try:
+        import json
+        build_info_file = REPO_ROOT / "build-info.json"
+        if build_info_file.exists():
+            with open(build_info_file, 'r') as f:
+                build_info = json.load(f)
+                branch = build_info.get('git_branch')
+                if branch and branch != 'unknown':
+                    return branch
+    except Exception as e:
+        logger.debug(f"Failed to read build-info.json: {e}")
+
     return None
 
 

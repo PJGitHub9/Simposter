@@ -14,6 +14,10 @@ RUN npm ci && npm run build
 # ---------- Backend/runtime stage ----------
 FROM python:3.10-slim
 
+# Capture git branch at build time
+ARG GIT_BRANCH=unknown
+RUN echo "Git branch: ${GIT_BRANCH}"
+
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=8003 \
@@ -36,6 +40,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-co
 
 # Ensure default folders exist in image (mount overrides are fine)
 RUN mkdir -p /config/output /config/uploads /config/settings /config/logs
+
+# Write build info with git branch
+ARG GIT_BRANCH=unknown
+RUN echo "{\"git_branch\": \"${GIT_BRANCH}\"}" > /app/build-info.json
 
 # Copy backend code
 COPY backend ./backend
