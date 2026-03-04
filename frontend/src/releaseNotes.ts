@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.52',
+    date: '2026-03-04',
+    sections: [
+      {
+        title: 'Overlay System Improvements',
+        items: [
+          'Uploaded assets now saved using the asset name as the filename (e.g. "4K Badge" → 4k-badge.png) — easier to manage manually',
+          'Added Rescan button to Assets Library — detects and registers image files dropped directly into config/assets/ folder',
+          'Added per-value Scale and Anchor controls for image-mode badges — scale and position each badge image independently without affecting text values',
+          'Anchor point control for image overlays — choose from 9 anchor positions (top-left, center, bottom-right, etc.) so images align consistently with text badges',
+          'Removed Width/Height (0-1) and Max Width/Height (px) from badge types — Scale replaces these with a simpler multiplier-based approach',
+          'Width, Height, Max Width, Max Height retained on Custom Image elements where precise sizing is still useful',
+          'Badge element UI simplified — position, metadata field, and per-value rendering rows only',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.51',
     date: '2026-03-01',
     sections: [

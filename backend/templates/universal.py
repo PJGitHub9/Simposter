@@ -963,7 +963,29 @@ def _should_render_element(element: Dict[str, Any], metadata: Dict[str, Any]) ->
     return True
 
 
-def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, asset_id: str) -> bool:
+def _calc_paste_position(x: int, y: int, ow: int, oh: int, anchor: str) -> tuple[int, int]:
+    """Calculate top-left paste position for an image given an anchor point."""
+    h_anchors = {
+        "left":   0,
+        "center": ow // 2,
+        "right":  ow,
+    }
+    v_anchors = {
+        "top":    0,
+        "center": oh // 2,
+        "bottom": oh,
+    }
+    parts = anchor.lower().split("-") if anchor else ["center"]
+    if len(parts) == 1:
+        h_off = h_anchors.get("center", ow // 2)
+        v_off = v_anchors.get("center", oh // 2)
+    else:
+        v_off = v_anchors.get(parts[0], oh // 2)
+        h_off = h_anchors.get(parts[1], ow // 2)
+    return x - h_off, y - v_off
+
+
+def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, asset_id: str, value: str = "") -> bool:
     """Try to render a badge using an asset image. Returns True if successful."""
     from .. import database as db
 
@@ -979,6 +1001,19 @@ def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y:
 
     W, H = canvas.size
     ow, oh = overlay_img.size
+
+    # Per-value scale/anchor (badge types) override element-level scale/anchor
+    val_key = value.lower() if value else ""
+    badge_scales = element.get("badge_scales") or {}
+    badge_anchors = element.get("badge_anchors") or {}
+    scale_multiplier = badge_scales.get(val_key) if val_key in badge_scales else element.get("scale")
+    anchor = badge_anchors.get(val_key) if val_key in badge_anchors else element.get("anchor", "center")
+
+    # Apply scale multiplier
+    if scale_multiplier and scale_multiplier > 0:
+        ow = int(ow * scale_multiplier)
+        oh = int(oh * scale_multiplier)
+        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
 
     # Apply percentage-based width/height (relative to canvas)
     pct_width = element.get("width")
@@ -1013,8 +1048,7 @@ def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y:
             overlay_img = overlay_img.resize((new_w, new_h), Image.LANCZOS)
 
     ow, oh = overlay_img.size
-    paste_x = x - ow // 2
-    paste_y = y - oh // 2
+    paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor or "center")
     canvas.paste(overlay_img, (paste_x, paste_y), overlay_img)
     return True
 
@@ -1048,7 +1082,7 @@ def _apply_metadata_badge(
         asset_id = badge_assets.get(value.lower())
         if asset_id:
             try:
-                if _render_badge_asset(canvas, element, x, y, asset_id):
+                if _render_badge_asset(canvas, element, x, y, asset_id, value=value):
                     logger.info("[OVERLAY]   -> Rendered metadata badge as image (asset=%s)", asset_id)
                     return canvas
             except Exception as e:
@@ -1101,6 +1135,13 @@ def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y:
     W, H = canvas.size
     ow, oh = overlay_img.size
 
+    # Apply scale multiplier first (if provided)
+    scale_multiplier = element.get("scale")
+    if scale_multiplier and scale_multiplier > 0:
+        ow = int(ow * scale_multiplier)
+        oh = int(oh * scale_multiplier)
+        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
+
     # Apply percentage-based width/height (relative to canvas)
     pct_width = element.get("width")
     pct_height = element.get("height")
@@ -1134,10 +1175,10 @@ def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y:
             new_h = int(oh * scale)
             overlay_img = overlay_img.resize((new_w, new_h), Image.LANCZOS)
 
-    # Calculate paste position (centered on x, y)
+    # Calculate paste position using anchor
     ow, oh = overlay_img.size
-    paste_x = x - ow // 2
-    paste_y = y - oh // 2
+    anchor = element.get("anchor", "center")
+    paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor)
 
     # Composite onto canvas
     canvas.paste(overlay_img, (paste_x, paste_y), overlay_img)

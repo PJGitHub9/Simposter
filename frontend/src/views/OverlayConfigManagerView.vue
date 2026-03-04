@@ -14,6 +14,8 @@ interface OverlayElement {
   height?: number
   max_width?: number
   max_height?: number
+  scale?: number
+  anchor?: string
   asset_id?: string
   text?: string
   font_family?: string
@@ -26,6 +28,8 @@ interface OverlayElement {
   badge_modes?: Record<string, string>
   badge_assets?: Record<string, string>
   badge_texts?: Record<string, string>
+  badge_scales?: Record<string, number>
+  badge_anchors?: Record<string, string>
   text_align?: string
 }
 
@@ -276,6 +280,26 @@ const uploadAsset = async () => {
   }
 }
 
+const rescanAssets = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/overlay-assets/rescan`, { method: 'POST' })
+    if (res.ok) {
+      const data = await res.json()
+      await loadAssets()
+      if (data.added > 0) {
+        alert(`Found ${data.added} new asset${data.added > 1 ? 's' : ''}: ${data.names.join(', ')}`)
+      } else {
+        alert('No new assets found — all files in the assets folder are already registered.')
+      }
+    } else {
+      alert('Failed to rescan assets folder')
+    }
+  } catch (e) {
+    console.error('Failed to rescan assets:', e)
+    alert('Failed to rescan assets folder')
+  }
+}
+
 const deleteAsset = async (assetId: string) => {
   if (!confirm('Delete this overlay asset?')) return
   try {
@@ -382,9 +406,11 @@ const getBadgeMode = (element: OverlayElement, value: string): string => {
 const setBadgeMode = (element: OverlayElement, value: string, mode: string) => {
   if (!element.badge_modes) element.badge_modes = {}
   element.badge_modes[value] = mode
-  // Clear asset reference when switching away from image
-  if (mode !== 'image' && element.badge_assets?.[value]) {
-    delete element.badge_assets[value]
+  // Clear image-specific overrides when switching away from image
+  if (mode !== 'image') {
+    if (element.badge_assets?.[value]) delete element.badge_assets[value]
+    if (element.badge_scales?.[value] != null) delete element.badge_scales[value]
+    if (element.badge_anchors?.[value]) delete element.badge_anchors[value]
   }
 }
 
@@ -414,10 +440,35 @@ const setBadgeText = (element: OverlayElement, value: string, text: string) => {
   }
 }
 
+const getBadgeScale = (element: OverlayElement, value: string): number | undefined => {
+  return element.badge_scales?.[value]
+}
+const setBadgeScale = (element: OverlayElement, value: string, v: string) => {
+  if (!element.badge_scales) element.badge_scales = {}
+  const n = parseFloat(v)
+  if (!isNaN(n) && n > 0) {
+    element.badge_scales[value] = n
+  } else {
+    delete element.badge_scales[value]
+  }
+}
+
+const getBadgeAnchor = (element: OverlayElement, value: string): string => {
+  return element.badge_anchors?.[value] ?? 'center'
+}
+const setBadgeAnchor = (element: OverlayElement, value: string, anchor: string) => {
+  if (!element.badge_anchors) element.badge_anchors = {}
+  element.badge_anchors[value] = anchor
+}
+
 const hasBadgeTextMode = (element: OverlayElement): boolean => {
-  if (!element.badge_modes || Object.keys(element.badge_modes).length === 0) return true // default is text
-  return Object.values(element.badge_modes).some(m => m === 'text') ||
-    !Object.keys(element.badge_modes).length // no modes set = all default to text
+  // Determine all possible values for this element's field
+  const field = element.type === 'edition_badge'
+    ? 'edition'
+    : (element.metadata_field || 'video_resolution')
+  const allValues = getValuesForField(field)
+  // Return true if any value's effective mode is "text" (unset defaults to "text")
+  return allValues.some(v => (element.badge_modes?.[v] ?? 'text') === 'text')
 }
 
 // --- Poster search ---
@@ -695,7 +746,13 @@ const renderPreviewElement = async (
       if (assetId) {
         try {
           const img = await loadAssetImage(assetId)
-          drawAssetOnCanvas(ctx, img, el, x, y, scale, idx, isHovered, cfg.accent)
+          // Apply per-value scale/anchor overrides for badge types
+          const effectiveEl = {
+            ...el,
+            scale: el.badge_scales?.[value] ?? el.scale,
+            anchor: el.badge_anchors?.[value] ?? el.anchor,
+          }
+          drawAssetOnCanvas(ctx, img, effectiveEl, x, y, scale, idx, isHovered, cfg.accent)
           return
         } catch { /* fall through to text */ }
       }
@@ -761,6 +818,12 @@ const drawAssetOnCanvas = (
   let drawW = img.width * scale
   let drawH = img.height * scale
 
+  // Apply scale multiplier first (if provided)
+  if (el.scale && el.scale > 0) {
+    drawW *= el.scale
+    drawH *= el.scale
+  }
+
   // Apply percentage-based width/height (relative to canvas)
   if (el.width && el.width > 0) {
     const targetW = PREVIEW_W * el.width
@@ -793,8 +856,13 @@ const drawAssetOnCanvas = (
   drawW = Math.max(drawW, 16)
   drawH = Math.max(drawH, 16)
 
-  const dx = x - drawW / 2
-  const dy = y - drawH / 2
+  // Apply anchor point
+  const anchor = el.anchor || 'center'
+  const [vPart, hPart] = anchor.includes('-') ? anchor.split('-') : ['center', 'center']
+  const hOffset = hPart === 'left' ? 0 : hPart === 'right' ? drawW : drawW / 2
+  const vOffset = vPart === 'top' ? 0 : vPart === 'bottom' ? drawH : drawH / 2
+  const dx = x - hOffset
+  const dy = y - vOffset
 
   if (isHovered) {
     ctx.strokeStyle = highlightColor
@@ -944,16 +1012,24 @@ onMounted(() => {
       <div class="section-card">
         <div class="section-header">
           <h2>Assets Library</h2>
-          <button class="btn-primary-sm" @click="showAssetUpload = true">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-            Upload Asset
-          </button>
+          <div style="display:flex;gap:0.5rem;">
+            <button class="btn-secondary-sm" @click="rescanAssets" title="Scan config/assets/ folder for new files">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
+              Rescan
+            </button>
+            <button class="btn-primary-sm" @click="showAssetUpload = true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              Upload Asset
+            </button>
+          </div>
         </div>
 
         <div v-if="assets.length === 0" class="empty-state">
-          No assets uploaded yet. Upload images to use in your overlay configs.
+          No assets yet. Upload images or drop files into <code>config/assets/</code> and click Rescan.
         </div>
         <div v-else class="assets-grid">
           <div v-for="asset in assets" :key="asset.id" class="asset-item">
@@ -1040,26 +1116,30 @@ onMounted(() => {
                       <input type="number" v-model.number="element.position_y" min="0" max="1" step="0.01" />
                     </label>
 
-                    <!-- Size (all types) -->
-                    <label>
-                      <span>Width (0-1)</span>
-                      <input type="number" v-model.number="element.width" min="0" max="1" step="0.01" placeholder="auto" />
-                    </label>
-                    <label>
-                      <span>Height (0-1)</span>
-                      <input type="number" v-model.number="element.height" min="0" max="1" step="0.01" placeholder="auto" />
-                    </label>
+                    <!-- Scale + Anchor (custom_image only — badge types use per-value overrides) -->
+                    <template v-if="element.type === 'custom_image'">
+                      <label>
+                        <span>Scale (0.1-2.0)</span>
+                        <input type="number" v-model.number="element.scale" min="0.1" max="2.0" step="0.1" placeholder="1.0" />
+                      </label>
+                      <label>
+                        <span>Anchor</span>
+                        <select v-model="element.anchor">
+                          <option value="top-left">Top Left</option>
+                          <option value="top-center">Top Center</option>
+                          <option value="top-right">Top Right</option>
+                          <option value="center-left">Center Left</option>
+                          <option value="center">Center (default)</option>
+                          <option value="center-right">Center Right</option>
+                          <option value="bottom-left">Bottom Left</option>
+                          <option value="bottom-center">Bottom Center</option>
+                          <option value="bottom-right">Bottom Right</option>
+                        </select>
+                      </label>
+                    </template>
 
                     <!-- Video Badge (+ legacy resolution_badge) -->
                     <template v-if="element.type === 'video_badge' || element.type === 'resolution_badge'">
-                      <label>
-                        <span>Max Width (px)</span>
-                        <input type="number" v-model.number="element.max_width" min="0" step="10" placeholder="none" />
-                      </label>
-                      <label>
-                        <span>Max Height (px)</span>
-                        <input type="number" v-model.number="element.max_height" min="0" step="10" placeholder="none" />
-                      </label>
                       <label class="field-full">
                         <span>Metadata Field</span>
                         <select v-model="element.metadata_field">
@@ -1071,34 +1151,54 @@ onMounted(() => {
                       <div class="field-full badge-assets-section">
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
-                          <div v-for="val in getValuesForField(element.metadata_field || 'video_resolution')" :key="val" class="badge-asset-row">
-                            <span class="badge-value-label">{{ val.toUpperCase() }}</span>
-                            <select
-                              :value="getBadgeMode(element, val)"
-                              @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
-                              class="badge-mode-select"
-                            >
-                              <option value="none">None</option>
-                              <option value="text">Text</option>
-                              <option value="image">Image</option>
-                            </select>
-                            <input
-                              v-if="getBadgeMode(element, val) === 'text'"
-                              type="text"
-                              :value="getBadgeText(element, val)"
-                              @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
-                              :placeholder="val.toUpperCase()"
-                              class="badge-text-input"
-                            />
-                            <select
-                              v-if="getBadgeMode(element, val) === 'image'"
-                              :value="getBadgeAsset(element, val) || ''"
-                              @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
-                              class="badge-asset-select"
-                            >
-                              <option value="">Select asset...</option>
-                              <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
-                            </select>
+                          <div v-for="val in getValuesForField(element.metadata_field || 'video_resolution')" :key="val" class="badge-asset-item">
+                            <div class="badge-asset-row">
+                              <span class="badge-value-label">{{ val.toUpperCase() }}</span>
+                              <select
+                                :value="getBadgeMode(element, val)"
+                                @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
+                                class="badge-mode-select"
+                              >
+                                <option value="none">None</option>
+                                <option value="text">Text</option>
+                                <option value="image">Image</option>
+                              </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'text'"
+                                type="text"
+                                :value="getBadgeText(element, val)"
+                                @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
+                                :placeholder="val.toUpperCase()"
+                                class="badge-text-input"
+                              />
+                              <select
+                                v-if="getBadgeMode(element, val) === 'image'"
+                                :value="getBadgeAsset(element, val) || ''"
+                                @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
+                                class="badge-asset-select"
+                              >
+                                <option value="">Select asset...</option>
+                                <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
+                              </select>
+                            </div>
+                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                              <label>Scale
+                                <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
+                              </label>
+                              <label>Anchor
+                                <select :value="getBadgeAnchor(element, val)" @change="setBadgeAnchor(element, val, ($event.target as HTMLSelectElement).value)">
+                                  <option value="top-left">Top Left</option>
+                                  <option value="top-center">Top Center</option>
+                                  <option value="top-right">Top Right</option>
+                                  <option value="center-left">Center Left</option>
+                                  <option value="center">Center</option>
+                                  <option value="center-right">Center Right</option>
+                                  <option value="bottom-left">Bottom Left</option>
+                                  <option value="bottom-center">Bottom Center</option>
+                                  <option value="bottom-right">Bottom Right</option>
+                                </select>
+                              </label>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1145,14 +1245,6 @@ onMounted(() => {
 
                     <!-- Audio Badge (+ legacy codec_badge) -->
                     <template v-if="element.type === 'audio_badge' || element.type === 'codec_badge'">
-                      <label>
-                        <span>Max Width (px)</span>
-                        <input type="number" v-model.number="element.max_width" min="0" step="10" placeholder="none" />
-                      </label>
-                      <label>
-                        <span>Max Height (px)</span>
-                        <input type="number" v-model.number="element.max_height" min="0" step="10" placeholder="none" />
-                      </label>
                       <label class="field-full">
                         <span>Metadata Field</span>
                         <select v-model="element.metadata_field">
@@ -1165,34 +1257,54 @@ onMounted(() => {
                       <div class="field-full badge-assets-section">
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
-                          <div v-for="val in getValuesForField(element.metadata_field || 'audio_codec')" :key="val" class="badge-asset-row">
-                            <span class="badge-value-label">{{ val.toUpperCase() }}</span>
-                            <select
-                              :value="getBadgeMode(element, val)"
-                              @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
-                              class="badge-mode-select"
-                            >
-                              <option value="none">None</option>
-                              <option value="text">Text</option>
-                              <option value="image">Image</option>
-                            </select>
-                            <input
-                              v-if="getBadgeMode(element, val) === 'text'"
-                              type="text"
-                              :value="getBadgeText(element, val)"
-                              @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
-                              :placeholder="val.toUpperCase()"
-                              class="badge-text-input"
-                            />
-                            <select
-                              v-if="getBadgeMode(element, val) === 'image'"
-                              :value="getBadgeAsset(element, val) || ''"
-                              @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
-                              class="badge-asset-select"
-                            >
-                              <option value="">Select asset...</option>
-                              <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
-                            </select>
+                          <div v-for="val in getValuesForField(element.metadata_field || 'audio_codec')" :key="val" class="badge-asset-item">
+                            <div class="badge-asset-row">
+                              <span class="badge-value-label">{{ val.toUpperCase() }}</span>
+                              <select
+                                :value="getBadgeMode(element, val)"
+                                @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
+                                class="badge-mode-select"
+                              >
+                                <option value="none">None</option>
+                                <option value="text">Text</option>
+                                <option value="image">Image</option>
+                              </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'text'"
+                                type="text"
+                                :value="getBadgeText(element, val)"
+                                @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
+                                :placeholder="val.toUpperCase()"
+                                class="badge-text-input"
+                              />
+                              <select
+                                v-if="getBadgeMode(element, val) === 'image'"
+                                :value="getBadgeAsset(element, val) || ''"
+                                @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
+                                class="badge-asset-select"
+                              >
+                                <option value="">Select asset...</option>
+                                <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
+                              </select>
+                            </div>
+                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                              <label>Scale
+                                <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
+                              </label>
+                              <label>Anchor
+                                <select :value="getBadgeAnchor(element, val)" @change="setBadgeAnchor(element, val, ($event.target as HTMLSelectElement).value)">
+                                  <option value="top-left">Top Left</option>
+                                  <option value="top-center">Top Center</option>
+                                  <option value="top-right">Top Right</option>
+                                  <option value="center-left">Center Left</option>
+                                  <option value="center">Center</option>
+                                  <option value="center-right">Center Right</option>
+                                  <option value="bottom-left">Bottom Left</option>
+                                  <option value="bottom-center">Bottom Center</option>
+                                  <option value="bottom-right">Bottom Right</option>
+                                </select>
+                              </label>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1239,46 +1351,58 @@ onMounted(() => {
 
                     <!-- Edition Badge -->
                     <template v-if="element.type === 'edition_badge'">
-                      <label>
-                        <span>Max Width (px)</span>
-                        <input type="number" v-model.number="element.max_width" min="0" step="10" placeholder="none" />
-                      </label>
-                      <label>
-                        <span>Max Height (px)</span>
-                        <input type="number" v-model.number="element.max_height" min="0" step="10" placeholder="none" />
-                      </label>
                       <div class="field-divider"></div>
                       <div class="field-full badge-assets-section">
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
-                          <div v-for="val in EDITION_VALUES" :key="val" class="badge-asset-row">
-                            <span class="badge-value-label">{{ val.toUpperCase() }}</span>
-                            <select
-                              :value="getBadgeMode(element, val)"
-                              @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
-                              class="badge-mode-select"
-                            >
-                              <option value="none">None</option>
-                              <option value="text">Text</option>
-                              <option value="image">Image</option>
-                            </select>
-                            <input
-                              v-if="getBadgeMode(element, val) === 'text'"
-                              type="text"
-                              :value="getBadgeText(element, val)"
-                              @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
-                              :placeholder="val.toUpperCase()"
-                              class="badge-text-input"
-                            />
-                            <select
-                              v-if="getBadgeMode(element, val) === 'image'"
-                              :value="getBadgeAsset(element, val) || ''"
-                              @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
-                              class="badge-asset-select"
-                            >
-                              <option value="">Select asset...</option>
-                              <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
-                            </select>
+                          <div v-for="val in EDITION_VALUES" :key="val" class="badge-asset-item">
+                            <div class="badge-asset-row">
+                              <span class="badge-value-label">{{ val.toUpperCase() }}</span>
+                              <select
+                                :value="getBadgeMode(element, val)"
+                                @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
+                                class="badge-mode-select"
+                              >
+                                <option value="none">None</option>
+                                <option value="text">Text</option>
+                                <option value="image">Image</option>
+                              </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'text'"
+                                type="text"
+                                :value="getBadgeText(element, val)"
+                                @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
+                                :placeholder="val.toUpperCase()"
+                                class="badge-text-input"
+                              />
+                              <select
+                                v-if="getBadgeMode(element, val) === 'image'"
+                                :value="getBadgeAsset(element, val) || ''"
+                                @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
+                                class="badge-asset-select"
+                              >
+                                <option value="">Select asset...</option>
+                                <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
+                              </select>
+                            </div>
+                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                              <label>Scale
+                                <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
+                              </label>
+                              <label>Anchor
+                                <select :value="getBadgeAnchor(element, val)" @change="setBadgeAnchor(element, val, ($event.target as HTMLSelectElement).value)">
+                                  <option value="top-left">Top Left</option>
+                                  <option value="top-center">Top Center</option>
+                                  <option value="top-right">Top Right</option>
+                                  <option value="center-left">Center Left</option>
+                                  <option value="center">Center</option>
+                                  <option value="center-right">Center Right</option>
+                                  <option value="bottom-left">Bottom Left</option>
+                                  <option value="bottom-center">Bottom Center</option>
+                                  <option value="bottom-right">Bottom Right</option>
+                                </select>
+                              </label>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1578,6 +1702,8 @@ onMounted(() => {
 
 .btn-primary-sm { display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.8rem; background: linear-gradient(135deg, var(--accent, #3dd6b7), #2bc4a6); color: #000; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 500; }
 .btn-primary-sm:hover { opacity: 0.9; }
+.btn-secondary-sm { display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0.8rem; background: transparent; color: var(--text-secondary, #aaa); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 500; }
+.btn-secondary-sm:hover { border-color: var(--accent, #3dd6b7); color: var(--accent, #3dd6b7); }
 
 .loading, .empty-state { padding: 2rem; text-align: center; color: var(--text-secondary, #aaa); font-size: 0.9rem; }
 
@@ -1661,8 +1787,14 @@ onMounted(() => {
 /* Badge assets mapping */
 .badge-assets-section { display: flex; flex-direction: column; gap: 0.4rem; }
 .badge-assets-label { color: var(--text-secondary, #888); font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
-.badge-asset-rows { display: flex; flex-direction: column; gap: 0.3rem; }
+.badge-asset-rows { display: flex; flex-direction: column; gap: 0.4rem; }
+.badge-asset-item { display: flex; flex-direction: column; gap: 0.25rem; }
 .badge-asset-row { display: flex; align-items: center; gap: 0.4rem; }
+.badge-image-overrides { display: flex; align-items: center; gap: 0.6rem; padding-left: 76px; }
+.badge-image-overrides label { display: flex; align-items: center; gap: 0.3rem; color: var(--text-secondary, #888); font-size: 0.7rem; }
+.badge-image-overrides input[type="number"] { width: 4.5rem; padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
+.badge-image-overrides select { padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
+.badge-image-overrides input:focus, .badge-image-overrides select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 .badge-value-label { color: var(--text-secondary, #aaa); font-size: 0.72rem; font-weight: 600; min-width: 70px; text-align: right; }
 .badge-mode-select { width: 68px; flex-shrink: 0; padding: 0.3rem 0.3rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-asset-select { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }

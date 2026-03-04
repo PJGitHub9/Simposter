@@ -231,6 +231,8 @@ class OverlayElement(BaseModel):
     height: Optional[float] = None  # Height as percentage of poster height (0.0 to 1.0)
     max_width: Optional[int] = None  # Max width in pixels
     max_height: Optional[int] = None  # Max height in pixels
+    scale: Optional[float] = None  # Scale multiplier for images (0.1 to 2.0), applied before width/height
+    anchor: Optional[str] = None  # Image anchor: "top-left"|"top-center"|"top-right"|"center-left"|"center"|"center-right"|"bottom-left"|"bottom-center"|"bottom-right" (default: "center")
     asset_id: Optional[str] = None  # For custom_image: reference to overlay_assets
     text: Optional[str] = None  # For text_label: the text to display
     font_family: Optional[str] = None  # For text_label
@@ -243,6 +245,8 @@ class OverlayElement(BaseModel):
     badge_modes: Optional[Dict[str, str]] = None  # Maps metadata value -> "none" | "text" | "image"
     badge_assets: Optional[Dict[str, str]] = None  # Maps metadata value -> asset_id (e.g., {"4k": "asset-123"})
     badge_texts: Optional[Dict[str, str]] = None  # Maps metadata value -> custom display text (e.g., {"1080": "HD"})
+    badge_scales: Optional[Dict[str, float]] = None  # Maps metadata value -> scale multiplier (image mode only)
+    badge_anchors: Optional[Dict[str, str]] = None  # Maps metadata value -> anchor point (image mode only)
     text_align: Optional[str] = None  # "left" | "center" | "right" (default: "center")
 
 

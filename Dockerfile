@@ -57,7 +57,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core gosu && rm -rf /var/lib/apt/lists/*
 
 # Ensure default folders exist in image (mount overrides are fine)
-RUN mkdir -p /config/output /config/uploads /config/settings /config/logs
+RUN mkdir -p /config/output /config/uploads /config/assets /config/settings /config/logs
 
 # Copy backend code
 COPY backend ./backend
