@@ -81,28 +81,6 @@ def _add_grain(img: Image.Image, amount: float) -> Image.Image:
     grain_rgb = Image.merge("RGB", (grain, grain, grain))
     return Image.blend(img, grain_rgb, amount)
 
-def _add_grain_fast(img: Image.Image, amount: float) -> Image.Image:
-    """
-    Film grain; amount 0..0.6
-    """
-    if amount <= 0:
-        return img
-    
-    img = img.convert("RGB")
-    w, h = img.size
-    
-    # Generate all random values at once
-    grain_array = np.random.uniform(-128 * amount, 128 * amount, (h, w))
-    grain_array = (128 + grain_array).clip(0, 255).astype(np.uint8)
-    
-    # Convert to PIL Image
-    grain = Image.fromarray(grain_array, mode='L')
-    grain = grain.filter(ImageFilter.GaussianBlur(1.5))
-    grain_rgb = Image.merge("RGB", (grain, grain, grain))
-    return Image.blend(img, grain_rgb, amount)
-
-
-
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     """Convert #RRGGBB (or RRGGBB) to (r,g,b)."""
@@ -985,6 +963,38 @@ def _calc_paste_position(x: int, y: int, ow: int, oh: int, anchor: str) -> tuple
     return x - h_off, y - v_off
 
 
+def _apply_canvas_size_constraints(img: Image.Image, element: Dict[str, Any], W: int, H: int) -> Image.Image:
+    """Apply percentage-based width/height and max-pixel constraints (custom_image only)."""
+    ow, oh = img.size
+
+    pct_width = element.get("width")
+    pct_height = element.get("height")
+    if pct_width and pct_width > 0:
+        ratio = int(W * pct_width) / ow
+        ow = int(W * pct_width)
+        oh = int(oh * ratio)
+        img = img.resize((ow, oh), Image.LANCZOS)
+    if pct_height and pct_height > 0:
+        ratio = int(H * pct_height) / oh
+        oh = int(H * pct_height)
+        ow = int(ow * ratio)
+        img = img.resize((ow, oh), Image.LANCZOS)
+
+    max_width = element.get("max_width")
+    max_height = element.get("max_height")
+    if max_width or max_height:
+        ow, oh = img.size
+        cap = 1.0
+        if max_width and ow > max_width:
+            cap = min(cap, max_width / ow)
+        if max_height and oh > max_height:
+            cap = min(cap, max_height / oh)
+        if cap < 1.0:
+            img = img.resize((int(ow * cap), int(oh * cap)), Image.LANCZOS)
+
+    return img
+
+
 def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, asset_id: str, value: str = "") -> bool:
     """Try to render a badge using an asset image. Returns True if successful."""
     from .. import database as db
@@ -999,53 +1009,16 @@ def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y:
 
     overlay_img = Image.open(asset_path).convert("RGBA")
 
-    W, H = canvas.size
-    ow, oh = overlay_img.size
-
-    # Per-value scale/anchor (badge types) override element-level scale/anchor
+    # Per-value scale/anchor override element-level fallback
     val_key = value.lower() if value else ""
     badge_scales = element.get("badge_scales") or {}
     badge_anchors = element.get("badge_anchors") or {}
     scale_multiplier = badge_scales.get(val_key) if val_key in badge_scales else element.get("scale")
     anchor = badge_anchors.get(val_key) if val_key in badge_anchors else element.get("anchor", "center")
 
-    # Apply scale multiplier
     if scale_multiplier and scale_multiplier > 0:
-        ow = int(ow * scale_multiplier)
-        oh = int(oh * scale_multiplier)
-        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
-
-    # Apply percentage-based width/height (relative to canvas)
-    pct_width = element.get("width")
-    pct_height = element.get("height")
-    if pct_width and pct_width > 0:
-        target_w = int(W * pct_width)
-        ratio = target_w / ow
-        ow = target_w
-        oh = int(oh * ratio)
-        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
-    if pct_height and pct_height > 0:
-        target_h = int(H * pct_height)
-        ratio = target_h / oh
-        oh = target_h
-        ow = int(ow * ratio)
-        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
-
-    # Apply max pixel constraints
-    max_width = element.get("max_width")
-    max_height = element.get("max_height")
-
-    if max_width or max_height:
         ow, oh = overlay_img.size
-        scale = 1.0
-        if max_width and ow > max_width:
-            scale = min(scale, max_width / ow)
-        if max_height and oh > max_height:
-            scale = min(scale, max_height / oh)
-        if scale < 1.0:
-            new_w = int(ow * scale)
-            new_h = int(oh * scale)
-            overlay_img = overlay_img.resize((new_w, new_h), Image.LANCZOS)
+        overlay_img = overlay_img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
 
     ow, oh = overlay_img.size
     paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor or "center")
@@ -1125,7 +1098,6 @@ def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y:
     if not asset:
         return canvas
 
-    # Load asset image
     asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
     if not asset_path.exists():
         return canvas
@@ -1133,54 +1105,20 @@ def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y:
     overlay_img = Image.open(asset_path).convert("RGBA")
 
     W, H = canvas.size
-    ow, oh = overlay_img.size
 
     # Apply scale multiplier first (if provided)
     scale_multiplier = element.get("scale")
     if scale_multiplier and scale_multiplier > 0:
-        ow = int(ow * scale_multiplier)
-        oh = int(oh * scale_multiplier)
-        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
-
-    # Apply percentage-based width/height (relative to canvas)
-    pct_width = element.get("width")
-    pct_height = element.get("height")
-    if pct_width and pct_width > 0:
-        target_w = int(W * pct_width)
-        ratio = target_w / ow
-        ow = target_w
-        oh = int(oh * ratio)
-        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
-    if pct_height and pct_height > 0:
-        target_h = int(H * pct_height)
-        ratio = target_h / oh
-        oh = target_h
-        ow = int(ow * ratio)
-        overlay_img = overlay_img.resize((ow, oh), Image.LANCZOS)
-
-    # Apply max pixel constraints
-    max_width = element.get("max_width")
-    max_height = element.get("max_height")
-
-    if max_width or max_height:
         ow, oh = overlay_img.size
-        scale = 1.0
-        if max_width and ow > max_width:
-            scale = min(scale, max_width / ow)
-        if max_height and oh > max_height:
-            scale = min(scale, max_height / oh)
+        overlay_img = overlay_img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
 
-        if scale < 1.0:
-            new_w = int(ow * scale)
-            new_h = int(oh * scale)
-            overlay_img = overlay_img.resize((new_w, new_h), Image.LANCZOS)
+    # Apply percentage-based width/height and max-pixel constraints
+    overlay_img = _apply_canvas_size_constraints(overlay_img, element, W, H)
 
-    # Calculate paste position using anchor
     ow, oh = overlay_img.size
     anchor = element.get("anchor", "center")
     paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor)
 
-    # Composite onto canvas
     canvas.paste(overlay_img, (paste_x, paste_y), overlay_img)
     return canvas
 
@@ -1195,21 +1133,13 @@ def _apply_text_label(canvas: Image.Image, element: Dict[str, Any], x: int, y: i
     font_size = element.get("font_size", 40)
     font_color = element.get("font_color", "#FFFFFF")
 
-    # Parse color
-    if font_color.startswith("#"):
+    if font_color.startswith("#") and len(font_color) >= 7:
         rgb = tuple(int(font_color[i:i+2], 16) for i in (1, 3, 5))
     else:
         rgb = (255, 255, 255)
 
+    font = _load_font(font_family, font_size)
     draw = ImageDraw.Draw(canvas)
-    try:
-        font = ImageFont.truetype(f"{font_family}.ttf", font_size)
-    except:
-        try:
-            font = ImageFont.truetype("arial.ttf", font_size)
-        except:
-            font = ImageFont.load_default()
-
     anchor = _get_text_anchor(element)
     draw.text((x, y), text, fill=(*rgb, 255), font=font, anchor=anchor)
     return canvas

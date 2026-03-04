@@ -224,7 +224,8 @@ class BatchRequest(BaseModel):
 
 # Overlay Configuration schemas
 class OverlayElement(BaseModel):
-    type: str  # "video_badge", "audio_badge", "edition_badge", "custom_image", "text_label" (legacy: "resolution_badge", "codec_badge", "label_badge")
+    type: str  # "video_badge" | "audio_badge" | "edition_badge" | "custom_image" | "text_label"
+               # Legacy aliases (still render, hidden from UI): "resolution_badge" | "codec_badge" | "label_badge"
     position_x: float = 0.5  # 0.0 to 1.0 (left to right)
     position_y: float = 0.5  # 0.0 to 1.0 (top to bottom)
     width: Optional[float] = None  # Width as percentage of poster width (0.0 to 1.0)

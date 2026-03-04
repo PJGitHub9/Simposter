@@ -10,6 +10,21 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.53',
+    date: '2026-03-04',
+    sections: [
+      {
+        title: 'Code Cleanup',
+        items: [
+          'Removed duplicate _add_grain_fast function — was identical to _add_grain',
+          'Extracted shared _apply_canvas_size_constraints helper — custom_image resize logic no longer duplicated',
+          'Text label overlay now uses full font search (_load_font) — respects config/fonts, bundled fonts, and system fonts instead of falling back to default immediately',
+          'Updated OverlayElement schema comment to clearly distinguish active types from legacy aliases',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.52',
     date: '2026-03-04',
     sections: [
