@@ -201,7 +201,8 @@ class TVShowBatchRequest(BaseModel):
     save_locally: bool = False
     labels: List[str] = []
     library_id: Optional[str] = None
-    include_seasons: bool = True  # Always true for TV shows: render all seasons instead of series poster
+    include_series: bool = True   # Render the series-level poster
+    include_seasons: bool = True  # Render individual season posters
     fallbackPosterAction: Optional[str] = None
     fallbackPosterTemplate: Optional[str] = None
     fallbackPosterPreset: Optional[str] = None

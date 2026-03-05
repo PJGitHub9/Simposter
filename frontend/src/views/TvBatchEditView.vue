@@ -58,6 +58,7 @@ const { tvShows: tvShowsCache, tvShowsLoaded: tvShowsLoadedFlag } = useTvShows()
 const settings = useSettingsStore()
 
 const tvShows = ref<TvShow[]>(tvShowsCache.value)
+const includeSeries = ref(true)
 const includeSeasons = ref(false)
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -703,6 +704,7 @@ const processBatch = async () => {
       save_locally: saveLocally.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
       library_id: currentLibrary.value || undefined,
+      include_series: includeSeries.value,
       include_seasons: includeSeasons.value,
       // Include fallback settings so batch endpoint can handle template fallbacks
       fallbackPosterAction: fallbackPosterAction,
@@ -839,17 +841,26 @@ const fetchSeasons = async (showKey: string) => {
     if (!res.ok) throw new Error(`Failed to fetch seasons`)
     const data = await res.json()
 
-    // Add synthetic "Series" entry at the beginning
-    const seriesEntry = {
-      index: -1,
-      key: showKey,
-      title: 'Series',
-      poster: currentPreviewMovie.value?.poster || null,
-      isSeries: true
-    }
+    const actualSeasons = data.seasons || []
 
-    currentSeasons.value = [seriesEntry, ...(data.seasons || [])]
-    currentSeasonIndex.value = 0
+    if (includeSeries.value) {
+      // Add synthetic "Series" entry at the beginning
+      const seriesEntry = {
+        index: -1,
+        key: showKey,
+        title: 'Series',
+        poster: currentPreviewMovie.value?.poster || null,
+        isSeries: true
+      }
+      currentSeasons.value = [seriesEntry, ...actualSeasons]
+      currentSeasonIndex.value = 0
+      // series entry (index -1) shows without requiring navigation
+    } else {
+      // No series entry — go straight to actual seasons
+      currentSeasons.value = actualSeasons
+      currentSeasonIndex.value = 0
+      hasNavigatedToSeason.value = true  // show first season immediately
+    }
   } catch (err) {
     console.error('Failed to fetch seasons:', err)
     currentSeasons.value = []
@@ -913,16 +924,21 @@ watch(includeSeasons, async (enabled) => {
   hasNavigatedToSeason.value = false // Reset navigation flag when toggling
   if (enabled && currentPreviewMovie.value) {
     await fetchSeasons(currentPreviewMovie.value.key)
-    // Don't auto-select first season - let user navigate to it
-    // This ensures series poster shows by default
-    // Don't call fetchPreview() here - currentSeason will change when seasons load,
-    // which will trigger watch(currentSeasonIndex) and call fetchPreview()
   } else {
     currentSeasons.value = []
     currentSeasonIndex.value = 0
     // When disabling seasons, we need to fetch the show-level preview
     previewCache.value = {}
     fetchPreview()
+  }
+})
+
+// Watch for includeSeries toggle — rebuild season list to add/remove the Series entry
+watch(includeSeries, async () => {
+  hasNavigatedToSeason.value = false
+  if (includeSeasons.value && currentPreviewMovie.value) {
+    previewCache.value = {}
+    await fetchSeasons(currentPreviewMovie.value.key)
   }
 })
 
@@ -1492,6 +1508,10 @@ onMounted(async () => {
           <label class="checkbox-label">
             <input type="checkbox" v-model="saveLocally" />
             Save locally
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="includeSeries" />
+            Include Series Poster
           </label>
           <label class="checkbox-label">
             <input type="checkbox" v-model="includeSeasons" />

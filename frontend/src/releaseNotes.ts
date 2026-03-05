@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.6',
+    date: '2026-03-05',
+    sections: [
+      {
+        title: 'TV Show Batch Edit',
+        items: [
+          'Added "Include Series Poster" checkbox — independently control whether the series-level poster is generated during a batch run',
+          'Series Poster and Include Seasons can now be toggled independently: generate series only, seasons only, or both',
+          '"Include Series Poster" defaults to checked; "Include Seasons" defaults to unchecked (matching previous behavior)',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.53',
     date: '2026-03-04',
     sections: [

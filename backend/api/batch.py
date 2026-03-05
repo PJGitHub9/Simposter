@@ -632,8 +632,21 @@ def _process_single_tv_show(
         show_details = get_tv_show_details(tmdb_id)
         show_title = show_details.get("name", "Unknown")
 
-        # If include_seasons is False, render series poster only
+        include_series = getattr(req, 'include_series', True)
+
+        # Neither type selected — nothing to do
+        if not req.include_seasons and not include_series:
+            return {
+                "rating_key": rating_key,
+                "show_title": show_details.get("name", ""),
+                "status": "skipped",
+                "reason": "No poster types selected (include_series=False, include_seasons=False)",
+                "poster_fallback": False,
+                "logo_fallback": False,
+            }
+
         if not req.include_seasons:
+            # Series poster only
             return _render_tv_series_poster(
                 rating_key, tmdb_id, tvdb_id, show_details, template_id, preset_id,
                 render_options_base, poster_filter, logo_preference, logo_mode,
@@ -641,14 +654,15 @@ def _process_single_tv_show(
                 source=source
             )
         else:
-            # Fetch seasons and render all with season-specific options
+            # Season posters (and optionally series poster)
             return _render_all_tv_seasons(
                 rating_key, tmdb_id, tvdb_id, show_details, template_id, preset_id,
                 render_options_base, poster_filter, logo_preference, logo_mode,
                 white_logo_fallback, language_pref, req,
                 season_poster_filter_final, season_options_final,
                 source=source,
-                affected_seasons=affected_seasons
+                affected_seasons=affected_seasons,
+                include_series=include_series,
             )
 
     except Exception as e:
@@ -799,6 +813,7 @@ def _render_all_tv_seasons(
     season_options: Optional[dict] = None,
     source: str = "batch",
     affected_seasons: Optional[List[int]] = None,
+    include_series: bool = True,
 ):
     """Render all seasons for a TV show.
 
@@ -866,9 +881,10 @@ def _render_all_tv_seasons(
 
     results = []
 
-    # Only render series poster if not in webhook mode with affected_seasons
-    # (webhooks with affected_seasons should only render the specific seasons, not series poster)
-    should_render_series = not affected_seasons
+    # Render series poster only when:
+    # - include_series is True (user opted in), AND
+    # - not in webhook mode with affected_seasons (webhooks with affected_seasons target specific seasons only)
+    should_render_series = include_series and not affected_seasons
 
     if should_render_series:
         # Render series poster first before processing seasons
