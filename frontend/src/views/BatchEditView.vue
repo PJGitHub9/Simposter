@@ -970,17 +970,6 @@ onMounted(async () => {
 
       <!-- Template & Preset Selection -->
       <div class="selection-row template-row">
-        <!-- Template selector hidden - only uniformlogo template exists -->
-        <div v-if="false" class="form-group">
-          <label>Template</label>
-          <select v-model="selectedTemplate" class="form-control">
-            <option value="">Select a template...</option>
-            <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">
-              {{ tpl.name }}
-            </option>
-          </select>
-        </div>
-
         <div class="form-group">
           <label>Preset</label>
           <select v-model="selectedPreset" class="form-control">

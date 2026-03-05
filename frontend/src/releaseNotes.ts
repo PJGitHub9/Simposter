@@ -10,7 +10,7 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
-    version: 'v1.5.6',
+    version: 'v1.5.61',
     date: '2026-03-05',
     sections: [
       {
@@ -19,6 +19,15 @@ export const releaseNotes: ReleaseNote[] = [
           'Added "Include Series Poster" checkbox — independently control whether the series-level poster is generated during a batch run',
           'Series Poster and Include Seasons can now be toggled independently: generate series only, seasons only, or both',
           '"Include Series Poster" defaults to checked; "Include Seasons" defaults to unchecked (matching previous behavior)',
+          'Preview correctly shows the first season when "Include Series Poster" is unchecked — no longer defaults to series poster',
+        ]
+      },
+      {
+        title: 'Code Cleanup',
+        items: [
+          'Removed dead template selector block (v-if="false") from both Batch Edit views',
+          'Removed unused defineProps/defineEmits from TV Batch Edit',
+          'Fixed log prefix in TV Batch Edit — was incorrectly logging as [BatchEdit]',
         ]
       }
     ]

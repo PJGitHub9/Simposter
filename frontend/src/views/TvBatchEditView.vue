@@ -6,14 +6,6 @@ import { useNotification } from '@/composables/useNotification'
 import { useTvShows } from '../composables/useTvShows'
 import { useSettingsStore } from '@/stores/settings'
 
-// Define props and emits to avoid Vue warnings
-defineProps<{
-  search?: string
-}>()
-
-defineEmits<{
-  select: [value: any]
-}>()
 
 type TvShow = {
   key: string
@@ -480,11 +472,11 @@ const fetchLabelsFromCache = async () => {
         }
       })
       
-      console.log(`[BatchEdit] Loaded ${labelsFound} label sets from backend cache for library ${currentLibrary.value}`)
+      console.log(`[TvBatchEdit] Loaded ${labelsFound} label sets from backend cache for library ${currentLibrary.value}`)
       saveLabelCache()
     }
   } catch (e) {
-    console.warn('[BatchEdit] Failed to load labels from cache:', e)
+    console.warn('[TvBatchEdit] Failed to load labels from cache:', e)
   }
 }
 
@@ -513,7 +505,7 @@ const fetchLabels = async (list: TvShow[]) => {
           labelInFlight.delete(movieKey)
         })
         saveLabelCache()
-        console.log(`[BatchEdit] Loaded ${Object.keys(bulkData.labels || {}).length} label sets via bulk endpoint`)
+        console.log(`[TvBatchEdit] Loaded ${Object.keys(bulkData.labels || {}).length} label sets via bulk endpoint`)
         return
       }
     }
@@ -1472,17 +1464,6 @@ onMounted(async () => {
 
       <!-- Template & Preset Selection -->
       <div class="selection-row template-row">
-        <!-- Template selector hidden - only uniformlogo template exists -->
-        <div v-if="false" class="form-group">
-          <label>Template</label>
-          <select v-model="selectedTemplate" class="form-control">
-            <option value="">Select a template...</option>
-            <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">
-              {{ tpl.name }}
-            </option>
-          </select>
-        </div>
-
         <div class="form-group">
           <label>Preset</label>
           <select v-model="selectedPreset" class="form-control">
