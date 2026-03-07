@@ -233,45 +233,57 @@ def api_preview(req: PreviewRequest):
                     logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
                     logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
 
-                    # Pick poster based on filter
-                    poster = pick_poster(posters, poster_filter)
+                    # Only auto-pick a poster from TMDB when the frontend hasn't provided a
+                    # specific selection. If background_url is already a direct image URL
+                    # (e.g., a TMDb or Fanart URL chosen from the thumbnail strip), use it as-is.
+                    should_fetch_poster = (
+                        not background_url
+                        or "/library/metadata/" in background_url
+                        or "/api/movie/" in background_url
+                    )
                     poster_fallback_action_used = None
 
-                    # Poster fallback handling
-                    if not poster:
-                        fallback_action = render_options.get("fallbackPosterAction") or "continue"
-                        poster_fallback_action_used = fallback_action
-                        fallback_poster_template = render_options.get("fallbackPosterTemplate")
-                        fallback_poster_preset = render_options.get("fallbackPosterPreset")
-                        if fallback_action == "template" and fallback_poster_template:
-                            presets = load_presets()
-                            tpl_presets = presets.get(fallback_poster_template, {}).get("presets", [])
-                            fpreset = next((p for p in tpl_presets if p.get("id") == fallback_poster_preset), None) if fallback_poster_preset else None
-                            if fpreset:
-                                fp_opts = fpreset.get("options", {})
-                                # Merge fallback preset options, letting fallback override current options to mirror batch behavior
-                                render_options = {**render_options, **fp_opts}
-                                poster_filter = render_options.get("poster_filter", poster_filter)
-                                logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
-                                logo_preference = map_logo_mode_to_preference(logo_preference)
-                                logo_mode = render_options.get("logo_mode", "first")
-                                template_id = fallback_poster_template
-                                logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
-                                logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
-                            else:
-                                logger.warning("[PREVIEW] Fallback poster preset '%s' not found for template '%s'", fallback_poster_preset, fallback_poster_template)
-                            # Re-pick poster with updated filter from fallback preset (or same filter if no preset options)
-                            poster = pick_poster(posters, poster_filter)
-                        elif fallback_action == "skip":
-                            raise HTTPException(status_code=400, detail="Poster fallback is set to skip (no poster found).")
-                        else:  # continue
-                            poster = posters[0] if posters else None
+                    if should_fetch_poster:
+                        # Pick poster based on filter
+                        poster = pick_poster(posters, poster_filter)
 
-                    if poster:
-                        background_url = poster.get("url")
-                        logger.info("[PREVIEW] Picked TMDB poster with filter='%s': %s", poster_filter, background_url)
+                        # Poster fallback handling
+                        if not poster:
+                            fallback_action = render_options.get("fallbackPosterAction") or "continue"
+                            poster_fallback_action_used = fallback_action
+                            fallback_poster_template = render_options.get("fallbackPosterTemplate")
+                            fallback_poster_preset = render_options.get("fallbackPosterPreset")
+                            if fallback_action == "template" and fallback_poster_template:
+                                presets = load_presets()
+                                tpl_presets = presets.get(fallback_poster_template, {}).get("presets", [])
+                                fpreset = next((p for p in tpl_presets if p.get("id") == fallback_poster_preset), None) if fallback_poster_preset else None
+                                if fpreset:
+                                    fp_opts = fpreset.get("options", {})
+                                    # Merge fallback preset options, letting fallback override current options to mirror batch behavior
+                                    render_options = {**render_options, **fp_opts}
+                                    poster_filter = render_options.get("poster_filter", poster_filter)
+                                    logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
+                                    logo_preference = map_logo_mode_to_preference(logo_preference)
+                                    logo_mode = render_options.get("logo_mode", "first")
+                                    template_id = fallback_poster_template
+                                    logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
+                                    logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
+                                else:
+                                    logger.warning("[PREVIEW] Fallback poster preset '%s' not found for template '%s'", fallback_poster_preset, fallback_poster_template)
+                                # Re-pick poster with updated filter from fallback preset (or same filter if no preset options)
+                                poster = pick_poster(posters, poster_filter)
+                            elif fallback_action == "skip":
+                                raise HTTPException(status_code=400, detail="Poster fallback is set to skip (no poster found).")
+                            else:  # continue
+                                poster = posters[0] if posters else None
+
+                        if poster:
+                            background_url = poster.get("url")
+                            logger.info("[PREVIEW] Picked TMDB poster with filter='%s': %s", poster_filter, background_url)
+                        else:
+                            raise HTTPException(status_code=404, detail="No valid poster found (even after fallback).")
                     else:
-                        raise HTTPException(status_code=404, detail="No valid poster found (even after fallback).")
+                        logger.info("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
 
                     # Pick logo based on preference (only if logo_mode is not 'none')
                     logo_mode = render_options.get("logo_mode", "first")

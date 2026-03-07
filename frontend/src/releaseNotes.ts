@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.62',
+    date: '2026-03-06',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed poster background thumbnail click not updating the preview in the manual movie editor — backend was ignoring the selected poster URL and auto-picking from TMDB instead',
+          'Logo thumbnail clicks were already working correctly; this only affected poster selection',
+          'Sending to Plex was unaffected — only the live preview was showing the wrong poster',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.61',
     date: '2026-03-05',
     sections: [
