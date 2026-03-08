@@ -80,6 +80,21 @@ def api_plex_send(req: PlexSendRequest):
     options["movie_title"] = movie_details.get("title", "")
     options["movie_year"] = movie_details.get("year", "")
 
+    # Pass preset_id so the template renderer can look up linked overlay configs
+    if req.preset_id:
+        options["preset_id"] = req.preset_id
+
+    # Inject Plex media metadata for overlay badge rendering
+    try:
+        from ..config import get_plex_media_info
+        plex_media = get_plex_media_info(req.rating_key)
+        if plex_media:
+            existing_meta = options.get("metadata") or {}
+            options["metadata"] = {**existing_meta, **plex_media}
+            logger.info("[PLEX] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
+    except Exception as e:
+        logger.debug("[PLEX] Failed to inject media info: %s", e)
+
     # Render poster using template + preset options
     img = render_poster_image(
         req.template_id,

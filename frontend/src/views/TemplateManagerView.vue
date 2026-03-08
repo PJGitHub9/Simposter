@@ -392,7 +392,7 @@ onMounted(async () => {
   <div class="template-manager">
     <div class="header">
       <div>
-        <h2>Template Manager</h2>
+        <h2>&#x1F3A8; Template Manager</h2>
         <p class="subtitle">Manage presets and fallback rules for poster/logo selection.</p>
       </div>
       <span class="pill">{{ presetCount }} presets</span>

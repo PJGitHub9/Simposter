@@ -211,6 +211,7 @@ const options = ref({
   overlayFile: '',
   overlayOpacity: 40,
   overlayMode: 'screen',
+  overlayConfigIds: [] as string[],
   season_text: undefined as string | undefined
 })
 
@@ -236,6 +237,9 @@ const strokeEnabled = ref(false)
 const strokeWidth = ref(4)
 const strokeColor = ref('#000000')
 const availableFonts = ref<string[]>([])
+
+// Overlay configs
+const overlayConfigs = ref<{ id: string; name: string }[]>([])
 
 const render = useRenderService()
 const loading = render.loading
@@ -849,7 +853,8 @@ const optionsPayload = computed(() => {
     shadow_opacity: shadowOpacity.value / 100,
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
-    stroke_color: strokeColor.value
+    stroke_color: strokeColor.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
   }
 
   // Only include season_text if it's not empty (for seasons, not series)
@@ -922,7 +927,8 @@ const saveCurrentPreset = async () => {
     shadow_opacity: shadowOpacity.value / 100,
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
-    stroke_color: strokeColor.value
+    stroke_color: strokeColor.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
   }
 
   // When editing season options, we need to save to season_options_json
@@ -1008,7 +1014,8 @@ const saveAsNewPreset = async () => {
     shadow_opacity: shadowOpacity.value / 100,
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
-    stroke_color: strokeColor.value
+    stroke_color: strokeColor.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
   }
 
   const newId = newPresetId.value.trim()
@@ -1371,7 +1378,8 @@ const doPreview = async (skipBackgroundRender = false) => {
     shadow_opacity: shadowOpacity.value / 100,
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
-    stroke_color: strokeColor.value
+    stroke_color: strokeColor.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
   }
 
   // Only include season_text if it's not empty (for seasons, not series)
@@ -2081,12 +2089,35 @@ function prevSeason() {
   currentSeasonIndex.value = currentSeasonIndex.value === 0 ? selectedCount - 1 : currentSeasonIndex.value - 1
 }
 
+// Load overlay configs for the selector
+const loadOverlayConfigs = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/overlay-configs`)
+    if (res.ok) {
+      const data = await res.json()
+      overlayConfigs.value = (data.configs || []).map((c: any) => ({ id: c.id, name: c.name }))
+    }
+  } catch (e) {
+    console.warn('Failed to load overlay configs:', e)
+  }
+}
+
+const toggleOverlayConfig = (configId: string) => {
+  const idx = options.value.overlayConfigIds.indexOf(configId)
+  if (idx >= 0) {
+    options.value.overlayConfigIds.splice(idx, 1)
+  } else {
+    options.value.overlayConfigIds.push(configId)
+  }
+}
+
 // Load saved state on mount
 onMounted(async () => {
   await loadGlobalFallbackSettings()
   loadEditorState()
   loadSeasonsCache()
   fetchSeasons()
+  loadOverlayConfigs()
 })
 
 // Watch for state changes and save
@@ -2219,6 +2250,7 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
+  if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }
@@ -2565,7 +2597,8 @@ watch(tmdbId, () => {
         <div class="section sliders">
           <div class="section-title">Poster Settings</div>
 
-          <div class="slider">
+          <!-- Poster Zoom - Hidden -->
+          <div v-if="false" class="slider">
             <label>Poster Zoom %</label>
             <div class="slider-row">
               <input v-model.number="options.posterZoom" type="range" min="80" max="140" />
@@ -2660,8 +2693,8 @@ watch(tmdbId, () => {
             <div class="slider">
               <label>Max Height (px)</label>
               <div class="slider-row">
-                <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="600" />
-                <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="600" class="slider-num" />
+                <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
+                <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
               </div>
             </div>
 
@@ -2741,26 +2774,19 @@ watch(tmdbId, () => {
             <input v-model="options.borderColor" type="color" />
           </div>
 
-          <div class="slider">
-            <label>Overlay File</label>
-            <input v-model="options.overlayFile" type="text" placeholder="e.g. grain_overlay.png" />
-          </div>
-
-          <div class="slider">
-            <label>Overlay Opacity %</label>
-            <div class="slider-row">
-              <input v-model.number="options.overlayOpacity" type="range" min="0" max="100" />
-              <input v-model.number="options.overlayOpacity" type="number" min="0" max="100" class="slider-num" />
+          <!-- Overlay Configs -->
+          <div v-if="overlayConfigs.length > 0" class="slider">
+            <label>Overlay Configs</label>
+            <div class="overlay-config-checkboxes">
+              <label v-for="cfg in overlayConfigs" :key="cfg.id" class="checkbox-label overlay-config-item">
+                <input
+                  type="checkbox"
+                  :checked="options.overlayConfigIds.includes(cfg.id)"
+                  @change="toggleOverlayConfig(cfg.id)"
+                />
+                {{ cfg.name }}
+              </label>
             </div>
-          </div>
-
-          <div class="slider">
-            <label>Overlay Mode</label>
-            <select v-model="options.overlayMode">
-              <option value="screen">Screen</option>
-              <option value="multiply">Multiply</option>
-              <option value="alpha">Alpha Composite</option>
-            </select>
           </div>
         </div>
 

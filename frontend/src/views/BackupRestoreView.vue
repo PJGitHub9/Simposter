@@ -257,14 +257,7 @@ onMounted(() => {
   <div class="backup-view">
     <div class="page-header">
       <div>
-        <h1>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          Backup / Restore
-        </h1>
+        <h1>&#x1F4E6; Backup / Restore</h1>
         <p class="page-subtitle">Back up original Plex posters and restore them later</p>
       </div>
       <button class="btn-refresh" @click="fetchStatus" :disabled="loading || actionInProgress">

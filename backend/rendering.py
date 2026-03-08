@@ -353,6 +353,13 @@ def render_with_overlay_cache(
                     border_color = render_options.get("border_color", "#FFFFFF")
                     canvas = ImageOps.expand(canvas, border=px, fill=border_color)
 
+            # Apply overlay configurations (resolution badges, codec badges, etc.)
+            from .templates.universal import apply_overlay_config
+            metadata = render_options.get("metadata", {})
+            overlay_config_ids = render_options.get("overlay_config_ids")
+            if preset_id or overlay_config_ids:
+                canvas = apply_overlay_config(canvas, preset_id, template_id, metadata, overlay_config_ids)
+
             logger.info("[CACHE] Successfully rendered with cached overlay")
             return canvas.convert("RGB")
 

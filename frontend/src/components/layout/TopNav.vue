@@ -11,6 +11,15 @@ type GroupedContent = (
   | { libraryName: string; mediaType?: string; shows: Movie[] }
 )[]
 
+interface VersionInfo {
+  version: string
+  branch: string | null
+  display_version: string
+  update_available: boolean
+  latest_version: string | null
+  update_url: string | null
+}
+
 const props = defineProps<{
   search?: string
   showBack?: boolean
@@ -26,6 +35,7 @@ const emit = defineEmits<{
 
 const searchFocused = ref(false)
 const posterCache = ref<Record<string, string | null>>({})
+const versionInfo = ref<VersionInfo | null>(null)
 const apiBase = getApiBase()
 
 const normalizePoster = (url: string | null | undefined) => {
@@ -108,10 +118,36 @@ const handleBlur = () => {
   }, 200)
 }
 
+const fetchVersionInfo = async () => {
+  try {
+    const response = await fetch(`${apiBase}/api/version-info`)
+    if (response.ok) {
+      versionInfo.value = await response.json()
+    }
+  } catch (error) {
+    console.debug('Failed to fetch version info:', error)
+  }
+}
+
+const displayVersion = computed(() => {
+  if (versionInfo.value?.display_version) {
+    return versionInfo.value.display_version
+  }
+  return APP_VERSION
+})
+
+const versionTitle = computed(() => {
+  if (versionInfo.value?.update_available) {
+    return `Update available: ${versionInfo.value.latest_version}\nClick to view changelog`
+  }
+  return 'View changelog'
+})
+
 let posterCacheInterval: number | null = null
 
 onMounted(() => {
   loadPosterCache()
+  fetchVersionInfo()
   // Watch for changes to the poster cache in sessionStorage every 500ms
   posterCacheInterval = window.setInterval(() => {
     loadPosterCache()
@@ -138,7 +174,15 @@ onUnmounted(() => {
       </button>
       <div class="logo">
         <span class="logo-text">Simposter</span>
-        <button class="version-badge" @click="emit('showChangelog')" title="View changelog">{{ APP_VERSION }}</button>
+        <button
+          class="version-badge"
+          :class="{ 'update-available': versionInfo?.update_available }"
+          @click="emit('showChangelog')"
+          :title="versionTitle"
+        >
+          {{ displayVersion }}
+          <span v-if="versionInfo?.update_available" class="update-dot"></span>
+        </button>
       </div>
     </div>
     <div class="search-container">
@@ -253,12 +297,57 @@ onUnmounted(() => {
   transition: all 0.2s ease;
   font-family: inherit;
   font-weight: 500;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .version-badge:hover {
   background: rgba(61, 214, 183, 0.25);
   border-color: rgba(61, 214, 183, 0.6);
   color: #3dd6b7;
+}
+
+.version-badge.update-available {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+  animation: pulse-update 2s ease-in-out infinite;
+}
+
+.version-badge.update-available:hover {
+  background: rgba(251, 191, 36, 0.25);
+  border-color: rgba(251, 191, 36, 0.6);
+  color: #f59e0b;
+}
+
+.update-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fbbf24;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-update {
+  0%, 100% {
+    border-color: rgba(251, 191, 36, 0.4);
+  }
+  50% {
+    border-color: rgba(251, 191, 36, 0.8);
+  }
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.8);
+  }
 }
 
 .search-container {

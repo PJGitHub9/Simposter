@@ -587,12 +587,14 @@ const loadTemplatesAndPresets = async () => {
       console.log('Loaded templates:', templates.value)
     } else {
       console.error('Failed to load templates:', templatesRes.status)
-      // Fallback to hardcoded templates if API fails
+      // Fallback to uniformlogo template if API fails
       templates.value = [
-        { id: 'default', name: 'Default Poster' },
         { id: 'uniformlogo', name: 'Uniform Logo' }
       ]
     }
+
+    // Auto-select uniformlogo template (only template available)
+    selectedTemplate.value = 'uniformlogo'
 
     // Load presets
     const presetsRes = await fetch(`${apiBase}/api/presets`)
@@ -619,11 +621,11 @@ const loadTemplatesAndPresets = async () => {
     }
   } catch (err) {
     console.error('Error loading templates/presets:', err)
-    // Fallback to hardcoded templates
+    // Fallback to uniformlogo template
     templates.value = [
-      { id: 'default', name: 'Default Poster' },
       { id: 'uniformlogo', name: 'Uniform Logo' }
     ]
+    selectedTemplate.value = 'uniformlogo'
   }
 }
 
@@ -964,24 +966,14 @@ onMounted(async () => {
   <div class="batch-edit-view">
     <!-- Top Controls -->
     <div class="controls-panel">
-      <h2>Batch Edit</h2>
+      <h2>&#x270F;&#xFE0F; Batch Edit</h2>
 
       <!-- Template & Preset Selection -->
       <div class="selection-row template-row">
         <div class="form-group">
-          <label>Template</label>
-          <select v-model="selectedTemplate" class="form-control">
-            <option value="">Select a template...</option>
-            <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">
-              {{ tpl.name }}
-            </option>
-          </select>
-        </div>
-
-        <div class="form-group">
           <label>Preset</label>
-          <select v-model="selectedPreset" class="form-control" :class="{ 'disabled-select': !selectedTemplate }" :disabled="!selectedTemplate">
-            <option value="">{{ selectedTemplate ? 'Select a preset...' : 'Select a template first' }}</option>
+          <select v-model="selectedPreset" class="form-control">
+            <option value="">Select a preset...</option>
             <option
               v-for="preset in filteredPresets"
               :key="preset.id"

@@ -32,6 +32,21 @@ router = APIRouter()
 
 
 # ============================================================================
+# TEMPLATE MIGRATION - Backward compatibility
+# ============================================================================
+
+def _normalize_template_id(template_id: str) -> str:
+    """
+    Convert legacy 'default' and 'universal' template IDs to 'uniformlogo'.
+    Provides backward compatibility for existing webhook configurations.
+    """
+    if template_id in ('default', 'universal'):
+        logger.info(f"[WEBHOOK] Converting legacy template '{template_id}' to 'uniformlogo'")
+        return 'uniformlogo'
+    return template_id
+
+
+# ============================================================================
 # WEBHOOK COOLDOWN - Prevent duplicate poster generation
 # ============================================================================
 # When Sonarr imports multiple episodes for the same season, each episode
@@ -775,6 +790,9 @@ def radarr_webhook(
     Query params:
     - test: If true, performs a dry run with detailed logging but no poster generation
     """
+    # Normalize template_id for backward compatibility
+    template_id = _normalize_template_id(template_id)
+
     try:
         event_type = payload.get("eventType", "").lower()
         logger.info(f"[RADARR_WEBHOOK{'_TEST' if test else ''}] Received {event_type} event (template={template_id}, preset={preset_id})")
@@ -898,6 +916,9 @@ def sonarr_webhook(
     - include_seasons: If True, generate posters for all seasons. If False, only series poster.
     - test: If true, performs a dry run with detailed logging but no poster generation
     """
+    # Normalize template_id for backward compatibility
+    template_id = _normalize_template_id(template_id)
+
     try:
         event_type = payload.get("eventType", "").lower()
         logger.info(f"[SONARR_WEBHOOK{'_TEST' if test else ''}] Received {event_type} event (template={template_id}, preset={preset_id}, include_seasons={include_seasons})")
@@ -1048,6 +1069,9 @@ def tautulli_webhook(
     - include_seasons: For TV shows, generate posters for all seasons
     - test: If true, performs a dry run with detailed logging but no poster generation
     """
+    # Normalize template_id for backward compatibility
+    template_id = _normalize_template_id(template_id)
+
     try:
         event = payload.get("event", "").lower()
         media_type = payload.get("media_type", "").lower()

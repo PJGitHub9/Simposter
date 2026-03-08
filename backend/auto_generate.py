@@ -2,6 +2,8 @@
 Automatic poster generation for new content detected during library scans.
 """
 import logging
+import time
+import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
@@ -220,5 +222,154 @@ def process_new_content_for_library(
             )
         except Exception as notif_err:
             logger.debug(f"[AUTO_GEN] Failed to send Discord notification: {notif_err}")
+
+    return results
+
+
+def check_recently_added(lookback_minutes: int = 20) -> Dict[str, Any]:
+    """
+    Poll Plex for items added in the last `lookback_minutes` and auto-generate
+    posters for any that aren't already in the Simposter cache.
+
+    Runs efficiently — only fetches recently added items, not the full library.
+    Called by the scheduler every 15 minutes so new content from any source
+    (not just Radarr/Sonarr) gets posters without a manual scan.
+    """
+    from .config import settings as config_settings, plex_session, plex_headers
+    from . import cache
+    from .schemas import Movie
+
+    results: Dict[str, Any] = {
+        "libraries_checked": 0,
+        "new_movies": 0,
+        "new_tv": 0,
+        "errors": [],
+    }
+
+    since_timestamp = int(time.time()) - (lookback_minutes * 60)
+
+    try:
+        ui_settings = db.get_ui_settings()
+        if not ui_settings:
+            return results
+
+        plex_settings = ui_settings.get("plex", {})
+
+        # Collect all unique library IDs across movie and TV mappings
+        library_ids: set = set()
+        for mapping in plex_settings.get("libraryMappings", []):
+            if mapping.get("id"):
+                library_ids.add(str(mapping["id"]))
+        for mapping in plex_settings.get("tvShowLibraryMappings", []):
+            if mapping.get("id"):
+                library_ids.add(str(mapping["id"]))
+
+        if not library_ids:
+            logger.debug("[AUTO_GEN] No libraries configured, skipping recently added check")
+            return results
+
+        logger.debug("[AUTO_GEN] Checking for recently added items in %d libraries (since %ds ago)",
+                     len(library_ids), lookback_minutes * 60)
+
+        for library_id in library_ids:
+            results["libraries_checked"] += 1
+
+            # --- Movies (Plex type=1) ---
+            existing_movie_keys = {m.get("rating_key") for m in cache.get_cached_movies(library_id=library_id)}
+            new_movies: List[Dict[str, Any]] = []
+
+            try:
+                url = (
+                    f"{config_settings.PLEX_URL}/library/sections/{library_id}/all"
+                    f"?type=1&addedAt>={since_timestamp}&sort=addedAt:desc"
+                    f"&X-Plex-Container-Size=100"
+                )
+                r = plex_session.get(url, headers=plex_headers(), timeout=10)
+                if r.ok:
+                    root = ET.fromstring(r.text)
+                    for video in root.findall(".//Video"):
+                        key = video.get("ratingKey")
+                        if not key or key in existing_movie_keys:
+                            continue
+                        title = video.get("title", "Unknown")
+                        year = video.get("year")
+                        added_at = video.get("addedAt")
+                        # Add to cache so future scans don't re-process it
+                        cache.upsert_movie(Movie(
+                            key=key,
+                            title=title,
+                            year=int(year) if year else None,
+                            addedAt=int(added_at) if added_at else None,
+                            library_id=library_id,
+                        ))
+                        new_movies.append({
+                            "rating_key": key,
+                            "title": title,
+                            "year": int(year) if year else None,
+                        })
+                        logger.info("[AUTO_GEN] Recently added movie: %s (key=%s, library=%s)", title, key, library_id)
+            except Exception as e:
+                logger.warning("[AUTO_GEN] Error fetching recently added movies for library %s: %s", library_id, e)
+                results["errors"].append(str(e))
+
+            if new_movies:
+                results["new_movies"] += len(new_movies)
+                process_new_content_for_library(
+                    library_id=library_id,
+                    new_movies=new_movies,
+                    new_tv_shows=[],
+                    auto_send=True,
+                )
+
+            # --- TV Shows (Plex type=2) ---
+            existing_tv_keys = {s.get("rating_key") for s in cache.get_cached_tv_shows(library_id=library_id)}
+            new_tv: List[Dict[str, Any]] = []
+
+            try:
+                url_tv = (
+                    f"{config_settings.PLEX_URL}/library/sections/{library_id}/all"
+                    f"?type=2&addedAt>={since_timestamp}&sort=addedAt:desc"
+                    f"&X-Plex-Container-Size=100"
+                )
+                r_tv = plex_session.get(url_tv, headers=plex_headers(), timeout=10)
+                if r_tv.ok:
+                    root_tv = ET.fromstring(r_tv.text)
+                    for directory in root_tv.findall(".//Directory"):
+                        key = directory.get("ratingKey")
+                        if not key or key in existing_tv_keys:
+                            continue
+                        title = directory.get("title", "Unknown")
+                        year = directory.get("year")
+                        added_at = directory.get("addedAt")
+                        # Add to cache so future scans don't re-process it
+                        cache.upsert_tv_show({
+                            "key": key,
+                            "title": title,
+                            "year": int(year) if year else None,
+                            "addedAt": int(added_at) if added_at else None,
+                            "library_id": library_id,
+                        })
+                        new_tv.append({
+                            "rating_key": key,
+                            "title": title,
+                            "year": int(year) if year else None,
+                        })
+                        logger.info("[AUTO_GEN] Recently added TV show: %s (key=%s, library=%s)", title, key, library_id)
+            except Exception as e:
+                logger.warning("[AUTO_GEN] Error fetching recently added TV shows for library %s: %s", library_id, e)
+                results["errors"].append(str(e))
+
+            if new_tv:
+                results["new_tv"] += len(new_tv)
+                process_new_content_for_library(
+                    library_id=library_id,
+                    new_movies=[],
+                    new_tv_shows=new_tv,
+                    auto_send=True,
+                )
+
+    except Exception as e:
+        logger.error("[AUTO_GEN] Unexpected error in check_recently_added: %s", e, exc_info=True)
+        results["errors"].append(str(e))
 
     return results

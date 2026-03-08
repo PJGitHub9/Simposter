@@ -42,8 +42,8 @@ export function useRenderService() {
     presetId?: string,
     options?: PresetOptions
   ) => ({
-    template_id: templateId || 'default',
-    preset_id: presetId || 'default',
+    template_id: templateId || 'uniformlogo',
+    preset_id: presetId || 'uniformlogo',
     background_url: bgUrl,
     logo_url: logoUrl || null,
     movie_title: movie.title,
@@ -66,6 +66,8 @@ export function useRenderService() {
     const disableOverlayCache = disableCache ?? false
     const data = await post('preview', {
       ...payload,
+      // Include rating_key so backend can fetch media info for overlay badges
+      rating_key: movie.key,
       // Only disable when explicitly requested
       disableOverlayCache
     })

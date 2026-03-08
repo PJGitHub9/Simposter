@@ -46,3 +46,4 @@ config/ui_settings.json
 /config/*
 .*/docker-compose.yml
 test_webhooks.py
+CLAUDE.md

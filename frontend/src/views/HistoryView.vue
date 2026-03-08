@@ -356,7 +356,7 @@ onMounted(async () => {
 <template>
   <div class="history-view">
     <div class="header">
-      <h1>Poster Generation History</h1>
+      <h1>&#x1F4CB; Poster Generation History</h1>
       <p class="subtitle">View all poster generations (manual and automatic)</p>
     </div>
 

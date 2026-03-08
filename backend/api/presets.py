@@ -116,8 +116,8 @@ def api_save_preset(req: PresetSaveRequest):
     """Save a preset to the database and generate overlay cache."""
     from ..rendering import generate_overlay
     from ..config import settings
-    
-    template_id = req.template_id or "default"
+
+    template_id = req.template_id or "uniformlogo"
     preset_id = req.preset_id
     options = _apply_global_template_defaults(req.options)
     season_options = req.season_options or {}
@@ -153,8 +153,8 @@ def api_save_preset(req: PresetSaveRequest):
 def api_save_season_options(req: dict = Body(...)):
     """Save only the season_options for a preset without modifying the base options."""
     import json
-    
-    template_id = req.get('template_id') or "default"
+
+    template_id = req.get('template_id') or "uniformlogo"
     preset_id = req.get('preset_id')
     season_options = req.get('season_options', {})
     
@@ -187,7 +187,7 @@ def api_save_season_options(req: dict = Body(...)):
 @router.post("/presets/delete")
 def api_delete_preset(req: PresetDeleteRequest):
     """Delete a preset from the database."""
-    template_id = req.template_id or "default"
+    template_id = req.template_id or "uniformlogo"
     preset_id = req.preset_id
 
     try:
