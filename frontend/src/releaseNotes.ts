@@ -10,6 +10,21 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.63',
+    date: '2026-03-08',
+    sections: [
+      {
+        title: 'Auto-Generate: Recently Added Detection',
+        items: [
+          'Added check_recently_added() — efficiently polls Plex for items added in the last 20 minutes instead of scanning the full library',
+          'New content from any source (downloaders, import tools, manual adds) is detected and auto-processed without requiring a Radarr/Sonarr webhook',
+          'New items are cached immediately so subsequent scans never double-process the same item',
+          'Works with the existing "Auto-generate on scan" setting per library — enable it in Settings → Plex Libraries to activate',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.62',
     date: '2026-03-06',
     sections: [
