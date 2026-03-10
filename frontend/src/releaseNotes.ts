@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.64',
+    date: '2026-03-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed auto-generate on scan silently skipping new movies and TV shows — library ID type mismatch (int vs string) caused the settings lookup to always fail, so autoGenerateEnabled was never read',
+          'Auto-generate now correctly triggers for any new content detected during a library scan when enabled in Settings → Plex Libraries',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.63',
     date: '2026-03-08',
     sections: [
