@@ -6,6 +6,9 @@ from PIL import Image, ImageDraw, ImageOps, ImageEnhance, ImageFilter, ImageChop
 import random
 import numpy as np
 import os
+import io
+import time
+import hashlib
 from pathlib import Path
 from ..config import settings
 
@@ -842,6 +845,56 @@ def apply_overlay_config(
 
     # Log available metadata for overlay rendering
     meta = metadata or {}
+
+    # Pre-pass: resolve streaming platform and studio if any config needs them
+    tmdb_id = meta.get("tmdb_id")
+    if tmdb_id:
+        needs_streaming = "streaming_platform" not in meta
+        needs_studio = "studio" not in meta
+
+        for cid in config_ids:
+            if not needs_streaming and not needs_studio:
+                break
+            try:
+                cfg = db.get_overlay_config(cid)
+                if not cfg:
+                    continue
+                element_types = {e.get("type") for e in cfg.get("elements", [])}
+
+                if needs_streaming and "streaming_platform_badge" in element_types:
+                    try:
+                        from ..tmdb_client import get_watch_providers, normalize_provider_name
+                        region = cfg.get("streaming_region") or "US"
+                        media_type = meta.get("media_type", "movie")
+                        providers = get_watch_providers(int(tmdb_id), media_type, region)
+                        if providers:
+                            provider = providers[0]
+                            slug = normalize_provider_name(provider.get("provider_name", ""))
+                            meta["streaming_platform"] = slug
+                            # Store TMDb logo URL so "url" mode works without manual URL config
+                            logo_path = provider.get("logo_path", "")
+                            if logo_path:
+                                meta["streaming_platform_logo_url"] = f"https://image.tmdb.org/t/p/w200{logo_path}"
+                            logger.debug("[OVERLAY] Resolved streaming platform: %s (region=%s)", slug, region)
+                    except Exception as sp_err:
+                        logger.debug("[OVERLAY] Streaming platform pre-pass error: %s", sp_err)
+                    needs_streaming = False
+
+                if needs_studio and "studio_badge" in element_types:
+                    try:
+                        from ..tmdb_client import get_studio_name
+                        media_type = meta.get("media_type", "movie")
+                        slug = get_studio_name(int(tmdb_id), media_type)
+                        if slug:
+                            meta["studio"] = slug
+                            logger.debug("[OVERLAY] Resolved studio: %s", slug)
+                    except Exception as st_err:
+                        logger.debug("[OVERLAY] Studio pre-pass error: %s", st_err)
+                    needs_studio = False
+
+            except Exception as cfg_err:
+                logger.debug("[OVERLAY] Pre-pass config error for %s: %s", cid, cfg_err)
+
     logger.info("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
 
     # Convert to RGBA for overlay compositing
@@ -904,11 +957,13 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
 
     # Metadata badge types (new + legacy aliases)
     _BADGE_DEFAULTS = {
-        "video_badge":      ("video_resolution", 40),
-        "audio_badge":      ("audio_codec", 30),
-        "edition_badge":    ("edition", 30),
-        "resolution_badge": ("video_resolution", 40),  # legacy alias
-        "codec_badge":      ("audio_codec", 30),       # legacy alias
+        "video_badge":              ("video_resolution", 40),
+        "audio_badge":              ("audio_codec", 30),
+        "edition_badge":            ("edition", 30),
+        "streaming_platform_badge": ("streaming_platform", 30),
+        "studio_badge":             ("studio", 30),
+        "resolution_badge":         ("video_resolution", 40),  # legacy alias
+        "codec_badge":              ("audio_codec", 30),       # legacy alias
     }
 
     if element_type in _BADGE_DEFAULTS:
@@ -995,17 +1050,18 @@ def _apply_canvas_size_constraints(img: Image.Image, element: Dict[str, Any], W:
     return img
 
 
-def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, asset_id: str, value: str = "") -> bool:
-    """Try to render a badge using an asset image. Returns True if successful."""
+def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, asset_id: str, value: str = "") -> Optional[Image.Image]:
+    """Try to render a badge using an asset image. Returns updated canvas on success, None on failure.
+    Uses alpha_composite so semi-transparent badge edges composite correctly without darkening."""
     from .. import database as db
 
     asset = db.get_overlay_asset(asset_id)
     if not asset:
-        return False
+        return None
 
     asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
     if not asset_path.exists():
-        return False
+        return None
 
     overlay_img = Image.open(asset_path).convert("RGBA")
 
@@ -1022,8 +1078,82 @@ def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y:
 
     ow, oh = overlay_img.size
     paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor or "center")
-    canvas.paste(overlay_img, (paste_x, paste_y), overlay_img)
-    return True
+    badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    badge_layer.paste(overlay_img, (paste_x, paste_y))
+    return Image.alpha_composite(canvas, badge_layer)
+
+
+def _normalize_badge_url(url: str) -> str:
+    """Normalize known URL patterns to direct-download equivalents.
+    GitHub blob viewer URLs → raw.githubusercontent.com CDN URLs."""
+    import re
+    # github.com/.../blob/branch/path → raw.githubusercontent.com/.../branch/path
+    m = re.match(r'https?://github\.com/([^/]+/[^/]+)/blob/([^?#]+)', url)
+    if m:
+        return f'https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}'
+    # Strip stray ?raw / ?raw=true suffixes that users copy from GitHub
+    url = re.sub(r'\?raw(=true)?$', '', url, flags=re.IGNORECASE)
+    return url
+
+
+def _fetch_url_badge_image(url: str) -> Optional[Image.Image]:
+    """Download a badge image from a URL with 7-day disk cache. Returns None on any error."""
+    import requests as _requests
+    from ..config import logger
+
+    if not url or not url.startswith(("http://", "https://")):
+        return None
+
+    # Normalize before caching so blob URLs and raw URLs share the same cache entry
+    url = _normalize_badge_url(url)
+
+    cache_dir = Path(settings.CONFIG_DIR) / "url_badge_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    url_hash = hashlib.md5(url.encode()).hexdigest()
+    cache_path = cache_dir / f"{url_hash}.png"
+
+    # Return cached copy if fresh (7-day TTL)
+    if cache_path.exists():
+        age = time.time() - cache_path.stat().st_mtime
+        if age < 604800:
+            try:
+                return Image.open(cache_path).convert("RGBA")
+            except Exception:
+                cache_path.unlink(missing_ok=True)
+
+    # Download and cache
+    try:
+        resp = _requests.get(url, timeout=10, headers={"User-Agent": "Simposter/1.0"})
+        resp.raise_for_status()
+        img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+        img.save(str(cache_path), "PNG")
+        logger.debug("[OVERLAY] Cached URL badge: %s → %s", url[:80], cache_path.name)
+        return img
+    except Exception as e:
+        logger.warning("[OVERLAY] Failed to fetch URL badge '%s': %s", url[:80], e)
+        return None
+
+
+# Friendly display labels for auto-detected slugs (streaming_platform and studio fields).
+# Used as fallback when badge_texts is empty — so "apple-tv-plus" renders as "Apple TV+"
+# rather than "APPLE-TV-PLUS" even for configs that pre-date the default text pre-population.
+_SLUG_DISPLAY_LABELS: dict[str, str] = {
+    # Streaming platforms
+    "netflix": "Netflix", "prime-video": "Prime Video", "disney-plus": "Disney+",
+    "max": "Max", "hulu": "Hulu", "apple-tv-plus": "Apple TV+",
+    "paramount-plus": "Paramount+", "peacock": "Peacock", "tubi": "Tubi",
+    "crunchyroll": "Crunchyroll", "shudder": "Shudder", "mubi": "MUBI",
+    # Studios / networks
+    "a24": "A24", "amazon-mgm": "Amazon MGM", "apple-original": "Apple Original",
+    "disney": "Disney", "marvel-studios": "Marvel Studios", "pixar": "Pixar",
+    "warner-bros": "Warner Bros.", "universal": "Universal", "paramount": "Paramount",
+    "sony-pictures": "Sony Pictures", "20th-century": "20th Century", "lionsgate": "Lionsgate",
+    "blumhouse": "Blumhouse", "focus-features": "Focus Features", "dreamworks": "DreamWorks",
+    "amblin": "Amblin", "legendary": "Legendary", "bad-robot": "Bad Robot",
+    "hbo": "HBO", "fx": "FX", "amc": "AMC", "showtime": "Showtime", "starz": "Starz",
+    "cbs": "CBS", "nbc": "NBC", "abc": "ABC", "fox": "FOX",
+}
 
 
 def _apply_metadata_badge(
@@ -1034,7 +1164,7 @@ def _apply_metadata_badge(
     Supports per-value badge modes: none (skip), text (render text), image (render asset)."""
     from ..config import logger
 
-    metadata_field = element.get("metadata_field", default_field)
+    metadata_field = element.get("metadata_field") or default_field
     value = metadata.get(metadata_field, "")
     if not value:
         logger.info("[OVERLAY]   -> Metadata badge: no value for field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
@@ -1055,12 +1185,47 @@ def _apply_metadata_badge(
         asset_id = badge_assets.get(value.lower())
         if asset_id:
             try:
-                if _render_badge_asset(canvas, element, x, y, asset_id, value=value):
+                result = _render_badge_asset(canvas, element, x, y, asset_id, value=value)
+                if result is not None:
                     logger.info("[OVERLAY]   -> Rendered metadata badge as image (asset=%s)", asset_id)
-                    return canvas
+                    return result
             except Exception as e:
                 logger.warning(f"[OVERLAY] Failed to render metadata badge asset: {e}")
         logger.info("[OVERLAY]   -> Image mode but asset not found, falling through to text")
+
+    if mode == "url":
+        badge_urls = element.get("badge_urls") or {}
+        url = (badge_urls.get(value.lower()) or "").strip()
+        # Auto-fall back to TMDb-derived logo URL stored in metadata during pre-pass
+        if not url:
+            auto_key = f"{metadata_field}_logo_url"
+            url = (metadata.get(auto_key) or "").strip()
+        if url:
+            img = _fetch_url_badge_image(url)
+            if img is not None:
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
+                val_key = value.lower()
+                badge_scales = element.get("badge_scales") or {}
+                badge_anchors = element.get("badge_anchors") or {}
+                scale_multiplier = badge_scales.get(val_key) if val_key in badge_scales else element.get("scale")
+                anchor = badge_anchors.get(val_key) if val_key in badge_anchors else element.get("anchor", "center")
+                if scale_multiplier and scale_multiplier > 0:
+                    ow, oh = img.size
+                    img = img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
+                ow, oh = img.size
+                paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor or "center")
+                # alpha_composite (not paste) is required: paste() linearly blends the alpha
+                # channel even with an RGBA mask, causing semi-transparent edge pixels to set
+                # canvas alpha < 255, which then renders as black on convert("RGB").
+                # alpha_composite uses the "over" operation which always keeps dst alpha = 255
+                # when the destination is fully opaque.
+                badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+                badge_layer.paste(img, (paste_x, paste_y))
+                canvas = Image.alpha_composite(canvas, badge_layer)
+                logger.info("[OVERLAY]   -> Rendered metadata badge from URL: %s", url[:80])
+                return canvas
+        logger.info("[OVERLAY]   -> URL mode: no URL or fetch failed for '%s', falling through to text", value)
 
     # Text rendering using element font settings
     font_family = element.get("font_family", "arial")
@@ -1073,9 +1238,9 @@ def _apply_metadata_badge(
     else:
         rgb = (255, 255, 255)
 
-    # Use custom display text if set, otherwise uppercase the raw value
+    # Use custom display text if set, fall back to friendly slug label, then uppercase raw value
     badge_texts = element.get("badge_texts") or {}
-    display_text = badge_texts.get(value.lower(), value.upper())
+    display_text = badge_texts.get(value.lower()) or _SLUG_DISPLAY_LABELS.get(value.lower()) or value.upper()
 
     logger.info("[OVERLAY]   -> Rendering metadata badge text '%s' (font=%s size=%s color=%s) at (%d, %d)",
                 display_text, font_family, font_size, font_color_hex, x, y)
@@ -1119,8 +1284,9 @@ def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y:
     anchor = element.get("anchor", "center")
     paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor)
 
-    canvas.paste(overlay_img, (paste_x, paste_y), overlay_img)
-    return canvas
+    badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    badge_layer.paste(overlay_img, (paste_x, paste_y))
+    return Image.alpha_composite(canvas, badge_layer)
 
 
 def _apply_text_label(canvas: Image.Image, element: Dict[str, Any], x: int, y: int) -> Image.Image:

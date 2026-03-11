@@ -6,8 +6,9 @@ import uuid
 from pathlib import Path
 from typing import List
 
+import io
 from fastapi import APIRouter, Form, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from ..config import settings, logger, BASE_DIR
 from .. import database as db
@@ -64,7 +65,7 @@ def api_save_overlay_config(req: OverlayConfigSaveRequest):
     """Save or update an overlay configuration."""
     try:
         elements = [elem.model_dump() for elem in req.elements]
-        db.save_overlay_config(req.id, req.name, elements)
+        db.save_overlay_config(req.id, req.name, elements, streaming_region=req.streaming_region)
         return {"status": "ok", "id": req.id}
     except Exception as e:
         logger.error(f"[OVERLAY] Error saving overlay config {req.id}: {e}")
@@ -322,3 +323,32 @@ def api_link_preset_to_overlay(req: PresetOverlayLinkRequest):
     except Exception as e:
         logger.error(f"[OVERLAY] Error linking preset to overlay config: {e}")
         raise HTTPException(500, "Failed to link preset to overlay configuration")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Image Proxy (for CORS-free canvas preview of URL badge images)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/proxy-image")
+def api_proxy_image(url: str):
+    """Fetch an external image URL server-side and return it, bypassing browser CORS restrictions.
+    Reuses the URL badge disk cache (7-day TTL) so repeated previews are instant."""
+    if not url or not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+    try:
+        from ..templates.universal import _fetch_url_badge_image
+        img = _fetch_url_badge_image(url)
+        if img is None:
+            raise HTTPException(status_code=502, detail="Failed to fetch image from URL")
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[OVERLAY] Proxy image error for {url[:80]}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to proxy image")

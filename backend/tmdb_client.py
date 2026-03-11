@@ -321,3 +321,194 @@ def get_tv_season_images(tmdb_id: int, season_number: int, original_language: Op
         "backdrops": [],
         "logos": [],
     }
+
+
+# ---------------------------------------------------------------------------
+# Watch Providers (streaming platform detection)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_PROVIDER_SLUG_MAP = {
+    "Netflix": "netflix",
+    "Amazon Prime Video": "prime-video",
+    "Apple TV+": "apple-tv-plus",
+    "Apple TV": "apple-tv-plus",
+    "Disney Plus": "disney-plus",
+    "Disney+": "disney-plus",
+    "Max": "max",
+    "HBO Max": "max",
+    "Hulu": "hulu",
+    "Paramount Plus": "paramount-plus",
+    "Paramount+": "paramount-plus",
+    "Peacock": "peacock",
+    "Peacock Premium": "peacock",
+    "Tubi TV": "tubi",
+    "Crunchyroll": "crunchyroll",
+    "Shudder": "shudder",
+    "MUBI": "mubi",
+    "BritBox": "britbox",
+    "Acorn TV": "acorn-tv",
+    "AMC+": "amc-plus",
+    "AMC Plus": "amc-plus",
+    "Starz": "starz",
+    "Showtime": "showtime",
+    "Epix": "epix",
+}
+
+
+def normalize_provider_name(name: str) -> str:
+    """Normalize a TMDb provider name to a lowercase slug."""
+    if name in _PROVIDER_SLUG_MAP:
+        return _PROVIDER_SLUG_MAP[name]
+    return _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+_STUDIO_SLUG_MAP = {
+    # Major film studios
+    "A24": "a24",
+    "Netflix": "netflix",
+    "Netflix Studios": "netflix",
+    "Netflix Animation": "netflix",
+    "Netflix Productions": "netflix",
+    "Amazon MGM Studios": "amazon-mgm",
+    "Amazon Studios": "amazon-mgm",
+    "MGM": "amazon-mgm",
+    "Apple Original Films": "apple-original",
+    "Walt Disney Pictures": "disney",
+    "Walt Disney Animation Studios": "disney",
+    "Disney": "disney",
+    "Marvel Studios": "marvel-studios",
+    "Pixar": "pixar",
+    "Pixar Animation Studios": "pixar",
+    "Warner Bros.": "warner-bros",
+    "Warner Bros. Pictures": "warner-bros",
+    "Warner Bros. Television": "warner-bros",
+    "Universal Pictures": "universal",
+    "Universal Television": "universal",
+    "Paramount Pictures": "paramount",
+    "Paramount Network Television": "paramount",
+    "Sony Pictures": "sony-pictures",
+    "Columbia Pictures": "sony-pictures",
+    "TriStar Pictures": "sony-pictures",
+    "20th Century Studios": "20th-century",
+    "20th Century Fox": "20th-century",
+    "20th Century Fox Television": "20th-century",
+    "Lionsgate": "lionsgate",
+    "Lionsgate Films": "lionsgate",
+    "Lionsgate Television": "lionsgate",
+    "Blumhouse Productions": "blumhouse",
+    "Blumhouse Television": "blumhouse",
+    "Focus Features": "focus-features",
+    "DreamWorks Animation": "dreamworks",
+    "DreamWorks Pictures": "dreamworks",
+    "Amblin Entertainment": "amblin",
+    "Legendary Entertainment": "legendary",
+    "Bad Robot": "bad-robot",
+    # TV Networks
+    "HBO": "hbo",
+    "HBO Max": "hbo",
+    "FX": "fx",
+    "FX Networks": "fx",
+    "FX Productions": "fx",
+    "AMC": "amc",
+    "AMC Networks": "amc",
+    "Showtime": "showtime",
+    "Starz": "starz",
+    "CBS": "cbs",
+    "NBC": "nbc",
+    "ABC": "abc",
+    "FOX": "fox",
+    "Fox Broadcasting Company": "fox",
+    "Hulu": "hulu",
+    "Peacock": "peacock",
+    "Apple TV+": "apple-tv-plus",
+    "Disney+": "disney-plus",
+}
+
+_STUDIO_CACHE_KEY = "__studio__"
+
+
+def normalize_studio_name(name: str) -> str:
+    """Normalize a TMDb studio/network name to a lowercase slug."""
+    if name in _STUDIO_SLUG_MAP:
+        return _STUDIO_SLUG_MAP[name]
+    return _re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def get_studio_name(tmdb_id: int, media_type: str = "movie") -> str:
+    """
+    Return the primary studio slug for a movie (production_companies[0]) or
+    TV show (networks[0]). Uses the streaming_provider_cache table with a
+    pseudo-region '__studio__' so no extra DB table is needed.
+
+    Returns "" on any error so badge rendering is never blocked.
+    """
+    # 1. Check DB cache (reuses streaming_provider_cache, region='__studio__')
+    try:
+        cached = db.get_cached_providers(tmdb_id, media_type, _STUDIO_CACHE_KEY)
+        if cached is not None:
+            if cached:
+                return normalize_studio_name(cached[0].get("provider_name", ""))
+            return ""
+    except Exception:
+        pass
+
+    # 2. Fetch from TMDb
+    studio_name = ""
+    try:
+        data = _tmdb_get(f"/{media_type}/{tmdb_id}", {})
+        if media_type == "tv":
+            companies = data.get("networks") or data.get("production_companies") or []
+        else:
+            companies = data.get("production_companies") or []
+        if companies:
+            studio_name = companies[0].get("name", "")
+        logger.debug("[TMDB] Studio for %s/%s: '%s'", media_type, tmdb_id, studio_name)
+    except Exception as e:
+        logger.debug("[TMDB] Studio fetch failed for %s/%s: %s", media_type, tmdb_id, e)
+
+    # 3. Cache result
+    entry = [{"provider_name": studio_name}] if studio_name else []
+    try:
+        db.upsert_cached_providers(tmdb_id, media_type, _STUDIO_CACHE_KEY, entry)
+    except Exception:
+        pass
+
+    return normalize_studio_name(studio_name) if studio_name else ""
+
+
+def get_watch_providers(tmdb_id: int, media_type: str = "movie", region: str = "US") -> list:
+    """
+    Return the flatrate (subscription) streaming providers for an item, sorted by display_priority.
+
+    Checks the database cache first (7-day TTL). Falls back to the TMDb API and
+    stores the result. Returns [] on any error so badge rendering is never blocked.
+    """
+    # 1. Check DB cache
+    try:
+        cached = db.get_cached_providers(tmdb_id, media_type, region)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
+
+    # 2. Fetch from TMDb
+    try:
+        data = _tmdb_get(f"/{media_type}/{tmdb_id}/watch/providers", {})
+        region_data = data.get("results", {}).get(region, {})
+        flatrate = region_data.get("flatrate", [])
+        providers = sorted(flatrate, key=lambda p: p.get("display_priority", 999))
+        logger.debug("[TMDB] Watch providers for %s/%s (%s): %d provider(s)",
+                     media_type, tmdb_id, region, len(providers))
+    except Exception as e:
+        logger.debug("[TMDB] Watch provider fetch failed for %s/%s: %s", media_type, tmdb_id, e)
+        providers = []
+
+    # 3. Store in DB cache regardless (even empty list)
+    try:
+        db.upsert_cached_providers(tmdb_id, media_type, region, providers)
+    except Exception:
+        pass
+
+    return providers

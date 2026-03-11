@@ -881,7 +881,24 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     logger.info(f"[SCAN] Auto-generation complete for library {lib_id}: {results}")
                 except Exception as e:
                     logger.error(f"[SCAN] Auto-generation failed for library {lib_id}: {e}")
-        
+
+            # Pre-populate streaming provider cache for new movies (best-effort)
+            if new_movies:
+                try:
+                    from ..tmdb_client import get_watch_providers
+                    from .. import database as _db
+                    overlay_region = "US"
+                    for cfg in _db.get_all_overlay_configs():
+                        if any(e.get("type") == "streaming_platform_badge" for e in cfg.get("elements", [])):
+                            overlay_region = cfg.get("streaming_region") or "US"
+                            break
+                    for movie in new_movies:
+                        tmdb_id = movie.get("tmdb_id")
+                        if tmdb_id:
+                            get_watch_providers(int(tmdb_id), "movie", overlay_region)
+                except Exception:
+                    pass  # Never block scan for this
+
         # Process TV shows per library
         tv_cache_by_lib = {}
         for show in tv_shows:
@@ -946,7 +963,24 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     logger.info(f"[SCAN] Auto-generation complete for library {lib_id}: {results}")
                 except Exception as e:
                     logger.error(f"[SCAN] Auto-generation failed for library {lib_id}: {e}")
-        
+
+            # Pre-populate streaming provider cache for new TV shows (best-effort)
+            if new_shows:
+                try:
+                    from ..tmdb_client import get_watch_providers
+                    from .. import database as _db
+                    overlay_region = "US"
+                    for cfg in _db.get_all_overlay_configs():
+                        if any(e.get("type") == "streaming_platform_badge" for e in cfg.get("elements", [])):
+                            overlay_region = cfg.get("streaming_region") or "US"
+                            break
+                    for show in new_shows:
+                        tmdb_id = show.get("tmdb_id")
+                        if tmdb_id:
+                            get_watch_providers(int(tmdb_id), "tv", overlay_region)
+                except Exception:
+                    pass  # Never block scan for this
+
         # Process collections per library
         coll_cache_by_lib = {}
         for coll in collections_list:

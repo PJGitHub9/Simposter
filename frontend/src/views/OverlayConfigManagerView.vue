@@ -28,6 +28,7 @@ interface OverlayElement {
   badge_modes?: Record<string, string>
   badge_assets?: Record<string, string>
   badge_texts?: Record<string, string>
+  badge_urls?: Record<string, string>
   badge_scales?: Record<string, number>
   badge_anchors?: Record<string, string>
   text_align?: string
@@ -37,6 +38,7 @@ interface OverlayConfig {
   id: string
   name: string
   elements: OverlayElement[]
+  streaming_region?: string
   created_at?: string
   updated_at?: string
 }
@@ -65,6 +67,50 @@ const AUDIO_CHANNELS_VALUES = ['2', '6', '8']
 const AUDIO_LANGUAGE_VALUES = ['en', 'es', 'fr', 'de', 'ja', 'ko', 'zh', 'it', 'pt', 'ru']
 const EDITION_VALUES = ['theatrical', 'extended', "director's cut", 'unrated', 'imax']
 
+const STREAMING_PLATFORM_VALUES = [
+  'netflix', 'prime-video', 'disney-plus', 'max', 'hulu',
+  'apple-tv-plus', 'paramount-plus', 'peacock', 'tubi',
+  'crunchyroll', 'shudder', 'mubi',
+]
+const STREAMING_PLATFORM_LABELS: Record<string, string> = {
+  'netflix': 'Netflix', 'prime-video': 'Prime Video', 'disney-plus': 'Disney+',
+  'max': 'Max', 'hulu': 'Hulu', 'apple-tv-plus': 'Apple TV+',
+  'paramount-plus': 'Paramount+', 'peacock': 'Peacock', 'tubi': 'Tubi',
+  'crunchyroll': 'Crunchyroll', 'shudder': 'Shudder', 'mubi': 'MUBI',
+}
+const STREAMING_REGIONS = [
+  { code: 'US', label: 'United States' }, { code: 'GB', label: 'United Kingdom' },
+  { code: 'CA', label: 'Canada' }, { code: 'AU', label: 'Australia' },
+  { code: 'DE', label: 'Germany' }, { code: 'FR', label: 'France' },
+  { code: 'ES', label: 'Spain' }, { code: 'IT', label: 'Italy' },
+  { code: 'JP', label: 'Japan' }, { code: 'KR', label: 'South Korea' },
+  { code: 'BR', label: 'Brazil' }, { code: 'MX', label: 'Mexico' },
+]
+
+const STUDIO_VALUES = [
+  // Film studios
+  'a24', 'netflix', 'amazon-mgm', 'apple-original',
+  'disney', 'marvel-studios', 'pixar',
+  'warner-bros', 'universal', 'paramount',
+  'sony-pictures', '20th-century', 'lionsgate',
+  'blumhouse', 'focus-features', 'dreamworks',
+  'amblin', 'legendary', 'bad-robot',
+  // TV networks
+  'hbo', 'fx', 'amc', 'showtime', 'starz',
+  'cbs', 'nbc', 'abc', 'fox',
+]
+const STUDIO_LABELS: Record<string, string> = {
+  'a24': 'A24', 'netflix': 'Netflix', 'amazon-mgm': 'Amazon MGM',
+  'apple-original': 'Apple Original Films', 'disney': 'Disney',
+  'marvel-studios': 'Marvel Studios', 'pixar': 'Pixar',
+  'warner-bros': 'Warner Bros.', 'universal': 'Universal', 'paramount': 'Paramount',
+  'sony-pictures': 'Sony Pictures', '20th-century': '20th Century', 'lionsgate': 'Lionsgate',
+  'blumhouse': 'Blumhouse', 'focus-features': 'Focus Features', 'dreamworks': 'DreamWorks',
+  'amblin': 'Amblin', 'legendary': 'Legendary', 'bad-robot': 'Bad Robot',
+  'hbo': 'HBO', 'fx': 'FX', 'amc': 'AMC', 'showtime': 'Showtime', 'starz': 'Starz',
+  'cbs': 'CBS', 'nbc': 'NBC', 'abc': 'ABC', 'fox': 'FOX',
+}
+
 const METADATA_FIELD_VALUES: Record<string, string[]> = {
   video_resolution: RESOLUTION_VALUES,
   video_codec: VIDEO_CODEC_VALUES,
@@ -72,6 +118,8 @@ const METADATA_FIELD_VALUES: Record<string, string[]> = {
   audio_channels: AUDIO_CHANNELS_VALUES,
   audio_language: AUDIO_LANGUAGE_VALUES,
   edition: EDITION_VALUES,
+  streaming_platform: STREAMING_PLATFORM_VALUES,
+  studio: STUDIO_VALUES,
 }
 
 const getValuesForField = (field: string): string[] => {
@@ -94,6 +142,7 @@ const previewCanvas = ref<HTMLCanvasElement | null>(null)
 const PREVIEW_W = 300
 const PREVIEW_H = 450
 const assetImageCache = ref<Record<string, HTMLImageElement>>({})
+const urlImageCache = ref<Record<string, HTMLImageElement>>({})
 
 // Drag state
 const dragEnabled = ref(false)
@@ -121,6 +170,8 @@ const previewCodec = ref('atmos')
 const previewAudioChannels = ref('6')
 const previewAudioLanguage = ref('en')
 const previewEdition = ref('theatrical')
+const previewStreamingPlatform = ref('netflix')
+const previewStudio = ref('a24')
 
 const previewMetadataValues: Record<string, Ref<string>> = {
   video_resolution: previewResolution,
@@ -129,6 +180,8 @@ const previewMetadataValues: Record<string, Ref<string>> = {
   audio_channels: previewAudioChannels,
   audio_language: previewAudioLanguage,
   edition: previewEdition,
+  streaming_platform: previewStreamingPlatform,
+  studio: previewStudio,
 }
 
 // Asset upload state
@@ -195,7 +248,8 @@ const createNewConfig = () => {
   selectedConfig.value = {
     id: `overlay-${Date.now()}`,
     name: 'New Overlay Config',
-    elements: []
+    elements: [],
+    streaming_region: 'US',
   }
   showEditor.value = true
 }
@@ -329,6 +383,7 @@ const addElement = (type: string) => {
     defaults.badge_modes = {}
     defaults.badge_assets = {}
     defaults.badge_texts = {}
+    defaults.badge_urls = {}
     defaults.font_size = 40
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
@@ -337,6 +392,7 @@ const addElement = (type: string) => {
     defaults.badge_modes = {}
     defaults.badge_assets = {}
     defaults.badge_texts = {}
+    defaults.badge_urls = {}
     defaults.font_size = 30
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
@@ -345,6 +401,25 @@ const addElement = (type: string) => {
     defaults.badge_modes = {}
     defaults.badge_assets = {}
     defaults.badge_texts = {}
+    defaults.badge_urls = {}
+    defaults.font_size = 30
+    defaults.font_color = '#FFFFFF'
+    defaults.font_family = 'Arial'
+  } else if (type === 'streaming_platform_badge') {
+    defaults.metadata_field = 'streaming_platform'
+    defaults.badge_modes = {}
+    defaults.badge_assets = {}
+    defaults.badge_texts = Object.fromEntries(STREAMING_PLATFORM_VALUES.map(v => [v, STREAMING_PLATFORM_LABELS[v] || v]))
+    defaults.badge_urls = {}
+    defaults.font_size = 30
+    defaults.font_color = '#FFFFFF'
+    defaults.font_family = 'Arial'
+  } else if (type === 'studio_badge') {
+    defaults.metadata_field = 'studio'
+    defaults.badge_modes = {}
+    defaults.badge_assets = {}
+    defaults.badge_texts = Object.fromEntries(STUDIO_VALUES.map(v => [v, STUDIO_LABELS[v] || v]))
+    defaults.badge_urls = {}
     defaults.font_size = 30
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
@@ -373,6 +448,8 @@ const elementTypeLabel = (type: string): string => {
     video_badge: 'Video Badge',
     audio_badge: 'Audio Badge',
     edition_badge: 'Edition Badge',
+    streaming_platform_badge: 'Streaming Badge',
+    studio_badge: 'Studio Badge',
     custom_image: 'Custom Image',
     text_label: 'Text Label',
     // Legacy types
@@ -388,6 +465,8 @@ const elementTypeColor = (type: string): string => {
     video_badge: '#60a5fa',
     audio_badge: '#a78bfa',
     edition_badge: '#f59e0b',
+    streaming_platform_badge: '#10b981',
+    studio_badge: '#f97316',
     custom_image: '#34d399',
     text_label: '#fbbf24',
     // Legacy types
@@ -409,8 +488,23 @@ const setBadgeMode = (element: OverlayElement, value: string, mode: string) => {
   // Clear image-specific overrides when switching away from image
   if (mode !== 'image') {
     if (element.badge_assets?.[value]) delete element.badge_assets[value]
-    if (element.badge_scales?.[value] != null) delete element.badge_scales[value]
-    if (element.badge_anchors?.[value]) delete element.badge_anchors[value]
+    if (mode !== 'url') {
+      if (element.badge_scales?.[value] != null) delete element.badge_scales[value]
+      if (element.badge_anchors?.[value]) delete element.badge_anchors[value]
+    }
+  }
+}
+
+const getBadgeUrl = (element: OverlayElement, value: string): string => {
+  return element.badge_urls?.[value] ?? ''
+}
+
+const setBadgeUrl = (element: OverlayElement, value: string, url: string) => {
+  if (!element.badge_urls) element.badge_urls = {}
+  if (url) {
+    element.badge_urls[value] = url
+  } else {
+    delete element.badge_urls[value]
   }
 }
 
@@ -465,6 +559,10 @@ const hasBadgeTextMode = (element: OverlayElement): boolean => {
   // Determine all possible values for this element's field
   const field = element.type === 'edition_badge'
     ? 'edition'
+    : element.type === 'streaming_platform_badge'
+    ? 'streaming_platform'
+    : element.type === 'studio_badge'
+    ? 'studio'
     : (element.metadata_field || 'video_resolution')
   const allValues = getValuesForField(field)
   // Return true if any value's effective mode is "text" (unset defaults to "text")
@@ -630,6 +728,38 @@ const loadAssetImage = (assetId: string): Promise<HTMLImageElement> => {
   })
 }
 
+const loadUrlImage = (url: string): Promise<HTMLImageElement> => {
+  const proxyUrl = `${apiBase}/api/proxy-image?url=${encodeURIComponent(url)}`
+  return new Promise((resolve, reject) => {
+    if (urlImageCache.value[proxyUrl]) {
+      resolve(urlImageCache.value[proxyUrl])
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      urlImageCache.value[proxyUrl] = img
+      resolve(img)
+    }
+    img.onerror = reject
+    img.src = proxyUrl
+  })
+}
+
+// Normalize known URL patterns: GitHub blob viewer → raw CDN, strip ?raw suffix
+const normalizeBadgeUrl = (url: string): string => {
+  if (!url) return url
+  const ghBlob = url.match(/^https?:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/([^?#]+)/)
+  if (ghBlob) return `https://raw.githubusercontent.com/${ghBlob[1]}/${ghBlob[2]}`
+  return url.replace(/\?raw(=true)?$/i, '')
+}
+
+const prefetchBadgeUrl = (url: string) => {
+  if (!url || !url.startsWith('http')) return
+  loadUrlImage(url)
+    .then(() => nextTick(renderPreview))
+    .catch(() => {})
+}
+
 const renderPreview = async () => {
   const canvas = previewCanvas.value
   if (!canvas || !selectedConfig.value) return
@@ -718,11 +848,13 @@ const renderPreviewElement = async (
 
   // Badge type rendering config
   const badgeConfig: Record<string, { defaultField: string; defaultFontSize: number; accent: string; accentRgba: string }> = {
-    video_badge:      { defaultField: 'video_resolution', defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
-    resolution_badge: { defaultField: 'video_resolution', defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
-    audio_badge:      { defaultField: 'audio_codec',      defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
-    codec_badge:      { defaultField: 'audio_codec',      defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
-    edition_badge:    { defaultField: 'edition',           defaultFontSize: 30, accent: '#f59e0b', accentRgba: 'rgba(245, 158, 11, 0.2)' },
+    video_badge:               { defaultField: 'video_resolution',  defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
+    resolution_badge:          { defaultField: 'video_resolution',  defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
+    audio_badge:               { defaultField: 'audio_codec',       defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
+    codec_badge:               { defaultField: 'audio_codec',       defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
+    edition_badge:             { defaultField: 'edition',            defaultFontSize: 30, accent: '#f59e0b', accentRgba: 'rgba(245, 158, 11, 0.2)' },
+    streaming_platform_badge:  { defaultField: 'streaming_platform', defaultFontSize: 30, accent: '#10b981', accentRgba: 'rgba(16, 185, 129, 0.2)' },
+    studio_badge:              { defaultField: 'studio',             defaultFontSize: 30, accent: '#f97316', accentRgba: 'rgba(249, 115, 22, 0.2)' },
   }
 
   const cfg = badgeConfig[el.type]
@@ -756,6 +888,25 @@ const renderPreviewElement = async (
           return
         } catch { /* fall through to text */ }
       }
+    }
+    if (mode === 'url') {
+      const url = el.badge_urls?.[value]
+      if (url) {
+        try {
+          const img = await loadUrlImage(url)
+          const effectiveEl = {
+            ...el,
+            scale: el.badge_scales?.[value] ?? el.scale,
+            anchor: el.badge_anchors?.[value] ?? el.anchor,
+          }
+          drawAssetOnCanvas(ctx, img, effectiveEl, x, y, scale, idx, isHovered, cfg.accent)
+          return
+        } catch { /* fall through */ }
+      }
+      // No URL set — show a dim placeholder so the element is still visible
+      const fontSize = Math.max(4, Math.round((el.font_size || cfg.defaultFontSize) * scale))
+      drawBadge(ctx, x, y, url ? 'URL?' : 'URL', fontSize, cfg.accent, cfg.accentRgba, idx, isHovered, el.text_align || 'center')
+      return
     }
     // Text mode (or image fallback)
     const fontSize = Math.max(4, Math.round((el.font_size || cfg.defaultFontSize) * scale))
@@ -938,6 +1089,15 @@ watch(previewCodec, () => { nextTick(renderPreview) })
 watch(previewAudioChannels, () => { nextTick(renderPreview) })
 watch(previewAudioLanguage, () => { nextTick(renderPreview) })
 watch(previewEdition, () => { nextTick(renderPreview) })
+watch(previewStreamingPlatform, () => { nextTick(renderPreview) })
+watch(previewStudio, () => { nextTick(renderPreview) })
+
+const hasStreamingBadge = computed(() =>
+  selectedConfig.value?.elements.some(e => e.type === 'streaming_platform_badge') ?? false
+)
+const hasStudioBadge = computed(() =>
+  selectedConfig.value?.elements.some(e => e.type === 'studio_badge') ?? false
+)
 
 watch(showEditor, (val) => {
   if (val) {
@@ -1054,7 +1214,15 @@ onMounted(() => {
         <div class="editor-header">
           <div>
             <h2>Edit Overlay Configuration</h2>
-            <input v-model="selectedConfig.name" class="config-name-input" placeholder="Config name..." />
+            <div class="editor-name-row">
+              <input v-model="selectedConfig.name" class="config-name-input" placeholder="Config name..." />
+              <div v-if="hasStreamingBadge" class="region-selector">
+                <span class="region-label">Region</span>
+                <select v-model="selectedConfig.streaming_region" class="region-select">
+                  <option v-for="r in STREAMING_REGIONS" :key="r.code" :value="r.code">{{ r.label }}</option>
+                </select>
+              </div>
+            </div>
           </div>
           <button class="btn-close" @click="showEditor = false">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1073,6 +1241,8 @@ onMounted(() => {
                   <button class="btn-add" @click="addElement('video_badge')">+ Video</button>
                   <button class="btn-add" @click="addElement('audio_badge')">+ Audio</button>
                   <button class="btn-add" @click="addElement('edition_badge')">+ Edition</button>
+                  <button class="btn-add" @click="addElement('streaming_platform_badge')">+ Stream</button>
+                  <button class="btn-add" @click="addElement('studio_badge')">+ Studio</button>
                   <button class="btn-add" @click="addElement('custom_image')">+ Image</button>
                   <button class="btn-add" @click="addElement('text_label')">+ Text</button>
                 </div>
@@ -1162,6 +1332,7 @@ onMounted(() => {
                                 <option value="none">None</option>
                                 <option value="text">Text</option>
                                 <option value="image">Image</option>
+                                <option value="url">URL</option>
                               </select>
                               <input
                                 v-if="getBadgeMode(element, val) === 'text'"
@@ -1180,8 +1351,18 @@ onMounted(() => {
                                 <option value="">Select asset...</option>
                                 <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
                               </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'url'"
+                                type="url"
+                                :value="getBadgeUrl(element, val)"
+                                @input="setBadgeUrl(element, val, ($event.target as HTMLInputElement).value)"
+                                @change="setBadgeUrl(element, val, normalizeBadgeUrl(($event.target as HTMLInputElement).value)); prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))"
+                                @keyup.enter="($event.target as HTMLInputElement).blur()"
+                                placeholder="https://..."
+                                class="badge-url-input"
+                              />
                             </div>
-                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                            <div v-if="getBadgeMode(element, val) === 'image' || getBadgeMode(element, val) === 'url'" class="badge-image-overrides">
                               <label>Scale
                                 <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
                               </label>
@@ -1268,6 +1449,7 @@ onMounted(() => {
                                 <option value="none">None</option>
                                 <option value="text">Text</option>
                                 <option value="image">Image</option>
+                                <option value="url">URL</option>
                               </select>
                               <input
                                 v-if="getBadgeMode(element, val) === 'text'"
@@ -1286,8 +1468,18 @@ onMounted(() => {
                                 <option value="">Select asset...</option>
                                 <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
                               </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'url'"
+                                type="url"
+                                :value="getBadgeUrl(element, val)"
+                                @input="setBadgeUrl(element, val, ($event.target as HTMLInputElement).value)"
+                                @change="setBadgeUrl(element, val, normalizeBadgeUrl(($event.target as HTMLInputElement).value)); prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))"
+                                @keyup.enter="($event.target as HTMLInputElement).blur()"
+                                placeholder="https://..."
+                                class="badge-url-input"
+                              />
                             </div>
-                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                            <div v-if="getBadgeMode(element, val) === 'image' || getBadgeMode(element, val) === 'url'" class="badge-image-overrides">
                               <label>Scale
                                 <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
                               </label>
@@ -1366,6 +1558,7 @@ onMounted(() => {
                                 <option value="none">None</option>
                                 <option value="text">Text</option>
                                 <option value="image">Image</option>
+                                <option value="url">URL</option>
                               </select>
                               <input
                                 v-if="getBadgeMode(element, val) === 'text'"
@@ -1384,8 +1577,236 @@ onMounted(() => {
                                 <option value="">Select asset...</option>
                                 <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
                               </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'url'"
+                                type="url"
+                                :value="getBadgeUrl(element, val)"
+                                @input="setBadgeUrl(element, val, ($event.target as HTMLInputElement).value)"
+                                @change="setBadgeUrl(element, val, normalizeBadgeUrl(($event.target as HTMLInputElement).value)); prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))"
+                                @keyup.enter="($event.target as HTMLInputElement).blur()"
+                                placeholder="https://..."
+                                class="badge-url-input"
+                              />
                             </div>
-                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                            <div v-if="getBadgeMode(element, val) === 'image' || getBadgeMode(element, val) === 'url'" class="badge-image-overrides">
+                              <label>Scale
+                                <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
+                              </label>
+                              <label>Anchor
+                                <select :value="getBadgeAnchor(element, val)" @change="setBadgeAnchor(element, val, ($event.target as HTMLSelectElement).value)">
+                                  <option value="top-left">Top Left</option>
+                                  <option value="top-center">Top Center</option>
+                                  <option value="top-right">Top Right</option>
+                                  <option value="center-left">Center Left</option>
+                                  <option value="center">Center</option>
+                                  <option value="center-right">Center Right</option>
+                                  <option value="bottom-left">Bottom Left</option>
+                                  <option value="bottom-center">Bottom Center</option>
+                                  <option value="bottom-right">Bottom Right</option>
+                                </select>
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <template v-if="hasBadgeTextMode(element)">
+                        <div class="field-divider"></div>
+                        <label>
+                          <span>Font Size (px)</span>
+                          <input type="number" v-model.number="element.font_size" min="8" max="200" step="1" />
+                        </label>
+                        <label>
+                          <span>Font Color</span>
+                          <div class="color-input-wrap">
+                            <input type="color" v-model="element.font_color" class="color-picker" />
+                            <input type="text" v-model="element.font_color" class="color-text" placeholder="#FFFFFF" />
+                          </div>
+                        </label>
+                        <label class="field-full">
+                          <span>Font Family</span>
+                          <select v-model="element.font_family">
+                            <optgroup label="System Fonts">
+                              <option value="Arial">Arial</option>
+                              <option value="Helvetica">Helvetica</option>
+                              <option value="Times New Roman">Times New Roman</option>
+                              <option value="Georgia">Georgia</option>
+                              <option value="Verdana">Verdana</option>
+                              <option value="Courier New">Courier New</option>
+                              <option value="Impact">Impact</option>
+                            </optgroup>
+                            <optgroup v-if="fonts.length > 0" label="Custom Fonts">
+                              <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
+                            </optgroup>
+                          </select>
+                        </label>
+                        <label class="field-full">
+                          <span>Text Align</span>
+                          <div class="align-btn-group">
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
+                          </div>
+                        </label>
+                      </template>
+                    </template>
+
+                    <!-- Streaming Platform Badge -->
+                    <template v-if="element.type === 'streaming_platform_badge'">
+                      <div class="field-divider"></div>
+                      <div class="field-full badge-assets-section">
+                        <div class="badge-assets-label">Badge Rendering (per platform)</div>
+                        <div class="badge-asset-rows">
+                          <div v-for="val in STREAMING_PLATFORM_VALUES" :key="val" class="badge-asset-item">
+                            <div class="badge-asset-row">
+                              <span class="badge-value-label">{{ STREAMING_PLATFORM_LABELS[val] || val }}</span>
+                              <select
+                                :value="getBadgeMode(element, val)"
+                                @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
+                                class="badge-mode-select"
+                              >
+                                <option value="none">None</option>
+                                <option value="text">Text</option>
+                                <option value="image">Image</option>
+                                <option value="url">URL</option>
+                              </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'text'"
+                                type="text"
+                                :value="getBadgeText(element, val)"
+                                @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
+                                :placeholder="STREAMING_PLATFORM_LABELS[val] || val"
+                                class="badge-text-input"
+                              />
+                              <select
+                                v-if="getBadgeMode(element, val) === 'image'"
+                                :value="getBadgeAsset(element, val) || ''"
+                                @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
+                                class="badge-asset-select"
+                              >
+                                <option value="">Select asset...</option>
+                                <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
+                              </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'url'"
+                                type="url"
+                                :value="getBadgeUrl(element, val)"
+                                @input="setBadgeUrl(element, val, ($event.target as HTMLInputElement).value)"
+                                @change="setBadgeUrl(element, val, normalizeBadgeUrl(($event.target as HTMLInputElement).value)); prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))"
+                                @keyup.enter="($event.target as HTMLInputElement).blur()"
+                                placeholder="Auto (TMDb logo) or paste URL"
+                                class="badge-url-input"
+                              />
+                            </div>
+                            <div v-if="getBadgeMode(element, val) === 'image' || getBadgeMode(element, val) === 'url'" class="badge-image-overrides">
+                              <label>Scale
+                                <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
+                              </label>
+                              <label>Anchor
+                                <select :value="getBadgeAnchor(element, val)" @change="setBadgeAnchor(element, val, ($event.target as HTMLSelectElement).value)">
+                                  <option value="top-left">Top Left</option>
+                                  <option value="top-center">Top Center</option>
+                                  <option value="top-right">Top Right</option>
+                                  <option value="center-left">Center Left</option>
+                                  <option value="center">Center</option>
+                                  <option value="center-right">Center Right</option>
+                                  <option value="bottom-left">Bottom Left</option>
+                                  <option value="bottom-center">Bottom Center</option>
+                                  <option value="bottom-right">Bottom Right</option>
+                                </select>
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <template v-if="hasBadgeTextMode(element)">
+                        <div class="field-divider"></div>
+                        <label>
+                          <span>Font Size (px)</span>
+                          <input type="number" v-model.number="element.font_size" min="8" max="200" step="1" />
+                        </label>
+                        <label>
+                          <span>Font Color</span>
+                          <div class="color-input-wrap">
+                            <input type="color" v-model="element.font_color" class="color-picker" />
+                            <input type="text" v-model="element.font_color" class="color-text" placeholder="#FFFFFF" />
+                          </div>
+                        </label>
+                        <label class="field-full">
+                          <span>Font Family</span>
+                          <select v-model="element.font_family">
+                            <optgroup label="System Fonts">
+                              <option value="Arial">Arial</option>
+                              <option value="Helvetica">Helvetica</option>
+                              <option value="Times New Roman">Times New Roman</option>
+                              <option value="Georgia">Georgia</option>
+                              <option value="Verdana">Verdana</option>
+                              <option value="Courier New">Courier New</option>
+                              <option value="Impact">Impact</option>
+                            </optgroup>
+                            <optgroup v-if="fonts.length > 0" label="Custom Fonts">
+                              <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
+                            </optgroup>
+                          </select>
+                        </label>
+                        <label class="field-full">
+                          <span>Text Align</span>
+                          <div class="align-btn-group">
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
+                            <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
+                          </div>
+                        </label>
+                      </template>
+                    </template>
+
+                    <!-- Studio Badge -->
+                    <template v-if="element.type === 'studio_badge'">
+                      <div class="field-divider"></div>
+                      <div class="field-full badge-assets-section">
+                        <div class="badge-assets-label">Badge Rendering (per studio)</div>
+                        <div class="badge-asset-rows">
+                          <div v-for="val in STUDIO_VALUES" :key="val" class="badge-asset-item">
+                            <div class="badge-asset-row">
+                              <span class="badge-value-label">{{ STUDIO_LABELS[val] || val }}</span>
+                              <select
+                                :value="getBadgeMode(element, val)"
+                                @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
+                                class="badge-mode-select"
+                              >
+                                <option value="none">None</option>
+                                <option value="text">Text</option>
+                                <option value="image">Image</option>
+                                <option value="url">URL</option>
+                              </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'text'"
+                                type="text"
+                                :value="getBadgeText(element, val)"
+                                @input="setBadgeText(element, val, ($event.target as HTMLInputElement).value)"
+                                :placeholder="STUDIO_LABELS[val] || val"
+                                class="badge-text-input"
+                              />
+                              <select
+                                v-if="getBadgeMode(element, val) === 'image'"
+                                :value="getBadgeAsset(element, val) || ''"
+                                @change="setBadgeAsset(element, val, ($event.target as HTMLSelectElement).value || undefined)"
+                                class="badge-asset-select"
+                              >
+                                <option value="">Select asset...</option>
+                                <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
+                              </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'url'"
+                                type="url"
+                                :value="getBadgeUrl(element, val)"
+                                @input="setBadgeUrl(element, val, ($event.target as HTMLInputElement).value)"
+                                @change="setBadgeUrl(element, val, normalizeBadgeUrl(($event.target as HTMLInputElement).value)); prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))"
+                                @keyup.enter="($event.target as HTMLInputElement).blur()"
+                                placeholder="https://..."
+                                class="badge-url-input"
+                              />
+                            </div>
+                            <div v-if="getBadgeMode(element, val) === 'image' || getBadgeMode(element, val) === 'url'" class="badge-image-overrides">
                               <label>Scale
                                 <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
                               </label>
@@ -1604,6 +2025,18 @@ onMounted(() => {
                       <option v-for="v in EDITION_VALUES" :key="v" :value="v">{{ v.charAt(0).toUpperCase() + v.slice(1) }}</option>
                     </select>
                   </label>
+                  <label v-if="hasStreamingBadge" class="preview-value-field">
+                    <span>Platform</span>
+                    <select v-model="previewStreamingPlatform">
+                      <option v-for="v in STREAMING_PLATFORM_VALUES" :key="v" :value="v">{{ STREAMING_PLATFORM_LABELS[v] || v }}</option>
+                    </select>
+                  </label>
+                  <label v-if="hasStudioBadge" class="preview-value-field">
+                    <span>Studio</span>
+                    <select v-model="previewStudio">
+                      <option v-for="v in STUDIO_VALUES" :key="v" :value="v">{{ STUDIO_LABELS[v] || v }}</option>
+                    </select>
+                  </label>
                 </div>
 
                 <div class="preview-info">
@@ -1736,8 +2169,13 @@ onMounted(() => {
 .editor-modal { background: var(--surface, #1a1f2e); border: 1px solid var(--border, #2a2f3e); border-radius: 14px; width: 94%; max-width: 1100px; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
 .editor-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border, #2a2f3e); }
 .editor-header h2 { margin: 0 0 0.4rem 0; color: var(--text-primary, #fff); font-size: 1.15rem; }
-.config-name-input { width: 100%; padding: 0.45rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.95rem; }
+.editor-name-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.config-name-input { flex: 1; min-width: 160px; padding: 0.45rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.95rem; }
 .config-name-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.region-selector { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.region-label { color: var(--text-secondary, #888); font-size: 0.78rem; font-weight: 500; }
+.region-select { padding: 0.4rem 0.5rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.8rem; cursor: pointer; }
+.region-select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 
 .btn-close { background: none; border: none; color: var(--text-secondary, #aaa); cursor: pointer; padding: 4px; border-radius: 4px; transition: color 0.2s; }
 .btn-close:hover { color: var(--text-primary, #fff); }
@@ -1795,11 +2233,13 @@ onMounted(() => {
 .badge-image-overrides input[type="number"] { width: 4.5rem; padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-image-overrides select { padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-image-overrides input:focus, .badge-image-overrides select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
-.badge-value-label { color: var(--text-secondary, #aaa); font-size: 0.72rem; font-weight: 600; min-width: 70px; text-align: right; }
+.badge-value-label { color: var(--text-secondary, #aaa); font-size: 0.72rem; font-weight: 600; min-width: 80px; text-align: right; }
 .badge-mode-select { width: 68px; flex-shrink: 0; padding: 0.3rem 0.3rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-asset-select { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-text-input { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-text-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.badge-url-input { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; font-family: monospace; }
+.badge-url-input:focus { outline: none; border-color: #10b981; }
 .badge-asset-row select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 
 /* Text align button group */

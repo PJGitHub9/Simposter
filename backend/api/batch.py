@@ -256,6 +256,12 @@ def _process_single_movie(
             existing_meta = render_options.get("metadata") or {}
             render_options["metadata"] = {**existing_meta, **plex_media}
 
+        # Inject tmdb_id and media_type for streaming platform badge resolution
+        if tmdb_id:
+            render_options.setdefault("metadata", {})
+            render_options["metadata"]["tmdb_id"] = tmdb_id
+            render_options["metadata"]["media_type"] = "movie"
+
         # Pass preset_id so the template renderer can look up linked overlay configs
         if preset_id:
             render_options["preset_id"] = preset_id
@@ -792,6 +798,7 @@ def _render_tv_series_poster(
         poster_fallback_template=poster_fallback_template_used,
         poster_fallback_preset=poster_fallback_preset_used,
         source=source,
+        tmdb_id=tmdb_id,
     )
 
 
@@ -955,6 +962,7 @@ def _render_all_tv_seasons(
                     poster_fallback_template=series_poster_fallback_template,
                     poster_fallback_preset=series_poster_fallback_preset,
                     source=source,
+                    tmdb_id=tmdb_id,
                 )
                 results.append({
                     **series_result,
@@ -1117,6 +1125,7 @@ def _render_all_tv_seasons(
             poster_fallback_template=season_poster_fallback_template,
             poster_fallback_preset=season_poster_fallback_preset,
             source=source,
+            tmdb_id=tmdb_id,
         )
         results.append(result)
 
@@ -1149,6 +1158,7 @@ def _render_and_save_poster(
     logo_fallback_template: Optional[str] = None,
     logo_fallback_preset: Optional[str] = None,
     source: str = "batch",
+    tmdb_id: Optional[int] = None,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
@@ -1160,6 +1170,12 @@ def _render_and_save_poster(
     if plex_media:
         existing_meta = render_options.get("metadata") or {}
         render_options["metadata"] = {**existing_meta, **plex_media}
+
+    # Inject tmdb_id and media_type for streaming platform badge resolution
+    if tmdb_id:
+        render_options.setdefault("metadata", {})
+        render_options["metadata"]["tmdb_id"] = tmdb_id
+        render_options["metadata"]["media_type"] = "tv" if is_tv else "movie"
 
     # Pass preset_id so the template renderer can look up linked overlay configs
     if preset_id:
