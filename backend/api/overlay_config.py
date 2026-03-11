@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import io
 from fastapi import APIRouter, Form, HTTPException, UploadFile, File
@@ -328,6 +328,57 @@ def api_link_preset_to_overlay(req: PresetOverlayLinkRequest):
 # ═══════════════════════════════════════════════════════════════════════════
 # Image Proxy (for CORS-free canvas preview of URL badge images)
 # ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/overlay-preview-metadata")
+def api_overlay_preview_metadata(
+    rating_key: str,
+    config_id: Optional[str] = None,
+    media_type: str = "movie",
+):
+    """Return Plex media metadata for a given rating_key for use in the overlay config preview.
+
+    If config_id is provided, also resolves streaming_platform and studio via the same
+    TMDb pre-pass that apply_overlay_config uses, so item-mode preview reflects real values.
+    """
+    try:
+        from ..config import get_plex_media_info, get_movie_tmdb_id
+        info = get_plex_media_info(rating_key) or {}
+
+        if config_id:
+            try:
+                cfg = db.get_overlay_config(config_id)
+                if cfg:
+                    element_types = {e.get("type") for e in cfg.get("elements", [])}
+                    tmdb_id = get_movie_tmdb_id(rating_key)
+
+                    if tmdb_id and "streaming_platform_badge" in element_types:
+                        try:
+                            from ..tmdb_client import get_watch_providers, normalize_provider_name
+                            region = cfg.get("streaming_region") or "US"
+                            providers = get_watch_providers(tmdb_id, media_type, region)
+                            if providers:
+                                slug = normalize_provider_name(providers[0].get("provider_name", ""))
+                                if slug:
+                                    info["streaming_platform"] = slug
+                        except Exception as sp_err:
+                            logger.debug(f"[OVERLAY] Preview streaming platform error: {sp_err}")
+
+                    if tmdb_id and "studio_badge" in element_types:
+                        try:
+                            from ..tmdb_client import get_studio_name
+                            slug = get_studio_name(tmdb_id, media_type)
+                            if slug:
+                                info["studio"] = slug
+                        except Exception as st_err:
+                            logger.debug(f"[OVERLAY] Preview studio error: {st_err}")
+            except Exception as pre_err:
+                logger.debug(f"[OVERLAY] Preview pre-pass error: {pre_err}")
+
+        return {"metadata": info}
+    except Exception as e:
+        logger.warning(f"[OVERLAY] Failed to fetch preview metadata for {rating_key}: {e}")
+        return {"metadata": {}}
+
 
 @router.get("/proxy-image")
 def api_proxy_image(url: str):

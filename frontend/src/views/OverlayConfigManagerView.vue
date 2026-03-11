@@ -157,10 +157,19 @@ const selectedMovie = ref<SimpleMovie | null>(null)
 const posterBgImage = ref<HTMLImageElement | null>(null)
 const posterLoading = ref(false)
 
+// Library selection for preview
+const previewLibraries = ref<Array<{key: string, title: string, type: string}>>([])
+const previewLibrariesLoading = ref(false)
+const previewSelectedLibrary = ref<{key: string, title: string, type: string} | null>(null)
+
+// Preview mode: 'item' uses real Plex metadata, 'testing' uses manual dropdowns
+const previewMode = ref<'item' | 'testing'>('testing')
+const previewItemMetadata = ref<Record<string, string>>({})
+
 const movieSearchResults = computed(() => {
   const q = movieSearchTerm.value.trim().toLowerCase()
-  if (!q) return movies.value.slice(0, 30)
-  return movies.value.filter(m => m.title.toLowerCase().includes(q)).slice(0, 30)
+  if (!q) return movies.value.slice(0, 50)
+  return movies.value.filter(m => m.title.toLowerCase().includes(q)).slice(0, 50)
 })
 
 // Preview value switcher
@@ -230,17 +239,38 @@ const loadFonts = async () => {
   }
 }
 
-const loadMovies = async () => {
-  if (moviesLoaded.value) return
+const loadPreviewLibraries = async () => {
+  if (previewLibraries.value.length > 0) return
+  previewLibrariesLoading.value = true
   try {
-    const res = await fetch(`${apiBase}/api/movies`)
+    const res = await fetch(`${apiBase}/api/test-plex-connection`)
+    if (res.ok) {
+      const data = await res.json()
+      previewLibraries.value = (data.sections || []).filter((s: any) =>
+        s.type === 'movie' || s.type === 'show'
+      )
+    }
+  } catch (e) {
+    console.error('Failed to load libraries:', e)
+  } finally {
+    previewLibrariesLoading.value = false
+  }
+}
+
+const loadMoviesForLibrary = async (lib: {key: string, title: string, type: string}) => {
+  moviesLoaded.value = false
+  movies.value = []
+  try {
+    const endpoint = lib.type === 'show' ? `/api/tv-shows` : `/api/movies`
+    const res = await fetch(`${apiBase}${endpoint}?library_id=${lib.key}`)
     if (res.ok) {
       const data = await res.json()
       movies.value = (Array.isArray(data) ? data : []).map((m: any) => ({ key: m.key, title: m.title }))
-      moviesLoaded.value = true
     }
   } catch (e) {
-    console.error('Failed to load movies:', e)
+    console.error('Failed to load items:', e)
+  } finally {
+    moviesLoaded.value = true
   }
 }
 
@@ -571,15 +601,44 @@ const hasBadgeTextMode = (element: OverlayElement): boolean => {
 
 // --- Poster search ---
 
-const openMovieSearch = async () => {
-  await loadMovies()
+const backToLibraries = () => {
+  previewSelectedLibrary.value = null
+  movies.value = []
+  moviesLoaded.value = false
   movieSearchTerm.value = ''
+}
+
+const openMovieSearch = async () => {
+  backToLibraries()
   showMovieSearch.value = true
+  await loadPreviewLibraries()
+}
+
+const selectLibrary = async (lib: {key: string, title: string, type: string}) => {
+  previewSelectedLibrary.value = lib
+  movieSearchTerm.value = ''
+  await loadMoviesForLibrary(lib)
+}
+
+const fetchItemMetadata = async (ratingKey: string) => {
+  try {
+    const params = new URLSearchParams({ rating_key: ratingKey })
+    if (selectedConfig.value?.id) params.set('config_id', selectedConfig.value.id)
+    params.set('media_type', previewSelectedLibrary.value?.type === 'show' ? 'tv' : 'movie')
+    const res = await fetch(`${apiBase}/api/overlay-preview-metadata?${params}`)
+    if (res.ok) {
+      const data = await res.json()
+      previewItemMetadata.value = data.metadata || {}
+    }
+  } catch (e) {
+    console.error('Failed to fetch item metadata:', e)
+  }
 }
 
 const selectMovie = async (movie: SimpleMovie) => {
   showMovieSearch.value = false
   selectedMovie.value = movie
+  previewItemMetadata.value = {}
   posterLoading.value = true
   try {
     const url = `${apiBase}/api/movie/${movie.key}/poster?raw=1`
@@ -591,19 +650,30 @@ const selectMovie = async (movie: SimpleMovie) => {
       img.src = url
     })
     posterBgImage.value = img
-    nextTick(renderPreview)
   } catch (e) {
     console.error('Failed to load poster:', e)
     posterBgImage.value = null
   } finally {
     posterLoading.value = false
   }
+  if (previewMode.value === 'item') {
+    await fetchItemMetadata(movie.key)
+  }
+  renderPreview()
 }
 
 const clearPoster = () => {
   selectedMovie.value = null
   posterBgImage.value = null
+  previewItemMetadata.value = {}
   nextTick(renderPreview)
+}
+
+const getPreviewValue = (field: string): string => {
+  if (previewMode.value === 'item' && previewItemMetadata.value[field]) {
+    return previewItemMetadata.value[field]
+  }
+  return previewMetadataValues[field]?.value || ''
 }
 
 // --- Canvas drag ---
@@ -760,7 +830,13 @@ const prefetchBadgeUrl = (url: string) => {
     .catch(() => {})
 }
 
+// Render version counter — incremented on every renderPreview call.
+// Async renders check this before drawing after each image-load await.
+// If a newer render has started, the stale render aborts instead of overwriting.
+let _renderVer = 0
+
 const renderPreview = async () => {
+  const ver = ++_renderVer
   const canvas = previewCanvas.value
   if (!canvas || !selectedConfig.value) return
 
@@ -826,13 +902,14 @@ const renderPreview = async () => {
 
   // Render each element
   for (let idx = 0; idx < selectedConfig.value.elements.length; idx++) {
+    if (_renderVer !== ver) return  // A newer render has started; abort this stale one
     const el = selectedConfig.value.elements[idx]
     if (!el) continue
     const x = el.position_x * PREVIEW_W
     const y = el.position_y * PREVIEW_H
     const isHovered = hoveredElementIdx.value === idx || draggingIdx.value === idx
 
-    await renderPreviewElement(ctx, el, x, y, idx, isHovered)
+    await renderPreviewElement(ctx, el, x, y, idx, isHovered, ver)
   }
 }
 
@@ -842,7 +919,8 @@ const renderPreviewElement = async (
   x: number,
   y: number,
   idx: number,
-  isHovered: boolean
+  isHovered: boolean,
+  ver: number = 0
 ) => {
   const scale = PREVIEW_W / 2000
 
@@ -860,8 +938,7 @@ const renderPreviewElement = async (
   const cfg = badgeConfig[el.type]
   if (cfg) {
     const metaField = el.metadata_field || cfg.defaultField
-    const fallbackRef = previewMetadataValues[metaField] || previewResolution
-    const value = fallbackRef.value
+    const value = getPreviewValue(metaField) || (previewMetadataValues[metaField]?.value ?? '')
     const mode = el.badge_modes?.[value] ?? 'text'
 
     if (mode === 'none') {
@@ -878,6 +955,7 @@ const renderPreviewElement = async (
       if (assetId) {
         try {
           const img = await loadAssetImage(assetId)
+          if (_renderVer !== ver) return  // stale render — a newer one has started
           // Apply per-value scale/anchor overrides for badge types
           const effectiveEl = {
             ...el,
@@ -894,6 +972,7 @@ const renderPreviewElement = async (
       if (url) {
         try {
           const img = await loadUrlImage(url)
+          if (_renderVer !== ver) return  // stale render
           const effectiveEl = {
             ...el,
             scale: el.badge_scales?.[value] ?? el.scale,
@@ -917,6 +996,7 @@ const renderPreviewElement = async (
     if (el.asset_id) {
       try {
         const img = await loadAssetImage(el.asset_id)
+        if (_renderVer !== ver) return  // stale render
         drawAssetOnCanvas(ctx, img, el, x, y, scale, idx, isHovered, '#34d399')
         return
       } catch { /* fallback */ }
@@ -1083,6 +1163,16 @@ watch(
 )
 
 watch(hoveredElementIdx, () => { nextTick(renderPreview) })
+// When metadata arrives from the server, re-render immediately.
+// This is the primary trigger for item-mode canvas updates.
+watch(previewItemMetadata, () => { renderPreview() })
+watch(previewMode, async () => {
+  if (previewMode.value === 'item' && selectedMovie.value) {
+    await fetchItemMetadata(selectedMovie.value.key)
+  }
+  // Call directly (not nextTick) — reactive data is already up-to-date at this point.
+  renderPreview()
+})
 watch(previewResolution, () => { nextTick(renderPreview) })
 watch(previewVideoCodec, () => { nextTick(renderPreview) })
 watch(previewCodec, () => { nextTick(renderPreview) })
@@ -1963,13 +2053,17 @@ onMounted(() => {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
                     </svg>
-                    {{ selectedMovie ? selectedMovie.title : 'Search poster...' }}
+                    {{ selectedMovie ? selectedMovie.title : 'Pick item...' }}
                   </button>
-                  <button v-if="selectedMovie" class="btn-clear-poster" @click="clearPoster" title="Clear poster">
+                  <button v-if="selectedMovie" class="btn-clear-poster" @click="clearPoster" title="Clear">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                     </svg>
                   </button>
+                  <div v-if="selectedMovie" class="preview-mode-toggle">
+                    <button :class="['mode-btn', previewMode === 'testing' && 'active']" @click="previewMode = 'testing'">Test</button>
+                    <button :class="['mode-btn', previewMode === 'item' && 'active']" @click="previewMode = 'item'">Item</button>
+                  </div>
                 </div>
 
                 <div class="preview-frame">
@@ -1988,7 +2082,21 @@ onMounted(() => {
                 </div>
 
                 <!-- Preview value switchers -->
-                <div class="preview-values">
+                <div v-if="previewMode === 'item' && selectedMovie" class="preview-values item-values">
+                  <div v-for="[field, label] in [['video_resolution','Res'],['video_codec','VCodec'],['audio_codec','ACodec'],['audio_channels','Ch'],['audio_language','Lang'],['edition','Edition']]" :key="field" class="preview-value-field">
+                    <span>{{ label }}</span>
+                    <span class="item-val">{{ previewItemMetadata[field] || '—' }}</span>
+                  </div>
+                  <div v-if="hasStreamingBadge" class="preview-value-field">
+                    <span>Platform</span>
+                    <span class="item-val">{{ previewItemMetadata['streaming_platform'] || '—' }}</span>
+                  </div>
+                  <div v-if="hasStudioBadge" class="preview-value-field">
+                    <span>Studio</span>
+                    <span class="item-val">{{ previewItemMetadata['studio'] || '—' }}</span>
+                  </div>
+                </div>
+                <div v-else class="preview-values">
                   <label class="preview-value-field">
                     <span>Resolution</span>
                     <select v-model="previewResolution">
@@ -2055,11 +2163,18 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Movie Search Modal -->
+    <!-- Item Picker Modal (2-step: library → item) -->
     <div v-if="showMovieSearch" class="modal-overlay" @click.self="showMovieSearch = false" style="z-index: 1100;">
       <div class="search-modal">
         <div class="search-modal-header">
-          <h3>Select a poster</h3>
+          <div class="search-modal-title">
+            <button v-if="previewSelectedLibrary" class="btn-back" @click="backToLibraries" title="Back to libraries">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+            </button>
+            <h3>{{ previewSelectedLibrary ? previewSelectedLibrary.title : 'Select library' }}</h3>
+          </div>
           <button class="btn-close" @click="showMovieSearch = false">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -2067,24 +2182,47 @@ onMounted(() => {
           </button>
         </div>
         <div class="search-modal-body">
-          <input
-            type="text"
-            v-model="movieSearchTerm"
-            placeholder="Search by title..."
-            class="search-input"
-            autofocus
-          />
-          <div class="search-results">
-            <button
-              v-for="movie in movieSearchResults"
-              :key="movie.key"
-              class="search-result"
-              @click="selectMovie(movie)"
-            >
-              {{ movie.title }}
-            </button>
-            <div v-if="movieSearchResults.length === 0" class="search-empty">No movies match that search.</div>
-          </div>
+          <!-- Step 1: library list -->
+          <template v-if="!previewSelectedLibrary">
+            <div v-if="previewLibrariesLoading" class="search-empty">Loading libraries...</div>
+            <div v-else-if="previewLibraries.length === 0" class="search-empty">No libraries found. Check Plex connection in Settings.</div>
+            <div v-else class="library-list">
+              <button
+                v-for="lib in previewLibraries"
+                :key="lib.key"
+                class="library-btn"
+                @click="selectLibrary(lib)"
+              >
+                <span class="library-icon">{{ lib.type === 'show' ? '📺' : '🎬' }}</span>
+                <span class="library-name">{{ lib.title }}</span>
+                <span class="library-type">{{ lib.type === 'show' ? 'TV' : 'Movies' }}</span>
+              </button>
+            </div>
+          </template>
+          <!-- Step 2: item search -->
+          <template v-else>
+            <input
+              type="text"
+              v-model="movieSearchTerm"
+              placeholder="Search by title..."
+              class="search-input"
+              autofocus
+            />
+            <div class="search-results">
+              <div v-if="!moviesLoaded" class="search-empty">Loading...</div>
+              <template v-else>
+                <button
+                  v-for="movie in movieSearchResults"
+                  :key="movie.key"
+                  class="search-result"
+                  @click="selectMovie(movie)"
+                >
+                  {{ movie.title }}
+                </button>
+                <div v-if="moviesLoaded && movieSearchResults.length === 0" class="search-empty">No items match that search.</div>
+              </template>
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -2251,7 +2389,7 @@ onMounted(() => {
 
 /* Preview column */
 .preview-column { position: sticky; top: 0; }
-.preview-panel { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #2a2f3e); border-radius: 10px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.preview-panel { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #2a2f3e); border-radius: 10px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; overflow-y: auto; max-height: calc(88vh - 140px); }
 
 .preview-top-row { display: flex; justify-content: space-between; align-items: center; }
 .preview-label { color: var(--text-secondary, #888); font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -2267,8 +2405,13 @@ onMounted(() => {
 .btn-search:disabled { opacity: 0.5; cursor: wait; }
 .btn-search svg { flex-shrink: 0; }
 
-.btn-clear-poster { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-secondary, #888); cursor: pointer; transition: all 0.15s; }
+.btn-clear-poster { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-secondary, #888); cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
 .btn-clear-poster:hover { border-color: #f87171; color: #f87171; }
+
+.preview-mode-toggle { display: flex; flex-shrink: 0; border: 1px solid var(--border, #2a2f3e); border-radius: 4px; overflow: hidden; }
+.mode-btn { padding: 0 0.45rem; height: 24px; background: transparent; border: none; color: var(--text-secondary, #888); cursor: pointer; font-size: 0.68rem; font-weight: 500; transition: all 0.15s; }
+.mode-btn.active { background: var(--accent, #3dd6b7); color: #000; }
+.mode-btn:not(.active):hover { background: rgba(255,255,255,0.06); color: var(--text-primary,#fff); }
 
 .preview-frame { display: flex; justify-content: center; background: rgba(0, 0, 0, 0.3); border-radius: 6px; padding: 0.5rem; }
 .preview-canvas { border-radius: 4px; display: block; }
@@ -2291,10 +2434,23 @@ onMounted(() => {
 .btn-primary:hover { opacity: 0.9; }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* Movie search modal */
+/* Item values read-only display */
+.item-values .preview-value-field { flex-direction: row; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); border: 1px solid var(--border,#2a2f3e); border-radius: 4px; padding: 0.2rem 0.4rem; }
+.item-val { color: var(--accent, #3dd6b7); font-size: 0.72rem; font-weight: 600; }
+
+/* Item picker modal */
 .search-modal { background: var(--surface, #1a1f2e); border: 1px solid var(--border, #2a2f3e); border-radius: 12px; width: 90%; max-width: 440px; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden; }
 .search-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border, #2a2f3e); }
+.search-modal-title { display: flex; align-items: center; gap: 0.5rem; }
 .search-modal-header h3 { margin: 0; color: var(--text-primary, #fff); font-size: 1rem; }
+.btn-back { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; background: rgba(255,255,255,0.05); border: 1px solid var(--border,#2a2f3e); border-radius: 5px; color: var(--text-secondary,#888); cursor: pointer; transition: all 0.15s; }
+.btn-back:hover { border-color: var(--accent,#3dd6b7); color: var(--accent,#3dd6b7); }
+.library-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.library-btn { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.8rem; background: rgba(255,255,255,0.03); border: 1px solid var(--border,#2a2f3e); border-radius: 7px; color: var(--text-primary,#fff); cursor: pointer; font-size: 0.88rem; text-align: left; transition: all 0.15s; }
+.library-btn:hover { border-color: var(--accent,#3dd6b7); background: rgba(61,214,183,0.07); }
+.library-icon { font-size: 1rem; }
+.library-name { flex: 1; font-weight: 500; }
+.library-type { font-size: 0.72rem; color: var(--text-secondary,#888); background: rgba(255,255,255,0.06); border-radius: 3px; padding: 0.1rem 0.35rem; }
 .search-modal-body { padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; overflow: hidden; }
 .search-input { padding: 0.5rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.9rem; }
 .search-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
