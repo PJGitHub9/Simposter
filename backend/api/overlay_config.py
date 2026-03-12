@@ -380,6 +380,45 @@ def api_overlay_preview_metadata(
         return {"metadata": {}}
 
 
+@router.get("/simposter-assets-map")
+def api_simposter_assets_map():
+    """Return the full slug→URL mapping for curated simposter-assets logos."""
+    from ..simposter_assets import get_full_map
+    return {"assets": get_full_map()}
+
+
+@router.get("/asset-image")
+def api_asset_image(slug: str):
+    """Resolve a simposter-assets slug and proxy the image.
+
+    Does full resolution: logos.json (live) → hardcoded overrides → heuristic title-case.
+    Returns 404 when no image can be found so the canvas can fall back gracefully.
+    """
+    if not slug:
+        raise HTTPException(status_code=400, detail="Missing slug")
+    try:
+        from ..simposter_assets import get_asset_url
+        from ..templates.universal import _fetch_url_badge_image
+        url = get_asset_url(slug)
+        if not url:
+            raise HTTPException(status_code=404, detail="No asset URL for slug")
+        img = _fetch_url_badge_image(url)
+        if img is None:
+            raise HTTPException(status_code=404, detail="Asset image not found or inaccessible")
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[OVERLAY] asset-image error for slug={slug!r}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to resolve asset image")
+
+
 @router.get("/proxy-image")
 def api_proxy_image(url: str):
     """Fetch an external image URL server-side and return it, bypassing browser CORS restrictions.

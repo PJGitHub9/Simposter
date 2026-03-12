@@ -1172,9 +1172,12 @@ def _apply_metadata_badge(
 
     logger.info("[OVERLAY]   -> Metadata badge: %s = '%s'", metadata_field, value)
 
-    # Check per-value mode (default: "text" for backwards compatibility)
+    # Check per-value mode; fall back to '__other__' catch-all, then "text"
     badge_modes = element.get("badge_modes") or {}
-    mode = badge_modes.get(value.lower(), "text")
+    _key = value.lower()
+    mode = badge_modes.get(_key)
+    if mode is None:
+        mode = badge_modes.get("__other__", "text")
 
     if mode == "none":
         logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", value)
@@ -1208,8 +1211,12 @@ def _apply_metadata_badge(
                 val_key = value.lower()
                 badge_scales = element.get("badge_scales") or {}
                 badge_anchors = element.get("badge_anchors") or {}
-                scale_multiplier = badge_scales.get(val_key) if val_key in badge_scales else element.get("scale")
-                anchor = badge_anchors.get(val_key) if val_key in badge_anchors else element.get("anchor", "center")
+                scale_multiplier = (badge_scales[val_key] if val_key in badge_scales
+                                    else badge_scales.get("__other__") if "__other__" in badge_scales
+                                    else element.get("scale"))
+                anchor = (badge_anchors[val_key] if val_key in badge_anchors
+                          else badge_anchors.get("__other__") if "__other__" in badge_anchors
+                          else element.get("anchor", "center"))
                 if scale_multiplier and scale_multiplier > 0:
                     ow, oh = img.size
                     img = img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
@@ -1226,6 +1233,35 @@ def _apply_metadata_badge(
                 logger.info("[OVERLAY]   -> Rendered metadata badge from URL: %s", url[:80])
                 return canvas
         logger.info("[OVERLAY]   -> URL mode: no URL or fetch failed for '%s', falling through to text", value)
+
+    if mode == "asset":
+        from ..simposter_assets import get_asset_url
+        asset_url = get_asset_url(value.lower())
+        if asset_url:
+            img = _fetch_url_badge_image(asset_url)
+            if img is not None:
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
+                val_key = value.lower()
+                badge_scales = element.get("badge_scales") or {}
+                badge_anchors = element.get("badge_anchors") or {}
+                scale_multiplier = (badge_scales[val_key] if val_key in badge_scales
+                                    else badge_scales.get("__other__") if "__other__" in badge_scales
+                                    else element.get("scale"))
+                anchor = (badge_anchors[val_key] if val_key in badge_anchors
+                          else badge_anchors.get("__other__") if "__other__" in badge_anchors
+                          else element.get("anchor", "center"))
+                if scale_multiplier and scale_multiplier > 0:
+                    ow, oh = img.size
+                    img = img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
+                ow, oh = img.size
+                paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor or "center")
+                badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+                badge_layer.paste(img, (paste_x, paste_y))
+                canvas = Image.alpha_composite(canvas, badge_layer)
+                logger.info("[OVERLAY]   -> Rendered metadata badge from simposter asset: %s", asset_url[:80])
+                return canvas
+        logger.info("[OVERLAY]   -> Asset mode: no simposter asset for '%s', falling through to text", value)
 
     # Text rendering using element font settings
     font_family = element.get("font_family", "arial")
