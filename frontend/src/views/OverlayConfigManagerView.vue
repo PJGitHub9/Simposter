@@ -31,6 +31,7 @@ interface OverlayElement {
   badge_urls?: Record<string, string>
   badge_scales?: Record<string, number>
   badge_anchors?: Record<string, string>
+  slug_aliases?: Record<string, string>
   text_align?: string
 }
 
@@ -568,6 +569,24 @@ const removeBadgeOverride = (element: OverlayElement, val: string) => {
   if (element.badge_urls) delete element.badge_urls[val]
 }
 
+// Slug alias helpers — map TMDb slugs to canonical asset slugs
+const pendingAliasFrom = ref('')
+const pendingAliasTo = ref('')
+
+const addSlugAlias = (element: OverlayElement, from: string, to: string) => {
+  const f = from.trim().toLowerCase()
+  const t = to.trim().toLowerCase()
+  if (!f || !t) return
+  if (!element.slug_aliases) element.slug_aliases = {}
+  element.slug_aliases[f] = t
+  pendingAliasFrom.value = ''
+  pendingAliasTo.value = ''
+}
+
+const removeSlugAlias = (element: OverlayElement, from: string) => {
+  if (element.slug_aliases) delete element.slug_aliases[from]
+}
+
 const setBadgeMode = (element: OverlayElement, value: string, mode: string) => {
   if (!element.badge_modes) element.badge_modes = {}
   element.badge_modes[value] = mode
@@ -1046,8 +1065,16 @@ const renderPreviewElement = async (
     if (mode === 'asset') {
       if (value) {
         try {
-          // Backend does full resolution: logos.json → overrides → heuristic (no map lookup needed)
-          const proxyUrl = `${apiBase}/api/asset-image?slug=${encodeURIComponent(value)}`
+          // Resolve alias first (same logic as backend renderer)
+          const resolvedSlug = el.slug_aliases?.[value] ?? value
+          // Backend does full resolution: company_id → logos.json → overrides → heuristic
+          let assetUrl = `${apiBase}/api/asset-image?slug=${encodeURIComponent(resolvedSlug)}`
+          // Pass TMDb company_id for studio_badge so ID-based lookup takes priority
+          if (el.type === 'studio_badge') {
+            const cid = previewItemMetadata.value['studio_company_id']
+            if (cid) assetUrl += `&company_id=${encodeURIComponent(cid)}`
+          }
+          const proxyUrl = assetUrl
           const img = await loadUrlImage(proxyUrl)
           if (_renderVer !== ver) return  // stale render
           const effectiveEl = {
@@ -1877,6 +1904,22 @@ onMounted(() => {
                           <option value="">+ Override a platform...</option>
                           <option v-for="val in getAvailableForOverride(element, STREAMING_PLATFORM_VALUES)" :key="val" :value="val">{{ badgeValueLabel(val, STREAMING_PLATFORM_LABELS) }}</option>
                         </select>
+                        <!-- Slug aliases -->
+                        <div class="badge-alias-section">
+                          <div class="badge-override-section-label">Slug Aliases <span class="badge-alias-hint">— remap TMDb slugs to asset names</span></div>
+                          <div v-for="(toSlug, fromSlug) in (element.slug_aliases || {})" :key="fromSlug" class="badge-alias-row">
+                            <span class="badge-alias-from">{{ fromSlug }}</span>
+                            <span class="badge-alias-arrow">→</span>
+                            <span class="badge-alias-to">{{ toSlug }}</span>
+                            <button type="button" class="badge-remove-override" @click="removeSlugAlias(element, fromSlug)" title="Remove alias">×</button>
+                          </div>
+                          <div class="badge-alias-add-row">
+                            <input v-model="pendingAliasFrom" placeholder="cj-enm-studios" class="badge-alias-input" @keyup.enter="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)" />
+                            <span class="badge-alias-arrow">→</span>
+                            <input v-model="pendingAliasTo" placeholder="cj-entertainment-studios" class="badge-alias-input" @keyup.enter="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)" />
+                            <button type="button" class="badge-alias-add-btn" :disabled="!pendingAliasFrom || !pendingAliasTo" @click="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)">Add</button>
+                          </div>
+                        </div>
                       </div>
                       <template v-if="hasBadgeTextMode(element)">
                         <div class="field-divider"></div>
@@ -1941,6 +1984,22 @@ onMounted(() => {
                           <option value="">+ Override a studio...</option>
                           <option v-for="val in getAvailableForOverride(element, STUDIO_VALUES)" :key="val" :value="val">{{ badgeValueLabel(val, STUDIO_LABELS) }}</option>
                         </select>
+                        <!-- Slug aliases -->
+                        <div class="badge-alias-section">
+                          <div class="badge-override-section-label">Slug Aliases <span class="badge-alias-hint">— remap TMDb slugs to asset names</span></div>
+                          <div v-for="(toSlug, fromSlug) in (element.slug_aliases || {})" :key="fromSlug" class="badge-alias-row">
+                            <span class="badge-alias-from">{{ fromSlug }}</span>
+                            <span class="badge-alias-arrow">→</span>
+                            <span class="badge-alias-to">{{ toSlug }}</span>
+                            <button type="button" class="badge-remove-override" @click="removeSlugAlias(element, fromSlug)" title="Remove alias">×</button>
+                          </div>
+                          <div class="badge-alias-add-row">
+                            <input v-model="pendingAliasFrom" placeholder="cj-enm-studios" class="badge-alias-input" @keyup.enter="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)" />
+                            <span class="badge-alias-arrow">→</span>
+                            <input v-model="pendingAliasTo" placeholder="cj-entertainment-studios" class="badge-alias-input" @keyup.enter="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)" />
+                            <button type="button" class="badge-alias-add-btn" :disabled="!pendingAliasFrom || !pendingAliasTo" @click="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)">Add</button>
+                          </div>
+                        </div>
                       </div>
                       <template v-if="hasBadgeTextMode(element)">
                         <div class="field-divider"></div>
@@ -2453,6 +2512,21 @@ onMounted(() => {
 }
 .badge-add-override-select:hover { border-color: var(--accent, #3dd6b7); color: var(--text-primary, #fff); }
 .badge-add-override-select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+
+/* Slug alias editor */
+.badge-alias-section { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.badge-alias-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-secondary, #666); font-style: italic; }
+.badge-alias-row { display: flex; align-items: center; gap: 6px; }
+.badge-alias-from { font-size: 0.72rem; color: var(--text-secondary, #aaa); font-family: monospace; min-width: 0; }
+.badge-alias-to { font-size: 0.72rem; color: var(--accent, #3dd6b7); font-family: monospace; min-width: 0; }
+.badge-alias-arrow { color: var(--text-secondary, #555); font-size: 0.72rem; flex-shrink: 0; }
+.badge-alias-add-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.badge-alias-input { flex: 1; min-width: 0; padding: 0.2rem 0.3rem; background: rgba(255,255,255,0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; font-family: monospace; }
+.badge-alias-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.badge-alias-add-btn { flex-shrink: 0; padding: 0.2rem 0.5rem; background: rgba(61,214,183,0.1); border: 1px solid rgba(61,214,183,0.3); border-radius: 4px; color: var(--accent, #3dd6b7); font-size: 0.72rem; cursor: pointer; transition: all 0.15s; }
+.badge-alias-add-btn:hover:not(:disabled) { background: rgba(61,214,183,0.2); border-color: var(--accent, #3dd6b7); }
+.badge-alias-add-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
 .badge-assets-label { color: var(--text-secondary, #888); font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 .badge-asset-rows { display: flex; flex-direction: column; gap: 0.4rem; }
 .badge-asset-item { display: flex; flex-direction: column; gap: 0.25rem; }

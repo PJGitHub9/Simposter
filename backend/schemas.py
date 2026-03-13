@@ -250,6 +250,7 @@ class OverlayElement(BaseModel):
     badge_scales: Optional[Dict[str, float]] = None  # Maps metadata value -> scale multiplier (image/url mode only)
     badge_anchors: Optional[Dict[str, str]] = None  # Maps metadata value -> anchor point (image/url mode only)
     badge_urls: Optional[Dict[str, str]] = None  # Maps metadata value -> image URL (url mode only)
+    slug_aliases: Optional[Dict[str, str]] = None  # Maps TMDb slug -> canonical asset slug (e.g., {"cj-enm-studios": "cj-entertainment-studios"})
     text_align: Optional[str] = None  # "left" | "center" | "right" (default: "center")
 
 

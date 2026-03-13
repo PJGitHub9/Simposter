@@ -449,13 +449,17 @@ def get_studio_name(tmdb_id: int, media_type: str = "movie") -> str:
         cached = db.get_cached_providers(tmdb_id, media_type, _STUDIO_CACHE_KEY)
         if cached is not None:
             if cached:
-                return normalize_studio_name(cached[0].get("provider_name", ""))
-            return ""
+                # If provider_id is missing the cache pre-dates company ID tracking — re-fetch
+                if cached[0].get("provider_id") is not None:
+                    return normalize_studio_name(cached[0].get("provider_name", ""))
+            elif cached == []:
+                return ""  # Previously cached "no studio" result
     except Exception:
         pass
 
     # 2. Fetch from TMDb
     studio_name = ""
+    company_id: Optional[int] = None
     try:
         data = _tmdb_get(f"/{media_type}/{tmdb_id}", {})
         if media_type == "tv":
@@ -464,18 +468,35 @@ def get_studio_name(tmdb_id: int, media_type: str = "movie") -> str:
             companies = data.get("production_companies") or []
         if companies:
             studio_name = companies[0].get("name", "")
-        logger.debug("[TMDB] Studio for %s/%s: '%s'", media_type, tmdb_id, studio_name)
+            company_id = companies[0].get("id")
+        logger.debug("[TMDB] Studio for %s/%s: '%s' (company_id=%s)", media_type, tmdb_id, studio_name, company_id)
     except Exception as e:
         logger.debug("[TMDB] Studio fetch failed for %s/%s: %s", media_type, tmdb_id, e)
 
-    # 3. Cache result
-    entry = [{"provider_name": studio_name}] if studio_name else []
+    # 3. Cache result — store company_id alongside name so callers can use it for asset lookup
+    entry = [{"provider_name": studio_name, "provider_id": company_id}] if studio_name else []
     try:
         db.upsert_cached_providers(tmdb_id, media_type, _STUDIO_CACHE_KEY, entry)
     except Exception:
         pass
 
     return normalize_studio_name(studio_name) if studio_name else ""
+
+
+def get_studio_company_id(tmdb_id: int, media_type: str = "movie") -> Optional[int]:
+    """Return the TMDb company ID for the primary studio/network of an item.
+
+    Reads from the same DB cache as get_studio_name() — no extra network call.
+    Returns None if not cached or not available.
+    """
+    try:
+        cached = db.get_cached_providers(tmdb_id, media_type, _STUDIO_CACHE_KEY)
+        if cached:
+            val = cached[0].get("provider_id")
+            return int(val) if val is not None else None
+    except Exception:
+        pass
+    return None
 
 
 def get_watch_providers(tmdb_id: int, media_type: str = "movie", region: str = "US") -> list:

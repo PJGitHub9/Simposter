@@ -882,12 +882,16 @@ def apply_overlay_config(
 
                 if needs_studio and "studio_badge" in element_types:
                     try:
-                        from ..tmdb_client import get_studio_name
+                        from ..tmdb_client import get_studio_name, get_studio_company_id
                         media_type = meta.get("media_type", "movie")
                         slug = get_studio_name(int(tmdb_id), media_type)
                         if slug:
                             meta["studio"] = slug
                             logger.debug("[OVERLAY] Resolved studio: %s", slug)
+                        company_id = get_studio_company_id(int(tmdb_id), media_type)
+                        if company_id is not None:
+                            meta["studio_company_id"] = company_id
+                            logger.debug("[OVERLAY] Resolved studio company_id: %s", company_id)
                     except Exception as st_err:
                         logger.debug("[OVERLAY] Studio pre-pass error: %s", st_err)
                     needs_studio = False
@@ -1236,7 +1240,18 @@ def _apply_metadata_badge(
 
     if mode == "asset":
         from ..simposter_assets import get_asset_url
-        asset_url = get_asset_url(value.lower())
+        slug_aliases = element.get("slug_aliases") or {}
+        effective_slug = slug_aliases.get(value.lower(), value.lower())
+        # Pass TMDb company ID for studio badges — more reliable than slug matching
+        company_id: Optional[int] = None
+        if metadata and element.get("type") == "studio_badge":
+            try:
+                raw_cid = metadata.get("studio_company_id")
+                if raw_cid is not None:
+                    company_id = int(raw_cid)
+            except (TypeError, ValueError):
+                pass
+        asset_url = get_asset_url(effective_slug, company_id=company_id)
         if asset_url:
             img = _fetch_url_badge_image(asset_url)
             if img is not None:

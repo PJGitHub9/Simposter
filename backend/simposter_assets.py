@@ -80,6 +80,8 @@ _OVERRIDES: dict[str, str] = {
 
 # In-memory cache: normalised-slug → direct URL (from logos.json)
 _logos_cache: dict[str, str] = {}
+# Parallel cache: TMDb company_id (int) → direct URL — populated when logos.json has a "tmdb_id" column
+_logos_id_cache: dict[int, str] = {}
 _logos_fetched_at: float = 0    # timestamp of last SUCCESSFUL fetch
 _logos_attempted_at: float = 0  # timestamp of last attempt (success or failure)
 _LOGOS_RETRY_COOLDOWN = 60      # seconds to wait before retrying a failed fetch
@@ -123,7 +125,7 @@ def _fetch_logos() -> dict[str, str]:
       - A fetch failed recently (> 60s cooldown before retrying).
     Never raises — always returns a dict.
     """
-    global _logos_cache, _logos_fetched_at, _logos_attempted_at
+    global _logos_cache, _logos_id_cache, _logos_fetched_at, _logos_attempted_at
     now = time.time()
 
     # Fast path: return without acquiring the lock if cache is fresh
@@ -153,6 +155,7 @@ def _fetch_logos() -> dict[str, str]:
                 return _logos_cache  # unexpected format, keep old cache
 
             new_cache: dict[str, str] = {}
+            new_id_cache: dict[int, str] = {}
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
@@ -179,7 +182,16 @@ def _fetch_logos() -> dict[str, str]:
                 if slug:
                     new_cache[slug] = url
 
+                # Also index by TMDb company ID if the entry has one
+                id_key = _find_key(entry, "tmdb_production_company_id", "tmdb_id", "company_id", "tmdb_company_id")
+                if id_key:
+                    try:
+                        new_id_cache[int(entry[id_key])] = url
+                    except (ValueError, TypeError):
+                        pass
+
             _logos_cache = new_cache
+            _logos_id_cache = new_id_cache
             _logos_fetched_at = now
 
         except Exception:
@@ -194,14 +206,28 @@ def _default_url(slug: str) -> str:
     return ASSET_BASE + urllib.parse.quote(f"{name}.png")
 
 
-def get_asset_url(slug: str) -> Optional[str]:
-    """Return the logo URL for *slug*, or None if slug is empty.
+def get_asset_url(slug: str, company_id: Optional[int] = None) -> Optional[str]:
+    """Return the logo URL for *slug* (or *company_id*), or None if both are empty.
 
     Resolution order:
-      1. logos.json from the repo  (authoritative, covers all uploaded files)
-      2. _OVERRIDES dict           (hardcoded fallback, no network required)
-      3. Heuristic title-case URL  (may 404 if the file doesn't exist)
+      0. TMDb company ID (most reliable — stable across name variations)
+      1. logos.json slug lookup (authoritative, covers all uploaded files)
+      2. _OVERRIDES dict          (hardcoded fallback, no network required)
+      3. Heuristic title-case URL (may 404 if the file doesn't exist)
     """
+    if not slug and company_id is None:
+        return None
+
+    # 0. TMDb company ID — check _logos_id_cache populated from logos.json tmdb_id column
+    if company_id is not None:
+        _fetch_logos()  # ensure cache is populated (no-op if fresh)
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        _log.info("[ASSETS] ID lookup: company_id=%s, id_cache_size=%d, slug_cache_size=%d, hit=%s",
+                  company_id, len(_logos_id_cache), len(_logos_cache), company_id in _logos_id_cache)
+        if company_id in _logos_id_cache:
+            return _logos_id_cache[company_id]
+
     if not slug:
         return None
     slug = slug.lower()

@@ -365,10 +365,13 @@ def api_overlay_preview_metadata(
 
                     if tmdb_id and "studio_badge" in element_types:
                         try:
-                            from ..tmdb_client import get_studio_name
+                            from ..tmdb_client import get_studio_name, get_studio_company_id
                             slug = get_studio_name(tmdb_id, media_type)
                             if slug:
                                 info["studio"] = slug
+                            cid = get_studio_company_id(tmdb_id, media_type)
+                            if cid is not None:
+                                info["studio_company_id"] = str(cid)
                         except Exception as st_err:
                             logger.debug(f"[OVERLAY] Preview studio error: {st_err}")
             except Exception as pre_err:
@@ -388,18 +391,18 @@ def api_simposter_assets_map():
 
 
 @router.get("/asset-image")
-def api_asset_image(slug: str):
-    """Resolve a simposter-assets slug and proxy the image.
+def api_asset_image(slug: str = "", company_id: Optional[int] = None):
+    """Resolve a simposter-assets slug (and/or TMDb company ID) and proxy the image.
 
-    Does full resolution: logos.json (live) → hardcoded overrides → heuristic title-case.
+    Does full resolution: company_id (ID cache) → logos.json slug → overrides → heuristic.
     Returns 404 when no image can be found so the canvas can fall back gracefully.
     """
-    if not slug:
-        raise HTTPException(status_code=400, detail="Missing slug")
+    if not slug and company_id is None:
+        raise HTTPException(status_code=400, detail="Missing slug or company_id")
     try:
         from ..simposter_assets import get_asset_url
         from ..templates.universal import _fetch_url_badge_image
-        url = get_asset_url(slug)
+        url = get_asset_url(slug, company_id=company_id)
         if not url:
             raise HTTPException(status_code=404, detail="No asset URL for slug")
         img = _fetch_url_badge_image(url)
@@ -415,7 +418,7 @@ def api_asset_image(slug: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(f"[OVERLAY] asset-image error for slug={slug!r}: {e}")
+        logger.warning(f"[OVERLAY] asset-image error for slug={slug!r} company_id={company_id}: {e}")
         raise HTTPException(status_code=502, detail="Failed to resolve asset image")
 
 
