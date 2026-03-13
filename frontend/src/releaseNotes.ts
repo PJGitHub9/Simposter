@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.7',
+    date: '2026-03-13',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Simposter Asset badge mode — pulls logos directly from the simposter-assets GitHub repo (logos.json refreshed hourly)',
+          'TMDb company ID matching — studio badges now resolve assets by stable numeric ID instead of name, eliminating mismatches from name variations (e.g. "CJ ENM" vs "CJ ENM Studios")',
+          'Slug alias system — map any unexpected TMDb slug to the correct asset slug per-element for edge cases',
+          'Unmaintained branch warning — logo turns amber/red with a pulsing warning badge when running a Docker tag that is not "latest" or "webui-overhaul-dev"',
+          'Docker tag exposed in /api/version-info — baked into build-info.json at build time via --build-arg DOCKER_TAG, overridable at runtime via DOCKER_TAG env var',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Studio company ID now cached alongside studio name — asset lookup by TMDb ID works immediately on subsequent renders',
+          'Stale studio cache entries (pre-dating company ID tracking) are automatically re-fetched from TMDb on next render',
+          'Thread-safe asset cache with double-checked locking prevents race conditions during server startup prewarm',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.68',
     date: '2026-03-11',
     sections: [

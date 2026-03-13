@@ -14,11 +14,14 @@ type GroupedContent = (
 interface VersionInfo {
   version: string
   branch: string | null
+  docker_tag: string | null
   display_version: string
   update_available: boolean
   latest_version: string | null
   update_url: string | null
 }
+
+const MAINTAINED_TAGS = ['latest', 'webui-overhaul-dev']
 
 const props = defineProps<{
   search?: string
@@ -143,6 +146,17 @@ const versionTitle = computed(() => {
   return 'View changelog'
 })
 
+const isUnsupportedTag = computed(() => {
+  const tag = versionInfo.value?.docker_tag
+  if (!tag) return false
+  return !MAINTAINED_TAGS.includes(tag)
+})
+
+const unsupportedTagTitle = computed(() => {
+  const tag = versionInfo.value?.docker_tag
+  return `You are running an unmaintained Docker tag: "${tag}"\nSwitch to "latest" or "webui-overhaul-dev" for supported builds.`
+})
+
 let posterCacheInterval: number | null = null
 
 onMounted(() => {
@@ -173,8 +187,17 @@ onUnmounted(() => {
         </svg>
       </button>
       <div class="logo">
-        <span class="logo-text">Simposter</span>
+        <span class="logo-text" :class="{ 'logo-warn': isUnsupportedTag }">Simposter</span>
+        <div v-if="isUnsupportedTag" class="unsupported-tag-badge" :title="unsupportedTagTitle">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span>{{ versionInfo?.docker_tag }}</span>
+        </div>
         <button
+          v-else
           class="version-badge"
           :class="{ 'update-available': versionInfo?.update_available }"
           @click="emit('showChangelog')"
@@ -284,6 +307,33 @@ onUnmounted(() => {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+.logo-text.logo-warn {
+  background: linear-gradient(120deg, #f59e0b, #ef4444);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.unsupported-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  font-weight: 600;
+  cursor: default;
+  animation: pulse-warn 2.5s ease-in-out infinite;
+}
+
+@keyframes pulse-warn {
+  0%, 100% { border-color: rgba(239, 68, 68, 0.45); }
+  50% { border-color: rgba(239, 68, 68, 0.85); }
 }
 
 .version-badge {
