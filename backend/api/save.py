@@ -278,6 +278,22 @@ def api_save(req: SaveRequest):
                 merged_options = {**preset_season_opts, **render_options}
                 render_options = merged_options
 
+    # Pass preset_id so the template renderer can look up linked overlay configs
+    if req.preset_id:
+        render_options["preset_id"] = req.preset_id
+
+    # Inject Plex media metadata for overlay badge rendering
+    if req.rating_key:
+        try:
+            from ..config import get_plex_media_info
+            plex_media = get_plex_media_info(req.rating_key)
+            if plex_media:
+                existing_meta = render_options.get("metadata") or {}
+                render_options["metadata"] = {**existing_meta, **plex_media}
+                logger.info("[SAVE] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
+        except Exception as e:
+            logger.debug("[SAVE] Failed to inject media info: %s", e)
+
     img = render_poster_image(
         req.template_id,
         req.background_url,

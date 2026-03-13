@@ -280,7 +280,7 @@ const clearLogs = async () => {
       <div class="header">
         <div>
           <p class="label">Activity</p>
-          <h2>Logs</h2>
+          <h2>&#x1F4DD; Logs</h2>
         </div>
         <div class="header-controls">
           <div class="filter-group">

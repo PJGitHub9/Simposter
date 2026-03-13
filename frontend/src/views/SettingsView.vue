@@ -1088,7 +1088,7 @@ onMounted(() => {
     <div class="settings-header">
       <div class="settings-title-row">
         <div>
-          <h2>Settings</h2>
+          <h2>&#x2699;&#xFE0F; Settings</h2>
           <p class="header-subtitle">Customize your Simposter experience</p>
         </div>
         <div class="header-status">

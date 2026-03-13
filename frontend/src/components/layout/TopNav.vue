@@ -11,6 +11,18 @@ type GroupedContent = (
   | { libraryName: string; mediaType?: string; shows: Movie[] }
 )[]
 
+interface VersionInfo {
+  version: string
+  branch: string | null
+  docker_tag: string | null
+  display_version: string
+  update_available: boolean
+  latest_version: string | null
+  update_url: string | null
+}
+
+const MAINTAINED_TAGS = ['latest', 'webui-overhaul-dev']
+
 const props = defineProps<{
   search?: string
   showBack?: boolean
@@ -26,6 +38,7 @@ const emit = defineEmits<{
 
 const searchFocused = ref(false)
 const posterCache = ref<Record<string, string | null>>({})
+const versionInfo = ref<VersionInfo | null>(null)
 const apiBase = getApiBase()
 
 const normalizePoster = (url: string | null | undefined) => {
@@ -108,10 +121,47 @@ const handleBlur = () => {
   }, 200)
 }
 
+const fetchVersionInfo = async () => {
+  try {
+    const response = await fetch(`${apiBase}/api/version-info`)
+    if (response.ok) {
+      versionInfo.value = await response.json()
+    }
+  } catch (error) {
+    console.debug('Failed to fetch version info:', error)
+  }
+}
+
+const displayVersion = computed(() => {
+  if (versionInfo.value?.display_version) {
+    return versionInfo.value.display_version
+  }
+  return APP_VERSION
+})
+
+const versionTitle = computed(() => {
+  if (versionInfo.value?.update_available) {
+    return `Update available: ${versionInfo.value.latest_version}\nClick to view changelog`
+  }
+  return 'View changelog'
+})
+
+const isUnsupportedTag = computed(() => {
+  const tag = versionInfo.value?.docker_tag
+  if (!tag) return false
+  return !MAINTAINED_TAGS.includes(tag)
+})
+
+const unsupportedTagTitle = computed(() => {
+  const tag = versionInfo.value?.docker_tag
+  return `You are running an unmaintained Docker tag: "${tag}"\nSwitch to "latest" or "webui-overhaul-dev" for supported builds.`
+})
+
 let posterCacheInterval: number | null = null
 
 onMounted(() => {
   loadPosterCache()
+  fetchVersionInfo()
   // Watch for changes to the poster cache in sessionStorage every 500ms
   posterCacheInterval = window.setInterval(() => {
     loadPosterCache()
@@ -137,8 +187,25 @@ onUnmounted(() => {
         </svg>
       </button>
       <div class="logo">
-        <span class="logo-text">Simposter</span>
-        <button class="version-badge" @click="emit('showChangelog')" title="View changelog">{{ APP_VERSION }}</button>
+        <span class="logo-text" :class="{ 'logo-warn': isUnsupportedTag }">Simposter</span>
+        <div v-if="isUnsupportedTag" class="unsupported-tag-badge" :title="unsupportedTagTitle">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span>{{ versionInfo?.docker_tag }}</span>
+        </div>
+        <button
+          v-else
+          class="version-badge"
+          :class="{ 'update-available': versionInfo?.update_available }"
+          @click="emit('showChangelog')"
+          :title="versionTitle"
+        >
+          {{ displayVersion }}
+          <span v-if="versionInfo?.update_available" class="update-dot"></span>
+        </button>
       </div>
     </div>
     <div class="search-container">
@@ -242,6 +309,33 @@ onUnmounted(() => {
   background-clip: text;
 }
 
+.logo-text.logo-warn {
+  background: linear-gradient(120deg, #f59e0b, #ef4444);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.unsupported-tag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  font-weight: 600;
+  cursor: default;
+  animation: pulse-warn 2.5s ease-in-out infinite;
+}
+
+@keyframes pulse-warn {
+  0%, 100% { border-color: rgba(239, 68, 68, 0.45); }
+  50% { border-color: rgba(239, 68, 68, 0.85); }
+}
+
 .version-badge {
   font-size: 12px;
   padding: 2px 8px;
@@ -253,12 +347,57 @@ onUnmounted(() => {
   transition: all 0.2s ease;
   font-family: inherit;
   font-weight: 500;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .version-badge:hover {
   background: rgba(61, 214, 183, 0.25);
   border-color: rgba(61, 214, 183, 0.6);
   color: #3dd6b7;
+}
+
+.version-badge.update-available {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+  animation: pulse-update 2s ease-in-out infinite;
+}
+
+.version-badge.update-available:hover {
+  background: rgba(251, 191, 36, 0.25);
+  border-color: rgba(251, 191, 36, 0.6);
+  color: #f59e0b;
+}
+
+.update-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #fbbf24;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-update {
+  0%, 100% {
+    border-color: rgba(251, 191, 36, 0.4);
+  }
+  50% {
+    border-color: rgba(251, 191, 36, 0.8);
+  }
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.8);
+  }
 }
 
 .search-container {

@@ -195,13 +195,7 @@ onMounted(() => {
   <div class="local-assets-view">
     <div class="header">
       <div>
-        <h1>
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
-            <polyline points="13 2 13 9 20 9"/>
-          </svg>
-          Local Assets
-        </h1>
+        <h1>&#x1F4C1; Local Assets</h1>
         <p class="subtitle">Browse and manage saved posters from the output folder</p>
       </div>
       <button class="btn-refresh" @click="fetchLocalAssets" :disabled="localAssetsLoading">

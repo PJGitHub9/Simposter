@@ -6,6 +6,9 @@ from PIL import Image, ImageDraw, ImageOps, ImageEnhance, ImageFilter, ImageChop
 import random
 import numpy as np
 import os
+import io
+import time
+import hashlib
 from pathlib import Path
 from ..config import settings
 
@@ -80,28 +83,6 @@ def _add_grain(img: Image.Image, amount: float) -> Image.Image:
     grain = grain.filter(ImageFilter.GaussianBlur(1.5))
     grain_rgb = Image.merge("RGB", (grain, grain, grain))
     return Image.blend(img, grain_rgb, amount)
-
-def _add_grain_fast(img: Image.Image, amount: float) -> Image.Image:
-    """
-    Film grain; amount 0..0.6
-    """
-    if amount <= 0:
-        return img
-    
-    img = img.convert("RGB")
-    w, h = img.size
-    
-    # Generate all random values at once
-    grain_array = np.random.uniform(-128 * amount, 128 * amount, (h, w))
-    grain_array = (128 + grain_array).clip(0, 255).astype(np.uint8)
-    
-    # Convert to PIL Image
-    grain = Image.fromarray(grain_array, mode='L')
-    grain = grain.filter(ImageFilter.GaussianBlur(1.5))
-    grain_rgb = Image.merge("RGB", (grain, grain, grain))
-    return Image.blend(img, grain_rgb, amount)
-
-
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -802,3 +783,602 @@ def render_universal(
             canvas = Image.alpha_composite(canvas, border_layer)
 
     return canvas.convert("RGB")
+
+
+# ============================================================
+# Overlay Rendering
+# ============================================================
+
+def apply_overlay_config(
+    canvas: Image.Image,
+    preset_id: Optional[str],
+    template_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    overlay_config_ids: Optional[list] = None
+) -> Image.Image:
+    """
+    Apply overlay configurations to the canvas.
+
+    Overlay configs come from two sources (both are applied, deduped):
+    1. The preset's linked overlay_config_id (legacy single-link)
+    2. Explicit overlay_config_ids passed in render options (multi-select)
+
+    Args:
+        canvas: The base poster image
+        preset_id: The preset ID (to look up overlay_config_id)
+        template_id: The template ID
+        metadata: Optional metadata dict with fields like video_resolution, audio_codec, labels, etc.
+        overlay_config_ids: Optional list of overlay config IDs to apply directly
+
+    Returns:
+        Canvas with overlays applied
+    """
+    from .. import database as db
+    from ..config import logger
+
+    # Collect all config IDs to apply (deduped, ordered)
+    config_ids: list[str] = []
+    seen: set[str] = set()
+
+    # 1. From preset's linked overlay_config_id
+    if preset_id:
+        try:
+            preset = db.get_preset(template_id, preset_id)
+            if preset:
+                linked_id = preset.get("overlay_config_id")
+                if linked_id and linked_id not in seen:
+                    config_ids.append(linked_id)
+                    seen.add(linked_id)
+        except Exception as e:
+            logger.error(f"[OVERLAY] Failed to load preset {preset_id}: {e}")
+
+    # 2. From explicit overlay_config_ids
+    if overlay_config_ids:
+        for cid in overlay_config_ids:
+            if cid and cid not in seen:
+                config_ids.append(cid)
+                seen.add(cid)
+
+    if not config_ids:
+        logger.info("[OVERLAY] No overlay config IDs to apply (preset_id=%s, explicit_ids=%s)", preset_id, overlay_config_ids)
+        return canvas
+
+    # Log available metadata for overlay rendering
+    meta = metadata or {}
+
+    # Pre-pass: resolve streaming platform and studio if any config needs them
+    tmdb_id = meta.get("tmdb_id")
+    if tmdb_id:
+        needs_streaming = "streaming_platform" not in meta
+        needs_studio = "studio" not in meta
+
+        for cid in config_ids:
+            if not needs_streaming and not needs_studio:
+                break
+            try:
+                cfg = db.get_overlay_config(cid)
+                if not cfg:
+                    continue
+                element_types = {e.get("type") for e in cfg.get("elements", [])}
+
+                if needs_streaming and "streaming_platform_badge" in element_types:
+                    try:
+                        from ..tmdb_client import get_watch_providers, normalize_provider_name
+                        region = cfg.get("streaming_region") or "US"
+                        media_type = meta.get("media_type", "movie")
+                        providers = get_watch_providers(int(tmdb_id), media_type, region)
+                        if providers:
+                            provider = providers[0]
+                            slug = normalize_provider_name(provider.get("provider_name", ""))
+                            meta["streaming_platform"] = slug
+                            # Store TMDb logo URL so "url" mode works without manual URL config
+                            logo_path = provider.get("logo_path", "")
+                            if logo_path:
+                                meta["streaming_platform_logo_url"] = f"https://image.tmdb.org/t/p/w200{logo_path}"
+                            logger.debug("[OVERLAY] Resolved streaming platform: %s (region=%s)", slug, region)
+                    except Exception as sp_err:
+                        logger.debug("[OVERLAY] Streaming platform pre-pass error: %s", sp_err)
+                    needs_streaming = False
+
+                if needs_studio and "studio_badge" in element_types:
+                    try:
+                        from ..tmdb_client import get_studio_name, get_studio_company_id
+                        media_type = meta.get("media_type", "movie")
+                        slug = get_studio_name(int(tmdb_id), media_type)
+                        if slug:
+                            meta["studio"] = slug
+                            logger.debug("[OVERLAY] Resolved studio: %s", slug)
+                        company_id = get_studio_company_id(int(tmdb_id), media_type)
+                        if company_id is not None:
+                            meta["studio_company_id"] = company_id
+                            logger.debug("[OVERLAY] Resolved studio company_id: %s", company_id)
+                    except Exception as st_err:
+                        logger.debug("[OVERLAY] Studio pre-pass error: %s", st_err)
+                    needs_studio = False
+
+            except Exception as cfg_err:
+                logger.debug("[OVERLAY] Pre-pass config error for %s: %s", cid, cfg_err)
+
+    logger.info("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
+
+    # Convert to RGBA for overlay compositing
+    if canvas.mode != "RGBA":
+        canvas = canvas.convert("RGBA")
+
+    W, H = canvas.size
+
+    for config_id in config_ids:
+        try:
+            overlay_config = db.get_overlay_config(config_id)
+            if not overlay_config:
+                logger.warning(f"[OVERLAY] Overlay config {config_id} not found")
+                continue
+
+            elements = overlay_config.get("elements", [])
+            if not elements:
+                logger.info(f"[OVERLAY] Overlay config '{overlay_config['name']}' has no elements, skipping")
+                continue
+
+            element_types = [e.get("type", "unknown") for e in elements]
+            logger.info(f"[OVERLAY] Applying overlay config '{overlay_config['name']}' with {len(elements)} elements: {element_types}")
+
+            for element in elements:
+                try:
+                    canvas = _apply_overlay_element(canvas, element, W, H, meta)
+                except Exception as elem_err:
+                    logger.error(f"[OVERLAY] Failed to apply element {element.get('type')}: {elem_err}")
+
+        except Exception as e:
+            logger.error(f"[OVERLAY] Failed to apply overlay config {config_id}: {e}")
+
+    return canvas
+
+
+def _get_text_anchor(element: Dict[str, Any]) -> str:
+    """Map element text_align to PIL text anchor. Default is center ('mm')."""
+    align = (element.get("text_align") or "center").lower()
+    return {"left": "lm", "right": "rm"}.get(align, "mm")
+
+
+def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int, H: int, metadata: Dict[str, Any]) -> Image.Image:
+    """Apply a single overlay element to the canvas."""
+    from ..config import logger
+
+    element_type = element.get("type")
+    logger.info("[OVERLAY] Processing element type='%s' at position=(%.2f, %.2f)",
+                element_type, element.get("position_x", 0.5), element.get("position_y", 0.5))
+
+    # Check conditional rendering based on labels
+    if not _should_render_element(element, metadata):
+        logger.info("[OVERLAY]   -> Skipped (conditional label filter)")
+        return canvas
+
+    # Calculate position
+    pos_x = element.get("position_x", 0.5)
+    pos_y = element.get("position_y", 0.5)
+    x = int(W * pos_x)
+    y = int(H * pos_y)
+
+    # Metadata badge types (new + legacy aliases)
+    _BADGE_DEFAULTS = {
+        "video_badge":              ("video_resolution", 40),
+        "audio_badge":              ("audio_codec", 30),
+        "edition_badge":            ("edition", 30),
+        "streaming_platform_badge": ("streaming_platform", 30),
+        "studio_badge":             ("studio", 30),
+        "resolution_badge":         ("video_resolution", 40),  # legacy alias
+        "codec_badge":              ("audio_codec", 30),       # legacy alias
+    }
+
+    if element_type in _BADGE_DEFAULTS:
+        default_field, default_font_size = _BADGE_DEFAULTS[element_type]
+        return _apply_metadata_badge(canvas, element, x, y, metadata, default_field, default_font_size)
+    elif element_type == "custom_image":
+        return _apply_custom_image(canvas, element, x, y)
+    elif element_type == "text_label":
+        return _apply_text_label(canvas, element, x, y)
+    elif element_type == "label_badge":
+        return _apply_label_badge(canvas, element, x, y, metadata)
+
+    logger.warning("[OVERLAY]   -> Unknown element type '%s', skipping", element_type)
+    return canvas
+
+
+def _should_render_element(element: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
+    """Check if element should be rendered based on conditional rules (case-insensitive)."""
+    show_if_label = element.get("show_if_label")
+    hide_if_label = element.get("hide_if_label")
+    labels = metadata.get("labels", [])
+    labels_lower = [l.lower() for l in labels]
+
+    if show_if_label and show_if_label.lower() not in labels_lower:
+        return False
+
+    if hide_if_label and hide_if_label.lower() in labels_lower:
+        return False
+
+    return True
+
+
+def _calc_paste_position(x: int, y: int, ow: int, oh: int, anchor: str) -> tuple[int, int]:
+    """Calculate top-left paste position for an image given an anchor point."""
+    h_anchors = {
+        "left":   0,
+        "center": ow // 2,
+        "right":  ow,
+    }
+    v_anchors = {
+        "top":    0,
+        "center": oh // 2,
+        "bottom": oh,
+    }
+    parts = anchor.lower().split("-") if anchor else ["center"]
+    if len(parts) == 1:
+        h_off = h_anchors.get("center", ow // 2)
+        v_off = v_anchors.get("center", oh // 2)
+    else:
+        v_off = v_anchors.get(parts[0], oh // 2)
+        h_off = h_anchors.get(parts[1], ow // 2)
+    return x - h_off, y - v_off
+
+
+def _apply_canvas_size_constraints(img: Image.Image, element: Dict[str, Any], W: int, H: int) -> Image.Image:
+    """Apply percentage-based width/height and max-pixel constraints (custom_image only)."""
+    ow, oh = img.size
+
+    pct_width = element.get("width")
+    pct_height = element.get("height")
+    if pct_width and pct_width > 0:
+        ratio = int(W * pct_width) / ow
+        ow = int(W * pct_width)
+        oh = int(oh * ratio)
+        img = img.resize((ow, oh), Image.LANCZOS)
+    if pct_height and pct_height > 0:
+        ratio = int(H * pct_height) / oh
+        oh = int(H * pct_height)
+        ow = int(ow * ratio)
+        img = img.resize((ow, oh), Image.LANCZOS)
+
+    max_width = element.get("max_width")
+    max_height = element.get("max_height")
+    if max_width or max_height:
+        ow, oh = img.size
+        cap = 1.0
+        if max_width and ow > max_width:
+            cap = min(cap, max_width / ow)
+        if max_height and oh > max_height:
+            cap = min(cap, max_height / oh)
+        if cap < 1.0:
+            img = img.resize((int(ow * cap), int(oh * cap)), Image.LANCZOS)
+
+    return img
+
+
+def _render_badge_asset(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, asset_id: str, value: str = "") -> Optional[Image.Image]:
+    """Try to render a badge using an asset image. Returns updated canvas on success, None on failure.
+    Uses alpha_composite so semi-transparent badge edges composite correctly without darkening."""
+    from .. import database as db
+
+    asset = db.get_overlay_asset(asset_id)
+    if not asset:
+        return None
+
+    asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
+    if not asset_path.exists():
+        return None
+
+    overlay_img = Image.open(asset_path).convert("RGBA")
+
+    # Per-value scale/anchor override element-level fallback
+    val_key = value.lower() if value else ""
+    badge_scales = element.get("badge_scales") or {}
+    badge_anchors = element.get("badge_anchors") or {}
+    scale_multiplier = badge_scales.get(val_key) if val_key in badge_scales else element.get("scale")
+    anchor = badge_anchors.get(val_key) if val_key in badge_anchors else element.get("anchor", "center")
+
+    if scale_multiplier and scale_multiplier > 0:
+        ow, oh = overlay_img.size
+        overlay_img = overlay_img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
+
+    ow, oh = overlay_img.size
+    paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor or "center")
+    badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    badge_layer.paste(overlay_img, (paste_x, paste_y))
+    return Image.alpha_composite(canvas, badge_layer)
+
+
+def _normalize_badge_url(url: str) -> str:
+    """Normalize known URL patterns to direct-download equivalents.
+    GitHub blob viewer URLs → raw.githubusercontent.com CDN URLs."""
+    import re
+    # github.com/.../blob/branch/path → raw.githubusercontent.com/.../branch/path
+    m = re.match(r'https?://github\.com/([^/]+/[^/]+)/blob/([^?#]+)', url)
+    if m:
+        return f'https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}'
+    # Strip stray ?raw / ?raw=true suffixes that users copy from GitHub
+    url = re.sub(r'\?raw(=true)?$', '', url, flags=re.IGNORECASE)
+    return url
+
+
+def _fetch_url_badge_image(url: str) -> Optional[Image.Image]:
+    """Download a badge image from a URL with 7-day disk cache. Returns None on any error."""
+    import requests as _requests
+    from ..config import logger
+
+    if not url or not url.startswith(("http://", "https://")):
+        return None
+
+    # Normalize before caching so blob URLs and raw URLs share the same cache entry
+    url = _normalize_badge_url(url)
+
+    cache_dir = Path(settings.CONFIG_DIR) / "url_badge_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    url_hash = hashlib.md5(url.encode()).hexdigest()
+    cache_path = cache_dir / f"{url_hash}.png"
+
+    # Return cached copy if fresh (7-day TTL)
+    if cache_path.exists():
+        age = time.time() - cache_path.stat().st_mtime
+        if age < 604800:
+            try:
+                return Image.open(cache_path).convert("RGBA")
+            except Exception:
+                cache_path.unlink(missing_ok=True)
+
+    # Download and cache
+    try:
+        resp = _requests.get(url, timeout=10, headers={"User-Agent": "Simposter/1.0"})
+        resp.raise_for_status()
+        img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+        img.save(str(cache_path), "PNG")
+        logger.debug("[OVERLAY] Cached URL badge: %s → %s", url[:80], cache_path.name)
+        return img
+    except Exception as e:
+        logger.warning("[OVERLAY] Failed to fetch URL badge '%s': %s", url[:80], e)
+        return None
+
+
+# Friendly display labels for auto-detected slugs (streaming_platform and studio fields).
+# Used as fallback when badge_texts is empty — so "apple-tv-plus" renders as "Apple TV+"
+# rather than "APPLE-TV-PLUS" even for configs that pre-date the default text pre-population.
+_SLUG_DISPLAY_LABELS: dict[str, str] = {
+    # Streaming platforms
+    "netflix": "Netflix", "prime-video": "Prime Video", "disney-plus": "Disney+",
+    "max": "Max", "hulu": "Hulu", "apple-tv-plus": "Apple TV+",
+    "paramount-plus": "Paramount+", "peacock": "Peacock", "tubi": "Tubi",
+    "crunchyroll": "Crunchyroll", "shudder": "Shudder", "mubi": "MUBI",
+    # Studios / networks
+    "a24": "A24", "amazon-mgm": "Amazon MGM", "apple-original": "Apple Original",
+    "disney": "Disney", "marvel-studios": "Marvel Studios", "pixar": "Pixar",
+    "warner-bros": "Warner Bros.", "universal": "Universal", "paramount": "Paramount",
+    "sony-pictures": "Sony Pictures", "20th-century": "20th Century", "lionsgate": "Lionsgate",
+    "blumhouse": "Blumhouse", "focus-features": "Focus Features", "dreamworks": "DreamWorks",
+    "amblin": "Amblin", "legendary": "Legendary", "bad-robot": "Bad Robot",
+    "hbo": "HBO", "fx": "FX", "amc": "AMC", "showtime": "Showtime", "starz": "Starz",
+    "cbs": "CBS", "nbc": "NBC", "abc": "ABC", "fox": "FOX",
+}
+
+
+def _apply_metadata_badge(
+    canvas: Image.Image, element: Dict[str, Any], x: int, y: int,
+    metadata: Dict[str, Any], default_field: str = "video_resolution", default_font_size: int = 40,
+) -> Image.Image:
+    """Unified metadata badge renderer for video, audio, edition, and legacy types.
+    Supports per-value badge modes: none (skip), text (render text), image (render asset)."""
+    from ..config import logger
+
+    metadata_field = element.get("metadata_field") or default_field
+    value = metadata.get(metadata_field, "")
+    if not value:
+        logger.info("[OVERLAY]   -> Metadata badge: no value for field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
+        return canvas
+
+    logger.info("[OVERLAY]   -> Metadata badge: %s = '%s'", metadata_field, value)
+
+    # Check per-value mode; fall back to '__other__' catch-all, then "text"
+    badge_modes = element.get("badge_modes") or {}
+    _key = value.lower()
+    mode = badge_modes.get(_key)
+    if mode is None:
+        mode = badge_modes.get("__other__", "text")
+
+    if mode == "none":
+        logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", value)
+        return canvas
+
+    if mode == "image":
+        badge_assets = element.get("badge_assets") or {}
+        asset_id = badge_assets.get(value.lower())
+        if asset_id:
+            try:
+                result = _render_badge_asset(canvas, element, x, y, asset_id, value=value)
+                if result is not None:
+                    logger.info("[OVERLAY]   -> Rendered metadata badge as image (asset=%s)", asset_id)
+                    return result
+            except Exception as e:
+                logger.warning(f"[OVERLAY] Failed to render metadata badge asset: {e}")
+        logger.info("[OVERLAY]   -> Image mode but asset not found, falling through to text")
+
+    if mode == "url":
+        badge_urls = element.get("badge_urls") or {}
+        url = (badge_urls.get(value.lower()) or "").strip()
+        # Auto-fall back to TMDb-derived logo URL stored in metadata during pre-pass
+        if not url:
+            auto_key = f"{metadata_field}_logo_url"
+            url = (metadata.get(auto_key) or "").strip()
+        if url:
+            img = _fetch_url_badge_image(url)
+            if img is not None:
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
+                val_key = value.lower()
+                badge_scales = element.get("badge_scales") or {}
+                badge_anchors = element.get("badge_anchors") or {}
+                scale_multiplier = (badge_scales[val_key] if val_key in badge_scales
+                                    else badge_scales.get("__other__") if "__other__" in badge_scales
+                                    else element.get("scale"))
+                anchor = (badge_anchors[val_key] if val_key in badge_anchors
+                          else badge_anchors.get("__other__") if "__other__" in badge_anchors
+                          else element.get("anchor", "center"))
+                if scale_multiplier and scale_multiplier > 0:
+                    ow, oh = img.size
+                    img = img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
+                ow, oh = img.size
+                paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor or "center")
+                # alpha_composite (not paste) is required: paste() linearly blends the alpha
+                # channel even with an RGBA mask, causing semi-transparent edge pixels to set
+                # canvas alpha < 255, which then renders as black on convert("RGB").
+                # alpha_composite uses the "over" operation which always keeps dst alpha = 255
+                # when the destination is fully opaque.
+                badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+                badge_layer.paste(img, (paste_x, paste_y))
+                canvas = Image.alpha_composite(canvas, badge_layer)
+                logger.info("[OVERLAY]   -> Rendered metadata badge from URL: %s", url[:80])
+                return canvas
+        logger.info("[OVERLAY]   -> URL mode: no URL or fetch failed for '%s', falling through to text", value)
+
+    if mode == "asset":
+        from ..simposter_assets import get_asset_url
+        slug_aliases = element.get("slug_aliases") or {}
+        effective_slug = slug_aliases.get(value.lower(), value.lower())
+        # Pass TMDb company ID for studio badges — more reliable than slug matching
+        company_id: Optional[int] = None
+        if metadata and element.get("type") == "studio_badge":
+            try:
+                raw_cid = metadata.get("studio_company_id")
+                if raw_cid is not None:
+                    company_id = int(raw_cid)
+            except (TypeError, ValueError):
+                pass
+        asset_url = get_asset_url(effective_slug, company_id=company_id)
+        if asset_url:
+            img = _fetch_url_badge_image(asset_url)
+            if img is not None:
+                if img.mode != "RGBA":
+                    img = img.convert("RGBA")
+                val_key = value.lower()
+                badge_scales = element.get("badge_scales") or {}
+                badge_anchors = element.get("badge_anchors") or {}
+                scale_multiplier = (badge_scales[val_key] if val_key in badge_scales
+                                    else badge_scales.get("__other__") if "__other__" in badge_scales
+                                    else element.get("scale"))
+                anchor = (badge_anchors[val_key] if val_key in badge_anchors
+                          else badge_anchors.get("__other__") if "__other__" in badge_anchors
+                          else element.get("anchor", "center"))
+                if scale_multiplier and scale_multiplier > 0:
+                    ow, oh = img.size
+                    img = img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
+                ow, oh = img.size
+                paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor or "center")
+                badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+                badge_layer.paste(img, (paste_x, paste_y))
+                canvas = Image.alpha_composite(canvas, badge_layer)
+                logger.info("[OVERLAY]   -> Rendered metadata badge from simposter asset: %s", asset_url[:80])
+                return canvas
+        logger.info("[OVERLAY]   -> Asset mode: no simposter asset for '%s', falling through to text", value)
+
+    # Text rendering using element font settings
+    font_family = element.get("font_family", "arial")
+    font_size = element.get("font_size", default_font_size)
+    font_color_hex = element.get("font_color", "#FFFFFF")
+    font = _load_font(font_family, font_size)
+
+    if font_color_hex and font_color_hex.startswith("#") and len(font_color_hex) >= 7:
+        rgb = tuple(int(font_color_hex[i:i+2], 16) for i in (1, 3, 5))
+    else:
+        rgb = (255, 255, 255)
+
+    # Use custom display text if set, fall back to friendly slug label, then uppercase raw value
+    badge_texts = element.get("badge_texts") or {}
+    display_text = badge_texts.get(value.lower()) or _SLUG_DISPLAY_LABELS.get(value.lower()) or value.upper()
+
+    logger.info("[OVERLAY]   -> Rendering metadata badge text '%s' (font=%s size=%s color=%s) at (%d, %d)",
+                display_text, font_family, font_size, font_color_hex, x, y)
+
+    draw = ImageDraw.Draw(canvas)
+    anchor = _get_text_anchor(element)
+    draw.text((x, y), display_text, fill=(*rgb, 255), font=font, anchor=anchor)
+    return canvas
+
+
+def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y: int) -> Image.Image:
+    """Apply custom image overlay from asset library."""
+    from .. import database as db
+
+    asset_id = element.get("asset_id")
+    if not asset_id:
+        return canvas
+
+    asset = db.get_overlay_asset(asset_id)
+    if not asset:
+        return canvas
+
+    asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
+    if not asset_path.exists():
+        return canvas
+
+    overlay_img = Image.open(asset_path).convert("RGBA")
+
+    W, H = canvas.size
+
+    # Apply scale multiplier first (if provided)
+    scale_multiplier = element.get("scale")
+    if scale_multiplier and scale_multiplier > 0:
+        ow, oh = overlay_img.size
+        overlay_img = overlay_img.resize((int(ow * scale_multiplier), int(oh * scale_multiplier)), Image.LANCZOS)
+
+    # Apply percentage-based width/height and max-pixel constraints
+    overlay_img = _apply_canvas_size_constraints(overlay_img, element, W, H)
+
+    ow, oh = overlay_img.size
+    anchor = element.get("anchor", "center")
+    paste_x, paste_y = _calc_paste_position(x, y, ow, oh, anchor)
+
+    badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    badge_layer.paste(overlay_img, (paste_x, paste_y))
+    return Image.alpha_composite(canvas, badge_layer)
+
+
+def _apply_text_label(canvas: Image.Image, element: Dict[str, Any], x: int, y: int) -> Image.Image:
+    """Apply text label overlay."""
+    text = element.get("text", "")
+    if not text:
+        return canvas
+
+    font_family = element.get("font_family", "arial")
+    font_size = element.get("font_size", 40)
+    font_color = element.get("font_color", "#FFFFFF")
+
+    if font_color.startswith("#") and len(font_color) >= 7:
+        rgb = tuple(int(font_color[i:i+2], 16) for i in (1, 3, 5))
+    else:
+        rgb = (255, 255, 255)
+
+    font = _load_font(font_family, font_size)
+    draw = ImageDraw.Draw(canvas)
+    anchor = _get_text_anchor(element)
+    draw.text((x, y), text, fill=(*rgb, 255), font=font, anchor=anchor)
+    return canvas
+
+
+def _apply_label_badge(canvas: Image.Image, element: Dict[str, Any], x: int, y: int, metadata: Dict[str, Any]) -> Image.Image:
+    """Apply badge based on Plex label presence."""
+    label_name = element.get("label_name", "")
+    if not label_name:
+        return canvas
+
+    labels = metadata.get("labels", [])
+    if label_name not in labels:
+        return canvas
+
+    # Render the label as a badge
+    draw = ImageDraw.Draw(canvas)
+    try:
+        font = ImageFont.truetype("arial.ttf", 30)
+    except:
+        font = ImageFont.load_default()
+
+    anchor = _get_text_anchor(element)
+    draw.text((x, y), label_name, fill=(255, 255, 255, 255), font=font, anchor=anchor)
+    return canvas

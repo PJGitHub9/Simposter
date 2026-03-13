@@ -1,5 +1,88 @@
 # Changelog
 
+## v1.5.7 (2026-03-13)
+### New Features
+- **Streaming Platform Badge**: New overlay element type that auto-detects the streaming platform from TMDb watch providers
+  - Supports Netflix, Prime Video, Disney+, Max, Hulu, Apple TV+, Paramount+, Peacock, Tubi, Crunchyroll, Shudder, MUBI
+  - Per-platform badge modes: None, Text, Image (Simposter Asset), or URL
+  - Region selector on overlay config (US, GB, CA, AU, DE, FR, ES, IT, JP, KR, BR, MX)
+  - Watch provider results cached in DB for 7 days to avoid redundant API calls
+- **Studio Badge**: New overlay element type that shows the primary production studio / network
+  - Auto-detected from TMDb production_companies (movies) or networks (TV shows)
+  - Same per-value badge modes as streaming badge
+- **Simposter Asset Badge Mode**: New `asset` mode for badge elements that pulls logos directly from the simposter-assets GitHub repo
+  - Live `logos.json` index refreshed hourly with 60-second retry cooldown on failure
+  - TMDb company ID column (`tmdb_production_company_id`) in logos.json for reliable studio matching regardless of name variations
+  - Slug alias system: per-element mappings for edge cases where TMDb returns an unexpected company name
+  - Thread-safe cache with double-checked locking to prevent race conditions during prewarm
+- **Unmaintained Branch Warning**: Logo in the top-left turns amber/red and shows a pulsing warning badge when running a Docker tag that is not `latest` or `webui-overhaul-dev`
+  - Docker tag is baked into `build-info.json` at build time via `--build-arg DOCKER_TAG=...`
+  - Can also be set at runtime via `DOCKER_TAG` environment variable
+
+### Improvements
+- `/api/version-info` now includes `docker_tag` field
+- Studio company ID cached alongside studio name so asset lookup by TMDb ID works immediately on subsequent renders
+- Stale studio cache entries (pre-dating company ID tracking) are automatically re-fetched from TMDb on next render
+
+## v1.5.51 (2026-03-01)
+### Bug Fixes
+- **Version API Docker Fix**: Fixed API crash in Docker containers due to incorrect subprocess exception handling
+  - Changed `subprocess.SubprocessTimeoutExpired` to `subprocess.TimeoutExpired` (correct Python stdlib name)
+- **Branch Detection in Containers**: Fixed git branch detection failing when `.git` directory is not present
+  - Added build-time branch capture via Docker build args
+  - Creates `build-info.json` file in image with git branch information
+  - Backend now falls back to `build-info.json` when git commands fail
+  - Added `build-docker.sh` and `build-docker.bat` scripts to automate branch capture
+
+## v1.5.5 (2026-03-01)
+### UI Improvements
+- **Navigation Emoji Icons**: Added emojis to all page headings and navigation items for better visual distinction
+  - Movies 🎬, TV Shows 📺, Batch Edit ✏️, Template Manager 🎨, Overlay Manager 📐
+  - Local Assets 🗂️, History 📜, Logs 📝, Collections 📚, Settings ⚙️, Backup/Restore 💾
+  - Removed duplicate SVG + emoji icons from sidebar (was rendering both)
+
+### Overlay System Enhancements
+- **Overlay Element Type Refactor**: Reorganized element types for clearer metadata organization
+  - **New types**: `video_badge` (resolution, codec), `audio_badge` (codec, channels, language), `edition_badge` (theatrical, extended, etc.)
+  - **Legacy support**: `resolution_badge` and `codec_badge` still work (aliased to new types)
+  - **Removed from UI**: `label_badge` (still renders for backwards compatibility)
+  - **Metadata field dropdowns**: Now restricted to relevant fields per badge type
+    - Video badges: video_resolution, video_codec only
+    - Audio badges: audio_codec, audio_channels, audio_language only
+    - Edition badges: fixed to edition field (theatrical, extended, director's cut, unrated, imax)
+  - **Case-insensitive label matching**: `show_if_label` and `hide_if_label` now case-insensitive
+  - **Consolidated rendering**: Backend uses unified `_apply_metadata_badge` function for all badge types
+
+### Technical Improvements
+- Simplified overlay badge rendering pipeline with type-to-defaults mapping
+- Canvas preview rendering now uses lookup table for badge colors (blue for video, purple for audio, amber for edition)
+- Updated schema documentation with new element types
+
+## v1.5.4 (2026-02-27)
+### Bug Fixes
+- **Fallback Settings Reset Fix**: Fixed fallback preset settings being reset to blank after v1.5.3 template consolidation
+  - `fallbackPosterTemplate` and `fallbackLogoTemplate` references to removed 'default'/'universal' templates now automatically migrate to 'uniformlogo' on startup
+  - Applies to both main preset options and season-specific options
+- **Overlay badge rendering fixes**: Fixed multiple issues preventing overlay badges from appearing on posters
+  - Fixed metadata not being injected when background URL was a direct TMDB link (rating_key now sent explicitly from frontend)
+  - Fixed overlay badges not rendering in Send to Plex, Save, and Batch paths — all render paths now inject preset_id and Plex media metadata
+  - Fixed resolution value mismatch: frontend badge values now match Plex's actual `videoResolution` format (e.g., `1080` instead of `1080p`)
+
+### New Features
+- **Overlay Config Manager**: Create reusable overlay templates with draggable elements (early testing)
+  - Resolution badges, codec badges, custom images, text labels, and label badges
+  - Overlay asset library — upload and manage badge images (4K, Atmos, etc.)
+  - Live canvas preview with drag-to-position, poster search, and value switcher
+  - Badge per-value mode selector: None (skip), Text (with custom display text and font settings), or Image (from asset library)
+  - Percentage-based and pixel-based sizing for overlay elements
+- **Dynamic Plex media metadata**: Overlay badges use real media info (resolution, codec, channels) fetched from Plex instead of hardcoded values
+  - Media info is cached in the database for fast subsequent lookups
+  - Cached automatically during library scans and label fetches
+
+### Improvements
+- Increased logo bounding box max height (thanks chadwpalm)
+- Detailed overlay rendering logs for easier debugging
+
 ## v1.5.0 (2026-01-11)
 ### Major Features
 - **Poster Generation History Tracking**: Complete audit log of all poster operations

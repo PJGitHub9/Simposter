@@ -342,6 +342,18 @@ def init_database():
             cursor.execute("ALTER TABLE movie_cache ADD COLUMN library_id TEXT DEFAULT 'default'")
         if "tvdb_id" not in cols:
             cursor.execute("ALTER TABLE movie_cache ADD COLUMN tvdb_id INTEGER")
+        if "video_resolution" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN video_resolution TEXT")
+        if "audio_codec" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN audio_codec TEXT")
+        if "audio_channels" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN audio_channels TEXT")
+        if "video_codec" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN video_codec TEXT")
+        if "audio_language" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN audio_language TEXT")
+        if "edition" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN edition TEXT")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_movie_cache_updated
@@ -388,6 +400,18 @@ def init_database():
             cursor.execute("ALTER TABLE tv_cache ADD COLUMN seasons_json TEXT DEFAULT '[]'")
         if "tvdb_id" not in tv_cols:
             cursor.execute("ALTER TABLE tv_cache ADD COLUMN tvdb_id INTEGER")
+        if "video_resolution" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN video_resolution TEXT")
+        if "audio_codec" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN audio_codec TEXT")
+        if "audio_channels" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN audio_channels TEXT")
+        if "video_codec" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN video_codec TEXT")
+        if "audio_language" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN audio_language TEXT")
+        if "edition" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN edition TEXT")
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_tv_cache_updated
             ON tv_cache(updated_at)
@@ -634,8 +658,105 @@ def init_database():
 
                 logger.info(f"[DB] Successfully migrated {history_to_migrate} poster_history entries")
 
+            # Migrate fallback template references inside ALL preset options_json / season_options_json
+            # A preset with template_id='uniformlogo' can still have fallbackPosterTemplate='default' in its options
+            cursor.execute("SELECT id, options_json, season_options_json FROM presets")
+            all_presets = cursor.fetchall()
+            fallback_keys = ["fallbackPosterTemplate", "fallbackLogoTemplate"]
+            migrated_fallback_count = 0
+
+            for preset in all_presets:
+                preset_id = preset["id"]
+                changed = False
+
+                opts = json.loads(preset["options_json"])
+                for key in fallback_keys:
+                    if opts.get(key) in ("default", "universal"):
+                        opts[key] = "uniformlogo"
+                        changed = True
+
+                season_raw = preset["season_options_json"] if "season_options_json" in preset.keys() else "{}"
+                season_opts = json.loads(season_raw) if season_raw else {}
+                for key in fallback_keys:
+                    if season_opts.get(key) in ("default", "universal"):
+                        season_opts[key] = "uniformlogo"
+                        changed = True
+
+                if changed:
+                    cursor.execute("""
+                        UPDATE presets SET options_json = ?, season_options_json = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    """, (json.dumps(opts), json.dumps(season_opts), preset_id))
+                    migrated_fallback_count += 1
+
+            if migrated_fallback_count > 0:
+                logger.info(f"[DB] Migrated fallback template references in {migrated_fallback_count} presets")
+
         except Exception as migration_err:
             logger.warning(f"[DB] Template consolidation migration failed (non-critical): {migration_err}")
+
+        # Overlay configuration tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS overlay_configs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                elements_json TEXT NOT NULL DEFAULT '[]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS overlay_assets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_type TEXT,
+                width INTEGER,
+                height INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Migration: add overlay_config_id column to presets if it doesn't exist
+        cursor.execute("PRAGMA table_info(presets)")
+        preset_cols = [row["name"] for row in cursor.fetchall()]
+        if "overlay_config_id" not in preset_cols:
+            cursor.execute("ALTER TABLE presets ADD COLUMN overlay_config_id TEXT")
+            logger.info("[DB] Added 'overlay_config_id' column to presets table")
+
+        # Migration: add streaming_region column to overlay_configs if it doesn't exist
+        cursor.execute("PRAGMA table_info(overlay_configs)")
+        overlay_cols = [row["name"] for row in cursor.fetchall()]
+        if "streaming_region" not in overlay_cols:
+            cursor.execute("ALTER TABLE overlay_configs ADD COLUMN streaming_region TEXT DEFAULT 'US'")
+            logger.info("[DB] Added 'streaming_region' column to overlay_configs table")
+
+        # Streaming provider cache — stores TMDb watch/providers results per item
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS streaming_provider_cache (
+                tmdb_id     TEXT NOT NULL,
+                media_type  TEXT NOT NULL,
+                region      TEXT NOT NULL DEFAULT 'US',
+                providers_json TEXT DEFAULT '[]',
+                fetched_at  INTEGER,
+                PRIMARY KEY (tmdb_id, media_type, region)
+            )
+        """)
+
+        # Create indexes for overlay tables
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_overlay_configs_name
+            ON overlay_configs(name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_overlay_assets_name
+            ON overlay_assets(name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_presets_overlay_config
+            ON presets(overlay_config_id)
+        """)
 
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
@@ -969,6 +1090,186 @@ def delete_preset(template_id: str, preset_id: str) -> bool:
     return deleted
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Overlay Configuration Functions
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_all_overlay_configs() -> List[Dict[str, Any]]:
+    """Get all overlay configurations."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, elements_json, streaming_region, created_at, updated_at
+            FROM overlay_configs
+            ORDER BY created_at DESC
+        """)
+        rows = cursor.fetchall()
+
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "elements": json.loads(row["elements_json"]),
+            "streaming_region": row["streaming_region"] or "US",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"]
+        }
+        for row in rows
+    ]
+
+
+def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
+    """Get a specific overlay configuration by ID."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, elements_json, streaming_region, created_at, updated_at
+            FROM overlay_configs
+            WHERE id = ?
+        """, (config_id,))
+        row = cursor.fetchone()
+
+    if row:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "elements": json.loads(row["elements_json"]),
+            "streaming_region": row["streaming_region"] or "US",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"]
+        }
+    return None
+
+
+def save_overlay_config(config_id: str, name: str, elements: List[Dict[str, Any]], streaming_region: str = "US") -> None:
+    """Save or update an overlay configuration."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO overlay_configs (id, name, elements_json, streaming_region, created_at, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                elements_json = excluded.elements_json,
+                streaming_region = excluded.streaming_region,
+                updated_at = CURRENT_TIMESTAMP
+        """, (config_id, name, json.dumps(elements), streaming_region))
+    logger.info(f"[DB] Saved overlay config {config_id} ({name})")
+
+
+def delete_overlay_config(config_id: str) -> bool:
+    """Delete an overlay configuration. Returns True if deleted, False if not found."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # First, unlink any presets using this overlay config
+        cursor.execute("""
+            UPDATE presets
+            SET overlay_config_id = NULL
+            WHERE overlay_config_id = ?
+        """, (config_id,))
+        # Then delete the config
+        cursor.execute("""
+            DELETE FROM overlay_configs WHERE id = ?
+        """, (config_id,))
+        deleted = cursor.rowcount > 0
+
+    if deleted:
+        logger.info(f"[DB] Deleted overlay config {config_id}")
+    return deleted
+
+
+def get_all_overlay_assets() -> List[Dict[str, Any]]:
+    """Get all overlay assets."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, file_path, file_type, width, height, created_at
+            FROM overlay_assets
+            ORDER BY created_at DESC
+        """)
+        rows = cursor.fetchall()
+
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "file_path": row["file_path"],
+            "file_type": row["file_type"],
+            "width": row["width"],
+            "height": row["height"],
+            "created_at": row["created_at"]
+        }
+        for row in rows
+    ]
+
+
+def get_overlay_asset(asset_id: str) -> Optional[Dict[str, Any]]:
+    """Get a specific overlay asset by ID."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, file_path, file_type, width, height, created_at
+            FROM overlay_assets
+            WHERE id = ?
+        """, (asset_id,))
+        row = cursor.fetchone()
+
+    if row:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "file_path": row["file_path"],
+            "file_type": row["file_type"],
+            "width": row["width"],
+            "height": row["height"],
+            "created_at": row["created_at"]
+        }
+    return None
+
+
+def save_overlay_asset(asset_id: str, name: str, file_path: str, file_type: str, width: int, height: int) -> None:
+    """Save a new overlay asset."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO overlay_assets (id, name, file_path, file_type, width, height, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                file_path = excluded.file_path,
+                file_type = excluded.file_type,
+                width = excluded.width,
+                height = excluded.height
+        """, (asset_id, name, file_path, file_type, width, height))
+    logger.info(f"[DB] Saved overlay asset {asset_id} ({name})")
+
+
+def delete_overlay_asset(asset_id: str) -> bool:
+    """Delete an overlay asset. Returns True if deleted, False if not found."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            DELETE FROM overlay_assets WHERE id = ?
+        """, (asset_id,))
+        deleted = cursor.rowcount > 0
+
+    if deleted:
+        logger.info(f"[DB] Deleted overlay asset {asset_id}")
+    return deleted
+
+
+def link_preset_to_overlay_config(template_id: str, preset_id: str, overlay_config_id: Optional[str]) -> None:
+    """Link a preset to an overlay configuration (or unlink if overlay_config_id is None)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE presets
+            SET overlay_config_id = ?
+            WHERE template_id = ? AND id = ?
+        """, (overlay_config_id, template_id, preset_id))
+    logger.info(f"[DB] Linked preset {preset_id} to overlay config {overlay_config_id}")
+
+
 def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
     """
     Replace all presets in the database with the provided structure.
@@ -1117,6 +1418,50 @@ def update_movie_poster(rating_key: str, poster_url: Optional[str], library_id: 
             SET poster_url = ?, updated_at = CURRENT_TIMESTAMP
             WHERE rating_key = ? AND library_id = COALESCE(library_id, ?)
         """, (poster_url, rating_key, library_id))
+
+
+def update_movie_media_info(rating_key: str, video_resolution: Optional[str] = None,
+                            audio_codec: Optional[str] = None, audio_channels: Optional[str] = None,
+                            video_codec: Optional[str] = None, audio_language: Optional[str] = None,
+                            edition: Optional[str] = None) -> None:
+    """Update media stream info for a cached movie."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE movie_cache
+            SET video_resolution = ?, audio_codec = ?, audio_channels = ?,
+                video_codec = ?, audio_language = ?, edition = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE rating_key = ?
+        """, (video_resolution, audio_codec, audio_channels, video_codec, audio_language, edition, rating_key))
+
+
+def get_cached_media_info(rating_key: str) -> Optional[Dict[str, str]]:
+    """Get cached media info for a movie or TV show. Returns None if not cached."""
+    fields = "video_resolution, audio_codec, audio_channels, video_codec, audio_language, edition"
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Try movie_cache first
+        cursor.execute(
+            f"SELECT {fields} FROM movie_cache WHERE rating_key = ?",
+            (rating_key,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            # Try tv_cache
+            cursor.execute(
+                f"SELECT {fields} FROM tv_cache WHERE rating_key = ?",
+                (rating_key,)
+            )
+            row = cursor.fetchone()
+        if not row:
+            return None
+        # Only return if at least one field is populated
+        info: Dict[str, str] = {}
+        for field in ("video_resolution", "audio_codec", "audio_channels", "video_codec", "audio_language", "edition"):
+            if row[field]:
+                info[field] = row[field]
+        return info if info else None
 
 
 def _cleanup_orphaned_posters(rating_keys: List[str]) -> None:
@@ -1372,6 +1717,22 @@ def update_tv_seasons(rating_key: str, seasons: List[Dict[str, Any]], library_id
             SET seasons_json = ?, updated_at = CURRENT_TIMESTAMP
             WHERE rating_key = ? AND library_id = COALESCE(library_id, ?)
         """, (seasons_json, rating_key, library_id))
+
+
+def update_tv_media_info(rating_key: str, video_resolution: Optional[str] = None,
+                         audio_codec: Optional[str] = None, audio_channels: Optional[str] = None,
+                         video_codec: Optional[str] = None, audio_language: Optional[str] = None,
+                         edition: Optional[str] = None) -> None:
+    """Update media stream info for a cached TV show."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE tv_cache
+            SET video_resolution = ?, audio_codec = ?, audio_channels = ?,
+                video_codec = ?, audio_language = ?, edition = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE rating_key = ?
+        """, (video_resolution, audio_codec, audio_channels, video_codec, audio_language, edition, rating_key))
 
 
 def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "default") -> None:
@@ -2011,6 +2372,39 @@ def has_poster_been_sent(rating_key: str) -> bool:
             (rating_key,),
         )
         return cursor.fetchone() is not None
+
+
+_STREAMING_PROVIDER_TTL = 604800  # 7 days
+
+
+def get_cached_providers(tmdb_id, media_type: str, region: str):
+    """Return cached flatrate provider list for (tmdb_id, media_type, region), or None if missing/stale."""
+    import json as _json
+    import time as _time
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT providers_json, fetched_at FROM streaming_provider_cache WHERE tmdb_id=? AND media_type=? AND region=?",
+            (str(tmdb_id), media_type, region),
+        )
+        row = cursor.fetchone()
+        if row and row["fetched_at"] and (_time.time() - row["fetched_at"]) < _STREAMING_PROVIDER_TTL:
+            try:
+                return _json.loads(row["providers_json"] or "[]")
+            except Exception:
+                return None
+    return None
+
+
+def upsert_cached_providers(tmdb_id, media_type: str, region: str, providers: list) -> None:
+    """Insert or replace streaming provider cache entry."""
+    import json as _json
+    import time as _time
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO streaming_provider_cache (tmdb_id, media_type, region, providers_json, fetched_at) VALUES (?,?,?,?,?)",
+            (str(tmdb_id), media_type, region, _json.dumps(providers), int(_time.time())),
+        )
 
 
 # Initialize database on module import

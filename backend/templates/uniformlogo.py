@@ -93,4 +93,12 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
             from PIL import ImageOps
             canvas = ImageOps.expand(canvas, border=px, fill=border_color)
 
+    # Apply overlay configurations
+    from .universal import apply_overlay_config
+    metadata = options.get("metadata", {})
+    preset_id = options.get("preset_id")
+    overlay_config_ids = options.get("overlay_config_ids")
+    if preset_id or overlay_config_ids:
+        canvas = apply_overlay_config(canvas, preset_id, "uniformlogo", metadata, overlay_config_ids)
+
     return canvas

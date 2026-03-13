@@ -183,7 +183,7 @@ onMounted(async () => {
     <div class="header">
       <div>
         <p class="eyebrow">Experimental</p>
-        <h1>Batch Edit Tracker</h1>
+        <h1>&#x270F;&#xFE0F; Batch Edit Tracker</h1>
         <p class="subtitle">Track which templates were used, when posters were saved or sent to Plex.</p>
       </div>
       <div class="pill">{{ filteredRows.length }} items</div>

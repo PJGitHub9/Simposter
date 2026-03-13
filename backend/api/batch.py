@@ -249,10 +249,27 @@ def _process_single_movie(
         render_options["movie_title"] = movie_details.get("title", "")
         render_options["movie_year"] = movie_details.get("year", "")
 
+        # Inject Plex media metadata for overlay badges
+        from ..config import get_plex_media_info
+        plex_media = get_plex_media_info(rating_key)
+        if plex_media:
+            existing_meta = render_options.get("metadata") or {}
+            render_options["metadata"] = {**existing_meta, **plex_media}
+
+        # Inject tmdb_id and media_type for streaming platform badge resolution
+        if tmdb_id:
+            render_options.setdefault("metadata", {})
+            render_options["metadata"]["tmdb_id"] = tmdb_id
+            render_options["metadata"]["media_type"] = "movie"
+
+        # Pass preset_id so the template renderer can look up linked overlay configs
+        if preset_id:
+            render_options["preset_id"] = preset_id
+
         # Check if overlay caching is enabled
         ui_settings = db.get_ui_settings()
         use_overlay_cache = ui_settings.get("performance", {}).get("useOverlayCache", True)
-        
+
         img = render_with_overlay_cache(
             template_id,
             preset_id,
@@ -588,6 +605,23 @@ def _process_single_tv_show(
         tmdb_id = extract_tmdb_id_from_metadata(r.text)
         tvdb_id = extract_tvdb_id_from_metadata(r.text)
 
+        # Piggyback: cache media info from the same response
+        try:
+            from ..config import extract_media_info_from_metadata
+            media_info = extract_media_info_from_metadata(r.text)
+            if media_info:
+                db.update_tv_media_info(
+                    rating_key,
+                    media_info.get("video_resolution"),
+                    media_info.get("audio_codec"),
+                    media_info.get("audio_channels"),
+                    video_codec=media_info.get("video_codec"),
+                    audio_language=media_info.get("audio_language"),
+                    edition=media_info.get("edition"),
+                )
+        except Exception:
+            pass  # Non-critical
+
         if tmdb_id and not tvdb_id:
             try:
                 external_ids = get_tv_external_ids(tmdb_id)
@@ -604,8 +638,21 @@ def _process_single_tv_show(
         show_details = get_tv_show_details(tmdb_id)
         show_title = show_details.get("name", "Unknown")
 
-        # If include_seasons is False, render series poster only
+        include_series = getattr(req, 'include_series', True)
+
+        # Neither type selected — nothing to do
+        if not req.include_seasons and not include_series:
+            return {
+                "rating_key": rating_key,
+                "show_title": show_details.get("name", ""),
+                "status": "skipped",
+                "reason": "No poster types selected (include_series=False, include_seasons=False)",
+                "poster_fallback": False,
+                "logo_fallback": False,
+            }
+
         if not req.include_seasons:
+            # Series poster only
             return _render_tv_series_poster(
                 rating_key, tmdb_id, tvdb_id, show_details, template_id, preset_id,
                 render_options_base, poster_filter, logo_preference, logo_mode,
@@ -613,14 +660,15 @@ def _process_single_tv_show(
                 source=source
             )
         else:
-            # Fetch seasons and render all with season-specific options
+            # Season posters (and optionally series poster)
             return _render_all_tv_seasons(
                 rating_key, tmdb_id, tvdb_id, show_details, template_id, preset_id,
                 render_options_base, poster_filter, logo_preference, logo_mode,
                 white_logo_fallback, language_pref, req,
                 season_poster_filter_final, season_options_final,
                 source=source,
-                affected_seasons=affected_seasons
+                affected_seasons=affected_seasons,
+                include_series=include_series,
             )
 
     except Exception as e:
@@ -750,6 +798,7 @@ def _render_tv_series_poster(
         poster_fallback_template=poster_fallback_template_used,
         poster_fallback_preset=poster_fallback_preset_used,
         source=source,
+        tmdb_id=tmdb_id,
     )
 
 
@@ -771,6 +820,7 @@ def _render_all_tv_seasons(
     season_options: Optional[dict] = None,
     source: str = "batch",
     affected_seasons: Optional[List[int]] = None,
+    include_series: bool = True,
 ):
     """Render all seasons for a TV show.
 
@@ -838,9 +888,10 @@ def _render_all_tv_seasons(
 
     results = []
 
-    # Only render series poster if not in webhook mode with affected_seasons
-    # (webhooks with affected_seasons should only render the specific seasons, not series poster)
-    should_render_series = not affected_seasons
+    # Render series poster only when:
+    # - include_series is True (user opted in), AND
+    # - not in webhook mode with affected_seasons (webhooks with affected_seasons target specific seasons only)
+    should_render_series = include_series and not affected_seasons
 
     if should_render_series:
         # Render series poster first before processing seasons
@@ -911,6 +962,7 @@ def _render_all_tv_seasons(
                     poster_fallback_template=series_poster_fallback_template,
                     poster_fallback_preset=series_poster_fallback_preset,
                     source=source,
+                    tmdb_id=tmdb_id,
                 )
                 results.append({
                     **series_result,
@@ -1073,6 +1125,7 @@ def _render_all_tv_seasons(
             poster_fallback_template=season_poster_fallback_template,
             poster_fallback_preset=season_poster_fallback_preset,
             source=source,
+            tmdb_id=tmdb_id,
         )
         results.append(result)
 
@@ -1105,10 +1158,28 @@ def _render_and_save_poster(
     logo_fallback_template: Optional[str] = None,
     logo_fallback_preset: Optional[str] = None,
     source: str = "batch",
+    tmdb_id: Optional[int] = None,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
     display_title = f"{title} - {season_title}" if season_title else title
+
+    # Inject Plex media metadata for overlay badges
+    from ..config import get_plex_media_info
+    plex_media = get_plex_media_info(rating_key)
+    if plex_media:
+        existing_meta = render_options.get("metadata") or {}
+        render_options["metadata"] = {**existing_meta, **plex_media}
+
+    # Inject tmdb_id and media_type for streaming platform badge resolution
+    if tmdb_id:
+        render_options.setdefault("metadata", {})
+        render_options["metadata"]["tmdb_id"] = tmdb_id
+        render_options["metadata"]["media_type"] = "tv" if is_tv else "movie"
+
+    # Pass preset_id so the template renderer can look up linked overlay configs
+    if preset_id:
+        render_options["preset_id"] = preset_id
 
     _update_batch_status({
         "current_step": "Rendering poster",

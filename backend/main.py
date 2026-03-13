@@ -18,6 +18,11 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     init_scheduler()
+    # Pre-warm simposter asset cache so the first render doesn't block on a
+    # synchronous GitHub HTTP fetch.
+    import threading
+    from .simposter_assets import _fetch_logos
+    threading.Thread(target=_fetch_logos, daemon=True, name="simposter-assets-prewarm").start()
 
 # Shutdown the scheduler gracefully
 @app.on_event("shutdown")
