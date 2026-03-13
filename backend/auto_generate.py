@@ -85,7 +85,7 @@ def process_new_content_for_library(
         # Process movies
         if new_movies:
             library_mappings = plex_settings.get("libraryMappings", [])
-            library_config = next((lib for lib in library_mappings if lib.get("id") == library_id), None)
+            library_config = next((lib for lib in library_mappings if str(lib.get("id", "")) == str(library_id)), None)
 
             if library_config and library_config.get("autoGenerateEnabled"):
                 template_id = library_config.get("autoGenerateTemplateId")
@@ -138,7 +138,7 @@ def process_new_content_for_library(
         # Process TV shows
         if new_tv_shows:
             tv_library_mappings = plex_settings.get("tvShowLibraryMappings", [])
-            tv_library_config = next((lib for lib in tv_library_mappings if lib.get("id") == library_id), None)
+            tv_library_config = next((lib for lib in tv_library_mappings if str(lib.get("id", "")) == str(library_id)), None)
 
             if tv_library_config and tv_library_config.get("autoGenerateEnabled"):
                 template_id = tv_library_config.get("autoGenerateTemplateId")

@@ -28,8 +28,10 @@ interface OverlayElement {
   badge_modes?: Record<string, string>
   badge_assets?: Record<string, string>
   badge_texts?: Record<string, string>
+  badge_urls?: Record<string, string>
   badge_scales?: Record<string, number>
   badge_anchors?: Record<string, string>
+  slug_aliases?: Record<string, string>
   text_align?: string
 }
 
@@ -37,6 +39,7 @@ interface OverlayConfig {
   id: string
   name: string
   elements: OverlayElement[]
+  streaming_region?: string
   created_at?: string
   updated_at?: string
 }
@@ -65,6 +68,50 @@ const AUDIO_CHANNELS_VALUES = ['2', '6', '8']
 const AUDIO_LANGUAGE_VALUES = ['en', 'es', 'fr', 'de', 'ja', 'ko', 'zh', 'it', 'pt', 'ru']
 const EDITION_VALUES = ['theatrical', 'extended', "director's cut", 'unrated', 'imax']
 
+const STREAMING_PLATFORM_VALUES = [
+  'netflix', 'prime-video', 'disney-plus', 'max', 'hulu',
+  'apple-tv-plus', 'paramount-plus', 'peacock', 'tubi',
+  'crunchyroll', 'shudder', 'mubi',
+]
+const STREAMING_PLATFORM_LABELS: Record<string, string> = {
+  'netflix': 'Netflix', 'prime-video': 'Prime Video', 'disney-plus': 'Disney+',
+  'max': 'Max', 'hulu': 'Hulu', 'apple-tv-plus': 'Apple TV+',
+  'paramount-plus': 'Paramount+', 'peacock': 'Peacock', 'tubi': 'Tubi',
+  'crunchyroll': 'Crunchyroll', 'shudder': 'Shudder', 'mubi': 'MUBI',
+}
+const STREAMING_REGIONS = [
+  { code: 'US', label: 'United States' }, { code: 'GB', label: 'United Kingdom' },
+  { code: 'CA', label: 'Canada' }, { code: 'AU', label: 'Australia' },
+  { code: 'DE', label: 'Germany' }, { code: 'FR', label: 'France' },
+  { code: 'ES', label: 'Spain' }, { code: 'IT', label: 'Italy' },
+  { code: 'JP', label: 'Japan' }, { code: 'KR', label: 'South Korea' },
+  { code: 'BR', label: 'Brazil' }, { code: 'MX', label: 'Mexico' },
+]
+
+const STUDIO_VALUES = [
+  // Film studios
+  'a24', 'netflix', 'amazon-mgm', 'apple-original',
+  'disney', 'marvel-studios', 'pixar',
+  'warner-bros', 'universal', 'paramount',
+  'sony-pictures', '20th-century', 'lionsgate',
+  'blumhouse', 'focus-features', 'dreamworks',
+  'amblin', 'legendary', 'bad-robot',
+  // TV networks
+  'hbo', 'fx', 'amc', 'showtime', 'starz',
+  'cbs', 'nbc', 'abc', 'fox',
+]
+const STUDIO_LABELS: Record<string, string> = {
+  'a24': 'A24', 'netflix': 'Netflix', 'amazon-mgm': 'Amazon MGM',
+  'apple-original': 'Apple Original Films', 'disney': 'Disney',
+  'marvel-studios': 'Marvel Studios', 'pixar': 'Pixar',
+  'warner-bros': 'Warner Bros.', 'universal': 'Universal', 'paramount': 'Paramount',
+  'sony-pictures': 'Sony Pictures', '20th-century': '20th Century', 'lionsgate': 'Lionsgate',
+  'blumhouse': 'Blumhouse', 'focus-features': 'Focus Features', 'dreamworks': 'DreamWorks',
+  'amblin': 'Amblin', 'legendary': 'Legendary', 'bad-robot': 'Bad Robot',
+  'hbo': 'HBO', 'fx': 'FX', 'amc': 'AMC', 'showtime': 'Showtime', 'starz': 'Starz',
+  'cbs': 'CBS', 'nbc': 'NBC', 'abc': 'ABC', 'fox': 'FOX',
+}
+
 const METADATA_FIELD_VALUES: Record<string, string[]> = {
   video_resolution: RESOLUTION_VALUES,
   video_codec: VIDEO_CODEC_VALUES,
@@ -72,6 +119,8 @@ const METADATA_FIELD_VALUES: Record<string, string[]> = {
   audio_channels: AUDIO_CHANNELS_VALUES,
   audio_language: AUDIO_LANGUAGE_VALUES,
   edition: EDITION_VALUES,
+  streaming_platform: STREAMING_PLATFORM_VALUES,
+  studio: STUDIO_VALUES,
 }
 
 const getValuesForField = (field: string): string[] => {
@@ -83,6 +132,7 @@ const getValuesForField = (field: string): string[] => {
 const configs = ref<OverlayConfig[]>([])
 const assets = ref<OverlayAsset[]>([])
 const fonts = ref<string[]>([])
+const simposterAssetMap = ref<Record<string, string>>({})
 const loading = ref(false)
 const selectedConfig = ref<OverlayConfig | null>(null)
 const showEditor = ref(false)
@@ -94,6 +144,7 @@ const previewCanvas = ref<HTMLCanvasElement | null>(null)
 const PREVIEW_W = 300
 const PREVIEW_H = 450
 const assetImageCache = ref<Record<string, HTMLImageElement>>({})
+const urlImageCache = ref<Record<string, HTMLImageElement>>({})
 
 // Drag state
 const dragEnabled = ref(false)
@@ -108,10 +159,19 @@ const selectedMovie = ref<SimpleMovie | null>(null)
 const posterBgImage = ref<HTMLImageElement | null>(null)
 const posterLoading = ref(false)
 
+// Library selection for preview
+const previewLibraries = ref<Array<{key: string, title: string, type: string}>>([])
+const previewLibrariesLoading = ref(false)
+const previewSelectedLibrary = ref<{key: string, title: string, type: string} | null>(null)
+
+// Preview mode: 'item' uses real Plex metadata, 'testing' uses manual dropdowns
+const previewMode = ref<'item' | 'testing'>('testing')
+const previewItemMetadata = ref<Record<string, string>>({})
+
 const movieSearchResults = computed(() => {
   const q = movieSearchTerm.value.trim().toLowerCase()
-  if (!q) return movies.value.slice(0, 30)
-  return movies.value.filter(m => m.title.toLowerCase().includes(q)).slice(0, 30)
+  if (!q) return movies.value.slice(0, 50)
+  return movies.value.filter(m => m.title.toLowerCase().includes(q)).slice(0, 50)
 })
 
 // Preview value switcher
@@ -121,6 +181,8 @@ const previewCodec = ref('atmos')
 const previewAudioChannels = ref('6')
 const previewAudioLanguage = ref('en')
 const previewEdition = ref('theatrical')
+const previewStreamingPlatform = ref('netflix')
+const previewStudio = ref('a24')
 
 const previewMetadataValues: Record<string, Ref<string>> = {
   video_resolution: previewResolution,
@@ -129,6 +191,8 @@ const previewMetadataValues: Record<string, Ref<string>> = {
   audio_channels: previewAudioChannels,
   audio_language: previewAudioLanguage,
   edition: previewEdition,
+  streaming_platform: previewStreamingPlatform,
+  studio: previewStudio,
 }
 
 // Asset upload state
@@ -150,6 +214,18 @@ const loadConfigs = async () => {
     console.error('Failed to load overlay configs:', e)
   } finally {
     loading.value = false
+  }
+}
+
+const loadSimposterAssets = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/simposter-assets-map`)
+    if (res.ok) {
+      const data = await res.json()
+      simposterAssetMap.value = data.assets || {}
+    }
+  } catch (e) {
+    console.warn('Failed to load simposter assets map:', e)
   }
 }
 
@@ -177,17 +253,38 @@ const loadFonts = async () => {
   }
 }
 
-const loadMovies = async () => {
-  if (moviesLoaded.value) return
+const loadPreviewLibraries = async () => {
+  if (previewLibraries.value.length > 0) return
+  previewLibrariesLoading.value = true
   try {
-    const res = await fetch(`${apiBase}/api/movies`)
+    const res = await fetch(`${apiBase}/api/test-plex-connection`)
+    if (res.ok) {
+      const data = await res.json()
+      previewLibraries.value = (data.sections || []).filter((s: any) =>
+        s.type === 'movie' || s.type === 'show'
+      )
+    }
+  } catch (e) {
+    console.error('Failed to load libraries:', e)
+  } finally {
+    previewLibrariesLoading.value = false
+  }
+}
+
+const loadMoviesForLibrary = async (lib: {key: string, title: string, type: string}) => {
+  moviesLoaded.value = false
+  movies.value = []
+  try {
+    const endpoint = lib.type === 'show' ? `/api/tv-shows` : `/api/movies`
+    const res = await fetch(`${apiBase}${endpoint}?library_id=${lib.key}`)
     if (res.ok) {
       const data = await res.json()
       movies.value = (Array.isArray(data) ? data : []).map((m: any) => ({ key: m.key, title: m.title }))
-      moviesLoaded.value = true
     }
   } catch (e) {
-    console.error('Failed to load movies:', e)
+    console.error('Failed to load items:', e)
+  } finally {
+    moviesLoaded.value = true
   }
 }
 
@@ -195,7 +292,8 @@ const createNewConfig = () => {
   selectedConfig.value = {
     id: `overlay-${Date.now()}`,
     name: 'New Overlay Config',
-    elements: []
+    elements: [],
+    streaming_region: 'US',
   }
   showEditor.value = true
 }
@@ -329,6 +427,7 @@ const addElement = (type: string) => {
     defaults.badge_modes = {}
     defaults.badge_assets = {}
     defaults.badge_texts = {}
+    defaults.badge_urls = {}
     defaults.font_size = 40
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
@@ -337,6 +436,7 @@ const addElement = (type: string) => {
     defaults.badge_modes = {}
     defaults.badge_assets = {}
     defaults.badge_texts = {}
+    defaults.badge_urls = {}
     defaults.font_size = 30
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
@@ -345,6 +445,25 @@ const addElement = (type: string) => {
     defaults.badge_modes = {}
     defaults.badge_assets = {}
     defaults.badge_texts = {}
+    defaults.badge_urls = {}
+    defaults.font_size = 30
+    defaults.font_color = '#FFFFFF'
+    defaults.font_family = 'Arial'
+  } else if (type === 'streaming_platform_badge') {
+    defaults.metadata_field = 'streaming_platform'
+    defaults.badge_modes = {}
+    defaults.badge_assets = {}
+    defaults.badge_texts = Object.fromEntries(STREAMING_PLATFORM_VALUES.map(v => [v, STREAMING_PLATFORM_LABELS[v] || v]))
+    defaults.badge_urls = {}
+    defaults.font_size = 30
+    defaults.font_color = '#FFFFFF'
+    defaults.font_family = 'Arial'
+  } else if (type === 'studio_badge') {
+    defaults.metadata_field = 'studio'
+    defaults.badge_modes = {}
+    defaults.badge_assets = {}
+    defaults.badge_texts = Object.fromEntries(STUDIO_VALUES.map(v => [v, STUDIO_LABELS[v] || v]))
+    defaults.badge_urls = {}
     defaults.font_size = 30
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
@@ -373,6 +492,8 @@ const elementTypeLabel = (type: string): string => {
     video_badge: 'Video Badge',
     audio_badge: 'Audio Badge',
     edition_badge: 'Edition Badge',
+    streaming_platform_badge: 'Streaming Badge',
+    studio_badge: 'Studio Badge',
     custom_image: 'Custom Image',
     text_label: 'Text Label',
     // Legacy types
@@ -388,6 +509,8 @@ const elementTypeColor = (type: string): string => {
     video_badge: '#60a5fa',
     audio_badge: '#a78bfa',
     edition_badge: '#f59e0b',
+    streaming_platform_badge: '#10b981',
+    studio_badge: '#f97316',
     custom_image: '#34d399',
     text_label: '#fbbf24',
     // Legacy types
@@ -399,18 +522,94 @@ const elementTypeColor = (type: string): string => {
 }
 
 // Badge mode/asset helpers
+// Appends the '__other__' catch-all row to any badge value list
+const withOther = (vals: string[]): string[] => [...vals, '__other__']
+
+// Display label for badge value rows; '__other__' shows as "Other (unrecognized)"
+const badgeValueLabel = (val: string, labels?: Record<string, string>): string => {
+  if (val === '__other__') return 'Other (unrecognized)'
+  return labels?.[val] || val.toUpperCase()
+}
+
 const getBadgeMode = (element: OverlayElement, value: string): string => {
-  return element.badge_modes?.[value] ?? 'text'
+  // Match canvas resolution: specific value → __other__ fallback → default 'text'
+  if (value === '__other__') return element.badge_modes?.['__other__'] ?? 'text'
+  return element.badge_modes?.[value] ?? element.badge_modes?.['__other__'] ?? 'text'
+}
+
+// Returns true if the value has ANY explicit setting (not just inheriting from __other__)
+const hasExplicitOverride = (element: OverlayElement, val: string): boolean =>
+  element.badge_modes?.[val] !== undefined ||
+  element.badge_scales?.[val] != null ||
+  element.badge_anchors?.[val] != null
+
+const getExplicitOverrides = (element: OverlayElement, values: string[]): string[] =>
+  values.filter(v => hasExplicitOverride(element, v))
+
+const getAvailableForOverride = (element: OverlayElement, values: string[]): string[] =>
+  values.filter(v => !hasExplicitOverride(element, v))
+
+const addBadgeOverride = (element: OverlayElement, val: string) => {
+  if (!val || val === '__other__') return
+  if (!element.badge_modes) element.badge_modes = {}
+  // Start from the current __other__ setting so the override looks right immediately
+  element.badge_modes[val] = element.badge_modes?.['__other__'] || 'asset'
+  const defScale = element.badge_scales?.['__other__']
+  const defAnchor = element.badge_anchors?.['__other__']
+  if (defScale != null) { if (!element.badge_scales) element.badge_scales = {}; element.badge_scales[val] = defScale }
+  if (defAnchor) { if (!element.badge_anchors) element.badge_anchors = {}; element.badge_anchors[val] = defAnchor }
+}
+
+const removeBadgeOverride = (element: OverlayElement, val: string) => {
+  if (element.badge_modes) delete element.badge_modes[val]
+  if (element.badge_scales) delete element.badge_scales[val]
+  if (element.badge_anchors) delete element.badge_anchors[val]
+  if (element.badge_texts) delete element.badge_texts[val]
+  if (element.badge_assets) delete element.badge_assets[val]
+  if (element.badge_urls) delete element.badge_urls[val]
+}
+
+// Slug alias helpers — map TMDb slugs to canonical asset slugs
+const pendingAliasFrom = ref('')
+const pendingAliasTo = ref('')
+
+const addSlugAlias = (element: OverlayElement, from: string, to: string) => {
+  const f = from.trim().toLowerCase()
+  const t = to.trim().toLowerCase()
+  if (!f || !t) return
+  if (!element.slug_aliases) element.slug_aliases = {}
+  element.slug_aliases[f] = t
+  pendingAliasFrom.value = ''
+  pendingAliasTo.value = ''
+}
+
+const removeSlugAlias = (element: OverlayElement, from: string) => {
+  if (element.slug_aliases) delete element.slug_aliases[from]
 }
 
 const setBadgeMode = (element: OverlayElement, value: string, mode: string) => {
   if (!element.badge_modes) element.badge_modes = {}
   element.badge_modes[value] = mode
-  // Clear image-specific overrides when switching away from image
+  // Clear image-specific overrides when switching away from image/asset
   if (mode !== 'image') {
     if (element.badge_assets?.[value]) delete element.badge_assets[value]
-    if (element.badge_scales?.[value] != null) delete element.badge_scales[value]
-    if (element.badge_anchors?.[value]) delete element.badge_anchors[value]
+    if (mode !== 'url' && mode !== 'asset') {
+      if (element.badge_scales?.[value] != null) delete element.badge_scales[value]
+      if (element.badge_anchors?.[value]) delete element.badge_anchors[value]
+    }
+  }
+}
+
+const getBadgeUrl = (element: OverlayElement, value: string): string => {
+  return element.badge_urls?.[value] ?? ''
+}
+
+const setBadgeUrl = (element: OverlayElement, value: string, url: string) => {
+  if (!element.badge_urls) element.badge_urls = {}
+  if (url) {
+    element.badge_urls[value] = url
+  } else {
+    delete element.badge_urls[value]
   }
 }
 
@@ -465,23 +664,56 @@ const hasBadgeTextMode = (element: OverlayElement): boolean => {
   // Determine all possible values for this element's field
   const field = element.type === 'edition_badge'
     ? 'edition'
+    : element.type === 'streaming_platform_badge'
+    ? 'streaming_platform'
+    : element.type === 'studio_badge'
+    ? 'studio'
     : (element.metadata_field || 'video_resolution')
-  const allValues = getValuesForField(field)
+  const allValues = withOther(getValuesForField(field))
   // Return true if any value's effective mode is "text" (unset defaults to "text")
   return allValues.some(v => (element.badge_modes?.[v] ?? 'text') === 'text')
 }
 
 // --- Poster search ---
 
-const openMovieSearch = async () => {
-  await loadMovies()
+const backToLibraries = () => {
+  previewSelectedLibrary.value = null
+  movies.value = []
+  moviesLoaded.value = false
   movieSearchTerm.value = ''
+}
+
+const openMovieSearch = async () => {
+  backToLibraries()
   showMovieSearch.value = true
+  await loadPreviewLibraries()
+}
+
+const selectLibrary = async (lib: {key: string, title: string, type: string}) => {
+  previewSelectedLibrary.value = lib
+  movieSearchTerm.value = ''
+  await loadMoviesForLibrary(lib)
+}
+
+const fetchItemMetadata = async (ratingKey: string) => {
+  try {
+    const params = new URLSearchParams({ rating_key: ratingKey })
+    if (selectedConfig.value?.id) params.set('config_id', selectedConfig.value.id)
+    params.set('media_type', previewSelectedLibrary.value?.type === 'show' ? 'tv' : 'movie')
+    const res = await fetch(`${apiBase}/api/overlay-preview-metadata?${params}`)
+    if (res.ok) {
+      const data = await res.json()
+      previewItemMetadata.value = data.metadata || {}
+    }
+  } catch (e) {
+    console.error('Failed to fetch item metadata:', e)
+  }
 }
 
 const selectMovie = async (movie: SimpleMovie) => {
   showMovieSearch.value = false
   selectedMovie.value = movie
+  previewItemMetadata.value = {}
   posterLoading.value = true
   try {
     const url = `${apiBase}/api/movie/${movie.key}/poster?raw=1`
@@ -493,19 +725,30 @@ const selectMovie = async (movie: SimpleMovie) => {
       img.src = url
     })
     posterBgImage.value = img
-    nextTick(renderPreview)
   } catch (e) {
     console.error('Failed to load poster:', e)
     posterBgImage.value = null
   } finally {
     posterLoading.value = false
   }
+  if (previewMode.value === 'item') {
+    await fetchItemMetadata(movie.key)
+  }
+  renderPreview()
 }
 
 const clearPoster = () => {
   selectedMovie.value = null
   posterBgImage.value = null
+  previewItemMetadata.value = {}
   nextTick(renderPreview)
+}
+
+const getPreviewValue = (field: string): string => {
+  if (previewMode.value === 'item' && previewItemMetadata.value[field]) {
+    return previewItemMetadata.value[field]
+  }
+  return previewMetadataValues[field]?.value || ''
 }
 
 // --- Canvas drag ---
@@ -630,7 +873,45 @@ const loadAssetImage = (assetId: string): Promise<HTMLImageElement> => {
   })
 }
 
+const loadUrlImage = (url: string): Promise<HTMLImageElement> => {
+  const proxyUrl = `${apiBase}/api/proxy-image?url=${encodeURIComponent(url)}`
+  return new Promise((resolve, reject) => {
+    if (urlImageCache.value[proxyUrl]) {
+      resolve(urlImageCache.value[proxyUrl])
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      urlImageCache.value[proxyUrl] = img
+      resolve(img)
+    }
+    img.onerror = reject
+    img.src = proxyUrl
+  })
+}
+
+// Normalize known URL patterns: GitHub blob viewer → raw CDN, strip ?raw suffix
+const normalizeBadgeUrl = (url: string): string => {
+  if (!url) return url
+  const ghBlob = url.match(/^https?:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/([^?#]+)/)
+  if (ghBlob) return `https://raw.githubusercontent.com/${ghBlob[1]}/${ghBlob[2]}`
+  return url.replace(/\?raw(=true)?$/i, '')
+}
+
+const prefetchBadgeUrl = (url: string) => {
+  if (!url || !url.startsWith('http')) return
+  loadUrlImage(url)
+    .then(() => nextTick(renderPreview))
+    .catch(() => {})
+}
+
+// Render version counter — incremented on every renderPreview call.
+// Async renders check this before drawing after each image-load await.
+// If a newer render has started, the stale render aborts instead of overwriting.
+let _renderVer = 0
+
 const renderPreview = async () => {
+  const ver = ++_renderVer
   const canvas = previewCanvas.value
   if (!canvas || !selectedConfig.value) return
 
@@ -696,13 +977,14 @@ const renderPreview = async () => {
 
   // Render each element
   for (let idx = 0; idx < selectedConfig.value.elements.length; idx++) {
+    if (_renderVer !== ver) return  // A newer render has started; abort this stale one
     const el = selectedConfig.value.elements[idx]
     if (!el) continue
     const x = el.position_x * PREVIEW_W
     const y = el.position_y * PREVIEW_H
     const isHovered = hoveredElementIdx.value === idx || draggingIdx.value === idx
 
-    await renderPreviewElement(ctx, el, x, y, idx, isHovered)
+    await renderPreviewElement(ctx, el, x, y, idx, isHovered, ver)
   }
 }
 
@@ -712,25 +994,27 @@ const renderPreviewElement = async (
   x: number,
   y: number,
   idx: number,
-  isHovered: boolean
+  isHovered: boolean,
+  ver: number = 0
 ) => {
   const scale = PREVIEW_W / 2000
 
   // Badge type rendering config
   const badgeConfig: Record<string, { defaultField: string; defaultFontSize: number; accent: string; accentRgba: string }> = {
-    video_badge:      { defaultField: 'video_resolution', defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
-    resolution_badge: { defaultField: 'video_resolution', defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
-    audio_badge:      { defaultField: 'audio_codec',      defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
-    codec_badge:      { defaultField: 'audio_codec',      defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
-    edition_badge:    { defaultField: 'edition',           defaultFontSize: 30, accent: '#f59e0b', accentRgba: 'rgba(245, 158, 11, 0.2)' },
+    video_badge:               { defaultField: 'video_resolution',  defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
+    resolution_badge:          { defaultField: 'video_resolution',  defaultFontSize: 40, accent: '#60a5fa', accentRgba: 'rgba(96, 165, 250, 0.2)' },
+    audio_badge:               { defaultField: 'audio_codec',       defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
+    codec_badge:               { defaultField: 'audio_codec',       defaultFontSize: 30, accent: '#a78bfa', accentRgba: 'rgba(167, 139, 250, 0.2)' },
+    edition_badge:             { defaultField: 'edition',            defaultFontSize: 30, accent: '#f59e0b', accentRgba: 'rgba(245, 158, 11, 0.2)' },
+    streaming_platform_badge:  { defaultField: 'streaming_platform', defaultFontSize: 30, accent: '#10b981', accentRgba: 'rgba(16, 185, 129, 0.2)' },
+    studio_badge:              { defaultField: 'studio',             defaultFontSize: 30, accent: '#f97316', accentRgba: 'rgba(249, 115, 22, 0.2)' },
   }
 
   const cfg = badgeConfig[el.type]
   if (cfg) {
     const metaField = el.metadata_field || cfg.defaultField
-    const fallbackRef = previewMetadataValues[metaField] || previewResolution
-    const value = fallbackRef.value
-    const mode = el.badge_modes?.[value] ?? 'text'
+    const value = getPreviewValue(metaField) || (previewMetadataValues[metaField]?.value ?? '')
+    const mode = el.badge_modes?.[value] ?? el.badge_modes?.['__other__'] ?? 'text'
 
     if (mode === 'none') {
       ctx.font = 'bold 9px sans-serif'
@@ -746,16 +1030,66 @@ const renderPreviewElement = async (
       if (assetId) {
         try {
           const img = await loadAssetImage(assetId)
+          if (_renderVer !== ver) return  // stale render — a newer one has started
           // Apply per-value scale/anchor overrides for badge types
           const effectiveEl = {
             ...el,
-            scale: el.badge_scales?.[value] ?? el.scale,
-            anchor: el.badge_anchors?.[value] ?? el.anchor,
+            scale: el.badge_scales?.[value] ?? el.badge_scales?.['__other__'] ?? el.scale,
+            anchor: el.badge_anchors?.[value] ?? el.badge_anchors?.['__other__'] ?? el.anchor,
           }
           drawAssetOnCanvas(ctx, img, effectiveEl, x, y, scale, idx, isHovered, cfg.accent)
           return
         } catch { /* fall through to text */ }
       }
+    }
+    if (mode === 'url') {
+      const url = el.badge_urls?.[value]
+      if (url) {
+        try {
+          const img = await loadUrlImage(url)
+          if (_renderVer !== ver) return  // stale render
+          const effectiveEl = {
+            ...el,
+            scale: el.badge_scales?.[value] ?? el.badge_scales?.['__other__'] ?? el.scale,
+            anchor: el.badge_anchors?.[value] ?? el.badge_anchors?.['__other__'] ?? el.anchor,
+          }
+          drawAssetOnCanvas(ctx, img, effectiveEl, x, y, scale, idx, isHovered, cfg.accent)
+          return
+        } catch { /* fall through */ }
+      }
+      // No URL set — show a dim placeholder so the element is still visible
+      const fontSize = Math.max(4, Math.round((el.font_size || cfg.defaultFontSize) * scale))
+      drawBadge(ctx, x, y, url ? 'URL?' : 'URL', fontSize, cfg.accent, cfg.accentRgba, idx, isHovered, el.text_align || 'center')
+      return
+    }
+    if (mode === 'asset') {
+      if (value) {
+        try {
+          // Resolve alias first (same logic as backend renderer)
+          const resolvedSlug = el.slug_aliases?.[value] ?? value
+          // Backend does full resolution: company_id → logos.json → overrides → heuristic
+          let assetUrl = `${apiBase}/api/asset-image?slug=${encodeURIComponent(resolvedSlug)}`
+          // Pass TMDb company_id for studio_badge so ID-based lookup takes priority
+          if (el.type === 'studio_badge') {
+            const cid = previewItemMetadata.value['studio_company_id']
+            if (cid) assetUrl += `&company_id=${encodeURIComponent(cid)}`
+          }
+          const proxyUrl = assetUrl
+          const img = await loadUrlImage(proxyUrl)
+          if (_renderVer !== ver) return  // stale render
+          const effectiveEl = {
+            ...el,
+            scale: el.badge_scales?.[value] ?? el.badge_scales?.['__other__'] ?? el.scale,
+            anchor: el.badge_anchors?.[value] ?? el.badge_anchors?.['__other__'] ?? el.anchor,
+          }
+          drawAssetOnCanvas(ctx, img, effectiveEl, x, y, scale, idx, isHovered, cfg.accent)
+          return
+        } catch { /* fall through to placeholder */ }
+      }
+      // No slug or asset not found — show placeholder
+      const fontSize = Math.max(4, Math.round((el.font_size || cfg.defaultFontSize) * scale))
+      drawBadge(ctx, x, y, value ? value.toUpperCase() : 'ASSET', fontSize, cfg.accent, cfg.accentRgba, idx, isHovered, el.text_align || 'center')
+      return
     }
     // Text mode (or image fallback)
     const fontSize = Math.max(4, Math.round((el.font_size || cfg.defaultFontSize) * scale))
@@ -766,6 +1100,7 @@ const renderPreviewElement = async (
     if (el.asset_id) {
       try {
         const img = await loadAssetImage(el.asset_id)
+        if (_renderVer !== ver) return  // stale render
         drawAssetOnCanvas(ctx, img, el, x, y, scale, idx, isHovered, '#34d399')
         return
       } catch { /* fallback */ }
@@ -932,12 +1267,33 @@ watch(
 )
 
 watch(hoveredElementIdx, () => { nextTick(renderPreview) })
+// When metadata arrives from the server, re-render immediately.
+// This is the primary trigger for item-mode canvas updates.
+watch(previewItemMetadata, () => { renderPreview() })
+watch(previewMode, async () => {
+  if (previewMode.value === 'item' && selectedMovie.value) {
+    await fetchItemMetadata(selectedMovie.value.key)
+  }
+  // Call directly (not nextTick) — reactive data is already up-to-date at this point.
+  renderPreview()
+})
 watch(previewResolution, () => { nextTick(renderPreview) })
 watch(previewVideoCodec, () => { nextTick(renderPreview) })
 watch(previewCodec, () => { nextTick(renderPreview) })
 watch(previewAudioChannels, () => { nextTick(renderPreview) })
 watch(previewAudioLanguage, () => { nextTick(renderPreview) })
 watch(previewEdition, () => { nextTick(renderPreview) })
+watch(previewStreamingPlatform, () => { nextTick(renderPreview) })
+watch(previewStudio, () => { nextTick(renderPreview) })
+// Re-render when the simposter asset map loads (it arrives async after mount)
+watch(simposterAssetMap, () => { renderPreview() })
+
+const hasStreamingBadge = computed(() =>
+  selectedConfig.value?.elements.some(e => e.type === 'streaming_platform_badge') ?? false
+)
+const hasStudioBadge = computed(() =>
+  selectedConfig.value?.elements.some(e => e.type === 'studio_badge') ?? false
+)
 
 watch(showEditor, (val) => {
   if (val) {
@@ -956,6 +1312,7 @@ onMounted(() => {
   loadConfigs()
   loadAssets()
   loadFonts()
+  loadSimposterAssets()
 })
 </script>
 
@@ -1054,7 +1411,15 @@ onMounted(() => {
         <div class="editor-header">
           <div>
             <h2>Edit Overlay Configuration</h2>
-            <input v-model="selectedConfig.name" class="config-name-input" placeholder="Config name..." />
+            <div class="editor-name-row">
+              <input v-model="selectedConfig.name" class="config-name-input" placeholder="Config name..." />
+              <div v-if="hasStreamingBadge" class="region-selector">
+                <span class="region-label">Region</span>
+                <select v-model="selectedConfig.streaming_region" class="region-select">
+                  <option v-for="r in STREAMING_REGIONS" :key="r.code" :value="r.code">{{ r.label }}</option>
+                </select>
+              </div>
+            </div>
           </div>
           <button class="btn-close" @click="showEditor = false">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1073,6 +1438,8 @@ onMounted(() => {
                   <button class="btn-add" @click="addElement('video_badge')">+ Video</button>
                   <button class="btn-add" @click="addElement('audio_badge')">+ Audio</button>
                   <button class="btn-add" @click="addElement('edition_badge')">+ Edition</button>
+                  <button class="btn-add" @click="addElement('streaming_platform_badge')">+ Stream</button>
+                  <button class="btn-add" @click="addElement('studio_badge')">+ Studio</button>
                   <button class="btn-add" @click="addElement('custom_image')">+ Image</button>
                   <button class="btn-add" @click="addElement('text_label')">+ Text</button>
                 </div>
@@ -1151,9 +1518,9 @@ onMounted(() => {
                       <div class="field-full badge-assets-section">
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
-                          <div v-for="val in getValuesForField(element.metadata_field || 'video_resolution')" :key="val" class="badge-asset-item">
+                          <div v-for="val in withOther(getValuesForField(element.metadata_field || 'video_resolution'))" :key="val" class="badge-asset-item">
                             <div class="badge-asset-row">
-                              <span class="badge-value-label">{{ val.toUpperCase() }}</span>
+                              <span class="badge-value-label">{{ badgeValueLabel(val) }}</span>
                               <select
                                 :value="getBadgeMode(element, val)"
                                 @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
@@ -1162,6 +1529,8 @@ onMounted(() => {
                                 <option value="none">None</option>
                                 <option value="text">Text</option>
                                 <option value="image">Image</option>
+                                <option value="url">URL</option>
+                                <option value="asset">Simposter Asset</option>
                               </select>
                               <input
                                 v-if="getBadgeMode(element, val) === 'text'"
@@ -1180,8 +1549,18 @@ onMounted(() => {
                                 <option value="">Select asset...</option>
                                 <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
                               </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'url'"
+                                type="url"
+                                :value="getBadgeUrl(element, val)"
+                                @input="setBadgeUrl(element, val, ($event.target as HTMLInputElement).value)"
+                                @change="setBadgeUrl(element, val, normalizeBadgeUrl(($event.target as HTMLInputElement).value)); prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))"
+                                @keyup.enter="($event.target as HTMLInputElement).blur()"
+                                placeholder="https://..."
+                                class="badge-url-input"
+                              />
                             </div>
-                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                            <div v-if="['image', 'url', 'asset'].includes(getBadgeMode(element, val))" class="badge-image-overrides">
                               <label>Scale
                                 <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
                               </label>
@@ -1257,9 +1636,9 @@ onMounted(() => {
                       <div class="field-full badge-assets-section">
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
-                          <div v-for="val in getValuesForField(element.metadata_field || 'audio_codec')" :key="val" class="badge-asset-item">
+                          <div v-for="val in withOther(getValuesForField(element.metadata_field || 'audio_codec'))" :key="val" class="badge-asset-item">
                             <div class="badge-asset-row">
-                              <span class="badge-value-label">{{ val.toUpperCase() }}</span>
+                              <span class="badge-value-label">{{ badgeValueLabel(val) }}</span>
                               <select
                                 :value="getBadgeMode(element, val)"
                                 @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
@@ -1268,6 +1647,8 @@ onMounted(() => {
                                 <option value="none">None</option>
                                 <option value="text">Text</option>
                                 <option value="image">Image</option>
+                                <option value="url">URL</option>
+                                <option value="asset">Simposter Asset</option>
                               </select>
                               <input
                                 v-if="getBadgeMode(element, val) === 'text'"
@@ -1286,8 +1667,18 @@ onMounted(() => {
                                 <option value="">Select asset...</option>
                                 <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
                               </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'url'"
+                                type="url"
+                                :value="getBadgeUrl(element, val)"
+                                @input="setBadgeUrl(element, val, ($event.target as HTMLInputElement).value)"
+                                @change="setBadgeUrl(element, val, normalizeBadgeUrl(($event.target as HTMLInputElement).value)); prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))"
+                                @keyup.enter="($event.target as HTMLInputElement).blur()"
+                                placeholder="https://..."
+                                class="badge-url-input"
+                              />
                             </div>
-                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                            <div v-if="['image', 'url', 'asset'].includes(getBadgeMode(element, val))" class="badge-image-overrides">
                               <label>Scale
                                 <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
                               </label>
@@ -1355,9 +1746,9 @@ onMounted(() => {
                       <div class="field-full badge-assets-section">
                         <div class="badge-assets-label">Badge Rendering (per value)</div>
                         <div class="badge-asset-rows">
-                          <div v-for="val in EDITION_VALUES" :key="val" class="badge-asset-item">
+                          <div v-for="val in withOther(EDITION_VALUES)" :key="val" class="badge-asset-item">
                             <div class="badge-asset-row">
-                              <span class="badge-value-label">{{ val.toUpperCase() }}</span>
+                              <span class="badge-value-label">{{ badgeValueLabel(val) }}</span>
                               <select
                                 :value="getBadgeMode(element, val)"
                                 @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)"
@@ -1366,6 +1757,8 @@ onMounted(() => {
                                 <option value="none">None</option>
                                 <option value="text">Text</option>
                                 <option value="image">Image</option>
+                                <option value="url">URL</option>
+                                <option value="asset">Simposter Asset</option>
                               </select>
                               <input
                                 v-if="getBadgeMode(element, val) === 'text'"
@@ -1384,8 +1777,18 @@ onMounted(() => {
                                 <option value="">Select asset...</option>
                                 <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }}</option>
                               </select>
+                              <input
+                                v-if="getBadgeMode(element, val) === 'url'"
+                                type="url"
+                                :value="getBadgeUrl(element, val)"
+                                @input="setBadgeUrl(element, val, ($event.target as HTMLInputElement).value)"
+                                @change="setBadgeUrl(element, val, normalizeBadgeUrl(($event.target as HTMLInputElement).value)); prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))"
+                                @keyup.enter="($event.target as HTMLInputElement).blur()"
+                                placeholder="https://..."
+                                class="badge-url-input"
+                              />
                             </div>
-                            <div v-if="getBadgeMode(element, val) === 'image'" class="badge-image-overrides">
+                            <div v-if="['image', 'url', 'asset'].includes(getBadgeMode(element, val))" class="badge-image-overrides">
                               <label>Scale
                                 <input type="number" :value="getBadgeScale(element, val)" @input="setBadgeScale(element, val, ($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" />
                               </label>
@@ -1444,6 +1847,166 @@ onMounted(() => {
                             <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
                           </div>
                         </label>
+                      </template>
+                    </template>
+
+                    <!-- Streaming Platform Badge -->
+                    <template v-if="element.type === 'streaming_platform_badge'">
+                      <div class="field-divider"></div>
+                      <div class="field-full badge-assets-section">
+                        <!-- Default row (applies to all platforms unless overridden) -->
+                        <div class="badge-override-section">
+                          <span class="badge-override-section-label">Default</span>
+                          <div class="badge-compact-row">
+                            <span class="badge-compact-label badge-default-label">All platforms</span>
+                            <select :value="getBadgeMode(element, '__other__')" @change="setBadgeMode(element, '__other__', ($event.target as HTMLSelectElement).value)" class="badge-compact-mode">
+                              <option value="none">None</option><option value="text">Text</option><option value="image">Image</option><option value="url">URL</option><option value="asset">Simposter Asset</option>
+                            </select>
+                            <template v-if="['image','url','asset'].includes(getBadgeMode(element,'__other__'))">
+                              <select v-if="getBadgeMode(element,'__other__')==='image'" :value="getBadgeAsset(element,'__other__')||''" @change="setBadgeAsset(element,'__other__',($event.target as HTMLSelectElement).value||undefined)" class="badge-compact-flex"><option value="">Select asset...</option><option v-for="a in assets" :key="a.id" :value="a.id">{{a.name}}</option></select>
+                              <input v-if="getBadgeMode(element,'__other__')==='url'" type="url" :value="getBadgeUrl(element,'__other__')" @input="setBadgeUrl(element,'__other__',($event.target as HTMLInputElement).value)" @change="setBadgeUrl(element,'__other__',normalizeBadgeUrl(($event.target as HTMLInputElement).value))" placeholder="https://..." class="badge-compact-flex badge-compact-url-input" />
+                              <input type="number" :value="getBadgeScale(element,'__other__')" @input="setBadgeScale(element,'__other__',($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" class="badge-cr-scale" />
+                              <select :value="getBadgeAnchor(element,'__other__')" @change="setBadgeAnchor(element,'__other__',($event.target as HTMLSelectElement).value)" class="badge-cr-anchor">
+                                <option value="top-left">Top Left</option><option value="top-center">Top Center</option><option value="top-right">Top Right</option>
+                                <option value="center-left">Center Left</option><option value="center">Center</option><option value="center-right">Center Right</option>
+                                <option value="bottom-left">Bottom Left</option><option value="bottom-center">Bottom Center</option><option value="bottom-right">Bottom Right</option>
+                              </select>
+                            </template>
+                            <input v-if="getBadgeMode(element,'__other__')==='text'" type="text" :value="getBadgeText(element,'__other__')" @input="setBadgeText(element,'__other__',($event.target as HTMLInputElement).value)" placeholder="Text override..." class="badge-compact-flex badge-text-input" />
+                          </div>
+                        </div>
+                        <!-- Per-platform overrides -->
+                        <div v-if="getExplicitOverrides(element, STREAMING_PLATFORM_VALUES).length > 0" class="badge-override-section">
+                          <span class="badge-override-section-label">Overrides</span>
+                          <div class="badge-compact-rows">
+                            <div v-for="val in getExplicitOverrides(element, STREAMING_PLATFORM_VALUES)" :key="val" class="badge-compact-row">
+                              <span class="badge-compact-label">{{ badgeValueLabel(val, STREAMING_PLATFORM_LABELS) }}</span>
+                              <select :value="getBadgeMode(element, val)" @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)" class="badge-compact-mode">
+                                <option value="none">None</option><option value="text">Text</option><option value="image">Image</option><option value="url">URL</option><option value="asset">Simposter Asset</option>
+                              </select>
+                              <template v-if="['image','url','asset'].includes(getBadgeMode(element,val))">
+                                <select v-if="getBadgeMode(element,val)==='image'" :value="getBadgeAsset(element,val)||''" @change="setBadgeAsset(element,val,($event.target as HTMLSelectElement).value||undefined)" class="badge-compact-flex"><option value="">Select asset...</option><option v-for="a in assets" :key="a.id" :value="a.id">{{a.name}}</option></select>
+                                <input v-if="getBadgeMode(element,val)==='url'" type="url" :value="getBadgeUrl(element,val)" @input="setBadgeUrl(element,val,($event.target as HTMLInputElement).value)" @change="setBadgeUrl(element,val,normalizeBadgeUrl(($event.target as HTMLInputElement).value));prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))" placeholder="https://..." class="badge-compact-flex badge-compact-url-input" />
+                                <input type="number" :value="getBadgeScale(element,val)" @input="setBadgeScale(element,val,($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" class="badge-cr-scale" />
+                                <select :value="getBadgeAnchor(element,val)" @change="setBadgeAnchor(element,val,($event.target as HTMLSelectElement).value)" class="badge-cr-anchor">
+                                  <option value="top-left">Top Left</option><option value="top-center">Top Center</option><option value="top-right">Top Right</option>
+                                  <option value="center-left">Center Left</option><option value="center">Center</option><option value="center-right">Center Right</option>
+                                  <option value="bottom-left">Bottom Left</option><option value="bottom-center">Bottom Center</option><option value="bottom-right">Bottom Right</option>
+                                </select>
+                              </template>
+                              <input v-if="getBadgeMode(element,val)==='text'" type="text" :value="getBadgeText(element,val)" @input="setBadgeText(element,val,($event.target as HTMLInputElement).value)" :placeholder="badgeValueLabel(val,STREAMING_PLATFORM_LABELS)" class="badge-compact-flex badge-text-input" />
+                              <button type="button" class="badge-remove-override" @click="removeBadgeOverride(element, val)" title="Remove override">×</button>
+                            </div>
+                          </div>
+                        </div>
+                        <!-- Add override -->
+                        <select class="badge-add-override-select" @change="addBadgeOverride(element, ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
+                          <option value="">+ Override a platform...</option>
+                          <option v-for="val in getAvailableForOverride(element, STREAMING_PLATFORM_VALUES)" :key="val" :value="val">{{ badgeValueLabel(val, STREAMING_PLATFORM_LABELS) }}</option>
+                        </select>
+                        <!-- Slug aliases -->
+                        <div class="badge-alias-section">
+                          <div class="badge-override-section-label">Slug Aliases <span class="badge-alias-hint">— remap TMDb slugs to asset names</span></div>
+                          <div v-for="(toSlug, fromSlug) in (element.slug_aliases || {})" :key="fromSlug" class="badge-alias-row">
+                            <span class="badge-alias-from">{{ fromSlug }}</span>
+                            <span class="badge-alias-arrow">→</span>
+                            <span class="badge-alias-to">{{ toSlug }}</span>
+                            <button type="button" class="badge-remove-override" @click="removeSlugAlias(element, fromSlug)" title="Remove alias">×</button>
+                          </div>
+                          <div class="badge-alias-add-row">
+                            <input v-model="pendingAliasFrom" placeholder="cj-enm-studios" class="badge-alias-input" @keyup.enter="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)" />
+                            <span class="badge-alias-arrow">→</span>
+                            <input v-model="pendingAliasTo" placeholder="cj-entertainment-studios" class="badge-alias-input" @keyup.enter="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)" />
+                            <button type="button" class="badge-alias-add-btn" :disabled="!pendingAliasFrom || !pendingAliasTo" @click="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)">Add</button>
+                          </div>
+                        </div>
+                      </div>
+                      <template v-if="hasBadgeTextMode(element)">
+                        <div class="field-divider"></div>
+                        <label><span>Font Size (px)</span><input type="number" v-model.number="element.font_size" min="8" max="200" step="1" /></label>
+                        <label><span>Font Color</span><div class="color-input-wrap"><input type="color" v-model="element.font_color" class="color-picker" /><input type="text" v-model="element.font_color" class="color-text" placeholder="#FFFFFF" /></div></label>
+                        <label class="field-full"><span>Font Family</span><select v-model="element.font_family"><optgroup label="System Fonts"><option value="Arial">Arial</option><option value="Helvetica">Helvetica</option><option value="Times New Roman">Times New Roman</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Courier New">Courier New</option><option value="Impact">Impact</option></optgroup><optgroup v-if="fonts.length > 0" label="Custom Fonts"><option v-for="f in fonts" :key="f" :value="f">{{ f }}</option></optgroup></select></label>
+                        <label class="field-full"><span>Text Align</span><div class="align-btn-group"><button type="button" :class="{ active: (element.text_align||'center')==='left' }" @click="element.text_align='left'">Left</button><button type="button" :class="{ active: (element.text_align||'center')==='center' }" @click="element.text_align='center'">Center</button><button type="button" :class="{ active: (element.text_align||'center')==='right' }" @click="element.text_align='right'">Right</button></div></label>
+                      </template>
+                    </template>
+
+                    <!-- Studio Badge -->
+                    <template v-if="element.type === 'studio_badge'">
+                      <div class="field-divider"></div>
+                      <div class="field-full badge-assets-section">
+                        <!-- Default row -->
+                        <div class="badge-override-section">
+                          <span class="badge-override-section-label">Default</span>
+                          <div class="badge-compact-row">
+                            <span class="badge-compact-label badge-default-label">All studios</span>
+                            <select :value="getBadgeMode(element, '__other__')" @change="setBadgeMode(element, '__other__', ($event.target as HTMLSelectElement).value)" class="badge-compact-mode">
+                              <option value="none">None</option><option value="text">Text</option><option value="image">Image</option><option value="url">URL</option><option value="asset">Simposter Asset</option>
+                            </select>
+                            <template v-if="['image','url','asset'].includes(getBadgeMode(element,'__other__'))">
+                              <select v-if="getBadgeMode(element,'__other__')==='image'" :value="getBadgeAsset(element,'__other__')||''" @change="setBadgeAsset(element,'__other__',($event.target as HTMLSelectElement).value||undefined)" class="badge-compact-flex"><option value="">Select asset...</option><option v-for="a in assets" :key="a.id" :value="a.id">{{a.name}}</option></select>
+                              <input v-if="getBadgeMode(element,'__other__')==='url'" type="url" :value="getBadgeUrl(element,'__other__')" @input="setBadgeUrl(element,'__other__',($event.target as HTMLInputElement).value)" @change="setBadgeUrl(element,'__other__',normalizeBadgeUrl(($event.target as HTMLInputElement).value))" placeholder="https://..." class="badge-compact-flex badge-compact-url-input" />
+                              <input type="number" :value="getBadgeScale(element,'__other__')" @input="setBadgeScale(element,'__other__',($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" class="badge-cr-scale" />
+                              <select :value="getBadgeAnchor(element,'__other__')" @change="setBadgeAnchor(element,'__other__',($event.target as HTMLSelectElement).value)" class="badge-cr-anchor">
+                                <option value="top-left">Top Left</option><option value="top-center">Top Center</option><option value="top-right">Top Right</option>
+                                <option value="center-left">Center Left</option><option value="center">Center</option><option value="center-right">Center Right</option>
+                                <option value="bottom-left">Bottom Left</option><option value="bottom-center">Bottom Center</option><option value="bottom-right">Bottom Right</option>
+                              </select>
+                            </template>
+                            <input v-if="getBadgeMode(element,'__other__')==='text'" type="text" :value="getBadgeText(element,'__other__')" @input="setBadgeText(element,'__other__',($event.target as HTMLInputElement).value)" placeholder="Text override..." class="badge-compact-flex badge-text-input" />
+                          </div>
+                        </div>
+                        <!-- Per-studio overrides -->
+                        <div v-if="getExplicitOverrides(element, STUDIO_VALUES).length > 0" class="badge-override-section">
+                          <span class="badge-override-section-label">Overrides</span>
+                          <div class="badge-compact-rows">
+                            <div v-for="val in getExplicitOverrides(element, STUDIO_VALUES)" :key="val" class="badge-compact-row">
+                              <span class="badge-compact-label">{{ badgeValueLabel(val, STUDIO_LABELS) }}</span>
+                              <select :value="getBadgeMode(element, val)" @change="setBadgeMode(element, val, ($event.target as HTMLSelectElement).value)" class="badge-compact-mode">
+                                <option value="none">None</option><option value="text">Text</option><option value="image">Image</option><option value="url">URL</option><option value="asset">Simposter Asset</option>
+                              </select>
+                              <template v-if="['image','url','asset'].includes(getBadgeMode(element,val))">
+                                <select v-if="getBadgeMode(element,val)==='image'" :value="getBadgeAsset(element,val)||''" @change="setBadgeAsset(element,val,($event.target as HTMLSelectElement).value||undefined)" class="badge-compact-flex"><option value="">Select asset...</option><option v-for="a in assets" :key="a.id" :value="a.id">{{a.name}}</option></select>
+                                <input v-if="getBadgeMode(element,val)==='url'" type="url" :value="getBadgeUrl(element,val)" @input="setBadgeUrl(element,val,($event.target as HTMLInputElement).value)" @change="setBadgeUrl(element,val,normalizeBadgeUrl(($event.target as HTMLInputElement).value));prefetchBadgeUrl(normalizeBadgeUrl(($event.target as HTMLInputElement).value))" placeholder="https://..." class="badge-compact-flex badge-compact-url-input" />
+                                <input type="number" :value="getBadgeScale(element,val)" @input="setBadgeScale(element,val,($event.target as HTMLInputElement).value)" min="0.05" max="3.0" step="0.05" placeholder="1.0" class="badge-cr-scale" />
+                                <select :value="getBadgeAnchor(element,val)" @change="setBadgeAnchor(element,val,($event.target as HTMLSelectElement).value)" class="badge-cr-anchor">
+                                  <option value="top-left">Top Left</option><option value="top-center">Top Center</option><option value="top-right">Top Right</option>
+                                  <option value="center-left">Center Left</option><option value="center">Center</option><option value="center-right">Center Right</option>
+                                  <option value="bottom-left">Bottom Left</option><option value="bottom-center">Bottom Center</option><option value="bottom-right">Bottom Right</option>
+                                </select>
+                              </template>
+                              <input v-if="getBadgeMode(element,val)==='text'" type="text" :value="getBadgeText(element,val)" @input="setBadgeText(element,val,($event.target as HTMLInputElement).value)" :placeholder="badgeValueLabel(val,STUDIO_LABELS)" class="badge-compact-flex badge-text-input" />
+                              <button type="button" class="badge-remove-override" @click="removeBadgeOverride(element, val)" title="Remove override">×</button>
+                            </div>
+                          </div>
+                        </div>
+                        <!-- Add override -->
+                        <select class="badge-add-override-select" @change="addBadgeOverride(element, ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''">
+                          <option value="">+ Override a studio...</option>
+                          <option v-for="val in getAvailableForOverride(element, STUDIO_VALUES)" :key="val" :value="val">{{ badgeValueLabel(val, STUDIO_LABELS) }}</option>
+                        </select>
+                        <!-- Slug aliases -->
+                        <div class="badge-alias-section">
+                          <div class="badge-override-section-label">Slug Aliases <span class="badge-alias-hint">— remap TMDb slugs to asset names</span></div>
+                          <div v-for="(toSlug, fromSlug) in (element.slug_aliases || {})" :key="fromSlug" class="badge-alias-row">
+                            <span class="badge-alias-from">{{ fromSlug }}</span>
+                            <span class="badge-alias-arrow">→</span>
+                            <span class="badge-alias-to">{{ toSlug }}</span>
+                            <button type="button" class="badge-remove-override" @click="removeSlugAlias(element, fromSlug)" title="Remove alias">×</button>
+                          </div>
+                          <div class="badge-alias-add-row">
+                            <input v-model="pendingAliasFrom" placeholder="cj-enm-studios" class="badge-alias-input" @keyup.enter="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)" />
+                            <span class="badge-alias-arrow">→</span>
+                            <input v-model="pendingAliasTo" placeholder="cj-entertainment-studios" class="badge-alias-input" @keyup.enter="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)" />
+                            <button type="button" class="badge-alias-add-btn" :disabled="!pendingAliasFrom || !pendingAliasTo" @click="addSlugAlias(element, pendingAliasFrom, pendingAliasTo)">Add</button>
+                          </div>
+                        </div>
+                      </div>
+                      <template v-if="hasBadgeTextMode(element)">
+                        <div class="field-divider"></div>
+                        <label><span>Font Size (px)</span><input type="number" v-model.number="element.font_size" min="8" max="200" step="1" /></label>
+                        <label><span>Font Color</span><div class="color-input-wrap"><input type="color" v-model="element.font_color" class="color-picker" /><input type="text" v-model="element.font_color" class="color-text" placeholder="#FFFFFF" /></div></label>
+                        <label class="field-full"><span>Font Family</span><select v-model="element.font_family"><optgroup label="System Fonts"><option value="Arial">Arial</option><option value="Helvetica">Helvetica</option><option value="Times New Roman">Times New Roman</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Courier New">Courier New</option><option value="Impact">Impact</option></optgroup><optgroup v-if="fonts.length > 0" label="Custom Fonts"><option v-for="f in fonts" :key="f" :value="f">{{ f }}</option></optgroup></select></label>
+                        <label class="field-full"><span>Text Align</span><div class="align-btn-group"><button type="button" :class="{ active: (element.text_align||'center')==='left' }" @click="element.text_align='left'">Left</button><button type="button" :class="{ active: (element.text_align||'center')==='center' }" @click="element.text_align='center'">Center</button><button type="button" :class="{ active: (element.text_align||'center')==='right' }" @click="element.text_align='right'">Right</button></div></label>
                       </template>
                     </template>
 
@@ -1542,13 +2105,17 @@ onMounted(() => {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
                     </svg>
-                    {{ selectedMovie ? selectedMovie.title : 'Search poster...' }}
+                    {{ selectedMovie ? selectedMovie.title : 'Pick item...' }}
                   </button>
-                  <button v-if="selectedMovie" class="btn-clear-poster" @click="clearPoster" title="Clear poster">
+                  <button v-if="selectedMovie" class="btn-clear-poster" @click="clearPoster" title="Clear">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                     </svg>
                   </button>
+                  <div v-if="selectedMovie" class="preview-mode-toggle">
+                    <button :class="['mode-btn', previewMode === 'testing' && 'active']" @click="previewMode = 'testing'">Test</button>
+                    <button :class="['mode-btn', previewMode === 'item' && 'active']" @click="previewMode = 'item'">Item</button>
+                  </div>
                 </div>
 
                 <div class="preview-frame">
@@ -1567,7 +2134,21 @@ onMounted(() => {
                 </div>
 
                 <!-- Preview value switchers -->
-                <div class="preview-values">
+                <div v-if="previewMode === 'item' && selectedMovie" class="preview-values item-values">
+                  <div v-for="[field, label] in [['video_resolution','Res'],['video_codec','VCodec'],['audio_codec','ACodec'],['audio_channels','Ch'],['audio_language','Lang'],['edition','Edition']]" :key="field" class="preview-value-field">
+                    <span>{{ label }}</span>
+                    <span class="item-val">{{ previewItemMetadata[(field as string)] || '—' }}</span>
+                  </div>
+                  <div v-if="hasStreamingBadge" class="preview-value-field">
+                    <span>Platform</span>
+                    <span class="item-val">{{ previewItemMetadata['streaming_platform'] || '—' }}</span>
+                  </div>
+                  <div v-if="hasStudioBadge" class="preview-value-field">
+                    <span>Studio</span>
+                    <span class="item-val">{{ previewItemMetadata['studio'] || '—' }}</span>
+                  </div>
+                </div>
+                <div v-else class="preview-values">
                   <label class="preview-value-field">
                     <span>Resolution</span>
                     <select v-model="previewResolution">
@@ -1604,6 +2185,18 @@ onMounted(() => {
                       <option v-for="v in EDITION_VALUES" :key="v" :value="v">{{ v.charAt(0).toUpperCase() + v.slice(1) }}</option>
                     </select>
                   </label>
+                  <label v-if="hasStreamingBadge" class="preview-value-field">
+                    <span>Platform</span>
+                    <select v-model="previewStreamingPlatform">
+                      <option v-for="v in STREAMING_PLATFORM_VALUES" :key="v" :value="v">{{ STREAMING_PLATFORM_LABELS[v] || v }}</option>
+                    </select>
+                  </label>
+                  <label v-if="hasStudioBadge" class="preview-value-field">
+                    <span>Studio</span>
+                    <select v-model="previewStudio">
+                      <option v-for="v in STUDIO_VALUES" :key="v" :value="v">{{ STUDIO_LABELS[v] || v }}</option>
+                    </select>
+                  </label>
                 </div>
 
                 <div class="preview-info">
@@ -1622,11 +2215,18 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Movie Search Modal -->
+    <!-- Item Picker Modal (2-step: library → item) -->
     <div v-if="showMovieSearch" class="modal-overlay" @click.self="showMovieSearch = false" style="z-index: 1100;">
       <div class="search-modal">
         <div class="search-modal-header">
-          <h3>Select a poster</h3>
+          <div class="search-modal-title">
+            <button v-if="previewSelectedLibrary" class="btn-back" @click="backToLibraries" title="Back to libraries">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+            </button>
+            <h3>{{ previewSelectedLibrary ? previewSelectedLibrary.title : 'Select library' }}</h3>
+          </div>
           <button class="btn-close" @click="showMovieSearch = false">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -1634,24 +2234,47 @@ onMounted(() => {
           </button>
         </div>
         <div class="search-modal-body">
-          <input
-            type="text"
-            v-model="movieSearchTerm"
-            placeholder="Search by title..."
-            class="search-input"
-            autofocus
-          />
-          <div class="search-results">
-            <button
-              v-for="movie in movieSearchResults"
-              :key="movie.key"
-              class="search-result"
-              @click="selectMovie(movie)"
-            >
-              {{ movie.title }}
-            </button>
-            <div v-if="movieSearchResults.length === 0" class="search-empty">No movies match that search.</div>
-          </div>
+          <!-- Step 1: library list -->
+          <template v-if="!previewSelectedLibrary">
+            <div v-if="previewLibrariesLoading" class="search-empty">Loading libraries...</div>
+            <div v-else-if="previewLibraries.length === 0" class="search-empty">No libraries found. Check Plex connection in Settings.</div>
+            <div v-else class="library-list">
+              <button
+                v-for="lib in previewLibraries"
+                :key="lib.key"
+                class="library-btn"
+                @click="selectLibrary(lib)"
+              >
+                <span class="library-icon">{{ lib.type === 'show' ? '📺' : '🎬' }}</span>
+                <span class="library-name">{{ lib.title }}</span>
+                <span class="library-type">{{ lib.type === 'show' ? 'TV' : 'Movies' }}</span>
+              </button>
+            </div>
+          </template>
+          <!-- Step 2: item search -->
+          <template v-else>
+            <input
+              type="text"
+              v-model="movieSearchTerm"
+              placeholder="Search by title..."
+              class="search-input"
+              autofocus
+            />
+            <div class="search-results">
+              <div v-if="!moviesLoaded" class="search-empty">Loading...</div>
+              <template v-else>
+                <button
+                  v-for="movie in movieSearchResults"
+                  :key="movie.key"
+                  class="search-result"
+                  @click="selectMovie(movie)"
+                >
+                  {{ movie.title }}
+                </button>
+                <div v-if="moviesLoaded && movieSearchResults.length === 0" class="search-empty">No items match that search.</div>
+              </template>
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -1736,8 +2359,13 @@ onMounted(() => {
 .editor-modal { background: var(--surface, #1a1f2e); border: 1px solid var(--border, #2a2f3e); border-radius: 14px; width: 94%; max-width: 1100px; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
 .editor-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border, #2a2f3e); }
 .editor-header h2 { margin: 0 0 0.4rem 0; color: var(--text-primary, #fff); font-size: 1.15rem; }
-.config-name-input { width: 100%; padding: 0.45rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.95rem; }
+.editor-name-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.config-name-input { flex: 1; min-width: 160px; padding: 0.45rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.95rem; }
 .config-name-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.region-selector { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.region-label { color: var(--text-secondary, #888); font-size: 0.78rem; font-weight: 500; }
+.region-select { padding: 0.4rem 0.5rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.8rem; cursor: pointer; }
+.region-select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 
 .btn-close { background: none; border: none; color: var(--text-secondary, #aaa); cursor: pointer; padding: 4px; border-radius: 4px; transition: color 0.2s; }
 .btn-close:hover { color: var(--text-primary, #fff); }
@@ -1786,6 +2414,119 @@ onMounted(() => {
 
 /* Badge assets mapping */
 .badge-assets-section { display: flex; flex-direction: column; gap: 0.4rem; }
+
+/* Compact badge rows for streaming/studio (override-based layout) */
+.badge-override-section { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.badge-override-section-label { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary, #666); }
+.badge-default-label { color: var(--text-primary, #ccc) !important; font-style: normal !important; }
+.badge-compact-rows { display: flex; flex-direction: column; gap: 3px; }
+.badge-compact-row { display: flex; align-items: center; gap: 6px; min-height: 26px; }
+.badge-compact-label {
+  min-width: 90px;
+  max-width: 90px;
+  text-align: right;
+  font-size: 0.72rem;
+  color: var(--text-secondary, #aaa);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+.badge-compact-mode {
+  width: 90px;
+  flex-shrink: 0;
+  padding: 0.2rem 0.3rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 0.72rem;
+}
+.badge-compact-mode:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.badge-cr-scale {
+  width: 50px;
+  flex-shrink: 0;
+  padding: 0.2rem 0.25rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 0.72rem;
+  text-align: center;
+}
+.badge-cr-scale:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.badge-cr-anchor {
+  width: 110px;
+  flex-shrink: 0;
+  padding: 0.2rem 0.3rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 0.72rem;
+}
+.badge-cr-anchor:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.badge-compact-flex {
+  flex: 1;
+  min-width: 0;
+  padding: 0.2rem 0.3rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 4px;
+  color: var(--text-primary, #fff);
+  font-size: 0.72rem;
+}
+.badge-compact-flex:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.badge-compact-url-input { font-family: monospace; }
+.badge-compact-url-input:focus { border-color: #10b981; }
+.badge-remove-override {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 3px;
+  color: var(--text-secondary, #888);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+.badge-remove-override:hover { background: rgba(239,68,68,0.15); border-color: #ef4444; color: #ef4444; }
+.badge-add-override-select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 0.3rem 0.4rem;
+  background: rgba(255,255,255,0.03);
+  border: 1px dashed rgba(255,255,255,0.15);
+  border-radius: 4px;
+  color: var(--text-secondary, #888);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.badge-add-override-select:hover { border-color: var(--accent, #3dd6b7); color: var(--text-primary, #fff); }
+.badge-add-override-select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+
+/* Slug alias editor */
+.badge-alias-section { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.badge-alias-hint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-secondary, #666); font-style: italic; }
+.badge-alias-row { display: flex; align-items: center; gap: 6px; }
+.badge-alias-from { font-size: 0.72rem; color: var(--text-secondary, #aaa); font-family: monospace; min-width: 0; }
+.badge-alias-to { font-size: 0.72rem; color: var(--accent, #3dd6b7); font-family: monospace; min-width: 0; }
+.badge-alias-arrow { color: var(--text-secondary, #555); font-size: 0.72rem; flex-shrink: 0; }
+.badge-alias-add-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.badge-alias-input { flex: 1; min-width: 0; padding: 0.2rem 0.3rem; background: rgba(255,255,255,0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; font-family: monospace; }
+.badge-alias-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.badge-alias-add-btn { flex-shrink: 0; padding: 0.2rem 0.5rem; background: rgba(61,214,183,0.1); border: 1px solid rgba(61,214,183,0.3); border-radius: 4px; color: var(--accent, #3dd6b7); font-size: 0.72rem; cursor: pointer; transition: all 0.15s; }
+.badge-alias-add-btn:hover:not(:disabled) { background: rgba(61,214,183,0.2); border-color: var(--accent, #3dd6b7); }
+.badge-alias-add-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
 .badge-assets-label { color: var(--text-secondary, #888); font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 .badge-asset-rows { display: flex; flex-direction: column; gap: 0.4rem; }
 .badge-asset-item { display: flex; flex-direction: column; gap: 0.25rem; }
@@ -1795,11 +2536,13 @@ onMounted(() => {
 .badge-image-overrides input[type="number"] { width: 4.5rem; padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-image-overrides select { padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-image-overrides input:focus, .badge-image-overrides select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
-.badge-value-label { color: var(--text-secondary, #aaa); font-size: 0.72rem; font-weight: 600; min-width: 70px; text-align: right; }
+.badge-value-label { color: var(--text-secondary, #aaa); font-size: 0.72rem; font-weight: 600; min-width: 80px; text-align: right; }
 .badge-mode-select { width: 68px; flex-shrink: 0; padding: 0.3rem 0.3rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-asset-select { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-text-input { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .badge-text-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.badge-url-input { flex: 1; padding: 0.3rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; font-family: monospace; }
+.badge-url-input:focus { outline: none; border-color: #10b981; }
 .badge-asset-row select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 
 /* Text align button group */
@@ -1811,7 +2554,7 @@ onMounted(() => {
 
 /* Preview column */
 .preview-column { position: sticky; top: 0; }
-.preview-panel { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #2a2f3e); border-radius: 10px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.preview-panel { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #2a2f3e); border-radius: 10px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; overflow-y: auto; max-height: calc(88vh - 140px); }
 
 .preview-top-row { display: flex; justify-content: space-between; align-items: center; }
 .preview-label { color: var(--text-secondary, #888); font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -1827,8 +2570,13 @@ onMounted(() => {
 .btn-search:disabled { opacity: 0.5; cursor: wait; }
 .btn-search svg { flex-shrink: 0; }
 
-.btn-clear-poster { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-secondary, #888); cursor: pointer; transition: all 0.15s; }
+.btn-clear-poster { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-secondary, #888); cursor: pointer; transition: all 0.15s; flex-shrink: 0; }
 .btn-clear-poster:hover { border-color: #f87171; color: #f87171; }
+
+.preview-mode-toggle { display: flex; flex-shrink: 0; border: 1px solid var(--border, #2a2f3e); border-radius: 4px; overflow: hidden; }
+.mode-btn { padding: 0 0.45rem; height: 24px; background: transparent; border: none; color: var(--text-secondary, #888); cursor: pointer; font-size: 0.68rem; font-weight: 500; transition: all 0.15s; }
+.mode-btn.active { background: var(--accent, #3dd6b7); color: #000; }
+.mode-btn:not(.active):hover { background: rgba(255,255,255,0.06); color: var(--text-primary,#fff); }
 
 .preview-frame { display: flex; justify-content: center; background: rgba(0, 0, 0, 0.3); border-radius: 6px; padding: 0.5rem; }
 .preview-canvas { border-radius: 4px; display: block; }
@@ -1851,10 +2599,23 @@ onMounted(() => {
 .btn-primary:hover { opacity: 0.9; }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* Movie search modal */
+/* Item values read-only display */
+.item-values .preview-value-field { flex-direction: row; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); border: 1px solid var(--border,#2a2f3e); border-radius: 4px; padding: 0.2rem 0.4rem; }
+.item-val { color: var(--accent, #3dd6b7); font-size: 0.72rem; font-weight: 600; }
+
+/* Item picker modal */
 .search-modal { background: var(--surface, #1a1f2e); border: 1px solid var(--border, #2a2f3e); border-radius: 12px; width: 90%; max-width: 440px; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden; }
 .search-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid var(--border, #2a2f3e); }
+.search-modal-title { display: flex; align-items: center; gap: 0.5rem; }
 .search-modal-header h3 { margin: 0; color: var(--text-primary, #fff); font-size: 1rem; }
+.btn-back { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; background: rgba(255,255,255,0.05); border: 1px solid var(--border,#2a2f3e); border-radius: 5px; color: var(--text-secondary,#888); cursor: pointer; transition: all 0.15s; }
+.btn-back:hover { border-color: var(--accent,#3dd6b7); color: var(--accent,#3dd6b7); }
+.library-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.library-btn { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.8rem; background: rgba(255,255,255,0.03); border: 1px solid var(--border,#2a2f3e); border-radius: 7px; color: var(--text-primary,#fff); cursor: pointer; font-size: 0.88rem; text-align: left; transition: all 0.15s; }
+.library-btn:hover { border-color: var(--accent,#3dd6b7); background: rgba(61,214,183,0.07); }
+.library-icon { font-size: 1rem; }
+.library-name { flex: 1; font-weight: 500; }
+.library-type { font-size: 0.72rem; color: var(--text-secondary,#888); background: rgba(255,255,255,0.06); border-radius: 3px; padding: 0.1rem 0.35rem; }
 .search-modal-body { padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 0.75rem; overflow: hidden; }
 .search-input { padding: 0.5rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.9rem; }
 .search-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }

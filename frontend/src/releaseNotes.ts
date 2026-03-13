@@ -10,6 +10,109 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.7',
+    date: '2026-03-13',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Simposter Asset badge mode — pulls logos directly from the simposter-assets GitHub repo (logos.json refreshed hourly)',
+          'TMDb company ID matching — studio badges now resolve assets by stable numeric ID instead of name, eliminating mismatches from name variations (e.g. "CJ ENM" vs "CJ ENM Studios")',
+          'Slug alias system — map any unexpected TMDb slug to the correct asset slug per-element for edge cases',
+          'Unmaintained branch warning — logo turns amber/red with a pulsing warning badge when running a Docker tag that is not "latest" or "webui-overhaul-dev"',
+          'Docker tag exposed in /api/version-info — baked into build-info.json at build time via --build-arg DOCKER_TAG, overridable at runtime via DOCKER_TAG env var',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Studio company ID now cached alongside studio name — asset lookup by TMDb ID works immediately on subsequent renders',
+          'Stale studio cache entries (pre-dating company ID tracking) are automatically re-fetched from TMDb on next render',
+          'Thread-safe asset cache with double-checked locking prevents race conditions during server startup prewarm',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.68',
+    date: '2026-03-11',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed black background appearing on URL-mode badge images with anti-aliased edges (e.g. Apple TV+ logo) — caused by PIL using a linear alpha-blend that corrupted the canvas alpha channel before JPEG conversion',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.67',
+    date: '2026-03-10',
+    sections: [
+      {
+        title: 'URL Mode for Badge Images',
+        items: [
+          'New badge rendering mode: URL — paste any direct image URL and Simposter fetches and caches it automatically (7-day disk cache)',
+          'Available for all badge types: video, audio, edition, streaming platform, and studio',
+          'Streaming Platform badges in URL mode automatically use the official TMDb provider logo when no URL is set — zero configuration required',
+          'URL images support the same scale and anchor position overrides as uploaded assets',
+          'Canvas preview attempts to load the URL image directly; falls back to a "URL" indicator if CORS-blocked',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.66',
+    date: '2026-03-10',
+    sections: [
+      {
+        title: 'Studio Badge',
+        items: [
+          'New overlay element type: Studio Badge — auto-detects the production studio (movies) or TV network from TMDb and renders the appropriate badge',
+          'Covers 29 studios and networks including A24, Netflix, Marvel Studios, Warner Bros., Universal, HBO, FX, AMC, and more',
+          'Unlike the streaming platform badge, studio data is permanent (who made it, not where to watch it) and is not region-dependent',
+          'Results are cached alongside streaming provider data — no extra API calls in most cases',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed streaming platform badge not rendering — metadata field was stored as null by Pydantic, causing the backend to look up field "None" instead of "streaming_platform"',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.65',
+    date: '2026-03-09',
+    sections: [
+      {
+        title: 'Streaming Platform Badge',
+        items: [
+          'New overlay element type: Streaming Platform Badge — auto-detects a title\'s streaming platform (Netflix, Disney+, Hulu, Max, etc.) via TMDb Watch Providers and renders the appropriate badge',
+          'Configure text, image, or none per platform — same flexible per-value badge system used by video, audio, and edition badges',
+          'Supports 12 streaming platforms: Netflix, Prime Video, Disney+, Max, Hulu, Apple TV+, Paramount+, Peacock, Tubi, Crunchyroll, Shudder, MUBI',
+          'Region selector per overlay config (US, UK, CA, AU, DE, FR, ES, IT, JP, KR, BR, MX) — watch provider availability varies by region',
+          'Provider data is cached in the database for 7 days, minimising TMDb API calls',
+          'Platform is resolved lazily at render time — no extra work unless a streaming badge element is present in the overlay config',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.64',
+    date: '2026-03-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed auto-generate on scan silently skipping new movies and TV shows — library ID type mismatch (int vs string) caused the settings lookup to always fail, so autoGenerateEnabled was never read',
+          'Auto-generate now correctly triggers for any new content detected during a library scan when enabled in Settings → Plex Libraries',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.63',
     date: '2026-03-08',
     sections: [

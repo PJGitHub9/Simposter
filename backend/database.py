@@ -725,6 +725,25 @@ def init_database():
             cursor.execute("ALTER TABLE presets ADD COLUMN overlay_config_id TEXT")
             logger.info("[DB] Added 'overlay_config_id' column to presets table")
 
+        # Migration: add streaming_region column to overlay_configs if it doesn't exist
+        cursor.execute("PRAGMA table_info(overlay_configs)")
+        overlay_cols = [row["name"] for row in cursor.fetchall()]
+        if "streaming_region" not in overlay_cols:
+            cursor.execute("ALTER TABLE overlay_configs ADD COLUMN streaming_region TEXT DEFAULT 'US'")
+            logger.info("[DB] Added 'streaming_region' column to overlay_configs table")
+
+        # Streaming provider cache — stores TMDb watch/providers results per item
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS streaming_provider_cache (
+                tmdb_id     TEXT NOT NULL,
+                media_type  TEXT NOT NULL,
+                region      TEXT NOT NULL DEFAULT 'US',
+                providers_json TEXT DEFAULT '[]',
+                fetched_at  INTEGER,
+                PRIMARY KEY (tmdb_id, media_type, region)
+            )
+        """)
+
         # Create indexes for overlay tables
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_overlay_configs_name
@@ -1080,7 +1099,7 @@ def get_all_overlay_configs() -> List[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, elements_json, created_at, updated_at
+            SELECT id, name, elements_json, streaming_region, created_at, updated_at
             FROM overlay_configs
             ORDER BY created_at DESC
         """)
@@ -1091,6 +1110,7 @@ def get_all_overlay_configs() -> List[Dict[str, Any]]:
             "id": row["id"],
             "name": row["name"],
             "elements": json.loads(row["elements_json"]),
+            "streaming_region": row["streaming_region"] or "US",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
@@ -1103,7 +1123,7 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, elements_json, created_at, updated_at
+            SELECT id, name, elements_json, streaming_region, created_at, updated_at
             FROM overlay_configs
             WHERE id = ?
         """, (config_id,))
@@ -1114,24 +1134,26 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
             "id": row["id"],
             "name": row["name"],
             "elements": json.loads(row["elements_json"]),
+            "streaming_region": row["streaming_region"] or "US",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
     return None
 
 
-def save_overlay_config(config_id: str, name: str, elements: List[Dict[str, Any]]) -> None:
+def save_overlay_config(config_id: str, name: str, elements: List[Dict[str, Any]], streaming_region: str = "US") -> None:
     """Save or update an overlay configuration."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO overlay_configs (id, name, elements_json, created_at, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            INSERT INTO overlay_configs (id, name, elements_json, streaming_region, created_at, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 elements_json = excluded.elements_json,
+                streaming_region = excluded.streaming_region,
                 updated_at = CURRENT_TIMESTAMP
-        """, (config_id, name, json.dumps(elements)))
+        """, (config_id, name, json.dumps(elements), streaming_region))
     logger.info(f"[DB] Saved overlay config {config_id} ({name})")
 
 
@@ -2350,6 +2372,39 @@ def has_poster_been_sent(rating_key: str) -> bool:
             (rating_key,),
         )
         return cursor.fetchone() is not None
+
+
+_STREAMING_PROVIDER_TTL = 604800  # 7 days
+
+
+def get_cached_providers(tmdb_id, media_type: str, region: str):
+    """Return cached flatrate provider list for (tmdb_id, media_type, region), or None if missing/stale."""
+    import json as _json
+    import time as _time
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT providers_json, fetched_at FROM streaming_provider_cache WHERE tmdb_id=? AND media_type=? AND region=?",
+            (str(tmdb_id), media_type, region),
+        )
+        row = cursor.fetchone()
+        if row and row["fetched_at"] and (_time.time() - row["fetched_at"]) < _STREAMING_PROVIDER_TTL:
+            try:
+                return _json.loads(row["providers_json"] or "[]")
+            except Exception:
+                return None
+    return None
+
+
+def upsert_cached_providers(tmdb_id, media_type: str, region: str, providers: list) -> None:
+    """Insert or replace streaming provider cache entry."""
+    import json as _json
+    import time as _time
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO streaming_provider_cache (tmdb_id, media_type, region, providers_json, fetched_at) VALUES (?,?,?,?,?)",
+            (str(tmdb_id), media_type, region, _json.dumps(providers), int(_time.time())),
+        )
 
 
 # Initialize database on module import

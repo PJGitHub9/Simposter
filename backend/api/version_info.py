@@ -108,6 +108,29 @@ def get_git_branch() -> Optional[str]:
     return None
 
 
+def get_docker_tag() -> Optional[str]:
+    """Get the Docker image tag this container was built with."""
+    # Runtime env var takes priority (allows override without rebuild)
+    env_tag = os.getenv('DOCKER_TAG')
+    if env_tag and env_tag not in ('unknown', ''):
+        return env_tag
+
+    # Fallback: read from build-info.json written at image build time
+    try:
+        import json
+        build_info_file = REPO_ROOT / "build-info.json"
+        if build_info_file.exists():
+            with open(build_info_file, 'r') as f:
+                build_info = json.load(f)
+                tag = build_info.get('docker_tag')
+                if tag and tag != 'unknown':
+                    return tag
+    except Exception as e:
+        logger.debug(f"Failed to read docker_tag from build-info.json: {e}")
+
+    return None
+
+
 def check_for_updates(current_version: str, branch: str) -> Optional[dict]:
     """
     Check GitHub for newer releases/commits.
@@ -159,6 +182,7 @@ async def get_version_info():
     """
     current_version = get_current_version()
     branch = get_git_branch()
+    docker_tag = get_docker_tag()
 
     # Build display version with branch suffix
     display_version = current_version
@@ -174,6 +198,7 @@ async def get_version_info():
     return {
         "version": current_version,
         "branch": branch,
+        "docker_tag": docker_tag,
         "display_version": display_version,
         "update_available": update_info.get('available', False) if update_info else False,
         "latest_version": update_info.get('latest_version') if update_info else None,

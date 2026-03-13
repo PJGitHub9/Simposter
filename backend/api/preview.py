@@ -585,6 +585,12 @@ def api_preview(req: PreviewRequest):
             else:
                 logger.info("[PREVIEW] No media info found for rating_key=%s", rating_key)
 
+        # Inject tmdb_id and media_type for streaming platform badge resolution
+        if tmdb_id:
+            render_options.setdefault("metadata", {})
+            render_options["metadata"]["tmdb_id"] = tmdb_id
+            render_options["metadata"]["media_type"] = "tv" if is_tv_show else "movie"
+
         # Pass preset_id so the template renderer can look up linked overlay configs
         if req.preset_id:
             render_options["preset_id"] = req.preset_id

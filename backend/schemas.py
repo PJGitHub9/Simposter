@@ -225,7 +225,7 @@ class BatchRequest(BaseModel):
 
 # Overlay Configuration schemas
 class OverlayElement(BaseModel):
-    type: str  # "video_badge" | "audio_badge" | "edition_badge" | "custom_image" | "text_label"
+    type: str  # "video_badge" | "audio_badge" | "edition_badge" | "streaming_platform_badge" | "studio_badge" | "custom_image" | "text_label"
                # Legacy aliases (still render, hidden from UI): "resolution_badge" | "codec_badge" | "label_badge"
     position_x: float = 0.5  # 0.0 to 1.0 (left to right)
     position_y: float = 0.5  # 0.0 to 1.0 (top to bottom)
@@ -244,11 +244,13 @@ class OverlayElement(BaseModel):
     show_if_label: Optional[str] = None  # Show only if this Plex label is present
     hide_if_label: Optional[str] = None  # Hide if this Plex label is present
     metadata_field: Optional[str] = None  # Metadata field to check (e.g., "video_resolution", "audio_codec")
-    badge_modes: Optional[Dict[str, str]] = None  # Maps metadata value -> "none" | "text" | "image"
+    badge_modes: Optional[Dict[str, str]] = None  # Maps metadata value -> "none" | "text" | "image" | "url"
     badge_assets: Optional[Dict[str, str]] = None  # Maps metadata value -> asset_id (e.g., {"4k": "asset-123"})
     badge_texts: Optional[Dict[str, str]] = None  # Maps metadata value -> custom display text (e.g., {"1080": "HD"})
-    badge_scales: Optional[Dict[str, float]] = None  # Maps metadata value -> scale multiplier (image mode only)
-    badge_anchors: Optional[Dict[str, str]] = None  # Maps metadata value -> anchor point (image mode only)
+    badge_scales: Optional[Dict[str, float]] = None  # Maps metadata value -> scale multiplier (image/url mode only)
+    badge_anchors: Optional[Dict[str, str]] = None  # Maps metadata value -> anchor point (image/url mode only)
+    badge_urls: Optional[Dict[str, str]] = None  # Maps metadata value -> image URL (url mode only)
+    slug_aliases: Optional[Dict[str, str]] = None  # Maps TMDb slug -> canonical asset slug (e.g., {"cj-enm-studios": "cj-entertainment-studios"})
     text_align: Optional[str] = None  # "left" | "center" | "right" (default: "center")
 
 
@@ -256,6 +258,7 @@ class OverlayConfigSaveRequest(BaseModel):
     id: str
     name: str
     elements: List[OverlayElement]
+    streaming_region: str = "US"  # ISO 3166-1 alpha-2 region for TMDb watch provider lookups
 
 
 class OverlayConfigDeleteRequest(BaseModel):

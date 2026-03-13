@@ -4,10 +4,11 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
+import io
 from fastapi import APIRouter, Form, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from ..config import settings, logger, BASE_DIR
 from .. import database as db
@@ -64,7 +65,7 @@ def api_save_overlay_config(req: OverlayConfigSaveRequest):
     """Save or update an overlay configuration."""
     try:
         elements = [elem.model_dump() for elem in req.elements]
-        db.save_overlay_config(req.id, req.name, elements)
+        db.save_overlay_config(req.id, req.name, elements, streaming_region=req.streaming_region)
         return {"status": "ok", "id": req.id}
     except Exception as e:
         logger.error(f"[OVERLAY] Error saving overlay config {req.id}: {e}")
@@ -322,3 +323,125 @@ def api_link_preset_to_overlay(req: PresetOverlayLinkRequest):
     except Exception as e:
         logger.error(f"[OVERLAY] Error linking preset to overlay config: {e}")
         raise HTTPException(500, "Failed to link preset to overlay configuration")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Image Proxy (for CORS-free canvas preview of URL badge images)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/overlay-preview-metadata")
+def api_overlay_preview_metadata(
+    rating_key: str,
+    config_id: Optional[str] = None,
+    media_type: str = "movie",
+):
+    """Return Plex media metadata for a given rating_key for use in the overlay config preview.
+
+    If config_id is provided, also resolves streaming_platform and studio via the same
+    TMDb pre-pass that apply_overlay_config uses, so item-mode preview reflects real values.
+    """
+    try:
+        from ..config import get_plex_media_info, get_movie_tmdb_id
+        info = get_plex_media_info(rating_key) or {}
+
+        if config_id:
+            try:
+                cfg = db.get_overlay_config(config_id)
+                if cfg:
+                    element_types = {e.get("type") for e in cfg.get("elements", [])}
+                    tmdb_id = get_movie_tmdb_id(rating_key)
+
+                    if tmdb_id and "streaming_platform_badge" in element_types:
+                        try:
+                            from ..tmdb_client import get_watch_providers, normalize_provider_name
+                            region = cfg.get("streaming_region") or "US"
+                            providers = get_watch_providers(tmdb_id, media_type, region)
+                            if providers:
+                                slug = normalize_provider_name(providers[0].get("provider_name", ""))
+                                if slug:
+                                    info["streaming_platform"] = slug
+                        except Exception as sp_err:
+                            logger.debug(f"[OVERLAY] Preview streaming platform error: {sp_err}")
+
+                    if tmdb_id and "studio_badge" in element_types:
+                        try:
+                            from ..tmdb_client import get_studio_name, get_studio_company_id
+                            slug = get_studio_name(tmdb_id, media_type)
+                            if slug:
+                                info["studio"] = slug
+                            cid = get_studio_company_id(tmdb_id, media_type)
+                            if cid is not None:
+                                info["studio_company_id"] = str(cid)
+                        except Exception as st_err:
+                            logger.debug(f"[OVERLAY] Preview studio error: {st_err}")
+            except Exception as pre_err:
+                logger.debug(f"[OVERLAY] Preview pre-pass error: {pre_err}")
+
+        return {"metadata": info}
+    except Exception as e:
+        logger.warning(f"[OVERLAY] Failed to fetch preview metadata for {rating_key}: {e}")
+        return {"metadata": {}}
+
+
+@router.get("/simposter-assets-map")
+def api_simposter_assets_map():
+    """Return the full slug→URL mapping for curated simposter-assets logos."""
+    from ..simposter_assets import get_full_map
+    return {"assets": get_full_map()}
+
+
+@router.get("/asset-image")
+def api_asset_image(slug: str = "", company_id: Optional[int] = None):
+    """Resolve a simposter-assets slug (and/or TMDb company ID) and proxy the image.
+
+    Does full resolution: company_id (ID cache) → logos.json slug → overrides → heuristic.
+    Returns 404 when no image can be found so the canvas can fall back gracefully.
+    """
+    if not slug and company_id is None:
+        raise HTTPException(status_code=400, detail="Missing slug or company_id")
+    try:
+        from ..simposter_assets import get_asset_url
+        from ..templates.universal import _fetch_url_badge_image
+        url = get_asset_url(slug, company_id=company_id)
+        if not url:
+            raise HTTPException(status_code=404, detail="No asset URL for slug")
+        img = _fetch_url_badge_image(url)
+        if img is None:
+            raise HTTPException(status_code=404, detail="Asset image not found or inaccessible")
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[OVERLAY] asset-image error for slug={slug!r} company_id={company_id}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to resolve asset image")
+
+
+@router.get("/proxy-image")
+def api_proxy_image(url: str):
+    """Fetch an external image URL server-side and return it, bypassing browser CORS restrictions.
+    Reuses the URL badge disk cache (7-day TTL) so repeated previews are instant."""
+    if not url or not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid URL")
+    try:
+        from ..templates.universal import _fetch_url_badge_image
+        img = _fetch_url_badge_image(url)
+        if img is None:
+            raise HTTPException(status_code=502, detail="Failed to fetch image from URL")
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return Response(
+            content=buf.getvalue(),
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[OVERLAY] Proxy image error for {url[:80]}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to proxy image")
