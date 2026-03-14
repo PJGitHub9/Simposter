@@ -227,7 +227,7 @@ const textTransform = ref('uppercase')
 const letterSpacing = ref(2)
 const lineHeight = ref(120)
 const positionY = ref(75)
-const shadowEnabled = ref(true)
+const shadowEnabled = ref(false)
 const shadowBlur = ref(10)
 const shadowOffsetX = ref(0)
 const shadowOffsetY = ref(4)
@@ -658,7 +658,7 @@ const loadEditorState = () => {
       letterSpacing.value = state.textOverlay.letterSpacing ?? 2
       lineHeight.value = state.textOverlay.lineHeight ?? 120
       positionY.value = state.textOverlay.positionY ?? 75
-      shadowEnabled.value = state.textOverlay.shadowEnabled ?? true
+      shadowEnabled.value = state.textOverlay.shadowEnabled ?? false
       shadowBlur.value = state.textOverlay.shadowBlur ?? 10
       shadowOffsetX.value = state.textOverlay.shadowOffsetX ?? 0
       shadowOffsetY.value = state.textOverlay.shadowOffsetY ?? 4
@@ -2222,7 +2222,7 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   letterSpacing.value = 2
   lineHeight.value = 120
   positionY.value = 75
-  shadowEnabled.value = true
+  shadowEnabled.value = false
   shadowBlur.value = 10
   shadowOffsetX.value = 0
   shadowOffsetY.value = 4

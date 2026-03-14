@@ -40,6 +40,7 @@ class PreviewRequest(BaseModel):
     fallbackLogoPreset: Optional[str] = None
     logoSource: Optional[str] = None
     disableOverlayCache: Optional[bool] = None
+    skip_fallback: Optional[bool] = None  # When True, never apply poster/logo fallback (for manual editor preview)
 
 
 class SaveRequest(PreviewRequest):

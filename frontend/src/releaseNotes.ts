@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.71',
+    date: '2026-03-14',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed manual editor (Template Manager preview) applying fallback logic when it shouldn\'t — if no logo was found for the selected movie the preset would silently switch to the configured fallback template/preset (e.g. a "text" preset), making it appear the selected preset was broken. The editor now always renders the selected preset as-is regardless of fallback configuration.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.7',
     date: '2026-03-13',
     sections: [
