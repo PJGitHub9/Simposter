@@ -354,7 +354,9 @@ const previewPreset = async (templateId: string, preset: Preset) => {
         preset_id: preset.id,
         movie_title: movie.title,
         // Only disable overlay cache when setting is off
-        disableOverlayCache: !settings.performance.value.useOverlayCache
+        disableOverlayCache: !settings.performance.value.useOverlayCache,
+        // Never apply fallback logic in the manual editor — always render the selected preset as-is
+        skip_fallback: true,
       })
     })
     if (!res.ok) {

@@ -69,7 +69,9 @@ export function useRenderService() {
       // Include rating_key so backend can fetch media info for overlay badges
       rating_key: movie.key,
       // Only disable when explicitly requested
-      disableOverlayCache
+      disableOverlayCache,
+      // Manual editor always renders the selected preset as-is, never falls back to another preset
+      skip_fallback: true
     })
     if (data?.image_base64 && !skipLastPreviewUpdate) {
       lastPreview.value = `data:image/jpeg;base64,${data.image_base64}`
