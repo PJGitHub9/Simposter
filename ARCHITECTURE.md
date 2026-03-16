@@ -36,6 +36,7 @@ This document explains how Simposter starts, how the backend and frontend intera
 - `tv_cache`, `tv_poster_cache`, `tv_label_cache` — Cached Plex/TVDB TV show data
 - `overlay_configs`, `overlay_assets` — Overlay configuration and badge assets
 - `media_metadata_cache` — Plex media metadata (resolution, codec, audio)
+- `streaming_provider_cache` — TMDb watch provider results per `(tmdb_id, media_type, region)`, 7-day TTL
 
 ### 3. Scheduler Initialization (`backend/scheduler.py`)
 - `init_scheduler()` creates background scheduler daemon
@@ -67,7 +68,22 @@ This document explains how Simposter starts, how the backend and frontend intera
 - **`check_and_update_version()`**: Compares database/app versions, triggers backup, then writes new version
 - **`init_database()`**: Creates tables, migrates legacy `ui_settings`, seeds indexes, then calls `check_and_update_version()`
 
+### Simposter Assets (`backend/simposter_assets.py`)
+- Fetches `logos.json` from the [simposter-assets](https://github.com/PJGitHub9/simposter-assets) GitHub repo (refreshed hourly)
+- Builds two in-memory lookup caches:
+  - `_logos_slug_cache: dict[str, str]` — studio slug → raw asset URL
+  - `_logos_id_cache: dict[int, str]` — TMDb company ID → raw asset URL (keyed on `tmdb_production_company_id` column)
+- **`get_asset_url(slug, company_id=None)`**: Checks ID cache first (more reliable), then slug cache; returns `None` if not found
+- Thread-safe cache prewarm with double-checked locking (`_fetch_lock`)
+
 ### Key API Routers (`backend/api/`)
+
+#### `version_info.py`
+- `get_version_info` (GET `/version-info`) — Returns `version`, `branch`, `docker_tag`, `display_version`, `update_available`, `latest_version`, `update_url`
+- `get_current_version()`: Reads from `frontend/src/version.ts`, falls back to `build-info.json` (Docker builds)
+- `get_git_branch()`: Checks `GIT_BRANCH` env var → `git rev-parse` → `.git/HEAD` → `build-info.json`
+- `get_docker_tag()`: Checks `DOCKER_TAG` env var → `build-info.json`
+- **`build-info.json`**: Written at Docker build time (`RUN ... echo {...} > /app/build-info.json`) with `git_branch`, `app_version`, `docker_tag`; read at runtime when git/version.ts are unavailable
 
 #### `movies.py`
 - `api_movies` — List movies (cached DB if fresh, otherwise Plex)
@@ -83,7 +99,8 @@ This document explains how Simposter starts, how the backend and frontend intera
 
 #### `preview.py`
 - `api_preview` — Compose poster with template/options; returns base64 JPEG
-- Supports logo fallback to different template/preset when logos missing
+- Supports logo/poster fallback to different template/preset when assets missing
+- **`skip_fallback`**: When `True` (sent by the manual editor), no fallback is applied — selected preset always renders as-is
 - Respects JPEG quality settings from database
 
 #### `save.py`
@@ -99,10 +116,12 @@ This document explains how Simposter starts, how the backend and frontend intera
 #### `overlay_config.py`
 - `api_list_overlay_configs` — List all overlay configurations
 - `api_create_overlay_config` — Create new overlay config
-- `api_update_overlay_config` — Update existing overlay config
+- `api_update_overlay_config` — Update existing overlay config (includes `streaming_region` field)
 - `api_delete_overlay_config` — Delete overlay config
 - `api_list_overlay_assets` — List uploaded badge assets
 - `api_upload_overlay_asset` — Upload new badge asset (PNG/JPG)
+- `GET /api/asset-image` — Proxy for simposter-assets badge image, accepts optional `company_id` for TMDb ID lookup
+- `GET /api/overlay-preview-metadata` — Returns metadata for canvas preview (studio slug, studio_company_id, streaming_platform)
 
 #### `scheduler.py`
 - `api_schedule_library_scan` (POST) — Schedule library scans with cron expression
@@ -172,18 +191,33 @@ User selects movies + template/preset → Frontend calls /api/batch/render
 Backend receives render request with preset_id
 → Load preset options from database
 → If overlayConfigId present, load overlay config
+→ Pre-pass resolves dynamic metadata fields:
+  - studio_badge present + tmdb_id available → call get_studio_name() + get_studio_company_id() → inject metadata["studio"] + metadata["studio_company_id"]
+  - streaming_platform_badge present + tmdb_id available → call get_watch_providers(tmdb_id, media_type, region) → inject metadata["streaming_platform"]
 → Fetch Plex media metadata for item:
   - rating_key → /library/metadata/{rating_key}
   - Extract: videoResolution, videoCodec, audioCodec, audioChannels, audioLanguageCode, editionTitle
-→ For each overlay element (video_badge, audio_badge, edition_badge, custom_image, text_label):
+→ For each overlay element (video_badge, audio_badge, edition_badge, studio_badge, streaming_platform_badge, custom_image, text_label):
   - Check show_if_label / hide_if_label conditions (case-insensitive)
-  - Get metadata value (e.g., resolution='4k', codec='hevc')
-  - Check badge_modes[value] (none/text/image)
+  - Get metadata value (e.g., resolution='4k', codec='hevc', studio='a24')
+  - Check badge_modes[value] (none/text/image/asset)
   - If 'text': render text with custom font/color/size
-  - If 'image': composite badge asset from overlay_assets table
+  - If 'image': composite badge asset from overlay_assets table (user-uploaded)
+  - If 'asset': fetch from simposter-assets repo via get_asset_url(slug, company_id)
   - Position at element.position_x, element.position_y
 → Composite all badges onto poster
 ```
+
+**Element types:**
+- `video_badge` — Video metadata (resolution, codec)
+- `audio_badge` — Audio metadata (codec, channels, language)
+- `edition_badge` — Edition metadata (theatrical, extended, director's cut)
+- `studio_badge` — Production studio / network (auto-detected from TMDb)
+- `streaming_platform_badge` — Streaming platform (auto-detected from TMDb watch providers)
+- `custom_image` — User-uploaded badge asset
+- `text_label` — Custom text overlay
+
+**Legacy aliases (backwards compatibility):** `resolution_badge` → `video_badge`, `codec_badge` → `audio_badge`
 
 ---
 
@@ -303,7 +337,15 @@ services:
       - PLEX_URL=http://plex:32400
       - PLEX_TOKEN=xxxxxxxxxxxx
       - TMDB_API_KEY=xxxxxxxxxxxx
+      # Optional: override Docker tag shown in UI (default read from build-info.json)
+      - DOCKER_TAG=latest
 ```
+
+**Build with tag injection** (use `build-docker.bat` on Windows or):
+```bash
+docker build --build-arg DOCKER_TAG=latest -t simposter:latest .
+```
+The `DOCKER_TAG` arg is baked into `/app/build-info.json` at build time alongside `git_branch` and `app_version`. This allows the UI to warn users if they are running an unsupported/unmaintained image tag.
 
 ### File Paths
 - **Config/settings**: `config/` (or `/config`) holds `settings/` and `ui_settings.json` fallback
@@ -383,5 +425,5 @@ sessionStorage.clear()
 
 ---
 
-**Last Updated**: 2026-03-01
-**Current Version**: v1.5.4
+**Last Updated**: 2026-03-16
+**Current Version**: v1.5.71
