@@ -62,8 +62,10 @@ export function useRenderService() {
     skipLastPreviewUpdate?: boolean
   ) => {
     const payload = basePayload(movie, bgUrl, logoUrl, templateId, presetId, options)
-    // Allow overlay caching by default for better performance
-    const disableOverlayCache = disableCache ?? false
+    // Always disable overlay cache for live preview — the cache bakes in matte/fade/vignette
+    // at save time, so a cached overlay would ignore slider changes in the manual editor.
+    // The cache is a batch-render optimization and should not affect interactive previews.
+    const disableOverlayCache = true
     const data = await post('preview', {
       ...payload,
       // Include rating_key so backend can fetch media info for overlay badges

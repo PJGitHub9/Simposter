@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.8',
+    date: '2026-03-19',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Matte height, fade height, and vignette sliders now update the preview in real-time for all presets. Previously, presets with a saved overlay cache (e.g. a custom preset with effects enabled) would show a stale preview because the baked-in cache was used instead of the new slider values. (Thanks chadwpalm!)',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.72',
     date: '2026-03-18',
     sections: [
