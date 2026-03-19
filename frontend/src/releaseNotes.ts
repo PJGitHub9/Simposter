@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.72',
+    date: '2026-03-18',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Apprise notifications — send poster generation events to 70+ services (Slack, Telegram, Pushover, Gotify, ntfy, email, and more) via Apprise URL schemes. Configurable per-library and per-event-type, with a test button. Discord and Apprise fire independently.',
+        ]
+      },
+      {
+        title: 'Bug Fix',
+        items: [
+          'Text shadow no longer defaults to enabled when turning on the custom text overlay.',
+          'Webhook notifications are no longer sent for TV episodes that don\'t result in a new poster being created (e.g. Sonarr episode webhooks for shows that already have a season poster).',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.71',
     date: '2026-03-14',
     sections: [

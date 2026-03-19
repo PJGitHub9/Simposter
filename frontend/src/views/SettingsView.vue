@@ -128,6 +128,13 @@ const localDiscordNotifyBatch = ref(true)
 const localDiscordNotifyManual = ref(true)
 const localDiscordNotifyWebhook = ref(true)
 const localDiscordNotifyAutoGenerate = ref(true)
+const localAppriseEnabled = ref(false)
+const localAppriseUrls = ref<string[]>([])
+const localAppriseNotifyLibraries = ref<string[]>([])
+const localAppriseNotifyBatch = ref(true)
+const localAppriseNotifyManual = ref(true)
+const localAppriseNotifyWebhook = ref(true)
+const localAppriseNotifyAutoGenerate = ref(true)
 
 // API key testing
 const testingApiKeys = ref<Record<string, boolean>>({})
@@ -260,6 +267,13 @@ const loadLocalSettings = async () => {
   localDiscordNotifyManual.value = settings.notifications?.value?.discordNotifyManual ?? true
   localDiscordNotifyWebhook.value = settings.notifications?.value?.discordNotifyWebhook ?? true
   localDiscordNotifyAutoGenerate.value = settings.notifications?.value?.discordNotifyAutoGenerate ?? true
+  localAppriseEnabled.value = settings.notifications?.value?.appriseEnabled ?? false
+  localAppriseUrls.value = settings.notifications?.value?.appriseUrls ?? []
+  localAppriseNotifyLibraries.value = settings.notifications?.value?.appriseNotifyLibraries ?? []
+  localAppriseNotifyBatch.value = settings.notifications?.value?.appriseNotifyBatch ?? true
+  localAppriseNotifyManual.value = settings.notifications?.value?.appriseNotifyManual ?? true
+  localAppriseNotifyWebhook.value = settings.notifications?.value?.appriseNotifyWebhook ?? true
+  localAppriseNotifyAutoGenerate.value = settings.notifications?.value?.appriseNotifyAutoGenerate ?? true
 
   await nextTick()
 }
@@ -307,7 +321,14 @@ const captureSettingsSnapshot = () => {
     discordNotifyBatch: localDiscordNotifyBatch.value,
     discordNotifyManual: localDiscordNotifyManual.value,
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
-    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
+    appriseEnabled: localAppriseEnabled.value,
+    appriseUrls: localAppriseUrls.value,
+    appriseNotifyLibraries: localAppriseNotifyLibraries.value,
+    appriseNotifyBatch: localAppriseNotifyBatch.value,
+    appriseNotifyManual: localAppriseNotifyManual.value,
+    appriseNotifyWebhook: localAppriseNotifyWebhook.value,
+    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
   })
   hasUnsavedChanges.value = false
 
@@ -368,7 +389,14 @@ const checkForChanges = () => {
     discordNotifyBatch: localDiscordNotifyBatch.value,
     discordNotifyManual: localDiscordNotifyManual.value,
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
-    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
+    appriseEnabled: localAppriseEnabled.value,
+    appriseUrls: localAppriseUrls.value,
+    appriseNotifyLibraries: localAppriseNotifyLibraries.value,
+    appriseNotifyBatch: localAppriseNotifyBatch.value,
+    appriseNotifyManual: localAppriseNotifyManual.value,
+    appriseNotifyWebhook: localAppriseNotifyWebhook.value,
+    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -481,7 +509,14 @@ const saveSettings = async () => {
     discordNotifyBatch: localDiscordNotifyBatch.value,
     discordNotifyManual: localDiscordNotifyManual.value,
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
-    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value
+    discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
+    appriseEnabled: localAppriseEnabled.value,
+    appriseUrls: localAppriseUrls.value,
+    appriseNotifyLibraries: localAppriseNotifyLibraries.value,
+    appriseNotifyBatch: localAppriseNotifyBatch.value,
+    appriseNotifyManual: localAppriseNotifyManual.value,
+    appriseNotifyWebhook: localAppriseNotifyWebhook.value,
+    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
   }
 
   await settings.save()
@@ -1268,6 +1303,13 @@ onMounted(() => {
         :discordNotifyManual="localDiscordNotifyManual"
         :discordNotifyWebhook="localDiscordNotifyWebhook"
         :discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate"
+        :appriseEnabled="localAppriseEnabled"
+        :appriseUrls="localAppriseUrls"
+        :appriseNotifyLibraries="localAppriseNotifyLibraries"
+        :appriseNotifyBatch="localAppriseNotifyBatch"
+        :appriseNotifyManual="localAppriseNotifyManual"
+        :appriseNotifyWebhook="localAppriseNotifyWebhook"
+        :appriseNotifyAutoGenerate="localAppriseNotifyAutoGenerate"
         :libraries="localLibraries"
         :tvShowLibraries="localTvShowLibraries"
         :unsavedChanges="hasUnsavedChanges"
@@ -1278,6 +1320,13 @@ onMounted(() => {
         @update:discordNotifyManual="localDiscordNotifyManual = $event; hasUnsavedChanges = true"
         @update:discordNotifyWebhook="localDiscordNotifyWebhook = $event; hasUnsavedChanges = true"
         @update:discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate = $event; hasUnsavedChanges = true"
+        @update:appriseEnabled="localAppriseEnabled = $event; hasUnsavedChanges = true"
+        @update:appriseUrls="localAppriseUrls = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyLibraries="localAppriseNotifyLibraries = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyBatch="localAppriseNotifyBatch = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyManual="localAppriseNotifyManual = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyWebhook="localAppriseNotifyWebhook = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyAutoGenerate="localAppriseNotifyAutoGenerate = $event; hasUnsavedChanges = true"
         @save="saveSettings"
       />
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.5.72 (2026-03-18)
+### New Features
+- **Apprise Notifications**: Send poster generation events to 70+ services (Slack, Telegram, Pushover, Gotify, ntfy, email, and more) via Apprise URL schemes
+  - Configured in Settings → Notifications alongside existing Discord integration
+  - Multiple URLs supported — all services notified simultaneously
+  - Per-library and per-event-type filtering (batch, manual, webhook, auto-generate)
+  - Test button fires to all configured URLs
+  - Discord and Apprise fire independently — both can be enabled at the same time
+### Bug Fixes
+- **Text Shadow Default**: "Enable Text Shadow" no longer defaults to on when enabling the custom text overlay
+
 ## v1.5.71 (2026-03-14)
 ### Bug Fixes
 - **Manual Editor Fallback**: Movie editor and Template Manager previews no longer apply logo/poster fallback logic — the selected preset always renders as-is, even when no logo is available
