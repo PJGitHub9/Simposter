@@ -447,6 +447,30 @@ MIT License — See [LICENSE](LICENSE) for details
 
 ---
 
+## 🙌 Special Thanks
+
+*No affiliation — just projects worth knowing about.*
+
+**Poster styles that inspired Simposter:**
+- [darkmatte](https://www.reddit.com/r/PlexPosters/) — Iconic dark matte poster aesthetic
+- [ikonok](https://www.reddit.com/r/PlexPosters/) — Clean, minimal poster style
+
+**Alternate projects:**
+- [Posterizarr](https://github.com/fscorrupt/Posterizarr) — Another great poster automation tool for Plex
+
+**Related projects to check out:**
+- [Kometa](https://kometa.wiki/) — Powerful Plex metadata and collection manager
+- [TitleCardMaker](https://github.com/CollinHeist/TitleCardMaker) — Automated title card generation for TV shows
+- [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Shows-for-Kometa) — Upcoming media overlays for Plex (Kometa files)
+
+---
+
+## 🤖 AI Disclosure
+
+Simposter is developed with the assistance of [Claude](https://claude.ai/). AI is used to help write, review, and iterate on code — all features are designed, directed, and tested by a human developer. (I'm still learning as I work on this! :D )
+
+---
+
 ## 🙏 Credits
 
 Built with:

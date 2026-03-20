@@ -74,6 +74,13 @@ export type NotificationSettings = {
   discordNotifyManual: boolean
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
+  appriseEnabled: boolean
+  appriseUrls: string[]
+  appriseNotifyLibraries: string[]
+  appriseNotifyBatch: boolean
+  appriseNotifyManual: boolean
+  appriseNotifyWebhook: boolean
+  appriseNotifyAutoGenerate: boolean
 }
 
 export type UISettings = {
@@ -132,7 +139,14 @@ const notifications = ref<NotificationSettings>({
   discordNotifyBatch: true,
   discordNotifyManual: true,
   discordNotifyWebhook: true,
-  discordNotifyAutoGenerate: true
+  discordNotifyAutoGenerate: true,
+  appriseEnabled: false,
+  appriseUrls: [],
+  appriseNotifyLibraries: [],
+  appriseNotifyBatch: true,
+  appriseNotifyManual: true,
+  appriseNotifyWebhook: true,
+  appriseNotifyAutoGenerate: true
 })
 
 async function loadSettings() {
@@ -212,7 +226,14 @@ async function loadSettings() {
       discordNotifyBatch: data.notifications?.discordNotifyBatch ?? true,
       discordNotifyManual: data.notifications?.discordNotifyManual ?? true,
       discordNotifyWebhook: data.notifications?.discordNotifyWebhook ?? true,
-      discordNotifyAutoGenerate: data.notifications?.discordNotifyAutoGenerate ?? true
+      discordNotifyAutoGenerate: data.notifications?.discordNotifyAutoGenerate ?? true,
+      appriseEnabled: data.notifications?.appriseEnabled ?? false,
+      appriseUrls: data.notifications?.appriseUrls ?? [],
+      appriseNotifyLibraries: data.notifications?.appriseNotifyLibraries ?? [],
+      appriseNotifyBatch: data.notifications?.appriseNotifyBatch ?? true,
+      appriseNotifyManual: data.notifications?.appriseNotifyManual ?? true,
+      appriseNotifyWebhook: data.notifications?.appriseNotifyWebhook ?? true,
+      appriseNotifyAutoGenerate: data.notifications?.appriseNotifyAutoGenerate ?? true
     }
 
   } catch (e: unknown) {

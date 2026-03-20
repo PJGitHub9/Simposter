@@ -6,7 +6,7 @@ from ..config import settings, plex_headers, plex_remove_label, logger
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest
 from .movies import fetch_and_cache_poster
-from .notifications import send_discord_notification
+from .notifications import send_discord_notification, send_apprise_notification
 
 router = APIRouter()
 
@@ -159,20 +159,24 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as history_err:
         logger.debug("[HISTORY] Failed to record manual send: %s", history_err)
 
-    # Send Discord notification for manual send (include poster image)
+    # Send notifications for manual send
+    _notif_kwargs = dict(
+        title=movie_details.get("title", "Unknown"),
+        year=movie_details.get("year"),
+        template_id=req.template_id,
+        preset_id=req.preset_id or "",
+        library_id=req.library_id or movie_details.get("library_id"),
+        source="manual",
+        action="sent_to_plex",
+    )
     try:
-        send_discord_notification(
-            title=movie_details.get("title", "Unknown"),
-            year=movie_details.get("year"),
-            template_id=req.template_id,
-            preset_id=req.preset_id or "",
-            library_id=req.library_id or movie_details.get("library_id"),
-            source="manual",
-            action="sent_to_plex",
-            poster_data=payload  # Include the rendered poster image
-        )
+        send_discord_notification(**_notif_kwargs, poster_data=payload)
     except Exception as notif_err:
         logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
+    try:
+        send_apprise_notification(**_notif_kwargs)
+    except Exception as notif_err:
+        logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
 
     logger.info(f"Sent poster to Plex for ratingKey={req.rating_key}")
     return {"status": "ok"}

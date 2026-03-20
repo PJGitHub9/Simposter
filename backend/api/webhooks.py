@@ -26,7 +26,7 @@ from ..config import logger, settings, plex_headers, plex_session, load_presets
 from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
 from .. import database as db
 from .. import cache
-from .notifications import send_discord_notification
+from .notifications import send_discord_notification, send_apprise_notification
 
 router = APIRouter()
 
@@ -668,24 +668,32 @@ def process_webhook_poster_generation(
                     _update_tv_cache(rating_key, library_id)
                 except Exception as cache_err:
                     logger.warning(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {cache_err}", exc_info=True)
-                # Send Discord notification (include poster image from first successful season)
-                try:
-                    tv_poster_data = None
-                    for sub in result.get("results", []):
-                        if sub.get("poster_data"):
-                            tv_poster_data = sub["poster_data"]
-                            break
-                    send_discord_notification(
+                # Only notify if at least one poster was actually created/sent.
+                # Sub-results with status != "ok" mean the season was skipped (already had a poster,
+                # no poster found, etc.) — e.g. a Sonarr episode webhook for S01E03 when S01
+                # already has a poster will return "ok" at the show level but all sub-results skipped.
+                sub_results = result.get("results", [])
+                posters_created = [r for r in sub_results if r.get("status") == "ok"]
+                if not posters_created:
+                    logger.debug(f"[WEBHOOK] No new posters created for TV show {rating_key} — skipping notifications")
+                else:
+                    _tv_notif_kwargs = dict(
                         title=result.get("show_title", "Unknown TV Show"),
                         template_id=template_id,
                         preset_id=preset_id,
                         library_id=library_id,
                         source="webhook",
                         action="sent_to_plex" if auto_send else "saved",
-                        poster_data=tv_poster_data
                     )
-                except Exception as notif_err:
-                    logger.debug(f"[WEBHOOK] Failed to send Discord notification: {notif_err}")
+                    try:
+                        tv_poster_data = next((r.get("poster_data") for r in posters_created if r.get("poster_data")), None)
+                        send_discord_notification(**_tv_notif_kwargs, poster_data=tv_poster_data)
+                    except Exception as notif_err:
+                        logger.debug(f"[WEBHOOK] Failed to send Discord notification: {notif_err}")
+                    try:
+                        send_apprise_notification(**_tv_notif_kwargs)
+                    except Exception as notif_err:
+                        logger.debug(f"[WEBHOOK] Failed to send Apprise notification: {notif_err}")
             else:
                 # Log full result for debugging
                 logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")
@@ -745,7 +753,7 @@ def process_webhook_poster_generation(
                     movie_info = next((m for m in cached_movies if m.get("key") == rating_key or m.get("rating_key") == rating_key), None)
                     movie_title = movie_info.get("title") if movie_info else "Unknown Movie"
                     movie_year = movie_info.get("year") if movie_info else None
-                    send_discord_notification(
+                    _movie_notif_kwargs = dict(
                         title=movie_title,
                         year=movie_year,
                         template_id=template_id,
@@ -753,10 +761,14 @@ def process_webhook_poster_generation(
                         library_id=library_id,
                         source="webhook",
                         action="sent_to_plex" if auto_send else "saved",
-                        poster_data=result.get("poster_data")
                     )
+                    send_discord_notification(**_movie_notif_kwargs, poster_data=result.get("poster_data"))
                 except Exception as notif_err:
                     logger.debug(f"[WEBHOOK] Failed to send Discord notification: {notif_err}")
+                try:
+                    send_apprise_notification(**_movie_notif_kwargs)
+                except Exception as notif_err:
+                    logger.debug(f"[WEBHOOK] Failed to send Apprise notification: {notif_err}")
             else:
                 # Log full result for debugging
                 logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")

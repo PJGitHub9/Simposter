@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
 from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels
-from .api.notifications import send_batch_notification
+from .api.notifications import send_batch_notification, send_apprise_notification
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
@@ -222,6 +222,20 @@ def process_new_content_for_library(
             )
         except Exception as notif_err:
             logger.debug(f"[AUTO_GEN] Failed to send Discord notification: {notif_err}")
+        try:
+            send_apprise_notification(
+                title=f"{total_succeeded + total_failed} posters processed",
+                template_id=template_id,
+                preset_id=preset_id,
+                library_id=library_id,
+                source="auto_generate",
+                action="sent_to_plex",
+                count=total_succeeded + total_failed,
+                success_count=total_succeeded,
+                failed_count=total_failed,
+            )
+        except Exception as notif_err:
+            logger.debug(f"[AUTO_GEN] Failed to send Apprise notification: {notif_err}")
 
     return results
 

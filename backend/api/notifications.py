@@ -18,6 +18,10 @@ class TestWebhookRequest(BaseModel):
     webhook_url: str
 
 
+class TestAppriseRequest(BaseModel):
+    urls: List[str]
+
+
 class DiscordNotification(BaseModel):
     """Data for a Discord notification"""
     title: str
@@ -43,6 +47,35 @@ def _get_notification_settings() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[DISCORD] Failed to get notification settings: {e}")
         return {}
+
+
+def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> bool:
+    """Check if an Apprise notification should be sent."""
+    settings = _get_notification_settings()
+
+    if not settings.get("appriseEnabled", False):
+        return False
+
+    if not settings.get("appriseUrls"):
+        return False
+
+    source_map = {
+        "batch": "appriseNotifyBatch",
+        "manual": "appriseNotifyManual",
+        "webhook": "appriseNotifyWebhook",
+        "auto_generate": "appriseNotifyAutoGenerate"
+    }
+
+    setting_key = source_map.get(source)
+    if setting_key and not settings.get(setting_key, True):
+        return False
+
+    # Check library filter
+    notify_libraries = settings.get("appriseNotifyLibraries", [])
+    if notify_libraries and library_id and library_id not in notify_libraries:
+        return False
+
+    return True
 
 
 def _should_notify(source: str, library_id: Optional[str] = None) -> bool:
@@ -259,6 +292,76 @@ def send_discord_notification(
 
     except Exception as e:
         logger.error(f"[DISCORD] Error sending notification: {e}")
+        return False
+
+
+def send_apprise_notification(
+    title: str,
+    year: Optional[int] = None,
+    template_id: str = "",
+    preset_id: str = "",
+    library_id: Optional[str] = None,
+    source: str = "manual",
+    action: str = "sent_to_plex",
+    count: int = 1,
+    success_count: int = 0,
+    failed_count: int = 0
+) -> bool:
+    """
+    Send an Apprise notification for poster generation events.
+    Fires to all configured Apprise URLs simultaneously.
+    """
+    if not _should_notify_apprise(source, library_id):
+        logger.debug(f"[APPRISE] Notification skipped (disabled or filtered): source={source}")
+        return False
+
+    settings = _get_notification_settings()
+    urls = settings.get("appriseUrls", [])
+    if not urls:
+        return False
+
+    try:
+        import apprise
+        ap = apprise.Apprise()
+        for url in urls:
+            if url.strip():
+                ap.add(url.strip())
+
+        if len(ap) == 0:
+            return False
+
+        emoji = _get_source_emoji(source)
+        source_label = _get_source_label(source)
+        library_name = _get_library_name(library_id)
+        action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
+
+        notify_title = f"{emoji} Simposter — {source_label} Complete"
+
+        if count > 1:
+            body = f"{success_count} posters generated successfully"
+            if failed_count > 0:
+                body += f"\n{failed_count} failed"
+        else:
+            year_str = f" ({year})" if year else ""
+            body = f"{title}{year_str}"
+
+        body += f"\nLibrary: {library_name}"
+        if template_id:
+            body += f"\nTemplate: {template_id}"
+        body += f"\nAction: {action_text}"
+
+        result = ap.notify(title=notify_title, body=body)
+        if result:
+            logger.info(f"[APPRISE] Notification sent: {title} ({source})")
+        else:
+            logger.warning(f"[APPRISE] One or more services failed to receive notification")
+        return bool(result)
+
+    except ImportError:
+        logger.error("[APPRISE] apprise library not installed — add 'apprise' to requirements.txt")
+        return False
+    except Exception as e:
+        logger.error(f"[APPRISE] Error sending notification: {e}")
         return False
 
 
@@ -606,6 +709,42 @@ def complete_batch_progress_notification(
     except Exception as e:
         logger.error(f"[DISCORD] Error completing batch progress: {e}")
         return False
+
+
+@router.post("/notifications/test-apprise")
+def test_apprise_notification(request: TestAppriseRequest):
+    """Test Apprise URLs by sending a test notification to all of them."""
+    if not request.urls:
+        return {"success": False, "error": "No URLs provided"}
+
+    valid_urls = [u.strip() for u in request.urls if u.strip()]
+    if not valid_urls:
+        return {"success": False, "error": "No valid URLs provided"}
+
+    try:
+        import apprise
+        ap = apprise.Apprise()
+        for url in valid_urls:
+            ap.add(url)
+
+        if len(ap) == 0:
+            return {"success": False, "error": "No valid Apprise URLs could be loaded"}
+
+        result = ap.notify(
+            title="\U0001F3AC Simposter Test",
+            body="Your Apprise notification is configured correctly!"
+        )
+
+        if result:
+            return {"success": True}
+        else:
+            return {"success": False, "error": "Apprise failed to deliver to one or more services — check your URLs"}
+
+    except ImportError:
+        return {"success": False, "error": "Apprise library not installed. Run: pip install apprise"}
+    except Exception as e:
+        logger.error(f"[APPRISE] Test error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @router.post("/notifications/test-discord")

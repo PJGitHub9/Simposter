@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
 from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
 from ..config import load_presets
-from .notifications import send_batch_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
+from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_tv_show_details, get_images_for_tv_show, get_tv_season_images, get_tv_external_ids
 from ..rendering import render_poster_image, render_with_overlay_cache
@@ -1632,7 +1632,7 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
         except Exception as notif_err:
             logger.debug("[BATCH] Failed to complete Discord progress: %s", notif_err)
     else:
-        # Fallback to simple notification if progress tracking wasn't started
+        # Fallback to simple Discord notification if progress tracking wasn't started
         try:
             send_batch_notification(
                 library_id=req.library_id,
@@ -1644,6 +1644,22 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
             )
         except Exception as notif_err:
             logger.debug("[BATCH] Failed to send Discord notification: %s", notif_err)
+
+    # Send Apprise completion notification (always fires independently of Discord)
+    try:
+        send_apprise_notification(
+            title=f"{total_count} posters processed",
+            template_id=req.template_id,
+            preset_id=req.preset_id or "",
+            library_id=req.library_id,
+            source="batch",
+            action="sent_to_plex",
+            count=total_count,
+            success_count=success_count,
+            failed_count=failed_count,
+        )
+    except Exception as notif_err:
+        logger.debug("[BATCH] Failed to send Apprise notification: %s", notif_err)
 
     return {"results": results}
 
