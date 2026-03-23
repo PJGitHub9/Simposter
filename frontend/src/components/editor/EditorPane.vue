@@ -76,6 +76,8 @@ const options = ref({
   uniformLogoMaxH: 200,
   uniformLogoOffsetX: 50,
   uniformLogoOffsetY: 78,
+  uniformLogoHAlign: 'center' as 'left' | 'center' | 'right',
+  uniformLogoVAlign: 'center' as 'top' | 'center' | 'bottom',
   borderEnabled: false,
   borderThickness: 0,
   borderColor: '#ffffff',
@@ -363,6 +365,8 @@ const optionsPayload = computed(() => ({
   uniform_logo_max_h: options.value.uniformLogoMaxH,
   uniform_logo_offset_x: options.value.uniformLogoOffsetX / 100,
   uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
+  uniform_logo_h_align: options.value.uniformLogoHAlign,
+  uniform_logo_v_align: options.value.uniformLogoVAlign,
   border_enabled: options.value.borderEnabled,
   border_px: options.value.borderThickness,
   border_color: options.value.borderColor,
@@ -437,6 +441,8 @@ const reloadPreset = async () => {
     if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
     if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
     if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
+    if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
+    if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
     options.value.borderEnabled = !!o.border_enabled
     options.value.borderThickness = Number(o.border_px) || 0
     if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -503,6 +509,8 @@ const saveCurrentPreset = async () => {
     uniform_logo_max_h: options.value.uniformLogoMaxH,
     uniform_logo_offset_x: options.value.uniformLogoOffsetX / 100,
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
+    uniform_logo_h_align: options.value.uniformLogoHAlign,
+    uniform_logo_v_align: options.value.uniformLogoVAlign,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -562,6 +570,8 @@ const saveAsNewPreset = async () => {
     uniform_logo_max_h: options.value.uniformLogoMaxH,
     uniform_logo_offset_x: options.value.uniformLogoOffsetX / 100,
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
+    uniform_logo_h_align: options.value.uniformLogoHAlign,
+    uniform_logo_v_align: options.value.uniformLogoVAlign,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -906,6 +916,8 @@ const applyPresetOptions = (id: string) => {
   if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
   if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
   if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
+  if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
+  if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
   options.value.borderEnabled = !!o.border_enabled
   options.value.borderThickness = Number(o.border_px) || 0
   if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -1282,6 +1294,30 @@ watch(
               <div class="slider-row">
                 <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
                 <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+
+            <div class="slider">
+              <label>Horizontal Align</label>
+              <div class="align-btn-group">
+                <button
+                  v-for="opt in (['left', 'center', 'right'] as const)"
+                  :key="opt"
+                  :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
+                  @click="options.uniformLogoHAlign = opt"
+                >{{ opt }}</button>
+              </div>
+            </div>
+
+            <div class="slider">
+              <label>Vertical Align</label>
+              <div class="align-btn-group">
+                <button
+                  v-for="opt in (['top', 'center', 'bottom'] as const)"
+                  :key="opt"
+                  :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
+                  @click="options.uniformLogoVAlign = opt"
+                >{{ opt }}</button>
               </div>
             </div>
 
@@ -1834,6 +1870,30 @@ watch(
   font-weight: 600;
   color: var(--accent);
   margin-bottom: 12px;
+}
+
+.align-btn-group {
+  display: flex;
+  gap: 6px;
+}
+
+.align-btn {
+  flex: 1;
+  padding: 5px 0;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-transform: capitalize;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.align-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 .checkbox-label {

@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.81',
+    date: '2026-03-20',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Logo alignment within the bounding box — choose horizontal (left / center / right) and vertical (top / center / bottom) alignment independently. Saved per-preset. Defaults to center/center so existing presets are unaffected.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.8',
     date: '2026-03-19',
     sections: [
