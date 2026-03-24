@@ -205,6 +205,8 @@ const options = ref({
   uniformLogoMaxH: 200,
   uniformLogoOffsetX: 50,
   uniformLogoOffsetY: 78,
+  uniformLogoHAlign: 'center' as 'left' | 'center' | 'right',
+  uniformLogoVAlign: 'center' as 'top' | 'center' | 'bottom',
   borderEnabled: false,
   borderThickness: 0,
   borderColor: '#ffffff',
@@ -2252,6 +2254,8 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (o.uniform_logo_max_h) options.value.uniformLogoMaxH = Number(o.uniform_logo_max_h)
   if (typeof o.uniform_logo_offset_x === 'number') options.value.uniformLogoOffsetX = Math.round(o.uniform_logo_offset_x * 100)
   if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
+  if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
+  if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
   options.value.borderEnabled = !!o.border_enabled
   options.value.borderThickness = Number(o.border_px) || 0
   if (o.border_color) options.value.borderColor = String(o.border_color)
