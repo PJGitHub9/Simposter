@@ -120,7 +120,8 @@ def api_save_preset(req: PresetSaveRequest):
     template_id = req.template_id or "uniformlogo"
     preset_id = req.preset_id
     options = _apply_global_template_defaults(req.options)
-    season_options = req.season_options or {}
+    # Keep season_options as None when not provided — db.save_preset will preserve the existing value
+    season_options = req.season_options
 
     try:
         # Save to database

@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.82',
+    date: '2026-03-22',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Season poster settings (poster filter, text overlay, logo mode, etc.) are no longer wiped when saving the series preset from the editor. Previously, saving the series preset would overwrite season_options with an empty object, causing webhooks and batch to render seasons with the wrong settings.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.81',
     date: '2026-03-20',
     sections: [

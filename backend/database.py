@@ -1057,21 +1057,38 @@ def get_preset(template_id: str, preset_id: str) -> Optional[Dict[str, Any]]:
 
 
 def save_preset(template_id: str, preset_id: str, name: str, options: Dict[str, Any], season_options: Optional[Dict[str, Any]] = None) -> None:
-    """Save or update a preset."""
+    """Save or update a preset.
+
+    When season_options is None (not explicitly provided), the existing
+    season_options_json is preserved so that saving a series preset from the
+    editor never clobbers the user's saved season configuration.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
         options_json = json.dumps(options)
-        season_json = json.dumps(season_options or {})
 
-        cursor.execute("""
-            INSERT INTO presets (id, template_id, name, options_json, season_options_json, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                options_json = excluded.options_json,
-                season_options_json = excluded.season_options_json,
-                updated_at = CURRENT_TIMESTAMP
-        """, (preset_id, template_id, name, options_json, season_json))
+        if season_options is not None:
+            # Caller explicitly provided season_options — write them.
+            season_json = json.dumps(season_options)
+            cursor.execute("""
+                INSERT INTO presets (id, template_id, name, options_json, season_options_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    options_json = excluded.options_json,
+                    season_options_json = excluded.season_options_json,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (preset_id, template_id, name, options_json, season_json))
+        else:
+            # season_options not provided — preserve whatever is already stored.
+            cursor.execute("""
+                INSERT INTO presets (id, template_id, name, options_json, season_options_json, updated_at)
+                VALUES (?, ?, ?, ?, '{}', CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    options_json = excluded.options_json,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (preset_id, template_id, name, options_json))
 
     logger.debug(f"[DB] Saved preset {preset_id} for template {template_id}")
 
