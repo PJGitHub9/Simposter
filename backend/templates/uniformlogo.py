@@ -1,7 +1,7 @@
 # backend/templates/uniformlogo.py
 
 from PIL import Image
-from ..config import settings
+from ..config import settings, logger
 from .universal import build_base_poster, _hex_to_rgb, _solid_color_logo, _render_text_overlay
 
 
@@ -70,18 +70,35 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
         new_h = int(lh * scale)
         logo_res = logo.resize((new_w, new_h), Image.LANCZOS)
 
-        # Center inside bounding box
-        x = cx - new_w // 2
-        y = cy - new_h // 2
+        # Align logo within bounding box
+        h_align = options.get("uniform_logo_h_align", "center")
+        v_align = options.get("uniform_logo_v_align", "center")
+
+        box_left = cx - max_w // 2
+        box_right = cx + max_w // 2
+        box_top = cy - max_h // 2
+        box_bottom = cy + max_h // 2
+
+        if h_align == "left":
+            x = box_left
+        elif h_align == "right":
+            x = box_right - new_w
+        else:  # center
+            x = cx - new_w // 2
+
+        if v_align == "top":
+            y = box_top
+        elif v_align == "bottom":
+            y = box_bottom - new_h
+        else:  # center
+            y = cy - new_h // 2
 
         canvas.paste(logo_res, (x, y), logo_res)
 
     # ------------- TEXT OVERLAY (outside logo check) -------------
     text_overlay_enabled = bool(options.get("text_overlay_enabled", False))
-    print(f"[DEBUG uniformlogo] Text overlay enabled: {text_overlay_enabled}")
     if text_overlay_enabled:
         custom_text = str(options.get("custom_text", ""))
-        print(f"[DEBUG uniformlogo] Custom text: '{custom_text}'")
         if custom_text:
             canvas = _render_text_overlay(canvas, custom_text, options)
 

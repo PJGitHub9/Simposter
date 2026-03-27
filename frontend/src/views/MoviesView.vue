@@ -85,11 +85,8 @@ const loadMoviesCache = () => {
   if (typeof sessionStorage === 'undefined') return
   try {
     const raw = sessionStorage.getItem(MOVIES_CACHE_KEY.value)
-    console.log('[MoviesView] loadMoviesCache - Cache key:', MOVIES_CACHE_KEY.value)
-    console.log('[MoviesView] loadMoviesCache - Current library:', currentLibrary.value)
     if (raw) {
       const cached = JSON.parse(raw)
-      console.log('[MoviesView] loadMoviesCache - Total cached items:', cached.length)
       // Only use cache if it actually has movies
       if (cached && cached.length > 0) {
         // STRICT validation: only show movies from current library
@@ -99,19 +96,14 @@ const loadMoviesCache = () => {
           // STRICT: library IDs must match exactly
           return cachedLib === currentLib
         })
-        console.log('[MoviesView] loadMoviesCache - Filtered items for library', currentLib + ':', validCached.length)
         if (validCached.length > 0) {
           moviesCache.value = validCached
-          console.log('[MoviesView] loadMoviesCache - Set moviesCache to', validCached.length, 'items')
         } else {
           // No valid movies for this library, clear the cache
           moviesCache.value = []
-          console.log('[MoviesView] loadMoviesCache - No valid items, cleared cache')
         }
         // Don't set moviesLoaded here - let onMounted decide whether to fetch fresh
       }
-    } else {
-      console.log('[MoviesView] loadMoviesCache - No cached data found')
     }
   } catch (e) {
     console.warn('[MoviesView] loadMoviesCache - Error:', e)
@@ -195,24 +187,17 @@ const forcePosterRefresh = async () => {
 // NOTE: Initial cache load moved to onMounted to ensure route is ready
 // Reload caches when library changes
 watch(currentLibrary, (newLib, oldLib) => {
-  console.log('[MoviesView] Library changed from', oldLib, 'to', newLib)
-  console.log('[MoviesView] Current moviesCache length before clear:', moviesCache.value.length)
-  console.log('[MoviesView] Current movies display length before clear:', movies.value.length)
-
   // Clear display AND cache immediately to prevent showing wrong library's movies
   loading.value = true
   movies.value = []
   moviesCache.value = []
   moviesLoaded.value = false
-  console.log('[MoviesView] Cleared all arrays')
 
   clearAllCaches()
   loadPosterCache()
   loadLabelCache()
   // Don't load movies cache - force fresh fetch from API
   fetchMovies().then(() => {
-    console.log('[MoviesView] Fetch complete, moviesCache length:', moviesCache.value.length)
-    console.log('[MoviesView] Fetch complete, movies display length:', movies.value.length)
     fetchPosters(paged.value)
     fetchLabels(paged.value)
   })
@@ -346,13 +331,9 @@ const fetchMovies = async (forceRefresh = false) => {
     if (forceRefresh) params.set('force_refresh', 'true')
     if (settings.deduplicateMovies.value) params.set('deduplicate', 'true')
     const url = `${apiBase}/api/movies${params.toString() ? '?' + params.toString() : ''}`
-    console.log('[MoviesView] fetchMovies - Current library:', currentLibrary.value)
-    console.log('[MoviesView] fetchMovies - URL:', url)
     const res = await fetch(url)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = (await res.json()) as (Movie & { labels?: string[] })[]
-    console.log('[MoviesView] fetchMovies - Received', data.length, 'items from API')
-    console.log('[MoviesView] fetchMovies - Sample library_ids:', data.slice(0, 5).map(m => m.library_id))
     // Seed caches from server data when available
     data.forEach((m) => {
       if (m.poster && !(m.key in posterCacheStore.value)) {
@@ -366,7 +347,6 @@ const fetchMovies = async (forceRefresh = false) => {
     saveLabelCache()
 
     moviesCache.value = data
-    console.log('[MoviesView] fetchMovies - Set moviesCache to', data.length, 'items')
 
     // IMPORTANT: Don't use hydratePostersFromSession() - it uses wrong cache key!
     // Instead, manually apply poster cache from our library-specific cache
@@ -379,7 +359,6 @@ const fetchMovies = async (forceRefresh = false) => {
     moviesLoaded.value = true
     saveMoviesCache()
     movies.value = moviesCache.value
-    console.log('[MoviesView] fetchMovies - Set movies display to', movies.value.length, 'items')
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'Failed to load movies'
   } finally {

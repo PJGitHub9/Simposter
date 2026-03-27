@@ -10,6 +10,42 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.83',
+    date: '2026-03-27',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Cleaned up backend and frontend logging — removed ~150 debug console.log/print statements across the codebase. Backend template modules (uniformlogo, universal) now use the structured logger instead of raw print(). Frontend views and editor panes no longer emit verbose debug output to the browser console. Warnings and errors are preserved.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.82',
+    date: '2026-03-22',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Season poster settings (poster filter, text overlay, logo mode, etc.) are no longer wiped when saving the series preset from the editor. Previously, saving the series preset would overwrite season_options with an empty object, causing webhooks and batch to render seasons with the wrong settings.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.81',
+    date: '2026-03-20',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Logo alignment within the bounding box — choose horizontal (left / center / right) and vertical (top / center / bottom) alignment independently. Saved per-preset. Defaults to center/center so existing presets are unaffected.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.8',
     date: '2026-03-19',
     sections: [

@@ -10,7 +10,7 @@ import io
 import time
 import hashlib
 from pathlib import Path
-from ..config import settings
+from ..config import settings, logger
 
 # ============================================================
 # Helpers
@@ -138,10 +138,10 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
             font_path = base_dir / f"{font_family}{ext}"
             if font_path.exists():
                 try:
-                    print(f"[FONT] Loaded '{font_family}' from {font_path}")
+                    logger.debug("[FONT] Loaded '%s' from %s", font_family, font_path)
                     return ImageFont.truetype(str(font_path), font_size)
                 except Exception as e:
-                    print(f"[FONT] Failed to load {font_path}: {e}")
+                    logger.debug("[FONT] Failed to load %s: %s", font_path, e)
 
             # Try with weight suffix if bold requested
             if boldish:
@@ -149,10 +149,10 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
                     font_path = base_dir / f"{font_family}{suffix}{ext}"
                     if font_path.exists():
                         try:
-                            print(f"[FONT] Loaded '{font_family}' (bold) from {font_path}")
+                            logger.debug("[FONT] Loaded '%s' (bold) from %s", font_family, font_path)
                             return ImageFont.truetype(str(font_path), font_size)
                         except Exception as e:
-                            print(f"[FONT] Failed to load {font_path}: {e}")
+                            logger.debug("[FONT] Failed to load %s: %s", font_path, e)
 
         # Try recursive search with fuzzy matching
         try:
@@ -196,13 +196,13 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
                 try:
                     font_obj = ImageFont.truetype(str(font_info['path']), font_size)
                     match_type = "exact weight" if font_info['is_exact_weight'] else "fallback weight"
-                    print(f"[FONT] Loaded '{font_family}' via fuzzy match ({match_type}) from {font_info['path']}")
+                    logger.debug("[FONT] Loaded '%s' via fuzzy match (%s) from %s", font_family, match_type, font_info['path'])
                     return font_obj
                 except Exception as e:
-                    print(f"[FONT] Failed to load {font_info['path']}: {e}")
+                    logger.debug("[FONT] Failed to load %s: %s", font_info['path'], e)
 
         except Exception as e:
-            print(f"[FONT] Error scanning directory {base_dir}: {e}")
+            logger.debug("[FONT] Error scanning directory %s: %s", base_dir, e)
 
         return None
 
@@ -324,13 +324,12 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     for font_name in candidates:
         try:
             font_obj = ImageFont.truetype(font_name, font_size)
-            print(f"[FONT] Loaded system font: {font_name} (weight={'bold' if boldish else 'regular'})")
+            logger.debug("[FONT] Loaded system font: %s (%s)", font_name, 'bold' if boldish else 'regular')
             return font_obj
         except Exception:
             continue
 
-    print(f"[FONT] WARNING: Could not load '{font_family}' (weight={'bold' if boldish else 'regular'}). Using Pillow default.")
-    print(f"[FONT] To fix: Upload .ttf/.otf files to {volume_fonts_dir}")
+    logger.warning("[FONT] Could not load '%s' (%s) — using Pillow default. Upload .ttf/.otf files to %s to fix.", font_family, 'bold' if boldish else 'regular', volume_fonts_dir)
     return ImageFont.load_default()
 
 
@@ -344,12 +343,9 @@ def _render_text_overlay(
     Supports font customization, positioning, shadows, and outlines.
     """
     if not text or not text.strip():
-        print(f"[DEBUG] Text overlay skipped - empty text: '{text}'")
         return canvas
 
-    print(f"[DEBUG] Rendering text overlay: '{text}'")
     W, H = canvas.size
-    print(f"[DEBUG] Canvas size: {W}x{H}")
 
     # Extract text options
     font_family = str(options.get("font_family", "Arial"))
@@ -383,7 +379,6 @@ def _render_text_overlay(
     text = text.replace("{title}", movie_title)
     text = text.replace("{year}", movie_year)
     text = text.replace("{season}", season_text)
-    print(f"[DEBUG] Text after template substitution: '{text}'")
 
     # Apply text transform
     if text_transform == "uppercase":
@@ -395,7 +390,7 @@ def _render_text_overlay(
 
     # Load font
     font = _load_font(font_family, font_size, font_weight)
-    print(f"[DEBUG] Font loaded: {font_family} size {font_size}")
+    logger.debug("[TEXT] Rendering '%s' font=%s size=%d", text[:40], font_family, font_size)
 
     # Create a drawing context for text measurement (needs proper size for accurate bbox)
     temp_img = Image.new("RGBA", (W, H))
@@ -487,13 +482,8 @@ def _render_text_overlay(
     total_height = sum(line_heights) + int(font_size * (line_height - 1) * (len(wrapped_lines) - 1))
     max_width = max(line_widths) if line_widths else 0
 
-    print(f"[DEBUG] Text wrapped into {len(wrapped_lines)} lines (original: {len(lines)} lines)")
-    print(f"[DEBUG] Max text width allowed: {max_text_width}px")
-
     # Calculate Y position
     y_pos = int(H * position_y - total_height / 2)
-    print(f"[DEBUG] Text position: y={y_pos}, position_y={position_y}, total_height={total_height}")
-    print(f"[DEBUG] Text color: {text_color}, align: {text_align}")
 
     # Create layer for text with extra space for shadow/stroke
     padding = max(shadow_blur + abs(shadow_offset_x) + abs(shadow_offset_y), stroke_width) + 50
@@ -573,8 +563,6 @@ def _render_text_overlay(
     # Composite text onto canvas
     canvas = canvas.convert("RGBA")
     canvas = Image.alpha_composite(canvas, text_layer)
-    print(f"[DEBUG] Text overlay composited successfully")
-
     return canvas
 
 
@@ -739,10 +727,8 @@ def render_universal(
 
     # ------------- TEXT OVERLAY -------------
     text_overlay_enabled = bool(options.get("text_overlay_enabled", False))
-    print(f"[DEBUG] Text overlay enabled: {text_overlay_enabled}")
     if text_overlay_enabled:
         custom_text = str(options.get("custom_text", ""))
-        print(f"[DEBUG] Custom text: '{custom_text}'")
         if custom_text:
             canvas = _render_text_overlay(canvas, custom_text, options)
 

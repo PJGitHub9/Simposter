@@ -330,8 +330,28 @@ def render_with_overlay_cache(
                     new_h = int(lh * scale)
                     logo_res = logo.resize((new_w, new_h), Image.LANCZOS)
 
-                    x = cx - new_w // 2
-                    y = cy - new_h // 2
+                    h_align = render_options.get("uniform_logo_h_align", "center")
+                    v_align = render_options.get("uniform_logo_v_align", "center")
+
+                    box_left = cx - max_w // 2
+                    box_right = cx + max_w // 2
+                    box_top = cy - max_h // 2
+                    box_bottom = cy + max_h // 2
+
+                    if h_align == "left":
+                        x = box_left
+                    elif h_align == "right":
+                        x = box_right - new_w
+                    else:
+                        x = cx - new_w // 2
+
+                    if v_align == "top":
+                        y = box_top
+                    elif v_align == "bottom":
+                        y = box_bottom - new_h
+                    else:
+                        y = cy - new_h // 2
+
                     canvas.paste(logo_res, (x, y), logo_res)
 
                     logger.info("[CACHE] Applied uniformlogo positioning with cached overlay")
