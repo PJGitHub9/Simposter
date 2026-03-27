@@ -454,7 +454,6 @@ const fetchAllAvailableLabels = async () => {
     if (res.ok) {
       const data = await res.json()
       allAvailableLabels.value = data.labels || []
-      console.log(`[BatchEdit] Loaded ${allAvailableLabels.value.length} unique labels for library ${currentLibrary.value}`)
     }
   } catch (e) {
     console.warn('[BatchEdit] Failed to fetch all labels:', e)
@@ -478,7 +477,6 @@ const fetchLabelsFromCache = async () => {
         }
       })
       
-      console.log(`[BatchEdit] Loaded ${labelsFound} label sets from backend cache for library ${currentLibrary.value}`)
       saveLabelCache()
     }
   } catch (e) {
@@ -511,7 +509,6 @@ const fetchLabels = async (list: Movie[]) => {
           labelInFlight.delete(movieKey)
         })
         saveLabelCache()
-        console.log(`[BatchEdit] Loaded ${Object.keys(bulkData.labels || {}).length} label sets via bulk endpoint`)
         return
       }
     }
@@ -584,7 +581,6 @@ const loadTemplatesAndPresets = async () => {
     if (templatesRes.ok) {
       const templatesData = await templatesRes.json()
       templates.value = templatesData.templates || []
-      console.log('Loaded templates:', templates.value)
     } else {
       console.error('Failed to load templates:', templatesRes.status)
       // Fallback to uniformlogo template if API fails
@@ -600,7 +596,6 @@ const loadTemplatesAndPresets = async () => {
     const presetsRes = await fetch(`${apiBase}/api/presets`)
     if (presetsRes.ok) {
       const presetsData = await presetsRes.json()
-      console.log('Raw presets data:', presetsData)
       // Convert presets structure to flat array
       const allPresets: Preset[] = []
       Object.entries(presetsData).forEach(([templateId, data]: [string, any]) => {
@@ -615,7 +610,6 @@ const loadTemplatesAndPresets = async () => {
         }
       })
       presets.value = allPresets
-      console.log('Loaded presets:', presets.value)
     } else {
       console.error('Failed to load presets:', presetsRes.status)
     }

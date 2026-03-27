@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.83',
+    date: '2026-03-27',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Cleaned up backend and frontend logging — removed ~150 debug console.log/print statements across the codebase. Backend template modules (uniformlogo, universal) now use the structured logger instead of raw print(). Frontend views and editor panes no longer emit verbose debug output to the browser console. Warnings and errors are preserved.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.82',
     date: '2026-03-22',
     sections: [

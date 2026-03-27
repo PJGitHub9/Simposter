@@ -190,7 +190,6 @@ const fetchLibraryLabels = async () => {
       if (!lib.id) continue
       try {
         const url = `${apiBase}/api/movies/labels/all?library_id=${encodeURIComponent(lib.id)}`
-        console.log(`[LibrariesTab] Fetching labels from: ${url}`)
         const res = await fetch(url)
         if (!res.ok) {
           if (res.status === 404) {
@@ -209,7 +208,6 @@ const fetchLibraryLabels = async () => {
         }
         const data = await res.json()
         labels[lib.id] = data.labels || []
-        console.log(`[LibrariesTab] Fetched ${(labels[lib.id] || []).length} labels for movie library ${lib.id}`)
       } catch (e) {
         console.error(`Failed to fetch labels for movie library ${lib.id}:`, e)
       }
@@ -238,7 +236,6 @@ const fetchLibraryLabels = async () => {
         }
         const data = await res.json()
         labels[lib.id] = data.labels || []
-        console.log(`[LibrariesTab] Fetched ${(labels[lib.id] || []).length} labels for TV library ${lib.id}`)
       } catch (e) {
         console.error(`Failed to fetch labels for TV library ${lib.id}:`, e)
       }

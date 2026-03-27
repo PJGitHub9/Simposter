@@ -1,7 +1,7 @@
 # backend/templates/uniformlogo.py
 
 from PIL import Image
-from ..config import settings
+from ..config import settings, logger
 from .universal import build_base_poster, _hex_to_rgb, _solid_color_logo, _render_text_overlay
 
 
@@ -97,10 +97,8 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
 
     # ------------- TEXT OVERLAY (outside logo check) -------------
     text_overlay_enabled = bool(options.get("text_overlay_enabled", False))
-    print(f"[DEBUG uniformlogo] Text overlay enabled: {text_overlay_enabled}")
     if text_overlay_enabled:
         custom_text = str(options.get("custom_text", ""))
-        print(f"[DEBUG uniformlogo] Custom text: '{custom_text}'")
         if custom_text:
             canvas = _render_text_overlay(canvas, custom_text, options)
 

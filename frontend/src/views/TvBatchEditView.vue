@@ -448,7 +448,6 @@ const fetchAllAvailableLabels = async () => {
     if (res.ok) {
       const data = await res.json()
       allAvailableLabels.value = data.labels || []
-      console.log(`[TvBatchEdit] Loaded ${allAvailableLabels.value.length} unique labels for library ${currentLibrary.value}`)
     }
   } catch (e) {
     console.warn('[TvBatchEdit] Failed to fetch all labels:', e)
@@ -472,7 +471,6 @@ const fetchLabelsFromCache = async () => {
         }
       })
       
-      console.log(`[TvBatchEdit] Loaded ${labelsFound} label sets from backend cache for library ${currentLibrary.value}`)
       saveLabelCache()
     }
   } catch (e) {
@@ -505,7 +503,6 @@ const fetchLabels = async (list: TvShow[]) => {
           labelInFlight.delete(movieKey)
         })
         saveLabelCache()
-        console.log(`[TvBatchEdit] Loaded ${Object.keys(bulkData.labels || {}).length} label sets via bulk endpoint`)
         return
       }
     }
@@ -578,7 +575,6 @@ const loadTemplatesAndPresets = async () => {
     if (templatesRes.ok) {
       const templatesData = await templatesRes.json()
       templates.value = templatesData.templates || []
-      console.log('Loaded templates:', templates.value)
     } else {
       console.error('Failed to load templates:', templatesRes.status)
       // Fallback to uniformlogo template if API fails
@@ -594,7 +590,6 @@ const loadTemplatesAndPresets = async () => {
     const presetsRes = await fetch(`${apiBase}/api/presets`)
     if (presetsRes.ok) {
       const presetsData = await presetsRes.json()
-      console.log('Raw presets data:', presetsData)
       presetsDataFull.value = presetsData // Store full data for later use
       // Convert presets structure to flat array
       const allPresets: Preset[] = []
@@ -610,7 +605,6 @@ const loadTemplatesAndPresets = async () => {
         }
       })
       presets.value = allPresets
-      console.log('Loaded presets:', presets.value)
     } else {
       console.error('Failed to load presets:', presetsRes.status)
     }
@@ -806,7 +800,6 @@ watch(selectedShowsList, (list) => {
 
   // Preload all selected shows in background for instant navigation
   if (list.length > 0 && selectedTemplate.value) {
-    console.log('[TV BATCH PREVIEW] Preloading', list.length, 'shows in background')
     // Preload in batches to avoid overwhelming the server
     list.forEach((show, idx) => {
       setTimeout(() => {
@@ -955,8 +948,6 @@ const schedulePreload = () => {
 
   // Start preload immediately (no delay) to prepare for navigation
   preloadTimeout = setTimeout(() => {
-    console.log('[TV BATCH PREVIEW] Starting background preload for adjacent item')
-
     // Preload the next item in the list if available
     if (selectedShowsList.value.length > 1 && previewIndex.value < selectedShowsList.value.length - 1) {
       const nextShow = selectedShowsList.value[previewIndex.value + 1]
@@ -969,8 +960,6 @@ const schedulePreload = () => {
 const preloadShowPreview = async (show: any) => {
   if (!selectedTemplate.value) return
 
-  console.log('[TV BATCH PREVIEW] Preloading show in background:', show.title)
-
   // Build the cache key for this show
   const libraryPart = currentLibrary.value ? `lib:${currentLibrary.value}` : 'no-lib'
   const seasonIdx = includeSeasons.value ? -1 : undefined // Always preload series entry first
@@ -980,7 +969,6 @@ const preloadShowPreview = async (show: any) => {
 
   // Skip if already cached
   if (previewCache.value[cacheKey]) {
-    console.log('[TV BATCH PREVIEW] Preload skipped - already cached:', cacheKey)
     return
   }
 
@@ -1001,7 +989,6 @@ const preloadShowPreview = async (show: any) => {
 
   // If we have a textless/text filter, use the select-poster endpoint
   if (posterFilter === 'textless' || posterFilter === 'text') {
-    console.log('[TV BATCH PREVIEW] Preload fetching filtered poster with filter:', posterFilter)
     const selectParams = new URLSearchParams({
       poster_filter: posterFilter,
       ...(currentLibrary.value && { library_id: currentLibrary.value })
@@ -1013,7 +1000,6 @@ const preloadShowPreview = async (show: any) => {
         const selectData = await selectRes.json()
         if (selectData.url) {
           posterUrl = selectData.url
-          console.log('[TV BATCH PREVIEW] Preload selected filtered poster:', posterUrl?.substring(0, 100))
         } else {
           console.warn('[TV BATCH PREVIEW] Preload poster selection returned no URL, using fallback')
         }
@@ -1037,8 +1023,6 @@ const preloadShowPreview = async (show: any) => {
     tv_show_rating_key: show.key
   }
 
-  console.log('[TV BATCH PREVIEW] Preload payload with poster_filter:', posterFilter)
-
   try {
     const response = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
@@ -1050,22 +1034,13 @@ const preloadShowPreview = async (show: any) => {
       const data = await response.json()
       const img = `data:image/jpeg;base64,${data.image_base64}`
       previewCache.value[cacheKey] = img
-      console.log('[TV BATCH PREVIEW] Preload completed for:', show.title)
     }
   } catch (err) {
-    console.log('[TV BATCH PREVIEW] Preload failed for:', show.title, err)
+    // preload failure is non-critical
   }
 }
 
 const fetchPreview = async (isPreload = false) => {
-  console.log('[TV BATCH PREVIEW] fetchPreview called:', {
-    isPreload,
-    hasMovie: !!currentPreviewMovie.value,
-    hasTemplate: !!selectedTemplate.value,
-    includeSeasons: includeSeasons.value,
-    currentSeason: currentSeason.value?.title || 'null'
-  })
-
   // If this is a manual fetch (not preload), cancel any scheduled preload
   if (!isPreload) {
     cancelPreload()
@@ -1078,7 +1053,6 @@ const fetchPreview = async (isPreload = false) => {
   }
 
   if (!currentPreviewMovie.value || !selectedTemplate.value) {
-    console.log('[TV BATCH PREVIEW] Early return - missing movie or template')
     previewImage.value = null
     return
   }
@@ -1094,34 +1068,20 @@ const fetchPreview = async (isPreload = false) => {
   let cacheKey: string
   const libraryPart = currentLibrary.value ? `lib:${currentLibrary.value}` : 'no-lib'
 
-  console.log('[TV BATCH PREVIEW] Cache key decision:', {
-    includeSeasons: includeSeasons.value,
-    isShowLevel,
-    hasCurrentSeason: !!currentSeason.value,
-    currentSeasonIndex: currentSeason.value?.index,
-    seasonsLength: currentSeasons.value.length
-  })
-
   if (includeSeasons.value && !isShowLevel) {
     // Viewing a specific season - include season info in cache key
     cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${movie.title}`
-    console.log('[TV BATCH PREVIEW] Using season item cache key (branch 1)')
   } else if (includeSeasons.value && currentSeason.value && currentSeasons.value.length > 0) {
     // Viewing show with seasons enabled AND seasons have been loaded AND a season is selected
     // Use season index for more reliable cache key (title can have special chars)
     const seasonIdx = currentSeason.value.index
     cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|season:${seasonIdx}`
-    console.log('[TV BATCH PREVIEW] Using season index cache key (branch 2):', seasonIdx)
   } else {
     // Viewing show without seasons OR seasons not loaded yet
     cacheKey = `${libraryPart}|${movie.key}|${selectedTemplate.value}|${selectedPreset.value || 'none'}|show`
-    console.log('[TV BATCH PREVIEW] Using show cache key (branch 3)')
   }
 
-  console.log('[TV BATCH PREVIEW] Final cache key:', cacheKey)
-
   if (previewCache.value[cacheKey]) {
-    console.log('[TV BATCH PREVIEW] Using cached preview')
     // If this is a manual fetch (not preload), update the preview image
     if (!isPreload) {
       previewImage.value = previewCache.value[cacheKey] || null
@@ -1183,25 +1143,21 @@ const fetchPreview = async (isPreload = false) => {
           // Otherwise use regular options poster_filter (for series-level rendering)
           if (seasonIndex !== undefined && preset.season_options && preset.season_options.poster_filter) {
             posterFilter = preset.season_options.poster_filter
-            console.log('[TV BATCH PREVIEW] Using season_options poster_filter:', posterFilter)
 
             // Also get fallback settings from season_options
             if (preset.season_options.fallbackPosterAction) {
               fallbackPosterAction = preset.season_options.fallbackPosterAction
               fallbackPosterTemplate = preset.season_options.fallbackPosterTemplate
               fallbackPosterPreset = preset.season_options.fallbackPosterPreset
-              console.log('[TV BATCH PREVIEW] Using season_options fallback:', fallbackPosterTemplate, fallbackPosterPreset)
             }
           } else if (preset.options && preset.options.poster_filter) {
             posterFilter = preset.options.poster_filter
-            console.log('[TV BATCH PREVIEW] Using options poster_filter:', posterFilter)
 
             // Also get fallback settings from regular options
             if (preset.options.fallbackPosterAction) {
               fallbackPosterAction = preset.options.fallbackPosterAction
               fallbackPosterTemplate = preset.options.fallbackPosterTemplate
               fallbackPosterPreset = preset.options.fallbackPosterPreset
-              console.log('[TV BATCH PREVIEW] Using options fallback:', fallbackPosterTemplate, fallbackPosterPreset)
             }
           }
         }
@@ -1211,7 +1167,6 @@ const fetchPreview = async (isPreload = false) => {
     // If we have a textless/text filter, use the new select-poster endpoint
     let posterSelectionFailed = false
     if (posterFilter === 'textless' || posterFilter === 'text') {
-      console.log('[TV BATCH PREVIEW] Fetching filtered poster with filter:', posterFilter)
       const selectParams = new URLSearchParams({
         poster_filter: posterFilter,
         ...(seasonIndex !== undefined && { season_index: seasonIndex.toString() }),
@@ -1225,13 +1180,11 @@ const fetchPreview = async (isPreload = false) => {
         if (selectRes.ok) {
           const selectData = await selectRes.json()
           posterUrl = selectData.url
-          console.log('[TV BATCH PREVIEW] Selected filtered poster: has_text=%s url=%s', selectData.has_text, posterUrl?.substring(0, 100))
         } else {
           const errorText = await selectRes.text()
           console.warn('[TV BATCH PREVIEW] Poster selection failed:', selectRes.status, errorText)
           posterSelectionFailed = true
           posterUrl = undefined  // Clear poster URL so backend handles fallback
-          console.log('[TV BATCH PREVIEW] Will let backend handle fallback logic (not fetching Plex poster)')
         }
       } catch (err) {
         console.error('[TV BATCH PREVIEW] Error selecting poster:', err)
@@ -1253,7 +1206,6 @@ const fetchPreview = async (isPreload = false) => {
 
     // Add poster_filter to options so preview endpoint respects it
     options.poster_filter = posterFilter
-    console.log('[TV BATCH PREVIEW] Adding poster_filter to options:', posterFilter)
 
     // IMPORTANT: Only add season_text when we're actually rendering a season poster
     // This ensures the preview API doesn't mistakenly use season_options for series posters
@@ -1261,18 +1213,13 @@ const fetchPreview = async (isPreload = false) => {
       if (!isShowLevel && movie.title) {
         // Viewing a specific season item - use its title
         options.season_text = movie.title
-        console.log('[TV BATCH PREVIEW] Season item, text:', movie.title)
       } else if (currentSeason.value && currentSeason.value.index !== -1) {
         // Viewing show with current season selected (but not the series entry)
         options.season_text = currentSeason.value.title
-        console.log('[TV BATCH PREVIEW] Show with season, text:', currentSeason.value.title)
-      } else {
-        // Series entry (index -1) - don't add season_text
-        console.log('[TV BATCH PREVIEW] Series entry detected, NOT adding season_text')
       }
-    } else {
-      console.log('[TV BATCH PREVIEW] Rendering series poster, NOT adding season_text')
+      // else: Series entry (index -1) - don't add season_text
     }
+    // else: Rendering series poster - don't add season_text
 
     const payload = {
       template_id: selectedTemplate.value,
@@ -1292,8 +1239,6 @@ const fetchPreview = async (isPreload = false) => {
       fallbackPosterPreset: fallbackPosterPreset
     }
 
-    console.log('[TV BATCH PREVIEW] Fetching preview with payload:', payload)
-
     const response = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1312,11 +1257,6 @@ const fetchPreview = async (isPreload = false) => {
       // This prevents race conditions where an older request completes after a newer one
       if (!isPreload && requestId === previewRequestId) {
         previewImage.value = img
-        console.log('[TV BATCH PREVIEW] Preview rendered successfully (request #' + requestId + ')')
-      } else if (isPreload) {
-        console.log('[TV BATCH PREVIEW] Background preload completed and cached')
-      } else {
-        console.log('[TV BATCH PREVIEW] Ignoring stale preview response (request #' + requestId + ', current #' + previewRequestId + ')')
       }
     } else {
       console.error('[TV BATCH PREVIEW] Preview response not OK:', response.status)
@@ -1329,7 +1269,6 @@ const fetchPreview = async (isPreload = false) => {
   } catch (err) {
     // Ignore abort errors - these are expected when canceling
     if (err instanceof Error && err.name === 'AbortError') {
-      console.log('[TV BATCH PREVIEW] Request aborted (request #' + requestId + ')')
       return
     }
     console.error('[TV BATCH PREVIEW] Preview failed:', err)
@@ -1399,16 +1338,9 @@ watch(currentPreviewMovie, () => {
 // Watch currentSeason instead of currentSeasonIndex because currentSeason is a computed
 // property that changes when seasons are loaded, even if the index stays at 0
 watch(currentSeason, (newSeason, oldSeason) => {
-  console.log('[TV BATCH PREVIEW] currentSeason changed:', {
-    oldSeason: oldSeason?.title || 'null',
-    newSeason: newSeason?.title || 'null',
-    includeSeasons: includeSeasons.value
-  })
-
   // Fetch preview when we have a valid season (not null)
   // This handles both initial load and navigation between seasons
   if (newSeason && includeSeasons.value) {
-    console.log('[TV BATCH PREVIEW] Fetching preview for season:', newSeason.title)
     fetchPreview()
   }
 })
