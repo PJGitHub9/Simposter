@@ -10,7 +10,7 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
-    version: 'v1.5.84',
+    version: 'v1.5.841',
     date: '2026-03-29',
     sections: [
       {
@@ -26,7 +26,7 @@ export const releaseNotes: ReleaseNote[] = [
           'Manual editor: settings panel reorganised into collapsible accordion sections (Preset, Poster, Logo, Custom Text, Overlay & Border). Template dropdown removed since only one template exists. Logo bounding box auto-shows when the Logo section is expanded and hides when collapsed or when No Logo is selected.',
           'TV show editor now includes horizontal/vertical alignment controls (previously missing). Mobile layout gains a scrollable season pill strip so seasons are accessible on narrow screens.',
         ]
-      }s
+      }
     ]
   },
   {
