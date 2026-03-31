@@ -59,7 +59,7 @@ const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
-const showBoundingBox = ref(false)
+const showBoundingBox = computed(() => sectionOpen.value.logo && isUniformLogo.value && !isLogoNone.value)
 const previewImgRef = ref<HTMLImageElement | null>(null)
 const posterRefreshKey = ref(0)
 
@@ -130,6 +130,18 @@ const newPresetId = ref('')
 
 const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 
+// Accordion section open/close state
+const sectionOpen = ref({
+  template: true,
+  poster: true,
+  logo: true,
+  text: false,
+  overlay: false,
+})
+const toggleSection = (key: keyof typeof sectionOpen.value) => {
+  sectionOpen.value[key] = !sectionOpen.value[key]
+}
+
 // State persistence
 const EDITOR_STATE_KEY = 'simposter_editor_state'
 
@@ -150,6 +162,7 @@ const saveEditorStateImmediate = () => {
       showClearArt: showClearArt.value,
       logoMode: logoMode.value,
       logoHex: logoHex.value,
+      sectionOpen: sectionOpen.value,
       textOverlay: {
         enabled: textOverlayEnabled.value,
         customText: customText.value,
@@ -228,6 +241,7 @@ const loadEditorState = () => {
     if (typeof state.showClearArt === 'boolean') showClearArt.value = state.showClearArt
     if (state.logoMode) logoMode.value = state.logoMode
     if (state.logoHex) logoHex.value = state.logoHex
+    if (state.sectionOpen) Object.assign(sectionOpen.value, state.sectionOpen)
     if (state.textOverlay) {
       textOverlayEnabled.value = state.textOverlay.enabled ?? false
       customText.value = state.textOverlay.customText ?? ''
@@ -1020,404 +1034,382 @@ watch(
       </div>
 
       <div class="controls-scroll">
-        <!-- Template & Preset -->
-        <div class="section">
-          <label class="field-label">
-            Template
-            <select v-model="selectedTemplate" @change="presetService.load">
-              <option v-if="presetLoading">Loading…</option>
-              <option v-for="t in templates" :key="t" :value="t">{{ t }}</option>
-            </select>
-          </label>
 
-          <div class="preset-row">
-            <label class="field-label preset-select">
-              Preset
-              <select v-model="selectedPreset">
-                <option v-if="presetLoading">Loading…</option>
-                <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+        <!-- 1. Preset -->
+        <div class="acc-section">
+          <button class="acc-header" @click="toggleSection('template')">
+            <span>Preset</span>
+            <svg class="acc-chevron" :class="{ open: sectionOpen.template }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="sectionOpen.template" class="acc-body">
+            <div class="preset-row">
+              <label class="field-label preset-select">
+                Preset
+                <select v-model="selectedPreset">
+                  <option v-if="presetLoading">Loading…</option>
+                  <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+                </select>
+              </label>
+              <button class="reload-preset-btn" @click="reloadPreset" title="Reload preset values">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="23 4 23 10 17 10" />
+                  <polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+              </button>
+              <button class="save-preset-btn" @click="saveCurrentPreset" title="Save current settings to preset">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                  <polyline points="7 3 7 8 15 8"/>
+                </svg>
+              </button>
+            </div>
+            <div class="preset-row new-preset-row">
+              <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
+              <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Poster -->
+        <div class="acc-section">
+          <button class="acc-header" @click="toggleSection('poster')">
+            <span>Poster</span>
+            <svg class="acc-chevron" :class="{ open: sectionOpen.poster }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="sectionOpen.poster" class="acc-body">
+            <!-- Poster source -->
+            <label class="field-label">
+              Filter
+              <select v-model="posterFilter">
+                <option value="all">All Posters</option>
+                <option value="textless">Textless Only</option>
+                <option value="text">With Text</option>
               </select>
             </label>
-            <button class="reload-preset-btn" @click="reloadPreset" title="Reload preset values">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="23 4 23 10 17 10" />
-                <polyline points="1 20 1 14 7 14" />
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-              </svg>
-            </button>
-            <button class="save-preset-btn" @click="saveCurrentPreset" title="Save current settings to preset">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                <polyline points="17 21 17 13 7 13 7 21"/>
-                <polyline points="7 3 7 8 15 8"/>
-              </svg>
-            </button>
-          </div>
-          <div class="preset-row new-preset-row">
-            <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
-            <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
-          </div>
-        </div>
-        
-        <hr class="divider" />
-        
-        <!-- Poster & Logo Selection -->
-        <div class="section">
-          <label class="field-label">
-            Poster Filter
-            <select v-model="posterFilter">
-              <option value="all">All Posters</option>
-              <option value="textless">Textless Only</option>
-              <option value="text">With Text</option>
-            </select>
-          </label>
-          
-
-          <div class="label-title">Posters</div>
-          <div class="inline-controls">
-            <label class="inline-field" v-if="posterFilter !== 'textless'">
-              <span>Language</span>
-              <select v-model="posterLanguageFilter">
-                <option value="all">All</option>
-                <option value="en">English</option>
-                <option value="with_lang">With language tag</option>
-              </select>
-            </label>
-            <label class="inline-field checkbox">
-              <input type="checkbox" v-model="showTmdbPosters" />
-              <span>TMDb</span>
-            </label>
-            <label class="inline-field checkbox">
-              <input type="checkbox" v-model="showFanartPosters" />
-              <span>Fanart</span>
-            </label>
-          </div>
-          <div class="thumb-strip">
-            <div
-              v-for="p in filteredPosters"
-              :key="p.url"
-              class="thumb poster-thumb"
-              :class="{ active: selectedPoster === p.url }"
-              @click="selectedPoster = p.url"
-            >
-              <img :src="p.thumb || p.url" alt="" />
-              <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
-            </div>
-          </div>
-
-          <label v-if="!isLogoNone" class="field-label">
-            Logo Preference
-            <select v-model="logoPreference">
-              <option value="first">First Available</option>
-              <option value="white">White Logos</option>
-              <option value="color">Colored Logos</option>
-            </select>
-          </label>
-
-          <div v-if="!isLogoNone" class="label-title">Logos (TMDb / Fanart)</div>
-          <div v-if="!isLogoNone" class="inline-controls">
-            <label class="inline-field">
-              <span>Language</span>
-              <select v-model="logoLanguageFilter">
-                <option value="all">All</option>
-                <option value="en">English</option>
-                <option value="with_lang">With language tag</option>
-              </select>
-            </label>
-            <label class="inline-field">
-              <span>Include clearart</span>
-              <input type="checkbox" v-model="showClearArt" />
-            </label>
-            <label class="inline-field checkbox">
-              <input type="checkbox" v-model="showTmdbLogos" />
-              <span>TMDb</span>
-            </label>
-            <label class="inline-field checkbox">
-              <input type="checkbox" v-model="showFanartLogos" />
-              <span>Fanart</span>
-            </label>
-          </div>
-          <div v-if="!isLogoNone" class="thumb-strip logo-strip">
-            <div
-              v-for="l in filteredLogos"
-              :key="l.url"
-              class="thumb logo-thumb"
-              :class="{ active: selectedLogo === l.url }"
-              @click="selectedLogo = l.url"
-            >
-              <img :src="l.thumb || l.url" alt="" />
-              <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
-              <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
-            </div>
-            <button class="no-logo-btn" :class="{ active: isLogoNone }" @click="logoMode = 'none'">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-              </svg>
-              <span>No Logo</span>
-            </button>
-          </div>
-
-          <label class="field-label">
-            Logo Mode
-            <select v-model="logoMode">
-              <option value="original">Keep Original</option>
-              <option value="match">Color Match Poster</option>
-              <option value="hex">Use Custom Hex</option>
-              <option value="none">No Logo</option>
-            </select>
-          </label>
-
-          <label v-if="logoMode === 'hex'" class="field-label">
-            Logo Color
-            <input v-model="logoHex" type="color" />
-          </label>
-        </div>
-
-        <hr class="divider" />
-
-        <!-- Poster Settings -->
-        <div class="section sliders">
-          <div class="section-title">Poster Settings</div>
-
-          <!-- Poster Zoom - Hidden -->
-          <div v-if="false" class="slider">
-            <label>Poster Zoom %</label>
-            <div class="slider-row">
-              <input v-model.number="options.posterZoom" type="range" min="80" max="140" />
-              <input v-model.number="options.posterZoom" type="number" min="80" max="140" class="slider-num" />
-            </div>
-          </div>
-
-          <div class="slider">
-            <label>Poster Shift Y %</label>
-            <div class="slider-row">
-              <input v-model.number="options.posterShiftY" type="range" min="-50" max="50" />
-              <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
-            </div>
-          </div>
-        </div>
-
-        <hr class="divider" />
-
-        <!-- Effects -->
-        <div class="section sliders">
-          <div class="section-title">Effects</div>
-
-          <div class="slider">
-            <label>Matte Height %</label>
-            <div class="slider-row">
-              <input v-model.number="options.matteHeight" type="range" min="0" max="50" />
-              <input v-model.number="options.matteHeight" type="number" min="0" max="50" class="slider-num" />
-            </div>
-          </div>
-
-          <div class="slider">
-            <label>Fade Height %</label>
-            <div class="slider-row">
-              <input v-model.number="options.fadeHeight" type="range" min="0" max="40" />
-              <input v-model.number="options.fadeHeight" type="number" min="0" max="40" class="slider-num" />
-            </div>
-          </div>
-
-          <div class="slider">
-            <label>Vignette</label>
-            <div class="slider-row">
-              <input v-model.number="options.vignette" type="range" min="0" max="100" />
-              <input v-model.number="options.vignette" type="number" min="0" max="100" class="slider-num" />
-            </div>
-          </div>
-
-          <div class="slider">
-            <label>Grain</label>
-            <div class="slider-row">
-              <input v-model.number="options.grain" type="range" min="0" max="60" />
-              <input v-model.number="options.grain" type="number" min="0" max="60" class="slider-num" />
-            </div>
-          </div>
-        </div>
-
-        <hr class="divider" />
-
-        <!-- Logo Settings -->
-        <div v-if="!isUniformLogo" class="section sliders">
-          <div class="section-title">Logo Settings</div>
-
-          <div class="slider">
-            <label>Logo Scale %</label>
-            <div class="slider-row">
-              <input v-model.number="options.logoScale" type="range" min="20" max="120" />
-              <input v-model.number="options.logoScale" type="number" min="20" max="120" class="slider-num" />
-            </div>
-          </div>
-
-          <div class="slider">
-            <label>Logo Position %</label>
-            <div class="slider-row">
-              <input v-model.number="options.logoOffset" type="range" min="0" max="100" />
-              <input v-model.number="options.logoOffset" type="number" min="0" max="100" class="slider-num" />
-            </div>
-          </div>
-        </div>
-
-        <!-- Uniform Logo Controls -->
-        <div v-if="isUniformLogo" class="section">
-          <div v-if="isUniformLogo" class="uniform-section">
-            <div class="uniform-title">Uniform Logo Settings</div>
-
-            <div class="slider">
-              <label>Max Width (px)</label>
-              <div class="slider-row">
-                <input v-model.number="options.uniformLogoMaxW" type="range" min="50" max="1800" />
-                <input v-model.number="options.uniformLogoMaxW" type="number" min="50" max="1800" class="slider-num" />
-              </div>
-            </div>
-
-            <div class="slider">
-              <label>Max Height (px)</label>
-              <div class="slider-row">
-                <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
-                <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
-              </div>
-            </div>
-
-            <div class="slider">
-              <label>Logo Box X %</label>
-              <div class="slider-row">
-                <input v-model.number="options.uniformLogoOffsetX" type="range" min="0" max="100" />
-                <input v-model.number="options.uniformLogoOffsetX" type="number" min="0" max="100" class="slider-num" />
-              </div>
-            </div>
-
-            <div class="slider">
-              <label>Logo Box Y %</label>
-              <div class="slider-row">
-                <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
-                <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
-              </div>
-            </div>
-
-            <div class="slider">
-              <label>Horizontal Align</label>
-              <div class="align-btn-group">
-                <button
-                  v-for="opt in (['left', 'center', 'right'] as const)"
-                  :key="opt"
-                  :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
-                  @click="options.uniformLogoHAlign = opt"
-                >{{ opt }}</button>
-              </div>
-            </div>
-
-            <div class="slider">
-              <label>Vertical Align</label>
-              <div class="align-btn-group">
-                <button
-                  v-for="opt in (['top', 'center', 'bottom'] as const)"
-                  :key="opt"
-                  :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
-                  @click="options.uniformLogoVAlign = opt"
-                >{{ opt }}</button>
-              </div>
-            </div>
-
-            <label class="checkbox-label">
-              <input v-model="showBoundingBox" type="checkbox" />
-              Show Logo Bounding Box (debug)
-            </label>
-          </div>
-        </div>
-
-        <hr class="divider" />
-
-        <!-- Text Overlay -->
-        <TextOverlayPanel
-          v-model:enabled="textOverlayEnabled"
-          v-model:customText="customText"
-          v-model:fontFamily="fontFamily"
-          v-model:fontSize="fontSize"
-          v-model:fontWeight="fontWeight"
-          v-model:textColor="textColor"
-          v-model:textAlign="textAlign"
-          v-model:textTransform="textTransform"
-          v-model:letterSpacing="letterSpacing"
-          v-model:lineHeight="lineHeight"
-          v-model:positionY="positionY"
-          v-model:shadowEnabled="shadowEnabled"
-          v-model:shadowBlur="shadowBlur"
-          v-model:shadowOffsetX="shadowOffsetX"
-          v-model:shadowOffsetY="shadowOffsetY"
-          v-model:shadowColor="shadowColor"
-          v-model:shadowOpacity="shadowOpacity"
-          v-model:strokeEnabled="strokeEnabled"
-          v-model:strokeWidth="strokeWidth"
-          v-model:strokeColor="strokeColor"
-          :availableFonts="availableFonts"
-        />
-
-        <hr class="divider" />
-
-        <!-- Border & Overlay -->
-        <div class="section sliders">
-          <div class="section-title">Border & Overlay</div>
-
-          <div class="slider">
-            <label class="checkbox-label">
-              <input v-model="options.borderEnabled" type="checkbox" />
-              Border Enabled
-            </label>
-          </div>
-
-          <div v-if="options.borderEnabled" class="slider">
-            <label>Border Thickness (px)</label>
-            <div class="slider-row">
-              <input v-model.number="options.borderThickness" type="range" min="0" max="30" />
-              <input v-model.number="options.borderThickness" type="number" min="0" max="30" class="slider-num" />
-            </div>
-          </div>
-
-          <div v-if="options.borderEnabled" class="slider">
-            <label>Border Color</label>
-            <input v-model="options.borderColor" type="color" />
-          </div>
-
-          <!-- Overlay Configs -->
-          <div v-if="overlayConfigs.length > 0" class="slider">
-            <label>Overlay Configs</label>
-            <div class="overlay-config-checkboxes">
-              <label v-for="cfg in overlayConfigs" :key="cfg.id" class="checkbox-label overlay-config-item">
-                <input
-                  type="checkbox"
-                  :checked="options.overlayConfigIds.includes(cfg.id)"
-                  @change="toggleOverlayConfig(cfg.id)"
-                />
-                {{ cfg.name }}
+            <div class="inline-controls">
+              <label class="inline-field" v-if="posterFilter !== 'textless'">
+                <span>Language</span>
+                <select v-model="posterLanguageFilter">
+                  <option value="all">All</option>
+                  <option value="en">English</option>
+                  <option value="with_lang">With language tag</option>
+                </select>
+              </label>
+              <label class="inline-field checkbox">
+                <input type="checkbox" v-model="showTmdbPosters" />
+                <span>TMDb</span>
+              </label>
+              <label class="inline-field checkbox">
+                <input type="checkbox" v-model="showFanartPosters" />
+                <span>Fanart</span>
               </label>
             </div>
+            <div class="thumb-strip">
+              <div
+                v-for="p in filteredPosters"
+                :key="p.url"
+                class="thumb poster-thumb"
+                :class="{ active: selectedPoster === p.url }"
+                @click="selectedPoster = p.url"
+              >
+                <img :src="p.thumb || p.url" alt="" />
+                <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
+              </div>
+            </div>
+
+            <!-- Poster adjustments -->
+            <div class="sub-section-title">Adjustments</div>
+            <div class="slider">
+              <label>Poster Shift Y %</label>
+              <div class="slider-row">
+                <input v-model.number="options.posterShiftY" type="range" min="-50" max="50" />
+                <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Matte Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.matteHeight" type="range" min="0" max="50" />
+                <input v-model.number="options.matteHeight" type="number" min="0" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Fade Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.fadeHeight" type="range" min="0" max="40" />
+                <input v-model.number="options.fadeHeight" type="number" min="0" max="40" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Vignette</label>
+              <div class="slider-row">
+                <input v-model.number="options.vignette" type="range" min="0" max="100" />
+                <input v-model.number="options.vignette" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Grain</label>
+              <div class="slider-row">
+                <input v-model.number="options.grain" type="range" min="0" max="60" />
+                <input v-model.number="options.grain" type="number" min="0" max="60" class="slider-num" />
+              </div>
+            </div>
           </div>
         </div>
 
-        <hr class="divider" />
-
-        <!-- Labels -->
-        <div class="section">
-          <div class="label-title">Labels to Remove</div>
-          <div class="label-chips">
-            <label v-for="l in labels" :key="l" class="chip">
-              <input type="checkbox" :checked="selectedLabels.has(l)" @change="toggleLabel(l)" />
-              <span>{{ l }}</span>
+        <!-- 3. Logo -->
+        <div class="acc-section">
+          <button class="acc-header" @click="toggleSection('logo')">
+            <span>Logo</span>
+            <svg class="acc-chevron" :class="{ open: sectionOpen.logo }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="sectionOpen.logo" class="acc-body">
+            <!-- Logo mode + color (preset-level — used by batch & webhook) -->
+            <div class="sub-section-title" style="margin-top: 0">Preset / Batch / Webhook</div>
+            <label class="field-label">
+              Logo Mode
+              <select v-model="logoMode">
+                <option value="original">Keep Original</option>
+                <option value="match">Color Match Poster</option>
+                <option value="hex">Use Custom Hex</option>
+                <option value="none">No Logo</option>
+              </select>
             </label>
-            <p v-if="!labels.length" class="muted-text">No labels found</p>
+            <label v-if="logoMode === 'hex'" class="field-label">
+              Logo Color
+              <input v-model="logoHex" type="color" />
+            </label>
+
+            <div class="sub-section-title">Manual Selection</div>
+
+            <!-- Logo source + thumbnails -->
+            <template v-if="!isLogoNone">
+              <label class="field-label">
+                Preference
+                <select v-model="logoPreference">
+                  <option value="first">First Available</option>
+                  <option value="white">White Logos</option>
+                  <option value="color">Colored Logos</option>
+                </select>
+              </label>
+              <div class="inline-controls">
+                <label class="inline-field">
+                  <span>Language</span>
+                  <select v-model="logoLanguageFilter">
+                    <option value="all">All</option>
+                    <option value="en">English</option>
+                    <option value="with_lang">With language tag</option>
+                  </select>
+                </label>
+                <label class="inline-field">
+                  <span>Clearart</span>
+                  <input type="checkbox" v-model="showClearArt" />
+                </label>
+                <label class="inline-field checkbox">
+                  <input type="checkbox" v-model="showTmdbLogos" />
+                  <span>TMDb</span>
+                </label>
+                <label class="inline-field checkbox">
+                  <input type="checkbox" v-model="showFanartLogos" />
+                  <span>Fanart</span>
+                </label>
+              </div>
+              <div class="thumb-strip logo-strip">
+                <div
+                  v-for="l in filteredLogos"
+                  :key="l.url"
+                  class="thumb logo-thumb"
+                  :class="{ active: selectedLogo === l.url }"
+                  @click="selectedLogo = l.url"
+                >
+                  <img :src="l.thumb || l.url" alt="" />
+                  <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
+                  <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
+                </div>
+                <button class="no-logo-btn" :class="{ active: isLogoNone }" @click="logoMode = 'none'">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                  </svg>
+                  <span>No Logo</span>
+                </button>
+              </div>
+
+              <!-- Logo position & size -->
+              <div class="sub-section-title">Position &amp; Size</div>
+              <template v-if="!isUniformLogo">
+                <div class="slider">
+                  <label>Logo Scale %</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.logoScale" type="range" min="20" max="120" />
+                    <input v-model.number="options.logoScale" type="number" min="20" max="120" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Logo Position %</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.logoOffset" type="range" min="0" max="100" />
+                    <input v-model.number="options.logoOffset" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+              </template>
+              <template v-if="isUniformLogo">
+                <div class="slider">
+                  <label>Max Width (px)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoMaxW" type="range" min="50" max="1800" />
+                    <input v-model.number="options.uniformLogoMaxW" type="number" min="50" max="1800" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Max Height (px)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
+                    <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Logo Box X %</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoOffsetX" type="range" min="0" max="100" />
+                    <input v-model.number="options.uniformLogoOffsetX" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Logo Box Y %</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
+                    <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Horizontal Align</label>
+                  <div class="align-btn-group">
+                    <button
+                      v-for="opt in (['left', 'center', 'right'] as const)"
+                      :key="opt"
+                      :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
+                      @click="options.uniformLogoHAlign = opt"
+                    >{{ opt }}</button>
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Vertical Align</label>
+                  <div class="align-btn-group">
+                    <button
+                      v-for="opt in (['top', 'center', 'bottom'] as const)"
+                      :key="opt"
+                      :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
+                      @click="options.uniformLogoVAlign = opt"
+                    >{{ opt }}</button>
+                  </div>
+                </div>
+              </template>
+            </template>
           </div>
         </div>
 
-        <hr class="divider" />
+        <!-- 4. Custom Text -->
+        <div class="acc-section">
+          <button class="acc-header" @click="toggleSection('text')">
+            <span>Custom Text</span>
+            <svg class="acc-chevron" :class="{ open: sectionOpen.text }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="sectionOpen.text" class="acc-body">
+            <TextOverlayPanel
+              v-model:enabled="textOverlayEnabled"
+              v-model:customText="customText"
+              v-model:fontFamily="fontFamily"
+              v-model:fontSize="fontSize"
+              v-model:fontWeight="fontWeight"
+              v-model:textColor="textColor"
+              v-model:textAlign="textAlign"
+              v-model:textTransform="textTransform"
+              v-model:letterSpacing="letterSpacing"
+              v-model:lineHeight="lineHeight"
+              v-model:positionY="positionY"
+              v-model:shadowEnabled="shadowEnabled"
+              v-model:shadowBlur="shadowBlur"
+              v-model:shadowOffsetX="shadowOffsetX"
+              v-model:shadowOffsetY="shadowOffsetY"
+              v-model:shadowColor="shadowColor"
+              v-model:shadowOpacity="shadowOpacity"
+              v-model:strokeEnabled="strokeEnabled"
+              v-model:strokeWidth="strokeWidth"
+              v-model:strokeColor="strokeColor"
+              :availableFonts="availableFonts"
+            />
+          </div>
+        </div>
+
+        <!-- 5. Overlay & Border -->
+        <div class="acc-section">
+          <button class="acc-header" @click="toggleSection('overlay')">
+            <span>Overlay &amp; Border</span>
+            <svg class="acc-chevron" :class="{ open: sectionOpen.overlay }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="sectionOpen.overlay" class="acc-body">
+            <div class="slider">
+              <label class="checkbox-label">
+                <input v-model="options.borderEnabled" type="checkbox" />
+                Border Enabled
+              </label>
+            </div>
+            <div v-if="options.borderEnabled" class="slider">
+              <label>Border Thickness (px)</label>
+              <div class="slider-row">
+                <input v-model.number="options.borderThickness" type="range" min="0" max="30" />
+                <input v-model.number="options.borderThickness" type="number" min="0" max="30" class="slider-num" />
+              </div>
+            </div>
+            <div v-if="options.borderEnabled" class="slider">
+              <label>Border Color</label>
+              <input v-model="options.borderColor" type="color" />
+            </div>
+
+            <div v-if="overlayConfigs.length > 0" class="slider">
+              <label>Overlay Configs</label>
+              <div class="overlay-config-checkboxes">
+                <label v-for="cfg in overlayConfigs" :key="cfg.id" class="checkbox-label overlay-config-item">
+                  <input
+                    type="checkbox"
+                    :checked="options.overlayConfigIds.includes(cfg.id)"
+                    @change="toggleOverlayConfig(cfg.id)"
+                  />
+                  {{ cfg.name }}
+                </label>
+              </div>
+            </div>
+
+            <div class="sub-section-title" style="margin-top: 12px">Labels to Remove</div>
+            <div class="label-chips">
+              <label v-for="l in labels" :key="l" class="chip">
+                <input type="checkbox" :checked="selectedLabels.has(l)" @change="toggleLabel(l)" />
+                <span>{{ l }}</span>
+              </label>
+              <p v-if="!labels.length" class="muted-text">No labels found</p>
+            </div>
+          </div>
+        </div>
 
         <!-- Actions -->
-        <div class="section actions">
+        <div class="acc-actions">
           <button class="btn-primary" :disabled="loading" @click="doPreview">Preview</button>
           <span v-if="error" class="error-text">{{ error }}</span>
         </div>
+
       </div>
     </div>
 
@@ -1812,7 +1804,7 @@ watch(
   accent-color: var(--accent, #3dd6b7);
 }
 
-.sliders .slider {
+.slider {
   margin-bottom: 14px;
 }
 
@@ -2241,6 +2233,70 @@ button:disabled {
   position: absolute;
   border: 2px dashed rgba(255, 255, 0, 0.8);
   pointer-events: none;
+}
+
+/* Accordion */
+.acc-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.acc-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 0;
+  background: none;
+  border: none;
+  color: #a8b8e0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s;
+}
+
+.acc-header:hover {
+  color: var(--accent);
+}
+
+.acc-header:hover .acc-chevron {
+  color: var(--accent);
+}
+
+.acc-chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.2s ease, color 0.15s;
+}
+
+.acc-chevron.open {
+  transform: rotate(180deg);
+}
+
+.acc-body {
+  padding-bottom: 18px;
+}
+
+.acc-actions {
+  padding: 16px 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sub-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 10px;
+  margin-top: 14px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 /* Mobile responsive styles */

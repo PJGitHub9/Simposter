@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.84',
+    date: '2026-03-29',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Notification settings (Discord and Apprise) now save and persist correctly. Previously, all Apprise fields were silently stripped by the backend schema before reaching the database, and the notifications object was not included in the settings merge — causing settings to revert on page refresh.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'TV batch preview now preloads selected shows concurrently (up to 3 in parallel) instead of staggering requests 300ms apart. With 10 shows selected, previews are ready significantly faster.',
+          'Manual editor: settings panel reorganised into collapsible accordion sections (Preset, Poster, Logo, Custom Text, Overlay & Border). Template dropdown removed since only one template exists. Logo bounding box auto-shows when the Logo section is expanded and hides when collapsed or when No Logo is selected.',
+          'TV show editor now includes horizontal/vertical alignment controls (previously missing). Mobile layout gains a scrollable season pill strip so seasons are accessible on narrow screens.',
+        ]
+      }s
+    ]
+  },
+  {
     version: 'v1.5.83',
     date: '2026-03-27',
     sections: [

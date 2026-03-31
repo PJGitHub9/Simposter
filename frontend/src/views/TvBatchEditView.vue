@@ -798,14 +798,20 @@ watch(selectedShowsList, (list) => {
     previewIndex.value = Math.max(0, list.length - 1)
   }
 
-  // Preload all selected shows in background for instant navigation
+  // Preload all selected shows concurrently for fast navigation
   if (list.length > 0 && selectedTemplate.value) {
-    // Preload in batches to avoid overwhelming the server
-    list.forEach((show, idx) => {
-      setTimeout(() => {
-        preloadShowPreview(show)
-      }, idx * 300) // Stagger requests by 300ms each
-    })
+    const concurrency = Math.min(3, settings.performance.value.concurrentRenders || 2)
+    const queue = [...list]
+    const runWorkers = async () => {
+      const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+        while (queue.length > 0) {
+          const show = queue.shift()
+          if (show) await preloadShowPreview(show)
+        }
+      })
+      await Promise.all(workers)
+    }
+    runWorkers()
   }
 })
 
