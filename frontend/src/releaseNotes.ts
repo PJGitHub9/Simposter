@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.85',
+    date: '2026-03-31',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Studio and streaming platform overlay badges now render correctly when sending to Plex or saving locally. Previously, tmdb_id was only injected during preview — the send and save paths were missing it, so studio/streaming badge lookups always returned empty.',
+          'Mobile TV show editor now shows season selection correctly: pills display a checkmark and distinct highlight for selected seasons, plus All/None buttons to bulk-select.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Apprise notifications sent to Discord webhook URLs now render as rich embeds (with poster thumbnail, color coding, library/template/action fields) instead of plain text — identical to the native Discord integration. Other Apprise services (Slack, Telegram, Pushover, etc.) are unaffected.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.841',
     date: '2026-03-29',
     sections: [

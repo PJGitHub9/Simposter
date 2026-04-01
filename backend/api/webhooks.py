@@ -691,7 +691,7 @@ def process_webhook_poster_generation(
                     except Exception as notif_err:
                         logger.debug(f"[WEBHOOK] Failed to send Discord notification: {notif_err}")
                     try:
-                        send_apprise_notification(**_tv_notif_kwargs)
+                        send_apprise_notification(**_tv_notif_kwargs, poster_data=tv_poster_data)
                     except Exception as notif_err:
                         logger.debug(f"[WEBHOOK] Failed to send Apprise notification: {notif_err}")
             else:
@@ -766,7 +766,7 @@ def process_webhook_poster_generation(
                 except Exception as notif_err:
                     logger.debug(f"[WEBHOOK] Failed to send Discord notification: {notif_err}")
                 try:
-                    send_apprise_notification(**_movie_notif_kwargs)
+                    send_apprise_notification(**_movie_notif_kwargs, poster_data=result.get("poster_data"))
                 except Exception as notif_err:
                     logger.debug(f"[WEBHOOK] Failed to send Apprise notification: {notif_err}")
             else:

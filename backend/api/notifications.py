@@ -295,6 +295,82 @@ def send_discord_notification(
         return False
 
 
+def _resolve_discord_webhook_url(apprise_url: str) -> Optional[str]:
+    """
+    Convert an Apprise URL to a raw Discord webhook URL if it is a Discord URL.
+    Handles both:
+      - Raw webhook: https://discord.com/api/webhooks/...
+      - Apprise scheme: discord://webhook_id/webhook_token
+    Returns the HTTPS webhook URL, or None if not a Discord URL.
+    """
+    import re
+    url = apprise_url.strip()
+    if url.startswith("https://discord.com/api/webhooks/"):
+        return url
+    if url.startswith("https://discordapp.com/api/webhooks/"):
+        return url
+    # Apprise discord:// or discords:// (TTS variant) scheme
+    m = re.match(r"^discords?://([^/]+)/(.+)$", url, re.IGNORECASE)
+    if m:
+        webhook_id, webhook_token = m.group(1), m.group(2)
+        # Strip any trailing Apprise options (e.g. ?tts=yes)
+        webhook_token = webhook_token.split("?")[0].rstrip("/")
+        return f"https://discord.com/api/webhooks/{webhook_id}/{webhook_token}"
+    return None
+
+
+def _build_notification_embed(
+    title: str,
+    year: Optional[int],
+    template_id: str,
+    library_id: Optional[str],
+    source: str,
+    action: str,
+    count: int,
+    success_count: int,
+    failed_count: int,
+    poster_data: Optional[bytes] = None,
+) -> dict:
+    """Build a Discord embed dict — shared between native Discord and Apprise Discord paths."""
+    emoji = _get_source_emoji(source)
+    source_label = _get_source_label(source)
+    library_name = _get_library_name(library_id)
+    action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
+
+    if failed_count > 0 and success_count == 0:
+        color = 0xFF4757
+    elif failed_count > 0:
+        color = 0xFFA502
+    else:
+        color = 0x3DD6B7
+
+    if count > 1:
+        description = f"**{success_count}** posters generated successfully"
+        if failed_count > 0:
+            description += f"\n**{failed_count}** failed"
+    else:
+        year_str = f" ({year})" if year else ""
+        description = f"**{title}**{year_str}"
+
+    embed = {
+        "title": f"{emoji} {source_label} Complete",
+        "description": description,
+        "color": color,
+        "fields": [
+            {"name": "Library", "value": library_name, "inline": True},
+            {"name": "Template", "value": template_id or "N/A", "inline": True},
+            {"name": "Action", "value": action_text, "inline": True},
+        ],
+        "footer": {"text": "Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    if poster_data:
+        embed["thumbnail"] = {"url": "attachment://poster.jpg"}
+
+    return embed
+
+
 def send_apprise_notification(
     title: str,
     year: Optional[int] = None,
@@ -305,11 +381,13 @@ def send_apprise_notification(
     action: str = "sent_to_plex",
     count: int = 1,
     success_count: int = 0,
-    failed_count: int = 0
+    failed_count: int = 0,
+    poster_data: Optional[bytes] = None,
 ) -> bool:
     """
     Send an Apprise notification for poster generation events.
-    Fires to all configured Apprise URLs simultaneously.
+    Discord webhook URLs (raw or apprise scheme) receive rich embeds identical to
+    the native Discord integration. All other URLs go through Apprise as plain text.
     """
     if not _should_notify_apprise(source, library_id):
         logger.debug(f"[APPRISE] Notification skipped (disabled or filtered): source={source}")
@@ -320,49 +398,94 @@ def send_apprise_notification(
     if not urls:
         return False
 
-    try:
-        import apprise
-        ap = apprise.Apprise()
-        for url in urls:
-            if url.strip():
-                ap.add(url.strip())
+    emoji = _get_source_emoji(source)
+    source_label = _get_source_label(source)
+    library_name = _get_library_name(library_id)
+    action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
 
-        if len(ap) == 0:
-            return False
-
-        emoji = _get_source_emoji(source)
-        source_label = _get_source_label(source)
-        library_name = _get_library_name(library_id)
-        action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
-
-        notify_title = f"{emoji} Simposter — {source_label} Complete"
-
-        if count > 1:
-            body = f"{success_count} posters generated successfully"
-            if failed_count > 0:
-                body += f"\n{failed_count} failed"
+    discord_urls: List[str] = []
+    other_urls: List[str] = []
+    for url in urls:
+        if not url.strip():
+            continue
+        discord_webhook = _resolve_discord_webhook_url(url)
+        if discord_webhook:
+            discord_urls.append(discord_webhook)
         else:
-            year_str = f" ({year})" if year else ""
-            body = f"{title}{year_str}"
+            other_urls.append(url.strip())
 
-        body += f"\nLibrary: {library_name}"
-        if template_id:
-            body += f"\nTemplate: {template_id}"
-        body += f"\nAction: {action_text}"
+    overall_ok = True
 
-        result = ap.notify(title=notify_title, body=body)
-        if result:
-            logger.info(f"[APPRISE] Notification sent: {title} ({source})")
-        else:
-            logger.warning(f"[APPRISE] One or more services failed to receive notification")
-        return bool(result)
+    # --- Discord URLs: send rich embed directly ---
+    if discord_urls:
+        import json as _json
+        embed = _build_notification_embed(
+            title=title, year=year, template_id=template_id,
+            library_id=library_id, source=source, action=action,
+            count=count, success_count=success_count, failed_count=failed_count,
+            poster_data=poster_data,
+        )
+        for webhook_url in discord_urls:
+            try:
+                if poster_data:
+                    files = {"file": ("poster.jpg", poster_data, "image/jpeg")}
+                    resp = requests.post(
+                        webhook_url,
+                        data={"payload_json": _json.dumps({"embeds": [embed]})},
+                        files=files,
+                        timeout=15,
+                    )
+                else:
+                    resp = requests.post(
+                        webhook_url,
+                        json={"embeds": [embed]},
+                        timeout=10,
+                    )
+                if resp.status_code in (200, 204):
+                    logger.info(f"[APPRISE] Discord embed sent: {title} ({source})")
+                else:
+                    logger.warning(f"[APPRISE] Discord embed failed: HTTP {resp.status_code}")
+                    overall_ok = False
+            except Exception as e:
+                logger.error(f"[APPRISE] Discord embed error: {e}")
+                overall_ok = False
 
-    except ImportError:
-        logger.error("[APPRISE] apprise library not installed — add 'apprise' to requirements.txt")
-        return False
-    except Exception as e:
-        logger.error(f"[APPRISE] Error sending notification: {e}")
-        return False
+    # --- Other URLs: plain text via Apprise ---
+    if other_urls:
+        try:
+            import apprise
+            ap = apprise.Apprise()
+            for url in other_urls:
+                ap.add(url)
+
+            if len(ap) > 0:
+                notify_title = f"{emoji} Simposter — {source_label} Complete"
+                if count > 1:
+                    body = f"{success_count} posters generated successfully"
+                    if failed_count > 0:
+                        body += f"\n{failed_count} failed"
+                else:
+                    year_str = f" ({year})" if year else ""
+                    body = f"{title}{year_str}"
+                body += f"\nLibrary: {library_name}"
+                if template_id:
+                    body += f"\nTemplate: {template_id}"
+                body += f"\nAction: {action_text}"
+
+                result = ap.notify(title=notify_title, body=body)
+                if result:
+                    logger.info(f"[APPRISE] Notification sent: {title} ({source})")
+                else:
+                    logger.warning(f"[APPRISE] One or more Apprise services failed")
+                    overall_ok = False
+        except ImportError:
+            logger.error("[APPRISE] apprise library not installed — add 'apprise' to requirements.txt")
+            overall_ok = False
+        except Exception as e:
+            logger.error(f"[APPRISE] Error sending notification: {e}")
+            overall_ok = False
+
+    return overall_ok
 
 
 def send_batch_notification(
