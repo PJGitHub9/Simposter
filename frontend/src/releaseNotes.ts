@@ -10,6 +10,40 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.88',
+    date: '2026-04-06',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'Manual editor: you can now upload your own poster image directly in the Poster section. Drag and drop an image onto the upload zone or click to browse. The uploaded image is used as the background and goes through all the same template effects, logo overlays, matte, fade, vignette etc. as any TMDb poster. Hover the uploaded thumbnail to swap it or clear it. Works in both the movie and TV show editors.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.87',
+    date: '2026-04-06',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Logo bounding box is now a manual checkbox in the Logo section ("Show bounding box") instead of auto-toggling based on section open state. Previously it would inconsistently appear and disappear as the accordion opened/closed.',
+          'Browser back button now correctly returns to the exact page, sort, and filter state when closing the poster editor. Previously, opening the editor replaced the history entry, making the back button go to the wrong page.',
+          'TV show editor: selecting individual seasons no longer silently includes the series poster. The series was auto-selected on load and never cleared when the user picked specific seasons, causing unintended series poster sends.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Settings: "Items per page" slider maximum raised from 40 to 100.',
+          'Batch edit (Movies & TV): Sort By and Order dropdowns merged into a single combined selector (e.g. "Date Added (Newest First)", "Title (A-Z)") to reduce toolbar clutter.',
+          'Template Manager: preset summary chips now show labeled key/value pairs ("Logo · White", "Poster · Textless") instead of bare values for clarity.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.86',
     date: '2026-04-06',
     sections: [

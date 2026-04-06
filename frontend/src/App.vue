@@ -338,17 +338,9 @@ const handleSelect = (movie: { key: string; title: string; year?: number | strin
   const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
   ui.setSelectedMovie({ ...movie, mediaType })
 
-  // Update URL with edit mode and library info
-  const currentLibrary = route.query.library as string | undefined
+  // Push a new history entry so the browser back button returns to the exact page/sort state
   const itemId = mediaType === 'tv-show' ? (movie.tvdb_id || movie.key) : (movie.tmdb_id || movie.key)
-  const newQuery: Record<string, string> = {
-    edit: String(itemId)
-  }
-  if (currentLibrary) {
-    newQuery.library = currentLibrary
-  }
-
-  router.replace({ query: newQuery })
+  router.push({ query: { ...route.query, edit: String(itemId) } })
 }
 
 const handleTabSelect = (tab: TabKey) => {

@@ -59,6 +59,48 @@ const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
+// Custom uploaded poster
+const uploadedPosterUrl = ref<string | null>(null)
+const posterUploading = ref(false)
+const posterDropActive = ref(false)
+
+const uploadPosterFile = async (file: File) => {
+  if (!file.type.startsWith('image/')) return
+  posterUploading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(`${apiBase}/api/upload/background`, { method: 'POST', body: fd })
+    if (!res.ok) throw new Error('Upload failed')
+    const data = await res.json()
+    uploadedPosterUrl.value = `${apiBase}${data.url}`
+    selectedPoster.value = uploadedPosterUrl.value
+  } catch (e) {
+    console.error('[EditorPane] Poster upload failed:', e)
+  } finally {
+    posterUploading.value = false
+  }
+}
+
+const onPosterFileInput = (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (file) uploadPosterFile(file)
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+const onPosterDrop = (e: DragEvent) => {
+  posterDropActive.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (file) uploadPosterFile(file)
+}
+
+const clearUploadedPoster = () => {
+  uploadedPosterUrl.value = null
+  if (selectedPoster.value && selectedPoster.value === uploadedPosterUrl.value) {
+    selectedPoster.value = posters.value[0]?.url || null
+  }
+}
+
 const showBoundingBox = ref(false)
 const previewImgRef = ref<HTMLImageElement | null>(null)
 const posterRefreshKey = ref(0)
@@ -1110,6 +1152,32 @@ watch(
                 <span>Fanart</span>
               </label>
             </div>
+            <!-- Custom upload -->
+            <div
+              class="poster-upload-zone"
+              :class="{ 'drag-over': posterDropActive, 'has-upload': !!uploadedPosterUrl }"
+              @dragover.prevent="posterDropActive = true"
+              @dragleave="posterDropActive = false"
+              @drop.prevent="onPosterDrop"
+              @click="!uploadedPosterUrl && ($refs.posterFileInput as HTMLInputElement)?.click()"
+            >
+              <template v-if="uploadedPosterUrl">
+                <img :src="uploadedPosterUrl" class="upload-preview" alt="Uploaded poster" />
+                <div class="upload-overlay">
+                  <button class="upload-reselect" @click.stop="selectedPoster = uploadedPosterUrl" :class="{ active: selectedPoster === uploadedPosterUrl }">Use this</button>
+                  <button class="upload-replace" @click.stop="($refs.posterFileInput as HTMLInputElement)?.click()">Replace</button>
+                  <button class="upload-remove" @click.stop="clearUploadedPoster">✕</button>
+                </div>
+              </template>
+              <template v-else>
+                <div class="upload-prompt">
+                  <span v-if="posterUploading">Uploading…</span>
+                  <span v-else>&#8679; Drop image or click to upload</span>
+                </div>
+              </template>
+            </div>
+            <input ref="posterFileInput" type="file" accept="image/*" style="display:none" @change="onPosterFileInput" />
+
             <div class="thumb-strip">
               <div
                 v-for="p in filteredPosters"
@@ -1722,6 +1790,68 @@ watch(
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+/* Custom poster upload zone */
+.poster-upload-zone {
+  position: relative;
+  border: 1.5px dashed var(--border, #2a2f3e);
+  border-radius: 8px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.poster-upload-zone:hover, .poster-upload-zone.drag-over {
+  border-color: rgba(61, 214, 183, 0.6);
+  background: rgba(61, 214, 183, 0.05);
+}
+.poster-upload-zone.has-upload {
+  height: 130px;
+  cursor: default;
+}
+.upload-preview {
+  height: 100%;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+.upload-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.poster-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
+.upload-reselect, .upload-replace, .upload-remove {
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.upload-reselect:hover, .upload-replace:hover { background: rgba(61,214,183,0.35); }
+.upload-reselect.active { border-color: #3dd6b7; color: #3dd6b7; }
+.upload-remove { border-color: rgba(255,100,100,0.4); }
+.upload-remove:hover { background: rgba(255,100,100,0.3); }
+.upload-prompt {
+  color: var(--text-secondary, #9aa4b5);
+  font-size: 0.82rem;
+  text-align: center;
+  pointer-events: none;
 }
 
 .logo-strip {

@@ -59,6 +59,14 @@ const searchQuery = ref('')
 const filterLabel = ref<string>('')
 const sortBy = ref<'title' | 'year' | 'addedAt'>('title')
 const sortOrder = ref<'asc' | 'desc'>('asc')
+const sortKey = computed({
+  get: () => `${sortBy.value}-${sortOrder.value}`,
+  set: (val: string) => {
+    const [field, order] = val.split('-') as [string, string]
+    sortBy.value = (field === 'addedAt' ? 'addedAt' : field) as 'title' | 'year' | 'addedAt'
+    sortOrder.value = order as 'asc' | 'desc'
+  }
+})
 const posterLimit = ref<number>(50)
 const currentPage = ref<number>(1)
 const currentSeasonIndex = ref<number>(0)
@@ -1488,18 +1496,14 @@ onMounted(async () => {
             </select>
           </div>
           <div class="sort-control">
-            <label for="sort-by">Sort by:</label>
-            <select id="sort-by" v-model="sortBy" class="filter-select">
-              <option value="title">Title</option>
-              <option value="year">Year</option>
-              <option value="addedAt">Date Added</option>
-            </select>
-          </div>
-          <div class="sort-control">
-            <label for="sort-order">Order:</label>
-            <select id="sort-order" v-model="sortOrder" class="filter-select">
-              <option value="asc">{{ sortBy === 'title' ? 'A-Z' : 'Oldest First' }}</option>
-              <option value="desc">{{ sortBy === 'title' ? 'Z-A' : 'Newest First' }}</option>
+            <label for="sort-key">Sort:</label>
+            <select id="sort-key" v-model="sortKey" class="filter-select">
+              <option value="title-asc">Title (A-Z)</option>
+              <option value="title-desc">Title (Z-A)</option>
+              <option value="year-desc">Year (Newest First)</option>
+              <option value="year-asc">Year (Oldest First)</option>
+              <option value="addedAt-desc">Date Added (Newest First)</option>
+              <option value="addedAt-asc">Date Added (Oldest First)</option>
             </select>
           </div>
           <select v-model="filterLabel" class="filter-select">
