@@ -59,7 +59,7 @@ const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
-const showBoundingBox = computed(() => sectionOpen.value.logo && isUniformLogo.value && !isLogoNone.value)
+const showBoundingBox = ref(false)
 const previewImgRef = ref<HTMLImageElement | null>(null)
 const posterRefreshKey = ref(0)
 
@@ -1172,6 +1172,10 @@ watch(
             </svg>
           </button>
           <div v-show="sectionOpen.logo" class="acc-body">
+            <label v-if="isUniformLogo && !isLogoNone" class="inline-field checkbox" style="margin-bottom: 4px;">
+              <input type="checkbox" v-model="showBoundingBox" />
+              <span>Show bounding box</span>
+            </label>
             <!-- Logo mode + color (preset-level — used by batch & webhook) -->
             <div class="sub-section-title" style="margin-top: 0">Preset / Batch / Webhook</div>
             <label class="field-label">

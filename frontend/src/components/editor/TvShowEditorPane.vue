@@ -68,7 +68,7 @@ const selectedPosterCache = ref<Record<string, string>>({})
 const settingsCache = ref<Record<string, any>>({})
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
-const showBoundingBox = computed(() => sectionOpen.value.logo && isUniformLogo.value && !isLogoNone.value)
+const showBoundingBox = ref(false)
 const previewImgRef = ref<HTMLImageElement | null>(null)
 const posterRefreshKey = ref(0)
 
@@ -1869,6 +1869,15 @@ function toggleSelectionOnly(seasonKey: string) {
       newSelection.add(seriesKey)
     }
   } else {
+    // If adding a non-series season while only the series is auto-selected (default),
+    // drop the series so the user gets exactly the seasons they pick
+    const clickedSeason = seasons.value.find(s => s.key === seasonKey)
+    if (!clickedSeason?.isSeries) {
+      const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+      if (newSelection.size === 1 && newSelection.has(seriesKey)) {
+        newSelection.delete(seriesKey)
+      }
+    }
     newSelection.add(seasonKey)
   }
 
@@ -1930,6 +1939,14 @@ async function toggleSeasonSelection(seasonKey: string) {
     }
   } else {
     // Add new season and switch to it
+    // If adding a non-series season while only the series is auto-selected (default),
+    // drop the series so the user gets exactly the seasons they pick
+    if (!season.isSeries) {
+      const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
+      if (newSelection.size === 1 && newSelection.has(seriesKey)) {
+        newSelection.delete(seriesKey)
+      }
+    }
     newSelection.add(seasonKey)
     selectedSeasons.value = newSelection
     
@@ -2506,6 +2523,10 @@ watch(tmdbId, () => {
             </svg>
           </button>
           <div v-show="sectionOpen.logo" class="acc-body">
+            <label v-if="isUniformLogo && !isLogoNone" class="inline-field checkbox" style="margin-bottom: 4px;">
+              <input type="checkbox" v-model="showBoundingBox" />
+              <span>Show bounding box</span>
+            </label>
             <div class="sub-section-title" style="margin-top: 0">Preset / Batch / Webhook</div>
             <label class="field-label">
               Logo Mode

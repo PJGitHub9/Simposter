@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.86',
+    date: '2026-04-06',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'TV show editor: selecting specific seasons no longer automatically includes the series poster. Previously, the series was auto-selected on load and never dropped when the user picked individual seasons — so sending Season 1 + Season 2 would also send the series. Now, clicking a season when only the series is selected (the default) replaces it rather than appending to it.',
+          'Template Manager: fixed missing clearSelectedPreviewMovie function that caused an error when clicking × to clear a pinned preview movie.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Template Manager redesigned: presets now display as full-width list items with labeled summary chips (Logo · White, Poster · Textless, etc.) instead of plain text. Each card expands to show a settings grid with Series/Season tabs. "Global Preset Preferences" renamed to "Default Batch Settings" and made collapsible. Import/Export section also collapsible.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.85',
     date: '2026-03-31',
     sections: [
