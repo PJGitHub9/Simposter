@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.89',
+    date: '2026-04-06',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed a phantom "Library 1" appearing on fresh installs with no Plex configured. The backend was hardcoding "1" as a fallback library ID when no libraries were set up, causing the Settings page to show an unremovable stub entry. New installs now start with an empty library list.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'History now records failed renders with a status of "Failed" and the error reason. Failed entries are filterable in the Action dropdown and display the error message in red in the Path column. Batch logs also now show the movie/show title instead of just the internal rating key when reporting errors.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.88',
     date: '2026-04-06',
     sections: [

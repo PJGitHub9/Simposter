@@ -64,6 +64,7 @@ def _process_single_movie(
     source: str = "batch",
 ):
     """Process a single movie in the batch. Returns result dict."""
+    title_hint = rating_key  # updated once we have movie_details, used in error reporting
     try:
         template_id = req.template_id
         preset_id = req.preset_id
@@ -90,6 +91,7 @@ def _process_single_movie(
 
         # Fetch movie details for template variables
         movie_details = get_movie_details(tmdb_id)
+        title_hint = movie_details.get("title") or rating_key
         # Fetch images honoring preferred languages (fallback to movie original language)
         imgs = get_images_for_movie(tmdb_id, movie_details.get("original_language"))
         posters = imgs.get("posters", [])
@@ -539,10 +541,25 @@ def _process_single_movie(
         return result
 
     except Exception as e:
-        logger.error(f"[BATCH] Error for {rating_key}\n{e}")
+        logger.error("[BATCH] Error for %s (%s): %s", title_hint, rating_key, e)
+        try:
+            db.record_poster_history(
+                rating_key=rating_key,
+                library_id=str(req.library_id or ""),
+                title=title_hint if title_hint != rating_key else None,
+                year=None,
+                template_id=req.template_id,
+                preset_id=req.preset_id,
+                action="failed",
+                source=source,
+                status="failed",
+                error_message=str(e),
+            )
+        except Exception:
+            pass
         return {
             "rating_key": rating_key,
-            "title": "",
+            "title": title_hint if title_hint != rating_key else "",
             "status": "error",
             "error": str(e),
             "poster_fallback": False,
@@ -573,6 +590,7 @@ def _process_single_tv_show(
                          Used by webhooks to only generate posters for newly added seasons.
                          If None or empty, process all seasons.
     """
+    title_hint = rating_key  # updated once we have show_details, used in error reporting
     try:
         template_id = req.template_id
         preset_id = req.preset_id
@@ -586,7 +604,7 @@ def _process_single_tv_show(
         season_poster_filter_final = season_poster_filter or base_poster_filter
         season_options_final = dict(season_options or base_options)
 
-        logger.info("[BATCH TV] Start rating_key=%s template=%s include_seasons=%s season_poster_filter=%s", 
+        logger.info("[BATCH TV] Start rating_key=%s template=%s include_seasons=%s season_poster_filter=%s",
                     rating_key, template_id, req.include_seasons, season_poster_filter_final)
 
         # Fetch TV show TMDB/TVDB IDs from Plex
@@ -637,6 +655,7 @@ def _process_single_tv_show(
         # Fetch TV show details
         show_details = get_tv_show_details(tmdb_id)
         show_title = show_details.get("name", "Unknown")
+        title_hint = show_title
 
         include_series = getattr(req, 'include_series', True)
 
@@ -672,10 +691,25 @@ def _process_single_tv_show(
             )
 
     except Exception as e:
-        logger.error(f"[BATCH TV] Error for {rating_key}\n{e}")
+        logger.error("[BATCH TV] Error for %s (%s): %s", title_hint, rating_key, e)
+        try:
+            db.record_poster_history(
+                rating_key=rating_key,
+                library_id=str(req.library_id or ""),
+                title=title_hint if title_hint != rating_key else None,
+                year=None,
+                template_id=req.template_id,
+                preset_id=req.preset_id,
+                action="failed",
+                source=source,
+                status="failed",
+                error_message=str(e),
+            )
+        except Exception:
+            pass
         return {
             "rating_key": rating_key,
-            "show_title": "",
+            "show_title": title_hint if title_hint != rating_key else "",
             "status": "error",
             "error": str(e),
             "poster_fallback": False,
