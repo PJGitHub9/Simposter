@@ -2793,8 +2793,8 @@ watch(tmdbId, () => {
             <div v-if="options.borderEnabled" class="slider">
               <label>Border Thickness (px)</label>
               <div class="slider-row">
-                <input v-model.number="options.borderThickness" type="range" min="0" max="30" />
-                <input v-model.number="options.borderThickness" type="number" min="0" max="30" class="slider-num" />
+                <input v-model.number="options.borderThickness" type="range" min="0" max="60" />
+                <input v-model.number="options.borderThickness" type="number" min="0" max="60" class="slider-num" />
               </div>
             </div>
             <div v-if="options.borderEnabled" class="slider">

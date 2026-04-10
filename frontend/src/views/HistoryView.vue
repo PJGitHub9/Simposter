@@ -96,7 +96,10 @@ const filteredRecords = computed(() => {
   }
 
   if (selectedSource.value !== 'all') {
-    filtered = filtered.filter(r => r.source === selectedSource.value)
+    filtered = filtered.filter(r => {
+      if (selectedSource.value === 'auto') return r.source === 'auto' || r.source === 'auto_generate'
+      return r.source === selectedSource.value
+    })
   }
 
   return filtered
@@ -191,6 +194,7 @@ const getActionClass = (action: string) => {
 const getSourceLabel = (source: string | null) => {
   switch (source) {
     case 'auto':
+    case 'auto_generate':
       return 'Auto'
     case 'batch':
       return 'Batch'
@@ -206,6 +210,7 @@ const getSourceLabel = (source: string | null) => {
 const getSourceClass = (source: string | null) => {
   switch (source) {
     case 'auto':
+    case 'auto_generate':
       return 'source-auto'
     case 'batch':
       return 'source-batch'

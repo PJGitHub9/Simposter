@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.9',
+    date: '2026-04-10',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Bounding box overlay now correctly aligns to the image when the preview panel is wider than the poster. Previously the box was offset because the image\'s position inside the container wasn\'t accounted for, causing users to compensate by setting X% to non-center values.',
+          'Auto-generated posters now appear as "Auto" in History instead of "Manual". The source value "auto_generate" was falling through to the default manual case.',
+          'Default "Labels to Remove" configured per-library in Settings are now respected during auto-generation and webhooks. Previously only the global auto-labels field was used, so per-library label removal had no effect on automatic sends.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Border thickness slider maximum increased from 30px to 60px.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.89',
     date: '2026-04-06',
     sections: [

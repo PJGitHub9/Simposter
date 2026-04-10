@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
-from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels
+from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels
 from .api.notifications import send_batch_notification, send_apprise_notification
 
 # Use the shared logger so logs appear in the main log
@@ -109,6 +109,13 @@ def process_new_content_for_library(
 
                             logger.info(f"[AUTO_GEN] Generating poster for movie: {title} ({year}) [key={rating_key}]")
 
+                            # Merge global auto_labels with per-library default labels to remove
+                            remove_labels = list(auto_labels)
+                            if auto_send:
+                                lib_default_labels = _get_default_remove_labels(library_id)
+                                if lib_default_labels:
+                                    remove_labels = list({*remove_labels, *lib_default_labels})
+
                             # Use the batch processing logic which includes fallback handling
                             success = process_single_movie_poster(
                                 rating_key=rating_key,
@@ -116,7 +123,7 @@ def process_new_content_for_library(
                                 preset_id=preset_id,
                                 send_to_plex=auto_send,
                                 library_id=library_id,
-                                labels=auto_labels if auto_send else [],
+                                labels=remove_labels if auto_send else [],
                                 source='auto_generate'
                             )
 
@@ -162,6 +169,13 @@ def process_new_content_for_library(
 
                             logger.info(f"[AUTO_GEN] Generating posters for TV show: {title} ({year}) [key={rating_key}]")
 
+                            # Merge global auto_labels with per-library default labels to remove
+                            remove_labels = list(auto_labels)
+                            if auto_send:
+                                lib_default_labels = _get_default_remove_labels(library_id)
+                                if lib_default_labels:
+                                    remove_labels = list({*remove_labels, *lib_default_labels})
+
                             # Use the batch processing logic which includes fallback handling
                             # include_seasons=True means it will generate posters for all seasons
                             success = process_single_tv_show_poster(
@@ -170,7 +184,7 @@ def process_new_content_for_library(
                                 preset_id=preset_id,
                                 send_to_plex=auto_send,
                                 library_id=library_id,
-                                labels=auto_labels if auto_send else [],
+                                labels=remove_labels if auto_send else [],
                                 include_seasons=True,  # Generate all season posters
                                 source='auto_generate'
                             )

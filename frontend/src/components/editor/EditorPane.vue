@@ -339,9 +339,9 @@ const boundingBoxStyle = computed(() => {
   const offsetX = options.value.uniformLogoOffsetX / 100
   const offsetY = options.value.uniformLogoOffsetY / 100
 
-  // Position (centered on offset point)
-  const left = (imgWidth * offsetX) - (boxWidth / 2)
-  const top = (imgHeight * offsetY) - (boxHeight / 2)
+  // Position (centered on offset point, adjusted for image offset within container)
+  const left = img.offsetLeft + (imgWidth * offsetX) - (boxWidth / 2)
+  const top = img.offsetTop + (imgHeight * offsetY) - (boxHeight / 2)
 
   return {
     width: `${boxWidth}px`,
@@ -1442,8 +1442,8 @@ watch(
             <div v-if="options.borderEnabled" class="slider">
               <label>Border Thickness (px)</label>
               <div class="slider-row">
-                <input v-model.number="options.borderThickness" type="range" min="0" max="30" />
-                <input v-model.number="options.borderThickness" type="number" min="0" max="30" class="slider-num" />
+                <input v-model.number="options.borderThickness" type="range" min="0" max="60" />
+                <input v-model.number="options.borderThickness" type="number" min="0" max="60" class="slider-num" />
               </div>
             </div>
             <div v-if="options.borderEnabled" class="slider">

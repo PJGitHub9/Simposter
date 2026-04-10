@@ -232,6 +232,27 @@ def _get_item_labels(rating_key: str) -> List[str]:
         return []
 
 
+def _get_default_remove_labels(library_id: str) -> List[str]:
+    """
+    Get the per-library 'Default Labels to Remove' configured in Settings.
+    These are merged with the global auto-labels when sending posters via
+    auto-generate, webhooks, or scheduled scans.
+    """
+    try:
+        ui_settings = db.get_ui_settings()
+        if not ui_settings:
+            return []
+        default_labels = ui_settings.get("defaultLabelsToRemove", {}) or {}
+        if isinstance(default_labels, dict):
+            return [l for l in (default_labels.get(str(library_id), []) or []) if l]
+        elif isinstance(default_labels, list):
+            return [l for l in default_labels if l]
+        return []
+    except Exception as e:
+        logger.warning(f"[WEBHOOK] Failed to get default remove labels for library {library_id}: {e}")
+        return []
+
+
 def _get_webhook_ignore_labels(library_id: str, is_tv: bool = False) -> List[str]:
     """
     Get the list of labels to ignore for webhook processing for a library.
@@ -602,6 +623,13 @@ def process_webhook_poster_generation(
         if not preset:
             logger.error(f"[WEBHOOK] Preset '{preset_id}' not found for template '{template_id}'")
             return
+
+        # Merge global auto_labels with per-library default labels to remove
+        if library_id:
+            lib_default_labels = _get_default_remove_labels(library_id)
+            if lib_default_labels:
+                auto_labels = list({*auto_labels, *lib_default_labels})
+                logger.debug("[WEBHOOK] Labels to remove for library %s: %s", library_id, auto_labels)
 
         options = preset.get("options", {})
 
