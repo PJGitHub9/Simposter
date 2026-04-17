@@ -212,6 +212,9 @@ const toPlexPosterUrl = (path?: string | null) => {
   if (!path) return undefined
   const url = String(path)
   if (url.startsWith('http')) return url
+  // Simposter API paths (/api/movie/.../poster, /api/tv-show/.../poster) are served
+  // directly — wrapping them in /api/plex-poster would double-proxy and break
+  if (url.startsWith('/api/')) return `${apiBase}${url}`
   return `${apiBase}/api/plex-poster?path=${encodeURIComponent(url)}`
 }
 

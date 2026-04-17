@@ -72,10 +72,16 @@ const route = useRoute()
 const router = useRouter()
 const searchQuery = ref('')
 const sidebarOpen = ref(false)
+const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const showChangelog = ref(false)
 
 const toggleSidebar = () => {
   sidebarOpen.value = !sidebarOpen.value
+}
+
+const toggleSidebarCollapsed = () => {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('sidebarCollapsed', String(sidebarCollapsed.value))
 }
 
 const closeSidebar = () => {
@@ -736,16 +742,16 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     </div>
 
     <!-- Normal workspace (movies/settings/logs) -->
-    <div v-if="!ui.selectedMovie.value" class="workspace">
-      <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" :mobile-open="sidebarOpen" @select="(tab) => { handleTabSelect(tab); closeSidebar() }" @submenu-click="(parentKey, submenuKey) => { handleSubmenuClick(parentKey, submenuKey); closeSidebar() }" />
+    <div v-if="!ui.selectedMovie.value" class="workspace" :style="{ '--sidebar-w': sidebarCollapsed ? '52px' : '260px' }">
+      <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" :mobile-open="sidebarOpen" :collapsed="sidebarCollapsed" @select="(tab) => { handleTabSelect(tab); closeSidebar() }" @submenu-click="(parentKey, submenuKey) => { handleSubmenuClick(parentKey, submenuKey); closeSidebar() }" @toggle-collapse="toggleSidebarCollapsed" />
       <section class="main-pane glass">
         <router-view :key="activeTab" :search="searchQuery" @select="handleSelect" />
       </section>
     </div>
 
     <!-- Inline editor when a movie is selected -->
-    <div v-else class="workspace">
-      <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" :mobile-open="sidebarOpen" @select="(tab) => { handleTabSelect(tab); closeSidebar() }" @submenu-click="(parentKey, submenuKey) => { handleSubmenuClick(parentKey, submenuKey); closeSidebar() }" />
+    <div v-else class="workspace" :style="{ '--sidebar-w': sidebarCollapsed ? '52px' : '260px' }">
+      <Sidebar :tabs="tabs" :active="activeTab" :active-submenu="activeSubmenu" :mobile-open="sidebarOpen" :collapsed="sidebarCollapsed" @select="(tab) => { handleTabSelect(tab); closeSidebar() }" @submenu-click="(parentKey, submenuKey) => { handleSubmenuClick(parentKey, submenuKey); closeSidebar() }" @toggle-collapse="toggleSidebarCollapsed" />
       <section class="main-pane glass">
         <TvShowEditorPane
           v-if="ui.selectedMovie.value.mediaType === 'tv-show'"
@@ -773,10 +779,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
 .workspace {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: var(--sidebar-w, 260px) 1fr;
   gap: 14px;
   flex: 1;
   align-items: stretch;
+  transition: grid-template-columns 0.2s ease;
 }
 
 .main-pane {

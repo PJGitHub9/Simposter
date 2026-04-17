@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.91',
+    date: '2026-04-11',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'Sidebar can now be collapsed to an icon-only rail by clicking the chevron button in the header. Collapsed state is saved across page reloads. Collapsing gives the content area (poster grid, editor, etc.) the full extra space.',
+        ]
+      },
+      {
+        title: 'Bug Fix',
+        items: [
+          'Auto-generated poster notifications now include the poster preview image. Previously the notification was sent without an image because the poster bytes were not passed through the auto-generate code path.',
+          'Fixed a preview crash where the TV show editor would construct a broken double-proxied URL (/api/plex-poster?path=/api/movie/...) when a show had no poster in the cache. The backend would then fail to decode the response as an image.',
+          'Tightened the internal-API URL detection in the preview endpoint so a URL containing /api/movie/ in a query parameter is no longer mistaken for a direct internal path, preventing malformed URLs from bypassing validation.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.9',
     date: '2026-04-10',
     sections: [

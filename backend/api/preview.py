@@ -30,9 +30,13 @@ def api_preview(req: PreviewRequest):
             # Internal API patterns (/api/movie/.../poster, /api/tv-show/.../poster)
             # are parsed for the rating_key and never fetched directly as HTTP requests,
             # so skip URL validation for them (avoids blocking private-network app URLs).
+            # Match only when the path component starts with /api/ — not when buried in a query param.
+            from urllib.parse import urlparse
+            _parsed = urlparse(req.background_url)
+            _path = _parsed.path  # path only, no query string
             is_internal_api = (
-                "/api/movie/" in req.background_url or
-                "/api/tv-show/" in req.background_url
+                _path.startswith("/api/movie/") or
+                _path.startswith("/api/tv-show/")
             )
             if not is_internal_api:
                 req.background_url = validate_url(req.background_url, allow_data_uri=True)

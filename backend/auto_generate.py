@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
 from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels
-from .api.notifications import send_batch_notification, send_apprise_notification
+from .api.notifications import send_batch_notification, send_apprise_notification, send_discord_notification
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
@@ -117,7 +117,7 @@ def process_new_content_for_library(
                                     remove_labels = list({*remove_labels, *lib_default_labels})
 
                             # Use the batch processing logic which includes fallback handling
-                            success = process_single_movie_poster(
+                            result = process_single_movie_poster(
                                 rating_key=rating_key,
                                 template_id=template_id,
                                 preset_id=preset_id,
@@ -127,9 +127,27 @@ def process_new_content_for_library(
                                 source='auto_generate'
                             )
 
-                            if success:
+                            if result.get("status") == "ok":
                                 results["movies_succeeded"] += 1
                                 logger.info(f"[AUTO_GEN] Successfully generated poster for {title}")
+                                # Send per-item notification with poster preview
+                                _notif_kwargs = dict(
+                                    title=title or result.get("title", "Unknown"),
+                                    year=year,
+                                    template_id=template_id,
+                                    preset_id=preset_id,
+                                    library_id=library_id,
+                                    source="auto_generate",
+                                    action="sent_to_plex" if auto_send else "saved",
+                                )
+                                try:
+                                    send_discord_notification(**_notif_kwargs, poster_data=result.get("poster_data"))
+                                except Exception as notif_err:
+                                    logger.debug(f"[AUTO_GEN] Discord notification failed: {notif_err}")
+                                try:
+                                    send_apprise_notification(**_notif_kwargs, poster_data=result.get("poster_data"))
+                                except Exception as notif_err:
+                                    logger.debug(f"[AUTO_GEN] Apprise notification failed: {notif_err}")
                             else:
                                 results["movies_failed"] += 1
                                 logger.warning(f"[AUTO_GEN] Failed to generate poster for {title}")
@@ -178,7 +196,7 @@ def process_new_content_for_library(
 
                             # Use the batch processing logic which includes fallback handling
                             # include_seasons=True means it will generate posters for all seasons
-                            success = process_single_tv_show_poster(
+                            result = process_single_tv_show_poster(
                                 rating_key=rating_key,
                                 template_id=template_id,
                                 preset_id=preset_id,
@@ -189,9 +207,27 @@ def process_new_content_for_library(
                                 source='auto_generate'
                             )
 
-                            if success:
+                            if result.get("status") == "ok":
                                 results["tv_shows_succeeded"] += 1
                                 logger.info(f"[AUTO_GEN] Successfully generated posters for {title}")
+                                # Send per-item notification with poster preview
+                                _notif_kwargs = dict(
+                                    title=title or result.get("title", "Unknown"),
+                                    year=year,
+                                    template_id=template_id,
+                                    preset_id=preset_id,
+                                    library_id=library_id,
+                                    source="auto_generate",
+                                    action="sent_to_plex" if auto_send else "saved",
+                                )
+                                try:
+                                    send_discord_notification(**_notif_kwargs, poster_data=result.get("poster_data"))
+                                except Exception as notif_err:
+                                    logger.debug(f"[AUTO_GEN] Discord notification failed: {notif_err}")
+                                try:
+                                    send_apprise_notification(**_notif_kwargs, poster_data=result.get("poster_data"))
+                                except Exception as notif_err:
+                                    logger.debug(f"[AUTO_GEN] Apprise notification failed: {notif_err}")
                             else:
                                 results["tv_shows_failed"] += 1
                                 logger.warning(f"[AUTO_GEN] Failed to generate posters for {title}")

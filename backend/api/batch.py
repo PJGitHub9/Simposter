@@ -530,8 +530,8 @@ def _process_single_movie(
         }
         if save_path:
             result["save_path"] = str(save_path)
-        # Include poster bytes for webhook Discord notifications (single-item, not batch)
-        if source == "webhook" and req.send_to_plex and payload:
+        # Include poster bytes for single-item notifications (webhook, auto_generate)
+        if source in ("webhook", "auto_generate") and req.send_to_plex and payload:
             result["poster_data"] = payload
 
         _update_batch_status({
@@ -1448,8 +1448,8 @@ def _render_and_save_poster(
         result["season"] = season_title
     if save_path:
         result["save_path"] = str(save_path)
-    # Include poster bytes for webhook Discord notifications (single-item, not batch)
-    if source == "webhook" and req.send_to_plex and payload:
+    # Include poster bytes for single-item notifications (webhook, auto_generate)
+    if source in ("webhook", "auto_generate") and req.send_to_plex and payload:
         result["poster_data"] = payload
 
     return result
@@ -1806,11 +1806,11 @@ def process_single_movie_poster(
             source=source  # Pass source for history tracking
         )
 
-        return result.get("status") == "success"
+        return result
 
     except Exception as e:
         logger.error(f"[{source.upper()}] Error processing movie poster: {e}", exc_info=True)
-        return False
+        return {}
 
 
 def process_single_tv_show_poster(
@@ -1886,8 +1886,8 @@ def process_single_tv_show_poster(
             source=source  # Pass source for history tracking
         )
 
-        return result.get("status") == "success"
+        return result
 
     except Exception as e:
         logger.error(f"[{source.upper()}] Error processing TV show poster: {e}", exc_info=True)
-        return False
+        return {}
