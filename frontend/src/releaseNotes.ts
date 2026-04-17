@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.92',
+    date: '2026-04-07',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Auto-generate no longer re-processes items that were already handled by a Radarr/Sonarr webhook within the cooldown window. Previously, items added via webhook could be picked up again by the next auto-scan.',
+          'Fixed duplicate notifications from auto-generation: previously one notification was sent per poster plus a second batch-summary notification for the same items. Now only the per-poster notification fires.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.91',
     date: '2026-04-11',
     sections: [

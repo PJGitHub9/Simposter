@@ -7,11 +7,29 @@ import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
-from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels
-from .api.notifications import send_batch_notification, send_apprise_notification, send_discord_notification
+from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels, _webhook_cooldowns, _webhook_cooldown_lock, WEBHOOK_COOLDOWN_SECONDS
+from .api.notifications import send_apprise_notification, send_discord_notification
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
+
+
+def _recently_handled_by_webhook(rating_key: str) -> bool:
+    """Return True if a webhook processed this rating_key recently (within the cooldown window)."""
+    import time as _time
+    with _webhook_cooldown_lock:
+        last = _webhook_cooldowns.get(f"radarr:{rating_key}") or \
+               _webhook_cooldowns.get(f"sonarr:{rating_key}") or \
+               _webhook_cooldowns.get(rating_key)
+        # Also check any cooldown key that ends with the rating_key
+        if last is None:
+            for k, v in _webhook_cooldowns.items():
+                if rating_key in k:
+                    last = v
+                    break
+        if last and (_time.time() - last) < WEBHOOK_COOLDOWN_SECONDS:
+            return True
+    return False
 
 
 def _should_skip_auto_generate(rating_key: str, library_id: str, is_tv: bool = False) -> bool:
@@ -243,50 +261,6 @@ def process_new_content_for_library(
     except Exception as e:
         logger.error(f"[AUTO_GEN] Error processing new content for library {library_id}: {e}", exc_info=True)
 
-    # Send Discord notification for auto-generation completion
-    total_succeeded = results["movies_succeeded"] + results["tv_shows_succeeded"]
-    total_failed = results["movies_failed"] + results["tv_shows_failed"]
-    if total_succeeded > 0 or total_failed > 0:
-        try:
-            # Get the template_id/preset_id from the library config
-            template_id = ""
-            preset_id = ""
-            try:
-                plex_settings = ui_settings.get("plex", {}) if ui_settings else {}
-                library_mappings = plex_settings.get("libraryMappings", [])
-                tv_mappings = plex_settings.get("tvShowLibraryMappings", [])
-                config = next((lib for lib in library_mappings + tv_mappings if lib.get("id") == library_id), None)
-                if config:
-                    template_id = config.get("autoGenerateTemplateId", "")
-                    preset_id = config.get("autoGeneratePresetId", "")
-            except Exception:
-                pass
-
-            send_batch_notification(
-                library_id=library_id,
-                template_id=template_id,
-                preset_id=preset_id,
-                success_count=total_succeeded,
-                failed_count=total_failed,
-                source="auto_generate"
-            )
-        except Exception as notif_err:
-            logger.debug(f"[AUTO_GEN] Failed to send Discord notification: {notif_err}")
-        try:
-            send_apprise_notification(
-                title=f"{total_succeeded + total_failed} posters processed",
-                template_id=template_id,
-                preset_id=preset_id,
-                library_id=library_id,
-                source="auto_generate",
-                action="sent_to_plex",
-                count=total_succeeded + total_failed,
-                success_count=total_succeeded,
-                failed_count=total_failed,
-            )
-        except Exception as notif_err:
-            logger.debug(f"[AUTO_GEN] Failed to send Apprise notification: {notif_err}")
-
     return results
 
 
@@ -355,6 +329,9 @@ def check_recently_added(lookback_minutes: int = 20) -> Dict[str, Any]:
                         key = video.get("ratingKey")
                         if not key or key in existing_movie_keys:
                             continue
+                        if _recently_handled_by_webhook(key):
+                            logger.info("[AUTO_GEN] Skipping movie key=%s - recently processed by webhook", key)
+                            continue
                         title = video.get("title", "Unknown")
                         year = video.get("year")
                         added_at = video.get("addedAt")
@@ -401,6 +378,9 @@ def check_recently_added(lookback_minutes: int = 20) -> Dict[str, Any]:
                     for directory in root_tv.findall(".//Directory"):
                         key = directory.get("ratingKey")
                         if not key or key in existing_tv_keys:
+                            continue
+                        if _recently_handled_by_webhook(key):
+                            logger.info("[AUTO_GEN] Skipping TV show key=%s - recently processed by webhook", key)
                             continue
                         title = directory.get("title", "Unknown")
                         year = directory.get("year")
