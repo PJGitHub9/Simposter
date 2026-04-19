@@ -626,22 +626,20 @@ def build_base_poster(
     fade_h = int(canvas_h * fade_height_ratio)
 
     if matte_h > 0 or fade_h > 0:
-        matte_mask = Image.new("L", (canvas_w, canvas_h), 0)
-        mp = matte_mask.load()
-
         matte_start = canvas_h - matte_h               # where solid matte begins
         fade_start = max(0, matte_start - fade_h)      # top of fade
 
-        for y in range(canvas_h):
-            if y >= matte_start:
-                alpha = 255  # solid matte
-            elif y >= fade_start:
-                t = (y - fade_start) / max(fade_h, 1)
-                alpha = int(255 * t)  # from 0 → 255 downward
-            else:
-                alpha = 0  # pure poster
-            for x in range(canvas_w):
-                mp[x, y] = alpha
+        # Build a 1-D alpha column using numpy (vectorised), then broadcast to
+        # full canvas width via a single C-level resize.  This replaces the
+        # O(W × H) pure-Python pixel loop (6 M iterations at 2000×3000) with
+        # O(H) numpy ops + a Pillow C resize — ~100–200× faster.
+        col = np.zeros(canvas_h, dtype=np.float32)
+        n_fade = matte_start - fade_start
+        if n_fade > 0:
+            col[fade_start:matte_start] = np.arange(n_fade, dtype=np.float32) / max(fade_h, 1) * 255
+        col[matte_start:] = 255.0
+        col_img = Image.fromarray(col.astype(np.uint8).reshape(canvas_h, 1), mode="L")
+        matte_mask = col_img.resize((canvas_w, canvas_h), Image.NEAREST)
 
         black = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
         base = Image.composite(black, base, matte_mask)

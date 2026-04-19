@@ -10,6 +10,169 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.92',
+    date: '2026-04-07',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Auto-generate no longer re-processes items that were already handled by a Radarr/Sonarr webhook within the cooldown window. Previously, items added via webhook could be picked up again by the next auto-scan.',
+          'Fixed duplicate notifications from auto-generation: previously one notification was sent per poster plus a second batch-summary notification for the same items. Now only the per-poster notification fires.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.91',
+    date: '2026-04-11',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'Sidebar can now be collapsed to an icon-only rail by clicking the chevron button in the header. Collapsed state is saved across page reloads. Collapsing gives the content area (poster grid, editor, etc.) the full extra space.',
+        ]
+      },
+      {
+        title: 'Bug Fix',
+        items: [
+          'Auto-generated poster notifications now include the poster preview image. Previously the notification was sent without an image because the poster bytes were not passed through the auto-generate code path.',
+          'Fixed a preview crash where the TV show editor would construct a broken double-proxied URL (/api/plex-poster?path=/api/movie/...) when a show had no poster in the cache. The backend would then fail to decode the response as an image.',
+          'Tightened the internal-API URL detection in the preview endpoint so a URL containing /api/movie/ in a query parameter is no longer mistaken for a direct internal path, preventing malformed URLs from bypassing validation.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.9',
+    date: '2026-04-10',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Bounding box overlay now correctly aligns to the image when the preview panel is wider than the poster. Previously the box was offset because the image\'s position inside the container wasn\'t accounted for, causing users to compensate by setting X% to non-center values.',
+          'Auto-generated posters now appear as "Auto" in History instead of "Manual". The source value "auto_generate" was falling through to the default manual case.',
+          'Default "Labels to Remove" configured per-library in Settings are now respected during auto-generation and webhooks. Previously only the global auto-labels field was used, so per-library label removal had no effect on automatic sends.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Border thickness slider maximum increased from 30px to 60px.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.89',
+    date: '2026-04-06',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed a phantom "Library 1" appearing on fresh installs with no Plex configured. The backend was hardcoding "1" as a fallback library ID when no libraries were set up, causing the Settings page to show an unremovable stub entry. New installs now start with an empty library list.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'History now records failed renders with a status of "Failed" and the error reason. Failed entries are filterable in the Action dropdown and display the error message in red in the Path column. Batch logs also now show the movie/show title instead of just the internal rating key when reporting errors.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.88',
+    date: '2026-04-06',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'Manual editor: you can now upload your own poster image directly in the Poster section. Drag and drop an image onto the upload zone or click to browse. The uploaded image is used as the background and goes through all the same template effects, logo overlays, matte, fade, vignette etc. as any TMDb poster. Hover the uploaded thumbnail to swap it or clear it. Works in both the movie and TV show editors.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.87',
+    date: '2026-04-06',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Logo bounding box is now a manual checkbox in the Logo section ("Show bounding box") instead of auto-toggling based on section open state. Previously it would inconsistently appear and disappear as the accordion opened/closed.',
+          'Browser back button now correctly returns to the exact page, sort, and filter state when closing the poster editor. Previously, opening the editor replaced the history entry, making the back button go to the wrong page.',
+          'TV show editor: selecting individual seasons no longer silently includes the series poster. The series was auto-selected on load and never cleared when the user picked specific seasons, causing unintended series poster sends.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Settings: "Items per page" slider maximum raised from 40 to 100.',
+          'Batch edit (Movies & TV): Sort By and Order dropdowns merged into a single combined selector (e.g. "Date Added (Newest First)", "Title (A-Z)") to reduce toolbar clutter.',
+          'Template Manager: preset summary chips now show labeled key/value pairs ("Logo · White", "Poster · Textless") instead of bare values for clarity.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.86',
+    date: '2026-04-06',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'TV show editor: selecting specific seasons no longer automatically includes the series poster. Previously, the series was auto-selected on load and never dropped when the user picked individual seasons — so sending Season 1 + Season 2 would also send the series. Now, clicking a season when only the series is selected (the default) replaces it rather than appending to it.',
+          'Template Manager: fixed missing clearSelectedPreviewMovie function that caused an error when clicking × to clear a pinned preview movie.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Template Manager redesigned: presets now display as full-width list items with labeled summary chips (Logo · White, Poster · Textless, etc.) instead of plain text. Each card expands to show a settings grid with Series/Season tabs. "Global Preset Preferences" renamed to "Default Batch Settings" and made collapsible. Import/Export section also collapsible.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.85',
+    date: '2026-03-31',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Studio and streaming platform overlay badges now render correctly when sending to Plex or saving locally. Previously, tmdb_id was only injected during preview — the send and save paths were missing it, so studio/streaming badge lookups always returned empty.',
+          'Mobile TV show editor now shows season selection correctly: pills display a checkmark and distinct highlight for selected seasons, plus All/None buttons to bulk-select.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Apprise notifications sent to Discord webhook URLs now render as rich embeds (with poster thumbnail, color coding, library/template/action fields) instead of plain text — identical to the native Discord integration. Other Apprise services (Slack, Telegram, Pushover, etc.) are unaffected.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.841',
+    date: '2026-03-29',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Notification settings (Discord and Apprise) now save and persist correctly. Previously, all Apprise fields were silently stripped by the backend schema before reaching the database, and the notifications object was not included in the settings merge — causing settings to revert on page refresh.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'TV batch preview now preloads selected shows concurrently (up to 3 in parallel) instead of staggering requests 300ms apart. With 10 shows selected, previews are ready significantly faster.',
+          'Manual editor: settings panel reorganised into collapsible accordion sections (Preset, Poster, Logo, Custom Text, Overlay & Border). Template dropdown removed since only one template exists. Logo bounding box auto-shows when the Logo section is expanded and hides when collapsed or when No Logo is selected.',
+          'TV show editor now includes horizontal/vertical alignment controls (previously missing). Mobile layout gains a scrollable season pill strip so seasons are accessible on narrow screens.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.83',
     date: '2026-03-27',
     sections: [

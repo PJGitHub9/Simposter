@@ -122,11 +122,18 @@ class NotificationSettings(BaseModel):
     """Settings for Discord and other notifications"""
     discordEnabled: bool = False
     discordWebhookUrl: str = ""
-    discordNotifyLibraries: List[str] = Field(default_factory=list)  # Library IDs to notify for
-    discordNotifyBatch: bool = True  # Notify on batch completion
-    discordNotifyManual: bool = True  # Notify on manual send
-    discordNotifyWebhook: bool = True  # Notify on webhook sends
-    discordNotifyAutoGenerate: bool = True  # Notify on auto-generate
+    discordNotifyLibraries: List[str] = Field(default_factory=list)
+    discordNotifyBatch: bool = True
+    discordNotifyManual: bool = True
+    discordNotifyWebhook: bool = True
+    discordNotifyAutoGenerate: bool = True
+    appriseEnabled: bool = False
+    appriseUrls: List[str] = Field(default_factory=list)
+    appriseNotifyLibraries: List[str] = Field(default_factory=list)
+    appriseNotifyBatch: bool = True
+    appriseNotifyManual: bool = True
+    appriseNotifyWebhook: bool = True
+    appriseNotifyAutoGenerate: bool = True
 
 
 class UISettings(BaseModel):

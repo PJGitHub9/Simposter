@@ -107,8 +107,8 @@ def _apply_runtime_settings(merged: dict):
     # Strip trailing slashes to prevent double-slash URLs like //library/metadata
     object.__setattr__(settings, "PLEX_URL", url.rstrip("/") if url else "")
     object.__setattr__(settings, "PLEX_TOKEN", token)
-    object.__setattr__(settings, "PLEX_MOVIE_LIBRARY_NAMES", names or ["1"])
-    object.__setattr__(settings, "PLEX_MOVIE_LIBRARY_NAME", (names or ["1"])[0])
+    object.__setattr__(settings, "PLEX_MOVIE_LIBRARY_NAMES", names or [])
+    object.__setattr__(settings, "PLEX_MOVIE_LIBRARY_NAME", names[0] if names else "")
 
     # Resolve IDs from names or IDs (passes through numeric IDs)
     try:
@@ -119,7 +119,7 @@ def _apply_runtime_settings(merged: dict):
     # Persist resolved IDs back on settings for downstream use
     object.__setattr__(settings, "PLEX_MOVIE_LIB_IDS", ids)
 
-    default_id = ids[0] if ids else "1"
+    default_id = ids[0] if ids else ""
     object.__setattr__(settings, "PLEX_DEFAULT_MOVIE_LIB_ID", default_id)
 
     # TMDB runtime key
@@ -153,7 +153,7 @@ def _default_ui_settings() -> UISettings:
             "url": settings.PLEX_URL,
             "token": settings.PLEX_TOKEN,
             "movieLibraryName": settings.PLEX_MOVIE_LIBRARY_NAME,
-            "movieLibraryNames": getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", []) or [settings.PLEX_MOVIE_LIBRARY_NAME],
+            "movieLibraryNames": [x for x in (getattr(settings, "PLEX_MOVIE_LIBRARY_NAMES", []) or ([settings.PLEX_MOVIE_LIBRARY_NAME] if settings.PLEX_MOVIE_LIBRARY_NAME else [])) if x],
             "libraryMappings": [
                 {
                     "id": lid,
@@ -255,7 +255,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
         # Merge with defaults so newly added fields are included
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False)
         merged = {**defaults, **data}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance", "notifications"):
             merged[nested_key] = {**defaults.get(nested_key, {}), **data.get(nested_key, {})}
 
         # ENV variables are now copied to DB on container startup instead of runtime overrides
@@ -315,7 +315,7 @@ def save_ui_settings_endpoint(payload: UISettings):
             exclude_none=False, exclude_defaults=False, exclude_unset=False
         )
         merged = {**defaults, **current, **incoming}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance", "notifications"):
             merged[nested_key] = {
                 **defaults.get(nested_key, {}),
                 **current.get(nested_key, {}),

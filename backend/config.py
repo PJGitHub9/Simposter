@@ -65,7 +65,7 @@ for env_path in env_candidates:
 class Settings(BaseSettings):
     PLEX_URL: str = "http://localhost:32400"
     PLEX_TOKEN: str = ""
-    PLEX_MOVIE_LIBRARY_NAME: str = "1"
+    PLEX_MOVIE_LIBRARY_NAME: str = ""
     PLEX_MOVIE_LIBRARY_NAMES: List[str] = []
     PLEX_VERIFY_TLS: bool = True
     LOG_LEVEL: str = "INFO"

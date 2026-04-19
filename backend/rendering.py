@@ -1,10 +1,12 @@
 # backend/rendering.py
 from __future__ import annotations
 
+from collections import OrderedDict
 from io import BytesIO
 import shutil
 import subprocess
 import tempfile
+import threading
 from typing import Any, Dict, Optional
 from pathlib import Path
 
@@ -13,6 +15,17 @@ from PIL import Image
 
 from .config import logger, settings
 from .templates import get_renderer
+
+# ---------------------------------------------------------------------------
+# In-memory image byte cache
+# ---------------------------------------------------------------------------
+# During live editing the user picks one poster + one logo then repeatedly
+# adjusts sliders. Without a cache every 300 ms debounce fires a fresh HTTP
+# download of the same two images. This LRU cache keeps rendered cycles fast
+# after the first download.
+_IMAGE_BYTE_CACHE: "OrderedDict[str, bytes]" = OrderedDict()
+_IMAGE_BYTE_CACHE_MAX = 30  # ~30-60 MB for typical JPEG poster/logo bytes
+_IMAGE_BYTE_CACHE_LOCK = threading.Lock()
 
 
 def _download_image(url: str) -> Image.Image:
@@ -23,6 +36,22 @@ def _download_image(url: str) -> Image.Image:
     """
     if not url:
         raise ValueError("Empty image URL")
+
+    # Cache hit — skip HTTP entirely
+    with _IMAGE_BYTE_CACHE_LOCK:
+        raw = _IMAGE_BYTE_CACHE.get(url)
+        if raw is not None:
+            _IMAGE_BYTE_CACHE.move_to_end(url)
+    if raw is not None:
+        logger.debug("[CACHE] Image cache hit: %s", url[:80])
+        try:
+            img = Image.open(BytesIO(raw))
+            img.load()
+            return img.convert("RGBA")
+        except Exception:
+            with _IMAGE_BYTE_CACHE_LOCK:
+                _IMAGE_BYTE_CACHE.pop(url, None)
+            raw = None  # fall through to re-download
 
     # Retry logic with exponential backoff for slow TMDB servers
     max_retries = 3
@@ -44,6 +73,14 @@ def _download_image(url: str) -> Image.Image:
         except Exception as e:
             logger.exception("Failed to download image: %s", url)
             raise ValueError(f"Failed to download image: {url}") from e
+
+    # Store in cache (evict LRU if over limit)
+    with _IMAGE_BYTE_CACHE_LOCK:
+        _IMAGE_BYTE_CACHE[url] = resp.content
+        _IMAGE_BYTE_CACHE.move_to_end(url)
+        if len(_IMAGE_BYTE_CACHE) > _IMAGE_BYTE_CACHE_MAX:
+            _IMAGE_BYTE_CACHE.popitem(last=False)
+            logger.debug("[CACHE] Image cache evicted LRU entry")
 
     content_type = resp.headers.get("content-type", "").lower()
     is_svg = (

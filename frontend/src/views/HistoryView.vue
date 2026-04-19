@@ -21,6 +21,8 @@ interface HistoryRecord {
   logo_fallback_template: string | null
   logo_fallback_preset: string | null
   created_at: string
+  status: string | null
+  error_message: string | null
 }
 
 const apiBase = getApiBase()
@@ -94,7 +96,10 @@ const filteredRecords = computed(() => {
   }
 
   if (selectedSource.value !== 'all') {
-    filtered = filtered.filter(r => r.source === selectedSource.value)
+    filtered = filtered.filter(r => {
+      if (selectedSource.value === 'auto') return r.source === 'auto' || r.source === 'auto_generate'
+      return r.source === selectedSource.value
+    })
   }
 
   return filtered
@@ -166,6 +171,8 @@ const getActionLabel = (action: string) => {
       return 'Sent to Plex'
     case 'saved_local':
       return 'Saved Locally'
+    case 'failed':
+      return 'Failed'
     default:
       return action
   }
@@ -177,6 +184,8 @@ const getActionClass = (action: string) => {
       return 'action-plex'
     case 'saved_local':
       return 'action-local'
+    case 'failed':
+      return 'action-failed'
     default:
       return ''
   }
@@ -185,6 +194,7 @@ const getActionClass = (action: string) => {
 const getSourceLabel = (source: string | null) => {
   switch (source) {
     case 'auto':
+    case 'auto_generate':
       return 'Auto'
     case 'batch':
       return 'Batch'
@@ -200,6 +210,7 @@ const getSourceLabel = (source: string | null) => {
 const getSourceClass = (source: string | null) => {
   switch (source) {
     case 'auto':
+    case 'auto_generate':
       return 'source-auto'
     case 'batch':
       return 'source-batch'
@@ -388,6 +399,7 @@ onMounted(async () => {
             <option value="all">All Actions</option>
             <option value="sent_to_plex">Sent to Plex</option>
             <option value="saved_local">Saved Locally</option>
+            <option value="failed">Failed</option>
           </select>
         </label>
 
@@ -447,7 +459,7 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="record in filteredRecords" :key="record.id">
+          <tr v-for="record in filteredRecords" :key="record.id" :class="{ 'row-failed': record.action === 'failed' }">
             <td class="preview-cell">
               <button
                 v-if="canPreview(record)"
@@ -495,7 +507,10 @@ onMounted(async () => {
               <span v-else class="no-fallback">—</span>
             </td>
             <td class="path-cell">
-              <span v-if="record.save_path" :title="record.save_path" class="path-text">
+              <span v-if="record.error_message" class="error-message-text" :title="record.error_message">
+                {{ record.error_message }}
+              </span>
+              <span v-else-if="record.save_path" :title="record.save_path" class="path-text">
                 {{ record.save_path }}
               </span>
               <span v-else>—</span>
@@ -776,6 +791,26 @@ onMounted(async () => {
 .action-local {
   background: rgba(59, 130, 246, 0.15);
   color: #3b82f6;
+}
+
+.action-failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.row-failed td {
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.error-message-text {
+  color: #ef4444;
+  font-size: 0.82rem;
+  max-width: 260px;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
 }
 
 .fallback-cell {

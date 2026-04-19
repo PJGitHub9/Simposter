@@ -111,15 +111,15 @@ const timezones = [
       </label>
 
       <label>
-        <span class="label-text">Poster Grid Density: {{ localPosterDensity }}</span>
+        <span class="label-text">Items per page: {{ localPosterDensity }}</span>
         <input
           type="range"
           v-model.number="localPosterDensity"
           min="10"
-          max="40"
+          max="100"
           step="1"
         />
-        <span class="help-text">Adjust spacing between posters in grid view</span>
+        <span class="help-text">Number of posters shown per page in the library grid</span>
       </label>
 
       <label>

@@ -755,7 +755,15 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             library_id = None
         
         logger.info(f"[SCAN] Scan request for library_id={library_id}")
-        
+
+        # Snapshot cache keys BEFORE fetching from Plex.
+        # get_plex_movies() eagerly calls cache.refresh_from_list() as a side effect,
+        # so if we read the cache after calling it, new items appear already-cached
+        # and are never detected as "new" — breaking auto-generate.
+        pre_scan_movie_keys = {item.get("rating_key") for item in cache.get_cached_movies()}
+        pre_scan_tv_keys = {item.get("rating_key") for item in cache.get_cached_tv_shows()}
+        logger.debug("[SCAN] Pre-scan cache: %d movies, %d TV shows", len(pre_scan_movie_keys), len(pre_scan_tv_keys))
+
         # Fetch all content types
         lib_ids = [library_id] if library_id else None
         movies = get_plex_movies(library_ids=lib_ids)
@@ -858,12 +866,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         # Bulk refresh movie cache per library and detect new content
         from .. import auto_generate
         for lib_id, cached_movies in movie_cache_by_lib.items():
-            # Get existing cache to detect new items
-            existing_cache = cache.get_cached_movies(library_id=lib_id)
-            existing_keys = {item.get("rating_key") for item in existing_cache}
-
-            # Detect new movies
-            new_movies = [m for m in cached_movies if m.get("rating_key") not in existing_keys]
+            # Use pre-scan snapshot so new items added since last scan are detected correctly.
+            # Cannot use cache.get_cached_movies() here — get_plex_movies() already refreshed it.
+            new_movies = [m for m in cached_movies if m.get("rating_key") not in pre_scan_movie_keys]
 
             # Refresh cache
             cache.refresh_from_list(cached_movies)
@@ -940,12 +945,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         
         # Bulk refresh TV cache per library and detect new content
         for lib_id, cached_shows in tv_cache_by_lib.items():
-            # Get existing cache to detect new items
-            existing_cache = cache.get_cached_tv_shows(library_id=lib_id)
-            existing_keys = {item.get("rating_key") for item in existing_cache}
-
-            # Detect new TV shows
-            new_shows = [s for s in cached_shows if s.get("rating_key") not in existing_keys]
+            # Use pre-scan snapshot for the same reason as movies above.
+            new_shows = [s for s in cached_shows if s.get("rating_key") not in pre_scan_tv_keys]
 
             # Refresh cache
             cache.refresh_tv_from_list(cached_shows)

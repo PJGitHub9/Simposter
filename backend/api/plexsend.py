@@ -42,11 +42,14 @@ def api_plex_send(req: PlexSendRequest):
 
     # Fetch movie details BEFORE rendering so {title} and {year} can be substituted
     import xml.etree.ElementTree as ET
+    from ..config import extract_tmdb_id_from_metadata
     movie_details = {}
+    plex_xml_text = None
     try:
         metadata_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}"
         resp = requests.get(metadata_url, headers=plex_headers(), timeout=5)
         if resp.ok:
+            plex_xml_text = resp.text
             root = ET.fromstring(resp.text)
             item = root.find('.//Video') or root.find('.//Directory')
             if item is not None:
@@ -94,6 +97,19 @@ def api_plex_send(req: PlexSendRequest):
             logger.info("[PLEX] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
     except Exception as e:
         logger.debug("[PLEX] Failed to inject media info: %s", e)
+
+    # Inject tmdb_id and media_type so studio/streaming platform badges can resolve
+    if plex_xml_text:
+        try:
+            tmdb_id = extract_tmdb_id_from_metadata(plex_xml_text)
+            if tmdb_id:
+                is_tv = bool(movie_details) and root.find('.//Directory') is not None
+                options.setdefault("metadata", {})
+                options["metadata"]["tmdb_id"] = tmdb_id
+                options["metadata"]["media_type"] = "tv" if is_tv else "movie"
+                logger.info("[PLEX] Injected tmdb_id=%s media_type=%s for studio/streaming badge resolution", tmdb_id, options["metadata"]["media_type"])
+        except Exception as e:
+            logger.debug("[PLEX] Failed to inject tmdb_id: %s", e)
 
     # Render poster using template + preset options
     img = render_poster_image(
@@ -174,7 +190,7 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as notif_err:
         logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
     try:
-        send_apprise_notification(**_notif_kwargs)
+        send_apprise_notification(**_notif_kwargs, poster_data=payload)
     except Exception as notif_err:
         logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
 

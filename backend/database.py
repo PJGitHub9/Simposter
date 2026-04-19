@@ -551,6 +551,12 @@ def init_database():
         if "thumbnail_path" not in history_cols:
             cursor.execute("ALTER TABLE poster_history ADD COLUMN thumbnail_path TEXT")
             logger.info("[DB] Added 'thumbnail_path' column to poster_history table")
+        if "status" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN status TEXT DEFAULT 'success'")
+            logger.info("[DB] Added 'status' column to poster_history table")
+        if "error_message" not in history_cols:
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN error_message TEXT")
+            logger.info("[DB] Added 'error_message' column to poster_history table")
 
         # Migration: Consolidate 'default' and 'universal' templates into 'uniformlogo'
         # Convert logo_scale/logo_offset to bounding box zones
@@ -2164,6 +2170,8 @@ def record_poster_history(
     logo_fallback_template: Optional[str] = None,
     logo_fallback_preset: Optional[str] = None,
     poster_data: Optional[bytes] = None,
+    status: str = 'success',
+    error_message: Optional[str] = None,
 ) -> None:
     """Record a poster-related action for tracking, including fallback information."""
     from .config import HISTORY_THUMBNAIL_DIR
@@ -2204,8 +2212,9 @@ def record_poster_history(
             INSERT INTO poster_history
             (rating_key, library_id, title, year, template_id, preset_id, action, save_path, source,
              poster_fallback_used, poster_fallback_template, poster_fallback_preset,
-             logo_fallback_used, logo_fallback_template, logo_fallback_preset, thumbnail_path, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             logo_fallback_used, logo_fallback_template, logo_fallback_preset, thumbnail_path,
+             status, error_message, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 rating_key,
@@ -2224,6 +2233,8 @@ def record_poster_history(
                 logo_fallback_template,
                 logo_fallback_preset,
                 thumbnail_path,
+                status,
+                error_message,
             ),
         )
 
