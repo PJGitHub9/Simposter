@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.93',
+    date: '2026-04-22',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Auto-generate and webhook renders now read the global "White Logo Fallback" setting from the database (matching normal batch behaviour). Previously the setting was always read from the preset options, which defaulted to "continue" even when the global setting was "use_next" — so movies with logos that didn\'t match the white preference would silently render without a logo instead of falling back to the next available one.',
+          'Added a log line whenever no logo is found during auto-generate or batch, showing which fallback action will be applied (e.g. "continue", "skip", or "template"). This makes it visible in the logs whether the Logo Fallback in Template Manager is configured or not.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Fade Height slider maximum increased from 40% to 100%.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.92',
     date: '2026-04-07',
     sections: [

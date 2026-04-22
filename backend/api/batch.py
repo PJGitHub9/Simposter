@@ -184,6 +184,7 @@ def _process_single_movie(
             fallback_logo_action = render_options_base.get("fallbackLogoAction") or "continue"
             fallback_logo_template = render_options_base.get("fallbackLogoTemplate")
             fallback_logo_preset = render_options_base.get("fallbackLogoPreset")
+            logger.info("[BATCH] No logo found for %s — fallback action: %s", rating_key, fallback_logo_action)
             if fallback_logo_action == "template" and fallback_logo_template:
                 logo_fallback_used = True
                 logo_fallback_template_used = fallback_logo_template
@@ -1788,8 +1789,13 @@ def process_single_movie_poster(
         base_poster_filter = base_options.get("poster_filter", "any")
         base_logo_preference = base_options.get("logo_preference", "white")
         base_logo_mode = base_options.get("logo_mode", "stock")
-        white_logo_fallback = base_options.get("white_logo_fallback", "continue")
-        language_pref = base_options.get("language", "en")
+        # Read white_logo_fallback from global DB setting (same as _execute_batch), fall back to preset option
+        white_logo_fallback = db.get_setting("fallback.white_logo_fallback") or base_options.get("white_logo_fallback", "use_next")
+        language_pref = db.get_setting("pref.language") or base_options.get("language", "en")
+        logger.debug("[%s] Fallback settings for %s: logo_action=%s white_fallback=%s",
+                     source.upper(), preset_id,
+                     base_options.get("fallbackLogoAction", "continue"),
+                     white_logo_fallback)
 
         # Process the movie with proper source tracking
         result = _process_single_movie(
@@ -1868,8 +1874,13 @@ def process_single_tv_show_poster(
         base_poster_filter = base_options.get("poster_filter", "any")
         base_logo_preference = base_options.get("logo_preference", "white")
         base_logo_mode = base_options.get("logo_mode", "stock")
-        white_logo_fallback = base_options.get("white_logo_fallback", "continue")
-        language_pref = base_options.get("language", "en")
+        # Read white_logo_fallback from global DB setting (same as _execute_batch), fall back to preset option
+        white_logo_fallback = db.get_setting("fallback.white_logo_fallback") or base_options.get("white_logo_fallback", "use_next")
+        language_pref = db.get_setting("pref.language") or base_options.get("language", "en")
+        logger.debug("[%s] Fallback settings for %s: logo_action=%s white_fallback=%s",
+                     source.upper(), preset_id,
+                     base_options.get("fallbackLogoAction", "continue"),
+                     white_logo_fallback)
 
         # Process the TV show with proper source tracking
         result = _process_single_tv_show(
