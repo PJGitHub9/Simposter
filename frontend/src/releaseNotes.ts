@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.95',
+    date: '2026-04-22',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed fallback rules (Logo Fallback / Poster Fallback configured in Template Manager) being silently wiped whenever a preset was saved from the movie or TV editor. The EditorPane save now merges onto the existing preset options, so fallback configuration, overlay config links, and any other settings not exposed by the editor sliders are preserved.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.94',
+    date: '2026-04-22',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Label removal is now immediately reflected in Simposter\'s label filter. Previously, after auto-generate or batch removed labels from Plex (e.g. "Overlay", "Simposter"), the local cache still showed the item under those labels until the next full library scan. The cache is now updated in-place right after each label is removed.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.93',
     date: '2026-04-22',
     sections: [

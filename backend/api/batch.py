@@ -484,12 +484,19 @@ def _process_single_movie(
             # Label removal
             if req.labels:
                 logger.info("[BATCH] Removing labels %s from %s", req.labels, rating_key)
+                removed_labels = []
                 try:
                     for label in req.labels:
                         plex_remove_label(rating_key, label)
                         logger.info("[BATCH] Removed label '%s' from %s", label, rating_key)
+                        removed_labels.append(label.lower())
                 except Exception as label_err:
                     logger.warning("[BATCH] Label removal failed for %s: %s", rating_key, label_err)
+                # Sync label cache — strip removed labels so the filter doesn't show stale results
+                if removed_labels:
+                    current = db.get_movie_labels(rating_key)
+                    updated = [l for l in current if l.lower() not in removed_labels]
+                    db.update_movie_labels(rating_key, updated)
 
             logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
             try:
@@ -1403,12 +1410,19 @@ def _render_and_save_poster(
             # Remove labels if specified
             if req.labels:
                 logger.info("[BATCH] Removing labels %s from %s (%s)", req.labels, rating_key, title)
+                removed_labels = []
                 try:
                     for label_name in req.labels:
                         plex_remove_label(rating_key, label_name)
                         logger.info("[BATCH] Removed label '%s' from %s", label_name, rating_key)
+                        removed_labels.append(label_name.lower())
                 except Exception as label_err:
                     logger.warning("[BATCH] Label removal failed for %s: %s", rating_key, label_err)
+                # Sync label cache — strip removed labels so the filter doesn't show stale results
+                if removed_labels:
+                    current = db.get_tv_labels(rating_key)
+                    updated = [l for l in current if l.lower() not in removed_labels]
+                    db.update_tv_labels(rating_key, updated, library_id=req.library_id or "default")
 
             # Record history
             try:

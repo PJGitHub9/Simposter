@@ -1409,6 +1409,28 @@ def upsert_movie_cache(
         """, (rating_key, title, year, added_at, tmdb_id, poster_url, labels_json, library_id))
 
 
+def get_movie_labels(rating_key: str) -> List[str]:
+    """Return current cached labels for a movie (empty list if not found)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT labels_json FROM movie_cache WHERE rating_key = ?", (rating_key,))
+        row = cursor.fetchone()
+        if row and row["labels_json"]:
+            return json.loads(row["labels_json"])
+        return []
+
+
+def get_tv_labels(rating_key: str) -> List[str]:
+    """Return current cached labels for a TV show (empty list if not found)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT labels_json FROM tv_cache WHERE rating_key = ?", (rating_key,))
+        row = cursor.fetchone()
+        if row and row["labels_json"]:
+            return json.loads(row["labels_json"])
+        return []
+
+
 def update_movie_labels(rating_key: str, labels: List[str], library_id: str = "default") -> None:
     """Update labels for a cached movie."""
     labels_json = json.dumps(labels)
