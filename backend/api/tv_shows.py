@@ -202,6 +202,7 @@ def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: st
                 "seasons": s.get("seasons") or [],
                 "updated_at": s.get("updated_at"),
                 "library_id": s.get("library_id"),
+                "edition": s.get("edition"),
             }
             for s in cached
         ]

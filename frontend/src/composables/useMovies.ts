@@ -6,6 +6,8 @@ type Movie = {
   year?: number | string
   addedAt?: number
   poster?: string | null
+  edition?: string | null
+  [key: string]: unknown
 }
 
 const moviesCache = ref<Movie[]>([])
@@ -19,14 +21,7 @@ export function useMovies() {
     if (idx === -1) return
     const current = moviesCache.value[idx]
     if (!current) return
-    // Preserve required fields; fallback to empty title if missing to satisfy type
-    moviesCache.value[idx] = {
-      key: current.key || key,
-      title: current.title || '',
-      year: current.year,
-      addedAt: current.addedAt,
-      poster: url
-    }
+    moviesCache.value[idx] = { ...current, poster: url }
   }
 
   const hydratePostersFromSession = () => {

@@ -14,6 +14,7 @@ class Movie(BaseModel):
     tmdb_id: Optional[int] = None
     labels: Optional[List[str]] = None
     updated_at: Optional[str] = None
+    edition: Optional[str] = None
 
 
 class MovieTMDbResponse(BaseModel):

@@ -276,6 +276,8 @@ def api_preview(req: PreviewRequest):
                                         logo_preference = map_logo_mode_to_preference(logo_preference)
                                         logo_mode = render_options.get("logo_mode", "first")
                                         template_id = fallback_poster_template
+                                        if fallback_poster_preset:
+                                            req.preset_id = fallback_poster_preset
                                         logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
                                         logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
                                     else:
@@ -332,6 +334,8 @@ def api_preview(req: PreviewRequest):
                                     logo_preference = map_logo_mode_to_preference(logo_preference)
                                     logo_mode = render_options.get("logo_mode", logo_mode)
                                     template_id = fallback_logo_template
+                                    if fallback_logo_preset:
+                                        req.preset_id = fallback_logo_preset
                                     logo_source_pref = render_options.get("logoSource") or render_options.get("logo_source")
                                     logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"))
                                     # If fallback preset provides a static logo URL, use it directly

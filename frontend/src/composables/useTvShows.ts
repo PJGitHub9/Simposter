@@ -6,6 +6,8 @@ type TvShow = {
   year?: number | string
   addedAt?: number
   poster?: string | null
+  edition?: string | null
+  [key: string]: unknown
 }
 
 const tvShowsCache = ref<TvShow[]>([])
@@ -19,14 +21,7 @@ export function useTvShows() {
     if (idx === -1) return
     const current = tvShowsCache.value[idx]
     if (!current) return
-    // Preserve required fields; fallback to empty title if missing to satisfy type
-    tvShowsCache.value[idx] = {
-      key: current.key || key,
-      title: current.title || '',
-      year: current.year,
-      addedAt: current.addedAt,
-      poster: url
-    }
+    tvShowsCache.value[idx] = { ...current, poster: url }
   }
 
   const hydratePostersFromSession = () => {

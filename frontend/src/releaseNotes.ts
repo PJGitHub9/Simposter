@@ -10,6 +10,42 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.98',
+    date: '2026-04-24',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed edition label being wiped from the movie card after sending a poster to Plex or refreshing poster metadata. Cache upserts now use COALESCE to preserve the existing edition value when the update does not supply one.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.97',
+    date: '2026-04-24',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed {title} text overlay variable including the Plex edition tag (e.g. "Hokum (Coming Soon)" instead of "Hokum"). Movie titles are now stored without the edition appended; the edition is displayed separately in the movie grid card as before.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.96',
+    date: '2026-04-23',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed poster and logo fallback presets not applying their overlay cache in the movie preview/save/send path. When a fallback preset fired, the original preset\'s overlay effects (matte/fade/vignette) were still used instead of the fallback preset\'s. The movie path in preview.py now updates req.preset_id when poster or logo fallback triggers, matching the existing behavior in batch rendering and the TV show path.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.95',
     date: '2026-04-22',
     sections: [

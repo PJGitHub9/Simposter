@@ -6,6 +6,7 @@ defineProps<{
   poster?: string | null
   status?: string
   ratingKey?: string
+  edition?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +28,7 @@ const emit = defineEmits<{
     </div>
     <div class="meta">
       <p class="title">{{ title }}</p>
+      <p v-if="edition" class="edition">{{ edition }}</p>
       <p class="muted">{{ year }}</p>
     </div>
   </article>
@@ -103,6 +105,16 @@ const emit = defineEmits<{
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+.edition {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .muted {
