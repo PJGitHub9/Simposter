@@ -20,6 +20,7 @@ def upsert_movie(movie: Movie, tmdb_id: Optional[int] = None, poster_url: Option
             poster_url=poster_url,
             labels=labels,
             library_id=getattr(movie, "library_id", None) or "default",
+            edition=getattr(movie, "edition", None),
         )
     except Exception as e:
         log.debug("[CACHE] failed to upsert %s: %s", movie.key, e, exc_info="database is locked" not in str(e).lower())
@@ -70,6 +71,7 @@ def refresh_from_list(movies):
                     "year": m.year,
                     "added_at": m.addedAt,
                     "library_id": getattr(m, "library_id", None) or "default",
+                    "edition": getattr(m, "edition", None),
                 })
         # Refresh per library to avoid deleting other libraries
         by_lib = {}
@@ -100,6 +102,7 @@ def upsert_tv_show(show: Dict, tmdb_id: Optional[int] = None, tvdb_id: Optional[
             labels=labels,
             seasons=seasons,
             library_id=show.get("library_id") or "default",
+            edition=show.get("edition"),
         )
     except Exception as e:
         log.debug("[CACHE] failed to upsert tv show %s: %s", show.get("key"), e, exc_info="database is locked" not in str(e).lower())
@@ -160,6 +163,7 @@ def refresh_tv_from_list(shows: List[Dict]):
                 "labels": s.get("labels"),
                 "seasons": s.get("seasons"),
                 "library_id": s.get("library_id") or "default",
+                "edition": s.get("edition"),
             })
         by_lib: Dict[str, List[Dict]] = {}
         for item in payload:

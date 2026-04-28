@@ -609,7 +609,7 @@ def build_base_poster(
     poster_shift_y = clamp(poster_shift_y, -0.5, 0.5)
 
     matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
-    fade_height_ratio = clamp(fade_height_ratio, 0.0, 0.5)
+    fade_height_ratio = clamp(fade_height_ratio, 0.0, 1.0)
 
     vignette_strength = clamp(vignette_strength, 0.0, 1.0)
     grain_amount = clamp(grain_amount, 0.0, 0.6)

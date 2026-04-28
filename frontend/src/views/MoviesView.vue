@@ -14,6 +14,7 @@ type Movie = {
   poster?: string | null
   mediaType?: 'movie' | 'tv-show'
   library_id?: string | number
+  edition?: string | null
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything

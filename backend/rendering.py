@@ -453,7 +453,7 @@ def generate_overlay(
         return max(lo, min(hi, v))
     
     matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
-    fade_height_ratio = clamp(fade_height_ratio, 0.0, 0.5)
+    fade_height_ratio = clamp(fade_height_ratio, 0.0, 1.0)
     vignette_strength = clamp(vignette_strength, 0.0, 1.0)
     v12_wash_strength = clamp(v12_wash_strength, 0.0, 1.0)
     

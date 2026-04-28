@@ -119,9 +119,18 @@ def api_save_preset(req: PresetSaveRequest):
 
     template_id = req.template_id or "uniformlogo"
     preset_id = req.preset_id
-    options = _apply_global_template_defaults(req.options)
     # Keep season_options as None when not provided — db.save_preset will preserve the existing value
     season_options = req.season_options
+
+    # Merge with existing preset options so fields not managed by the EditorPane
+    # (fallback rules, overlayConfigId, logoSource, etc.) survive a slider-only save.
+    # New values from req.options take precedence; existing unknowns are preserved.
+    existing = db.get_preset(template_id, preset_id)
+    if existing:
+        merged = {**existing["options"], **req.options}
+    else:
+        merged = dict(req.options)
+    options = _apply_global_template_defaults(merged)
 
     try:
         # Save to database

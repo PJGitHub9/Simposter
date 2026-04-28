@@ -388,6 +388,7 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
             "labels": m.get("labels") or [],
             "updated_at": m.get("updated_at"),
             "library_id": m.get("library_id"),
+            "edition": m.get("edition"),
         }
         for m in cached
     ]

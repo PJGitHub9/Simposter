@@ -10,6 +10,85 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.98',
+    date: '2026-04-24',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed edition label being wiped from the movie card after sending a poster to Plex or refreshing poster metadata. Cache upserts now use COALESCE to preserve the existing edition value when the update does not supply one.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.97',
+    date: '2026-04-24',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed {title} text overlay variable including the Plex edition tag (e.g. "Hokum (Coming Soon)" instead of "Hokum"). Movie titles are now stored without the edition appended; the edition is displayed separately in the movie grid card as before.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.96',
+    date: '2026-04-23',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed poster and logo fallback presets not applying their overlay cache in the movie preview/save/send path. When a fallback preset fired, the original preset\'s overlay effects (matte/fade/vignette) were still used instead of the fallback preset\'s. The movie path in preview.py now updates req.preset_id when poster or logo fallback triggers, matching the existing behavior in batch rendering and the TV show path.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.95',
+    date: '2026-04-22',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed fallback rules (Logo Fallback / Poster Fallback configured in Template Manager) being silently wiped whenever a preset was saved from the movie or TV editor. The EditorPane save now merges onto the existing preset options, so fallback configuration, overlay config links, and any other settings not exposed by the editor sliders are preserved.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.94',
+    date: '2026-04-22',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Label removal is now immediately reflected in Simposter\'s label filter. Previously, after auto-generate or batch removed labels from Plex (e.g. "Overlay", "Simposter"), the local cache still showed the item under those labels until the next full library scan. The cache is now updated in-place right after each label is removed.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.93',
+    date: '2026-04-22',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Auto-generate and webhook renders now read the global "White Logo Fallback" setting from the database (matching normal batch behaviour). Previously the setting was always read from the preset options, which defaulted to "continue" even when the global setting was "use_next" — so movies with logos that didn\'t match the white preference would silently render without a logo instead of falling back to the next available one.',
+          'Added a log line whenever no logo is found during auto-generate or batch, showing which fallback action will be applied (e.g. "continue", "skip", or "template"). This makes it visible in the logs whether the Logo Fallback in Template Manager is configured or not.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Fade Height slider maximum increased from 40% to 100%.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.92',
     date: '2026-04-07',
     sections: [

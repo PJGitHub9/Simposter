@@ -803,8 +803,8 @@ onMounted(async () => {
             <label>
               <span class="label-text">{{ posterFallbackLabel }}</span>
               <select v-model="modalFallback.fallbackPosterAction">
-                <option value="continue">Continue with first available</option>
-                <option value="skip">Skip — don't render</option>
+                <option value="continue">Use first available poster</option>
+                <option value="skip">Skip — no poster will be generated</option>
                 <option value="template">Use a different preset</option>
               </select>
             </label>
@@ -831,8 +831,8 @@ onMounted(async () => {
             <label>
               <span class="label-text">{{ logoFallbackLabel }}</span>
               <select v-model="modalFallback.fallbackLogoAction">
-                <option value="continue">Continue with render</option>
-                <option value="skip">Skip — don't render</option>
+                <option value="continue">Render without logo</option>
+                <option value="skip">Skip — no poster will be generated</option>
                 <option value="template">Use a different preset</option>
               </select>
             </label>

@@ -1210,8 +1210,8 @@ watch(
             <div class="slider">
               <label>Fade Height %</label>
               <div class="slider-row">
-                <input v-model.number="options.fadeHeight" type="range" min="0" max="40" />
-                <input v-model.number="options.fadeHeight" type="number" min="0" max="40" class="slider-num" />
+                <input v-model.number="options.fadeHeight" type="range" min="0" max="100" />
+                <input v-model.number="options.fadeHeight" type="number" min="0" max="100" class="slider-num" />
               </div>
             </div>
             <div class="slider">

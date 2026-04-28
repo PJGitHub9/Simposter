@@ -184,6 +184,7 @@ def _process_single_movie(
             fallback_logo_action = render_options_base.get("fallbackLogoAction") or "continue"
             fallback_logo_template = render_options_base.get("fallbackLogoTemplate")
             fallback_logo_preset = render_options_base.get("fallbackLogoPreset")
+            logger.info("[BATCH] No logo found for %s — fallback action: %s", rating_key, fallback_logo_action)
             if fallback_logo_action == "template" and fallback_logo_template:
                 logo_fallback_used = True
                 logo_fallback_template_used = fallback_logo_template
@@ -483,12 +484,19 @@ def _process_single_movie(
             # Label removal
             if req.labels:
                 logger.info("[BATCH] Removing labels %s from %s", req.labels, rating_key)
+                removed_labels = []
                 try:
                     for label in req.labels:
                         plex_remove_label(rating_key, label)
                         logger.info("[BATCH] Removed label '%s' from %s", label, rating_key)
+                        removed_labels.append(label.lower())
                 except Exception as label_err:
                     logger.warning("[BATCH] Label removal failed for %s: %s", rating_key, label_err)
+                # Sync label cache — strip removed labels so the filter doesn't show stale results
+                if removed_labels:
+                    current = db.get_movie_labels(rating_key)
+                    updated = [l for l in current if l.lower() not in removed_labels]
+                    db.update_movie_labels(rating_key, updated)
 
             logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
             try:
@@ -1402,12 +1410,19 @@ def _render_and_save_poster(
             # Remove labels if specified
             if req.labels:
                 logger.info("[BATCH] Removing labels %s from %s (%s)", req.labels, rating_key, title)
+                removed_labels = []
                 try:
                     for label_name in req.labels:
                         plex_remove_label(rating_key, label_name)
                         logger.info("[BATCH] Removed label '%s' from %s", label_name, rating_key)
+                        removed_labels.append(label_name.lower())
                 except Exception as label_err:
                     logger.warning("[BATCH] Label removal failed for %s: %s", rating_key, label_err)
+                # Sync label cache — strip removed labels so the filter doesn't show stale results
+                if removed_labels:
+                    current = db.get_tv_labels(rating_key)
+                    updated = [l for l in current if l.lower() not in removed_labels]
+                    db.update_tv_labels(rating_key, updated, library_id=req.library_id or "default")
 
             # Record history
             try:
@@ -1788,8 +1803,13 @@ def process_single_movie_poster(
         base_poster_filter = base_options.get("poster_filter", "any")
         base_logo_preference = base_options.get("logo_preference", "white")
         base_logo_mode = base_options.get("logo_mode", "stock")
-        white_logo_fallback = base_options.get("white_logo_fallback", "continue")
-        language_pref = base_options.get("language", "en")
+        # Read white_logo_fallback from global DB setting (same as _execute_batch), fall back to preset option
+        white_logo_fallback = db.get_setting("fallback.white_logo_fallback") or base_options.get("white_logo_fallback", "use_next")
+        language_pref = db.get_setting("pref.language") or base_options.get("language", "en")
+        logger.debug("[%s] Fallback settings for %s: logo_action=%s white_fallback=%s",
+                     source.upper(), preset_id,
+                     base_options.get("fallbackLogoAction", "continue"),
+                     white_logo_fallback)
 
         # Process the movie with proper source tracking
         result = _process_single_movie(
@@ -1868,8 +1888,13 @@ def process_single_tv_show_poster(
         base_poster_filter = base_options.get("poster_filter", "any")
         base_logo_preference = base_options.get("logo_preference", "white")
         base_logo_mode = base_options.get("logo_mode", "stock")
-        white_logo_fallback = base_options.get("white_logo_fallback", "continue")
-        language_pref = base_options.get("language", "en")
+        # Read white_logo_fallback from global DB setting (same as _execute_batch), fall back to preset option
+        white_logo_fallback = db.get_setting("fallback.white_logo_fallback") or base_options.get("white_logo_fallback", "use_next")
+        language_pref = db.get_setting("pref.language") or base_options.get("language", "en")
+        logger.debug("[%s] Fallback settings for %s: logo_action=%s white_fallback=%s",
+                     source.upper(), preset_id,
+                     base_options.get("fallbackLogoAction", "continue"),
+                     white_logo_fallback)
 
         # Process the TV show with proper source tracking
         result = _process_single_tv_show(

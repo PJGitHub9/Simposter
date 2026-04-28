@@ -8,6 +8,7 @@ type Entry = {
   status?: string
   poster?: string | null
   key: string
+  edition?: string | null
 }
 
 defineProps<{
@@ -37,6 +38,7 @@ const emit = defineEmits<{
         :poster="item.poster"
         :status="item.status"
         :ratingKey="item.key"
+        :edition="item.edition"
         @select="emit('select', item)"
         @refresh="emit('refresh', item.key)"
       />
