@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.99',
+    date: '2026-04-28',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'Batch Results panel now appears after every batch run in both Movie and TV Show Batch Edit. Shows succeeded / failed / poster fallback / logo fallback counts, a collapsible list of failed items with human-readable error reasons, and a collapsible list of items that used a fallback preset.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.98',
     date: '2026-04-24',
     sections: [

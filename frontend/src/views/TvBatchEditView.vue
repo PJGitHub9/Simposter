@@ -45,9 +45,64 @@ type PosterStatus = {
   saved: PosterStatusEntry | null
 }
 
+type BatchResult = {
+  rating_key: string
+  title: string
+  status: 'ok' | 'error'
+  error?: string
+  poster_fallback?: boolean
+  logo_fallback?: boolean
+}
+
 const { success, error: showError } = useNotification()
 const { tvShows: tvShowsCache, tvShowsLoaded: tvShowsLoadedFlag } = useTvShows()
 const settings = useSettingsStore()
+
+const BATCH_RESULTS_KEY = 'simposter-batch-results-tv'
+const batchResults = ref<BatchResult[]>([])
+const showBatchResults = ref(false)
+const batchResultsShowFailed = ref(true)
+const batchResultsShowFallback = ref(false)
+const batchResultsTimestamp = ref<number | null>(null)
+
+const batchFailed = computed(() => batchResults.value.filter(r => r.status === 'error'))
+const batchSucceeded = computed(() => batchResults.value.filter(r => r.status === 'ok'))
+const batchPosterFallback = computed(() => batchResults.value.filter(r => r.status === 'ok' && r.poster_fallback))
+const batchLogoFallback = computed(() => batchResults.value.filter(r => r.status === 'ok' && r.logo_fallback))
+
+const batchResultsAge = computed(() => {
+  if (!batchResultsTimestamp.value) return ''
+  const mins = Math.floor((Date.now() - batchResultsTimestamp.value) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  return hrs < 24 ? `${hrs}h ago` : `${Math.floor(hrs / 24)}d ago`
+})
+
+function saveBatchResultsToStorage() {
+  try {
+    localStorage.setItem(BATCH_RESULTS_KEY, JSON.stringify({
+      results: batchResults.value,
+      timestamp: batchResultsTimestamp.value,
+      library_id: currentLibrary.value
+    }))
+  } catch { /* ignore */ }
+}
+
+function dismissBatchResults() {
+  showBatchResults.value = false
+  try { localStorage.removeItem(BATCH_RESULTS_KEY) } catch { /* ignore */ }
+}
+
+function shortError(msg: string, ratingKey?: string): string {
+  if (!msg) return 'Unknown error'
+  if (msg.includes('NameResolutionError') || msg.includes('Failed to resolve') || msg.includes('Max retries exceeded'))
+    return 'TMDb unreachable — network/DNS failure'
+  if (msg.includes('Failed to download image')) return 'Image download failed'
+  if (msg.includes('No poster found') || msg.includes('no poster')) return 'No poster available'
+  if (msg.includes('No TMDb')) return `No TMDb match found${ratingKey ? ` (${ratingKey})` : ''}`
+  return msg.length > 100 ? msg.slice(0, 100) + '…' : msg
+}
 
 const tvShows = ref<TvShow[]>(tvShowsCache.value)
 const includeSeries = ref(true)
@@ -721,16 +776,18 @@ const processBatch = async () => {
       throw new Error('Failed to process batch')
     }
 
-    await response.json()
+    const data = await response.json()
+    batchResults.value = data.results || []
+    batchResultsTimestamp.value = Date.now()
+    showBatchResults.value = true
+    batchResultsShowFailed.value = true
+    batchResultsShowFallback.value = false
+    saveBatchResultsToStorage()
 
-    let message = `Successfully processed ${selectedShows.value.size} TV shows`
-    if (sendToPlex.value && saveLocally.value) {
-      message += ' (sent to Plex and saved locally)'
-    } else if (sendToPlex.value) {
-      message += ' (sent to Plex)'
-    } else if (saveLocally.value) {
-      message += ' (saved locally)'
-    }
+    const failedCount = batchFailed.value.length
+    const succeededCount = batchSucceeded.value.length
+    let message = `Batch complete: ${succeededCount} succeeded`
+    if (failedCount > 0) message += `, ${failedCount} failed — see results below`
     success(message)
 
     // Refresh status for sent/saved indicators
@@ -1373,7 +1430,22 @@ onMounted(async () => {
   posterCache.value = {}
   tvShows.value = []
   selectedShows.value.clear()
-  
+
+  // Restore last batch results for this library if available
+  try {
+    const raw = localStorage.getItem(BATCH_RESULTS_KEY)
+    if (raw) {
+      const saved = JSON.parse(raw)
+      if (saved.library_id === currentLibrary.value && Array.isArray(saved.results) && saved.results.length) {
+        batchResults.value = saved.results
+        batchResultsTimestamp.value = saved.timestamp || null
+        showBatchResults.value = true
+        batchResultsShowFailed.value = true
+        batchResultsShowFallback.value = false
+      }
+    }
+  } catch { /* ignore */ }
+
   // Only proceed if we have a valid library context
   if (currentLibrary.value) {
     // Load templates/presets first
@@ -1478,6 +1550,69 @@ onMounted(async () => {
       <!-- Progress Bar -->
       <div v-if="processing" class="progress-bar">
         <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+      </div>
+    </div>
+
+    <!-- Batch Results Panel -->
+    <div v-if="showBatchResults" class="batch-results-panel">
+      <div class="batch-results-header">
+        <div>
+          <h3>Batch Results</h3>
+          <span v-if="batchResultsAge" class="batch-results-age">{{ batchResultsAge }}</span>
+        </div>
+        <button class="btn-dismiss" @click="dismissBatchResults">✕ Dismiss</button>
+      </div>
+
+      <!-- Summary row -->
+      <div class="batch-summary-row">
+        <div class="summary-stat ok">
+          <span class="stat-num">{{ batchSucceeded.length }}</span>
+          <span class="stat-label">Succeeded</span>
+        </div>
+        <div class="summary-stat error" v-if="batchFailed.length">
+          <span class="stat-num">{{ batchFailed.length }}</span>
+          <span class="stat-label">Failed</span>
+        </div>
+        <div class="summary-stat fallback" v-if="batchPosterFallback.length">
+          <span class="stat-num">{{ batchPosterFallback.length }}</span>
+          <span class="stat-label">Poster Fallback</span>
+        </div>
+        <div class="summary-stat fallback" v-if="batchLogoFallback.length">
+          <span class="stat-num">{{ batchLogoFallback.length }}</span>
+          <span class="stat-label">Logo Fallback</span>
+        </div>
+      </div>
+
+      <!-- Failed items -->
+      <div v-if="batchFailed.length" class="results-section">
+        <button class="section-toggle" @click="batchResultsShowFailed = !batchResultsShowFailed">
+          <span class="toggle-icon">{{ batchResultsShowFailed ? '▾' : '▸' }}</span>
+          Failed ({{ batchFailed.length }})
+        </button>
+        <div v-if="batchResultsShowFailed" class="results-list">
+          <div v-for="item in batchFailed" :key="item.rating_key" class="result-item result-error">
+            <span class="result-title">{{ item.title || 'Unknown' }}</span>
+            <span class="result-reason">{{ shortError(item.error || '', item.rating_key) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fallback items -->
+      <div v-if="batchPosterFallback.length || batchLogoFallback.length" class="results-section">
+        <button class="section-toggle" @click="batchResultsShowFallback = !batchResultsShowFallback">
+          <span class="toggle-icon">{{ batchResultsShowFallback ? '▾' : '▸' }}</span>
+          Used Fallback ({{ batchPosterFallback.length + batchLogoFallback.length }})
+        </button>
+        <div v-if="batchResultsShowFallback" class="results-list">
+          <div v-for="item in batchPosterFallback" :key="'pf-' + item.rating_key" class="result-item result-fallback">
+            <span class="result-title">{{ item.title }}</span>
+            <span class="result-reason">Poster fallback applied</span>
+          </div>
+          <div v-for="item in batchLogoFallback" :key="'lf-' + item.rating_key" class="result-item result-fallback">
+            <span class="result-title">{{ item.title }}</span>
+            <span class="result-reason">Logo fallback applied</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1717,6 +1852,142 @@ onMounted(async () => {
   padding: 1.5rem;
   margin-bottom: 1.5rem;
   border: 1px solid var(--border, #2a2f3e);
+}
+
+/* Batch Results Panel */
+.batch-results-panel {
+  background: var(--surface, #1a1f2e);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.batch-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.batch-results-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #d8e3ff;
+}
+
+.batch-results-age {
+  display: block;
+  font-size: 11px;
+  color: var(--muted, #7a8ab0);
+  margin-top: 2px;
+}
+
+.btn-dismiss {
+  background: transparent;
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 6px;
+  color: var(--muted, #7a8ab0);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-dismiss:hover { color: #d8e3ff; border-color: #4a5580; }
+
+.batch-summary-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.summary-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 18px;
+  border-radius: 8px;
+  min-width: 80px;
+}
+.summary-stat.ok    { background: rgba(61, 214, 183, 0.12); border: 1px solid rgba(61, 214, 183, 0.3); }
+.summary-stat.error { background: rgba(239, 68, 68, 0.12);  border: 1px solid rgba(239, 68, 68, 0.3); }
+.summary-stat.fallback { background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); }
+
+.stat-num {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+.summary-stat.ok .stat-num     { color: #3dd6b7; }
+.summary-stat.error .stat-num  { color: #ef4444; }
+.summary-stat.fallback .stat-num { color: #fbbf24; }
+
+.stat-label {
+  font-size: 11px;
+  color: var(--muted, #7a8ab0);
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+.results-section {
+  border-top: 1px solid var(--border, #2a2f3e);
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.section-toggle {
+  background: transparent;
+  border: none;
+  color: #d8e3ff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 0.5rem;
+}
+.section-toggle:hover { color: #fff; }
+.toggle-icon { font-size: 11px; color: var(--muted, #7a8ab0); }
+
+.results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.result-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.result-error   { background: rgba(239, 68, 68, 0.08); }
+.result-fallback { background: rgba(251, 191, 36, 0.07); }
+
+.result-title {
+  font-weight: 500;
+  color: #d8e3ff;
+  min-width: 180px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.result-error .result-title   { color: #fca5a5; }
+.result-fallback .result-title { color: #fde68a; }
+
+.result-reason {
+  color: var(--muted, #7a8ab0);
+  font-size: 12px;
 }
 
 .controls-panel h2 {
