@@ -189,7 +189,8 @@ async function loadSettings() {
       libraryMappings: data.plex?.libraryMappings ?? [],
       tvShowLibraryName: data.plex?.tvShowLibraryName ?? '',
       tvShowLibraryNames: data.plex?.tvShowLibraryNames ?? (data.plex?.tvShowLibraryName ? [data.plex.tvShowLibraryName] : []),
-      tvShowLibraryMappings: data.plex?.tvShowLibraryMappings ?? []
+      tvShowLibraryMappings: data.plex?.tvShowLibraryMappings ?? [],
+      sendLogosToPlex: data.plex?.sendLogosToPlex ?? false
     }
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }

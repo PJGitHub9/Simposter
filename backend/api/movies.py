@@ -9,7 +9,7 @@ from fastapi.responses import Response, FileResponse, JSONResponse
 from PIL import Image
 
 import requests
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR
 from .. import cache, database as db
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, TMDBError
@@ -154,6 +154,81 @@ def _remove_poster_cache(rating_key: str):
             except OSError as e:
                 logger.warning("Failed to remove cached poster %s: %s", p, e)
     return removed
+
+
+_LOGO_CACHE_DIR = Path(LOGO_CACHE_DIR)
+
+
+def _logo_cache_path(rating_key: str) -> Optional[Path]:
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        candidate = _LOGO_CACHE_DIR / f"{rating_key}.{ext}"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _logo_cache_url(rating_key: str, cached: Path) -> str:
+    ts = int(cached.stat().st_mtime)
+    return f"/api/logo/{rating_key}?raw=1&v={ts}"
+
+
+def _save_logo_cache(rating_key: str, content: bytes, content_type: str) -> Optional[Path]:
+    ext = (content_type.split("/")[-1] if "/" in content_type else "png").lower()
+    if ext not in ("jpg", "jpeg", "png", "webp"):
+        ext = "png"
+    target = _LOGO_CACHE_DIR / f"{rating_key}.{ext}"
+    try:
+        target.write_bytes(content)
+        return target
+    except Exception as e:
+        logger.debug("[LOGO] Failed to write logo cache for %s: %s", rating_key, e)
+        return None
+
+
+def fetch_and_cache_logo(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
+    """Fetch Plex clearlogo and cache locally. Returns cached file path or None."""
+    if not force_refresh:
+        cached = _logo_cache_path(rating_key)
+        if cached:
+            return cached
+    try:
+        # Plex returns image metadata as JSON with an Image[] array
+        metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        json_headers = {**plex_headers(), "Accept": "application/json"}
+        r = plex_session.get(metadata_url, headers=json_headers, timeout=5)
+        if r.status_code != 200:
+            return None
+
+        logo_url = None
+        try:
+            data = r.json()
+            container = data.get("MediaContainer", {})
+            # Image array may be at the top level or inside each Metadata item
+            images = container.get("Image", [])
+            if not images:
+                for item in container.get("Metadata", []):
+                    images = item.get("Image", [])
+                    if images:
+                        break
+            for img in images:
+                if img.get("type") == "clearLogo":
+                    logo_url = img.get("url")
+                    break
+        except Exception:
+            pass
+
+        if not logo_url:
+            return None
+
+        # The URL is a direct external URL (e.g. TMDB) — no Plex auth needed
+        logo_r = requests.get(logo_url, timeout=10)
+        if logo_r.status_code != 200:
+            return None
+        content_type = logo_r.headers.get("content-type", "image/png")
+        return _save_logo_cache(rating_key, logo_r.content, content_type)
+    except Exception as e:
+        logger.debug("[LOGO] Failed to fetch Plex clearlogo for %s: %s", rating_key, e)
+        return None
 
 
 def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
@@ -384,6 +459,7 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
             "year": m["year"],
             "addedAt": m["addedAt"],
             "poster": m.get("poster_url"),
+            "logo_url": m.get("logo_url"),
             "tmdb_id": m.get("tmdb_id"),
             "labels": m.get("labels") or [],
             "updated_at": m.get("updated_at"),
@@ -700,6 +776,19 @@ def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw:
     raise HTTPException(status_code=404, detail="Poster not found")
 
 
+@router.get("/logo/{rating_key}")
+def api_logo(rating_key: str, force_refresh: bool = False):
+    """Serve cached clearlogo file. Pass force_refresh=1 to re-fetch from Plex first."""
+    if force_refresh:
+        fetch_and_cache_logo(rating_key, force_refresh=True)
+    cached = _logo_cache_path(rating_key)
+    if cached:
+        resp = FileResponse(cached)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    raise HTTPException(status_code=404, detail="Logo not found")
+
+
 @router.get("/movies/tmdb")
 def api_movies_tmdb():
     movies = get_plex_movies()
@@ -801,7 +890,6 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         if movie_keys:
             try:
                 logger.info(f"[SCAN] Bulk fetching labels for {len(movie_keys)} movies")
-                # Call internal bulk labels function directly
                 for movie_key in movie_keys:
                     try:
                         url = f"{settings.PLEX_URL}/library/metadata/{movie_key}"
@@ -821,9 +909,10 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             except Exception as e:
                 logger.warning(f"[SCAN] Bulk label fetch failed, will skip labels: {e}")
 
-        # Parallelize poster fetching using ThreadPoolExecutor
+        # Parallelize poster + logo fetching using ThreadPoolExecutor
         from concurrent.futures import ThreadPoolExecutor, as_completed
         poster_results = {}
+        logo_results = {}
 
         def fetch_poster_for_movie(movie_key):
             try:
@@ -834,14 +923,28 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 logger.debug(f"[SCAN] Failed to fetch poster for movie {movie_key}: {e}")
             return movie_key, None
 
+        def fetch_logo_for_movie(movie_key):
+            try:
+                logo_path = fetch_and_cache_logo(movie_key, force_refresh=force_poster_refresh)
+                if logo_path:
+                    return movie_key, _logo_cache_url(movie_key, logo_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch logo for movie {movie_key}: {e}")
+            return movie_key, None
+
         if movie_keys:
-            logger.info(f"[SCAN] Parallel fetching posters for {len(movie_keys)} movies")
+            logger.info(f"[SCAN] Parallel fetching posters + logos for {len(movie_keys)} movies")
             with ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_key = {executor.submit(fetch_poster_for_movie, key): key for key in movie_keys}
-                for future in as_completed(future_to_key):
+                poster_futures = {executor.submit(fetch_poster_for_movie, key): key for key in movie_keys}
+                logo_futures = {executor.submit(fetch_logo_for_movie, key): key for key in movie_keys}
+                for future in as_completed(poster_futures):
                     movie_key, poster_url = future.result()
                     poster_results[movie_key] = poster_url
-            logger.info(f"[SCAN] Completed poster fetching for {len(poster_results)} movies")
+                for future in as_completed(logo_futures):
+                    movie_key, logo_url_result = future.result()
+                    logo_results[movie_key] = logo_url_result
+            logo_count = sum(1 for v in logo_results.values() if v)
+            logger.info(f"[SCAN] Completed poster + logo fetching for {len(poster_results)} movies ({logo_count} logos found)")
 
         # Now assemble the movie cache using pre-fetched data
         for movie in movies:
@@ -855,6 +958,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "year": movie.year,
                 "added_at": movie.addedAt,
                 "poster_url": poster_results.get(movie.key),
+                "logo_url": logo_results.get(movie.key),
                 "labels": bulk_labels.get(movie.key, []),
                 "library_id": lib_id,
             })
@@ -920,7 +1024,16 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     poster_url = _poster_cache_url(show.get("key"), poster_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch poster for TV show {show.get('key')}: {e}")
-            
+
+            # Fetch clearlogo from Plex
+            logo_url = None
+            try:
+                logo_path = fetch_and_cache_logo(show.get("key"), force_refresh=force_poster_refresh)
+                if logo_path:
+                    logo_url = _logo_cache_url(show.get("key"), logo_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch logo for TV show {show.get('key')}: {e}")
+
             # Fetch labels
             labels = []
             try:
@@ -928,13 +1041,14 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 labels = labels_data.labels
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch labels for TV show {show.get('key')}: {e}")
-            
+
             tv_cache_by_lib[lib_id].append({
                 "rating_key": show.get("key"),
                 "title": show.get("title"),
                 "year": show.get("year"),
                 "added_at": show.get("addedAt"),
                 "poster_url": poster_url,
+                "logo_url": logo_url,
                 "labels": labels,
                 "library_id": lib_id,
             })

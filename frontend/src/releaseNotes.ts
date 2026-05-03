@@ -10,6 +10,22 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.991',
+    date: '2026-05-01',
+    sections: [
+      {
+        title: 'ClearLogos Support',
+        items: [
+          'New Logos page — browse all clearlogos in your movie/TV library, see what\'s missing, and click any card to open the Logo Editor.',
+          'Logo Editor — pick from TMDb/Fanart.tv logos or upload your own, then send it to Plex\'s clearLogo slot with one click.',
+          'Send Logo button in both manual editors — push the selected logo to Plex independently of the poster.',
+          'Send logos during batch runs and via the manual editor\'s Send to Plex action (optional checkbox).',
+          '"Send logos to Plex by default" setting in Settings → Libraries.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.99',
     date: '2026-04-28',
     sections: [

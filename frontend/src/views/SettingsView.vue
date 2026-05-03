@@ -92,6 +92,7 @@ const localDefaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
+const localSendLogosToPlex = ref(false)
 const localLibraries = ref<LibraryMapping[]>([])
 const savedLibraryIds = ref<Set<string>>(new Set())
 const localTvShowLibraries = ref<LibraryMapping[]>([])
@@ -193,6 +194,7 @@ const loadLocalSettings = async () => {
   localPlexUrl.value = settings.plex.value.url
   localPlexToken.value = settings.plex.value.token
   localPlexLibrary.value = settings.plex.value.movieLibraryName || ''
+  localSendLogosToPlex.value = (settings.plex.value as any).sendLogosToPlex ?? false
 
   // Load movie libraries
   const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: LibraryMapping) => l && l.id)
@@ -474,7 +476,8 @@ const saveSettings = async () => {
       autoGeneratePresetId: l.autoGeneratePresetId || null,
       autoGenerateTemplateId: l.autoGenerateTemplateId || null,
       webhookIgnoreLabels: l.webhookIgnoreLabels || [],
-    }))
+    })),
+    sendLogosToPlex: localSendLogosToPlex.value,
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }
   settings.tvdb.value = { apiKey: localTvdbApiKey.value, comingSoon: settings.tvdb.value.comingSoon }
@@ -1228,6 +1231,8 @@ onMounted(() => {
         :unsavedChanges="hasUnsavedChanges"
         :schedulerChanged="sectionsWithChanges.scheduler"
         :connectionsChanged="sectionsWithChanges.connections"
+        :sendLogosToPlex="localSendLogosToPlex"
+        @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
         @update:libraries="localLibraries = $event; hasUnsavedChanges = true"

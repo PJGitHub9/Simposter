@@ -211,6 +211,7 @@ settings.UPLOAD_DIR = _resolve_path(settings.UPLOAD_DIR)
 settings.LOG_DIR = _resolve_path(settings.LOG_DIR or str(Path(settings.CONFIG_DIR) / "logs"))
 settings.LOG_FILE = _resolve_path(settings.LOG_FILE) if settings.LOG_FILE else str(Path(settings.LOG_DIR) / "simposter.log")
 POSTER_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "posters")
+LOGO_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "logos")
 HISTORY_THUMBNAIL_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "history_thumbnails")
 
 # Load from ui_settings.json if environment variables weren't provided
@@ -239,6 +240,7 @@ Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.OUTPUT_ROOT).mkdir(parents=True, exist_ok=True)
 Path(settings.LOG_DIR).mkdir(parents=True, exist_ok=True)
 Path(POSTER_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+Path(LOGO_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(HISTORY_THUMBNAIL_DIR).mkdir(parents=True, exist_ok=True)
 
 # Migrate legacy log locations into the dedicated config/logs folder

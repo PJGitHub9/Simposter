@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.5.991 (2026-05-01)
+### New Features
+- **Logo Editor**: New dedicated Logos page (Movies & TV Shows) showing all library clearlogos in a grid
+  - Cards display the cached clearlogo, or a placeholder for items missing a logo
+  - Toggle to show/hide items with missing logos
+  - Click any card to open the Logo Editor — browse TMDb/Fanart.tv logos or upload a custom PNG/JPG
+  - Send selected or uploaded logo directly to Plex's clearLogo slot
+  - UI updates immediately after send (no full page reload required)
+- **Send Logo to Plex — Manual Editor**: Both movie and TV show editors now have a standalone **Send Logo** button
+  - Sends the currently selected logo to Plex independently of poster send
+  - Separate loading/success state from the poster send flow
+- **Send Logo with Poster**: New "Send logo" checkbox modifier in both manual editors
+  - When checked, the selected logo is sent to Plex automatically after each poster send
+- **Batch Logo Send**: "Send logos to Plex" checkbox in both Batch Edit views
+  - Sends each item's rendered logo to Plex alongside its poster in the same batch run
+- **Global Logo Default**: New "Send logos to Plex by default" toggle in Settings → Libraries
+  - Pre-populates the batch and manual editor checkboxes on load
+
+### Bug Fixes
+- **Movie logos not showing in Logos view**: FastAPI `response_model` was stripping `logo_url` from movie responses because the `Movie` schema was missing the field
+- **Plex clearlogo fetch**: Fixed `fetch_and_cache_logo` which was using XML parsing on a JSON endpoint — now correctly requests `Accept: application/json` and parses `MediaContainer.Image[]`
+- **Logo cache stale after send**: After uploading a logo to Plex, the uploaded bytes are now written directly to the local cache file so the UI reflects the new logo immediately (no delay waiting for Plex to process the upload)
+- **Logo Editor modal positioning**: Fixed modal appearing halfway down the page — wrapped in `<Teleport to="body">` to escape ancestor CSS transforms
+
 ## v1.5.72 (2026-03-18)
 ### New Features
 - **Apprise Notifications**: Send poster generation events to 70+ services (Slack, Telegram, Pushover, Gotify, ntfy, email, and more) via Apprise URL schemes

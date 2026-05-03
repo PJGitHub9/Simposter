@@ -499,6 +499,20 @@ def _process_single_movie(
                     db.update_movie_labels(rating_key, updated)
 
             logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
+
+            # Send logo to Plex if requested and a logo was used
+            if getattr(req, 'send_logos_to_plex', False) and logo_url:
+                try:
+                    logo_r = requests.get(logo_url, timeout=10)
+                    if logo_r.status_code == 200:
+                        ct = logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
+                        plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
+                        logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
+                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_r.content, timeout=20)
+                        logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
+                except Exception as logo_err:
+                    logger.debug("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
+
             try:
                 db.record_poster_history(
                     rating_key=rating_key,
@@ -526,6 +540,11 @@ def _process_single_movie(
             fetch_and_cache_poster(rating_key, force_refresh=True)
         except Exception as cache_err:
             logger.debug("[BATCH] Failed to refresh poster cache for %s: %s", rating_key, cache_err)
+
+        try:
+            db.update_movie_logo_url(rating_key, logo_url)
+        except Exception as logo_cache_err:
+            logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
 
         result = {
             "rating_key": rating_key,
@@ -1397,6 +1416,19 @@ def _render_and_save_poster(
             upload_resp.raise_for_status()
             logger.info("[BATCH] Uploaded poster to Plex for %s", title)
 
+            # Send logo to Plex if requested and a logo was used
+            if getattr(req, 'send_logos_to_plex', False) and logo_url:
+                try:
+                    logo_r = requests.get(logo_url, timeout=10)
+                    if logo_r.status_code == 200:
+                        ct = logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
+                        plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
+                        logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
+                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_r.content, timeout=20)
+                        logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
+                except Exception as logo_err:
+                    logger.debug("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
+
             # Invalidate poster cache so UI shows updated poster
             if is_tv:
                 from .tv_shows import _remove_poster_cache as _remove_tv_poster_cache
@@ -1450,6 +1482,14 @@ def _render_and_save_poster(
         except Exception as upload_err:
             logger.error("[BATCH] Plex upload failed for %s: %s", display_title, upload_err)
             raise
+
+    try:
+        if is_tv:
+            db.update_tv_logo_url(rating_key, logo_url)
+        else:
+            db.update_movie_logo_url(rating_key, logo_url)
+    except Exception as logo_cache_err:
+        logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
 
     result = {
         "rating_key": rating_key,

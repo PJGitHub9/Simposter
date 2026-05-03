@@ -11,6 +11,7 @@ class Movie(BaseModel):
     addedAt: Optional[int] = None
     library_id: Optional[str] = None
     poster: Optional[str] = None
+    logo_url: Optional[str] = None
     tmdb_id: Optional[int] = None
     labels: Optional[List[str]] = None
     updated_at: Optional[str] = None
@@ -75,6 +76,7 @@ class PlexSettings(BaseModel):
     tvShowLibraryName: str = ""
     tvShowLibraryNames: List[str] = Field(default_factory=list)
     tvShowLibraryMappings: List[Dict[str, Any]] = Field(default_factory=list)
+    sendLogosToPlex: bool = False
 
 
 class TMDBSettings(BaseModel):
@@ -161,6 +163,14 @@ class UISettings(BaseModel):
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
 
+class PlexLogoSendRequest(BaseModel):
+    rating_key: str
+    logo_url: Optional[str] = None   # external URL to download
+    logo_data: Optional[str] = None  # base64 data URL (for uploads)
+    is_tv: bool = False
+    library_id: Optional[str] = None
+
+
 class PlexSendRequest(BaseModel):
     template_id: str
     preset_id: str  # ADD THIS
@@ -197,6 +207,7 @@ class MovieBatchRequest(BaseModel):
     fallbackLogoAction: Optional[str] = None
     fallbackLogoTemplate: Optional[str] = None
     fallbackLogoPreset: Optional[str] = None
+    send_logos_to_plex: bool = False
 
 
 class TVShowBatchRequest(BaseModel):
@@ -215,6 +226,7 @@ class TVShowBatchRequest(BaseModel):
     fallbackPosterAction: Optional[str] = None
     fallbackPosterTemplate: Optional[str] = None
     fallbackPosterPreset: Optional[str] = None
+    send_logos_to_plex: bool = False
 
 
 # Legacy batch request - kept for backward compatibility

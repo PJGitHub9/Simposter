@@ -217,6 +217,7 @@ const selectedTemplate = ref('')
 const selectedPreset = ref('')
 const sendToPlex = ref(true)
 const saveLocally = ref(false)
+const sendLogos = ref(false)
 const sentFilter = ref<'all' | 'sent' | 'unsent'>('all')
 const savedFilter = ref<'all' | 'saved' | 'unsaved'>('all')
 const labelsToRemove = ref<Set<string>>(new Set())
@@ -736,6 +737,7 @@ const processBatch = async () => {
       options: {},
       send_to_plex: sendToPlex.value,
       save_locally: saveLocally.value,
+      send_logos_to_plex: sendToPlex.value && sendLogos.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
       library_id: currentLibrary.value || undefined
     }
@@ -987,6 +989,8 @@ onMounted(async () => {
     await settings.load()
   }
 
+  sendLogos.value = (settings.plex.value as any).sendLogosToPlex ?? false
+
   // Clear any stale cache data first to prevent cross-library contamination on page load
   labelCache.value = {}
   posterCache.value = {}
@@ -1065,6 +1069,10 @@ onMounted(async () => {
           <label class="checkbox-label">
             <input type="checkbox" v-model="sendToPlex" />
             Send to Plex
+          </label>
+          <label class="checkbox-label" :class="{ 'disabled-label': !sendToPlex }">
+            <input type="checkbox" v-model="sendLogos" :disabled="!sendToPlex" />
+            Send logos to Plex
           </label>
           <label class="checkbox-label">
             <input type="checkbox" v-model="saveLocally" />
@@ -1587,6 +1595,11 @@ onMounted(async () => {
   color: var(--text-primary, #fff);
   cursor: pointer;
   font-size: 0.95rem;
+}
+
+.checkbox-label.disabled-label {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .checkbox-label.sub-option {

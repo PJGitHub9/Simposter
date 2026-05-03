@@ -37,6 +37,7 @@ const tabs = computed<MenuItem[]>(() => {
     submenu: [
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
       { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
+      { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -51,6 +52,7 @@ const tabs = computed<MenuItem[]>(() => {
     label: `\u{1F4FA} ${lib.displayName || lib.title || `TV Library ${idx + 1}`}`,
     submenu: [
       { key: `tv-batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
+      { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -305,13 +307,13 @@ const activeTab = computed<TabKey>(() => {
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
     return `tv-shows-${firstTvLib?.id || 'default'}`
   }
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -325,6 +327,8 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
   if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
+  if (route.name === 'logos') return `logos-${libQuery || 'default'}`
+  if (route.name === 'tv-logos') return `tv-logos-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
   if (route.name === 'backup') {
@@ -616,6 +620,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'batch-edit', query: { library: libId } })
     } else if (submenuKey.startsWith('collections-')) {
       router.push({ name: 'collections', query: { library: libId } })
+    } else if (submenuKey.startsWith('logos-')) {
+      router.push({ name: 'logos', query: { library: libId } })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: { library: libId } })
     } else if (submenuKey.startsWith('backup-')) {
@@ -625,6 +631,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     const libId = parentKey.replace('tv-shows-', '')
     if (submenuKey.startsWith('tv-batch-')) {
       router.push({ name: 'tv-batch-edit', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-logos-')) {
+      router.push({ name: 'tv-logos', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-assets-')) {
       router.push({ name: 'tv-local-assets', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-backup-')) {

@@ -111,7 +111,8 @@ export function useRenderService() {
     options?: PresetOptions,
     labels?: string[],
     templateId?: string,
-    presetId?: string
+    presetId?: string,
+    sendLogo?: boolean
   ) => {
     const payload: Record<string, unknown> = {
       ...basePayload(movie, bgUrl, logoUrl, templateId, presetId, options),
@@ -122,7 +123,21 @@ export function useRenderService() {
     if (labels?.length) {
       payload.labels = labels
     }
-    return post('plex/send', payload)
+    const result = await post('plex/send', payload)
+    if (result && sendLogo && logoUrl) {
+      try {
+        await fetch(`${apiBase}/api/plex/send-logo`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            rating_key: movie.key,
+            logo_url: logoUrl,
+            is_tv: (movie as any).mediaType === 'tv-show',
+          })
+        })
+      } catch { /* non-fatal */ }
+    }
+    return result
   }
 
   return { loading, error, lastPreview, preview, save, send }
