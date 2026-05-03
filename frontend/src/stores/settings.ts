@@ -23,6 +23,7 @@ export type PlexSettings = {
   tvShowLibraryName?: string
   tvShowLibraryNames?: string[]
   tvShowLibraryMappings?: LibraryMapping[]
+  sendLogosToPlex?: boolean
 }
 
 export type TMDBSettings = {
