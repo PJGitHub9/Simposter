@@ -99,7 +99,10 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
         <label class="field-label">
           Font Family
           <select :value="fontFamily" @change="emit('update:fontFamily', ($event.target as HTMLSelectElement).value)">
-            <optgroup label="System Fonts">
+            <optgroup v-if="availableFonts.length > 0" label="Available Fonts">
+              <option v-for="font in availableFonts" :key="font" :value="font">{{ font }}</option>
+            </optgroup>
+            <optgroup v-else label="Fonts">
               <option value="Arial">Arial</option>
               <option value="Helvetica">Helvetica</option>
               <option value="Times New Roman">Times New Roman</option>
@@ -107,9 +110,6 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
               <option value="Verdana">Verdana</option>
               <option value="Courier New">Courier New</option>
               <option value="Impact">Impact</option>
-            </optgroup>
-            <optgroup v-if="availableFonts.length > 0" label="Custom Fonts">
-              <option v-for="font in availableFonts" :key="font" :value="font">{{ font }}</option>
             </optgroup>
           </select>
         </label>

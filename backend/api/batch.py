@@ -1798,7 +1798,8 @@ def process_single_movie_poster(
     send_to_plex: bool = False,
     library_id: str = "",
     labels: list = None,
-    source: str = "webhook"
+    source: str = "webhook",
+    send_logos_to_plex: bool = False,
 ) -> bool:
     """
     Process a single movie poster programmatically.
@@ -1825,7 +1826,8 @@ def process_single_movie_poster(
             options={},
             send_to_plex=send_to_plex,
             labels=labels or [],
-            library_id=library_id
+            library_id=library_id,
+            send_logos_to_plex=send_logos_to_plex,
         )
 
         # Load presets for options
@@ -1881,7 +1883,8 @@ def process_single_tv_show_poster(
     library_id: str = "",
     labels: list = None,
     include_seasons: bool = True,
-    source: str = "webhook"
+    source: str = "webhook",
+    send_logos_to_plex: bool = False,
 ) -> bool:
     """
     Process a single TV show poster programmatically.
@@ -1910,7 +1913,8 @@ def process_single_tv_show_poster(
             send_to_plex=send_to_plex,
             labels=labels or [],
             include_seasons=include_seasons,
-            library_id=library_id
+            library_id=library_id,
+            send_logos_to_plex=send_logos_to_plex,
         )
 
         # Load presets for options

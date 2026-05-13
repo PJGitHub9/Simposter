@@ -94,6 +94,7 @@ def process_new_content_for_library(
             return results
 
         plex_settings = ui_settings.get("plex", {})
+        send_logos = bool(plex_settings.get("sendLogosToPlex", False))
 
         # Get automation settings for this library
         automation_config = ui_settings.get("automation", {})
@@ -142,7 +143,8 @@ def process_new_content_for_library(
                                 send_to_plex=auto_send,
                                 library_id=library_id,
                                 labels=remove_labels if auto_send else [],
-                                source='auto_generate'
+                                source='auto_generate',
+                                send_logos_to_plex=send_logos if auto_send else False,
                             )
 
                             if result.get("status") == "ok":
@@ -222,7 +224,8 @@ def process_new_content_for_library(
                                 library_id=library_id,
                                 labels=remove_labels if auto_send else [],
                                 include_seasons=True,  # Generate all season posters
-                                source='auto_generate'
+                                source='auto_generate',
+                                send_logos_to_plex=send_logos if auto_send else False
                             )
 
                             if result.get("status") == "ok":

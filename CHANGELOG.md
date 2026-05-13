@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.995 (2026-05-08)
+### New Features
+- **Logo send wired into all paths**: "Send logos to Plex by default" setting now applies to webhook triggers and automatic scan sends, not just manual/batch
+- **Current Plex Logo in editors**: Both movie and TV show manual editors now show the current Plex clearlogo below the poster preview, with a refresh button
+- **Logos page improvements**: Sort (title A–Z, title Z–A, year), filter (all / has logo / missing), and search box
+
+### Bug Fixes
+- **Custom text font rendering**: Font picker now shows actually available fonts; Liberation Sans/Serif/Mono and DejaVu fonts are bundled in Docker so selections render correctly
+
 ## v1.5.991 (2026-05-01)
 ### New Features
 - **Logo Editor**: New dedicated Logos page (Movies & TV Shows) showing all library clearlogos in a grid

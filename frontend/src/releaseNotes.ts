@@ -10,8 +10,8 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
-    version: 'v1.5.991',
-    date: '2026-05-01',
+    version: 'v1.5.995',
+    date: '2026-05-08',
     sections: [
       {
         title: 'ClearLogos Support',
@@ -20,7 +20,15 @@ export const releaseNotes: ReleaseNote[] = [
           'Logo Editor — pick from TMDb/Fanart.tv logos or upload your own, then send it to Plex\'s clearLogo slot with one click.',
           'Send Logo button in both manual editors — push the selected logo to Plex independently of the poster.',
           'Send logos during batch runs and via the manual editor\'s Send to Plex action (optional checkbox).',
-          '"Send logos to Plex by default" setting in Settings → Libraries.',
+          '"Send logos to Plex by default" setting in Settings → Libraries — also applies to webhook triggers and automatic scan sends.',
+          'Current Plex Logo display in both manual editors with a refresh button.',
+          'Logos page now has sort, filter (all / has logo / missing), and search.',
+        ]
+      },
+      {
+        title: 'Bug Fix',
+        items: [
+          'Custom text overlay now correctly uses the selected font. Liberation Sans, Serif, and Mono fonts are bundled in Docker; the font picker shows all available fonts.',
         ]
       }
     ]

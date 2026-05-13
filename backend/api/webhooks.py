@@ -631,6 +631,15 @@ def process_webhook_poster_generation(
                 auto_labels = list({*auto_labels, *lib_default_labels})
                 logger.debug("[WEBHOOK] Labels to remove for library %s: %s", library_id, auto_labels)
 
+        # Read sendLogosToPlex global setting
+        send_logos = False
+        try:
+            from .. import database as _db
+            _ui = _db.get_ui_settings()
+            send_logos = bool(_ui.get("plex", {}).get("sendLogosToPlex", False))
+        except Exception:
+            pass
+
         options = preset.get("options", {})
 
         if is_tv:
@@ -647,7 +656,8 @@ def process_webhook_poster_generation(
                 include_seasons=include_seasons,
                 fallbackPosterAction=options.get("fallbackPosterAction"),
                 fallbackPosterTemplate=options.get("fallbackPosterTemplate"),
-                fallbackPosterPreset=options.get("fallbackPosterPreset")
+                fallbackPosterPreset=options.get("fallbackPosterPreset"),
+                send_logos_to_plex=send_logos,
             )
 
             # Get base settings from preset
@@ -738,7 +748,8 @@ def process_webhook_poster_generation(
                 send_to_plex=auto_send,
                 save_locally=False,
                 labels=auto_labels,
-                library_id=library_id
+                library_id=library_id,
+                send_logos_to_plex=send_logos,
             )
 
             # Get base settings from preset

@@ -2147,6 +2147,10 @@ onMounted(async () => {
   loadSeasonsCache()
   fetchSeasons()
   loadOverlayConfigs()
+  fetch(`${apiBase}/api/fonts`)
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d?.fonts) availableFonts.value = d.fonts })
+    .catch(() => {})
 })
 
 // Watch for state changes and save
