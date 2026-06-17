@@ -3,7 +3,7 @@ import requests
 from fastapi import APIRouter, HTTPException
 from io import BytesIO
 
-from ..config import settings, plex_headers, plex_remove_label, logger
+from ..config import settings, plex_headers, plex_remove_label, logger, save_render_cache
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url
@@ -149,6 +149,8 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as e:
         logger.error("[PLEX] Upload failed rating_key=%s err=%s", req.rating_key, e)
         raise
+
+    save_render_cache(req.rating_key, payload)
 
     # Remove labels if requested
     for label in req.labels or []:

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
+from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id, save_render_cache
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -480,6 +480,7 @@ def _process_single_movie(
 
             r = requests.post(plex_url, headers=headers, data=payload, timeout=20)
             r.raise_for_status()
+            save_render_cache(rating_key, payload)
 
             # Label removal
             if req.labels:
@@ -501,6 +502,8 @@ def _process_single_movie(
             logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
 
             # Send logo to Plex if requested and a logo was used
+            logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s",
+                        getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key)
             if getattr(req, 'send_logos_to_plex', False) and logo_url:
                 try:
                     logo_r = requests.get(logo_url, timeout=10)
@@ -510,8 +513,10 @@ def _process_single_movie(
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         requests.post(plex_logo_url, headers=logo_hdrs, data=logo_r.content, timeout=20)
                         logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
+                    else:
+                        logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
                 except Exception as logo_err:
-                    logger.debug("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
+                    logger.warning("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
 
             try:
                 db.record_poster_history(
@@ -1415,8 +1420,11 @@ def _render_and_save_poster(
             upload_resp = requests.post(upload_url, headers=headers, data=payload, timeout=20)
             upload_resp.raise_for_status()
             logger.info("[BATCH] Uploaded poster to Plex for %s", title)
+            save_render_cache(rating_key, payload)
 
             # Send logo to Plex if requested and a logo was used
+            logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s",
+                        getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key)
             if getattr(req, 'send_logos_to_plex', False) and logo_url:
                 try:
                     logo_r = requests.get(logo_url, timeout=10)
@@ -1426,8 +1434,10 @@ def _render_and_save_poster(
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         requests.post(plex_logo_url, headers=logo_hdrs, data=logo_r.content, timeout=20)
                         logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
+                    else:
+                        logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
                 except Exception as logo_err:
-                    logger.debug("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
+                    logger.warning("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
 
             # Invalidate poster cache so UI shows updated poster
             if is_tv:

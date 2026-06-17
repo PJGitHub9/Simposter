@@ -9,6 +9,7 @@ from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
 from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels, _webhook_cooldowns, _webhook_cooldown_lock, WEBHOOK_COOLDOWN_SECONDS
 from .api.notifications import send_apprise_notification, send_discord_notification
+from .config import settings, plex_session, plex_headers, load_render_cache, save_render_cache
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
@@ -95,6 +96,7 @@ def process_new_content_for_library(
 
         plex_settings = ui_settings.get("plex", {})
         send_logos = bool(plex_settings.get("sendLogosToPlex", False))
+        logger.info("[AUTO_GEN] sendLogosToPlex=%s", send_logos)
 
         # Get automation settings for this library
         automation_config = ui_settings.get("automation", {})
@@ -127,6 +129,25 @@ def process_new_content_for_library(
                                 continue
 
                             logger.info(f"[AUTO_GEN] Generating poster for movie: {title} ({year}) [key={rating_key}]")
+
+                            # Resend cached poster if setting requests it and one exists
+                            if auto_send and ui_settings.get("automation", {}).get("existingContentMode") == "resend":
+                                cached = load_render_cache(rating_key)
+                                if cached:
+                                    try:
+                                        plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+                                        plex_session.post(
+                                            plex_url,
+                                            headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                                            data=cached,
+                                            timeout=20,
+                                        ).raise_for_status()
+                                        results["movies_succeeded"] += 1
+                                        logger.info(f"[AUTO_GEN] Resent cached poster for {title} (existingContentMode=resend)")
+                                    except Exception as resend_err:
+                                        logger.warning(f"[AUTO_GEN] Cache resend failed for {title}: {resend_err} — falling through to generation")
+                                    else:
+                                        continue
 
                             # Merge global auto_labels with per-library default labels to remove
                             remove_labels = list(auto_labels)
@@ -206,6 +227,25 @@ def process_new_content_for_library(
                                 continue
 
                             logger.info(f"[AUTO_GEN] Generating posters for TV show: {title} ({year}) [key={rating_key}]")
+
+                            # Resend cached poster if setting requests it and one exists
+                            if auto_send and ui_settings.get("automation", {}).get("existingContentMode") == "resend":
+                                cached = load_render_cache(rating_key)
+                                if cached:
+                                    try:
+                                        plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+                                        plex_session.post(
+                                            plex_url,
+                                            headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                                            data=cached,
+                                            timeout=20,
+                                        ).raise_for_status()
+                                        results["tv_shows_succeeded"] += 1
+                                        logger.info(f"[AUTO_GEN] Resent cached poster for {title} (existingContentMode=resend)")
+                                    except Exception as resend_err:
+                                        logger.warning(f"[AUTO_GEN] Cache resend failed for {title}: {resend_err} — falling through to generation")
+                                    else:
+                                        continue
 
                             # Merge global auto_labels with per-library default labels to remove
                             remove_labels = list(auto_labels)

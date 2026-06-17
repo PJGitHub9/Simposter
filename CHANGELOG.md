@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.5.996 (2026-06-11)
+### New Features
+- **Resend existing poster setting**: New automation setting "Existing Content — Poster Behaviour" (Settings → Performance → Automatic Poster Generation)
+  - `Regenerate` (default): always creates a new poster — existing behaviour unchanged
+  - `Resend`: when a webhook or scan fires for a title that already has a Simposter-generated poster, the cached render is pushed straight back to Plex without regenerating. Protects manually tuned posters from being overwritten by future Radarr/Sonarr events.
+- **Poster render cache**: Every poster sent to Plex (manual, batch, webhook, auto-scan) is now cached to `/config/cache/poster_renders/{rating_key}.jpg`. Cached in `/config/cache/` so clearing the cache directory gracefully falls back to full regeneration.
+
 ## v1.5.995 (2026-05-08)
 ### New Features
 - **Logo send wired into all paths**: "Send logos to Plex by default" setting now applies to webhook triggers and automatic scan sends, not just manual/batch

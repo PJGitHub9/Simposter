@@ -65,6 +65,7 @@ export type AutomationSettings = {
   webhookAutoSend: boolean
   webhookAutoLabels: string
   webhookAlwaysRegenerateSeason: boolean
+  existingContentMode?: 'resend' | 'regenerate'
 }
 
 export type NotificationSettings = {
@@ -132,7 +133,7 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false, existingContentMode: 'regenerate' })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
   discordWebhookUrl: '',
@@ -219,7 +220,8 @@ async function loadSettings() {
     automation.value = {
       webhookAutoSend: data.automation?.webhookAutoSend ?? true,
       webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Simposter',
-      webhookAlwaysRegenerateSeason: data.automation?.webhookAlwaysRegenerateSeason ?? false
+      webhookAlwaysRegenerateSeason: data.automation?.webhookAlwaysRegenerateSeason ?? false,
+      existingContentMode: data.automation?.existingContentMode ?? 'regenerate'
     }
     notifications.value = {
       discordEnabled: data.notifications?.discordEnabled ?? false,

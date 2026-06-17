@@ -877,3 +877,34 @@ def plex_remove_label(rating_key: str, label: str):
         logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s type=%s status=%s", rating_key, label, content_type, r.status_code)
     except (requests.RequestException, requests.Timeout) as e:
         logger.debug("[PLEX] Method 3 failed: %s", e)
+
+
+# ==============================================================================
+# Poster Render Cache
+# Stores the most recently rendered+sent JPEG for each rating_key so that
+# webhooks/auto-gen can resend the same poster instead of regenerating.
+# ==============================================================================
+
+def _render_cache_path(rating_key: str) -> Path:
+    return Path(settings.CONFIG_DIR) / "cache" / "poster_renders" / f"{rating_key}.jpg"
+
+
+def save_render_cache(rating_key: str, img_bytes: bytes) -> None:
+    """Persist rendered poster bytes so they can be resent later."""
+    try:
+        p = _render_cache_path(rating_key)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(img_bytes)
+    except Exception as e:
+        logger.debug("[RENDER_CACHE] Failed to save for %s: %s", rating_key, e)
+
+
+def load_render_cache(rating_key: str) -> Optional[bytes]:
+    """Return previously saved rendered poster bytes, or None."""
+    try:
+        p = _render_cache_path(rating_key)
+        if p.exists():
+            return p.read_bytes()
+    except Exception as e:
+        logger.debug("[RENDER_CACHE] Failed to load for %s: %s", rating_key, e)
+    return None

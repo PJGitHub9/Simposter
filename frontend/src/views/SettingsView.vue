@@ -120,6 +120,7 @@ let scanPoller: number | null = null
 const localWebhookAutoSend = ref(true)
 const localWebhookAutoLabels = ref('Overlay')
 const localWebhookAlwaysRegenerateSeason = ref(false)
+const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
 
 // Notification settings
 const localDiscordEnabled = ref(false)
@@ -260,6 +261,7 @@ const loadLocalSettings = async () => {
   localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
   localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
   localWebhookAlwaysRegenerateSeason.value = settings.automation?.value?.webhookAlwaysRegenerateSeason ?? false
+  localExistingContentMode.value = (settings.automation?.value?.existingContentMode as 'resend' | 'regenerate') ?? 'regenerate'
 
   // Notification settings
   localDiscordEnabled.value = settings.notifications?.value?.discordEnabled ?? false
@@ -317,6 +319,7 @@ const captureSettingsSnapshot = () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    existingContentMode: localExistingContentMode.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -385,6 +388,7 @@ const checkForChanges = () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    existingContentMode: localExistingContentMode.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -503,7 +507,8 @@ const saveSettings = async () => {
   settings.automation.value = {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
-    webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value
+    webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    existingContentMode: localExistingContentMode.value
   }
   settings.notifications.value = {
     discordEnabled: localDiscordEnabled.value,
@@ -1279,6 +1284,7 @@ onMounted(() => {
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
         :webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason"
+        :existingContentMode="localExistingContentMode"
         :imageQualityChanged="sectionsWithChanges.imageQuality"
         :performanceChanged="sectionsWithChanges.performance"
         :automationChanged="sectionsWithChanges.automation"
@@ -1294,6 +1300,7 @@ onMounted(() => {
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:existingContentMode="localExistingContentMode = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @clear-frontend-cache="clearCache"
         @clear-backend-cache="clearBackendCache"
         @save="saveSettings"

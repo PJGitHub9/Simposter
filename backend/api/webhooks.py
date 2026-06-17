@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 import time
 import threading
 
-from ..config import logger, settings, plex_headers, plex_session, load_presets
+from ..config import logger, settings, plex_headers, plex_session, load_presets, load_render_cache
 from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
 from .. import database as db
 from .. import cache
@@ -613,6 +613,28 @@ def process_webhook_poster_generation(
                          If None or empty, process all seasons (for new series).
     """
     try:
+        # ------------------------------------------------------------------
+        # Resend cached poster if the setting is "resend" and a cached
+        # render exists for this item (i.e. it was previously sent by Simposter).
+        # ------------------------------------------------------------------
+        if auto_send:
+            try:
+                _ui = db.get_ui_settings()
+                if _ui.get("automation", {}).get("existingContentMode") == "resend":
+                    cached = load_render_cache(rating_key)
+                    if cached:
+                        plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+                        plex_session.post(
+                            plex_url,
+                            headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                            data=cached,
+                            timeout=20,
+                        ).raise_for_status()
+                        logger.info("[WEBHOOK] Resent cached poster for %s (existingContentMode=resend)", rating_key)
+                        return
+            except Exception as resend_err:
+                logger.warning("[WEBHOOK] Cache resend check failed for %s: %s — falling through to generation", rating_key, resend_err)
+
         from .batch import _process_single_movie, _process_single_tv_show
 
         # Load preset options

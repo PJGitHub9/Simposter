@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.996',
+    date: '2026-06-11',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'New automation setting: "Existing Content — Poster Behaviour". Set to Resend to push the last generated poster back to Plex when a webhook or scan fires for a title that already has a Simposter poster, instead of regenerating from scratch. Useful for protecting manually tuned posters from being overwritten by Radarr/Sonarr events.',
+          'Rendered posters are now cached locally to /config/cache/poster_renders/ whenever sent to Plex (manual, batch, webhook, or auto-scan). Deleting the cache directory gracefully falls back to regeneration.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.995',
     date: '2026-05-08',
     sections: [

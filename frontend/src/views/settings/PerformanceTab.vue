@@ -16,6 +16,7 @@ const props = defineProps<{
   webhookAutoSend: boolean
   webhookAutoLabels: string
   webhookAlwaysRegenerateSeason: boolean
+  existingContentMode: 'resend' | 'regenerate'
   imageQualityChanged?: boolean
   performanceChanged?: boolean
   automationChanged?: boolean
@@ -34,6 +35,7 @@ const emit = defineEmits<{
   'update:webhookAutoSend': [value: boolean]
   'update:webhookAutoLabels': [value: string]
   'update:webhookAlwaysRegenerateSeason': [value: boolean]
+  'update:existingContentMode': [value: 'resend' | 'regenerate']
   'clear-frontend-cache': []
   'clear-backend-cache': []
   'save': []
@@ -97,6 +99,11 @@ const localWebhookAutoLabels = computed({
 const localWebhookAlwaysRegenerateSeason = computed({
   get: () => props.webhookAlwaysRegenerateSeason,
   set: (val) => emit('update:webhookAlwaysRegenerateSeason', val)
+})
+
+const localExistingContentMode = computed({
+  get: () => props.existingContentMode,
+  set: (val) => emit('update:existingContentMode', val)
 })
 
 </script>
@@ -261,6 +268,19 @@ const localWebhookAlwaysRegenerateSeason = computed({
       <p class="help-text" style="margin: -8px 0 16px 0;">
         When enabled, a new season poster is generated every time a new episode webhook is received. When disabled, season posters that have already been sent to Plex are skipped.
       </p>
+
+      <label>
+        <span class="label-text">Existing Content — Poster Behaviour</span>
+        <select v-model="localExistingContentMode">
+          <option value="regenerate">Regenerate — always create a new poster</option>
+          <option value="resend">Resend — reuse the last sent poster if available</option>
+        </select>
+        <span class="help-text">
+          When a webhook or scheduled scan fires for a title that already has a Simposter-generated poster,
+          <strong>Resend</strong> pushes the cached rendered poster straight back to Plex without regenerating.
+          Useful when you have manually tuned a poster and don't want it overwritten by future Radarr/Sonarr events.
+        </span>
+      </label>
 
       <label>
         <span class="label-text">Default Labels for Webhook Posters</span>
