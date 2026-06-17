@@ -152,6 +152,13 @@ def api_plex_send(req: PlexSendRequest):
 
     save_render_cache(req.rating_key, payload)
 
+    # Manual send always resolves any pending retry — the user chose this poster
+    try:
+        from .. import database as _db_retry
+        _db_retry.remove_from_retry_queue(req.rating_key)
+    except Exception:
+        pass
+
     # Remove labels if requested
     for label in req.labels or []:
         plex_remove_label(req.rating_key, label)

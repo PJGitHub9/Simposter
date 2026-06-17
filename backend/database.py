@@ -773,9 +773,31 @@ def init_database():
             ON presets(overlay_config_id)
         """)
 
+        # Poster retry queue — tracks items that didn't meet ideal template conditions
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_retry_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rating_key TEXT NOT NULL UNIQUE,
+                media_type TEXT NOT NULL DEFAULT 'movie',
+                library_id TEXT,
+                template_id TEXT NOT NULL,
+                preset_id TEXT NOT NULL,
+                title TEXT,
+                reason TEXT,
+                first_queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_attempted_at TIMESTAMP,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending'
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_retry_queue_status
+            ON poster_retry_queue(status)
+        """)
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
-        
+
         # Clean up any invalid TV cache entries (NULL or empty rating_key)
         try:
             cursor.execute("DELETE FROM tv_cache WHERE rating_key IS NULL OR rating_key = ''")
@@ -2457,6 +2479,116 @@ def get_poster_status(
             }
 
     return result
+
+
+# ============================================
+#  Poster Retry Queue Operations
+# ============================================
+
+def add_to_retry_queue(
+    rating_key: str,
+    media_type: str,
+    library_id: Optional[str],
+    template_id: str,
+    preset_id: str,
+    title: Optional[str],
+    reason: str,
+) -> None:
+    """Add or update an item in the poster retry queue."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO poster_retry_queue
+                (rating_key, media_type, library_id, template_id, preset_id, title, reason,
+                 first_queued_at, last_attempted_at, retry_count, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 'pending')
+            ON CONFLICT(rating_key) DO UPDATE SET
+                template_id = excluded.template_id,
+                preset_id = excluded.preset_id,
+                reason = excluded.reason,
+                status = 'pending',
+                last_attempted_at = CURRENT_TIMESTAMP
+        """, (rating_key, media_type, library_id, template_id, preset_id, title, reason))
+    logger.debug("[RETRY] Queued %s (%s) reason=%s", rating_key, media_type, reason)
+
+
+def update_retry_attempt(rating_key: str) -> None:
+    """Increment retry_count and update last_attempted_at for an item."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE poster_retry_queue
+            SET retry_count = retry_count + 1,
+                last_attempted_at = CURRENT_TIMESTAMP
+            WHERE rating_key = ?
+        """, (rating_key,))
+
+
+def resolve_retry_queue_item(rating_key: str, status: str = "resolved") -> None:
+    """Mark an item as resolved or manually overridden."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE poster_retry_queue SET status = ? WHERE rating_key = ?
+        """, (status, rating_key))
+    logger.debug("[RETRY] Resolved %s as %s", rating_key, status)
+
+
+def remove_from_retry_queue(rating_key: str) -> None:
+    """Remove an item from the retry queue (used on manual send)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM poster_retry_queue WHERE rating_key = ?", (rating_key,))
+    logger.debug("[RETRY] Removed %s from retry queue (manual override)", rating_key)
+
+
+def get_pending_retry_items(max_attempts: int = 0) -> List[Dict[str, Any]]:
+    """
+    Return all pending retry items, optionally filtered by max_attempts.
+    max_attempts=0 means unlimited.
+    """
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if max_attempts > 0:
+            cursor.execute("""
+                SELECT * FROM poster_retry_queue
+                WHERE status = 'pending' AND retry_count < ?
+                ORDER BY last_attempted_at ASC
+            """, (max_attempts,))
+        else:
+            cursor.execute("""
+                SELECT * FROM poster_retry_queue
+                WHERE status = 'pending'
+                ORDER BY last_attempted_at ASC
+            """)
+        rows = cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_retry_queue(include_resolved: bool = False) -> List[Dict[str, Any]]:
+    """Return retry queue items for UI display."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if include_resolved:
+            cursor.execute("""
+                SELECT * FROM poster_retry_queue ORDER BY first_queued_at DESC LIMIT 500
+            """)
+        else:
+            cursor.execute("""
+                SELECT * FROM poster_retry_queue
+                WHERE status = 'pending' OR status = 'abandoned'
+                ORDER BY first_queued_at DESC LIMIT 500
+            """)
+        rows = cursor.fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_retry_queue_count() -> int:
+    """Return count of pending retry items."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM poster_retry_queue WHERE status = 'pending'")
+        return cursor.fetchone()[0]
 
 
 def has_poster_been_sent(rating_key: str) -> bool:

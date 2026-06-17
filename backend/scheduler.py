@@ -57,6 +57,14 @@ def init_scheduler(restore_from_settings: bool = True):
             else:
                 logger.info("[SCHEDULER] Scheduled scans are disabled in settings")
 
+            # Restore poster retry job if enabled
+            automation = settings_dict.get("automation", {})
+            if automation.get("retryUntilTemplateMet", False):
+                interval_hours = float(automation.get("retryIntervalHours", 24))
+                schedule_poster_retry(interval_hours)
+            else:
+                logger.info("[SCHEDULER] Poster retry is disabled in settings")
+
         except Exception as e:
             logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e, exc_info=True)
 
@@ -285,6 +293,133 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
 
     except Exception as e:
         logger.error("[SCHEDULER] Unexpected error during scheduled library scan: %s", e, exc_info=True)
+
+
+_retry_job_id = "poster_retry_job"
+
+
+def schedule_poster_retry(interval_hours: float):
+    """Schedule the poster retry job to run every interval_hours hours."""
+    if _scheduler is None:
+        logger.error("[SCHEDULER] Scheduler not initialized")
+        return False
+    try:
+        if _scheduler.get_job(_retry_job_id):
+            _scheduler.remove_job(_retry_job_id)
+
+        from apscheduler.triggers.interval import IntervalTrigger
+        _scheduler.add_job(
+            func=_run_poster_retry,
+            trigger=IntervalTrigger(hours=interval_hours),
+            id=_retry_job_id,
+            name="Poster Retry",
+            replace_existing=True,
+        )
+        logger.info("[SCHEDULER] Scheduled poster retry every %.1f hours", interval_hours)
+        return True
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to schedule poster retry: %s", e)
+        return False
+
+
+def cancel_poster_retry():
+    """Cancel the poster retry job."""
+    if _scheduler is None:
+        return False
+    try:
+        if _scheduler.get_job(_retry_job_id):
+            _scheduler.remove_job(_retry_job_id)
+            logger.info("[SCHEDULER] Cancelled poster retry job")
+            return True
+        return False
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to cancel poster retry: %s", e)
+        return False
+
+
+def _run_poster_retry():
+    """Retry pending items from the poster retry queue."""
+    try:
+        from . import database as db
+        from .api.ui_settings import _read_settings
+        from .api.batch import process_single_movie_poster, process_single_tv_show_poster
+
+        ui = db.get_ui_settings() or {}
+        automation = ui.get("automation", {})
+
+        if not automation.get("retryUntilTemplateMet", False):
+            logger.debug("[RETRY] retryUntilTemplateMet is off — skipping retry run")
+            return
+
+        max_attempts = int(automation.get("retryMaxAttempts", 0))
+        send_logos = bool(ui.get("plex", {}).get("sendLogosToPlex", False))
+
+        pending = db.get_pending_retry_items(max_attempts=max_attempts)
+        if not pending:
+            logger.debug("[RETRY] No pending items in retry queue")
+            return
+
+        logger.info("[RETRY] Running retry job — %d pending items (max_attempts=%s)", len(pending), max_attempts or "unlimited")
+
+        for item in pending:
+            rating_key = item["rating_key"]
+            media_type = item.get("media_type", "movie")
+            library_id = item.get("library_id", "")
+            template_id = item["template_id"]
+            preset_id = item["preset_id"]
+            title = item.get("title", rating_key)
+            retry_count = item.get("retry_count", 0)
+
+            # Abandon if max_attempts exceeded
+            if max_attempts > 0 and retry_count >= max_attempts:
+                db.resolve_retry_queue_item(rating_key, "abandoned")
+                logger.info("[RETRY] Abandoned %s after %d attempts", title, retry_count)
+                continue
+
+            logger.info("[RETRY] Retrying %s (%s) attempt #%d", title, media_type, retry_count + 1)
+            db.update_retry_attempt(rating_key)
+
+            try:
+                if media_type == "tv":
+                    result = process_single_tv_show_poster(
+                        rating_key=rating_key,
+                        template_id=template_id,
+                        preset_id=preset_id,
+                        send_to_plex=True,
+                        library_id=library_id,
+                        labels=[],
+                        include_seasons=True,
+                        source="auto_generate",
+                        send_logos_to_plex=send_logos,
+                    )
+                    sub_results = result.get("results", []) if isinstance(result, dict) else []
+                    still_needs_retry = any(r.get("needs_retry") for r in sub_results)
+                else:
+                    result = process_single_movie_poster(
+                        rating_key=rating_key,
+                        template_id=template_id,
+                        preset_id=preset_id,
+                        send_to_plex=True,
+                        library_id=library_id,
+                        labels=[],
+                        source="auto_generate",
+                        send_logos_to_plex=send_logos,
+                    )
+                    still_needs_retry = result.get("needs_retry", False) if isinstance(result, dict) else True
+
+                if not still_needs_retry:
+                    db.resolve_retry_queue_item(rating_key, "resolved")
+                    logger.info("[RETRY] Successfully resolved %s — ideal template conditions met", title)
+                else:
+                    logger.info("[RETRY] %s still pending (attempt #%d) — will retry again", title, retry_count + 1)
+
+            except Exception as retry_err:
+                logger.warning("[RETRY] Error retrying %s: %s", title, retry_err)
+
+        logger.info("[RETRY] Retry job complete")
+
+    except Exception as e:
+        logger.error("[RETRY] Unexpected error in retry job: %s", e, exc_info=True)
 
 
 def shutdown_scheduler():

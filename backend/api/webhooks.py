@@ -722,6 +722,28 @@ def process_webhook_poster_generation(
             result_status = result.get("status")
             if result_status == "ok":
                 logger.info(f"[WEBHOOK] Successfully processed TV show {rating_key}")
+                # Enqueue for retry if ideal template conditions weren't met
+                try:
+                    _ui = db.get_ui_settings() or {}
+                    if _ui.get("automation", {}).get("retryUntilTemplateMet", False):
+                        sub_results = result.get("results", [])
+                        needs_retry_items = [r for r in sub_results if r.get("needs_retry")]
+                        show_title = result.get("show_title", rating_key)
+                        if needs_retry_items:
+                            db.add_to_retry_queue(
+                                rating_key=rating_key,
+                                media_type="tv",
+                                library_id=library_id,
+                                template_id=template_id,
+                                preset_id=preset_id,
+                                title=show_title,
+                                reason=needs_retry_items[0].get("retry_reason", "unknown"),
+                            )
+                            logger.info("[WEBHOOK] Queued TV show %s for retry", show_title)
+                        else:
+                            db.remove_from_retry_queue(rating_key)
+                except Exception as q_err:
+                    logger.debug("[WEBHOOK] TV retry queue update failed for %s: %s", rating_key, q_err)
                 # Update cache so the show appears in library view
                 try:
                     logger.info(f"[WEBHOOK] Updating TV cache for {rating_key} (library_id={library_id})")
@@ -801,6 +823,26 @@ def process_webhook_poster_generation(
             result_status = result.get("status")
             if result_status == "ok":
                 logger.info(f"[WEBHOOK] Successfully processed movie {rating_key}")
+                # Enqueue for retry if ideal template conditions weren't met
+                try:
+                    _ui = db.get_ui_settings() or {}
+                    if _ui.get("automation", {}).get("retryUntilTemplateMet", False):
+                        if result.get("needs_retry"):
+                            movie_title = result.get("title", rating_key)
+                            db.add_to_retry_queue(
+                                rating_key=rating_key,
+                                media_type="movie",
+                                library_id=library_id,
+                                template_id=template_id,
+                                preset_id=preset_id,
+                                title=movie_title,
+                                reason=result.get("retry_reason", "unknown"),
+                            )
+                            logger.info("[WEBHOOK] Queued %s for retry (reason=%s)", movie_title, result.get("retry_reason"))
+                        else:
+                            db.remove_from_retry_queue(rating_key)
+                except Exception as q_err:
+                    logger.debug("[WEBHOOK] Retry queue update failed for %s: %s", rating_key, q_err)
                 # Update cache so the movie appears in library view
                 try:
                     logger.info(f"[WEBHOOK] Updating movie cache for {rating_key} (library_id={library_id})")

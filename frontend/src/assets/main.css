@@ -16,6 +16,11 @@
   --bg: radial-gradient(circle at 20% 20%, rgba(61, 214, 183, 0.14), transparent 35%),
     radial-gradient(circle at 80% 0%, rgba(91, 141, 238, 0.1), transparent 30%),
     #070910;
+  --text-primary: #eef2ff;
+  --text-secondary: #9aa4bf;
+  --text-tertiary: #5c6580;
+  --text-muted: #9aa4bf;
+  --bg-primary: #0a0c12;
 }
 
 /* Themes */
@@ -28,6 +33,11 @@
   --muted: #94a3b8;
   --border: #334155;
   --bg: radial-gradient(circle at 20% 10%, rgba(56, 189, 248, 0.08), transparent 40%), #0f172a;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
+  --text-muted: #94a3b8;
+  --bg-primary: #0f172a;
 }
 
 :root[data-theme='dracula'] {
@@ -39,6 +49,11 @@
   --muted: #c3c8e8;
   --border: #313244;
   --bg: radial-gradient(circle at 30% 20%, rgba(255, 121, 198, 0.12), transparent 40%), #181825;
+  --text-primary: #f8f8f2;
+  --text-secondary: #c3c8e8;
+  --text-tertiary: #6272a4;
+  --text-muted: #c3c8e8;
+  --bg-primary: #181825;
 }
 
 :root[data-theme='nord'] {
@@ -50,6 +65,11 @@
   --muted: #c0c8d7;
   --border: #2e3a46;
   --bg: radial-gradient(circle at 20% 10%, rgba(136, 192, 208, 0.12), transparent 40%), #1b2630;
+  --text-primary: #eceff4;
+  --text-secondary: #c0c8d7;
+  --text-tertiary: #8896b3;
+  --text-muted: #c0c8d7;
+  --bg-primary: #19232c;
 }
 
 :root[data-theme='oled'] {
@@ -61,6 +81,11 @@
   --muted: #a8b0c0;
   --border: #1a1a1a;
   --bg: #000000;
+  --text-primary: #f0f0f5;
+  --text-secondary: #a8b0c0;
+  --text-tertiary: #5c6480;
+  --text-muted: #a8b0c0;
+  --bg-primary: #000000;
 }
 
 :root[data-theme='light'] {
@@ -75,6 +100,11 @@
   --shadow:
     0 10px 40px rgba(0, 0, 0, 0.08),
     0 0 0 1px rgba(0, 0, 0, 0.03);
+  --text-primary: #1e293b;
+  --text-secondary: #5c6475;
+  --text-tertiary: #94a3b8;
+  --text-muted: #5c6475;
+  --bg-primary: #eef1f7;
 }
 
 body {
@@ -192,14 +222,9 @@ input, select, textarea, .glass, a {
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Enhanced button hover effects */
+/* Button hover: only apply lift to primary CTAs (.btn-plex, .btn-save) via their own rules */
 button:not(:disabled) {
   transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-button:not(:disabled):hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 button:not(:disabled):active {
@@ -341,8 +366,8 @@ select:disabled {
 
 /* Refined scrollbar styling */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -350,23 +375,23 @@ select:disabled {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
-  border: 2px solid transparent;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  border: 1px solid transparent;
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.2);
   background-clip: padding-box;
 }
 
 :root[data-theme='light'] ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.12);
   background-clip: padding-box;
 }
 
 :root[data-theme='light'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.15);
+  background: rgba(0, 0, 0, 0.22);
   background-clip: padding-box;
 }

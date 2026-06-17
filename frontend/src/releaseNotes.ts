@@ -10,6 +10,21 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.997',
+    date: '2026-06-17',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'New "Retry Until Template Is Met" automation setting. When auto-generate or a webhook fires and the ideal poster cannot be made (logo not found, or no textless poster available), Simposter now queues the item for automatic retry at a configurable interval. Once the ideal poster is generated it is saved, uploaded to Plex, and removed from the queue. Manually sending a poster for any title immediately removes it from the queue.',
+          'New Retry Queue tab in History — shows all pending retries with reason (no logo / no textless poster), attempt count, last tried timestamp, and per-item Retry Now / Dismiss actions.',
+          'Settings → Automation: toggle retry on/off, set retry interval (hours), and optionally cap the max retry attempts (0 = unlimited).',
+          'Diagnostic logging added for auto-generate logo sends ([AUTO_GEN] sendLogosToPlex=) and batch logo upload path ([BATCH] Logo upload check:) to help troubleshoot missing logo uploads.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.996',
     date: '2026-06-11',
     sections: [

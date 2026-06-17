@@ -25,11 +25,35 @@ interface HistoryRecord {
   error_message: string | null
 }
 
+interface RetryQueueItem {
+  id: number
+  rating_key: string
+  media_type: string
+  library_id: string | null
+  template_id: string
+  preset_id: string
+  title: string | null
+  reason: string | null
+  first_queued_at: string
+  last_attempted_at: string | null
+  retry_count: number
+  status: string
+}
+
 const apiBase = getApiBase()
 const settings = useSettingsStore()
 const records = ref<HistoryRecord[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// Tab state
+const activeTab = ref<'history' | 'retry-queue'>('history')
+
+// Retry queue state
+const retryItems = ref<RetryQueueItem[]>([])
+const retryLoading = ref(false)
+const retryCount = ref(0)
+const retryActionInProgress = ref<string | null>(null)
 
 // Preview popup state
 const previewRecord = ref<HistoryRecord | null>(null)
@@ -135,6 +159,70 @@ const fetchHistory = async () => {
     console.error('[HISTORY] Error fetching history:', e)
   } finally {
     loading.value = false
+  }
+}
+
+const fetchRetryQueue = async () => {
+  retryLoading.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/retry-queue`)
+    if (!res.ok) throw new Error(`Failed to fetch retry queue: ${res.status}`)
+    const data = await res.json()
+    retryItems.value = data.items || []
+    retryCount.value = data.pending_count || 0
+  } catch (e: any) {
+    console.error('[RETRY_QUEUE] Error:', e)
+  } finally {
+    retryLoading.value = false
+  }
+}
+
+const switchToRetry = () => {
+  activeTab.value = 'retry-queue'
+  fetchRetryQueue()
+}
+
+const retryNow = async (rating_key: string) => {
+  retryActionInProgress.value = rating_key
+  try {
+    const res = await fetch(`${apiBase}/api/retry-queue/${rating_key}/retry-now`, { method: 'POST' })
+    if (!res.ok) throw new Error(`Retry failed: ${res.status}`)
+    await fetchRetryQueue()
+  } catch (e: any) {
+    console.error('[RETRY_QUEUE] Retry failed:', e)
+  } finally {
+    retryActionInProgress.value = null
+  }
+}
+
+const dismissItem = async (rating_key: string) => {
+  retryActionInProgress.value = `dismiss_${rating_key}`
+  try {
+    const res = await fetch(`${apiBase}/api/retry-queue/${rating_key}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(`Dismiss failed: ${res.status}`)
+    await fetchRetryQueue()
+  } catch (e: any) {
+    console.error('[RETRY_QUEUE] Dismiss failed:', e)
+  } finally {
+    retryActionInProgress.value = null
+  }
+}
+
+const getRetryReasonLabel = (reason: string | null): string => {
+  switch (reason) {
+    case 'no_logo': return 'No logo found'
+    case 'poster_fallback': return 'No textless poster'
+    case 'no_logo_and_poster_fallback': return 'No logo + textless'
+    default: return reason || 'Unknown'
+  }
+}
+
+const getRetryReasonClass = (reason: string | null): string => {
+  switch (reason) {
+    case 'no_logo': return 'reason-logo'
+    case 'poster_fallback': return 'reason-poster'
+    case 'no_logo_and_poster_fallback': return 'reason-both'
+    default: return 'reason-unknown'
   }
 }
 
@@ -361,6 +449,8 @@ onMounted(async () => {
     await settings.load()
   }
   fetchHistory()
+  // Load retry count for badge indicator (non-blocking)
+  fetchRetryQueue()
 })
 </script>
 
@@ -371,6 +461,19 @@ onMounted(async () => {
       <p class="subtitle">View all poster generations (manual and automatic)</p>
     </div>
 
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button :class="['tab-btn', { active: activeTab === 'history' }]" @click="activeTab = 'history'">
+        History
+      </button>
+      <button :class="['tab-btn', { active: activeTab === 'retry-queue' }]" @click="switchToRetry">
+        Retry Queue
+        <span v-if="retryCount > 0" class="retry-count-badge">{{ retryCount }}</span>
+      </button>
+    </div>
+
+    <!-- History tab -->
+    <template v-if="activeTab === 'history'">
     <div class="filters">
       <div class="filter-group">
         <label>
@@ -519,6 +622,92 @@ onMounted(async () => {
         </tbody>
       </table>
     </div>
+
+    </template><!-- end history tab -->
+
+    <!-- Retry Queue tab -->
+    <template v-if="activeTab === 'retry-queue'">
+      <div class="retry-queue-header">
+        <div class="retry-queue-info">
+          <span v-if="retryCount > 0" class="retry-pending-count">
+            {{ retryCount }} item{{ retryCount !== 1 ? 's' : '' }} pending retry
+          </span>
+          <span v-else class="retry-pending-count retry-none">No items pending retry</span>
+          <span class="retry-info-hint">Items are retried automatically on your configured interval.</span>
+        </div>
+        <button @click="fetchRetryQueue" class="btn-refresh" :disabled="retryLoading">
+          {{ retryLoading ? 'Loading...' : 'Refresh' }}
+        </button>
+      </div>
+
+      <div v-if="retryLoading && retryItems.length === 0" class="loading">
+        Loading retry queue...
+      </div>
+
+      <div v-else-if="retryItems.length === 0" class="empty-state">
+        <p>No items in the retry queue.</p>
+        <p class="hint">When auto-generate or webhooks create a poster using a fallback (no logo or no textless poster found), the item is queued here for automatic retry.</p>
+      </div>
+
+      <div v-else class="history-table-container">
+        <div class="results-count">
+          {{ retryItems.length }} item{{ retryItems.length !== 1 ? 's' : '' }} in queue
+        </div>
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Type</th>
+              <th>Library</th>
+              <th>Reason</th>
+              <th>Attempts</th>
+              <th>Last Tried</th>
+              <th>Template / Preset</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in retryItems" :key="item.id">
+              <td class="title-cell">{{ item.title || item.rating_key }}</td>
+              <td class="year-cell">{{ item.media_type === 'tv' ? 'TV' : 'Movie' }}</td>
+              <td class="library-cell">{{ getLibraryName(item.library_id) }}</td>
+              <td>
+                <span :class="['reason-badge', getRetryReasonClass(item.reason)]">
+                  {{ getRetryReasonLabel(item.reason) }}
+                </span>
+              </td>
+              <td class="year-cell">{{ item.retry_count }}</td>
+              <td class="date-cell">
+                {{ item.last_attempted_at ? formatDate(item.last_attempted_at) : 'Not yet' }}
+              </td>
+              <td class="year-cell">{{ item.template_id }} / {{ item.preset_id }}</td>
+              <td>
+                <span :class="['action-badge', item.status === 'pending' ? 'action-plex' : 'action-local']">
+                  {{ item.status }}
+                </span>
+              </td>
+              <td class="actions-cell">
+                <button
+                  class="btn-retry-now"
+                  :disabled="retryActionInProgress === item.rating_key"
+                  @click="retryNow(item.rating_key)"
+                >
+                  {{ retryActionInProgress === item.rating_key ? '...' : 'Retry Now' }}
+                </button>
+                <button
+                  class="btn-dismiss"
+                  :disabled="retryActionInProgress === `dismiss_${item.rating_key}`"
+                  @click="dismissItem(item.rating_key)"
+                >
+                  Dismiss
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </template><!-- end retry-queue tab -->
 
     <!-- Preview Popup -->
     <Teleport to="body">
@@ -984,6 +1173,165 @@ onMounted(async () => {
   color: #ef4444;
 }
 
+/* Tab bar */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-btn {
+  padding: 10px 20px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: -1px;
+}
+
+.tab-btn:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: rgba(61, 214, 183, 0.05);
+}
+
+.retry-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.8);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Retry queue styles */
+.retry-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.retry-queue-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.retry-pending-count {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.retry-none {
+  color: var(--text-secondary);
+}
+
+.retry-info-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.actions-cell {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.btn-retry-now {
+  padding: 5px 12px;
+  border: 1px solid rgba(61, 214, 183, 0.4);
+  border-radius: 4px;
+  background: rgba(61, 214, 183, 0.1);
+  color: #3dd6b7;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-retry-now:hover:not(:disabled) {
+  background: rgba(61, 214, 183, 0.2);
+  border-color: rgba(61, 214, 183, 0.6);
+}
+
+.btn-retry-now:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-dismiss {
+  padding: 5px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.08);
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-dismiss:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+}
+
+.btn-dismiss:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.reason-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.reason-logo {
+  background: rgba(251, 146, 60, 0.15);
+  color: #fb923c;
+}
+
+.reason-poster {
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+}
+
+.reason-both {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.reason-unknown {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+}
+
 /* Mobile Responsive Styles */
 @media (max-width: 1024px) {
   .history-view {
@@ -1126,9 +1474,15 @@ onMounted(async () => {
     padding: 3px 6px;
   }
 
-  .btn-preview {
+  .btn-preview,
+  .btn-retry-now,
+  .btn-dismiss {
     padding: 3px 8px;
     font-size: 10px;
+  }
+
+  .tab-bar {
+    overflow-x: auto;
   }
 
   /* Mobile preview popup - show as modal on click */

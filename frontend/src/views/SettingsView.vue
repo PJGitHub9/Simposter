@@ -121,6 +121,9 @@ const localWebhookAutoSend = ref(true)
 const localWebhookAutoLabels = ref('Overlay')
 const localWebhookAlwaysRegenerateSeason = ref(false)
 const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
+const localRetryUntilTemplateMet = ref(false)
+const localRetryIntervalHours = ref(24)
+const localRetryMaxAttempts = ref(0)
 
 // Notification settings
 const localDiscordEnabled = ref(false)
@@ -262,6 +265,9 @@ const loadLocalSettings = async () => {
   localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
   localWebhookAlwaysRegenerateSeason.value = settings.automation?.value?.webhookAlwaysRegenerateSeason ?? false
   localExistingContentMode.value = (settings.automation?.value?.existingContentMode as 'resend' | 'regenerate') ?? 'regenerate'
+  localRetryUntilTemplateMet.value = settings.automation?.value?.retryUntilTemplateMet ?? false
+  localRetryIntervalHours.value = settings.automation?.value?.retryIntervalHours ?? 24
+  localRetryMaxAttempts.value = settings.automation?.value?.retryMaxAttempts ?? 0
 
   // Notification settings
   localDiscordEnabled.value = settings.notifications?.value?.discordEnabled ?? false
@@ -320,6 +326,9 @@ const captureSettingsSnapshot = () => {
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
     existingContentMode: localExistingContentMode.value,
+    retryUntilTemplateMet: localRetryUntilTemplateMet.value,
+    retryIntervalHours: localRetryIntervalHours.value,
+    retryMaxAttempts: localRetryMaxAttempts.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -389,6 +398,9 @@ const checkForChanges = () => {
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
     existingContentMode: localExistingContentMode.value,
+    retryUntilTemplateMet: localRetryUntilTemplateMet.value,
+    retryIntervalHours: localRetryIntervalHours.value,
+    retryMaxAttempts: localRetryMaxAttempts.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -508,7 +520,10 @@ const saveSettings = async () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
-    existingContentMode: localExistingContentMode.value
+    existingContentMode: localExistingContentMode.value,
+    retryUntilTemplateMet: localRetryUntilTemplateMet.value,
+    retryIntervalHours: localRetryIntervalHours.value,
+    retryMaxAttempts: localRetryMaxAttempts.value,
   }
   settings.notifications.value = {
     discordEnabled: localDiscordEnabled.value,
@@ -1285,6 +1300,9 @@ onMounted(() => {
         :webhookAutoLabels="localWebhookAutoLabels"
         :webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason"
         :existingContentMode="localExistingContentMode"
+        :retryUntilTemplateMet="localRetryUntilTemplateMet"
+        :retryIntervalHours="localRetryIntervalHours"
+        :retryMaxAttempts="localRetryMaxAttempts"
         :imageQualityChanged="sectionsWithChanges.imageQuality"
         :performanceChanged="sectionsWithChanges.performance"
         :automationChanged="sectionsWithChanges.automation"
@@ -1301,6 +1319,9 @@ onMounted(() => {
         @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:existingContentMode="localExistingContentMode = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:retryUntilTemplateMet="localRetryUntilTemplateMet = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:retryIntervalHours="localRetryIntervalHours = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:retryMaxAttempts="localRetryMaxAttempts = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @clear-frontend-cache="clearCache"
         @clear-backend-cache="clearBackendCache"
         @save="saveSettings"

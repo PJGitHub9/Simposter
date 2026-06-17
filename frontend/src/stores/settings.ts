@@ -66,6 +66,9 @@ export type AutomationSettings = {
   webhookAutoLabels: string
   webhookAlwaysRegenerateSeason: boolean
   existingContentMode?: 'resend' | 'regenerate'
+  retryUntilTemplateMet?: boolean
+  retryIntervalHours?: number
+  retryMaxAttempts?: number
 }
 
 export type NotificationSettings = {
@@ -133,7 +136,7 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false, existingContentMode: 'regenerate' })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false, existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0 })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
   discordWebhookUrl: '',
@@ -221,7 +224,10 @@ async function loadSettings() {
       webhookAutoSend: data.automation?.webhookAutoSend ?? true,
       webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Simposter',
       webhookAlwaysRegenerateSeason: data.automation?.webhookAlwaysRegenerateSeason ?? false,
-      existingContentMode: data.automation?.existingContentMode ?? 'regenerate'
+      existingContentMode: data.automation?.existingContentMode ?? 'regenerate',
+      retryUntilTemplateMet: data.automation?.retryUntilTemplateMet ?? false,
+      retryIntervalHours: data.automation?.retryIntervalHours ?? 24,
+      retryMaxAttempts: data.automation?.retryMaxAttempts ?? 0,
     }
     notifications.value = {
       discordEnabled: data.notifications?.discordEnabled ?? false,

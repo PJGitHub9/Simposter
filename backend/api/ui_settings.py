@@ -337,6 +337,18 @@ def save_ui_settings_endpoint(payload: UISettings):
                 raise
         logger.info("[UI_SETTINGS] Saved to database")
 
+        # Apply retry scheduler setting
+        try:
+            from ..scheduler import schedule_poster_retry, cancel_poster_retry
+            automation = merged.get("automation", {})
+            if automation.get("retryUntilTemplateMet", False):
+                interval_hours = float(automation.get("retryIntervalHours", 24))
+                schedule_poster_retry(interval_hours)
+            else:
+                cancel_poster_retry()
+        except Exception as retry_sched_err:
+            logger.debug("[UI_SETTINGS] Failed to apply retry scheduler: %s", retry_sched_err)
+
         # Delete JSON files after successful migration
         for json_file in [_settings_file, _legacy_settings_file]:
             if json_file.exists():

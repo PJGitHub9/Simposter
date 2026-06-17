@@ -98,6 +98,9 @@ def process_new_content_for_library(
         send_logos = bool(plex_settings.get("sendLogosToPlex", False))
         logger.info("[AUTO_GEN] sendLogosToPlex=%s", send_logos)
 
+        retry_settings = ui_settings.get("automation", {})
+        retry_enabled = bool(retry_settings.get("retryUntilTemplateMet", False))
+
         # Get automation settings for this library
         automation_config = ui_settings.get("automation", {})
         auto_labels = automation_config.get("webhookAutoLabels", "Simposter").split(",")
@@ -171,6 +174,27 @@ def process_new_content_for_library(
                             if result.get("status") == "ok":
                                 results["movies_succeeded"] += 1
                                 logger.info(f"[AUTO_GEN] Successfully generated poster for {title}")
+                                # Enqueue for retry if ideal template conditions weren't met
+                                if retry_enabled and result.get("needs_retry"):
+                                    try:
+                                        db.add_to_retry_queue(
+                                            rating_key=rating_key,
+                                            media_type="movie",
+                                            library_id=library_id,
+                                            template_id=template_id,
+                                            preset_id=preset_id,
+                                            title=title,
+                                            reason=result.get("retry_reason", "unknown"),
+                                        )
+                                        logger.info("[AUTO_GEN] Queued %s for retry (reason=%s)", title, result.get("retry_reason"))
+                                    except Exception as queue_err:
+                                        logger.debug("[AUTO_GEN] Failed to enqueue retry for %s: %s", title, queue_err)
+                                elif retry_enabled:
+                                    # Ideal conditions met — remove from queue if it was previously pending
+                                    try:
+                                        db.remove_from_retry_queue(rating_key)
+                                    except Exception:
+                                        pass
                                 # Send per-item notification with poster preview
                                 _notif_kwargs = dict(
                                     title=title or result.get("title", "Unknown"),
@@ -271,6 +295,29 @@ def process_new_content_for_library(
                             if result.get("status") == "ok":
                                 results["tv_shows_succeeded"] += 1
                                 logger.info(f"[AUTO_GEN] Successfully generated posters for {title}")
+                                # Enqueue for retry if ideal template conditions weren't met
+                                if retry_enabled:
+                                    sub_results = result.get("results", [])
+                                    needs_retry_items = [r for r in sub_results if r.get("needs_retry")]
+                                    if needs_retry_items:
+                                        try:
+                                            db.add_to_retry_queue(
+                                                rating_key=rating_key,
+                                                media_type="tv",
+                                                library_id=library_id,
+                                                template_id=template_id,
+                                                preset_id=preset_id,
+                                                title=title,
+                                                reason=needs_retry_items[0].get("retry_reason", "unknown"),
+                                            )
+                                            logger.info("[AUTO_GEN] Queued TV show %s for retry", title)
+                                        except Exception as queue_err:
+                                            logger.debug("[AUTO_GEN] Failed to enqueue TV retry for %s: %s", title, queue_err)
+                                    else:
+                                        try:
+                                            db.remove_from_retry_queue(rating_key)
+                                        except Exception:
+                                            pass
                                 # Send per-item notification with poster preview
                                 _notif_kwargs = dict(
                                     title=title or result.get("title", "Unknown"),

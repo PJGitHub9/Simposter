@@ -482,6 +482,13 @@ def _process_single_movie(
             r.raise_for_status()
             save_render_cache(rating_key, payload)
 
+            # Manual batch send resolves any pending retry for this item
+            if source == "batch":
+                try:
+                    db.remove_from_retry_queue(rating_key)
+                except Exception:
+                    pass
+
             # Label removal
             if req.labels:
                 logger.info("[BATCH] Removing labels %s from %s", req.labels, rating_key)
@@ -551,6 +558,10 @@ def _process_single_movie(
         except Exception as logo_cache_err:
             logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
 
+        # Determine whether the ideal template conditions were met
+        logo_was_expected = str(logo_mode).lower() != "none"
+        needs_retry = (logo_was_expected and logo_url is None) or (poster_fallback_action_used == "template")
+
         result = {
             "rating_key": rating_key,
             "title": movie_details.get("title", ""),
@@ -559,6 +570,13 @@ def _process_single_movie(
             "status": "ok",
             "poster_fallback": poster_fallback_action_used == "template",
             "logo_fallback": logo_fallback_used,
+            "needs_retry": needs_retry,
+            "retry_reason": (
+                "no_logo_and_poster_fallback" if (logo_was_expected and logo_url is None and poster_fallback_action_used == "template")
+                else "no_logo" if (logo_was_expected and logo_url is None)
+                else "poster_fallback" if poster_fallback_action_used == "template"
+                else None
+            ),
         }
         if save_path:
             result["save_path"] = str(save_path)
@@ -865,6 +883,7 @@ def _render_tv_series_poster(
         poster_fallback_preset=poster_fallback_preset_used,
         source=source,
         tmdb_id=tmdb_id,
+        logo_was_expected=str(logo_mode).lower() != "none",
     )
 
 
@@ -1029,6 +1048,7 @@ def _render_all_tv_seasons(
                     poster_fallback_preset=series_poster_fallback_preset,
                     source=source,
                     tmdb_id=tmdb_id,
+                    logo_was_expected=str(logo_mode).lower() != "none",
                 )
                 results.append({
                     **series_result,
@@ -1192,6 +1212,7 @@ def _render_all_tv_seasons(
             poster_fallback_preset=season_poster_fallback_preset,
             source=source,
             tmdb_id=tmdb_id,
+            logo_was_expected=str(season_logo_mode).lower() != "none",
         )
         results.append(result)
 
@@ -1225,6 +1246,7 @@ def _render_and_save_poster(
     logo_fallback_preset: Optional[str] = None,
     source: str = "batch",
     tmdb_id: Optional[int] = None,
+    logo_was_expected: bool = True,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
@@ -1422,6 +1444,13 @@ def _render_and_save_poster(
             logger.info("[BATCH] Uploaded poster to Plex for %s", title)
             save_render_cache(rating_key, payload)
 
+            # Manual batch send resolves any pending retry for this item
+            if source == "batch":
+                try:
+                    db.remove_from_retry_queue(rating_key)
+                except Exception:
+                    pass
+
             # Send logo to Plex if requested and a logo was used
             logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s",
                         getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key)
@@ -1501,6 +1530,7 @@ def _render_and_save_poster(
     except Exception as logo_cache_err:
         logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
 
+    needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used
     result = {
         "rating_key": rating_key,
         "poster_used": poster_url,
@@ -1508,6 +1538,13 @@ def _render_and_save_poster(
         "status": "ok",
         "poster_fallback": poster_fallback_used,
         "logo_fallback": logo_fallback_used,
+        "needs_retry": needs_retry,
+        "retry_reason": (
+            "no_logo_and_poster_fallback" if (logo_was_expected and logo_url is None and poster_fallback_used)
+            else "no_logo" if (logo_was_expected and logo_url is None)
+            else "poster_fallback" if poster_fallback_used
+            else None
+        ),
     }
     if season_title:
         result["season"] = season_title
