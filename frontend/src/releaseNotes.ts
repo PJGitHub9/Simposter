@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.5.998',
+    date: '2026-06-18',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed "Existing Content — Poster Behaviour" (Resend/Regenerate) setting not persisting after save. The backend Pydantic schema for AutomationSettings was missing the field, causing it to be silently stripped on every POST. The setting now saves and restores correctly.',
+          'Fixed batch runs not adding items to the retry queue when a fallback preset was used. Batch results are now evaluated for retry eligibility the same way webhooks and auto-generate runs are.',
+          'Resent posters are now tracked in History with a distinct "Resent to Plex" action badge (purple). Includes a hover thumbnail preview and appears in the Action filter dropdown. Previously resend events were logged to file only and invisible in the History page.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.997',
     date: '2026-06-17',
     sections: [

@@ -2243,6 +2243,26 @@ def copy_env_to_ui_settings():
 #  Poster History Operations
 # ============================================
 
+def get_title_for_rating_key(rating_key: str) -> tuple:
+    """Return (title, year) for a rating_key from movie_cache or poster_history. Falls back to (None, None)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT title, year FROM movie_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT title, year FROM tv_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+            ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT title, year FROM poster_history WHERE rating_key = ? ORDER BY created_at DESC LIMIT 1",
+                (rating_key,)
+            ).fetchone()
+    if row:
+        return row["title"], row["year"]
+    return None, None
+
+
 def record_poster_history(
     rating_key: str,
     library_id: Optional[str],

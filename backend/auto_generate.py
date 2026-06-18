@@ -147,6 +147,17 @@ def process_new_content_for_library(
                                         ).raise_for_status()
                                         results["movies_succeeded"] += 1
                                         logger.info(f"[AUTO_GEN] Resent cached poster for {title} (existingContentMode=resend)")
+                                        db.record_poster_history(
+                                            rating_key=rating_key,
+                                            library_id=str(library_id or ""),
+                                            title=title,
+                                            year=year,
+                                            template_id=template_id,
+                                            preset_id=preset_id,
+                                            action="resent_to_plex",
+                                            source="auto_generate",
+                                            poster_data=cached,
+                                        )
                                     except Exception as resend_err:
                                         logger.warning(f"[AUTO_GEN] Cache resend failed for {title}: {resend_err} — falling through to generation")
                                     else:
@@ -266,6 +277,17 @@ def process_new_content_for_library(
                                         ).raise_for_status()
                                         results["tv_shows_succeeded"] += 1
                                         logger.info(f"[AUTO_GEN] Resent cached poster for {title} (existingContentMode=resend)")
+                                        db.record_poster_history(
+                                            rating_key=rating_key,
+                                            library_id=str(library_id or ""),
+                                            title=title,
+                                            year=year,
+                                            template_id=template_id,
+                                            preset_id=preset_id,
+                                            action="resent_to_plex",
+                                            source="auto_generate",
+                                            poster_data=cached,
+                                        )
                                     except Exception as resend_err:
                                         logger.warning(f"[AUTO_GEN] Cache resend failed for {title}: {resend_err} — falling through to generation")
                                     else:

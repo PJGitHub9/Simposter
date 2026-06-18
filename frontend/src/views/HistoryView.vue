@@ -257,6 +257,8 @@ const getActionLabel = (action: string) => {
   switch (action) {
     case 'sent_to_plex':
       return 'Sent to Plex'
+    case 'resent_to_plex':
+      return 'Resent to Plex'
     case 'saved_local':
       return 'Saved Locally'
     case 'failed':
@@ -270,6 +272,8 @@ const getActionClass = (action: string) => {
   switch (action) {
     case 'sent_to_plex':
       return 'action-plex'
+    case 'resent_to_plex':
+      return 'action-resent'
     case 'saved_local':
       return 'action-local'
     case 'failed':
@@ -341,7 +345,7 @@ const clearFilters = () => {
 // Check if a record can be previewed
 const canPreview = (record: HistoryRecord): boolean => {
   // Can preview if we have a save_path (local file) or if it was sent to Plex (rating_key)
-  return !!(record.save_path || (record.action === 'sent_to_plex' && record.rating_key))
+  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex') && record.rating_key))
 }
 
 // Get the preview image URL for a record
@@ -501,6 +505,7 @@ onMounted(async () => {
           <select v-model="selectedAction" @change="fetchHistory">
             <option value="all">All Actions</option>
             <option value="sent_to_plex">Sent to Plex</option>
+            <option value="resent_to_plex">Resent to Plex</option>
             <option value="saved_local">Saved Locally</option>
             <option value="failed">Failed</option>
           </select>
@@ -975,6 +980,11 @@ onMounted(async () => {
 .action-plex {
   background: rgba(229, 160, 13, 0.15);
   color: #e5a00d;
+}
+
+.action-resent {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
 }
 
 .action-local {

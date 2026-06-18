@@ -1565,11 +1565,13 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
         req: The batch request containing all parameters
         is_tv_batch: True for TV shows (process seasons), False for movies
     """
-    # Get concurrent renders setting
+    # Get concurrent renders setting and retry config
+    retry_enabled = False
     try:
         from .ui_settings import _read_settings
         ui_settings = _read_settings(include_env=False)
         max_workers = ui_settings.performance.concurrentRenders if ui_settings.performance else 2
+        retry_enabled = ui_settings.automation.retryUntilTemplateMet if ui_settings.automation else False
     except Exception:
         max_workers = 2  # Default to 2 concurrent renders
 
@@ -1696,6 +1698,40 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                     success_count += 1
                 else:
                     failed_count += 1
+                # Enqueue for retry if ideal template conditions weren't met
+                if retry_enabled:
+                    if result.get("needs_retry"):
+                        # Movie path: needs_retry is at the top level
+                        try:
+                            db.add_to_retry_queue(
+                                rating_key=result.get("rating_key", ""),
+                                media_type="movie",
+                                library_id=str(req.library_id or ""),
+                                template_id=req.template_id,
+                                preset_id=req.preset_id or "",
+                                title=result.get("title", ""),
+                                reason=result.get("retry_reason", "unknown"),
+                            )
+                            logger.info("[BATCH] Queued %s for retry (reason=%s)", result.get("title"), result.get("retry_reason"))
+                        except Exception as queue_err:
+                            logger.debug("[BATCH] Failed to enqueue retry for %s: %s", result.get("rating_key"), queue_err)
+                    elif is_tv_batch and result.get("status") == "ok":
+                        # TV path: needs_retry lives in sub-results; enqueue the show once if any sub needs retry
+                        sub_needing_retry = next((s for s in result.get("results", []) if s.get("needs_retry")), None)
+                        if sub_needing_retry:
+                            try:
+                                db.add_to_retry_queue(
+                                    rating_key=result.get("rating_key", ""),
+                                    media_type="tv",
+                                    library_id=str(req.library_id or ""),
+                                    template_id=req.template_id,
+                                    preset_id=req.preset_id or "",
+                                    title=result.get("show_title", ""),
+                                    reason=sub_needing_retry.get("retry_reason", "unknown"),
+                                )
+                                logger.info("[BATCH] Queued TV show %s for retry (reason=%s)", result.get("show_title"), sub_needing_retry.get("retry_reason"))
+                            except Exception as queue_err:
+                                logger.debug("[BATCH] Failed to enqueue TV retry for %s: %s", result.get("rating_key"), queue_err)
                 # Track fallback usage (direct flags for movies, nested results for TV shows)
                 if result.get("poster_fallback"):
                     poster_fallback_count += 1

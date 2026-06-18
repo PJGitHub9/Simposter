@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.5.998 (2026-06-18)
+### Bug Fixes
+- **existingContentMode not saving**: `AutomationSettings` Pydantic schema was missing `existingContentMode`, `retryUntilTemplateMet`, `retryIntervalHours`, and `retryMaxAttempts` fields. Pydantic silently stripped them on every POST, so the setting always reverted to `regenerate` after a page refresh.
+- **Batch runs not enqueuing retries**: When a batch run used a fallback preset, the item was never added to the retry queue. Batch results are now evaluated for retry eligibility (matching webhook and auto-generate behaviour).
+- **Resend not tracked in History**: Resent posters were logged to the application log file but never written to the history database. They now appear in History with a "Resent to Plex" action badge and hover thumbnail preview, and can be filtered via the Action dropdown.
+
 ## v1.5.997 (2026-06-17)
 ### New Features
 - **Retry Until Template Is Met**: New automation setting that queues items for automatic retry when the ideal poster can't be generated (no logo found, or no textless poster available). Items retry on a configurable interval until the ideal poster is produced, then are saved, uploaded to Plex, and removed from the queue. Toggle, retry interval (hours), and max attempts (0 = unlimited) configurable in Settings → Performance.

@@ -631,6 +631,21 @@ def process_webhook_poster_generation(
                             timeout=20,
                         ).raise_for_status()
                         logger.info("[WEBHOOK] Resent cached poster for %s (existingContentMode=resend)", rating_key)
+                        _title, _year = db.get_title_for_rating_key(rating_key)
+                        try:
+                            db.record_poster_history(
+                                rating_key=rating_key,
+                                library_id=str(library_id or ""),
+                                title=_title,
+                                year=_year,
+                                template_id=template_id,
+                                preset_id=preset_id,
+                                action="resent_to_plex",
+                                source="webhook",
+                                poster_data=cached,
+                            )
+                        except Exception:
+                            pass
                         return
             except Exception as resend_err:
                 logger.warning("[WEBHOOK] Cache resend check failed for %s: %s — falling through to generation", rating_key, resend_err)
