@@ -2,7 +2,7 @@
 
 ## v1.5.997 (2026-06-17)
 ### New Features
-- **Retry Until Template Is Met**: New automation setting that queues items for automatic retry when the ideal poster can't be generated (no logo found, or no textless poster available). Items retry on a configurable interval until the ideal poster is produced, then are saved, uploaded to Plex, and removed from the queue. Toggle, retry interval (hours), and max attempts (0 = unlimited) configurable in Settings → Automation.
+- **Retry Until Template Is Met**: New automation setting that queues items for automatic retry when the ideal poster can't be generated (no logo found, or no textless poster available). Items retry on a configurable interval until the ideal poster is produced, then are saved, uploaded to Plex, and removed from the queue. Toggle, retry interval (hours), and max attempts (0 = unlimited) configurable in Settings → Performance.
 - **Retry Queue in History**: New "Retry Queue" tab in the History page shows all pending retries with reason, attempt count, last tried time, and per-item Retry Now / Dismiss actions.
 - **Manual send clears retry queue**: Sending a poster manually (from the editor, batch, or via direct Plex send) automatically removes the item from the retry queue — the manual poster takes precedence.
 ### Diagnostics

@@ -116,9 +116,13 @@ class SchedulerSettings(BaseModel):
 
 class AutomationSettings(BaseModel):
     """Settings for automatic poster generation via webhooks"""
-    webhookAutoSend: bool = True  # Automatically send generated posters to Plex
-    webhookAutoLabels: str = "Simposter"  # Comma-separated labels to apply to webhook-generated posters
-    webhookAlwaysRegenerateSeason: bool = False  # Always regenerate season poster on new episode webhook
+    webhookAutoSend: bool = True
+    webhookAutoLabels: str = "Simposter"
+    webhookAlwaysRegenerateSeason: bool = False
+    existingContentMode: str = "regenerate"  # "regenerate" or "resend"
+    retryUntilTemplateMet: bool = False
+    retryIntervalHours: int = 24
+    retryMaxAttempts: int = 0
 
 
 class NotificationSettings(BaseModel):
