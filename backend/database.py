@@ -807,6 +807,28 @@ def init_database():
                 conn.commit()
         except Exception as cleanup_err:
             logger.warning(f"[DB] Failed to clean up TV cache: {cleanup_err}")
+
+        # Seed onboarding_completed flag if it has never been set.
+        # Existing users who already have Plex configured get true (skip onboarding).
+        # Fresh installs get false (show onboarding).
+        try:
+            existing = cursor.execute(
+                "SELECT value FROM settings WHERE key = 'onboarding_completed' LIMIT 1"
+            ).fetchone()
+            if existing is None:
+                plex_url_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'plex.url' OR key = 'url' AND category = 'plex' LIMIT 1"
+                ).fetchone()
+                already_configured = bool(plex_url_row and plex_url_row["value"] and plex_url_row["value"].strip())
+                flag_value = "true" if already_configured else "false"
+                cursor.execute("""
+                    INSERT INTO settings (key, value, category)
+                    VALUES ('onboarding_completed', ?, NULL)
+                """, (flag_value,))
+                conn.commit()
+                logger.info(f"[DB] Seeded onboarding_completed={flag_value}")
+        except Exception as onboard_err:
+            logger.warning(f"[DB] Could not seed onboarding_completed: {onboard_err}")
     except Exception as e:
         logger.error(f"[DB] Initialization/migration failed: {e}")
         conn.rollback()

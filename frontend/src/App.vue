@@ -8,6 +8,7 @@ import TvShowEditorPane from './components/editor/TvShowEditorPane.vue'
 import NotificationContainer from './components/NotificationContainer.vue'
 import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
+import OnboardingModal from './components/OnboardingModal.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
@@ -76,6 +77,7 @@ const searchQuery = ref('')
 const sidebarOpen = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const showChangelog = ref(false)
+const showOnboarding = ref(false)
 
 const toggleSidebar = () => {
   sidebarOpen.value = !sidebarOpen.value
@@ -392,10 +394,11 @@ onMounted(async () => {
     await settings.load()
   }
 
-  // Check if Plex is configured
+  // Check if Plex is configured — show onboarding for new users
   const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
-  if (!plexConfigured && route.path !== '/settings') {
-    // Redirect to settings if Plex not configured
+  if (!settings.onboardingCompleted.value) {
+    showOnboarding.value = true
+  } else if (!plexConfigured && route.path !== '/settings') {
     router.push('/settings')
   }
 
@@ -645,6 +648,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 <template>
   <div class="shell">
     <NotificationContainer />
+    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false" />
     <UpdateAnnouncementModal />
 
     <!-- Mobile sidebar overlay -->

@@ -166,6 +166,7 @@ class UISettings(BaseModel):
     automation: AutomationSettings = Field(default_factory=AutomationSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
+    onboarding_completed: bool = False
 
 class PlexLogoSendRequest(BaseModel):
     rating_key: str

@@ -111,8 +111,10 @@ export type UISettings = {
   scheduler?: SchedulerSettings
   automation?: AutomationSettings
   notifications?: NotificationSettings
+  onboarding_completed?: boolean
 }
 
+const onboardingCompleted = ref(false)
 const theme = ref<Theme>('neon')
 const posterDensity = ref(20)
 const deduplicateMovies = ref(false)
@@ -180,6 +182,7 @@ async function loadSettings() {
       defaultTvLabelsToRemove.value = data.defaultTvLabelsToRemove || {}
     }
     loaded.value = true
+    onboardingCompleted.value = data.onboarding_completed ?? false
     saveLocation.value = data.saveLocation ?? "/output"
     // New separate save locations with backwards compatibility
     movieSaveLocation.value = data.movieSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title}.jpg"
@@ -280,7 +283,8 @@ async function saveSettings() {
       apiOrder: apiOrder.value,
       scheduler: { ...scheduler.value },
       automation: { ...automation.value },
-      notifications: { ...notifications.value }
+      notifications: { ...notifications.value },
+      onboarding_completed: onboardingCompleted.value,
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -319,6 +323,7 @@ export function useSettingsStore() {
     scheduler,
     automation,
     notifications,
+    onboardingCompleted,
     loading,
     error,
     loaded,
