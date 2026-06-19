@@ -220,9 +220,16 @@ def fetch_and_cache_logo(rating_key: str, force_refresh: bool = False) -> Option
         if not logo_url:
             return None
 
-        # The URL is a direct external URL (e.g. TMDB) — no Plex auth needed
-        logo_r = requests.get(logo_url, timeout=10)
+        # Plex returns a relative path (/library/metadata/.../clearLogo/...).
+        # Prepend the Plex base URL and use the authenticated session.
+        if logo_url.startswith("/"):
+            logo_url = f"{settings.PLEX_URL}{logo_url}"
+            logo_r = plex_session.get(logo_url, headers=plex_headers(), timeout=10)
+        else:
+            # Absolute external URL (rare) — no auth needed
+            logo_r = requests.get(logo_url, timeout=10)
         if logo_r.status_code != 200:
+            logger.debug("[LOGO] Failed to download clearlogo for %s: HTTP %s", rating_key, logo_r.status_code)
             return None
         content_type = logo_r.headers.get("content-type", "image/png")
         return _save_logo_cache(rating_key, logo_r.content, content_type)

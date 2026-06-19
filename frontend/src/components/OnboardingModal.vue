@@ -323,12 +323,12 @@ const goNext = async () => {
     importDefaultPreset()  // fire-and-forget; finish step shows progress passively
   }
   const idx = stepIndex.value
-  if (idx < STEPS.length - 1) step.value = STEPS[idx + 1]
+  if (idx < STEPS.length - 1) step.value = STEPS[idx + 1]!
 }
 
 const goBack = () => {
   const idx = stepIndex.value
-  if (idx > 0) step.value = STEPS[idx - 1]
+  if (idx > 0) step.value = STEPS[idx - 1]!
 }
 
 // ── Close ──────────────────────────────────────────────────────────────────

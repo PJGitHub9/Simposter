@@ -9,6 +9,7 @@ import NotificationContainer from './components/NotificationContainer.vue'
 import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
 import OnboardingModal from './components/OnboardingModal.vue'
+import QuickStartGuide from './components/QuickStartGuide.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
@@ -78,6 +79,17 @@ const sidebarOpen = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const showChangelog = ref(false)
 const showOnboarding = ref(false)
+const showQuickGuide = ref(false)
+
+const handleQuickGuideDone = () => {
+  showQuickGuide.value = false
+  const firstLib = settings.plex.value.libraryMappings?.[0]
+  if (firstLib?.id) {
+    router.push({ name: 'movies', query: { library: firstLib.id } })
+  } else {
+    router.push({ name: 'movies' })
+  }
+}
 
 const toggleSidebar = () => {
   sidebarOpen.value = !sidebarOpen.value
@@ -648,7 +660,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 <template>
   <div class="shell">
     <NotificationContainer />
-    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false" />
+    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true" />
+    <QuickStartGuide v-if="showQuickGuide" @done="handleQuickGuideDone" />
     <UpdateAnnouncementModal />
 
     <!-- Mobile sidebar overlay -->

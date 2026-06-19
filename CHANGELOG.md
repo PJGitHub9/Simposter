@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.6 (2026-06-19)
+### New Features
+- **Onboarding wizard**: First-run setup modal walks new users through Plex connection, library selection, API keys (TMDb/TVDb/Fanart with inline test buttons), automation preferences (Kometa compatibility, scan schedule, timezone, label tracking), performance defaults (concurrent renders, output format/quality), and Apprise notifications — all in one guided flow
+  - Library scan starts immediately after the libraries step so content is ready by the time setup finishes
+  - Default preset (Uniformlogo) is automatically imported on completion — no manual step needed
+  - Existing users are detected via DB flag and skip the wizard entirely
+- **Quick start guide**: Post-onboarding feature overview showing all key areas of the app (Libraries, Batch Edit, Template Manager, Overlay Manager, Local Assets, Backup & Restore) as a scannable card grid
+
 ## v1.5.998 (2026-06-18)
 ### Bug Fixes
 - **existingContentMode not saving**: `AutomationSettings` Pydantic schema was missing `existingContentMode`, `retryUntilTemplateMet`, `retryIntervalHours`, and `retryMaxAttempts` fields. Pydantic silently stripped them on every POST, so the setting always reverted to `regenerate` after a page refresh.

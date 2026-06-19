@@ -557,7 +557,10 @@ PLEX_DEFAULT_MOVIE_LIB_ID = PLEX_MOVIE_LIB_IDS[0] if PLEX_MOVIE_LIB_IDS else "1"
 def get_plex_movies(library_ids: Optional[List[str]] = None):
     from .schemas import Movie
 
-    lib_ids = library_ids or PLEX_MOVIE_LIB_IDS
+    # Prefer runtime-updated settings attribute over the module-level constant
+    # (module-level is resolved once at startup; new users save libraries during onboarding
+    # which updates settings.PLEX_MOVIE_LIB_IDS via _apply_runtime_settings, not the constant)
+    lib_ids = library_ids or getattr(settings, "PLEX_MOVIE_LIB_IDS", None) or PLEX_MOVIE_LIB_IDS or []
     out: List[Movie] = []
 
     for lib_id in lib_ids:
