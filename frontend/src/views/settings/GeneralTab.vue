@@ -69,26 +69,55 @@ const localFanartApiKey = computed({
 })
 
 // Common timezones list
-const timezones = [
+const TIMEZONE_LIST = [
   { value: 'UTC', label: 'UTC (Coordinated Universal Time)' },
   { value: 'America/New_York', label: 'Eastern Time (US & Canada)' },
   { value: 'America/Chicago', label: 'Central Time (US & Canada)' },
   { value: 'America/Denver', label: 'Mountain Time (US & Canada)' },
   { value: 'America/Los_Angeles', label: 'Pacific Time (US & Canada)' },
+  { value: 'America/Toronto', label: 'Toronto' },
+  { value: 'America/Vancouver', label: 'Vancouver' },
   { value: 'America/Anchorage', label: 'Alaska' },
   { value: 'Pacific/Honolulu', label: 'Hawaii' },
+  { value: 'America/Sao_Paulo', label: 'São Paulo' },
+  { value: 'America/Argentina/Buenos_Aires', label: 'Buenos Aires' },
   { value: 'Europe/London', label: 'London' },
-  { value: 'Europe/Paris', label: 'Paris, Berlin, Madrid' },
+  { value: 'Europe/Paris', label: 'Paris' },
+  { value: 'Europe/Berlin', label: 'Berlin' },
+  { value: 'Europe/Amsterdam', label: 'Amsterdam' },
+  { value: 'Europe/Rome', label: 'Rome' },
+  { value: 'Europe/Madrid', label: 'Madrid' },
+  { value: 'Europe/Stockholm', label: 'Stockholm' },
   { value: 'Europe/Athens', label: 'Athens, Istanbul' },
   { value: 'Europe/Moscow', label: 'Moscow' },
   { value: 'Asia/Dubai', label: 'Dubai' },
   { value: 'Asia/Kolkata', label: 'India' },
+  { value: 'Asia/Bangkok', label: 'Bangkok' },
+  { value: 'Asia/Singapore', label: 'Singapore' },
   { value: 'Asia/Shanghai', label: 'Beijing, Shanghai' },
+  { value: 'Asia/Hong_Kong', label: 'Hong Kong' },
   { value: 'Asia/Tokyo', label: 'Tokyo' },
   { value: 'Asia/Seoul', label: 'Seoul' },
+  { value: 'Australia/Perth', label: 'Perth' },
   { value: 'Australia/Sydney', label: 'Sydney' },
+  { value: 'Australia/Melbourne', label: 'Melbourne' },
   { value: 'Pacific/Auckland', label: 'Auckland' },
 ]
+
+// Include any currently-saved timezone that isn't in the standard list
+const timezones = computed(() => {
+  const known = new Set(TIMEZONE_LIST.map(t => t.value))
+  const current = props.timezone
+  const detected = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const extras: { value: string; label: string }[] = []
+  for (const tz of [current, detected]) {
+    if (tz && !known.has(tz)) {
+      known.add(tz)
+      extras.push({ value: tz, label: tz })
+    }
+  }
+  return extras.length ? [...extras, ...TIMEZONE_LIST] : TIMEZONE_LIST
+})
 </script>
 
 <template>

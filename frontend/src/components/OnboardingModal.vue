@@ -230,14 +230,22 @@ const saveSettings = async () => {
       webhookAutoSend: true,
       webhookAutoLabels: sendLabel.value ? labelName.value : '',
       webhookAlwaysRegenerateSeason: false,
+      retryUntilTemplateMet: true,
     }
+    const allLibIds = [
+      ...movieMappings.map(m => m.id),
+      ...tvMappings.map(m => m.id),
+    ]
     settings.scheduler.value = {
       ...settings.scheduler.value,
       enabled: scanFrequency.value !== 'never',
       cronExpression: scanCronExpression.value || '0 1 * * *',
+      libraryIds: allLibIds,
     }
-    // defaultLabelsToRemove is per-library; seed the 'default' key
-    settings.defaultLabelsToRemove.value = { default: labelsToRemove }
+    // defaultLabelsToRemove keyed by library ID so SettingsView renders correctly
+    const labelsRecord: Record<string, string[]> = {}
+    allLibIds.forEach(id => { labelsRecord[id] = labelsToRemove })
+    settings.defaultLabelsToRemove.value = labelsRecord
 
     await settings.save()
     settingsSaved.value = true

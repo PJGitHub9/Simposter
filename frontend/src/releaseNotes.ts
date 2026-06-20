@@ -10,6 +10,21 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.01',
+    date: '2026-06-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed timezone selection appearing blank in Settings after onboarding — the Settings timezone dropdown now includes all timezones available in the onboarding wizard, and any saved or browser-detected timezone not in the standard list is automatically added as an option.',
+          'Fixed Kometa "Overlay" label not appearing in Default Labels to Remove after onboarding — labels are now saved with library IDs as keys, matching the format Settings expects.',
+          'Fixed scheduled scan having no libraries selected after onboarding — all configured libraries are now included in the scheduler settings saved during setup.',
+          'Retry poster generation (Retry Until Template Is Met) is now enabled by default on new installs.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6',
     date: '2026-06-19',
     sections: [

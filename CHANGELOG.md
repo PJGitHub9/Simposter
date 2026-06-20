@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.6.01 (2026-06-19)
+### Bug Fixes
+- **Timezone blank after onboarding**: Settings timezone dropdown now includes the full timezone list from the onboarding wizard, and any saved or browser-detected timezone not in the standard list is prepended automatically so the select never appears blank
+- **Kometa label not auto-applied**: Default Labels to Remove was saved with a `"default"` key instead of per-library IDs — fixed to use actual library IDs so the "Overlay" label appears correctly in Settings after setup
+- **Scheduled scan no libraries selected**: Onboarding now saves all configured library IDs into `scheduler.libraryIds` so the scan schedule covers all selected libraries from the start
+- **Retry not enabled by default**: New installs now have "Retry Until Template Is Met" enabled by default (set during onboarding's settings save)
+
 ## v1.6 (2026-06-19)
 ### New Features
 - **Onboarding wizard**: First-run setup modal walks new users through Plex connection, library selection, API keys (TMDb/TVDb/Fanart with inline test buttons), automation preferences (Kometa compatibility, scan schedule, timezone, label tracking), performance defaults (concurrent renders, output format/quality), and Apprise notifications — all in one guided flow
