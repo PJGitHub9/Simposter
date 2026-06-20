@@ -10,6 +10,22 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6',
+    date: '2026-06-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Onboarding wizard for new users — guided setup covering Plex connection, library selection, API keys (TMDb, TVDb, Fanart) with inline test buttons, automation preferences (Kometa, scan schedule, timezone, label tracking), performance defaults, and Apprise notifications.',
+          'Library scan starts immediately after the libraries step so content is ready by the time setup finishes.',
+          'Default preset (Uniformlogo) is automatically imported on completion — no manual step needed.',
+          'Quick start guide appears after onboarding — a feature overview card grid covering Libraries, Batch Edit, Template Manager, Overlay Manager, Local Assets, and Backup & Restore.',
+          'Fixed clearlogo fetch from Plex: the Image[].url from Plex\'s JSON API is a relative path and now correctly has the Plex base URL and auth token prepended before download.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.998',
     date: '2026-06-18',
     sections: [
