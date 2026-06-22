@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.6.02 (2026-06-22)
+### Bug Fixes
+- **Retry queue not populated after logo fallback**: When auto-generate or a scheduled scan found no logo and switched to a fallback preset (e.g. `stock-poster`), the fallback preset's `logo_mode: none` overwrote the original mode — causing `logo_was_expected` to evaluate `False` and `needs_retry` to remain `False`. Items using a logo or poster fallback are now correctly enqueued for retry.
+
 ## v1.6.01 (2026-06-19)
 ### Bug Fixes
 - **Timezone blank after onboarding**: Settings timezone dropdown now includes the full timezone list from the onboarding wizard, and any saved or browser-detected timezone not in the standard list is prepended automatically so the select never appears blank

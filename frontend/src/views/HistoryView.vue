@@ -211,6 +211,7 @@ const dismissItem = async (rating_key: string) => {
 const getRetryReasonLabel = (reason: string | null): string => {
   switch (reason) {
     case 'no_logo': return 'No logo found'
+    case 'logo_fallback': return 'Logo fallback used'
     case 'poster_fallback': return 'No textless poster'
     case 'no_logo_and_poster_fallback': return 'No logo + textless'
     default: return reason || 'Unknown'
@@ -220,6 +221,7 @@ const getRetryReasonLabel = (reason: string | null): string => {
 const getRetryReasonClass = (reason: string | null): string => {
   switch (reason) {
     case 'no_logo': return 'reason-logo'
+    case 'logo_fallback': return 'reason-logo'
     case 'poster_fallback': return 'reason-poster'
     case 'no_logo_and_poster_fallback': return 'reason-both'
     default: return 'reason-unknown'

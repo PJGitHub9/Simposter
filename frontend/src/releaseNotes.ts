@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.02',
+    date: '2026-06-22',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed retry queue not receiving items when a logo fallback preset was used during auto-generate or scheduled scan. When no logo is found and the fallback preset switches to one with logo_mode "none", the original needs_retry check evaluated to false — items are now correctly enqueued whenever a logo or poster fallback fires.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.01',
     date: '2026-06-19',
     sections: [

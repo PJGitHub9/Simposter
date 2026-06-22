@@ -558,9 +558,12 @@ def _process_single_movie(
         except Exception as logo_cache_err:
             logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
 
-        # Determine whether the ideal template conditions were met
+        # Determine whether the ideal template conditions were met.
+        # logo_was_expected uses the original logo_mode (before fallback may have overwritten it
+        # with "none") — but logo_fallback_used captures the case where the fallback fires and
+        # logo_mode becomes "none", which would otherwise make logo_was_expected False.
         logo_was_expected = str(logo_mode).lower() != "none"
-        needs_retry = (logo_was_expected and logo_url is None) or (poster_fallback_action_used == "template")
+        needs_retry = (logo_was_expected and logo_url is None) or (poster_fallback_action_used == "template") or logo_fallback_used
 
         result = {
             "rating_key": rating_key,
@@ -575,6 +578,7 @@ def _process_single_movie(
                 "no_logo_and_poster_fallback" if (logo_was_expected and logo_url is None and poster_fallback_action_used == "template")
                 else "no_logo" if (logo_was_expected and logo_url is None)
                 else "poster_fallback" if poster_fallback_action_used == "template"
+                else "logo_fallback" if logo_fallback_used
                 else None
             ),
         }
@@ -1530,7 +1534,7 @@ def _render_and_save_poster(
     except Exception as logo_cache_err:
         logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
 
-    needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used
+    needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used
     result = {
         "rating_key": rating_key,
         "poster_used": poster_url,
@@ -1543,6 +1547,7 @@ def _render_and_save_poster(
             "no_logo_and_poster_fallback" if (logo_was_expected and logo_url is None and poster_fallback_used)
             else "no_logo" if (logo_was_expected and logo_url is None)
             else "poster_fallback" if poster_fallback_used
+            else "logo_fallback" if logo_fallback_used
             else None
         ),
     }
