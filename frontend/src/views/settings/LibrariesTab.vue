@@ -56,6 +56,7 @@ const props = defineProps<{
   unsavedChanges: boolean
   schedulerChanged?: boolean
   connectionsChanged?: boolean
+  sendLogosToPlex: boolean
 }>()
 
 const apiBase = getApiBase()
@@ -72,6 +73,7 @@ const emit = defineEmits<{
   'update:schedulerLibraryIds': [value: string[]]
   'update:defaultLabelsToRemove': [value: Record<string, string[]>]
   'update:defaultTvLabelsToRemove': [value: Record<string, string[]>]
+  'update:sendLogosToPlex': [value: boolean]
   'test-connection': []
   'scan-library': [libraryId?: string]
   'save': []
@@ -530,6 +532,20 @@ const webhookInstructions = computed(() => {
           {{ testConnection }}
         </div>
       </div>
+    </div>
+
+    <!-- Global Logo Settings -->
+    <div class="section">
+      <h3>Logo Defaults</h3>
+      <label class="checkbox-label">
+        <input
+          type="checkbox"
+          :checked="sendLogosToPlex"
+          @change="emit('update:sendLogosToPlex', ($event.target as HTMLInputElement).checked)"
+        />
+        <span>Send logos to Plex by default</span>
+      </label>
+      <p class="help-text">When enabled, the "Send logo to Plex" option will be pre-checked in the poster editor and batch edit screens.</p>
     </div>
 
     <!-- Libraries Grid -->

@@ -92,6 +92,7 @@ const localDefaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
 const localPlexToken = ref('')
 const localPlexLibrary = ref('')
+const localSendLogosToPlex = ref(false)
 const localLibraries = ref<LibraryMapping[]>([])
 const savedLibraryIds = ref<Set<string>>(new Set())
 const localTvShowLibraries = ref<LibraryMapping[]>([])
@@ -119,6 +120,10 @@ let scanPoller: number | null = null
 const localWebhookAutoSend = ref(true)
 const localWebhookAutoLabels = ref('Overlay')
 const localWebhookAlwaysRegenerateSeason = ref(false)
+const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
+const localRetryUntilTemplateMet = ref(false)
+const localRetryIntervalHours = ref(24)
+const localRetryMaxAttempts = ref(0)
 
 // Notification settings
 const localDiscordEnabled = ref(false)
@@ -193,6 +198,7 @@ const loadLocalSettings = async () => {
   localPlexUrl.value = settings.plex.value.url
   localPlexToken.value = settings.plex.value.token
   localPlexLibrary.value = settings.plex.value.movieLibraryName || ''
+  localSendLogosToPlex.value = (settings.plex.value as any).sendLogosToPlex ?? false
 
   // Load movie libraries
   const hasPersistedLibraries = (settings.plex.value.libraryMappings || []).some((l: LibraryMapping) => l && l.id)
@@ -258,6 +264,10 @@ const loadLocalSettings = async () => {
   localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
   localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
   localWebhookAlwaysRegenerateSeason.value = settings.automation?.value?.webhookAlwaysRegenerateSeason ?? false
+  localExistingContentMode.value = (settings.automation?.value?.existingContentMode as 'resend' | 'regenerate') ?? 'regenerate'
+  localRetryUntilTemplateMet.value = settings.automation?.value?.retryUntilTemplateMet ?? false
+  localRetryIntervalHours.value = settings.automation?.value?.retryIntervalHours ?? 24
+  localRetryMaxAttempts.value = settings.automation?.value?.retryMaxAttempts ?? 0
 
   // Notification settings
   localDiscordEnabled.value = settings.notifications?.value?.discordEnabled ?? false
@@ -315,6 +325,10 @@ const captureSettingsSnapshot = () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    existingContentMode: localExistingContentMode.value,
+    retryUntilTemplateMet: localRetryUntilTemplateMet.value,
+    retryIntervalHours: localRetryIntervalHours.value,
+    retryMaxAttempts: localRetryMaxAttempts.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -383,6 +397,10 @@ const checkForChanges = () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    existingContentMode: localExistingContentMode.value,
+    retryUntilTemplateMet: localRetryUntilTemplateMet.value,
+    retryIntervalHours: localRetryIntervalHours.value,
+    retryMaxAttempts: localRetryMaxAttempts.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -474,7 +492,8 @@ const saveSettings = async () => {
       autoGeneratePresetId: l.autoGeneratePresetId || null,
       autoGenerateTemplateId: l.autoGenerateTemplateId || null,
       webhookIgnoreLabels: l.webhookIgnoreLabels || [],
-    }))
+    })),
+    sendLogosToPlex: localSendLogosToPlex.value,
   }
   settings.tmdb.value = { apiKey: localTmdbApiKey.value }
   settings.tvdb.value = { apiKey: localTvdbApiKey.value, comingSoon: settings.tvdb.value.comingSoon }
@@ -500,7 +519,11 @@ const saveSettings = async () => {
   settings.automation.value = {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
-    webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value
+    webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    existingContentMode: localExistingContentMode.value,
+    retryUntilTemplateMet: localRetryUntilTemplateMet.value,
+    retryIntervalHours: localRetryIntervalHours.value,
+    retryMaxAttempts: localRetryMaxAttempts.value,
   }
   settings.notifications.value = {
     discordEnabled: localDiscordEnabled.value,
@@ -1228,6 +1251,8 @@ onMounted(() => {
         :unsavedChanges="hasUnsavedChanges"
         :schedulerChanged="sectionsWithChanges.scheduler"
         :connectionsChanged="sectionsWithChanges.connections"
+        :sendLogosToPlex="localSendLogosToPlex"
+        @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
         @update:libraries="localLibraries = $event; hasUnsavedChanges = true"
@@ -1274,6 +1299,10 @@ onMounted(() => {
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
         :webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason"
+        :existingContentMode="localExistingContentMode"
+        :retryUntilTemplateMet="localRetryUntilTemplateMet"
+        :retryIntervalHours="localRetryIntervalHours"
+        :retryMaxAttempts="localRetryMaxAttempts"
         :imageQualityChanged="sectionsWithChanges.imageQuality"
         :performanceChanged="sectionsWithChanges.performance"
         :automationChanged="sectionsWithChanges.automation"
@@ -1289,6 +1318,10 @@ onMounted(() => {
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:existingContentMode="localExistingContentMode = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:retryUntilTemplateMet="localRetryUntilTemplateMet = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:retryIntervalHours="localRetryIntervalHours = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:retryMaxAttempts="localRetryMaxAttempts = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @clear-frontend-cache="clearCache"
         @clear-backend-cache="clearBackendCache"
         @save="saveSettings"

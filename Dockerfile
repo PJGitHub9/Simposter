@@ -57,8 +57,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git jq \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Ensure usable fonts for text overlay (DejaVu) and gosu for PUID/PGID drop
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core gosu && rm -rf /var/lib/apt/lists/*
+# Install fonts (DejaVu + Liberation) and gosu; copy .ttf files into /app/config/fonts
+# so the /api/fonts endpoint and _load_font() can find them without scanning /usr/share
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fonts-liberation gosu \
+    && mkdir -p /app/config/fonts \
+    && find /usr/share/fonts -name "*.ttf" -exec cp {} /app/config/fonts/ \; \
+    && rm -rf /var/lib/apt/lists/*
 
 # Ensure default folders exist in image (mount overrides are fine)
 RUN mkdir -p /config/output /config/uploads /config/assets /config/settings /config/logs

@@ -34,6 +34,8 @@ const logos = ref<{ url: string; thumb?: string; color?: string; language?: stri
 const labels = ref<string[]>([])
 const selectedLabels = ref<Set<string>>(new Set())
 const existingPoster = ref<string | null>(null)
+const existingLogo = ref<string | null>(null)
+const logoRefreshKey = ref(0)
 
 const posterFilter = ref<'all' | 'textless' | 'text'>('all')
 const posterLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
@@ -1345,6 +1347,18 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
   }
 }
 
+const fetchExistingLogo = async (forceRefresh = false) => {
+  try {
+    const params = `${forceRefresh ? 'force_refresh=1&' : ''}v=${Date.now()}`
+    const url = `${apiBase}/api/logo/${props.movie.key}?${params}`
+    const res = await fetch(url)
+    existingLogo.value = res.ok ? url : null
+    logoRefreshKey.value += 1
+  } catch {
+    existingLogo.value = null
+  }
+}
+
 const toggleLabel = (label: string) => {
   const set = new Set(selectedLabels.value)
   if (set.has(label)) set.delete(label)
@@ -1779,6 +1793,36 @@ const doSave = async () => {
   }
 }
 
+const sendLogo = ref((settings.plex.value as any).sendLogosToPlex ?? false)
+const logoSending = ref(false)
+
+const doSendLogoOnly = async () => {
+  if (!logoUrl.value) {
+    notifyError('No logo selected to send.')
+    return
+  }
+  logoSending.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/plex/send-logo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rating_key: props.movie.key,
+        logo_url: logoUrl.value,
+        is_tv: true,
+      }),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    success('Logo sent to Plex!')
+    await fetchExistingLogo()
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to send logo to Plex'
+    notifyError(message)
+  } finally {
+    logoSending.value = false
+  }
+}
+
 const doSend = async () => {
   if (!bgUrl.value) return
 
@@ -1816,7 +1860,7 @@ const doSend = async () => {
 
         // Create a temporary movie object for this season
         const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
-        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value)
+        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value)
 
         succeeded.push(season.title)
       } catch (err) {
@@ -1848,6 +1892,7 @@ const doSend = async () => {
     // Wait 600ms for Plex to process, then refresh poster and labels
     await new Promise(resolve => setTimeout(resolve, 600))
     await fetchExistingPoster(true)
+    await fetchExistingLogo()
     await fetchLabels()
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to send posters to Plex'
@@ -2102,6 +2147,10 @@ onMounted(async () => {
   loadSeasonsCache()
   fetchSeasons()
   loadOverlayConfigs()
+  fetch(`${apiBase}/api/fonts`)
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d?.fonts) availableFonts.value = d.fonts })
+    .catch(() => {})
 })
 
 // Watch for state changes and save
@@ -2151,6 +2200,7 @@ watch(
     await fetchImagesForCurrentSeason()
     await fetchLabels()
     await fetchExistingPoster()
+    await fetchExistingLogo()
     ensurePosterSelected() // Ensure series poster is selected after existing poster loads
     await presetService.load()
     applyPresetOptions(selectedPreset.value)
@@ -2939,6 +2989,21 @@ watch(tmdbId, () => {
           </div>
           <img v-if="existingPoster" :key="posterRefreshKey" :src="existingPoster" alt="Existing poster" class="existing-img" />
           <div v-else class="empty-preview">No poster</div>
+
+          <div class="preview-label" style="margin-top: 14px;">
+            Current Plex Logo
+            <button class="refresh-btn" title="Fetch logo from Plex" @click="fetchExistingLogo(true)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10" />
+                <polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+          </div>
+          <div class="existing-logo-area">
+            <img v-if="existingLogo" :key="logoRefreshKey" :src="existingLogo" alt="Existing logo" class="existing-logo-img" />
+            <div v-else class="empty-preview small">No logo</div>
+          </div>
         </div>
 
         <div class="preview-content-wrapper">
@@ -2951,6 +3016,14 @@ watch(tmdbId, () => {
             <span v-if="loading" class="status-badge">Rendering...</span>
             <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
             <div class="preview-actions float-right">
+              <label class="send-logo-toggle" title="Also send the selected logo to Plex">
+                <input type="checkbox" v-model="sendLogo" />
+                <span>Send logo</span>
+              </label>
+              <button title="Send Logo to Plex" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+                <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo' }}</span>
+              </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
               <button title="Send to Plex" class="btn-plex btn-inline" :disabled="loading" @click="doSend">📺 <span class="btn-label">Send to Plex</span></button>
             </div>
@@ -3567,6 +3640,29 @@ watch(tmdbId, () => {
   border-color: rgba(255, 255, 255, 0.15);
 }
 
+.send-logo-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #a8b3cf;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  transition: all 0.15s;
+}
+.send-logo-toggle:has(input:checked) {
+  color: #eef2ff;
+  border-color: rgba(61, 214, 183, 0.35);
+}
+.send-logo-toggle input {
+  margin: 0;
+  accent-color: var(--accent, #3dd6b7);
+}
+
 /* Override to ensure .btn-plex color wins when combined with btn-secondary */
 .btn-secondary.btn-plex {
   background: linear-gradient(120deg, #ff8a65, #ff7043);
@@ -3584,20 +3680,40 @@ watch(tmdbId, () => {
   display: flex;
   gap: 8px;
   align-items: center;
-  width: 320px; /* slightly narrower so buttons are a bit smaller */
   justify-content: flex-end;
 }
 .btn-inline {
-  width: calc(50% - 6px); /* two buttons share the preview-actions width */
-  min-width: 130px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-radius: 10px;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.btn-send-logo {
+  background: rgba(61, 214, 183, 0.12);
+  color: #3dd6b7;
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-send-logo:hover:not(:disabled) {
+  background: rgba(61, 214, 183, 0.22);
+  border-color: rgba(61, 214, 183, 0.55);
+}
+.btn-send-logo:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn-send-logo .spin {
+  animation: spin-logo 0.9s linear infinite;
+}
+@keyframes spin-logo {
+  to { transform: rotate(360deg); }
 }
 .btn-label {
   display: inline-block;
@@ -4025,6 +4141,30 @@ button:disabled {
 .status-badge.success {
   background: rgba(61, 214, 183, 0.15);
   color: #3dd6b7;
+}
+
+.existing-logo-area {
+  width: 160px;
+  background: #0a0b12;
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  box-sizing: border-box;
+}
+
+.existing-logo-img {
+  width: 100%;
+  max-height: 72px;
+  object-fit: contain;
+  display: block;
+}
+
+.empty-preview.small {
+  font-size: 11px;
+  padding: 8px;
 }
 
 .existing-img {
@@ -4474,14 +4614,10 @@ button:disabled {
     grid-template-columns: 380px 180px 1fr;
   }
 
-  .preview-actions {
-    width: 260px;
-  }
-
   .btn-inline {
-    min-width: 100px;
-    padding: 8px 10px;
-    font-size: 13px;
+    min-width: 80px;
+    padding: 7px 10px;
+    font-size: 12px;
   }
 }
 

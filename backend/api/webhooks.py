@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 import time
 import threading
 
-from ..config import logger, settings, plex_headers, plex_session, load_presets
+from ..config import logger, settings, plex_headers, plex_session, load_presets, load_render_cache
 from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
 from .. import database as db
 from .. import cache
@@ -613,6 +613,43 @@ def process_webhook_poster_generation(
                          If None or empty, process all seasons (for new series).
     """
     try:
+        # ------------------------------------------------------------------
+        # Resend cached poster if the setting is "resend" and a cached
+        # render exists for this item (i.e. it was previously sent by Simposter).
+        # ------------------------------------------------------------------
+        if auto_send:
+            try:
+                _ui = db.get_ui_settings()
+                if _ui.get("automation", {}).get("existingContentMode") == "resend":
+                    cached = load_render_cache(rating_key)
+                    if cached:
+                        plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+                        plex_session.post(
+                            plex_url,
+                            headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                            data=cached,
+                            timeout=20,
+                        ).raise_for_status()
+                        logger.info("[WEBHOOK] Resent cached poster for %s (existingContentMode=resend)", rating_key)
+                        _title, _year = db.get_title_for_rating_key(rating_key)
+                        try:
+                            db.record_poster_history(
+                                rating_key=rating_key,
+                                library_id=str(library_id or ""),
+                                title=_title,
+                                year=_year,
+                                template_id=template_id,
+                                preset_id=preset_id,
+                                action="resent_to_plex",
+                                source="webhook",
+                                poster_data=cached,
+                            )
+                        except Exception:
+                            pass
+                        return
+            except Exception as resend_err:
+                logger.warning("[WEBHOOK] Cache resend check failed for %s: %s — falling through to generation", rating_key, resend_err)
+
         from .batch import _process_single_movie, _process_single_tv_show
 
         # Load preset options
@@ -631,6 +668,15 @@ def process_webhook_poster_generation(
                 auto_labels = list({*auto_labels, *lib_default_labels})
                 logger.debug("[WEBHOOK] Labels to remove for library %s: %s", library_id, auto_labels)
 
+        # Read sendLogosToPlex global setting
+        send_logos = False
+        try:
+            from .. import database as _db
+            _ui = _db.get_ui_settings()
+            send_logos = bool(_ui.get("plex", {}).get("sendLogosToPlex", False))
+        except Exception:
+            pass
+
         options = preset.get("options", {})
 
         if is_tv:
@@ -647,7 +693,8 @@ def process_webhook_poster_generation(
                 include_seasons=include_seasons,
                 fallbackPosterAction=options.get("fallbackPosterAction"),
                 fallbackPosterTemplate=options.get("fallbackPosterTemplate"),
-                fallbackPosterPreset=options.get("fallbackPosterPreset")
+                fallbackPosterPreset=options.get("fallbackPosterPreset"),
+                send_logos_to_plex=send_logos,
             )
 
             # Get base settings from preset
@@ -690,6 +737,28 @@ def process_webhook_poster_generation(
             result_status = result.get("status")
             if result_status == "ok":
                 logger.info(f"[WEBHOOK] Successfully processed TV show {rating_key}")
+                # Enqueue for retry if ideal template conditions weren't met
+                try:
+                    _ui = db.get_ui_settings() or {}
+                    if _ui.get("automation", {}).get("retryUntilTemplateMet", False):
+                        sub_results = result.get("results", [])
+                        needs_retry_items = [r for r in sub_results if r.get("needs_retry")]
+                        show_title = result.get("show_title", rating_key)
+                        if needs_retry_items:
+                            db.add_to_retry_queue(
+                                rating_key=rating_key,
+                                media_type="tv",
+                                library_id=library_id,
+                                template_id=template_id,
+                                preset_id=preset_id,
+                                title=show_title,
+                                reason=needs_retry_items[0].get("retry_reason", "unknown"),
+                            )
+                            logger.info("[WEBHOOK] Queued TV show %s for retry", show_title)
+                        else:
+                            db.remove_from_retry_queue(rating_key)
+                except Exception as q_err:
+                    logger.debug("[WEBHOOK] TV retry queue update failed for %s: %s", rating_key, q_err)
                 # Update cache so the show appears in library view
                 try:
                     logger.info(f"[WEBHOOK] Updating TV cache for {rating_key} (library_id={library_id})")
@@ -738,7 +807,8 @@ def process_webhook_poster_generation(
                 send_to_plex=auto_send,
                 save_locally=False,
                 labels=auto_labels,
-                library_id=library_id
+                library_id=library_id,
+                send_logos_to_plex=send_logos,
             )
 
             # Get base settings from preset
@@ -768,6 +838,26 @@ def process_webhook_poster_generation(
             result_status = result.get("status")
             if result_status == "ok":
                 logger.info(f"[WEBHOOK] Successfully processed movie {rating_key}")
+                # Enqueue for retry if ideal template conditions weren't met
+                try:
+                    _ui = db.get_ui_settings() or {}
+                    if _ui.get("automation", {}).get("retryUntilTemplateMet", False):
+                        if result.get("needs_retry"):
+                            movie_title = result.get("title", rating_key)
+                            db.add_to_retry_queue(
+                                rating_key=rating_key,
+                                media_type="movie",
+                                library_id=library_id,
+                                template_id=template_id,
+                                preset_id=preset_id,
+                                title=movie_title,
+                                reason=result.get("retry_reason", "unknown"),
+                            )
+                            logger.info("[WEBHOOK] Queued %s for retry (reason=%s)", movie_title, result.get("retry_reason"))
+                        else:
+                            db.remove_from_retry_queue(rating_key)
+                except Exception as q_err:
+                    logger.debug("[WEBHOOK] Retry queue update failed for %s: %s", rating_key, q_err)
                 # Update cache so the movie appears in library view
                 try:
                     logger.info(f"[WEBHOOK] Updating movie cache for {rating_key} (library_id={library_id})")

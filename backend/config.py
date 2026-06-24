@@ -211,6 +211,7 @@ settings.UPLOAD_DIR = _resolve_path(settings.UPLOAD_DIR)
 settings.LOG_DIR = _resolve_path(settings.LOG_DIR or str(Path(settings.CONFIG_DIR) / "logs"))
 settings.LOG_FILE = _resolve_path(settings.LOG_FILE) if settings.LOG_FILE else str(Path(settings.LOG_DIR) / "simposter.log")
 POSTER_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "posters")
+LOGO_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "logos")
 HISTORY_THUMBNAIL_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "history_thumbnails")
 
 # Load from ui_settings.json if environment variables weren't provided
@@ -239,6 +240,7 @@ Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 Path(settings.OUTPUT_ROOT).mkdir(parents=True, exist_ok=True)
 Path(settings.LOG_DIR).mkdir(parents=True, exist_ok=True)
 Path(POSTER_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+Path(LOGO_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(HISTORY_THUMBNAIL_DIR).mkdir(parents=True, exist_ok=True)
 
 # Migrate legacy log locations into the dedicated config/logs folder
@@ -555,7 +557,10 @@ PLEX_DEFAULT_MOVIE_LIB_ID = PLEX_MOVIE_LIB_IDS[0] if PLEX_MOVIE_LIB_IDS else "1"
 def get_plex_movies(library_ids: Optional[List[str]] = None):
     from .schemas import Movie
 
-    lib_ids = library_ids or PLEX_MOVIE_LIB_IDS
+    # Prefer runtime-updated settings attribute over the module-level constant
+    # (module-level is resolved once at startup; new users save libraries during onboarding
+    # which updates settings.PLEX_MOVIE_LIB_IDS via _apply_runtime_settings, not the constant)
+    lib_ids = library_ids or getattr(settings, "PLEX_MOVIE_LIB_IDS", None) or PLEX_MOVIE_LIB_IDS or []
     out: List[Movie] = []
 
     for lib_id in lib_ids:
@@ -875,3 +880,34 @@ def plex_remove_label(rating_key: str, label: str):
         logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s type=%s status=%s", rating_key, label, content_type, r.status_code)
     except (requests.RequestException, requests.Timeout) as e:
         logger.debug("[PLEX] Method 3 failed: %s", e)
+
+
+# ==============================================================================
+# Poster Render Cache
+# Stores the most recently rendered+sent JPEG for each rating_key so that
+# webhooks/auto-gen can resend the same poster instead of regenerating.
+# ==============================================================================
+
+def _render_cache_path(rating_key: str) -> Path:
+    return Path(settings.CONFIG_DIR) / "cache" / "poster_renders" / f"{rating_key}.jpg"
+
+
+def save_render_cache(rating_key: str, img_bytes: bytes) -> None:
+    """Persist rendered poster bytes so they can be resent later."""
+    try:
+        p = _render_cache_path(rating_key)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(img_bytes)
+    except Exception as e:
+        logger.debug("[RENDER_CACHE] Failed to save for %s: %s", rating_key, e)
+
+
+def load_render_cache(rating_key: str) -> Optional[bytes]:
+    """Return previously saved rendered poster bytes, or None."""
+    try:
+        p = _render_cache_path(rating_key)
+        if p.exists():
+            return p.read_bytes()
+    except Exception as e:
+        logger.debug("[RENDER_CACHE] Failed to load for %s: %s", rating_key, e)
+    return None

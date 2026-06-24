@@ -1,43 +1,52 @@
-# Simposter 🎬🖼️
+# Simposter
 
-> **Template-based poster generation for Plex** — Create clean, consistent custom posters with TMDb/TVDB artwork, intelligent caching, and batch processing.
+> **Template-based poster generation for Plex** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
 
 ![Simposter UI](https://github.com/user-attachments/assets/bc31ee99-0d68-4ba0-a54f-d6b4a1b119b7)
 
----
-
-## ✨ Features
-
-### 🎨 Modern Interface
-- **Full-page batch editor** with grid view and real-time preview sidebar
-- **Live preview** with TMDB poster integration (textless/text variants)
-- **Drag-and-drop overlay editor** for resolution, codec, and audio badges
-- **Dark/light themes** with responsive mobile design
-
-### ⚡ Performance
-- **Smart caching** — SessionStorage with LRU eviction, 5-10x faster database queries
-- **Overlay cache** — Pre-rendered effects for 3-5x faster batch rendering
-- **Concurrent rendering** — Process multiple posters simultaneously (configurable workers)
-- **Lazy loading** — Images load on-demand as you scroll
-- **Scheduled scans** — Automatic cron-based library syncing
-
-### 🎬 Multi-Source Artwork
-- **TMDb** — Movies & TV show posters with textless/text variants, high-res logos
-- **TVDB** — TV show posters, season artwork, logos, coming-soon indicators
-- **Fanart.tv** — HD clearlogos with priority/fallback logic
-- **Configurable priority** — Drag to reorder API sources
-
-### 🔧 Advanced Features
-- **Template system** — Bounding box logo placement, matte/fade/vignette effects
-- **Preset management** — Save, import, export configurations with fallback rules
-- **Overlay badges** — Resolution, codec, audio, edition metadata from Plex
-- **Label management** — Smart label removal, ignore labels for webhooks
-- **History tracking** — Complete audit log with filtering and hover previews
-- **Webhook integration** — Auto-generate from Tautulli events
+<!-- SCREENSHOT SUGGESTION: Replace the hero above with a wider, cleaner shot of the movie grid
+     showing a mix of generated posters. Ideally captured at 1400–1600px wide. -->
 
 ---
 
-## 🚀 Quick Start
+## Features
+
+### Poster Editor
+- **Live preview** — See changes in real time as you adjust settings
+- **Multi-source artwork** — TMDb, TVDB, and Fanart.tv with configurable priority
+- **Logo system** — Clearlogos with white/color/first preference, hex tinting, and fallback rules
+- **ClearLogo editor** — Browse, select, or upload logos and push them to Plex independently
+
+### Batch & Automation
+- **Batch edit** — Select your whole library and apply a preset in one run
+- **Webhooks** — Auto-generate posters when Tautulli fires an event (new/updated media)
+- **Scheduled scans** — Cron-based library syncing for hands-off automation
+- **Smart retry queue** — Items that couldn't get an ideal poster (missing logo, no textless poster) are queued and retried automatically until resolved
+- **Existing content mode** — Choose whether a webhook/scan regenerates the poster or resends the last cached one (protects manually tuned posters)
+
+### Overlay Badges
+- **Video** — Resolution (4K, 1080p, 720p) and video codec (HEVC, AV1, H.264)
+- **Audio** — Codec (Atmos, DTS-X, TrueHD), channels, language
+- **Edition** — Theatrical, Extended, Director's Cut, IMAX, Unrated
+- **Studio / Streaming platform** — Auto-detected from TMDb
+- **Custom images** — Upload your own badge assets (4K logo, Dolby Vision seal, etc.)
+- **Text labels** — Custom text with full font/size/color control
+
+### Performance
+- **Overlay cache** — Pre-rendered effect layers for 3–5x faster batch rendering
+- **Smart caching** — SessionStorage LRU, SQLite-backed poster/label cache, indexed queries
+- **Concurrent rendering** — Configurable worker count (1–4)
+- **Lazy loading** — Posters load on-demand as you scroll
+
+### Other
+- **6 themes** — Neon, Slate, Dracula, Nord, OLED, Light
+- **Notifications** — Discord and Apprise (70+ services) with per-event toggles
+- **History** — Full audit log with source tracking, fallback indicators, and hover previews
+- **Retry queue** — Dedicated tab in History showing pending retries with per-item actions
+
+---
+
+## Quick Start
 
 ### Docker (Recommended)
 
@@ -49,7 +58,7 @@ docker run -d \
   simposter:latest
 ```
 
-Then visit `http://localhost:8003` and configure Plex/TMDb settings in the GUI.
+Open `http://localhost:8003` and configure Plex/TMDb in Settings.
 
 ### Docker Compose
 
@@ -67,22 +76,18 @@ services:
       - TMDB_API_KEY=your_tmdb_key
 ```
 
-### Building Docker Image
-
-To build the Docker image with git branch detection:
+### Building Locally
 
 ```bash
-# Linux/Mac
-./build-docker.sh
-
 # Windows
 build-docker.bat
 
-# Manual build (specify branch)
+# Linux/Mac
+./build-docker.sh
+
+# Manual (specify branch label)
 docker build --build-arg GIT_BRANCH=dev -t simposter:latest .
 ```
-
-The build script automatically detects your current git branch and embeds it in the image, so the version badge displays correctly (e.g., `v1.5.5-dev`).
 
 ### Local Development
 
@@ -91,198 +96,172 @@ The build script automatically detects your current git branch and embeds it in 
 uvicorn backend.main:app --reload --port 8003
 
 # Frontend (separate terminal)
-cd frontend
-npm install
-npm run dev
+cd frontend && npm install && npm run dev
 ```
 
 ---
 
-## 📖 Core Concepts
+## Core Concepts
 
 ### Templates & Presets
 
-**Templates** define the rendering logic (logo placement, effects, overlays):
-- **Uniform Logo** — Bounding box zones for consistent logo placement across your library
+**Templates** define the rendering logic. Currently there is one: **Uniform Logo**, which places the clearlogo inside a configurable bounding box zone with matte, fade, vignette, grain, and wash effects.
 
-**Presets** store template-specific settings:
-- Logo positioning (top-left, top-center, center, etc.)
-- Visual effects (matte, fade, vignette, grain, wash)
-- Text overlays with `{title}` and `{year}` variables
-- Overlay badges (resolution, codec, audio metadata)
-- Fallback rules (switch templates when logos/posters missing)
+**Presets** store a named snapshot of template settings:
+- Logo zone (top-left, top-center, bottom-left, etc.)
+- Visual effects and intensities
+- Text overlays using `{title}` / `{year}` variables
+- Linked overlay badge configuration
+- Fallback rules (switch templates/presets when a logo or textless poster is missing)
 
-**Save/Import/Export** — Share presets as JSON files
+Presets can be exported and imported as JSON.
+
+<!-- SCREENSHOT SUGGESTION: Template Manager page showing a preset list on the left and
+     the options panel on the right, with logo zone and effects visible -->
 
 ### Logo System
 
-**Sources:**
-- TMDb movie logos
-- Fanart.tv HD clearlogos
-- Merged mode with priority
+Logos are sourced from TMDb, Fanart.tv, and TVDB, then merged with priority/fallback logic.
 
-**Modes:**
-- **Stock** — Original logo colors
-- **Match** — Color-match logo to poster dominant color
-- **Hex** — Custom color (works best with white logos)
-- **None** — No logo rendering
+| Mode | Behaviour |
+|------|-----------|
+| Stock | Original logo colors |
+| Match | Tints logo to match the poster's dominant color |
+| Hex | Custom hex color (best with white logos) |
+| None | No logo rendered |
 
-**Preferences:**
-- **White** — Prefer white/light logos (low saturation)
-- **Color** — Prefer colored logos (high saturation)
-- **First** — Use first available
+| Preference | Picks |
+|------------|-------|
+| White | Lowest saturation logo |
+| Color | Highest saturation logo |
+| First | First available |
 
-**Fallback:**
+**Fallback options when no logo is found:**
 - Continue without logo
 - Skip rendering entirely
-- Switch to different template/preset (e.g., text-based fallback)
+- Switch to a different template/preset (e.g., a text-only fallback)
 
 ![Logo Examples](https://github.com/user-attachments/assets/10ba7d2f-0e1b-4ab7-b9cf-67651ec335e0)
 
+<!-- SCREENSHOT SUGGESTION: Side-by-side showing the same poster with white logo, color logo,
+     and the hex-tinted variant -->
+
 ### Overlay Badges
 
-Add resolution, codec, and audio metadata badges to your posters:
+Badges pull live metadata from Plex (resolution, codec, audio channels, edition title) and render on top of the poster. Each badge value can be individually set to **None**, **Text**, or **Image** mode — so you can show 4K as a badge image but render Dolby Atmos as text, for example.
 
-**Badge Types:**
-- **Video Badge** — Resolution (4K, 1080p, 720p) and video codec (HEVC, H.264, AV1)
-- **Audio Badge** — Audio codec (Atmos, DTS-X, TrueHD), channels (2.0, 5.1, 7.1), language
-- **Edition Badge** — Theatrical, Extended, Director's Cut, Unrated, IMAX
-- **Custom Images** — Upload your own badge assets (4K logo, Dolby Vision, etc.)
-- **Text Labels** — Custom text with font controls
+Badge visibility can also be controlled with Plex labels: `show_if_label` / `hide_if_label`.
 
-**Badge Modes** (per metadata value):
-- **None** — Don't render badge for this value
-- **Text** — Render as text with custom font/color/size
-- **Image** — Render as uploaded badge asset
+<!-- SCREENSHOT SUGGESTION: Overlay Config Manager showing a configured badge set on the left
+     and a rendered poster preview with badges visible on the right -->
 
-**Metadata Source:**
-- Fetches real media info from Plex (resolution, codec, audio channels)
-- Cached in database for fast subsequent renders
-- Case-insensitive label matching for conditional rendering
+### Smart Retry Queue
+
+When a poster is generated via batch, webhook, or auto-scan and the ideal template conditions aren't met (e.g., no clearlogo found, or no textless poster available), Simposter adds the item to a **retry queue**. A background job periodically re-attempts the poster until the ideal result is achieved, then resolves the item and removes it from the queue.
+
+- **Toggle** on/off in Settings → Performance
+- **Retry interval** — configurable in hours
+- **Max attempts** — 0 = unlimited, or set a cap
+- **Manual override** — sending a poster manually removes it from the queue immediately
+
+The Retry Queue is visible in **History → Retry Queue tab**, with per-item Retry Now and Dismiss actions.
+
+<!-- SCREENSHOT SUGGESTION: History page with the Retry Queue tab active, showing a handful
+     of items with their reason badges (No Logo / Poster Fallback) and action buttons -->
 
 ---
 
-## 🎯 Workflows
+## Workflows
 
 ### Single Poster
 
-1. **Select movie/show** from your Plex library
-2. **Choose template + preset** (or adjust settings manually)
-3. **Preview** in real-time as you make changes
-4. **Save locally** or **Send to Plex** (with optional label removal)
+1. Open **Movies** or **TV Shows** and click a title
+2. Choose a template and preset in the editor panel
+3. Preview updates live — switch poster/logo sources, adjust effects
+4. **Save to disk** and/or **Send to Plex**
+
+<!-- SCREENSHOT SUGGESTION: Movie editor pane open alongside the movie grid — show the
+     live preview panel with a poster visible and some sliders/options on the right -->
 
 ### Batch Processing
 
-1. **Navigate to Batch Edit** (Movies or TV Shows submenu)
-2. **Select items** using grid view, search, or label filters
-3. **Apply template + preset** (both required for consistency)
-4. **Preview renders** — Navigate through selected items to verify
-5. **Choose labels to remove** (optional, per-library configured)
-6. **Process batch** — Send to Plex and/or save locally with progress tracking
+1. Go to **Batch Edit** (Movies or TV)
+2. Select items — use search, label filters, or select all
+3. Choose template + preset
+4. **Preview** — step through selected items to spot-check renders
+5. Set labels to remove (optional)
+6. Run the batch — progress tracked live, results summary shown when complete
+
+<!-- SCREENSHOT SUGGESTION: Batch Edit page with several items selected (checkboxes visible)
+     and the batch results panel open at the bottom showing succeeded/fallback counts -->
 
 ![Batch Editor](https://github.com/user-attachments/assets/e6e60d93-5913-4054-aa47-b38a04bd5435)
 
 ### Automation
 
-**Scheduled Library Scans:**
-- Configure cron schedule in Settings → Libraries tab
-- Example: `0 2 * * *` (daily at 2 AM)
-- Auto-scans keep Simposter synced with Plex additions/changes
-
-**Webhooks (Tautulli):**
+**Webhook (Tautulli):**
 ```
 http://your-server:8003/api/webhook/tautulli?template_id=uniformlogo&preset_id=default&event_types=added
 ```
 
-Configure in Tautulli → Settings → Notification Agents → Webhook
+**Scheduled scans:** Configure a cron expression in Settings → Libraries (e.g., `0 2 * * *` for 2 AM daily).
 
-**Supported Events:**
-- `added` — New media added to library
-- `watched` — Media finished playing
-- `updated` — Media metadata updated
+**Existing content mode** (Settings → Performance):
+- `Regenerate` *(default)* — always creates a fresh poster
+- `Resend` — if a Simposter poster already exists for the title, pushes the cached render back to Plex without regenerating. Useful when you've manually tuned a poster and don't want webhooks overwriting it.
 
-See [Webhook Setup](#-tautulli-webhook-setup) for full configuration details.
-
----
-
-## ⚙️ Settings
-
-Settings are organized into 5 tabs:
-
-### 🏠 General
-- Theme (Dark/Light mode)
-- Poster display density
-- Library refresh interval
-
-### 📚 Libraries
-- **Plex connection** — Server URL, API token, SSL verification
-- **Library mappings** — Enable/disable per-library, set display names
-- **Auto-generate** — Template/preset for new content
-- **Webhook ignore labels** — Skip poster generation for labeled items
-- **Label removal** — Choose which Plex labels to remove
-- **Scheduled scans** — Cron schedule for automatic syncing
-
-### 💾 Save Locations
-- **Movie output** — Path template with `{library}`, `{title}`, `{year}`, `{key}`
-- **TV show output** — Path template with `{season}` for season-specific saving
-- **Batch subfolder** — Organize batch-generated posters
-
-### ⚡ Performance
-- **Image format** — JPEG/PNG/WebP with quality sliders
-- **Concurrent renders** — 1-4 workers (balance speed vs memory)
-- **Overlay cache** — Pre-generate effects for faster rendering
-- **API rate limits** — TMDb/TVDB request throttling
-- **Cache management** — Clear application/image/database cache
-
-### 🔧 Advanced
-- **API source priority** — Drag to reorder TMDb/TVDB/Fanart
-- **Database backup/restore** — Export/import settings database
+**Smart retry:** Items that couldn't get an ideal poster during any automated run are queued and retried on the configured interval. See [Smart Retry Queue](#smart-retry-queue).
 
 ---
 
-## 📜 History & Tracking
+## Settings
 
-**Complete Audit Log:**
-- Every poster generation tracked (timestamp, template, preset, source)
-- Filter by library, template, action (sent to Plex / saved locally)
-- Source tracking (manual / batch / webhook / auto-generate)
-- Fallback tracking (see which posters used template fallback)
-
-**Preview on Hover:**
-- Hover "View" button to see poster thumbnail
-- Works for locally saved posters and Plex-uploaded posters
-
-![Logs](https://github.com/user-attachments/assets/2e7b7b23-770e-463e-91e6-62f0d061fff1)
+| Tab | What's in it |
+|-----|--------------|
+| **General** | Theme, poster display density, deduplication, default sort |
+| **Libraries** | Plex connection, library mappings, auto-generate preset, webhook ignore labels, label removal |
+| **Save Locations** | Output path templates for movies and TV shows, batch subfolder option |
+| **Performance** | Image format/quality, concurrent renders, overlay cache, API rate limits, automation (retry queue, existing content mode) |
+| **Notifications** | Discord webhook and Apprise URLs, per-event toggles (batch / manual / webhook / auto-generate) |
+| **Advanced** | API source priority order, database backup/restore |
 
 ---
 
-## 🎙️ Tautulli Webhook Setup
+## History & Retry Queue
 
-### 1. Configure Simposter
+**History tab** — every poster generation is logged:
+- Timestamp, template, preset, source (manual / batch / webhook / auto-generate)
+- Whether a fallback template was used
+- Hover "View" to preview the poster thumbnail
+- Filter by library, template, action
 
-In Settings → Performance tab:
-- Enable **"Automatically Send to Plex"** (optional)
-- Set **"Default Labels for Webhook Posters"** (e.g., `Overlay, Auto`)
+**Retry Queue tab** — shows items still waiting for an ideal poster:
+- Reason badge: *No Logo*, *Poster Fallback*, or *Both*
+- Attempt count and last-tried timestamp
+- **Retry Now** — trigger an immediate retry
+- **Dismiss** — remove from queue without retrying
 
-### 2. Configure Tautulli
+![History](https://github.com/user-attachments/assets/2e7b7b23-770e-463e-91e6-62f0d061fff1)
 
-In Tautulli → Settings → Notification Agents → Add Webhook:
+<!-- SCREENSHOT SUGGESTION: Replace the above with a shot showing both the History tab and
+     Retry Queue tab — ideally with the Retry Queue tab active and 2-3 items visible -->
 
-**Webhook URL:**
+---
+
+## Tautulli Webhook Setup
+
+### 1. Webhook URL
+
 ```
 http://your-server:8003/api/webhook/tautulli?template_id=uniformlogo&preset_id=default&event_types=added
 ```
 
-**Method:** POST
+**Method:** POST  
+**Trigger:** Recently Added
 
-**JSON Headers:**
-```json
-{
-  "Content-Type": "application/json"
-}
-```
+### 2. JSON Payload
 
-**JSON Data (Movies):**
+**Movies:**
 ```json
 {
   "event": "{action}",
@@ -295,7 +274,7 @@ http://your-server:8003/api/webhook/tautulli?template_id=uniformlogo&preset_id=d
 }
 ```
 
-**JSON Data (TV Shows):**
+**TV Shows:**
 ```json
 {
   "event": "{action}",
@@ -308,146 +287,82 @@ http://your-server:8003/api/webhook/tautulli?template_id=uniformlogo&preset_id=d
 }
 ```
 
-**Triggers:** Recently Added
+### 3. Event Types
 
-### 3. Testing
+| Tautulli Event | Simposter value | Fires when |
+|----------------|-----------------|------------|
+| `library.new` / `created` | `added` | New media added |
+| `library.update` | `updated` | Metadata updated |
+| `playback.stop` | `watched` | Playback finished |
 
-Test mode (dry-run without generating):
+### 4. Ignore Labels
+
+In Settings → Libraries → Webhook Ignore Labels, list Plex labels that should skip poster generation (e.g., `Custom`, `NoOverlay`). Case-insensitive.
+
+### 5. Test Mode
+
 ```
 http://your-server:8003/api/webhook/tautulli?template_id=uniformlogo&preset_id=default&event_types=added&test=true
 ```
 
-Check logs at `/config/logs/simposter.log` for webhook events.
-
-### Event Types
-
-| Tautulli Event | Simposter Event | Description |
-|---------------|----------------|-------------|
-| `library.new` | `added` | New media added |
-| `created` | `added` | Alternative new media event |
-| `library.update` | `updated` | Metadata updated |
-| `playback.stop` | `watched` | Playback finished |
-
-### Ignore Labels
-
-Configure in Settings → Libraries → Webhook Ignore Labels:
-- Mark items with labels like `Custom`, `NoOverlay`, `Manual`
-- Simposter skips poster generation for labeled items
-- Case-insensitive matching
-- Works with webhooks and auto-generate (not manual batch)
+Dry-run — logs the event without generating a poster.
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
-| Variable | Required | Purpose | Example |
-|----------|----------|---------|---------|
-| `PLEX_URL` | * | Plex server URL | `http://plex:32400` |
-| `PLEX_TOKEN` | * | Plex auth token | `xxxyyyzzz` |
-| `PLEX_MOVIE_LIBRARY_NAME` | * | Movie library name | `Movies` |
-| `PLEX_TV_LIBRARY_NAME` | | TV library name | `TV Shows` |
-| `TMDB_API_KEY` | * | TMDb API key | `abcd1234` |
-| `TVDB_API_KEY` | | TVDB API key | `efgh5678` |
-| `FANART_API_KEY` | | Fanart.tv API key | `ijkl9012` |
-| `CONFIG_DIR` | | Config directory (Docker) | `/config` |
+| Variable | Required | Example |
+|----------|----------|---------|
+| `PLEX_URL` | Yes | `http://plex:32400` |
+| `PLEX_TOKEN` | Yes | `xxxyyyzzz` |
+| `PLEX_MOVIE_LIBRARY_NAME` | Yes | `Movies` |
+| `PLEX_TV_LIBRARY_NAME` | No | `TV Shows` |
+| `TMDB_API_KEY` | Yes | `abcd1234` |
+| `TVDB_API_KEY` | No | `efgh5678` |
+| `FANART_API_KEY` | No | `ijkl9012` |
+| `CONFIG_DIR` | No (Docker) | `/config` |
 
-\* Can be set via GUI Settings OR environment variables (env vars override GUI)
+All of these can also be set (and overridden) via the Settings UI.
 
-### File Paths
+### File Layout
 
 ```
 config/
 ├── settings/
-│   └── simposter.db         # SQLite database (settings, presets, cache)
+│   └── simposter.db       # SQLite — settings, presets, history, cache
 ├── logs/
-│   └── simposter.log        # Application logs
-└── output/                  # Saved poster files
+│   └── simposter.log      # Application logs
+├── cache/
+│   └── poster_renders/    # Cached rendered posters for resend mode
+└── output/                # Saved poster files
     └── {Library}/
-        └── {Title} ({Year})/
-            └── poster.jpg
+        └── {Title} ({Year}).jpg
 ```
 
-**Database Migration:**
-- Legacy `presets.json` and `ui_settings.json` automatically migrate to SQLite on first startup
-- Automatic backup created on version changes: `simposter_v1.5.4.db.bak`
+Legacy `presets.json` and `ui_settings.json` migrate automatically to SQLite on first run. A database backup is created automatically on version upgrades.
 
 ---
 
-## 💡 Tips
+## Tips
 
-### General
-- **Use textless posters** — Better for matte/fade effects
-- **Save presets** — Speed up library-wide poster creation
-- **Check logs** — Debug API issues in Settings → Logs
-
-### Batch Processing
-- **Preview first** — Navigate through selected items to verify renders
-- **Filter by labels** — Quickly find items with specific Plex labels
-- **SessionStorage cache** — Posters load instantly on subsequent visits
-
-### Performance
-- **Enable overlay cache** — 3-5x faster batch rendering (Settings → Performance)
-- **Adjust concurrent renders** — Increase workers for faster batch (max: 4)
-- **Use indexed database** — Keep cache enabled for 5-10x faster queries
-- **Lazy loading** — Images load as you scroll (automatic)
+- **Textless posters** look best with matte and fade effects — filter for them in the poster picker
+- **Save presets** before running a batch so you can reproduce the same look later
+- **Overlay cache** gives the biggest batch speed boost — keep it on (Settings → Performance)
+- **Retry queue** means a missing logo today won't be missing forever — Fanart.tv gets new logos regularly
+- **Check logs** in Settings → Logs to diagnose webhook or API key issues
 
 ---
 
-## 📁 Project Structure
+## Documentation
 
-```
-simposter/
-├── backend/
-│   ├── main.py              # FastAPI entry point
-│   ├── config.py            # Configuration loader
-│   ├── database.py          # SQLite connection & migrations
-│   ├── rendering.py         # Core PIL rendering logic
-│   ├── scheduler.py         # APScheduler for cron scans
-│   ├── api/                 # API routers
-│   │   ├── movies.py        # Movie endpoints
-│   │   ├── tv_shows.py      # TV show endpoints
-│   │   ├── preview.py       # Real-time preview
-│   │   ├── batch.py         # Batch rendering
-│   │   ├── overlay_config.py # Overlay management
-│   │   └── webhooks.py      # Webhook handlers
-│   ├── templates/
-│   │   ├── universal.py     # Overlay badge rendering
-│   │   └── uniformlogo.py   # Main template
-│   ├── assets/
-│   │   └── selection.py     # Poster/logo selection
-│   ├── tmdb_client.py       # TMDb API wrapper
-│   ├── tvdb_client.py       # TVDB API wrapper
-│   └── fanart_client.py     # Fanart.tv API wrapper
-├── frontend/
-│   ├── src/
-│   │   ├── views/           # Page components
-│   │   ├── components/      # Reusable UI components
-│   │   └── stores/          # Pinia state management
-│   └── vite.config.ts
-├── config/                  # Persistent data (volume mount)
-├── Dockerfile
-└── docker-compose.yml
-```
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Technical architecture, API routers, rendering pipeline
+- [CHANGELOG.md](CHANGELOG.md) — Full version history
 
 ---
 
-## 📄 Documentation
-
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — Technical architecture, startup flow, API routers
-- **[CHANGELOG.md](CHANGELOG.md)** — Release notes and version history
-- **[CLAUDE.md](CLAUDE.md)** — AI assistant context (gitignored)
-
----
-
-## 📜 License
-
-MIT License — See [LICENSE](LICENSE) for details
-
----
-
-## 🙌 Special Thanks
+## Special Thanks
 
 *No affiliation — just projects worth knowing about.*
 
@@ -455,28 +370,22 @@ MIT License — See [LICENSE](LICENSE) for details
 - [darkmatte](https://www.reddit.com/r/PlexPosters/) — Iconic dark matte poster aesthetic
 - [ikonok](https://www.reddit.com/r/PlexPosters/) — Clean, minimal poster style
 
-**Alternate projects:**
-- [Posterizarr](https://github.com/fscorrupt/Posterizarr) — Another great poster automation tool for Plex
-
-**Related projects to check out:**
-- [Kometa](https://kometa.wiki/) — Powerful Plex metadata and collection manager
+**Related projects:**
+- [Posterizarr](https://github.com/fscorrupt/Posterizarr) — Another poster automation tool for Plex
+- [Kometa](https://kometa.wiki/) — Plex metadata and collection manager
 - [TitleCardMaker](https://github.com/CollinHeist/TitleCardMaker) — Automated title card generation for TV shows
-- [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Shows-for-Kometa) — Upcoming media overlays for Plex (Kometa files)
+- [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Shows-for-Kometa) — Upcoming media overlays for Plex
 
 ---
 
-## 🤖 AI Disclosure
+## License
 
-Simposter is developed with the assistance of [Claude](https://claude.ai/). AI is used to help write, review, and iterate on code — all features are designed, directed, and tested by a human developer. (I'm still learning as I work on this! :D )
+MIT License — See [LICENSE](LICENSE) for details.
 
 ---
 
-## 🙏 Credits
+## Credits
 
-Built with:
-- [FastAPI](https://fastapi.tiangolo.com/) — High-performance Python web framework
-- [Vue 3](https://vuejs.org/) — Progressive JavaScript framework
-- [Pillow](https://python-pillow.org/) — Python imaging library
-- [TMDb API](https://www.themoviedb.org/documentation/api) — Movie & TV metadata
-- [TVDB API](https://thetvdb.com/api-information) — TV show metadata
-- [Fanart.tv API](https://fanart.tv/get-an-api-key/) — HD clearlogos
+Built with [FastAPI](https://fastapi.tiangolo.com/), [Vue 3](https://vuejs.org/), [Pillow](https://python-pillow.org/), [TMDb API](https://www.themoviedb.org/documentation/api), [TVDB API](https://thetvdb.com/api-information), and [Fanart.tv API](https://fanart.tv/get-an-api-key/).
+
+Developed with the assistance of [Claude](https://claude.ai/). All features are designed, directed, and tested by a human. (Still learning! :D)

@@ -196,6 +196,7 @@ def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: st
                 "year": s["year"],
                 "addedAt": s["addedAt"],
                 "poster": s.get("poster_url"),
+                "logo_url": s.get("logo_url"),
                 "tmdb_id": s.get("tmdb_id"),
                 "tvdb_id": s.get("tvdb_id"),
                 "labels": s.get("labels") or [],

@@ -8,6 +8,8 @@ import TvShowEditorPane from './components/editor/TvShowEditorPane.vue'
 import NotificationContainer from './components/NotificationContainer.vue'
 import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
+import OnboardingModal from './components/OnboardingModal.vue'
+import QuickStartGuide from './components/QuickStartGuide.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
@@ -37,6 +39,7 @@ const tabs = computed<MenuItem[]>(() => {
     submenu: [
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
       { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
+      { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -51,6 +54,7 @@ const tabs = computed<MenuItem[]>(() => {
     label: `\u{1F4FA} ${lib.displayName || lib.title || `TV Library ${idx + 1}`}`,
     submenu: [
       { key: `tv-batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
+      { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -60,7 +64,7 @@ const tabs = computed<MenuItem[]>(() => {
     ...movieTabs,
     ...tvShowTabs,
     { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
-    { key: 'overlay-config-manager', label: '\u{1F9EA} Overlay Config (experimental)' },
+    { key: 'overlay-config-manager', label: '\u{1F4D0} Overlay Config' },
     { key: 'history', label: '\u{1F4CB} History' },
     { key: 'settings', label: '\u{2699}\uFE0F Settings' },
     { key: 'logs', label: '\u{1F4DD} Logs' }
@@ -74,6 +78,18 @@ const searchQuery = ref('')
 const sidebarOpen = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 const showChangelog = ref(false)
+const showOnboarding = ref(false)
+const showQuickGuide = ref(false)
+
+const handleQuickGuideDone = () => {
+  showQuickGuide.value = false
+  const firstLib = settings.plex.value.libraryMappings?.[0]
+  if (firstLib?.id) {
+    router.push({ name: 'movies', query: { library: firstLib.id } })
+  } else {
+    router.push({ name: 'movies' })
+  }
+}
 
 const toggleSidebar = () => {
   sidebarOpen.value = !sidebarOpen.value
@@ -305,13 +321,13 @@ const activeTab = computed<TabKey>(() => {
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
     return `tv-shows-${firstTvLib?.id || 'default'}`
   }
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -325,6 +341,8 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
   if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
+  if (route.name === 'logos') return `logos-${libQuery || 'default'}`
+  if (route.name === 'tv-logos') return `tv-logos-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
   if (route.name === 'backup') {
@@ -388,10 +406,11 @@ onMounted(async () => {
     await settings.load()
   }
 
-  // Check if Plex is configured
+  // Check if Plex is configured — show onboarding for new users
   const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
-  if (!plexConfigured && route.path !== '/settings') {
-    // Redirect to settings if Plex not configured
+  if (!settings.onboardingCompleted.value) {
+    showOnboarding.value = true
+  } else if (!plexConfigured && route.path !== '/settings') {
     router.push('/settings')
   }
 
@@ -418,26 +437,33 @@ onMounted(async () => {
   }
 })
 
+const tryOpenEditItem = () => {
+  const editId = route.query.edit
+  if (!editId || ui.selectedMovie.value) return
+  const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
+  const allItems = mediaType === 'tv-show' ? tvShows.value : movies.value
+  const item = allItems.find((m: any) => {
+    const itemId = mediaType === 'tv-show' ? (m.tvdb_id || m.key) : (m.tmdb_id || m.key)
+    return String(itemId) === String(editId)
+  })
+  if (item) {
+    ui.setSelectedMovie({ ...item, mediaType })
+  }
+}
+
 // Watch for URL edit parameter changes (browser back/forward)
 watch(() => route.query.edit, (editId) => {
   if (editId && !ui.selectedMovie.value) {
-    // User navigated to an edit URL, find the item and open editor
-    const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
-    const allItems = mediaType === 'tv-show' ? tvShows.value : movies.value
-
-    // Try to find by tmdb_id/tvdb_id first, fall back to key
-    const item = allItems.find((m: any) => {
-      const itemId = mediaType === 'tv-show' ? (m.tvdb_id || m.key) : (m.tmdb_id || m.key)
-      return String(itemId) === String(editId)
-    })
-
-    if (item) {
-      ui.setSelectedMovie({ ...item, mediaType })
-    }
+    tryOpenEditItem()
   } else if (!editId && ui.selectedMovie.value) {
     // Edit parameter removed, close editor
     ui.setSelectedMovie(null)
   }
+})
+
+// When items load after navigation (e.g. from History), apply a pending edit param
+watch([movies, tvShows], () => {
+  tryOpenEditItem()
 })
 
 onUnmounted(() => {
@@ -616,6 +642,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'batch-edit', query: { library: libId } })
     } else if (submenuKey.startsWith('collections-')) {
       router.push({ name: 'collections', query: { library: libId } })
+    } else if (submenuKey.startsWith('logos-')) {
+      router.push({ name: 'logos', query: { library: libId } })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: { library: libId } })
     } else if (submenuKey.startsWith('backup-')) {
@@ -625,6 +653,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     const libId = parentKey.replace('tv-shows-', '')
     if (submenuKey.startsWith('tv-batch-')) {
       router.push({ name: 'tv-batch-edit', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-logos-')) {
+      router.push({ name: 'tv-logos', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-assets-')) {
       router.push({ name: 'tv-local-assets', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-backup-')) {
@@ -637,6 +667,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 <template>
   <div class="shell">
     <NotificationContainer />
+    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true" />
+    <QuickStartGuide v-if="showQuickGuide" @done="handleQuickGuideDone" />
     <UpdateAnnouncementModal />
 
     <!-- Mobile sidebar overlay -->

@@ -1,11 +1,12 @@
+import base64
 import requests
 from fastapi import APIRouter, HTTPException
 from io import BytesIO
 
-from ..config import settings, plex_headers, plex_remove_label, logger
+from ..config import settings, plex_headers, plex_remove_label, logger, save_render_cache
 from ..rendering import render_poster_image
-from ..schemas import PlexSendRequest
-from .movies import fetch_and_cache_poster
+from ..schemas import PlexSendRequest, PlexLogoSendRequest
+from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url
 from .notifications import send_discord_notification, send_apprise_notification
 
 router = APIRouter()
@@ -45,12 +46,14 @@ def api_plex_send(req: PlexSendRequest):
     from ..config import extract_tmdb_id_from_metadata
     movie_details = {}
     plex_xml_text = None
+    is_tv = False
     try:
         metadata_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}"
         resp = requests.get(metadata_url, headers=plex_headers(), timeout=5)
         if resp.ok:
             plex_xml_text = resp.text
             root = ET.fromstring(resp.text)
+            is_tv = root.find('.//Directory') is not None
             item = root.find('.//Video') or root.find('.//Directory')
             if item is not None:
                 title = item.get('title', '')
@@ -147,6 +150,15 @@ def api_plex_send(req: PlexSendRequest):
         logger.error("[PLEX] Upload failed rating_key=%s err=%s", req.rating_key, e)
         raise
 
+    save_render_cache(req.rating_key, payload)
+
+    # Manual send always resolves any pending retry — the user chose this poster
+    try:
+        from .. import database as _db_retry
+        _db_retry.remove_from_retry_queue(req.rating_key)
+    except Exception:
+        pass
+
     # Remove labels if requested
     for label in req.labels or []:
         plex_remove_label(req.rating_key, label)
@@ -196,3 +208,65 @@ def api_plex_send(req: PlexSendRequest):
 
     logger.info(f"Sent poster to Plex for ratingKey={req.rating_key}")
     return {"status": "ok"}
+
+
+@router.post("/plex/send-logo")
+def api_plex_send_logo(req: PlexLogoSendRequest):
+    if not settings.PLEX_URL or not settings.PLEX_TOKEN:
+        raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
+
+    # Resolve logo bytes
+    logo_bytes = None
+    content_type = "image/png"
+
+    if req.logo_data:
+        try:
+            header, data = req.logo_data.split(",", 1)
+            if "jpeg" in header or "jpg" in header:
+                content_type = "image/jpeg"
+            logo_bytes = base64.b64decode(data)
+        except Exception as e:
+            raise HTTPException(400, f"Invalid logo_data: {e}")
+    elif req.logo_url:
+        try:
+            r = requests.get(req.logo_url, timeout=15)
+            r.raise_for_status()
+            content_type = r.headers.get("content-type", "image/png").split(";")[0].strip()
+            logo_bytes = r.content
+        except Exception as e:
+            raise HTTPException(500, f"Failed to download logo: {e}")
+    else:
+        raise HTTPException(400, "Either logo_url or logo_data must be provided.")
+
+    # Upload to Plex clearLogos endpoint
+    plex_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}/clearLogos"
+    upload_headers = {
+        "X-Plex-Token": settings.PLEX_TOKEN,
+        "Content-Type": content_type,
+    }
+    logger.info("[PLEX] Uploading clearlogo rating_key=%s is_tv=%s", req.rating_key, req.is_tv)
+    try:
+        r = requests.post(plex_url, headers=upload_headers, data=logo_bytes, timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        logger.error("[PLEX] Logo upload failed rating_key=%s err=%s", req.rating_key, e)
+        raise HTTPException(500, f"Failed to upload logo to Plex: {e}")
+
+    # Save uploaded bytes directly to cache — no need to re-fetch from Plex
+    # (Plex may not have processed the upload yet, so re-fetching would return the old logo)
+    new_logo_url = None
+    try:
+        from .. import database as db_mod
+        from .movies import _save_logo_cache, _logo_cache_url
+        logo_path = _save_logo_cache(req.rating_key, logo_bytes, content_type)
+        if logo_path:
+            new_logo_url = _logo_cache_url(req.rating_key, logo_path)
+            if req.is_tv:
+                db_mod.update_tv_logo_url(req.rating_key, new_logo_url)
+            else:
+                db_mod.update_movie_logo_url(req.rating_key, new_logo_url)
+    except Exception as e:
+        logger.debug("[PLEX] Failed to update logo cache after upload: %s", e)
+
+    logger.info("[PLEX] Clearlogo sent for ratingKey=%s", req.rating_key)
+    return {"status": "ok", "logo_url": new_logo_url}

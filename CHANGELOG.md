@@ -1,5 +1,86 @@
 # Changelog
 
+## v1.6.05 (2026-06-24)
+### New Features
+- **Clickable titles in History and Retry Queue**: Movie and TV show titles are now links — clicking one navigates directly to that item's editor, bypassing the library grid search entirely.
+
+### Bug Fixes
+- **Retry queue not populated after logo fallback**: When auto-generate or a scheduled scan found no logo and switched to a fallback preset, the item was not enqueued for retry. Fixed in both movie and TV render paths.
+
+## v1.6.02 (2026-06-22)
+### Bug Fixes
+- **Retry queue not populated after logo fallback**: When auto-generate or a scheduled scan found no logo and switched to a fallback preset (e.g. `stock-poster`), the fallback preset's `logo_mode: none` overwrote the original mode — causing `logo_was_expected` to evaluate `False` and `needs_retry` to remain `False`. Items using a logo or poster fallback are now correctly enqueued for retry.
+
+## v1.6.01 (2026-06-19)
+### Bug Fixes
+- **Timezone blank after onboarding**: Settings timezone dropdown now includes the full timezone list from the onboarding wizard, and any saved or browser-detected timezone not in the standard list is prepended automatically so the select never appears blank
+- **Kometa label not auto-applied**: Default Labels to Remove was saved with a `"default"` key instead of per-library IDs — fixed to use actual library IDs so the "Overlay" label appears correctly in Settings after setup
+- **Scheduled scan no libraries selected**: Onboarding now saves all configured library IDs into `scheduler.libraryIds` so the scan schedule covers all selected libraries from the start
+- **Retry not enabled by default**: New installs now have "Retry Until Template Is Met" enabled by default (set during onboarding's settings save)
+
+## v1.6 (2026-06-19)
+### New Features
+- **Onboarding wizard**: First-run setup modal walks new users through Plex connection, library selection, API keys (TMDb/TVDb/Fanart with inline test buttons), automation preferences (Kometa compatibility, scan schedule, timezone, label tracking), performance defaults (concurrent renders, output format/quality), and Apprise notifications — all in one guided flow
+  - Library scan starts immediately after the libraries step so content is ready by the time setup finishes
+  - Default preset (Uniformlogo) is automatically imported on completion — no manual step needed
+  - Existing users are detected via DB flag and skip the wizard entirely
+- **Quick start guide**: Post-onboarding feature overview showing all key areas of the app (Libraries, Batch Edit, Template Manager, Overlay Manager, Local Assets, Backup & Restore) as a scannable card grid
+
+## v1.5.998 (2026-06-18)
+### Bug Fixes
+- **existingContentMode not saving**: `AutomationSettings` Pydantic schema was missing `existingContentMode`, `retryUntilTemplateMet`, `retryIntervalHours`, and `retryMaxAttempts` fields. Pydantic silently stripped them on every POST, so the setting always reverted to `regenerate` after a page refresh.
+- **Batch runs not enqueuing retries**: When a batch run used a fallback preset, the item was never added to the retry queue. Batch results are now evaluated for retry eligibility (matching webhook and auto-generate behaviour).
+- **Resend not tracked in History**: Resent posters were logged to the application log file but never written to the history database. They now appear in History with a "Resent to Plex" action badge and hover thumbnail preview, and can be filtered via the Action dropdown.
+
+## v1.5.997 (2026-06-17)
+### New Features
+- **Retry Until Template Is Met**: New automation setting that queues items for automatic retry when the ideal poster can't be generated (no logo found, or no textless poster available). Items retry on a configurable interval until the ideal poster is produced, then are saved, uploaded to Plex, and removed from the queue. Toggle, retry interval (hours), and max attempts (0 = unlimited) configurable in Settings → Performance.
+- **Retry Queue in History**: New "Retry Queue" tab in the History page shows all pending retries with reason, attempt count, last tried time, and per-item Retry Now / Dismiss actions.
+- **Manual send clears retry queue**: Sending a poster manually (from the editor, batch, or via direct Plex send) automatically removes the item from the retry queue — the manual poster takes precedence.
+### Diagnostics
+- Added `[AUTO_GEN] sendLogosToPlex=` log line on each auto-generate run to help diagnose why logos may not be sent with auto-generated posters.
+- Added `[BATCH] Logo upload check:` info log in both movie and TV logo upload paths to surface whether `send_logos_to_plex` or `logo_url` is the failing condition.
+
+## v1.5.996 (2026-06-11)
+### New Features
+- **Resend existing poster setting**: New automation setting "Existing Content — Poster Behaviour" (Settings → Performance → Automatic Poster Generation)
+  - `Regenerate` (default): always creates a new poster — existing behaviour unchanged
+  - `Resend`: when a webhook or scan fires for a title that already has a Simposter-generated poster, the cached render is pushed straight back to Plex without regenerating. Protects manually tuned posters from being overwritten by future Radarr/Sonarr events.
+- **Poster render cache**: Every poster sent to Plex (manual, batch, webhook, auto-scan) is now cached to `/config/cache/poster_renders/{rating_key}.jpg`. Cached in `/config/cache/` so clearing the cache directory gracefully falls back to full regeneration.
+
+## v1.5.995 (2026-05-08)
+### New Features
+- **Logo send wired into all paths**: "Send logos to Plex by default" setting now applies to webhook triggers and automatic scan sends, not just manual/batch
+- **Current Plex Logo in editors**: Both movie and TV show manual editors now show the current Plex clearlogo below the poster preview, with a refresh button
+- **Logos page improvements**: Sort (title A–Z, title Z–A, year), filter (all / has logo / missing), and search box
+
+### Bug Fixes
+- **Custom text font rendering**: Font picker now shows actually available fonts; Liberation Sans/Serif/Mono and DejaVu fonts are bundled in Docker so selections render correctly
+
+## v1.5.991 (2026-05-01)
+### New Features
+- **Logo Editor**: New dedicated Logos page (Movies & TV Shows) showing all library clearlogos in a grid
+  - Cards display the cached clearlogo, or a placeholder for items missing a logo
+  - Toggle to show/hide items with missing logos
+  - Click any card to open the Logo Editor — browse TMDb/Fanart.tv logos or upload a custom PNG/JPG
+  - Send selected or uploaded logo directly to Plex's clearLogo slot
+  - UI updates immediately after send (no full page reload required)
+- **Send Logo to Plex — Manual Editor**: Both movie and TV show editors now have a standalone **Send Logo** button
+  - Sends the currently selected logo to Plex independently of poster send
+  - Separate loading/success state from the poster send flow
+- **Send Logo with Poster**: New "Send logo" checkbox modifier in both manual editors
+  - When checked, the selected logo is sent to Plex automatically after each poster send
+- **Batch Logo Send**: "Send logos to Plex" checkbox in both Batch Edit views
+  - Sends each item's rendered logo to Plex alongside its poster in the same batch run
+- **Global Logo Default**: New "Send logos to Plex by default" toggle in Settings → Libraries
+  - Pre-populates the batch and manual editor checkboxes on load
+
+### Bug Fixes
+- **Movie logos not showing in Logos view**: FastAPI `response_model` was stripping `logo_url` from movie responses because the `Movie` schema was missing the field
+- **Plex clearlogo fetch**: Fixed `fetch_and_cache_logo` which was using XML parsing on a JSON endpoint — now correctly requests `Accept: application/json` and parses `MediaContainer.Image[]`
+- **Logo cache stale after send**: After uploading a logo to Plex, the uploaded bytes are now written directly to the local cache file so the UI reflects the new logo immediately (no delay waiting for Plex to process the upload)
+- **Logo Editor modal positioning**: Fixed modal appearing halfway down the page — wrapped in `<Teleport to="body">` to escape ancestor CSS transforms
+
 ## v1.5.72 (2026-03-18)
 ### New Features
 - **Apprise Notifications**: Send poster generation events to 70+ services (Slack, Telegram, Pushover, Gotify, ntfy, email, and more) via Apprise URL schemes

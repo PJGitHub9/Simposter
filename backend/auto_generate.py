@@ -9,6 +9,7 @@ from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
 from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels, _webhook_cooldowns, _webhook_cooldown_lock, WEBHOOK_COOLDOWN_SECONDS
 from .api.notifications import send_apprise_notification, send_discord_notification
+from .config import settings, plex_session, plex_headers, load_render_cache, save_render_cache
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
@@ -94,6 +95,11 @@ def process_new_content_for_library(
             return results
 
         plex_settings = ui_settings.get("plex", {})
+        send_logos = bool(plex_settings.get("sendLogosToPlex", False))
+        logger.info("[AUTO_GEN] sendLogosToPlex=%s", send_logos)
+
+        retry_settings = ui_settings.get("automation", {})
+        retry_enabled = bool(retry_settings.get("retryUntilTemplateMet", False))
 
         # Get automation settings for this library
         automation_config = ui_settings.get("automation", {})
@@ -127,6 +133,36 @@ def process_new_content_for_library(
 
                             logger.info(f"[AUTO_GEN] Generating poster for movie: {title} ({year}) [key={rating_key}]")
 
+                            # Resend cached poster if setting requests it and one exists
+                            if auto_send and ui_settings.get("automation", {}).get("existingContentMode") == "resend":
+                                cached = load_render_cache(rating_key)
+                                if cached:
+                                    try:
+                                        plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+                                        plex_session.post(
+                                            plex_url,
+                                            headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                                            data=cached,
+                                            timeout=20,
+                                        ).raise_for_status()
+                                        results["movies_succeeded"] += 1
+                                        logger.info(f"[AUTO_GEN] Resent cached poster for {title} (existingContentMode=resend)")
+                                        db.record_poster_history(
+                                            rating_key=rating_key,
+                                            library_id=str(library_id or ""),
+                                            title=title,
+                                            year=year,
+                                            template_id=template_id,
+                                            preset_id=preset_id,
+                                            action="resent_to_plex",
+                                            source="auto_generate",
+                                            poster_data=cached,
+                                        )
+                                    except Exception as resend_err:
+                                        logger.warning(f"[AUTO_GEN] Cache resend failed for {title}: {resend_err} — falling through to generation")
+                                    else:
+                                        continue
+
                             # Merge global auto_labels with per-library default labels to remove
                             remove_labels = list(auto_labels)
                             if auto_send:
@@ -142,12 +178,34 @@ def process_new_content_for_library(
                                 send_to_plex=auto_send,
                                 library_id=library_id,
                                 labels=remove_labels if auto_send else [],
-                                source='auto_generate'
+                                source='auto_generate',
+                                send_logos_to_plex=send_logos if auto_send else False,
                             )
 
                             if result.get("status") == "ok":
                                 results["movies_succeeded"] += 1
                                 logger.info(f"[AUTO_GEN] Successfully generated poster for {title}")
+                                # Enqueue for retry if ideal template conditions weren't met
+                                if retry_enabled and result.get("needs_retry"):
+                                    try:
+                                        db.add_to_retry_queue(
+                                            rating_key=rating_key,
+                                            media_type="movie",
+                                            library_id=library_id,
+                                            template_id=template_id,
+                                            preset_id=preset_id,
+                                            title=title,
+                                            reason=result.get("retry_reason", "unknown"),
+                                        )
+                                        logger.info("[AUTO_GEN] Queued %s for retry (reason=%s)", title, result.get("retry_reason"))
+                                    except Exception as queue_err:
+                                        logger.debug("[AUTO_GEN] Failed to enqueue retry for %s: %s", title, queue_err)
+                                elif retry_enabled:
+                                    # Ideal conditions met — remove from queue if it was previously pending
+                                    try:
+                                        db.remove_from_retry_queue(rating_key)
+                                    except Exception:
+                                        pass
                                 # Send per-item notification with poster preview
                                 _notif_kwargs = dict(
                                     title=title or result.get("title", "Unknown"),
@@ -205,6 +263,36 @@ def process_new_content_for_library(
 
                             logger.info(f"[AUTO_GEN] Generating posters for TV show: {title} ({year}) [key={rating_key}]")
 
+                            # Resend cached poster if setting requests it and one exists
+                            if auto_send and ui_settings.get("automation", {}).get("existingContentMode") == "resend":
+                                cached = load_render_cache(rating_key)
+                                if cached:
+                                    try:
+                                        plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+                                        plex_session.post(
+                                            plex_url,
+                                            headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                                            data=cached,
+                                            timeout=20,
+                                        ).raise_for_status()
+                                        results["tv_shows_succeeded"] += 1
+                                        logger.info(f"[AUTO_GEN] Resent cached poster for {title} (existingContentMode=resend)")
+                                        db.record_poster_history(
+                                            rating_key=rating_key,
+                                            library_id=str(library_id or ""),
+                                            title=title,
+                                            year=year,
+                                            template_id=template_id,
+                                            preset_id=preset_id,
+                                            action="resent_to_plex",
+                                            source="auto_generate",
+                                            poster_data=cached,
+                                        )
+                                    except Exception as resend_err:
+                                        logger.warning(f"[AUTO_GEN] Cache resend failed for {title}: {resend_err} — falling through to generation")
+                                    else:
+                                        continue
+
                             # Merge global auto_labels with per-library default labels to remove
                             remove_labels = list(auto_labels)
                             if auto_send:
@@ -222,12 +310,36 @@ def process_new_content_for_library(
                                 library_id=library_id,
                                 labels=remove_labels if auto_send else [],
                                 include_seasons=True,  # Generate all season posters
-                                source='auto_generate'
+                                source='auto_generate',
+                                send_logos_to_plex=send_logos if auto_send else False
                             )
 
                             if result.get("status") == "ok":
                                 results["tv_shows_succeeded"] += 1
                                 logger.info(f"[AUTO_GEN] Successfully generated posters for {title}")
+                                # Enqueue for retry if ideal template conditions weren't met
+                                if retry_enabled:
+                                    sub_results = result.get("results", [])
+                                    needs_retry_items = [r for r in sub_results if r.get("needs_retry")]
+                                    if needs_retry_items:
+                                        try:
+                                            db.add_to_retry_queue(
+                                                rating_key=rating_key,
+                                                media_type="tv",
+                                                library_id=library_id,
+                                                template_id=template_id,
+                                                preset_id=preset_id,
+                                                title=title,
+                                                reason=needs_retry_items[0].get("retry_reason", "unknown"),
+                                            )
+                                            logger.info("[AUTO_GEN] Queued TV show %s for retry", title)
+                                        except Exception as queue_err:
+                                            logger.debug("[AUTO_GEN] Failed to enqueue TV retry for %s: %s", title, queue_err)
+                                    else:
+                                        try:
+                                            db.remove_from_retry_queue(rating_key)
+                                        except Exception:
+                                            pass
                                 # Send per-item notification with poster preview
                                 _notif_kwargs = dict(
                                     title=title or result.get("title", "Unknown"),

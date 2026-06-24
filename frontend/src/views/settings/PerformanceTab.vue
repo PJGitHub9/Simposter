@@ -16,6 +16,10 @@ const props = defineProps<{
   webhookAutoSend: boolean
   webhookAutoLabels: string
   webhookAlwaysRegenerateSeason: boolean
+  existingContentMode: 'resend' | 'regenerate'
+  retryUntilTemplateMet: boolean
+  retryIntervalHours: number
+  retryMaxAttempts: number
   imageQualityChanged?: boolean
   performanceChanged?: boolean
   automationChanged?: boolean
@@ -34,6 +38,10 @@ const emit = defineEmits<{
   'update:webhookAutoSend': [value: boolean]
   'update:webhookAutoLabels': [value: string]
   'update:webhookAlwaysRegenerateSeason': [value: boolean]
+  'update:existingContentMode': [value: 'resend' | 'regenerate']
+  'update:retryUntilTemplateMet': [value: boolean]
+  'update:retryIntervalHours': [value: number]
+  'update:retryMaxAttempts': [value: number]
   'clear-frontend-cache': []
   'clear-backend-cache': []
   'save': []
@@ -97,6 +105,26 @@ const localWebhookAutoLabels = computed({
 const localWebhookAlwaysRegenerateSeason = computed({
   get: () => props.webhookAlwaysRegenerateSeason,
   set: (val) => emit('update:webhookAlwaysRegenerateSeason', val)
+})
+
+const localExistingContentMode = computed({
+  get: () => props.existingContentMode,
+  set: (val) => emit('update:existingContentMode', val)
+})
+
+const localRetryUntilTemplateMet = computed({
+  get: () => props.retryUntilTemplateMet,
+  set: (val) => emit('update:retryUntilTemplateMet', val)
+})
+
+const localRetryIntervalHours = computed({
+  get: () => props.retryIntervalHours,
+  set: (val) => emit('update:retryIntervalHours', val)
+})
+
+const localRetryMaxAttempts = computed({
+  get: () => props.retryMaxAttempts,
+  set: (val) => emit('update:retryMaxAttempts', val)
 })
 
 </script>
@@ -261,6 +289,41 @@ const localWebhookAlwaysRegenerateSeason = computed({
       <p class="help-text" style="margin: -8px 0 16px 0;">
         When enabled, a new season poster is generated every time a new episode webhook is received. When disabled, season posters that have already been sent to Plex are skipped.
       </p>
+
+      <label>
+        <span class="label-text">Existing Content — Poster Behaviour</span>
+        <select v-model="localExistingContentMode">
+          <option value="regenerate">Regenerate — always create a new poster</option>
+          <option value="resend">Resend — reuse the last sent poster if available</option>
+        </select>
+        <span class="help-text">
+          When a webhook or scheduled scan fires for a title that already has a Simposter-generated poster,
+          <strong>Resend</strong> pushes the cached rendered poster straight back to Plex without regenerating.
+          Useful when you have manually tuned a poster and don't want it overwritten by future Radarr/Sonarr events.
+        </span>
+      </label>
+
+      <label class="checkbox-label">
+        <input type="checkbox" v-model="localRetryUntilTemplateMet" />
+        <span>Retry Poster Generation Until Ideal Template Is Met</span>
+      </label>
+      <p class="help-text" style="margin: -8px 0 16px 0;">
+        When enabled, if a poster is generated but the ideal template conditions weren't met (e.g. a logo was required but none was available, or a textless poster was needed), Simposter will keep a retry queue and attempt to regenerate on the interval below. Once the ideal poster is created it stops retrying. A manual send always overrides and stops retries for that title.
+      </p>
+
+      <template v-if="localRetryUntilTemplateMet">
+        <label>
+          <span class="label-text">Retry Interval (hours)</span>
+          <input type="number" v-model.number="localRetryIntervalHours" min="1" max="720" step="1" style="width:100px" />
+          <span class="help-text">How often (in hours) to check the retry queue and attempt regeneration.</span>
+        </label>
+
+        <label>
+          <span class="label-text">Max Retry Attempts (0 = unlimited)</span>
+          <input type="number" v-model.number="localRetryMaxAttempts" min="0" max="9999" step="1" style="width:100px" />
+          <span class="help-text">Stop retrying after this many attempts. Set to 0 to retry indefinitely.</span>
+        </label>
+      </template>
 
       <label>
         <span class="label-text">Default Labels for Webhook Posters</span>

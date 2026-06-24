@@ -23,6 +23,7 @@ export type PlexSettings = {
   tvShowLibraryName?: string
   tvShowLibraryNames?: string[]
   tvShowLibraryMappings?: LibraryMapping[]
+  sendLogosToPlex?: boolean
 }
 
 export type TMDBSettings = {
@@ -64,6 +65,10 @@ export type AutomationSettings = {
   webhookAutoSend: boolean
   webhookAutoLabels: string
   webhookAlwaysRegenerateSeason: boolean
+  existingContentMode?: 'resend' | 'regenerate'
+  retryUntilTemplateMet?: boolean
+  retryIntervalHours?: number
+  retryMaxAttempts?: number
 }
 
 export type NotificationSettings = {
@@ -106,8 +111,10 @@ export type UISettings = {
   scheduler?: SchedulerSettings
   automation?: AutomationSettings
   notifications?: NotificationSettings
+  onboarding_completed?: boolean
 }
 
+const onboardingCompleted = ref(false)
 const theme = ref<Theme>('neon')
 const posterDensity = ref(20)
 const deduplicateMovies = ref(false)
@@ -131,7 +138,7 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false, existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0 })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
   discordWebhookUrl: '',
@@ -175,6 +182,7 @@ async function loadSettings() {
       defaultTvLabelsToRemove.value = data.defaultTvLabelsToRemove || {}
     }
     loaded.value = true
+    onboardingCompleted.value = data.onboarding_completed ?? false
     saveLocation.value = data.saveLocation ?? "/output"
     // New separate save locations with backwards compatibility
     movieSaveLocation.value = data.movieSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title}.jpg"
@@ -189,7 +197,8 @@ async function loadSettings() {
       libraryMappings: data.plex?.libraryMappings ?? [],
       tvShowLibraryName: data.plex?.tvShowLibraryName ?? '',
       tvShowLibraryNames: data.plex?.tvShowLibraryNames ?? (data.plex?.tvShowLibraryName ? [data.plex.tvShowLibraryName] : []),
-      tvShowLibraryMappings: data.plex?.tvShowLibraryMappings ?? []
+      tvShowLibraryMappings: data.plex?.tvShowLibraryMappings ?? [],
+      sendLogosToPlex: data.plex?.sendLogosToPlex ?? false
     }
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }
@@ -217,7 +226,11 @@ async function loadSettings() {
     automation.value = {
       webhookAutoSend: data.automation?.webhookAutoSend ?? true,
       webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Simposter',
-      webhookAlwaysRegenerateSeason: data.automation?.webhookAlwaysRegenerateSeason ?? false
+      webhookAlwaysRegenerateSeason: data.automation?.webhookAlwaysRegenerateSeason ?? false,
+      existingContentMode: data.automation?.existingContentMode ?? 'regenerate',
+      retryUntilTemplateMet: data.automation?.retryUntilTemplateMet ?? false,
+      retryIntervalHours: data.automation?.retryIntervalHours ?? 24,
+      retryMaxAttempts: data.automation?.retryMaxAttempts ?? 0,
     }
     notifications.value = {
       discordEnabled: data.notifications?.discordEnabled ?? false,
@@ -270,7 +283,8 @@ async function saveSettings() {
       apiOrder: apiOrder.value,
       scheduler: { ...scheduler.value },
       automation: { ...automation.value },
-      notifications: { ...notifications.value }
+      notifications: { ...notifications.value },
+      onboarding_completed: onboardingCompleted.value,
     }
     const res = await fetch(`${apiBase}/api/ui-settings`, {
       method: 'POST',
@@ -309,6 +323,7 @@ export function useSettingsStore() {
     scheduler,
     automation,
     notifications,
+    onboardingCompleted,
     loading,
     error,
     loaded,

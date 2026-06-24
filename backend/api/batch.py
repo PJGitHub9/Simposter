@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
+from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id, save_render_cache
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -480,6 +480,14 @@ def _process_single_movie(
 
             r = requests.post(plex_url, headers=headers, data=payload, timeout=20)
             r.raise_for_status()
+            save_render_cache(rating_key, payload)
+
+            # Manual batch send resolves any pending retry for this item
+            if source == "batch":
+                try:
+                    db.remove_from_retry_queue(rating_key)
+                except Exception:
+                    pass
 
             # Label removal
             if req.labels:
@@ -499,6 +507,24 @@ def _process_single_movie(
                     db.update_movie_labels(rating_key, updated)
 
             logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
+
+            # Send logo to Plex if requested and a logo was used
+            logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s",
+                        getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key)
+            if getattr(req, 'send_logos_to_plex', False) and logo_url:
+                try:
+                    logo_r = requests.get(logo_url, timeout=10)
+                    if logo_r.status_code == 200:
+                        ct = logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
+                        plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
+                        logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
+                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_r.content, timeout=20)
+                        logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
+                    else:
+                        logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
+                except Exception as logo_err:
+                    logger.warning("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
+
             try:
                 db.record_poster_history(
                     rating_key=rating_key,
@@ -527,6 +553,18 @@ def _process_single_movie(
         except Exception as cache_err:
             logger.debug("[BATCH] Failed to refresh poster cache for %s: %s", rating_key, cache_err)
 
+        try:
+            db.update_movie_logo_url(rating_key, logo_url)
+        except Exception as logo_cache_err:
+            logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
+
+        # Determine whether the ideal template conditions were met.
+        # logo_was_expected uses the original logo_mode (before fallback may have overwritten it
+        # with "none") — but logo_fallback_used captures the case where the fallback fires and
+        # logo_mode becomes "none", which would otherwise make logo_was_expected False.
+        logo_was_expected = str(logo_mode).lower() != "none"
+        needs_retry = (logo_was_expected and logo_url is None) or (poster_fallback_action_used == "template") or logo_fallback_used
+
         result = {
             "rating_key": rating_key,
             "title": movie_details.get("title", ""),
@@ -535,6 +573,14 @@ def _process_single_movie(
             "status": "ok",
             "poster_fallback": poster_fallback_action_used == "template",
             "logo_fallback": logo_fallback_used,
+            "needs_retry": needs_retry,
+            "retry_reason": (
+                "no_logo_and_poster_fallback" if (logo_was_expected and logo_url is None and poster_fallback_action_used == "template")
+                else "no_logo" if (logo_was_expected and logo_url is None)
+                else "poster_fallback" if poster_fallback_action_used == "template"
+                else "logo_fallback" if logo_fallback_used
+                else None
+            ),
         }
         if save_path:
             result["save_path"] = str(save_path)
@@ -841,6 +887,7 @@ def _render_tv_series_poster(
         poster_fallback_preset=poster_fallback_preset_used,
         source=source,
         tmdb_id=tmdb_id,
+        logo_was_expected=str(logo_mode).lower() != "none",
     )
 
 
@@ -1005,6 +1052,7 @@ def _render_all_tv_seasons(
                     poster_fallback_preset=series_poster_fallback_preset,
                     source=source,
                     tmdb_id=tmdb_id,
+                    logo_was_expected=str(logo_mode).lower() != "none",
                 )
                 results.append({
                     **series_result,
@@ -1168,6 +1216,7 @@ def _render_all_tv_seasons(
             poster_fallback_preset=season_poster_fallback_preset,
             source=source,
             tmdb_id=tmdb_id,
+            logo_was_expected=str(season_logo_mode).lower() != "none",
         )
         results.append(result)
 
@@ -1201,6 +1250,7 @@ def _render_and_save_poster(
     logo_fallback_preset: Optional[str] = None,
     source: str = "batch",
     tmdb_id: Optional[int] = None,
+    logo_was_expected: bool = True,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
@@ -1396,6 +1446,31 @@ def _render_and_save_poster(
             upload_resp = requests.post(upload_url, headers=headers, data=payload, timeout=20)
             upload_resp.raise_for_status()
             logger.info("[BATCH] Uploaded poster to Plex for %s", title)
+            save_render_cache(rating_key, payload)
+
+            # Manual batch send resolves any pending retry for this item
+            if source == "batch":
+                try:
+                    db.remove_from_retry_queue(rating_key)
+                except Exception:
+                    pass
+
+            # Send logo to Plex if requested and a logo was used
+            logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s",
+                        getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key)
+            if getattr(req, 'send_logos_to_plex', False) and logo_url:
+                try:
+                    logo_r = requests.get(logo_url, timeout=10)
+                    if logo_r.status_code == 200:
+                        ct = logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
+                        plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
+                        logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
+                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_r.content, timeout=20)
+                        logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
+                    else:
+                        logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
+                except Exception as logo_err:
+                    logger.warning("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
 
             # Invalidate poster cache so UI shows updated poster
             if is_tv:
@@ -1451,6 +1526,15 @@ def _render_and_save_poster(
             logger.error("[BATCH] Plex upload failed for %s: %s", display_title, upload_err)
             raise
 
+    try:
+        if is_tv:
+            db.update_tv_logo_url(rating_key, logo_url)
+        else:
+            db.update_movie_logo_url(rating_key, logo_url)
+    except Exception as logo_cache_err:
+        logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
+
+    needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used
     result = {
         "rating_key": rating_key,
         "poster_used": poster_url,
@@ -1458,6 +1542,14 @@ def _render_and_save_poster(
         "status": "ok",
         "poster_fallback": poster_fallback_used,
         "logo_fallback": logo_fallback_used,
+        "needs_retry": needs_retry,
+        "retry_reason": (
+            "no_logo_and_poster_fallback" if (logo_was_expected and logo_url is None and poster_fallback_used)
+            else "no_logo" if (logo_was_expected and logo_url is None)
+            else "poster_fallback" if poster_fallback_used
+            else "logo_fallback" if logo_fallback_used
+            else None
+        ),
     }
     if season_title:
         result["season"] = season_title
@@ -1478,11 +1570,13 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
         req: The batch request containing all parameters
         is_tv_batch: True for TV shows (process seasons), False for movies
     """
-    # Get concurrent renders setting
+    # Get concurrent renders setting and retry config
+    retry_enabled = False
     try:
         from .ui_settings import _read_settings
         ui_settings = _read_settings(include_env=False)
         max_workers = ui_settings.performance.concurrentRenders if ui_settings.performance else 2
+        retry_enabled = ui_settings.automation.retryUntilTemplateMet if ui_settings.automation else False
     except Exception:
         max_workers = 2  # Default to 2 concurrent renders
 
@@ -1609,6 +1703,40 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                     success_count += 1
                 else:
                     failed_count += 1
+                # Enqueue for retry if ideal template conditions weren't met
+                if retry_enabled:
+                    if result.get("needs_retry"):
+                        # Movie path: needs_retry is at the top level
+                        try:
+                            db.add_to_retry_queue(
+                                rating_key=result.get("rating_key", ""),
+                                media_type="movie",
+                                library_id=str(req.library_id or ""),
+                                template_id=req.template_id,
+                                preset_id=req.preset_id or "",
+                                title=result.get("title", ""),
+                                reason=result.get("retry_reason", "unknown"),
+                            )
+                            logger.info("[BATCH] Queued %s for retry (reason=%s)", result.get("title"), result.get("retry_reason"))
+                        except Exception as queue_err:
+                            logger.debug("[BATCH] Failed to enqueue retry for %s: %s", result.get("rating_key"), queue_err)
+                    elif is_tv_batch and result.get("status") == "ok":
+                        # TV path: needs_retry lives in sub-results; enqueue the show once if any sub needs retry
+                        sub_needing_retry = next((s for s in result.get("results", []) if s.get("needs_retry")), None)
+                        if sub_needing_retry:
+                            try:
+                                db.add_to_retry_queue(
+                                    rating_key=result.get("rating_key", ""),
+                                    media_type="tv",
+                                    library_id=str(req.library_id or ""),
+                                    template_id=req.template_id,
+                                    preset_id=req.preset_id or "",
+                                    title=result.get("show_title", ""),
+                                    reason=sub_needing_retry.get("retry_reason", "unknown"),
+                                )
+                                logger.info("[BATCH] Queued TV show %s for retry (reason=%s)", result.get("show_title"), sub_needing_retry.get("retry_reason"))
+                            except Exception as queue_err:
+                                logger.debug("[BATCH] Failed to enqueue TV retry for %s: %s", result.get("rating_key"), queue_err)
                 # Track fallback usage (direct flags for movies, nested results for TV shows)
                 if result.get("poster_fallback"):
                     poster_fallback_count += 1
@@ -1758,7 +1886,8 @@ def process_single_movie_poster(
     send_to_plex: bool = False,
     library_id: str = "",
     labels: list = None,
-    source: str = "webhook"
+    source: str = "webhook",
+    send_logos_to_plex: bool = False,
 ) -> bool:
     """
     Process a single movie poster programmatically.
@@ -1785,7 +1914,8 @@ def process_single_movie_poster(
             options={},
             send_to_plex=send_to_plex,
             labels=labels or [],
-            library_id=library_id
+            library_id=library_id,
+            send_logos_to_plex=send_logos_to_plex,
         )
 
         # Load presets for options
@@ -1841,7 +1971,8 @@ def process_single_tv_show_poster(
     library_id: str = "",
     labels: list = None,
     include_seasons: bool = True,
-    source: str = "webhook"
+    source: str = "webhook",
+    send_logos_to_plex: bool = False,
 ) -> bool:
     """
     Process a single TV show poster programmatically.
@@ -1870,7 +2001,8 @@ def process_single_tv_show_poster(
             send_to_plex=send_to_plex,
             labels=labels or [],
             include_seasons=include_seasons,
-            library_id=library_id
+            library_id=library_id,
+            send_logos_to_plex=send_logos_to_plex,
         )
 
         # Load presets for options

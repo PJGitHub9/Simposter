@@ -10,6 +10,145 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.05',
+    date: '2026-06-24',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Clickable titles in History and Retry Queue — click any movie or TV show title to navigate directly to its editor, bypassing the need to search or scroll through the library.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed retry queue not receiving items when a logo fallback preset was used during auto-generate or scheduled scan.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.02',
+    date: '2026-06-22',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed retry queue not receiving items when a logo fallback preset was used during auto-generate or scheduled scan. When no logo is found and the fallback preset switches to one with logo_mode "none", the original needs_retry check evaluated to false — items are now correctly enqueued whenever a logo or poster fallback fires.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.01',
+    date: '2026-06-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed timezone selection appearing blank in Settings after onboarding — the Settings timezone dropdown now includes all timezones available in the onboarding wizard, and any saved or browser-detected timezone not in the standard list is automatically added as an option.',
+          'Fixed Kometa "Overlay" label not appearing in Default Labels to Remove after onboarding — labels are now saved with library IDs as keys, matching the format Settings expects.',
+          'Fixed scheduled scan having no libraries selected after onboarding — all configured libraries are now included in the scheduler settings saved during setup.',
+          'Retry poster generation (Retry Until Template Is Met) is now enabled by default on new installs.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6',
+    date: '2026-06-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Onboarding wizard for new users — guided setup covering Plex connection, library selection, API keys (TMDb, TVDb, Fanart) with inline test buttons, automation preferences (Kometa, scan schedule, timezone, label tracking), performance defaults, and Apprise notifications.',
+          'Library scan starts immediately after the libraries step so content is ready by the time setup finishes.',
+          'Default preset (Uniformlogo) is automatically imported on completion — no manual step needed.',
+          'Quick start guide appears after onboarding — a feature overview card grid covering Libraries, Batch Edit, Template Manager, Overlay Manager, Local Assets, and Backup & Restore.',
+          'Fixed clearlogo fetch from Plex: the Image[].url from Plex\'s JSON API is a relative path and now correctly has the Plex base URL and auth token prepended before download.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.998',
+    date: '2026-06-18',
+    sections: [
+      {
+        title: 'Bug Fix',
+        items: [
+          'Fixed "Existing Content — Poster Behaviour" (Resend/Regenerate) setting not persisting after save. The backend Pydantic schema for AutomationSettings was missing the field, causing it to be silently stripped on every POST. The setting now saves and restores correctly.',
+          'Fixed batch runs not adding items to the retry queue when a fallback preset was used. Batch results are now evaluated for retry eligibility the same way webhooks and auto-generate runs are.',
+          'Resent posters are now tracked in History with a distinct "Resent to Plex" action badge (purple). Includes a hover thumbnail preview and appears in the Action filter dropdown. Previously resend events were logged to file only and invisible in the History page.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.997',
+    date: '2026-06-17',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'New "Retry Until Template Is Met" automation setting. When auto-generate or a webhook fires and the ideal poster cannot be made (logo not found, or no textless poster available), Simposter now queues the item for automatic retry at a configurable interval. Once the ideal poster is generated it is saved, uploaded to Plex, and removed from the queue. Manually sending a poster for any title immediately removes it from the queue.',
+          'New Retry Queue tab in History — shows all pending retries with reason (no logo / no textless poster), attempt count, last tried timestamp, and per-item Retry Now / Dismiss actions.',
+          'Settings → Performance: toggle retry on/off, set retry interval (hours), and optionally cap the max retry attempts (0 = unlimited).',
+          'Diagnostic logging added for auto-generate logo sends ([AUTO_GEN] sendLogosToPlex=) and batch logo upload path ([BATCH] Logo upload check:) to help troubleshoot missing logo uploads.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.996',
+    date: '2026-06-11',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'New automation setting: "Existing Content — Poster Behaviour". Set to Resend to push the last generated poster back to Plex when a webhook or scan fires for a title that already has a Simposter poster, instead of regenerating from scratch. Useful for protecting manually tuned posters from being overwritten by Radarr/Sonarr events.',
+          'Rendered posters are now cached locally to /config/cache/poster_renders/ whenever sent to Plex (manual, batch, webhook, or auto-scan). Deleting the cache directory gracefully falls back to regeneration.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.995',
+    date: '2026-05-08',
+    sections: [
+      {
+        title: 'ClearLogos Support',
+        items: [
+          'New Logos page — browse all clearlogos in your movie/TV library, see what\'s missing, and click any card to open the Logo Editor.',
+          'Logo Editor — pick from TMDb/Fanart.tv logos or upload your own, then send it to Plex\'s clearLogo slot with one click.',
+          'Send Logo button in both manual editors — push the selected logo to Plex independently of the poster.',
+          'Send logos during batch runs and via the manual editor\'s Send to Plex action (optional checkbox).',
+          '"Send logos to Plex by default" setting in Settings → Libraries — also applies to webhook triggers and automatic scan sends.',
+          'Current Plex Logo display in both manual editors with a refresh button.',
+          'Logos page now has sort, filter (all / has logo / missing), and search.',
+        ]
+      },
+      {
+        title: 'Bug Fix',
+        items: [
+          'Custom text overlay now correctly uses the selected font. Liberation Sans, Serif, and Mono fonts are bundled in Docker; the font picker shows all available fonts.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.5.99',
+    date: '2026-04-28',
+    sections: [
+      {
+        title: 'New Feature',
+        items: [
+          'Batch Results panel now appears after every batch run in both Movie and TV Show Batch Edit. Shows succeeded / failed / poster fallback / logo fallback counts, a collapsible list of failed items with human-readable error reasons, and a collapsible list of items that used a fallback preset.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.5.98',
     date: '2026-04-24',
     sections: [
