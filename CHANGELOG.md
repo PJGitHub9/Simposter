@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.6.05 (2026-06-24)
+### New Features
+- **Clickable titles in History and Retry Queue**: Movie and TV show titles are now links — clicking one navigates directly to that item's editor, bypassing the library grid search entirely.
+
+### Bug Fixes
+- **Retry queue not populated after logo fallback**: When auto-generate or a scheduled scan found no logo and switched to a fallback preset, the item was not enqueued for retry. Fixed in both movie and TV render paths.
+
 ## v1.6.02 (2026-06-22)
 ### Bug Fixes
 - **Retry queue not populated after logo fallback**: When auto-generate or a scheduled scan found no logo and switched to a fallback preset (e.g. `stock-poster`), the fallback preset's `logo_mode: none` overwrote the original mode — causing `logo_was_expected` to evaluate `False` and `needs_retry` to remain `False`. Items using a logo or poster fallback are now correctly enqueued for retry.

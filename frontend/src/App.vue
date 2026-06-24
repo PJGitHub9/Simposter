@@ -437,26 +437,33 @@ onMounted(async () => {
   }
 })
 
+const tryOpenEditItem = () => {
+  const editId = route.query.edit
+  if (!editId || ui.selectedMovie.value) return
+  const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
+  const allItems = mediaType === 'tv-show' ? tvShows.value : movies.value
+  const item = allItems.find((m: any) => {
+    const itemId = mediaType === 'tv-show' ? (m.tvdb_id || m.key) : (m.tmdb_id || m.key)
+    return String(itemId) === String(editId)
+  })
+  if (item) {
+    ui.setSelectedMovie({ ...item, mediaType })
+  }
+}
+
 // Watch for URL edit parameter changes (browser back/forward)
 watch(() => route.query.edit, (editId) => {
   if (editId && !ui.selectedMovie.value) {
-    // User navigated to an edit URL, find the item and open editor
-    const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
-    const allItems = mediaType === 'tv-show' ? tvShows.value : movies.value
-
-    // Try to find by tmdb_id/tvdb_id first, fall back to key
-    const item = allItems.find((m: any) => {
-      const itemId = mediaType === 'tv-show' ? (m.tvdb_id || m.key) : (m.tmdb_id || m.key)
-      return String(itemId) === String(editId)
-    })
-
-    if (item) {
-      ui.setSelectedMovie({ ...item, mediaType })
-    }
+    tryOpenEditItem()
   } else if (!editId && ui.selectedMovie.value) {
     // Edit parameter removed, close editor
     ui.setSelectedMovie(null)
   }
+})
+
+// When items load after navigation (e.g. from History), apply a pending edit param
+watch([movies, tvShows], () => {
+  tryOpenEditItem()
 })
 
 onUnmounted(() => {

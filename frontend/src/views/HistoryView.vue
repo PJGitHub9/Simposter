@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -42,6 +43,20 @@ interface RetryQueueItem {
 
 const apiBase = getApiBase()
 const settings = useSettingsStore()
+const router = useRouter()
+
+const isTvLibrary = (libraryId: string | null): boolean => {
+  if (!libraryId) return false
+  return !!(settings.plex.value.tvShowLibraryMappings?.some((m: any) => m.id === libraryId))
+}
+
+const openItem = (rating_key: string, library_id: string | null, media_type?: string) => {
+  const isTV = media_type === 'tv' || (!media_type && isTvLibrary(library_id))
+  router.push({
+    path: isTV ? '/tv-shows' : '/movies',
+    query: { library: library_id || undefined, edit: rating_key },
+  })
+}
 const records = ref<HistoryRecord[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -586,7 +601,13 @@ onMounted(async () => {
               {{ formatDate(record.created_at) }}
             </td>
             <td class="title-cell">
-              {{ record.title || 'Unknown' }}
+              <button
+                v-if="record.rating_key && record.library_id"
+                class="btn-open-item"
+                :title="`Open in editor`"
+                @click="openItem(record.rating_key, record.library_id)"
+              >{{ record.title || 'Unknown' }}</button>
+              <span v-else>{{ record.title || 'Unknown' }}</span>
             </td>
             <td class="year-cell">
               {{ record.year || '—' }}
@@ -676,7 +697,13 @@ onMounted(async () => {
           </thead>
           <tbody>
             <tr v-for="item in retryItems" :key="item.id">
-              <td class="title-cell">{{ item.title || item.rating_key }}</td>
+              <td class="title-cell">
+                <button
+                  class="btn-open-item"
+                  :title="`Open in editor`"
+                  @click="openItem(item.rating_key, item.library_id, item.media_type)"
+                >{{ item.title || item.rating_key }}</button>
+              </td>
               <td class="year-cell">{{ item.media_type === 'tv' ? 'TV' : 'Movie' }}</td>
               <td class="library-cell">{{ getLibraryName(item.library_id) }}</td>
               <td>
@@ -933,6 +960,29 @@ onMounted(async () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.btn-open-item {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 500;
+  color: var(--accent, #3dd6b7);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  display: block;
+  transition: opacity 0.15s;
+}
+
+.btn-open-item:hover {
+  opacity: 0.75;
+  text-decoration: underline;
 }
 
 .year-cell,

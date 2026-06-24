@@ -484,6 +484,17 @@ onMounted(async () => {
     await settings.load()
   }
   await fetchMovies()
+
+  // Deep-link: open editor directly if URL contains ?edit=<rating_key>
+  const editKey = route.query.edit as string
+  if (editKey && movies.value.length) {
+    const item = movies.value.find(m => String(m.key) === String(editKey))
+    if (item) {
+      emit('select', item)
+      return
+    }
+  }
+
   await fetchPosters(paged.value)
   await fetchLabels(paged.value)
 })
