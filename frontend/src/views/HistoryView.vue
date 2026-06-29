@@ -850,7 +850,7 @@ onMounted(async () => {
           <img
             v-else-if="previewImageUrl"
             :src="previewImageUrl"
-            :alt="previewRecord.title || 'Poster preview'"
+            :alt="previewRecord?.title || 'Poster preview'"
             class="preview-image"
             @error="handlePreviewError"
             @load="handlePreviewLoad"
