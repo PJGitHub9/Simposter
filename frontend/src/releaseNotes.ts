@@ -10,6 +10,31 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.06',
+    date: '2026-06-26',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Preset names are now shown in History and Retry Queue instead of the internal preset ID — renaming a preset is immediately reflected everywhere.',
+          'Preset duplication — click the ⎘ button on any preset card to create a copy with all options preserved.',
+          'History search box — filter the history table by title without leaving the page.',
+          'Retry queue thumbnail — hover or click the View button on any retry queue item to preview the current Plex poster.',
+          'Compact preset export — "Copy compact" button in Template Manager → Import/Export copies a minified version of your presets to the clipboard with default values stripped (typically 80–90% smaller). Ideal for sharing.',
+          'Preset rename — click the pencil icon on any preset card to rename it inline. The internal ID never changes so all history records, webhook configs, and settings stay linked correctly.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Preset exports (both regular and compact) no longer include internal IDs — IDs are Simposter-managed and invisible to users. On import, a fresh ID is always generated so imported presets never conflict with or overwrite existing ones.',
+          'Preset rename is instant — the new name appears immediately without waiting for the backend to respond.',
+          'History and Retry Queue preset column resolves the current display name from the presets list, so renames are reflected in past records too.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.05',
     date: '2026-06-24',
     sections: [

@@ -58,6 +58,7 @@ class SaveRequest(PreviewRequest):
 class PresetSaveRequest(BaseModel):
     template_id: str = "uniformlogo"
     preset_id: str
+    name: Optional[str] = None
     options: Dict[str, Any]
     season_options: Optional[Dict[str, Any]] = None
 

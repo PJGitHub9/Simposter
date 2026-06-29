@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.6.06 (2026-06-26)
+### New Features
+- **Preset duplication**: Click the ⎘ button on any preset card to create a copy with all options preserved.
+- **Preset rename**: Click the pencil icon on a preset card to rename it inline. The internal ID never changes so history records, webhook configs, and settings stay linked correctly. Rename is instant (optimistic update).
+- **History search box**: Filter the history table by title in real time without triggering a new API request.
+- **Retry queue thumbnail**: Hover or click View on any retry queue item to preview the current Plex poster for that title.
+- **Compact preset export**: "Copy compact" button in Template Manager → Import/Export copies a minified preset JSON to the clipboard with all default values stripped (typically 80–90% smaller). Designed for sharing presets with others.
+- **Preset name in History/Retry Queue**: The Preset column now shows the display name instead of the internal ID. Renames are reflected in past records.
+
+### Improvements
+- **Export never includes internal IDs**: Both regular and compact exports now omit the internal preset ID entirely. On import, Simposter always generates a fresh ID from the preset name — imported presets can never conflict with or silently overwrite existing ones.
+- **History resolves preset names at render time**: Fetches the current presets list on load and maps IDs to display names, so renamed presets show the new name everywhere.
+
 ## v1.6.05 (2026-06-24)
 ### New Features
 - **Clickable titles in History and Retry Queue**: Movie and TV show titles are now links — clicking one navigates directly to that item's editor, bypassing the library grid search entirely.
