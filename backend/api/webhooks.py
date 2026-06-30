@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 import time
 import threading
 
-from ..config import logger, settings, plex_headers, plex_session, load_presets, load_render_cache
+from ..config import logger, settings, plex_headers, plex_session, load_presets, load_render_cache, plex_remove_label
 from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
 from .. import database as db
 from .. import cache
@@ -646,6 +646,26 @@ def process_webhook_poster_generation(
                             )
                         except Exception:
                             pass
+                        # Remove configured labels after resend (same as full pipeline)
+                        try:
+                            resend_labels = list(auto_labels)
+                            if library_id:
+                                lib_default_labels = _get_default_remove_labels(str(library_id))
+                                if lib_default_labels:
+                                    resend_labels = list({*resend_labels, *lib_default_labels})
+                            if resend_labels:
+                                logger.info("[WEBHOOK] Removing labels %s from %s (resend)", resend_labels, rating_key)
+                                removed = []
+                                for lbl in resend_labels:
+                                    plex_remove_label(rating_key, lbl)
+                                    logger.info("[WEBHOOK] Removed label '%s' from %s", lbl, rating_key)
+                                    removed.append(lbl.lower())
+                                if removed:
+                                    current = db.get_movie_labels(rating_key)
+                                    updated = [l for l in current if l.lower() not in removed]
+                                    db.update_movie_labels(rating_key, updated)
+                        except Exception as lbl_err:
+                            logger.warning("[WEBHOOK] Label removal after resend failed for %s: %s", rating_key, lbl_err)
                         return
             except Exception as resend_err:
                 logger.warning("[WEBHOOK] Cache resend check failed for %s: %s — falling through to generation", rating_key, resend_err)

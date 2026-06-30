@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.6.07 (2026-06-30)
+### Bug Fixes
+- **Retry queue did not remove labels on success**: When the retry job resolved an item (e.g. a logo became available after several attempts), it uploaded the poster to Plex but never removed the configured labels. Labels (`Simposter`, `Overlay`, etc.) are now removed and the label cache is updated, matching the behaviour of auto-generate and webhook renders.
+- **Resend mode did not remove labels**: When `existingContentMode=resend` was active and a cached poster was re-uploaded, the webhook handler, scheduled scan movie path, and scheduled scan TV path all returned/continued before the label removal block could run. All three paths now remove labels after a successful resend.
+
 ## v1.6.06 (2026-06-26)
 ### New Features
 - **Preset duplication**: Click the ⎘ button on any preset card to create a copy with all options preserved.

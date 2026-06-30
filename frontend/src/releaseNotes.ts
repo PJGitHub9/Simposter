@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.07',
+    date: '2026-06-30',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Labels were not removed after a successful retry — items processed by the retry queue (e.g. "retried until template met") now have their configured labels removed from Plex just like auto-generate and webhooks do.',
+          'Labels were not removed when a cached poster was resent (existingContentMode=resend) — resend paths in webhooks and scheduled scans now remove the configured labels after uploading, matching the behaviour of a full render.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.06',
     date: '2026-06-26',
     sections: [
