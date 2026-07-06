@@ -2,8 +2,11 @@ import base64
 import requests
 from fastapi import APIRouter, HTTPException
 from io import BytesIO
+from pathlib import Path
+from pydantic import BaseModel
+from typing import Optional
 
-from ..config import settings, plex_headers, plex_remove_label, logger, save_render_cache
+from ..config import settings, plex_headers, plex_session, plex_remove_label, logger, save_render_cache, load_render_cache
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url
@@ -270,3 +273,121 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
 
     logger.info("[PLEX] Clearlogo sent for ratingKey=%s", req.rating_key)
     return {"status": "ok", "logo_url": new_logo_url}
+
+
+# ---------------------------------------------------------------------------
+# Render-cache resend endpoints
+# ---------------------------------------------------------------------------
+
+class ResendCachedRequest(BaseModel):
+    include_seasons: bool = False
+    is_tv: bool = False
+
+
+@router.get("/render-cache/cached-keys")
+def api_render_cache_cached_keys():
+    """Return the set of rating_keys that have a locally cached rendered poster."""
+    cache_dir = Path(settings.CONFIG_DIR) / "cache" / "poster_renders"
+    if not cache_dir.exists():
+        return {"cached_keys": []}
+    keys = [p.stem for p in cache_dir.glob("*.jpg")]
+    return {"cached_keys": keys}
+
+
+def _remove_labels_for_key(rating_key: str, is_tv: bool, library_id: Optional[str], db) -> None:
+    """Remove configured auto-labels from Plex and sync the label cache."""
+    try:
+        from .webhooks import _get_default_remove_labels
+        ui = db.get_ui_settings() or {}
+        auto_labels_raw = ui.get("automation", {}).get("webhookAutoLabels", "Simposter")
+        labels = [l.strip() for l in auto_labels_raw.split(",") if l.strip()]
+        if library_id:
+            lib_default = _get_default_remove_labels(library_id)
+            if lib_default:
+                labels = list({*labels, *lib_default})
+        if not labels:
+            return
+        logger.info("[PLEXSEND] Removing labels %s from %s (resend)", labels, rating_key)
+        removed = []
+        for lbl in labels:
+            try:
+                plex_remove_label(rating_key, lbl)
+                logger.info("[PLEXSEND] Removed label '%s' from %s", lbl, rating_key)
+                removed.append(lbl.lower())
+            except Exception as le:
+                logger.warning("[PLEXSEND] Failed to remove label '%s' from %s: %s", lbl, rating_key, le)
+        if removed:
+            if is_tv:
+                current = db.get_tv_labels(rating_key)
+                db.update_tv_labels(rating_key, [l for l in current if l.lower() not in removed],
+                                    library_id=library_id or "default")
+            else:
+                current = db.get_movie_labels(rating_key)
+                db.update_movie_labels(rating_key, [l for l in current if l.lower() not in removed])
+    except Exception as e:
+        logger.warning("[PLEXSEND] Label removal failed for %s: %s", rating_key, e)
+
+
+@router.post("/render-cache/{rating_key}/resend")
+def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
+    """Resend a previously cached rendered poster to Plex (no re-render)."""
+    if not settings.PLEX_URL or not settings.PLEX_TOKEN:
+        raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set")
+
+    cached = load_render_cache(rating_key)
+    if not cached:
+        raise HTTPException(404, f"No cached poster for {rating_key}")
+
+    from .. import database as db
+
+    # Look up library_id from cache
+    with db.get_db() as conn:
+        row = conn.execute(
+            "SELECT library_id FROM movie_cache WHERE rating_key = ? "
+            "UNION SELECT library_id FROM tv_cache WHERE rating_key = ? LIMIT 1",
+            (rating_key, rating_key)
+        ).fetchone()
+    library_id: Optional[str] = row["library_id"] if row else None
+
+    plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+    try:
+        plex_session.post(
+            plex_url,
+            headers={**plex_headers(), "Content-Type": "image/jpeg"},
+            data=cached,
+            timeout=20,
+        ).raise_for_status()
+    except Exception as e:
+        raise HTTPException(502, f"Failed to upload poster to Plex: {e}")
+
+    _title, _year = db.get_title_for_rating_key(rating_key)
+    logger.info("[PLEXSEND] Resent cached poster for %s (%s)", rating_key, _title)
+
+    _remove_labels_for_key(rating_key, req.is_tv, library_id, db)
+
+    resent_seasons = 0
+    if req.include_seasons:
+        show = db.get_cached_tv_show(rating_key)
+        if show:
+            for season in show.get("seasons", []):
+                season_key = season.get("key")
+                if not season_key:
+                    continue
+                season_cached = load_render_cache(season_key)
+                if not season_cached:
+                    continue
+                try:
+                    season_url = f"{settings.PLEX_URL}/library/metadata/{season_key}/posters"
+                    plex_session.post(
+                        season_url,
+                        headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                        data=season_cached,
+                        timeout=20,
+                    ).raise_for_status()
+                    resent_seasons += 1
+                    logger.info("[PLEXSEND] Resent cached season poster for %s", season_key)
+                    _remove_labels_for_key(season_key, True, library_id, db)
+                except Exception as se:
+                    logger.warning("[PLEXSEND] Failed to resend season %s: %s", season_key, se)
+
+    return {"status": "ok", "rating_key": rating_key, "title": _title, "resent_seasons": resent_seasons}

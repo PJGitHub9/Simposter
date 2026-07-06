@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.08 (2026-07-06)
+### New Features
+- **Resend cached poster to Plex**: Hover any movie or TV show card to reveal a send button (bottom-left of the poster). Movies resend immediately; TV shows prompt whether to include cached season posters. No re-render — uses the previously saved render.
+- **"Cached only" filter**: New toggle button in the Movies and TV Shows toolbars filters the grid to items with a locally cached render. Shows a live count while active and stacks with the existing label and search filters.
+
+### Bug Fixes
+- **Resend removes labels**: Cached-poster resend now removes configured auto-labels (e.g. Simposter, Overlay) from Plex and updates the label cache, matching the full render pipeline. Applies to card resend, webhook resend, scheduler resend, and auto-generate resend paths.
+- **Resend refreshes thumbnail**: After a successful resend the grid card fetches the updated poster thumbnail from Plex automatically.
+
 ## v1.6.07 (2026-06-30)
 ### Bug Fixes
 - **Retry queue did not remove labels on success**: When the retry job resolved an item (e.g. a logo became available after several attempts), it uploaded the poster to Plex but never removed the configured labels. Labels (`Simposter`, `Overlay`, etc.) are now removed and the label cache is updated, matching the behaviour of auto-generate and webhook renders.

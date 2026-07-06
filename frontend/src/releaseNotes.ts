@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.08',
+    date: '2026-07-06',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Resend cached poster to Plex — hover any movie or TV show card to reveal a send button (bottom-left). For TV shows, a prompt lets you choose to resend the show poster only or include all cached season posters. No re-render required.',
+          '"Cached only" filter button in the Movies and TV Shows toolbars — instantly filters the grid to items that have a locally cached render, with a live count shown while active.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Resend now removes configured labels from Plex (e.g. Simposter, Overlay) and syncs the label cache — consistent with the full render pipeline.',
+          'Resending a cached poster now refreshes the thumbnail in the grid immediately after upload.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.07',
     date: '2026-06-30',
     sections: [

@@ -259,15 +259,17 @@ const allLabels = computed(() => {
   return Array.from(labels).sort()
 })
 
+const filterCached = ref(false)
+
 const filtered = computed(() => {
   const term = (props.search || '').trim().toLowerCase()
   let result = movies.value
-  
+
   // Filter by search term
   if (term) {
     result = result.filter((m) => m.title.toLowerCase().includes(term))
   }
-  
+
   // Filter by label
   if (filterLabel.value) {
     result = result.filter(m => {
@@ -275,7 +277,12 @@ const filtered = computed(() => {
       return labels.includes(filterLabel.value)
     })
   }
-  
+
+  // Filter by cached poster
+  if (filterCached.value) {
+    result = result.filter(m => cachedKeys.value.has(m.key))
+  }
+
   return result
 })
 
@@ -430,6 +437,20 @@ const prevPage = () => {
   if (page.value > 1) page.value -= 1
 }
 
+const cachedKeys = ref<Set<string>>(new Set())
+
+const fetchCachedKeys = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/render-cache/cached-keys`)
+    if (res.ok) {
+      const data = await res.json()
+      cachedKeys.value = new Set(data.cached_keys || [])
+    }
+  } catch {
+    /* non-critical — resend button just won't appear */
+  }
+}
+
 const handleRefreshPoster = async (ratingKey: string, forceRefresh?: boolean) => {
   try {
     const res = await fetch(`${apiBase}/api/movie/${ratingKey}/poster?meta=1&force_refresh=1`)
@@ -497,6 +518,7 @@ onMounted(async () => {
 
   await fetchPosters(paged.value)
   await fetchLabels(paged.value)
+  fetchCachedKeys()
 })
 </script>
 
@@ -526,6 +548,10 @@ onMounted(async () => {
             <option v-for="label in allLabels" :key="label" :value="label">{{ label }}</option>
           </select>
         </div>
+        <label class="filter-check" :class="{ active: filterCached }" title="Show only items Simposter has previously generated a poster for (saved renders)">
+          <input type="checkbox" v-model="filterCached" @change="page = 1" />
+          Generated{{ filterCached && cachedKeys.size ? ` (${cachedKeys.size})` : '' }}
+        </label>
         <button @click="refreshData" class="refresh-btn" :disabled="loading">
           {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
         </button>
@@ -539,7 +565,7 @@ onMounted(async () => {
       <button @click="() => fetchMovies()">Retry</button>
     </div>
     <div v-else-if="loading" class="callout">Loading movies…</div>
-    <MovieGrid v-else heading="Movies" :items="paged" @select="handleSelect" @refresh="handleRefreshPoster" />
+    <MovieGrid v-else heading="Movies" :items="paged" :cachedKeys="cachedKeys" @select="handleSelect" @refresh="handleRefreshPoster" @resend-done="handleRefreshPoster" />
     <div class="toolbar glass pagination">
       <div class="pager">
         <button @click="prevPage" :disabled="page === 1">Prev</button>
@@ -630,6 +656,30 @@ onMounted(async () => {
 .refresh-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.filter-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  padding: 0 4px;
+  transition: color 0.15s ease;
+}
+
+.filter-check input[type="checkbox"] {
+  accent-color: #5b8dee;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.filter-check.active {
+  color: #8ab4f8;
 }
 
 .refresh-btn.danger {
