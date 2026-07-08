@@ -214,6 +214,7 @@ class MovieBatchRequest(BaseModel):
     fallbackLogoTemplate: Optional[str] = None
     fallbackLogoPreset: Optional[str] = None
     send_logos_to_plex: bool = False
+    send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
 
 
 class TVShowBatchRequest(BaseModel):
@@ -233,6 +234,7 @@ class TVShowBatchRequest(BaseModel):
     fallbackPosterTemplate: Optional[str] = None
     fallbackPosterPreset: Optional[str] = None
     send_logos_to_plex: bool = False
+    send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
 
 
 # Legacy batch request - kept for backward compatibility

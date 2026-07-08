@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.09',
+    date: '2026-07-08',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Retry queue no longer re-sends the same poster on every attempt — each retry now checks whether the new render actually meets the template spec (logo found, no fallback used) before uploading to Plex. Attempts that still don\'t meet spec are skipped and left pending for the next retry, instead of re-uploading an unchanged fallback poster. For TV shows, this is checked per season/series poster, so shows with a mix of ready and not-ready seasons only send the ones that are ready.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.08',
     date: '2026-07-06',
     sections: [

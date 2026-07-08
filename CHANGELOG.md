@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.6.09 (2026-07-08)
+### Improvements
+- **Retry queue only sends when the poster is actually ready**: Previously, every retry attempt re-uploaded a poster to Plex regardless of whether the new render still needed a fallback (missing logo, poster fallback, etc.) — so items stuck in the queue got re-sent unnecessarily on every pass. The retry job now renders and checks whether the ideal template conditions are met *before* uploading, and only sends to Plex if they are. Items that still don't meet spec are left pending for the next retry without an upload. For TV shows this is evaluated per season/series poster, so a show with some seasons ready and some not will only send the ready ones.
+
 ## v1.6.08 (2026-07-06)
 ### New Features
 - **Resend cached poster to Plex**: Hover any movie or TV show card to reveal a send button (bottom-left of the poster). Movies resend immediately; TV shows prompt whether to include cached season posters. No re-render — uses the previously saved render.

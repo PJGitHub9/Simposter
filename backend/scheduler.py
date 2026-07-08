@@ -403,6 +403,7 @@ def _run_poster_retry():
                         include_seasons=True,
                         source="auto_generate",
                         send_logos_to_plex=send_logos,
+                        send_only_if_ideal=True,
                     )
                     sub_results = result.get("results", []) if isinstance(result, dict) else []
                     still_needs_retry = any(r.get("needs_retry") for r in sub_results)
@@ -416,6 +417,7 @@ def _run_poster_retry():
                         labels=remove_labels,
                         source="auto_generate",
                         send_logos_to_plex=send_logos,
+                        send_only_if_ideal=True,
                     )
                     still_needs_retry = result.get("needs_retry", False) if isinstance(result, dict) else True
 

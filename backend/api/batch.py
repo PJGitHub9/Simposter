@@ -240,6 +240,16 @@ def _process_single_movie(
         logger.info(f"[BATCH] Picked logo pref={logo_preference}")
         logger.info(f"[BATCH] Picked poster={poster_url}")
         logger.info(f"[BATCH] Picked logo={logo_url}")
+
+        # Determine whether the ideal template conditions were met.
+        # logo_was_expected uses the original logo_mode (before fallback may have overwritten it
+        # with "none") — but logo_fallback_used captures the case where the fallback fires and
+        # logo_mode becomes "none", which would otherwise make logo_was_expected False.
+        logo_was_expected = str(logo_mode).lower() != "none"
+        needs_retry = (logo_was_expected and logo_url is None) or (poster_fallback_action_used == "template") or logo_fallback_used
+        # Retry-queue runs only want to upload once the render actually meets the template spec
+        skip_send_not_ideal = getattr(req, 'send_only_if_ideal', False) and needs_retry
+
         # ---------------------------
         # Render
         # ---------------------------
@@ -456,7 +466,9 @@ def _process_single_movie(
         # Upload to Plex (if requested)
         # ---------------------------
         payload = None
-        if req.send_to_plex:
+        if skip_send_not_ideal:
+            logger.info("[BATCH] Skipping Plex upload for %s — still needs_retry and send_only_if_ideal is set", rating_key)
+        elif req.send_to_plex:
             _update_batch_status({
                 "current_step": "Sending to Plex",
             })
@@ -557,13 +569,6 @@ def _process_single_movie(
             db.update_movie_logo_url(rating_key, logo_url)
         except Exception as logo_cache_err:
             logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
-
-        # Determine whether the ideal template conditions were met.
-        # logo_was_expected uses the original logo_mode (before fallback may have overwritten it
-        # with "none") — but logo_fallback_used captures the case where the fallback fires and
-        # logo_mode becomes "none", which would otherwise make logo_was_expected False.
-        logo_was_expected = str(logo_mode).lower() != "none"
-        needs_retry = (logo_was_expected and logo_url is None) or (poster_fallback_action_used == "template") or logo_fallback_used
 
         result = {
             "rating_key": rating_key,
@@ -1256,6 +1261,10 @@ def _render_and_save_poster(
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
     display_title = f"{title} - {season_title}" if season_title else title
 
+    needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used
+    # Retry-queue runs only want to upload once the render actually meets the template spec
+    skip_send_not_ideal = getattr(req, 'send_only_if_ideal', False) and needs_retry
+
     # Inject Plex media metadata for overlay badges
     from ..config import get_plex_media_info
     plex_media = get_plex_media_info(rating_key)
@@ -1420,7 +1429,9 @@ def _render_and_save_poster(
 
     # Send to Plex if requested
     payload = None
-    if req.send_to_plex:
+    if skip_send_not_ideal:
+        logger.info("[BATCH] Skipping Plex upload for %s — still needs_retry and send_only_if_ideal is set", display_title)
+    elif req.send_to_plex:
         _update_batch_status({
             "current_step": "Uploading to Plex",
         })
@@ -1534,7 +1545,6 @@ def _render_and_save_poster(
     except Exception as logo_cache_err:
         logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
 
-    needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used
     result = {
         "rating_key": rating_key,
         "poster_used": poster_url,
@@ -1888,6 +1898,7 @@ def process_single_movie_poster(
     labels: list = None,
     source: str = "webhook",
     send_logos_to_plex: bool = False,
+    send_only_if_ideal: bool = False,
 ) -> bool:
     """
     Process a single movie poster programmatically.
@@ -1901,6 +1912,9 @@ def process_single_movie_poster(
         library_id: Library ID for history tracking
         labels: Labels to apply if sending to Plex
         source: Source identifier for history ('webhook', 'auto_generate', etc.)
+        send_only_if_ideal: If True, skip the Plex upload when the render still needs_retry
+            (i.e. no logo found / a fallback was used). Used by the retry queue so it doesn't
+            keep re-sending the same fallback poster on every retry pass.
 
     Returns:
         True if successful, False otherwise
@@ -1916,6 +1930,7 @@ def process_single_movie_poster(
             labels=labels or [],
             library_id=library_id,
             send_logos_to_plex=send_logos_to_plex,
+            send_only_if_ideal=send_only_if_ideal,
         )
 
         # Load presets for options
@@ -1973,6 +1988,7 @@ def process_single_tv_show_poster(
     include_seasons: bool = True,
     source: str = "webhook",
     send_logos_to_plex: bool = False,
+    send_only_if_ideal: bool = False,
 ) -> bool:
     """
     Process a single TV show poster programmatically.
@@ -1987,6 +2003,9 @@ def process_single_tv_show_poster(
         labels: Labels to apply if sending to Plex
         include_seasons: Whether to generate season posters
         source: Source identifier for history ('webhook', 'auto_generate', etc.)
+        send_only_if_ideal: If True, skip the Plex upload for any series/season poster that
+            still needs_retry. Used by the retry queue so it doesn't keep re-sending the same
+            fallback poster on every retry pass.
 
     Returns:
         True if successful, False otherwise
@@ -2003,6 +2022,7 @@ def process_single_tv_show_poster(
             include_seasons=include_seasons,
             library_id=library_id,
             send_logos_to_plex=send_logos_to_plex,
+            send_only_if_ideal=send_only_if_ideal,
         )
 
         # Load presets for options
