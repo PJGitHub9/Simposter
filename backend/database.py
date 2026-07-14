@@ -906,6 +906,23 @@ def get_all_settings() -> Dict[str, str]:
         return {row["key"]: row["value"] for row in rows}
 
 
+# Dotted "category.field" keys that must always be read back as a raw string, even if
+# their value happens to look like a number or "true"/"false" (e.g. a webhook secret of
+# "123", or an API key that happens to be all-digits). Without this, the generic
+# type-guessing below would coerce them to int/bool and fail UISettings validation
+# (automation.webhookSecret expects str, not int) — every settings read (including
+# unrelated endpoints like the scheduler) fails until the value changes.
+_STRING_ONLY_SETTINGS_KEYS = {
+    "plex.token",
+    "tmdb.apiKey",
+    "tvdb.apiKey",
+    "fanart.apiKey",
+    "automation.webhookSecret",
+    "automation.webhookAutoLabels",
+    "notifications.discordWebhookUrl",
+}
+
+
 def get_ui_settings() -> Optional[Dict[str, Any]]:
     """
     Get UI settings organized in the legacy JSON structure.
@@ -927,18 +944,21 @@ def get_ui_settings() -> Optional[Dict[str, Any]]:
         value = row["value"]
         category = row["category"]
 
-        # Parse JSON values if they look like JSON
-        try:
-            if value and (value.startswith('{') or value.startswith('[')):
-                parsed_value = json.loads(value)
-            elif value and value.isdigit():
-                parsed_value = int(value)
-            elif value in ('true', 'false'):
-                parsed_value = value == 'true'
-            else:
-                parsed_value = value
-        except (json.JSONDecodeError, ValueError):
+        if key in _STRING_ONLY_SETTINGS_KEYS:
             parsed_value = value
+        else:
+            # Parse JSON values if they look like JSON
+            try:
+                if value and (value.startswith('{') or value.startswith('[')):
+                    parsed_value = json.loads(value)
+                elif value and value.isdigit():
+                    parsed_value = int(value)
+                elif value in ('true', 'false'):
+                    parsed_value = value == 'true'
+                else:
+                    parsed_value = value
+            except (json.JSONDecodeError, ValueError):
+                parsed_value = value
 
         if category:
             # Nested setting (e.g., category="plex", key="url")

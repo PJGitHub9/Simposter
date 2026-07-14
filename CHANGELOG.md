@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.6.11 (2026-07-14)
+### Bug Fixes
+- **Numeric-looking secret values broke settings entirely**: `get_ui_settings()` guessed a stored value's type from its shape (all-digits → `int`), which is correct for genuine numeric settings but wrong for string fields that happen to be all-digits — e.g. a webhook secret of `"123"`. That silently turned it into an `int`, which then failed `UISettings` validation on every single settings read, breaking any endpoint that touches settings, including the scheduler (`POST /api/scheduler/library-scan` would 500). Known string-only fields (Plex token, TMDb/TVDB/Fanart keys, webhook secret, webhook labels, Discord webhook URL) are now always read back as strings regardless of their content. Fixes itself on restart — no manual database edit needed.
+- **Webhook secret setup instructions were wrong for Radarr/Sonarr**: the in-app help text (added in v1.6.10) suggested adding the secret as a custom header in Radarr/Sonarr, but their webhook connection UI has no custom-header field — only URL, method, and optional basic auth. Corrected to point at the actually-supported method: append `?secret=your-secret` (or `&secret=...` if the URL already has a `?`) to the webhook URL configured in each app.
+
 ## v1.6.10 (2026-07-14)
 ### Security
 - **SSRF hardening**: URL-fetching endpoints (poster/logo render pipeline, badge image proxy, Plex logo upload) now resolve the target host and block private/internal/link-local ranges — including the `169.254.169.254`-style cloud metadata range, which was previously unrestricted everywhere. A private-network exception remains for the configured Plex server and the app's own local-asset paths; the image-proxy endpoint (which reflects fetched bytes back to the caller) allows no private-network exception at all. Closes a bypass where a crafted URL could smuggle an allowed substring (e.g. `/library/metadata/`) past the old regex-based check while actually pointing at an arbitrary internal host.

@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.11',
+    date: '2026-07-14',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a crash where setting the new Webhook Secret (or any API key) to a value made only of digits (e.g. "123") would break Settings entirely, including scheduled library scans, until it was changed to something else. This resolves itself automatically on update — no need to re-enter anything.',
+          'Corrected the Webhook Secret help text — Radarr and Sonarr don\'t support a custom header for webhooks, so the secret needs to be added to the webhook URL itself (?secret=your-secret) rather than as a header.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.10',
     date: '2026-07-14',
     sections: [
