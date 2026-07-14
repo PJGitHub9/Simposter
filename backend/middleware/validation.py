@@ -5,7 +5,10 @@ Provides validation functions for common input types to prevent
 injection attacks and ensure data integrity.
 """
 
+import ipaddress
 import re
+import socket
+from urllib.parse import urlparse
 from typing import Optional, List, Any, Dict
 from fastapi import HTTPException, status
 
@@ -13,6 +16,112 @@ from fastapi import HTTPException, status
 class ValidationError(Exception):
     """Custom exception for validation errors."""
     pass
+
+
+# Ranges with no legitimate use as a poster/logo/badge source under any configuration
+# (cloud metadata services, unspecified/multicast addresses). Blocked unconditionally,
+# even for hosts that would otherwise qualify for the private-network exception below.
+_ALWAYS_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local, incl. cloud metadata (169.254.169.254)
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+# Paths that are always served from local disk / this app's own known endpoints, so a
+# private-network host is safe to reach here regardless of which private host it is.
+_SAFE_INTERNAL_PATH_PREFIXES = (
+    "/uploads/",
+    "/api/movie/",
+    "/api/tv-show/",
+    "/api/local-assets/",
+    "/library/metadata/",  # Plex's own API — reached only via the resolved-host check below
+)
+
+
+def _resolve_to_ip(hostname: str) -> Optional["ipaddress._BaseAddress"]:
+    """Best-effort resolve hostname to an ip_address. Returns None if it can't be resolved
+    (the actual HTTP request will simply fail on its own in that case)."""
+    try:
+        return ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    try:
+        resolved = socket.gethostbyname(hostname)
+        return ipaddress.ip_address(resolved)
+    except (socket.gaierror, ValueError, OSError):
+        return None
+
+
+def _host_is_always_blocked(hostname: str) -> bool:
+    ip = _resolve_to_ip(hostname)
+    if ip is None:
+        return False
+    return any(ip in net for net in _ALWAYS_BLOCKED_NETWORKS)
+
+
+def _host_is_private(hostname: str) -> bool:
+    ip = _resolve_to_ip(hostname)
+    if ip is None:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified
+
+
+def check_ssrf_safe(url: str, strict: bool = False) -> Optional[str]:
+    """
+    Check whether a URL is safe to fetch server-side.
+
+    Returns None if safe, or a human-readable reason string if it should be blocked.
+
+    strict=True blocks ALL private/internal hosts with no exceptions — use this for
+    endpoints that reflect the fetched bytes back to the caller (image proxies), where
+    there's no legitimate reason to ever target an internal host. strict=False (default)
+    additionally allows the configured Plex host and this app's own known local-file
+    paths, for the render pipeline's background/logo fetches.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return "URL must use http:// or https://"
+
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return "URL is missing a host"
+
+    if _host_is_always_blocked(hostname):
+        return "URL resolves to a blocked network range"
+
+    if _host_is_private(hostname):
+        if strict:
+            return "Private/internal network URLs are not allowed"
+
+        from ..config import settings
+        plex_host = (urlparse(settings.PLEX_URL).hostname or "").lower()
+        is_configured_plex = bool(plex_host) and hostname.lower() == plex_host
+        is_safe_internal_path = parsed.path.startswith(_SAFE_INTERNAL_PATH_PREFIXES)
+        if not (is_configured_plex or is_safe_internal_path):
+            return "Private/internal network URLs are not allowed for this host"
+
+    return None
+
+
+def assert_fetch_url_safe(url: str) -> None:
+    """SSRF guard for internal server-side fetches made outside a request-validation
+    context (e.g. the rendering pipeline). Raises ValueError, not HTTPException, so it
+    fits the existing error handling of its callers."""
+    if not url or not re.match(r'^https?://', url):
+        raise ValueError(f"Refusing to fetch: not an http(s) URL: {url!r}")
+    reason = check_ssrf_safe(url)
+    if reason:
+        raise ValueError(f"Refusing to fetch URL ({reason}): {url[:120]}")
+
+
+def assert_external_fetch_safe(url: str) -> None:
+    """Stricter SSRF guard for endpoints that reflect the fetched bytes back to the
+    caller (image proxy/asset-image). No private-network exceptions."""
+    if not url or not re.match(r'^https?://', url):
+        raise ValueError(f"Refusing to fetch: not an http(s) URL: {url!r}")
+    reason = check_ssrf_safe(url, strict=True)
+    if reason:
+        raise ValueError(f"Refusing to fetch URL ({reason}): {url[:120]}")
 
 
 def validate_rating_key(rating_key: str) -> str:
@@ -323,37 +432,15 @@ def validate_url(url: str, allow_data_uri: bool = False) -> str:
             detail="URL must start with http:// or https://"
         )
 
-    # Prevent SSRF: block private IPs and localhost (except for Plex servers)
-    # Allow private network URLs from Plex servers (port 32400) since many users
-    # run Plex on their local network and need to access poster/logo URLs
-    private_patterns = [
-        r'localhost',
-        r'127\.0\.0\.',
-        r'192\.168\.',
-        r'10\.',
-        r'172\.(1[6-9]|2[0-9]|3[0-1])\.',
-    ]
-
-    for pattern in private_patterns:
-        if re.search(pattern, url, re.IGNORECASE):
-            # Allow private network URLs if they appear to be from Plex or this app's own API
-            # Common patterns: port 32400, .plex.direct domain, localhost, Plex metadata paths,
-            # and internal API endpoints (parsed for rating_key extraction, never fetched as HTTP)
-            is_safe_url = (
-                'localhost' in url or
-                '127.0.0.1' in url or
-                ':32400' in url or
-                '.plex.direct' in url or
-                'X-Plex-Token' in url or  # URL contains Plex auth token
-                '/library/metadata/' in url or  # Plex metadata path (may be behind reverse proxy)
-                '/api/movie/' in url or  # Internal API URL (parsed, not fetched)
-                '/api/tv-show/' in url  # Internal API URL (parsed, not fetched)
-            )
-            if not is_safe_url:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Private network URLs are not allowed"
-                )
+    # Prevent SSRF: resolve the host and block private/internal/cloud-metadata ranges,
+    # with narrow exceptions for the configured Plex server and this app's own
+    # known local-file paths (see check_ssrf_safe for the exact rules).
+    reason = check_ssrf_safe(url)
+    if reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=reason
+        )
 
     # Length check
     if len(url) > 2048:

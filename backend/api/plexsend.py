@@ -231,6 +231,8 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
         except Exception as e:
             raise HTTPException(400, f"Invalid logo_data: {e}")
     elif req.logo_url:
+        from ..middleware.validation import validate_url
+        req.logo_url = validate_url(req.logo_url)
         try:
             r = requests.get(req.logo_url, timeout=15)
             r.raise_for_status()

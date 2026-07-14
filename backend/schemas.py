@@ -120,6 +120,7 @@ class AutomationSettings(BaseModel):
     webhookAutoSend: bool = True
     webhookAutoLabels: str = "Simposter"
     webhookAlwaysRegenerateSeason: bool = False
+    webhookSecret: str = ""
     existingContentMode: str = "regenerate"  # "regenerate" or "resend"
     retryUntilTemplateMet: bool = False
     retryIntervalHours: int = 24

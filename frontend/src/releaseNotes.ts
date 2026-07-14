@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.10',
+    date: '2026-07-14',
+    sections: [
+      {
+        title: 'Security',
+        items: [
+          'API keys and your Plex token are no longer shown in plain text in Settings responses — they\'re masked, and saving only changes them if you actually edit the field. The "Test" buttons still work as before.',
+          'Database export now leaves API keys/tokens out by default (there\'s a checkbox in Settings → Advanced to include them for a full migration backup).',
+          'Closed a gap where image URLs (posters, logos, custom badges) could be pointed at internal/private network addresses, including cloud metadata endpoints — now blocked with a narrow exception for your own Plex server.',
+          'Fixed a path-traversal bug in the local save feature that could, in theory, write a rendered poster outside the configured output folder.',
+          'The webhook secret setting (Settings → Performance → Automatic Poster Generation) is now actually enforced when set — previously it had no effect.',
+          'Turned on request rate-limiting to prevent accidental or malicious request floods on expensive endpoints (batch render, webhooks).',
+          'Tightened an overly permissive CORS setting (no functional impact — the app doesn\'t use browser cookies for authentication).',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.09',
     date: '2026-07-08',
     sections: [

@@ -120,6 +120,7 @@ let scanPoller: number | null = null
 const localWebhookAutoSend = ref(true)
 const localWebhookAutoLabels = ref('Overlay')
 const localWebhookAlwaysRegenerateSeason = ref(false)
+const localWebhookSecret = ref('')
 const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
 const localRetryUntilTemplateMet = ref(false)
 const localRetryIntervalHours = ref(24)
@@ -155,6 +156,7 @@ const schedulerStatus = ref<string>('not_initialized')
 // DB import/export states
 const dbExporting = ref(false)
 const dbImporting = ref(false)
+const dbExportIncludeSecrets = ref(true)
 const showDbImportModal = ref(false)
 const dbImportText = ref('')
 
@@ -264,6 +266,7 @@ const loadLocalSettings = async () => {
   localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
   localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
   localWebhookAlwaysRegenerateSeason.value = settings.automation?.value?.webhookAlwaysRegenerateSeason ?? false
+  localWebhookSecret.value = settings.automation?.value?.webhookSecret ?? ''
   localExistingContentMode.value = (settings.automation?.value?.existingContentMode as 'resend' | 'regenerate') ?? 'regenerate'
   localRetryUntilTemplateMet.value = settings.automation?.value?.retryUntilTemplateMet ?? false
   localRetryIntervalHours.value = settings.automation?.value?.retryIntervalHours ?? 24
@@ -325,6 +328,7 @@ const captureSettingsSnapshot = () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
@@ -397,6 +401,7 @@ const checkForChanges = () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
@@ -520,6 +525,7 @@ const saveSettings = async () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
@@ -653,23 +659,24 @@ const testSingleApiKey = async (keyType: string, apiKey: string) => {
   try {
     const apiBase = getApiBase()
     let endpoint: string
-    let options: RequestInit
 
     if (keyType === 'tmdb') {
-      endpoint = `/api/test-tmdb?api_key=${encodeURIComponent(apiKey)}`
-      options = { method: 'GET' }
+      endpoint = '/api/test-tmdb'
     } else if (keyType === 'tvdb') {
-      endpoint = `/api/test-tvdb?api_key=${encodeURIComponent(apiKey)}`
-      options = { method: 'GET' }
+      endpoint = '/api/test-tvdb'
     } else if (keyType === 'fanart') {
       endpoint = '/api/test-fanart'
-      options = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: apiKey })
-      }
     } else {
       return
+    }
+
+    // POST with the key in the body (not a query param) so it never lands in access logs.
+    // If the field still holds the mask placeholder (user didn't edit an already-saved key),
+    // the backend resolves it to the currently stored key.
+    const options: RequestInit = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey })
     }
 
     const res = await fetch(`${apiBase}${endpoint}`, options)
@@ -908,7 +915,7 @@ const handleDbExport = async () => {
   dbExporting.value = true
   try {
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/database/export`)
+    const res = await fetch(`${apiBase}/api/database/export?include_secrets=${dbExportIncludeSecrets.value}`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -1299,6 +1306,7 @@ onMounted(() => {
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
         :webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason"
+        :webhookSecret="localWebhookSecret"
         :existingContentMode="localExistingContentMode"
         :retryUntilTemplateMet="localRetryUntilTemplateMet"
         :retryIntervalHours="localRetryIntervalHours"
@@ -1318,6 +1326,7 @@ onMounted(() => {
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:webhookSecret="localWebhookSecret = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:existingContentMode="localExistingContentMode = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryUntilTemplateMet="localRetryUntilTemplateMet = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryIntervalHours="localRetryIntervalHours = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
@@ -1371,9 +1380,11 @@ onMounted(() => {
         :dbImportText="dbImportText"
         :apiOrder="apiOrder"
         :unsavedChanges="hasUnsavedChanges"
+        :dbExportIncludeSecrets="dbExportIncludeSecrets"
         @update:showDbImportModal="showDbImportModal = $event"
         @update:dbImportText="dbImportText = $event"
         @update:apiOrder="apiOrder = $event; sectionsWithChanges.apiKeys = true; hasUnsavedChanges = true"
+        @update:dbExportIncludeSecrets="dbExportIncludeSecrets = $event"
         @export-db="handleDbExport"
         @import-db="handleDbImport"
         @save="saveSettings"

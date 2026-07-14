@@ -303,9 +303,14 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
 @router.get("/test-plex-connection")
 def test_plex_connection(plex_url: str = None, plex_token: str = None):
     """Test Plex server connection and return diagnostics."""
-    # Use provided parameters or fall back to settings
+    from ..config import SECRET_MASK
+
+    # Use provided parameters or fall back to settings. If the caller echoed back the
+    # masked placeholder (Settings UI never sees the real saved token), treat that the
+    # same as "not provided" so we test the actual stored token instead of the literal
+    # placeholder string.
     test_url = plex_url or settings.PLEX_URL
-    test_token = plex_token or settings.PLEX_TOKEN
+    test_token = plex_token if (plex_token and plex_token != SECRET_MASK) else settings.PLEX_TOKEN
 
     try:
         url = f"{test_url}/library/sections"

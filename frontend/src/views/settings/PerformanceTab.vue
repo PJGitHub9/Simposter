@@ -16,6 +16,7 @@ const props = defineProps<{
   webhookAutoSend: boolean
   webhookAutoLabels: string
   webhookAlwaysRegenerateSeason: boolean
+  webhookSecret: string
   existingContentMode: 'resend' | 'regenerate'
   retryUntilTemplateMet: boolean
   retryIntervalHours: number
@@ -38,6 +39,7 @@ const emit = defineEmits<{
   'update:webhookAutoSend': [value: boolean]
   'update:webhookAutoLabels': [value: string]
   'update:webhookAlwaysRegenerateSeason': [value: boolean]
+  'update:webhookSecret': [value: string]
   'update:existingContentMode': [value: 'resend' | 'regenerate']
   'update:retryUntilTemplateMet': [value: boolean]
   'update:retryIntervalHours': [value: number]
@@ -105,6 +107,11 @@ const localWebhookAutoLabels = computed({
 const localWebhookAlwaysRegenerateSeason = computed({
   get: () => props.webhookAlwaysRegenerateSeason,
   set: (val) => emit('update:webhookAlwaysRegenerateSeason', val)
+})
+
+const localWebhookSecret = computed({
+  get: () => props.webhookSecret,
+  set: (val) => emit('update:webhookSecret', val)
 })
 
 const localExistingContentMode = computed({
@@ -333,6 +340,25 @@ const localRetryMaxAttempts = computed({
           placeholder="Simposter, Auto"
         />
         <span class="help-text">Comma-separated list of labels to apply to webhook-generated posters (e.g., "Simposter, Auto")</span>
+      </label>
+
+      <label>
+        <span class="label-text">Webhook Secret (optional)</span>
+        <input
+          type="password"
+          v-model="localWebhookSecret"
+          placeholder="Leave blank to accept any request (default)"
+          autocomplete="new-password"
+        />
+        <span class="help-text">
+          When set, webhook requests must include this value or they're rejected. Without it, anyone who can
+          reach this server's webhook URLs can trigger poster generation. Radarr/Sonarr/Tautulli don't have a
+          custom-header field for webhooks, so add it directly to the webhook URL you already configured in
+          each app: append <code>?secret=your-secret</code>, or <code>&amp;secret=your-secret</code> if the URL
+          already has a <code>?</code> in it (e.g. Sonarr's <code>?include_seasons=true</code>).
+          A <code>X-Webhook-Secret</code> header also works if you're calling the webhook from something that
+          supports custom headers.
+        </span>
       </label>
     </div>
 

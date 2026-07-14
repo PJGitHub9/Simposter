@@ -1,5 +1,5 @@
 # backend/api/save.py
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 import os
 import json
 from pathlib import Path
@@ -384,8 +384,16 @@ def api_save(req: SaveRequest):
         else:
             base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")
 
-    os.makedirs(base_dir, exist_ok=True)
-    out_path = base_dir / filename
+    # Security: constrain the final path to the two legitimate output roots. save_path is
+    # built from user-controlled template variables (movie_title, library_label) and the
+    # char-allowlist above permits "." and "/", so a crafted title like "../../../../etc"
+    # can otherwise escape the intended directory once the ".." components are resolved.
+    allowed_roots = [Path(settings.OUTPUT_ROOT).resolve(), Path(settings.CONFIG_DIR).resolve()]
+    out_path = (base_dir / filename).resolve()
+    if not any(out_path.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=400, detail="Resolved save path is outside the allowed output directories")
+
+    os.makedirs(out_path.parent, exist_ok=True)
 
     # Embed library metadata into the image
     img = embed_library_metadata(img, req.library_id, library_label, req.movie_title, str(req.movie_year) if req.movie_year else None)

@@ -1095,6 +1095,13 @@ def _fetch_url_badge_image(url: str) -> Optional[Image.Image]:
     # Normalize before caching so blob URLs and raw URLs share the same cache entry
     url = _normalize_badge_url(url)
 
+    from ..middleware.validation import assert_external_fetch_safe
+    try:
+        assert_external_fetch_safe(url)
+    except ValueError as e:
+        logger.warning("[OVERLAY] Refused to fetch URL badge: %s", e)
+        return None
+
     cache_dir = Path(settings.CONFIG_DIR) / "url_badge_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
 

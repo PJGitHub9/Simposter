@@ -1,16 +1,24 @@
-from fastapi import APIRouter, Query, HTTPException
-from ..config import logger
+from fastapi import APIRouter, HTTPException
+from ..config import logger, settings, SECRET_MASK
 from .. import tmdb_client, fanart_client
 
 router = APIRouter()
 
 
-@router.get("/test-tmdb")
-async def test_tmdb_api_key(api_key: str = Query(..., description="TMDb API key to test")):
-    """Test a TMDb API key by making a simple API call."""
+@router.post("/test-tmdb")
+async def test_tmdb_api_key(payload: dict):
+    """Test a TMDb API key by making a simple API call (body, so the key won't hit access logs).
+    If the key is the SECRET_MASK placeholder (user didn't edit an already-saved key in the UI),
+    tests the currently stored key instead."""
     try:
         import requests
         from ..config import mask_sensitive
+
+        api_key = str(payload.get("api_key") or "")
+        if api_key == SECRET_MASK:
+            api_key = settings.TMDB_API_KEY
+        if not api_key:
+            return {"status": "error", "error": "API key required"}
 
         # Test with a simple movie lookup (The Matrix - ID: 603)
         # TMDb API v3 uses api_key query parameter
@@ -50,12 +58,20 @@ async def test_tmdb_api_key(api_key: str = Query(..., description="TMDb API key 
         }
 
 
-@router.get("/test-tvdb")
-async def test_tvdb_api_key(api_key: str = Query(..., description="TVDB API key to test")):
-    """Test a TVDB API key by performing a login call."""
+@router.post("/test-tvdb")
+async def test_tvdb_api_key(payload: dict):
+    """Test a TVDB API key by performing a login call (body, so the key won't hit access logs).
+    If the key is the SECRET_MASK placeholder (user didn't edit an already-saved key in the UI),
+    tests the currently stored key instead."""
     try:
         from .. import tvdb_client
         from ..config import mask_sensitive
+
+        api_key = str(payload.get("api_key") or "")
+        if api_key == SECRET_MASK:
+            api_key = settings.TVDB_API_KEY
+        if not api_key:
+            return {"status": "error", "error": "API key required"}
 
         redacted = mask_sensitive(api_key)
         logger.info("[TEST_TVDB] Testing API key: %s", redacted)
@@ -80,6 +96,8 @@ async def test_fanart_api_key(payload: dict):
         import requests
 
         api_key = str(payload.get("api_key") or "")
+        if api_key == SECRET_MASK:
+            api_key = settings.FANART_API_KEY
         if not api_key:
             return {"status": "error", "error": "API key required"}
 

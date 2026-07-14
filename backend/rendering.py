@@ -37,6 +37,9 @@ def _download_image(url: str) -> Image.Image:
     if not url:
         raise ValueError("Empty image URL")
 
+    from .middleware.validation import assert_fetch_url_safe
+    assert_fetch_url_safe(url)
+
     # Cache hit — skip HTTP entirely
     with _IMAGE_BYTE_CACHE_LOCK:
         raw = _IMAGE_BYTE_CACHE.get(url)

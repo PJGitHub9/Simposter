@@ -16,8 +16,9 @@ Example webhook URLs:
 - Tautulli: http://your-server:5000/webhook/tautulli?template_id=...&preset_id=...&event_types=watched,added
 """
 
-from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, Body, BackgroundTasks, Depends, Request
 from typing import Dict, Any, Optional, List, Callable
+import hmac
 import xml.etree.ElementTree as ET
 import time
 import threading
@@ -29,6 +30,26 @@ from .. import cache
 from .notifications import send_discord_notification, send_apprise_notification
 
 router = APIRouter()
+
+
+def verify_webhook_secret(request: Request) -> None:
+    """
+    Reject webhook calls when a shared secret is configured but not supplied/matching.
+
+    No-op when settings.WEBHOOK_SECRET is unset (the default) — preserves existing
+    trusted-network deployments where no secret was ever configured. When a secret IS
+    set (Settings -> Automation -> Webhook Secret, or WEBHOOK_SECRET env var), it must
+    be supplied via the "X-Webhook-Secret" header or "?secret=" query param, matching
+    how Radarr/Sonarr/Tautulli let you attach a custom header or query string to
+    webhook URLs.
+    """
+    secret = settings.WEBHOOK_SECRET
+    if not secret:
+        return
+    supplied = request.headers.get("X-Webhook-Secret") or request.query_params.get("secret") or ""
+    if not hmac.compare_digest(supplied, secret):
+        logger.warning("[WEBHOOK] Rejected request to %s: missing or invalid webhook secret", request.url.path)
+        raise HTTPException(status_code=401, detail="Invalid or missing webhook secret")
 
 
 # ============================================================================
@@ -921,7 +942,7 @@ def process_webhook_poster_generation(
 # RADARR WEBHOOKS - Movie poster generation
 # ============================================================================
 
-@router.post("/webhook/radarr/{template_id}/{preset_id}")
+@router.post("/webhook/radarr/{template_id}/{preset_id}", dependencies=[Depends(verify_webhook_secret)])
 def radarr_webhook(
     template_id: str,
     preset_id: str,
@@ -1045,7 +1066,7 @@ def radarr_webhook(
 # SONARR WEBHOOKS - TV show poster generation with season control
 # ============================================================================
 
-@router.post("/webhook/sonarr/{template_id}/{preset_id}")
+@router.post("/webhook/sonarr/{template_id}/{preset_id}", dependencies=[Depends(verify_webhook_secret)])
 def sonarr_webhook(
     template_id: str,
     preset_id: str,
@@ -1193,7 +1214,7 @@ def sonarr_webhook(
 # TAUTULLI WEBHOOKS - Plex library event poster generation
 # ============================================================================
 
-@router.post("/webhook/tautulli")
+@router.post("/webhook/tautulli", dependencies=[Depends(verify_webhook_secret)])
 def tautulli_webhook(
     background_tasks: BackgroundTasks,
     template_id: str = Query(..., description="Template ID to use for poster generation"),
