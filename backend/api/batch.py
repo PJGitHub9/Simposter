@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id, save_render_cache
+from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -12,7 +12,8 @@ from backend.assets.selection import pick_poster, pick_logo, map_logo_mode_to_pr
 from backend.logo_sources import get_logos_merged
 from .movies import fetch_and_cache_poster
 from .tv_shows import plex_session, plex_headers, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
-from .save import apply_save_location_variables, get_save_location_template, resolve_library_label, embed_library_metadata
+from .save import embed_library_metadata
+from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, save_or_cache_render
 from datetime import datetime, timezone
 from PIL import Image, PngImagePlugin
 from .. import database as db
@@ -300,100 +301,21 @@ def _process_single_movie(
             _update_batch_status({
                 "current_step": "Saving locally",
             })
-            import os
-            from pathlib import Path
-            import json
 
-            # Load UI settings to respect saveLocation + batch subfolder flag
-            ui_settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
-            legacy_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
-            save_template = get_save_location_template(media_type="movie")
-            save_batch = False
-            try:
-                data = None
-                if ui_settings_file.exists():
-                    data = json.loads(ui_settings_file.read_text(encoding="utf-8"))
-                elif legacy_file.exists():
-                    data = json.loads(legacy_file.read_text(encoding="utf-8"))
-                if data:
-                    save_template = data.get("saveLocation") or save_template
-                    save_batch = bool(data.get("saveBatchInSubfolder", False))
-            except Exception:
-                pass
-
-            # Apply variable substitution
-            # Use library display name/title when available
             library_label = resolve_library_label(req.library_id)
-
-            save_path_template = apply_save_location_variables(
-                save_template,
-                movie_details.get("title", rating_key),
-                movie_details.get("year", ""),
-                rating_key,
-                library_label
-            )
-
-            # Sanitize path components (keep dots for filenames)
-            # Remove colons and other special characters (similar to Kometa's structure)
-            safe_path = "".join(c for c in save_path_template if c.isalnum() or c in " _-/().")
-            safe_path = safe_path.strip()
-
             from .save import get_output_format_settings
             fmt_settings = get_output_format_settings()
 
-            candidate = Path(safe_path)
-            if candidate.suffix:
-                base_dir = candidate.parent
-                # Override extension to match user's output format setting
-                stem = Path(candidate.name).stem
-                filename = f"{stem}{fmt_settings['ext']}"
-            else:
-                base_dir = candidate
-                # Sanitize the title for filename
-                title = movie_details.get('title', rating_key)
-                safe_title = "".join(c for c in title if c.isalnum() or c in " _-().")
-                filename = safe_title.strip()
-                yr = movie_details.get("year", "")
-                if yr:
-                    filename += f" ({yr})"
-                filename += fmt_settings["ext"]
-
-            # Map explicit /output to configured OUTPUT_ROOT
-            base_dir_str = str(base_dir).replace("\\", "/")
-            mapped_output = False
-            if base_dir_str.startswith("/output"):
-                tail = base_dir_str[len("/output"):].lstrip("/")
-                base_dir = Path(settings.OUTPUT_ROOT) / tail if tail else Path(settings.OUTPUT_ROOT)
-                mapped_output = True
-
-            # Map explicit /config to configured CONFIG_DIR so default template lands in config volume
-            if base_dir_str.startswith("/config"):
-                tail = base_dir_str[len("/config"):].lstrip("/")
-                base_dir = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
-                mapped_output = True
-
-            # Anchor relative paths (skip if we already mapped /output or /config)
-            if not base_dir.is_absolute():
-                lower_path = base_dir_str.lower()
-                if lower_path.startswith("config/"):
-                    tail = base_dir_str.split("/", 1)[1] if "/" in base_dir_str else ""
-                    base_dir = Path(settings.CONFIG_DIR) / tail
-                elif lower_path.startswith("output/"):
-                    tail = base_dir_str.split("/", 1)[1] if "/" in base_dir_str else ""
-                    base_dir = Path(settings.OUTPUT_ROOT) / tail
-                elif not mapped_output:
-                    base_dir = Path(settings.OUTPUT_ROOT) / str(base_dir).lstrip("/\\")
-
-            # Optional batch subfolder (insert after output root)
-            if save_batch:
-                try:
-                    rel = base_dir.relative_to(settings.OUTPUT_ROOT)
-                    base_dir = Path(settings.OUTPUT_ROOT) / "batch" / rel
-                except ValueError:
-                    base_dir = Path(settings.OUTPUT_ROOT) / "batch" / base_dir.name
-
-            os.makedirs(base_dir, exist_ok=True)
-            save_path = base_dir / filename
+            movie_year = movie_details.get("year")
+            ctx = SaveContext(
+                media_type="movie",
+                title=movie_details.get("title", rating_key),
+                year=int(movie_year) if movie_year else None,
+                rating_key=rating_key,
+                library_label=library_label,
+            )
+            save_path = resolve_save_path(ctx, fmt_settings["ext"], batch_subfolder=req.batch_subfolder)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Embed library metadata into the image
             img = embed_library_metadata(
@@ -414,6 +336,8 @@ def _process_single_movie(
                 pnginfo.add_text("simposter_library_name", str(library_label or ""))
                 pnginfo.add_text("simposter_movie_title", str(movie_details.get("title", "")))
                 pnginfo.add_text("simposter_movie_year", str(movie_details.get("year", "")))
+                pnginfo.add_text("simposter_rating_key", str(rating_key or ""))
+                pnginfo.add_text("simposter_is_tv", "0")
                 img.save(save_path, "PNG", pnginfo=pnginfo, compress_level=fmt_settings["quality"])
             elif pil_format == "WEBP":
                 img.convert("RGB").save(save_path, "WEBP", quality=fmt_settings["quality"])
@@ -433,7 +357,9 @@ def _process_single_movie(
                     "simposter_library_id": str(req.library_id or ""),
                     "simposter_library_name": str(library_label or ""),
                     "simposter_movie_title": str(movie_details.get("title", "")),
-                    "simposter_movie_year": str(movie_details.get("year", ""))
+                    "simposter_movie_year": str(movie_details.get("year", "")),
+                    "simposter_rating_key": str(rating_key or ""),
+                    "simposter_is_tv": "0",
                 })
                 exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
                 exif_bytes = exif.tobytes()
@@ -492,7 +418,17 @@ def _process_single_movie(
 
             r = requests.post(plex_url, headers=headers, data=payload, timeout=20)
             r.raise_for_status()
-            save_render_cache(rating_key, payload)
+            try:
+                cache_ctx = SaveContext(
+                    media_type="movie",
+                    title=movie_details.get("title", rating_key),
+                    year=int(movie_details["year"]) if movie_details.get("year") else None,
+                    rating_key=rating_key,
+                    library_label=resolve_library_label(req.library_id),
+                )
+            except Exception:
+                cache_ctx = None
+            save_or_cache_render(rating_key, payload, cache_ctx)
 
             # Manual batch send resolves any pending retry for this item
             if source == "batch":
@@ -1308,69 +1244,21 @@ def _render_and_save_poster(
         })
 
         try:
-            # Use appropriate save location template based on media type
             media_type = "tv-show" if is_tv else "movie"
-            template_str = get_save_location_template(media_type=media_type)
             library_label = resolve_library_label(req.library_id) if req.library_id else ""
-
-            # Apply variable substitution (include season for TV shows if provided)
-            save_path_template = apply_save_location_variables(
-                template_str,
-                title,
-                int(year) if year else None,
-                rating_key,
-                library_label,
-                season=season_index if is_tv else None,
-                is_tv_show=is_tv
-            )
-
-            # Sanitize path components
-            safe_path = "".join(c for c in save_path_template if c.isalnum() or c in " _-/().")
-            safe_path = safe_path.strip()
-
-            from pathlib import Path
             from .save import get_output_format_settings
             fmt_settings = get_output_format_settings()
-            file_ext = fmt_settings["ext"]
 
-            candidate = Path(safe_path)
-            if candidate.suffix:
-                base_dir = candidate.parent
-                # Override extension to match user's output format setting
-                stem = Path(candidate.name).stem
-                filename = f"{stem}{file_ext}"
-            else:
-                base_dir = candidate
-                # Sanitize the title for filename
-                safe_title = "".join(c for c in title if c.isalnum() or c in " _-()")
-                safe_title = safe_title.strip()
-
-                # Add season suffix for TV show seasons
-                if season_title:
-                    # Extract season number from season_title (e.g., "Season 1" -> "S01")
-                    import re
-                    season_match = re.search(r'(\d+)', season_title)
-                    if season_match:
-                        season_num = int(season_match.group(1))
-                        filename = f"{safe_title} - S{season_num:02d}{file_ext}"
-                    else:
-                        # Fallback: use sanitized season title
-                        safe_season = "".join(c for c in season_title if c.isalnum() or c in " _-()")
-                        filename = f"{safe_title} - {safe_season}{file_ext}"
-                else:
-                    filename = f"{safe_title}{file_ext}"
-
-            save_path = base_dir / filename
-
-            # Convert to absolute path for clarity
-            save_path = save_path.resolve()
-
-            # Create parent directory if it doesn't exist
-            try:
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                logger.error("[BATCH] Failed to create directory %s: %s", save_path.parent, e)
-                raise
+            ctx = SaveContext(
+                media_type=media_type,
+                title=title,
+                year=int(year) if year else None,
+                rating_key=rating_key,
+                library_label=library_label,
+                season=season_index if is_tv else None,
+            )
+            save_path = resolve_save_path(ctx, fmt_settings["ext"], batch_subfolder=req.batch_subfolder)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Embed library metadata into the image
             rendered = embed_library_metadata(
@@ -1396,11 +1284,32 @@ def _render_and_save_poster(
                     pnginfo.add_text("simposter_template_id", template_id)
                 if preset_id:
                     pnginfo.add_text("simposter_preset_id", preset_id)
+                pnginfo.add_text("simposter_rating_key", str(rating_key or ""))
+                pnginfo.add_text("simposter_is_tv", "1" if is_tv else "0")
                 rendered.save(str(save_path), "PNG", pnginfo=pnginfo, optimize=False, compress_level=fmt_settings["quality"])
             elif pil_format == "WEBP":
                 rendered.convert("RGB").save(str(save_path), "WEBP", quality=fmt_settings["quality"])
             else:
-                rendered.convert("RGB").save(str(save_path), "JPEG", quality=fmt_settings["quality"])
+                # For JPEG, embed metadata in EXIF UserComment field (matching the PNG
+                # branch above — this was previously missing, so JPEG-format TV/season
+                # local assets had no embedded metadata at all: no library, title, or
+                # rating_key, which also broke Local Assets library-filtering for them).
+                import json
+                rendered_rgb = rendered.convert("RGB")
+                exif = rendered_rgb.getexif()
+                if exif is None:
+                    from PIL.Image import Exif
+                    exif = Exif()
+                metadata_json = json.dumps({
+                    "simposter_library_id": str(req.library_id or ""),
+                    "simposter_library_name": library_label or "",
+                    "simposter_movie_title": title or "",
+                    "simposter_movie_year": str(year) if year else "",
+                    "simposter_rating_key": str(rating_key or ""),
+                    "simposter_is_tv": "1" if is_tv else "0",
+                })
+                exif[0x9286] = metadata_json.encode('utf-8')
+                rendered_rgb.save(str(save_path), "JPEG", quality=fmt_settings["quality"], exif=exif.tobytes())
             logger.info("[BATCH] Saved %s to: %s", title, save_path)
 
             # Record history
@@ -1457,7 +1366,18 @@ def _render_and_save_poster(
             upload_resp = requests.post(upload_url, headers=headers, data=payload, timeout=20)
             upload_resp.raise_for_status()
             logger.info("[BATCH] Uploaded poster to Plex for %s", title)
-            save_render_cache(rating_key, payload)
+            try:
+                cache_ctx = SaveContext(
+                    media_type="tv-show" if is_tv else "movie",
+                    title=title,
+                    year=int(year) if year else None,
+                    rating_key=rating_key,
+                    library_label=resolve_library_label(req.library_id) if req.library_id else "",
+                    season=season_index if is_tv else None,
+                )
+            except Exception:
+                cache_ctx = None
+            save_or_cache_render(rating_key, payload, cache_ctx)
 
             # Manual batch send resolves any pending retry for this item
             if source == "batch":
@@ -1582,13 +1502,21 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
     """
     # Get concurrent renders setting and retry config
     retry_enabled = False
+    save_batch_in_subfolder = False
     try:
         from .ui_settings import _read_settings
         ui_settings = _read_settings(include_env=False)
         max_workers = ui_settings.performance.concurrentRenders if ui_settings.performance else 2
         retry_enabled = ui_settings.automation.retryUntilTemplateMet if ui_settings.automation else False
+        save_batch_in_subfolder = bool(ui_settings.saveBatchInSubfolder)
     except Exception:
         max_workers = 2  # Default to 2 concurrent renders
+
+    # One timestamp for the whole run so every item (movies and TV alike) lands in the
+    # same batch-<timestamp> folder, instead of a new folder per item.
+    if req.save_locally and save_batch_in_subfolder:
+        from ..save_paths import make_batch_subfolder_name
+        req.batch_subfolder = make_batch_subfolder_name()
 
     results = []
 

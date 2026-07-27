@@ -22,6 +22,7 @@ from ..middleware.validation import (
     validate_library_id,
     validate_labels
 )
+from ..save_paths import resolve_save_root
 
 router = APIRouter()
 
@@ -36,10 +37,47 @@ scan_status = {
 }
 
 
-def _read_image_metadata(file_path: Path) -> dict:
+# Local Assets can hold thousands of saved posters, and every listing/resend request
+# used to re-open and re-parse every single file from scratch — on network-backed
+# storage (NFS/SMB volumes, common for these self-hosted setups) that made "Refresh"
+# visibly slow. Cache metadata per file, keyed by (mtime, size) so it's invalidated
+# automatically the moment a file actually changes, without needing a TTL or an
+# explicit cache-clear button. Lives for the life of the backend process.
+_image_metadata_cache: dict = {}  # path_str -> (mtime, size, metadata)
+
+
+def _read_image_metadata(file_path: Path, stat_result: Optional[os.stat_result] = None) -> dict:
     """
-    Read library metadata from image file.
-    Returns dict with library_id, library_name, movie_title, and movie_year if found.
+    Read library metadata from image file (cached — see _image_metadata_cache above).
+
+    Args:
+        file_path: path to the saved poster
+        stat_result: pass this in if the caller already has a fresh os.stat() for the
+            file (e.g. from an os.walk loop) to avoid a second stat() call.
+    """
+    path_str = str(file_path)
+    try:
+        stat_result = stat_result or file_path.stat()
+    except OSError:
+        stat_result = None
+
+    if stat_result is not None:
+        cached = _image_metadata_cache.get(path_str)
+        if cached and cached[0] == stat_result.st_mtime and cached[1] == stat_result.st_size:
+            return cached[2]
+
+    metadata = _read_image_metadata_uncached(file_path)
+
+    if stat_result is not None:
+        _image_metadata_cache[path_str] = (stat_result.st_mtime, stat_result.st_size, metadata)
+    return metadata
+
+
+def _read_image_metadata_uncached(file_path: Path) -> dict:
+    """
+    Actually read library metadata from an image file's embedded PNG/EXIF data.
+    Returns dict with library_id, library_name, movie_title, movie_year, rating_key,
+    and is_tv if found. Called through _read_image_metadata()'s cache, not directly.
     """
     try:
         img = Image.open(file_path)
@@ -50,6 +88,8 @@ def _read_image_metadata(file_path: Path) -> dict:
             library_name = img.text.get('simposter_library_name')
             movie_title = img.text.get('simposter_movie_title')
             movie_year = img.text.get('simposter_movie_year')
+            rating_key = img.text.get('simposter_rating_key')
+            is_tv = img.text.get('simposter_is_tv')
             if library_id or movie_title:
                 result = {}
                 if library_id:
@@ -59,6 +99,9 @@ def _read_image_metadata(file_path: Path) -> dict:
                     result['movie_title'] = movie_title
                 if movie_year:
                     result['movie_year'] = movie_year
+                if rating_key:
+                    result['rating_key'] = rating_key
+                    result['is_tv'] = is_tv == '1'
                 return result
 
         # Try from EXIF data (for JPEG files)
@@ -76,6 +119,8 @@ def _read_image_metadata(file_path: Path) -> dict:
                     library_name = metadata.get('simposter_library_name')
                     movie_title = metadata.get('simposter_movie_title')
                     movie_year = metadata.get('simposter_movie_year')
+                    rating_key = metadata.get('simposter_rating_key')
+                    is_tv = metadata.get('simposter_is_tv')
                     if library_id or movie_title:
                         result = {}
                         if library_id:
@@ -85,6 +130,9 @@ def _read_image_metadata(file_path: Path) -> dict:
                             result['movie_title'] = movie_title
                         if movie_year:
                             result['movie_year'] = movie_year
+                        if rating_key:
+                            result['rating_key'] = rating_key
+                            result['is_tv'] = is_tv == '1'
                         return result
                 except (json.JSONDecodeError, TypeError):
                     pass
@@ -97,6 +145,8 @@ def _read_image_metadata(file_path: Path) -> dict:
             library_name = img.info.get('simposter_library_name')
             movie_title = img.info.get('simposter_movie_title')
             movie_year = img.info.get('simposter_movie_year')
+            rating_key = img.info.get('simposter_rating_key')
+            is_tv = img.info.get('simposter_is_tv')
             if library_id or movie_title:
                 result = {}
                 if library_id:
@@ -106,6 +156,9 @@ def _read_image_metadata(file_path: Path) -> dict:
                     result['movie_title'] = movie_title
                 if movie_year:
                     result['movie_year'] = movie_year
+                if rating_key:
+                    result['rating_key'] = rating_key
+                    result['is_tv'] = is_tv == '1'
                 return result
 
         return {}
@@ -1160,88 +1213,97 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         raise HTTPException(status_code=500, detail=f"Failed to scan library: {e}")
 
 
+def _get_unique_asset_roots() -> List[Path]:
+    """Browsable output roots across both the movie and TV save-location templates.
+    Most installs have both templates resolve to the same root (the default templates
+    both start with "/config/output/{library}/..."), but a user can point them at
+    different locations, so Local Assets needs to cover both rather than only the
+    legacy single "saveLocation" field it used to read."""
+    candidates: List[Path] = []
+    for media_type in ("movie", "tv-show"):
+        root = resolve_save_root(media_type)
+        if root not in candidates:
+            candidates.append(root)
+    # Drop any root nested inside another candidate — walking the parent already covers it.
+    return [r for r in candidates if not any(r != other and r.is_relative_to(other) for other in candidates)]
+
+
+def _find_asset_under_roots(path: str) -> Path:
+    """Resolve a relative asset path against each candidate output root, returning
+    the first that both stays within its root (blocks traversal) and exists on disk.
+    Raises 403 if `path` escapes every candidate root, or 404 if it's contained but
+    doesn't exist anywhere."""
+    roots = _get_unique_asset_roots()
+    any_contained = False
+    for root in roots:
+        candidate = (root / path).resolve()
+        if candidate.is_relative_to(root):
+            any_contained = True
+            if candidate.exists() and candidate.is_file():
+                return candidate
+    if not any_contained:
+        raise HTTPException(status_code=403, detail="Access denied")
+    raise HTTPException(status_code=404, detail="File not found")
+
+
 @router.get("/local-assets")
 def api_local_assets():
-    """List all saved poster assets from the output folder defined in UI settings."""
+    """List all saved poster assets from the movie/TV output folders defined in UI settings."""
     try:
-        # Get save location from UI settings
-        from ..api.ui_settings import _read_settings
-        ui_settings = _read_settings()
-        save_location = ui_settings.saveLocation or "/output"
-
-        # Resolve the save location path (strip {library}, {title}, {year}, {key} template variables)
-        base_path = save_location.split("{")[0].rstrip("/")
-
-        if base_path.startswith("/output"):
-            # Map /output to OUTPUT_ROOT if configured, otherwise use CONFIG_DIR/output
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            tail = base_path[len("/output"):].lstrip("/")
-            output_root = Path(output_base) / tail if tail else Path(output_base)
-        elif base_path.startswith("/config"):
-            # Map /config to CONFIG_DIR
-            tail = base_path[len("/config"):].lstrip("/")
-            output_root = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
-        elif base_path.startswith("config/"):
-            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
-            output_root = Path(settings.CONFIG_DIR) / tail
-        elif base_path.startswith("output/"):
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
-            output_root = Path(output_base) / tail
-        else:
-            # Relative path - anchor under CONFIG_DIR/output
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            output_root = Path(output_base) / base_path.lstrip("/\\")
-
-        output_root = output_root.resolve()
-
-        if not output_root.exists():
-            return {"assets": [], "count": 0, "output_path": str(output_root)}
+        output_roots = _get_unique_asset_roots()
 
         assets = []
         # Supported image extensions
         image_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
 
-        # Walk through output directory
-        for root, dirs, files in os.walk(output_root):
-            for file in files:
-                file_path = Path(root) / file
-                if file_path.suffix.lower() in image_extensions:
-                    try:
-                        stat = file_path.stat()
-                        rel_path = file_path.relative_to(output_root)
+        for output_root in output_roots:
+            if not output_root.exists():
+                continue
+            for root, dirs, files in os.walk(output_root):
+                for file in files:
+                    file_path = Path(root) / file
+                    if file_path.suffix.lower() in image_extensions:
+                        try:
+                            stat = file_path.stat()
+                            rel_path = file_path.relative_to(output_root)
 
-                        # Read library metadata from the image
-                        metadata = _read_image_metadata(file_path)
+                            # Read library metadata from the image (cached — see
+                            # _read_image_metadata — so unchanged files are instant
+                            # on repeat "Refresh" clicks instead of re-opening every file)
+                            metadata = _read_image_metadata(file_path, stat_result=stat)
 
-                        asset = {
-                            "filename": file,
-                            "path": str(rel_path),
-                            "full_path": str(file_path),
-                            "size": stat.st_size,
-                            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                            "folder": str(rel_path.parent) if rel_path.parent != Path('.') else ""
-                        }
+                            asset = {
+                                "filename": file,
+                                "path": str(rel_path),
+                                "full_path": str(file_path),
+                                "size": stat.st_size,
+                                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                                "folder": str(rel_path.parent) if rel_path.parent != Path('.') else ""
+                            }
 
-                        # Add library metadata if available
-                        if metadata:
-                            asset["library_id"] = metadata.get("library_id")
-                            asset["library_name"] = metadata.get("library_name")
-                            asset["movie_title"] = metadata.get("movie_title")
-                            asset["movie_year"] = metadata.get("movie_year")
+                            # Add library metadata if available
+                            if metadata:
+                                asset["library_id"] = metadata.get("library_id")
+                                asset["library_name"] = metadata.get("library_name")
+                                asset["movie_title"] = metadata.get("movie_title")
+                                asset["movie_year"] = metadata.get("movie_year")
+                                if metadata.get("rating_key"):
+                                    asset["rating_key"] = metadata.get("rating_key")
+                                    asset["is_tv"] = metadata.get("is_tv", False)
 
-                        assets.append(asset)
-                    except Exception as e:
-                        logger.debug(f"[LOCAL_ASSETS] Failed to stat {file_path}: {e}")
+                            assets.append(asset)
+                        except Exception as e:
+                            logger.debug(f"[LOCAL_ASSETS] Failed to stat {file_path}: {e}")
 
         # Sort by modified time (newest first)
         assets.sort(key=lambda x: x['modified'], reverse=True)
 
-        logger.info(f"[LOCAL_ASSETS] Found {len(assets)} assets in {output_root}")
+        logger.info(f"[LOCAL_ASSETS] Found {len(assets)} assets in {[str(r) for r in output_roots]}")
         return {
             "assets": assets,
             "count": len(assets),
-            "output_path": str(output_root)
+            "output_path": str(output_roots[0]) if output_roots else "",
+            "output_paths": [str(r) for r in output_roots],
         }
     except Exception as e:
         logger.error(f"[LOCAL_ASSETS] Failed to list assets: {e}")
@@ -1252,42 +1314,7 @@ def api_local_assets():
 def api_local_asset_file(path: str):
     """Serve a local asset file."""
     try:
-        # Get save location from UI settings
-        from ..api.ui_settings import _read_settings
-        ui_settings = _read_settings()
-        save_location = ui_settings.saveLocation or "/output"
-
-        # Resolve the save location path (strip template variables)
-        base_path = save_location.split("{")[0].rstrip("/")
-
-        if base_path.startswith("/output"):
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            tail = base_path[len("/output"):].lstrip("/")
-            output_root = Path(output_base) / tail if tail else Path(output_base)
-        elif base_path.startswith("/config"):
-            tail = base_path[len("/config"):].lstrip("/")
-            output_root = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
-        elif base_path.startswith("config/"):
-            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
-            output_root = Path(settings.CONFIG_DIR) / tail
-        elif base_path.startswith("output/"):
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
-            output_root = Path(output_base) / tail
-        else:
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            output_root = Path(output_base) / base_path.lstrip("/\\")
-
-        output_root = output_root.resolve()
-        file_path = output_root / path
-
-        # Security check: ensure the resolved path is still within output_root
-        if not file_path.resolve().is_relative_to(output_root.resolve()):
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        if not file_path.exists() or not file_path.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-
+        file_path = _find_asset_under_roots(path)
         return FileResponse(file_path)
     except HTTPException:
         raise
@@ -1300,41 +1327,8 @@ def api_local_asset_file(path: str):
 def api_delete_local_asset(path: str):
     """Delete a local asset file."""
     try:
-        # Get save location from UI settings
-        from ..api.ui_settings import _read_settings
-        ui_settings = _read_settings()
-        save_location = ui_settings.saveLocation or "/output"
-
-        # Resolve the save location path (strip template variables)
-        base_path = save_location.split("{")[0].rstrip("/")
-
-        if base_path.startswith("/output"):
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            tail = base_path[len("/output"):].lstrip("/")
-            output_root = Path(output_base) / tail if tail else Path(output_base)
-        elif base_path.startswith("/config"):
-            tail = base_path[len("/config"):].lstrip("/")
-            output_root = Path(settings.CONFIG_DIR) / tail if tail else Path(settings.CONFIG_DIR)
-        elif base_path.startswith("config/"):
-            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
-            output_root = Path(settings.CONFIG_DIR) / tail
-        elif base_path.startswith("output/"):
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            tail = base_path.split("/", 1)[1] if "/" in base_path else ""
-            output_root = Path(output_base) / tail
-        else:
-            output_base = settings.OUTPUT_ROOT if settings.OUTPUT_ROOT else str(Path(settings.CONFIG_DIR) / "output")
-            output_root = Path(output_base) / base_path.lstrip("/\\")
-
-        output_root = output_root.resolve()
-        file_path = output_root / path
-
-        # Security check: ensure the resolved path is still within output_root
-        if not file_path.resolve().is_relative_to(output_root.resolve()):
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        if not file_path.exists() or not file_path.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
+        file_path = _find_asset_under_roots(path)
+        output_root = next(r for r in _get_unique_asset_roots() if file_path.is_relative_to(r))
 
         # Delete the file
         file_path.unlink()

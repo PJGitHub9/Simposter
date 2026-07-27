@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from ..config import settings, logger, resolve_library_ids, SECRET_MASK, SECRET_FIELD_PATHS
 from ..schemas import UISettings
+from ..save_paths import DEFAULT_MOVIE_SAVE_LOCATION, DEFAULT_TV_SAVE_LOCATION
 from .. import database as db
 
 router = APIRouter()
@@ -104,6 +105,23 @@ def _normalize_plex_payload(data: dict) -> dict:
 
     data["plex"] = normalized
     return data
+
+
+def _migrate_legacy_save_location(merged: dict) -> dict:
+    """One-time, idempotent migration for the pre-consolidation `saveLocation` field:
+    if a user customized only that legacy field and never touched the newer
+    `movieSaveLocation`/`tvShowSaveLocation` fields (still at their untouched
+    defaults), carry the legacy value over to whichever of the two is still default.
+    Runs on every read but is a no-op as soon as either new field has a real value —
+    no separate "migrated" flag needed."""
+    legacy = merged.get("saveLocation")
+    if not legacy or legacy == DEFAULT_MOVIE_SAVE_LOCATION:
+        return merged
+    if merged.get("movieSaveLocation") == DEFAULT_MOVIE_SAVE_LOCATION:
+        merged["movieSaveLocation"] = legacy
+    if merged.get("tvShowSaveLocation") == DEFAULT_TV_SAVE_LOCATION:
+        merged["tvShowSaveLocation"] = legacy
+    return merged
 
 
 def _apply_runtime_settings(merged: dict):
@@ -309,6 +327,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
                     logger.debug("[UI_SETTINGS] Database has user settings, ENV overrides disabled")
 
         merged = _normalize_plex_payload(merged)
+        merged = _migrate_legacy_save_location(merged)
         _apply_runtime_settings(merged)
         return UISettings(**merged)
     except Exception as e:

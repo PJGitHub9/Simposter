@@ -112,13 +112,18 @@ export function useRenderService() {
     labels?: string[],
     templateId?: string,
     presetId?: string,
-    sendLogo?: boolean
+    sendLogo?: boolean,
+    seasonIndex?: number | null
   ) => {
     const payload: Record<string, unknown> = {
       ...basePayload(movie, bgUrl, logoUrl, templateId, presetId, options),
       rating_key: movie.key,
       send_to_plex: true,
-      library_id: movie.library_id ?? null
+      library_id: movie.library_id ?? null,
+      // Needed so a "save to asset folder on send" render lands at the right path
+      // (movie vs. show vs. a specific season) — see backend/save_paths.py.
+      is_tv: movie.mediaType === 'tv-show',
+      season_index: seasonIndex ?? null
     }
     if (labels?.length) {
       payload.labels = labels

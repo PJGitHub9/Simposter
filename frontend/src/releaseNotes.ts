@@ -10,6 +10,51 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.14',
+    date: '2026-07-23',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Local Assets refreshing was slow — it was re-reading every saved poster file from disk on every refresh. Unchanged files are now served from a cache instead, so refreshing should be much faster, especially with a lot of saved posters.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.13',
+    date: '2026-07-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Settings reorganized into clearer groups: a new "Output" tab combines Save Locations and Image Quality; a new "Automation" tab combines the Webhook URL Generator and Automatic Poster Generation settings, which used to be split across three different tabs. Nothing was removed — everything just moved to a more logical home.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.12',
+    date: '2026-07-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Save Locations now has quick-select presets — Default, Flat (Kometa), Asset folders (Kometa), or Custom — so you can save posters in a layout Kometa (and other tools) can read directly, without hand-writing template strings.',
+          'New "Save to asset folder on send" option (Settings → Save Locations): when on, sending a poster to Plex also saves it to your configured folder, so other tools can reuse the file.',
+          'Resending a poster now shows a quick preview — saved poster vs. what\'s currently live in Plex — before it actually sends, instead of sending immediately.',
+          'Local Assets can now select multiple saved posters and resend them to Plex all at once, with a summary of how many succeeded, were skipped, or failed. Only applies to posters saved from this release onward.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Simplified and fixed the save-location settings — consolidated four slightly different copies of the same logic, fixed TV batch saves not respecting your configured output folder correctly, fixed the batch "save in subfolder" option not working for TV shows, and fixed JPEG-format TV/season saves missing metadata that PNG saves already had.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.11',
     date: '2026-07-14',
     sections: [

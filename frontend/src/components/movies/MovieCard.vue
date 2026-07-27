@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import ResendPreviewModal from './ResendPreviewModal.vue'
 
 const props = defineProps<{
   title: string
@@ -20,25 +21,19 @@ const emit = defineEmits<{
   (e: 'resend-done', ratingKey: string): void
 }>()
 
-type ResendState = 'idle' | 'confirming' | 'loading' | 'done' | 'error'
+type ResendState = 'idle' | 'previewing' | 'loading' | 'done' | 'error'
 const resendState = ref<ResendState>('idle')
 
 function onResendClick(e: MouseEvent) {
   e.stopPropagation()
-  if (props.isTV) {
-    resendState.value = 'confirming'
-  } else {
-    doResend(false)
-  }
+  resendState.value = 'previewing'
 }
 
-function cancelConfirm(e: MouseEvent) {
-  e.stopPropagation()
+function cancelPreview() {
   resendState.value = 'idle'
 }
 
-async function doResend(includeSeasons: boolean, e?: MouseEvent) {
-  e?.stopPropagation()
+async function doResend(includeSeasons: boolean) {
   if (!props.ratingKey) return
   resendState.value = 'loading'
   try {
@@ -83,16 +78,6 @@ async function doResend(includeSeasons: boolean, e?: MouseEvent) {
         </svg>
       </button>
 
-      <!-- TV season confirm prompt -->
-      <div v-if="resendState === 'confirming'" class="resend-confirm" @click.stop>
-        <p class="confirm-label">Resend generated poster?</p>
-        <div class="confirm-btns">
-          <button class="confirm-btn" @click.stop="doResend(false, $event)">Show only</button>
-          <button class="confirm-btn accent" @click.stop="doResend(true, $event)">+ Seasons</button>
-          <button class="confirm-btn cancel" @click.stop="cancelConfirm($event)">✕</button>
-        </div>
-      </div>
-
       <!-- Loading state -->
       <div v-if="resendState === 'loading'" class="resend-feedback" @click.stop>
         <svg class="spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -120,6 +105,20 @@ async function doResend(includeSeasons: boolean, e?: MouseEvent) {
       <p class="muted">{{ year }}</p>
     </div>
   </article>
+
+  <!-- Teleported to <body> so the modal isn't clipped/mispositioned by the card's
+       hover transform (a transformed ancestor creates a new containing block for
+       position:fixed descendants). -->
+  <Teleport to="body">
+    <ResendPreviewModal
+      :is-open="resendState === 'previewing'"
+      :rating-key="ratingKey || ''"
+      :title="title"
+      :is-tv="isTV ?? false"
+      @close="cancelPreview"
+      @confirm="doResend"
+    />
+  </Teleport>
 </template>
 
 <style scoped>
@@ -212,69 +211,6 @@ async function doResend(includeSeasons: boolean, e?: MouseEvent) {
 .card:hover .resend-btn {
   opacity: 1;
   transform: translateY(0);
-}
-
-/* --- TV season confirm overlay --- */
-.resend-confirm {
-  position: absolute;
-  inset: 0;
-  background: rgba(10, 14, 28, 0.88);
-  backdrop-filter: blur(6px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 12px;
-  border-radius: 10px;
-}
-
-.confirm-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: #d8e3ff;
-  text-align: center;
-}
-
-.confirm-btns {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.confirm-btn {
-  padding: 5px 10px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.06);
-  color: #c8d4f0;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.confirm-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.3);
-}
-
-.confirm-btn.accent {
-  background: rgba(91, 141, 238, 0.2);
-  border-color: rgba(91, 141, 238, 0.45);
-  color: #8ab4f8;
-}
-
-.confirm-btn.accent:hover {
-  background: rgba(91, 141, 238, 0.35);
-}
-
-.confirm-btn.cancel {
-  background: transparent;
-  border-color: rgba(255, 255, 255, 0.1);
-  color: var(--muted);
-  padding: 5px 8px;
 }
 
 /* --- loading/done/error feedback --- */

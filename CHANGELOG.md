@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.6.14 (2026-07-23)
+### Bug Fixes
+- **Local Assets was slow to refresh**: `GET /api/local-assets` re-opened and re-parsed every single saved poster file on every single request (list or resend) — on network-backed storage (NFS/SMB volumes, common for these self-hosted setups) this made "Refresh" visibly slow, worse the more posters you have saved. Metadata reads are now cached in memory per file, keyed by the file's modified time and size, so unchanged files are served instantly on repeat requests instead of being re-opened — automatically invalidated the moment a file actually changes (re-saved, edited, replaced). In local testing this cut a 20-file repeat listing from ~290ms to ~10ms; the effect scales with library size.
+
+## v1.6.13 (2026-07-23)
+### Improvements
+- **Settings reorganized**: related settings that had drifted across tabs are now grouped together. New **Output** tab combines Save Locations with Image Quality (both are "what gets written to disk" concerns). New **Automation** tab combines the Webhook URL Generator (previously in Libraries) with Automatic Poster Generation (previously in Performance) — everything about webhooks and auto-generation now lives in one place instead of three. Performance is trimmed down to rendering concurrency, memory, API rate limits, and cache management. No settings were removed or reset — this only changes which tab each control lives in.
+- Fixed a small existing bug where the "save to asset folder on send" toggle (added in v1.6.12) wasn't included in the Output tab's unsaved-changes detection — changing only that field wouldn't highlight the tab as dirty (the Save button still worked correctly).
+
+## v1.6.12 (2026-07-23)
+### New Features
+- **Kometa-compatible save presets**: Settings → Save Locations now has four quick-select presets — Default, Flat (Kometa), Asset folders (Kometa), and Custom. The two Kometa presets produce `Movie Name (Year)/poster.ext` and `Show Name (Year)/SeasonNN.ext`, matching Kometa's asset-folder convention exactly, via a new `{filename}` template token. Custom keeps full manual control of the template strings.
+- **Save to asset folder on send**: new toggle (Settings → Save Locations) that makes "Send to Plex" also write the render to your configured save-location template, instead of (or in addition to, previously) an internal-only cache — so tools like Kometa can pick up the file, and "save now, push to Plex later with something else" becomes a real workflow. When enabled, the asset-folder file becomes the resend source directly.
+- **Resend confirmation preview**: clicking resend on a movie/TV card now shows a small popup comparing the saved poster against what's currently live in Plex before anything is sent, instead of sending immediately.
+- **Bulk resend from Local Assets**: Local Assets now supports selecting multiple saved posters (checkbox per card, "select all resendable") and resending them to Plex in one action, with a per-item success/skipped/failed summary. Only files saved after this release carry the Plex reference needed to resend — older files are reported as skipped rather than guessed at.
+
+### Improvements
+- **Consolidated save-path resolution**: the save-location template logic that had drifted into four separate, slightly different copies (manual save, movie batch, TV batch, Local Assets browsing) is now one shared resolver. Along the way this fixed: TV batch saves silently missing the `/output`↔`/config` path remapping and the path-traversal safety check that manual save already had; Local Assets browsing/deleting from a stale legacy settings field even when the newer per-media-type fields were set; and `saveBatchInSubfolder` not working for TV batches and not actually being timestamped despite the UI saying so (now genuinely one shared `batch-<timestamp>` folder per run, movies and TV alike).
+- **Fixed TV save-path ordering bug**: the default TV template produced `"Show - series (2008).jpg"` instead of the documented `"Show (2008) - series.jpg"` because the season/series suffix was baked into the `{title}` substitution. Existing templates are unaffected (still resolve exactly as before); the new `{filename}` token-based presets don't have this issue.
+- **JPEG local assets for TV/season batch saves now carry embedded metadata**: previously only PNG output embedded library/title metadata for this render path — JPEG (the default output format) silently saved with none, which also broke Local Assets library filtering for those files.
+
 ## v1.6.11 (2026-07-14)
 ### Bug Fixes
 - **Numeric-looking secret values broke settings entirely**: `get_ui_settings()` guessed a stored value's type from its shape (all-digits → `int`), which is correct for genuine numeric settings but wrong for string fields that happen to be all-digits — e.g. a webhook secret of `"123"`. That silently turned it into an `int`, which then failed `UISettings` validation on every single settings read, breaking any endpoint that touches settings, including the scheduler (`POST /api/scheduler/library-scan` would 500). Known string-only fields (Plex token, TMDb/TVDB/Fanart keys, webhook secret, webhook labels, Discord webhook URL) are now always read back as strings regardless of their content. Fixes itself on restart — no manual database edit needed.

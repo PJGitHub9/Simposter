@@ -156,6 +156,9 @@ class UISettings(BaseModel):
     tvShowSaveLocation: str = "/config/output/{library}/{title} ({year}).jpg"
     saveBatchInSubfolder: bool = False
     tvShowSaveMode: str = "flat"  # "flat" (all in one folder with prefixes) or "nested" (each show in its own folder)
+    saveToAssetFolderOnSend: bool = False  # When true, "Send to Plex" also writes the render to the
+    # configured local asset folder (via the same template as "Save to Disk") instead of the hidden
+    # internal resend cache — the asset-folder file becomes the resend source.
     defaultLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     defaultTvLabelsToRemove: Union[List[str], Dict[str, List[str]]] = Field(default_factory=list)
     plex: PlexSettings = Field(default_factory=PlexSettings)
@@ -187,6 +190,8 @@ class PlexSendRequest(BaseModel):
     options: Optional[Dict[str, Any]] = None  # Can be removed
     labels: Optional[List[str]] = None
     library_id: Optional[str] = None  # For history tracking
+    is_tv: bool = False  # Needed for the "save to asset folder on send" template resolution
+    season_index: Optional[int] = None  # Set when sending a specific season's poster
 
 
 class LabelsResponse(BaseModel):
@@ -216,6 +221,7 @@ class MovieBatchRequest(BaseModel):
     fallbackLogoPreset: Optional[str] = None
     send_logos_to_plex: bool = False
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
+    batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
 
 
 class TVShowBatchRequest(BaseModel):
@@ -236,6 +242,7 @@ class TVShowBatchRequest(BaseModel):
     fallbackPosterPreset: Optional[str] = None
     send_logos_to_plex: bool = False
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
+    batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
 
 
 # Legacy batch request - kept for backward compatibility
@@ -251,6 +258,7 @@ class BatchRequest(BaseModel):
     labels: List[str] = []
     library_id: Optional[str] = None
     include_seasons: bool = False  # TV shows: render all seasons instead of series poster
+    batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
 
 
 # Overlay Configuration schemas

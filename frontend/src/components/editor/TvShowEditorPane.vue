@@ -1860,7 +1860,8 @@ const doSend = async () => {
 
         // Create a temporary movie object for this season
         const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
-        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value)
+        const seasonIndex = season.isSeries ? null : season.index
+        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex)
 
         succeeded.push(season.title)
       } catch (err) {

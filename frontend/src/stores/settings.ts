@@ -102,6 +102,7 @@ export type UISettings = {
   tvShowSaveLocation?: string
   tvShowSaveMode?: string
   saveBatchInSubfolder?: boolean
+  saveToAssetFolderOnSend?: boolean
   plex?: PlexSettings
   tmdb?: TMDBSettings
   tvdb?: TVDBSettings
@@ -131,6 +132,7 @@ const movieSaveLocation = ref<string>('/config/output/{library}/{title}.jpg')
 const tvShowSaveLocation = ref<string>('/config/output/{library}/{title} ({year}).jpg')
 const tvShowSaveMode = ref<string>('flat')
 const saveBatchInSubfolder = ref<boolean>(false)
+const saveToAssetFolderOnSend = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
@@ -190,6 +192,7 @@ async function loadSettings() {
     tvShowSaveLocation.value = data.tvShowSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title} ({year}).jpg"
     tvShowSaveMode.value = data.tvShowSaveMode ?? 'flat'
     saveBatchInSubfolder.value = !!data.saveBatchInSubfolder
+    saveToAssetFolderOnSend.value = !!data.saveToAssetFolderOnSend
     plex.value = {
       url: data.plex?.url ?? '',
       token: data.plex?.token ?? '',
@@ -276,6 +279,7 @@ async function saveSettings() {
       tvShowSaveLocation: tvShowSaveLocation.value,
       tvShowSaveMode: tvShowSaveMode.value,
       saveBatchInSubfolder: saveBatchInSubfolder.value,
+      saveToAssetFolderOnSend: saveToAssetFolderOnSend.value,
       plex: { ...plex.value },
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
@@ -334,6 +338,7 @@ export function useSettingsStore() {
     tvShowSaveLocation,
     tvShowSaveMode,
     saveBatchInSubfolder,
+    saveToAssetFolderOnSend,
     load: loadSettings,
     save: saveSettings
   }
