@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.15',
+    date: '2026-07-27',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed library scan progress appearing stuck at "0/..." for movie libraries — it now updates live as posters, logos, and labels are fetched instead of only jumping to done at the very end.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.14',
     date: '2026-07-23',
     sections: [

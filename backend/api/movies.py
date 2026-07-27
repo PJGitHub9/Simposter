@@ -955,7 +955,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         if movie_keys:
             try:
                 logger.info(f"[SCAN] Bulk fetching labels for {len(movie_keys)} movies")
-                for movie_key in movie_keys:
+                for label_idx, movie_key in enumerate(movie_keys, start=1):
                     try:
                         url = f"{settings.PLEX_URL}/library/metadata/{movie_key}"
                         r = plex_session.get(url, headers=plex_headers(), timeout=10)
@@ -970,6 +970,10 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     except Exception as e:
                         logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
                         bulk_labels[movie_key] = []
+                    # This is a sequential per-movie network call and can be the slowest
+                    # part of a scan for large libraries — without this, scan_status stayed
+                    # unchanged (looking stalled) for the entire label-fetch phase.
+                    scan_status.update({"current": f"Fetching labels ({label_idx}/{len(movie_keys)})"})
                 logger.info(f"[SCAN] Successfully fetched labels for {len(bulk_labels)} movies")
             except Exception as e:
                 logger.warning(f"[SCAN] Bulk label fetch failed, will skip labels: {e}")
@@ -999,19 +1003,37 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
         if movie_keys:
             logger.info(f"[SCAN] Parallel fetching posters + logos for {len(movie_keys)} movies")
+            # This is typically the slowest phase of a scan (an image download per movie,
+            # doubled for logos, especially with force_poster_refresh — the default). Track
+            # completions as they land so scan_status.processed climbs smoothly through it
+            # instead of sitting at 0 for the whole phase and then jumping at the very end.
+            poster_logo_done = 0
+            poster_logo_total = len(movie_keys) * 2
             with ThreadPoolExecutor(max_workers=10) as executor:
                 poster_futures = {executor.submit(fetch_poster_for_movie, key): key for key in movie_keys}
                 logo_futures = {executor.submit(fetch_logo_for_movie, key): key for key in movie_keys}
                 for future in as_completed(poster_futures):
                     movie_key, poster_url = future.result()
                     poster_results[movie_key] = poster_url
+                    poster_logo_done += 1
+                    scan_status.update({
+                        "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
+                        "current": f"Fetching posters/logos ({poster_logo_done}/{poster_logo_total})",
+                    })
                 for future in as_completed(logo_futures):
                     movie_key, logo_url_result = future.result()
                     logo_results[movie_key] = logo_url_result
+                    poster_logo_done += 1
+                    scan_status.update({
+                        "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
+                        "current": f"Fetching posters/logos ({poster_logo_done}/{poster_logo_total})",
+                    })
             logo_count = sum(1 for v in logo_results.values() if v)
             logger.info(f"[SCAN] Completed poster + logo fetching for {len(poster_results)} movies ({logo_count} logos found)")
 
-        # Now assemble the movie cache using pre-fetched data
+        # Now assemble the movie cache using pre-fetched data. This loop is fast (no I/O —
+        # posters/logos/labels were already fetched above), so it doesn't report progress
+        # per-item; scan_status.processed is set to its final value once at the end instead.
         for movie in movies:
             lib_id = getattr(movie, "library_id", None) or "default"
             if lib_id not in movie_cache_by_lib:
@@ -1029,10 +1051,10 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             })
 
             processed += 1
-            if processed % 50 == 0 or processed == len(movies):
-                logger.info("[SCAN] Movies progress %d/%d", processed, len(movies))
-            scan_status.update({"processed": processed, "current": movie.title or ""})
-        
+
+        logger.info("[SCAN] Movies progress %d/%d", processed, len(movies))
+        scan_status.update({"processed": processed, "current": ""})
+
         # Bulk refresh movie cache per library and detect new content
         from .. import auto_generate
         for lib_id, cached_movies in movie_cache_by_lib.items():

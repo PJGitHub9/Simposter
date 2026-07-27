@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.6.15 (2026-07-27)
+### Bug Fixes
+- **Library scan progress looked stuck at 0 for movie libraries**: `POST /api/scan-library` only updated its progress counter in the final "assemble the cache" loop — but that loop runs after labels, posters, and logos have already been fetched (sequentially for labels, in parallel via a thread pool for posters/logos), which is where nearly all of a scan's time is actually spent. The progress counter (and the polling endpoint the UI reads every few seconds) never moved during that real work, so the UI sat at "0/N" for the whole scan and then jumped to done almost instantly once the slow phase finished. Progress now updates live as each label fetch and each poster/logo download completes, so the counter climbs smoothly through the whole scan instead of appearing frozen. TV show scanning was unaffected (it was already sequential and already reported per-item progress).
+
 ## v1.6.14 (2026-07-23)
 ### Bug Fixes
 - **Local Assets was slow to refresh**: `GET /api/local-assets` re-opened and re-parsed every single saved poster file on every single request (list or resend) — on network-backed storage (NFS/SMB volumes, common for these self-hosted setups) this made "Refresh" visibly slow, worse the more posters you have saved. Metadata reads are now cached in memory per file, keyed by the file's modified time and size, so unchanged files are served instantly on repeat requests instead of being re-opened — automatically invalidated the moment a file actually changes (re-saved, edited, replaced). In local testing this cut a 20-file repeat listing from ~290ms to ~10ms; the effect scales with library size.
