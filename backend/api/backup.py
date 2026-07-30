@@ -18,7 +18,7 @@ from typing import List, Optional
 
 from ..config import settings, plex_session, plex_headers, logger
 from .. import database as db
-from .save import resolve_library_label
+from ..save_paths import resolve_library_label
 
 router = APIRouter()
 

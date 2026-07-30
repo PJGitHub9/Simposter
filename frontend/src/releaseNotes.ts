@@ -10,6 +10,164 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.15',
+    date: '2026-07-27',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed library scan progress appearing stuck at "0/..." for movie libraries — it now updates live as posters, logos, and labels are fetched instead of only jumping to done at the very end.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.14',
+    date: '2026-07-23',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Local Assets refreshing was slow — it was re-reading every saved poster file from disk on every refresh. Unchanged files are now served from a cache instead, so refreshing should be much faster, especially with a lot of saved posters.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.13',
+    date: '2026-07-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Settings reorganized into clearer groups: a new "Output" tab combines Save Locations and Image Quality; a new "Automation" tab combines the Webhook URL Generator and Automatic Poster Generation settings, which used to be split across three different tabs. Nothing was removed — everything just moved to a more logical home.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.12',
+    date: '2026-07-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Save Locations now has quick-select presets — Default, Flat (Kometa), Asset folders (Kometa), or Custom — so you can save posters in a layout Kometa (and other tools) can read directly, without hand-writing template strings.',
+          'New "Save to asset folder on send" option (Settings → Save Locations): when on, sending a poster to Plex also saves it to your configured folder, so other tools can reuse the file.',
+          'Resending a poster now shows a quick preview — saved poster vs. what\'s currently live in Plex — before it actually sends, instead of sending immediately.',
+          'Local Assets can now select multiple saved posters and resend them to Plex all at once, with a summary of how many succeeded, were skipped, or failed. Only applies to posters saved from this release onward.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Simplified and fixed the save-location settings — consolidated four slightly different copies of the same logic, fixed TV batch saves not respecting your configured output folder correctly, fixed the batch "save in subfolder" option not working for TV shows, and fixed JPEG-format TV/season saves missing metadata that PNG saves already had.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.11',
+    date: '2026-07-14',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a crash where setting the new Webhook Secret (or any API key) to a value made only of digits (e.g. "123") would break Settings entirely, including scheduled library scans, until it was changed to something else. This resolves itself automatically on update — no need to re-enter anything.',
+          'Corrected the Webhook Secret help text — Radarr and Sonarr don\'t support a custom header for webhooks, so the secret needs to be added to the webhook URL itself (?secret=your-secret) rather than as a header.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.10',
+    date: '2026-07-14',
+    sections: [
+      {
+        title: 'Security',
+        items: [
+          'API keys and your Plex token are no longer shown in plain text in Settings responses — they\'re masked, and saving only changes them if you actually edit the field. The "Test" buttons still work as before.',
+          'Database export now leaves API keys/tokens out by default (there\'s a checkbox in Settings → Advanced to include them for a full migration backup).',
+          'Closed a gap where image URLs (posters, logos, custom badges) could be pointed at internal/private network addresses, including cloud metadata endpoints — now blocked with a narrow exception for your own Plex server.',
+          'Fixed a path-traversal bug in the local save feature that could, in theory, write a rendered poster outside the configured output folder.',
+          'The webhook secret setting (Settings → Performance → Automatic Poster Generation) is now actually enforced when set — previously it had no effect.',
+          'Turned on request rate-limiting to prevent accidental or malicious request floods on expensive endpoints (batch render, webhooks).',
+          'Tightened an overly permissive CORS setting (no functional impact — the app doesn\'t use browser cookies for authentication).',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.09',
+    date: '2026-07-08',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Retry queue no longer re-sends the same poster on every attempt — each retry now checks whether the new render actually meets the template spec (logo found, no fallback used) before uploading to Plex. Attempts that still don\'t meet spec are skipped and left pending for the next retry, instead of re-uploading an unchanged fallback poster. For TV shows, this is checked per season/series poster, so shows with a mix of ready and not-ready seasons only send the ones that are ready.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.08',
+    date: '2026-07-06',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Resend cached poster to Plex — hover any movie or TV show card to reveal a send button (bottom-left). For TV shows, a prompt lets you choose to resend the show poster only or include all cached season posters. No re-render required.',
+          '"Cached only" filter button in the Movies and TV Shows toolbars — instantly filters the grid to items that have a locally cached render, with a live count shown while active.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Resend now removes configured labels from Plex (e.g. Simposter, Overlay) and syncs the label cache — consistent with the full render pipeline.',
+          'Resending a cached poster now refreshes the thumbnail in the grid immediately after upload.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.07',
+    date: '2026-06-30',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Labels were not removed after a successful retry — items processed by the retry queue (e.g. "retried until template met") now have their configured labels removed from Plex just like auto-generate and webhooks do.',
+          'Labels were not removed when a cached poster was resent (existingContentMode=resend) — resend paths in webhooks and scheduled scans now remove the configured labels after uploading, matching the behaviour of a full render.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.06',
+    date: '2026-06-26',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Preset names are now shown in History and Retry Queue instead of the internal preset ID — renaming a preset is immediately reflected everywhere.',
+          'Preset duplication — click the ⎘ button on any preset card to create a copy with all options preserved.',
+          'History search box — filter the history table by title without leaving the page.',
+          'Retry queue thumbnail — hover or click the View button on any retry queue item to preview the current Plex poster.',
+          'Compact preset export — "Copy compact" button in Template Manager → Import/Export copies a minified version of your presets to the clipboard with default values stripped (typically 80–90% smaller). Ideal for sharing.',
+          'Preset rename — click the pencil icon on any preset card to rename it inline. The internal ID never changes so all history records, webhook configs, and settings stay linked correctly.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Preset exports (both regular and compact) no longer include internal IDs — IDs are Simposter-managed and invisible to users. On import, a fresh ID is always generated so imported presets never conflict with or overwrite existing ones.',
+          'Preset rename is instant — the new name appears immediately without waiting for the backend to respond.',
+          'History and Retry Queue preset column resolves the current display name from the presets list, so renames are reflected in past records too.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.05',
     date: '2026-06-24',
     sections: [

@@ -1,5 +1,76 @@
 # Changelog
 
+## v1.6.15 (2026-07-27)
+### Bug Fixes
+- **Library scan progress looked stuck at 0 for movie libraries**: `POST /api/scan-library` only updated its progress counter in the final "assemble the cache" loop — but that loop runs after labels, posters, and logos have already been fetched (sequentially for labels, in parallel via a thread pool for posters/logos), which is where nearly all of a scan's time is actually spent. The progress counter (and the polling endpoint the UI reads every few seconds) never moved during that real work, so the UI sat at "0/N" for the whole scan and then jumped to done almost instantly once the slow phase finished. Progress now updates live as each label fetch and each poster/logo download completes, so the counter climbs smoothly through the whole scan instead of appearing frozen. TV show scanning was unaffected (it was already sequential and already reported per-item progress).
+
+## v1.6.14 (2026-07-23)
+### Bug Fixes
+- **Local Assets was slow to refresh**: `GET /api/local-assets` re-opened and re-parsed every single saved poster file on every single request (list or resend) — on network-backed storage (NFS/SMB volumes, common for these self-hosted setups) this made "Refresh" visibly slow, worse the more posters you have saved. Metadata reads are now cached in memory per file, keyed by the file's modified time and size, so unchanged files are served instantly on repeat requests instead of being re-opened — automatically invalidated the moment a file actually changes (re-saved, edited, replaced). In local testing this cut a 20-file repeat listing from ~290ms to ~10ms; the effect scales with library size.
+
+## v1.6.13 (2026-07-23)
+### Improvements
+- **Settings reorganized**: related settings that had drifted across tabs are now grouped together. New **Output** tab combines Save Locations with Image Quality (both are "what gets written to disk" concerns). New **Automation** tab combines the Webhook URL Generator (previously in Libraries) with Automatic Poster Generation (previously in Performance) — everything about webhooks and auto-generation now lives in one place instead of three. Performance is trimmed down to rendering concurrency, memory, API rate limits, and cache management. No settings were removed or reset — this only changes which tab each control lives in.
+- Fixed a small existing bug where the "save to asset folder on send" toggle (added in v1.6.12) wasn't included in the Output tab's unsaved-changes detection — changing only that field wouldn't highlight the tab as dirty (the Save button still worked correctly).
+
+## v1.6.12 (2026-07-23)
+### New Features
+- **Kometa-compatible save presets**: Settings → Save Locations now has four quick-select presets — Default, Flat (Kometa), Asset folders (Kometa), and Custom. The two Kometa presets produce `Movie Name (Year)/poster.ext` and `Show Name (Year)/SeasonNN.ext`, matching Kometa's asset-folder convention exactly, via a new `{filename}` template token. Custom keeps full manual control of the template strings.
+- **Save to asset folder on send**: new toggle (Settings → Save Locations) that makes "Send to Plex" also write the render to your configured save-location template, instead of (or in addition to, previously) an internal-only cache — so tools like Kometa can pick up the file, and "save now, push to Plex later with something else" becomes a real workflow. When enabled, the asset-folder file becomes the resend source directly.
+- **Resend confirmation preview**: clicking resend on a movie/TV card now shows a small popup comparing the saved poster against what's currently live in Plex before anything is sent, instead of sending immediately.
+- **Bulk resend from Local Assets**: Local Assets now supports selecting multiple saved posters (checkbox per card, "select all resendable") and resending them to Plex in one action, with a per-item success/skipped/failed summary. Only files saved after this release carry the Plex reference needed to resend — older files are reported as skipped rather than guessed at.
+
+### Improvements
+- **Consolidated save-path resolution**: the save-location template logic that had drifted into four separate, slightly different copies (manual save, movie batch, TV batch, Local Assets browsing) is now one shared resolver. Along the way this fixed: TV batch saves silently missing the `/output`↔`/config` path remapping and the path-traversal safety check that manual save already had; Local Assets browsing/deleting from a stale legacy settings field even when the newer per-media-type fields were set; and `saveBatchInSubfolder` not working for TV batches and not actually being timestamped despite the UI saying so (now genuinely one shared `batch-<timestamp>` folder per run, movies and TV alike).
+- **Fixed TV save-path ordering bug**: the default TV template produced `"Show - series (2008).jpg"` instead of the documented `"Show (2008) - series.jpg"` because the season/series suffix was baked into the `{title}` substitution. Existing templates are unaffected (still resolve exactly as before); the new `{filename}` token-based presets don't have this issue.
+- **JPEG local assets for TV/season batch saves now carry embedded metadata**: previously only PNG output embedded library/title metadata for this render path — JPEG (the default output format) silently saved with none, which also broke Local Assets library filtering for those files.
+
+## v1.6.11 (2026-07-14)
+### Bug Fixes
+- **Numeric-looking secret values broke settings entirely**: `get_ui_settings()` guessed a stored value's type from its shape (all-digits → `int`), which is correct for genuine numeric settings but wrong for string fields that happen to be all-digits — e.g. a webhook secret of `"123"`. That silently turned it into an `int`, which then failed `UISettings` validation on every single settings read, breaking any endpoint that touches settings, including the scheduler (`POST /api/scheduler/library-scan` would 500). Known string-only fields (Plex token, TMDb/TVDB/Fanart keys, webhook secret, webhook labels, Discord webhook URL) are now always read back as strings regardless of their content. Fixes itself on restart — no manual database edit needed.
+- **Webhook secret setup instructions were wrong for Radarr/Sonarr**: the in-app help text (added in v1.6.10) suggested adding the secret as a custom header in Radarr/Sonarr, but their webhook connection UI has no custom-header field — only URL, method, and optional basic auth. Corrected to point at the actually-supported method: append `?secret=your-secret` (or `&secret=...` if the URL already has a `?`) to the webhook URL configured in each app.
+
+## v1.6.10 (2026-07-14)
+### Security
+- **SSRF hardening**: URL-fetching endpoints (poster/logo render pipeline, badge image proxy, Plex logo upload) now resolve the target host and block private/internal/link-local ranges — including the `169.254.169.254`-style cloud metadata range, which was previously unrestricted everywhere. A private-network exception remains for the configured Plex server and the app's own local-asset paths; the image-proxy endpoint (which reflects fetched bytes back to the caller) allows no private-network exception at all. Closes a bypass where a crafted URL could smuggle an allowed substring (e.g. `/library/metadata/`) past the old regex-based check while actually pointing at an arbitrary internal host.
+- **Path traversal fix in `/api/save`**: the save-path sanitizer allow-listed `.` and `/`, so a crafted movie title could escape the intended output directory once `..` components were resolved by the filesystem. The final resolved path is now required to stay within the configured output/config roots, matching the containment check already used by local-assets and backup file serving.
+- **Webhook shared secret is now enforced**: `WEBHOOK_SECRET` existed as a config field but was never actually checked by the Radarr/Sonarr/Tautulli webhook endpoints. It's now enforced when set (via `X-Webhook-Secret` header or `?secret=` query param), configurable from Settings → Performance → Automatic Poster Generation → Webhook Secret. Off by default to preserve existing webhook configs.
+- **Rate limiting enabled**: the per-endpoint sliding-window rate limiter existed but was commented out. Now active (e.g. batch render initiation: 5/min, webhooks: 10/min, preview: 120/min). Frequently-polled status endpoints (`/api/batch-progress`, `/api/scan-progress` — polled every 200ms/3s while a job runs) are exempted; also fixed a matching bug where those same endpoints would have inherited the much stricter `/api/batch` limit due to a shared text prefix (`batch-progress` starts with `batch`), which would have broken the live batch progress bar within a couple seconds of starting any batch job.
+- **CORS**: disabled `allow_credentials` on the wildcard-origin CORS policy — removes a dangerous wildcard-origin-plus-credentials combination flagged by security review. No functional change since the app doesn't use cookie/session auth.
+- **Secrets no longer returned in plaintext**: `GET /api/ui-settings` previously returned the raw Plex token and TMDb/TVDB/Fanart API keys to any caller. It now returns a masked placeholder, and saving only overwrites a credential field if it was actually changed (the "Test API Key" and "Test Plex Connection" buttons resolve the placeholder back to the real stored key server-side). `GET /api/database/export` now excludes credentials by default, with an explicit "Include API keys and tokens" checkbox in Settings → Advanced for full-migration backups. `test-tmdb`/`test-tvdb` moved from GET query-parameter to POST body so keys stop appearing in access logs (matching the existing `test-fanart` pattern).
+- Note: Simposter still has no authentication gate on the API itself — this release closes concrete SSRF/traversal/secret-exposure/webhook-trust bugs, but anyone who can reach the configured port still has full read/write access to the app. Keep it behind your own network boundary (VPN, reverse-proxy auth, firewall) if it's reachable beyond a trusted LAN.
+
+## v1.6.09 (2026-07-08)
+### Improvements
+- **Retry queue only sends when the poster is actually ready**: Previously, every retry attempt re-uploaded a poster to Plex regardless of whether the new render still needed a fallback (missing logo, poster fallback, etc.) — so items stuck in the queue got re-sent unnecessarily on every pass. The retry job now renders and checks whether the ideal template conditions are met *before* uploading, and only sends to Plex if they are. Items that still don't meet spec are left pending for the next retry without an upload. For TV shows this is evaluated per season/series poster, so a show with some seasons ready and some not will only send the ready ones.
+
+## v1.6.08 (2026-07-06)
+### New Features
+- **Resend cached poster to Plex**: Hover any movie or TV show card to reveal a send button (bottom-left of the poster). Movies resend immediately; TV shows prompt whether to include cached season posters. No re-render — uses the previously saved render.
+- **"Cached only" filter**: New toggle button in the Movies and TV Shows toolbars filters the grid to items with a locally cached render. Shows a live count while active and stacks with the existing label and search filters.
+
+### Bug Fixes
+- **Resend removes labels**: Cached-poster resend now removes configured auto-labels (e.g. Simposter, Overlay) from Plex and updates the label cache, matching the full render pipeline. Applies to card resend, webhook resend, scheduler resend, and auto-generate resend paths.
+- **Resend refreshes thumbnail**: After a successful resend the grid card fetches the updated poster thumbnail from Plex automatically.
+
+## v1.6.07 (2026-06-30)
+### Bug Fixes
+- **Retry queue did not remove labels on success**: When the retry job resolved an item (e.g. a logo became available after several attempts), it uploaded the poster to Plex but never removed the configured labels. Labels (`Simposter`, `Overlay`, etc.) are now removed and the label cache is updated, matching the behaviour of auto-generate and webhook renders.
+- **Resend mode did not remove labels**: When `existingContentMode=resend` was active and a cached poster was re-uploaded, the webhook handler, scheduled scan movie path, and scheduled scan TV path all returned/continued before the label removal block could run. All three paths now remove labels after a successful resend.
+
+## v1.6.06 (2026-06-26)
+### New Features
+- **Preset duplication**: Click the ⎘ button on any preset card to create a copy with all options preserved.
+- **Preset rename**: Click the pencil icon on a preset card to rename it inline. The internal ID never changes so history records, webhook configs, and settings stay linked correctly. Rename is instant (optimistic update).
+- **History search box**: Filter the history table by title in real time without triggering a new API request.
+- **Retry queue thumbnail**: Hover or click View on any retry queue item to preview the current Plex poster for that title.
+- **Compact preset export**: "Copy compact" button in Template Manager → Import/Export copies a minified preset JSON to the clipboard with all default values stripped (typically 80–90% smaller). Designed for sharing presets with others.
+- **Preset name in History/Retry Queue**: The Preset column now shows the display name instead of the internal ID. Renames are reflected in past records.
+
+### Improvements
+- **Export never includes internal IDs**: Both regular and compact exports now omit the internal preset ID entirely. On import, Simposter always generates a fresh ID from the preset name — imported presets can never conflict with or silently overwrite existing ones.
+- **History resolves preset names at render time**: Fetches the current presets list on load and maps IDs to display names, so renamed presets show the new name everywhere.
+
 ## v1.6.05 (2026-06-24)
 ### New Features
 - **Clickable titles in History and Retry Queue**: Movie and TV show titles are now links — clicking one navigates directly to that item's editor, bypassing the library grid search entirely.

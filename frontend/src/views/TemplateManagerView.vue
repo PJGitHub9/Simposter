@@ -243,6 +243,11 @@ const savePresetFallback = async () => {
   }
 }
 
+const stripId = (preset: Preset) => {
+  const { id: _id, ...rest } = preset
+  return rest
+}
+
 const handleExportSelected = () => {
   const map: TemplatePresets = {}
   selectedPresets.value.forEach((key) => {
@@ -251,7 +256,7 @@ const handleExportSelected = () => {
     const preset = presets.value[tpl]?.presets.find((p) => p.id === pid)
     if (!preset) return
     if (!map[tpl]) map[tpl] = { presets: [] }
-    map[tpl].presets.push(preset)
+    map[tpl].presets.push(stripId(preset) as Preset)
   })
   if (Object.keys(map).length === 0) { handleExportAll(); return }
   importText.value = JSON.stringify(map, null, 2)
@@ -264,6 +269,88 @@ const toggleSelected = (tplId: string, presetId: string) => {
   if (set.has(key)) set.delete(key)
   else set.add(key)
   selectedPresets.value = set
+}
+
+const duplicating = ref<string | null>(null)
+const copyingCompact = ref(false)
+const renamingPreset = ref<string | null>(null)
+const renameValue = ref('')
+
+const startRename = (key: string, currentName: string) => {
+  renamingPreset.value = key
+  renameValue.value = currentName
+}
+
+const saveRename = async (templateId: string, preset: Preset) => {
+  const newName = renameValue.value.trim()
+  renamingPreset.value = null
+  if (!newName || newName === (preset.name || preset.id)) return
+  // Optimistic update — show new name immediately
+  const tpl = presets.value[templateId]
+  const local = tpl?.presets.find(p => p.id === preset.id)
+  const oldName = local?.name ?? preset.name
+  if (local) local.name = newName
+  try {
+    const res = await fetch(`${apiBase}/api/presets/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template_id: templateId,
+        preset_id: preset.id,
+        name: newName,
+        options: preset.options,
+        season_options: preset.season_options ?? undefined,
+      })
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+  } catch (e) {
+    // Revert on failure
+    if (local) local.name = oldName ?? preset.id
+    showError(e instanceof Error ? e.message : 'Rename failed')
+  }
+}
+
+const cancelRename = () => { renamingPreset.value = null }
+
+const handleCopyCompact = async () => {
+  copyingCompact.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/presets/export-compact`)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    const text = JSON.stringify(data)
+    await navigator.clipboard.writeText(text)
+  } catch (e) {
+    showError(e instanceof Error ? e.message : 'Copy failed')
+  } finally {
+    copyingCompact.value = false
+  }
+}
+
+const duplicatePreset = async (templateId: string, preset: Preset) => {
+  const baseName = preset.name || preset.id
+  const newName = `${baseName} (Copy)`
+  const newId = `${preset.id}_copy_${Date.now()}`
+  duplicating.value = `${templateId}::${preset.id}`
+  try {
+    const res = await fetch(`${apiBase}/api/presets/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template_id: templateId,
+        preset_id: newId,
+        name: newName,
+        options: preset.options,
+        season_options: preset.season_options ?? undefined,
+      })
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    await fetchPresets()
+  } catch (e) {
+    showError(e instanceof Error ? e.message : 'Duplicate failed')
+  } finally {
+    duplicating.value = null
+  }
 }
 
 const deletePreset = async (templateId: string, presetId: string) => {
@@ -560,9 +647,21 @@ onMounted(async () => {
                       />
                     </label>
 
-                    <div class="preset-card-title" @click="toggleExpand(`${templateId}::${preset.id}`)">
-                      <span class="preset-name">{{ preset.name || preset.id }}</span>
-                      <span class="preset-id">{{ preset.id }}</span>
+                    <div class="preset-card-title">
+                      <template v-if="renamingPreset === `${templateId}::${preset.id}`">
+                        <input
+                          class="rename-input"
+                          v-model="renameValue"
+                          @keydown.enter="saveRename(templateId, preset)"
+                          @keydown.esc="cancelRename"
+                          @blur="saveRename(templateId, preset)"
+                          @click.stop
+                          autofocus
+                        />
+                      </template>
+                      <template v-else>
+                        <span class="preset-name" @click="toggleExpand(`${templateId}::${preset.id}`)">{{ preset.name || preset.id }}</span>
+                      </template>
                     </div>
 
                     <!-- Summary chips -->
@@ -584,7 +683,16 @@ onMounted(async () => {
                       <button class="icon-btn" @click.stop="previewPreset(templateId, preset)" title="Preview">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
                       </button>
+                      <button class="icon-btn" @click.stop="startRename(`${templateId}::${preset.id}`, preset.name || preset.id)" title="Rename">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                      </button>
                       <button class="icon-btn" @click.stop="openFallbackModal(templateId, preset)" title="Fallback rules">⚙</button>
+                      <button
+                        class="icon-btn"
+                        @click.stop="duplicatePreset(templateId, preset)"
+                        :disabled="duplicating === `${templateId}::${preset.id}`"
+                        title="Duplicate"
+                      >⎘</button>
                       <button
                         class="icon-btn danger"
                         @click.stop="deletePreset(templateId, preset.id)"
@@ -623,6 +731,10 @@ onMounted(async () => {
                       </div>
                       <template v-else>
                         <div class="settings-grid">
+                          <div class="setting-item" style="grid-column: 1 / -1;">
+                            <span class="setting-label">Preset ID</span>
+                            <span class="setting-value" style="font-size:0.78rem; font-weight:400; color: var(--text-secondary); font-family: monospace;">{{ preset.id }}</span>
+                          </div>
                           <div class="setting-item">
                             <span class="setting-label">Logo</span>
                             <span class="setting-value">{{ logoLabel(getActiveOpts(`${templateId}::${preset.id}`, preset)) }}</span>
@@ -700,6 +812,9 @@ onMounted(async () => {
                 {{ importing ? 'Importing…' : 'Import JSON' }}
               </button>
               <button class="secondary" @click="importText = ''" :disabled="!importText.trim()">Clear</button>
+              <button class="secondary" @click="handleCopyCompact" :disabled="copyingCompact" title="Strip defaults and copy minified JSON to clipboard for sharing">
+                {{ copyingCompact ? 'Copying…' : 'Copy compact' }}
+              </button>
             </div>
           </div>
         </div>
@@ -1066,15 +1181,23 @@ select:focus, textarea:focus, input:focus {
 
 .preset-card-title {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  cursor: pointer;
+  align-items: center;
   min-width: 0;
   flex-shrink: 0;
   width: 130px;
 }
-.preset-name { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.preset-id { color: var(--text-secondary, #9aa4b5); font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preset-name { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.rename-input {
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(61, 214, 183, 0.5);
+  background: var(--input-bg, #111623);
+  color: var(--text-primary, #fff);
+  width: 120px;
+  box-shadow: 0 0 0 2px rgba(61, 214, 183, 0.15);
+}
 
 /* Chip summary row */
 .preset-chips {

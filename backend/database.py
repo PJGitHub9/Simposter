@@ -2,9 +2,11 @@
 """SQLite database for storing application settings and presets."""
 import json
 import logging
+import re
 import sqlite3
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
@@ -904,6 +906,23 @@ def get_all_settings() -> Dict[str, str]:
         return {row["key"]: row["value"] for row in rows}
 
 
+# Dotted "category.field" keys that must always be read back as a raw string, even if
+# their value happens to look like a number or "true"/"false" (e.g. a webhook secret of
+# "123", or an API key that happens to be all-digits). Without this, the generic
+# type-guessing below would coerce them to int/bool and fail UISettings validation
+# (automation.webhookSecret expects str, not int) — every settings read (including
+# unrelated endpoints like the scheduler) fails until the value changes.
+_STRING_ONLY_SETTINGS_KEYS = {
+    "plex.token",
+    "tmdb.apiKey",
+    "tvdb.apiKey",
+    "fanart.apiKey",
+    "automation.webhookSecret",
+    "automation.webhookAutoLabels",
+    "notifications.discordWebhookUrl",
+}
+
+
 def get_ui_settings() -> Optional[Dict[str, Any]]:
     """
     Get UI settings organized in the legacy JSON structure.
@@ -925,18 +944,21 @@ def get_ui_settings() -> Optional[Dict[str, Any]]:
         value = row["value"]
         category = row["category"]
 
-        # Parse JSON values if they look like JSON
-        try:
-            if value and (value.startswith('{') or value.startswith('[')):
-                parsed_value = json.loads(value)
-            elif value and value.isdigit():
-                parsed_value = int(value)
-            elif value in ('true', 'false'):
-                parsed_value = value == 'true'
-            else:
-                parsed_value = value
-        except (json.JSONDecodeError, ValueError):
+        if key in _STRING_ONLY_SETTINGS_KEYS:
             parsed_value = value
+        else:
+            # Parse JSON values if they look like JSON
+            try:
+                if value and (value.startswith('{') or value.startswith('[')):
+                    parsed_value = json.loads(value)
+                elif value and value.isdigit():
+                    parsed_value = int(value)
+                elif value in ('true', 'false'):
+                    parsed_value = value == 'true'
+                else:
+                    parsed_value = value
+            except (json.JSONDecodeError, ValueError):
+                parsed_value = value
 
         if category:
             # Nested setting (e.g., category="plex", key="url")
@@ -1372,11 +1394,19 @@ def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
     logger.info("[DB] Replaced all presets from import")
 
 
+def _slugify(text: str) -> str:
+    """Convert a display name to a safe preset ID slug."""
+    return re.sub(r'[^a-z0-9]+', '_', text.lower()).strip('_') or 'preset'
+
+
 def merge_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
     """
-    Merge imported presets with existing presets (append mode).
-    Expected shape: { template_id: { presets: [ {id,name,options}, ... ] } }
-    Existing presets with matching IDs will be updated, new ones will be added.
+    Merge imported presets with existing presets.
+    Expected shape: { template_id: { presets: [ {name,options} OR {id,name,options} ] } }
+
+    When 'id' is present: update existing preset with that ID (same-machine backup restore).
+    When 'id' is absent (shared compact format): generate a fresh unique ID from the name
+    so there can never be a conflict with existing presets.
     """
     with get_db() as conn:
         cursor = conn.cursor()
@@ -1384,14 +1414,21 @@ def merge_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
         for template_id, tpl_data in (preset_data or {}).items():
             presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
             for preset in presets_list:
-                pid = preset.get("id")
-                name = preset.get("name") or pid
+                name = preset.get("name") or "Imported Preset"
                 options = preset.get("options") or {}
+                pid = preset.get("id")
+
                 if not pid:
-                    continue
+                    # Shared/compact import — generate a fresh ID that won't collide
+                    base = _slugify(name)
+                    pid = base
+                    suffix = int(time.time())
+                    while cursor.execute("SELECT 1 FROM presets WHERE id = ?", (pid,)).fetchone():
+                        pid = f"{base}_{suffix}"
+                        suffix += 1
+
                 options_json = json.dumps(options)
                 season_options_json = json.dumps(preset.get("season_options") or {})
-                # Use INSERT OR REPLACE to update existing or add new
                 cursor.execute("""
                     INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)

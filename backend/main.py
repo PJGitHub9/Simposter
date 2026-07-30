@@ -29,19 +29,25 @@ async def startup_event():
 async def shutdown_event():
     shutdown_scheduler()
 
-# Add rate limiting middleware (before CORS)
-# Note: Disabled by default to not interfere with normal usage
-# Uncomment to enable rate limiting for production deployments
-# app.add_middleware(
-#     RateLimitMiddleware,
-#     default_limit=300,  # 300 requests per minute for general endpoints
-#     window_seconds=60   # 60 second window
-# )
+# Rate limiting: per-IP, per-endpoint sliding window (see middleware/rate_limit.py for
+# the per-endpoint limits, e.g. batch render: 5/min, webhooks: 10/min). Sits in front of
+# CORS so it also throttles unauthenticated/cross-origin abuse.
+app.add_middleware(
+    RateLimitMiddleware,
+    default_limit=300,  # 300 requests per minute for endpoints without a specific limit
+    window_seconds=60
+)
 
+# allow_credentials=False: this API does not use cookies/session auth, so there is no
+# credential for a malicious origin to ride along with. Wildcard origins + credentials
+# is a dangerous combination (browsers would let any site make authenticated requests on
+# a user's behalf); disabling credentials here removes that risk even though wildcard
+# origins remain, which is required for the Vite dev server (different port) to reach
+# the API directly (see frontend/src/services/apiBase.ts).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

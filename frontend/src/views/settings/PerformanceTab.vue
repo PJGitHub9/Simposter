@@ -6,42 +6,18 @@ const props = defineProps<{
   useOverlayCache: boolean
   unsavedChanges: boolean
   scanRunning: boolean
-  outputFormat: string
-  jpgQuality: number
-  pngCompression: number
-  webpQuality: number
   tmdbRateLimit: number
   tvdbRateLimit: number
   memoryLimit: number
-  webhookAutoSend: boolean
-  webhookAutoLabels: string
-  webhookAlwaysRegenerateSeason: boolean
-  existingContentMode: 'resend' | 'regenerate'
-  retryUntilTemplateMet: boolean
-  retryIntervalHours: number
-  retryMaxAttempts: number
-  imageQualityChanged?: boolean
   performanceChanged?: boolean
-  automationChanged?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:concurrentRenders': [value: number]
   'update:useOverlayCache': [value: boolean]
-  'update:outputFormat': [value: string]
-  'update:jpgQuality': [value: number]
-  'update:pngCompression': [value: number]
-  'update:webpQuality': [value: number]
   'update:tmdbRateLimit': [value: number]
   'update:tvdbRateLimit': [value: number]
   'update:memoryLimit': [value: number]
-  'update:webhookAutoSend': [value: boolean]
-  'update:webhookAutoLabels': [value: string]
-  'update:webhookAlwaysRegenerateSeason': [value: boolean]
-  'update:existingContentMode': [value: 'resend' | 'regenerate']
-  'update:retryUntilTemplateMet': [value: boolean]
-  'update:retryIntervalHours': [value: number]
-  'update:retryMaxAttempts': [value: number]
   'clear-frontend-cache': []
   'clear-backend-cache': []
   'save': []
@@ -55,26 +31,6 @@ const localConcurrentRenders = computed({
 const localUseOverlayCache = computed({
   get: () => props.useOverlayCache,
   set: (val) => emit('update:useOverlayCache', val)
-})
-
-const localOutputFormat = computed({
-  get: () => props.outputFormat,
-  set: (val) => emit('update:outputFormat', val)
-})
-
-const localJpgQuality = computed({
-  get: () => props.jpgQuality,
-  set: (val) => emit('update:jpgQuality', val)
-})
-
-const localPngCompression = computed({
-  get: () => props.pngCompression,
-  set: (val) => emit('update:pngCompression', val)
-})
-
-const localWebpQuality = computed({
-  get: () => props.webpQuality,
-  set: (val) => emit('update:webpQuality', val)
 })
 
 const localTmdbRateLimit = computed({
@@ -91,106 +47,11 @@ const localMemoryLimit = computed({
   get: () => props.memoryLimit,
   set: (val) => emit('update:memoryLimit', val)
 })
-
-const localWebhookAutoSend = computed({
-  get: () => props.webhookAutoSend,
-  set: (val) => emit('update:webhookAutoSend', val)
-})
-
-const localWebhookAutoLabels = computed({
-  get: () => props.webhookAutoLabels,
-  set: (val) => emit('update:webhookAutoLabels', val)
-})
-
-const localWebhookAlwaysRegenerateSeason = computed({
-  get: () => props.webhookAlwaysRegenerateSeason,
-  set: (val) => emit('update:webhookAlwaysRegenerateSeason', val)
-})
-
-const localExistingContentMode = computed({
-  get: () => props.existingContentMode,
-  set: (val) => emit('update:existingContentMode', val)
-})
-
-const localRetryUntilTemplateMet = computed({
-  get: () => props.retryUntilTemplateMet,
-  set: (val) => emit('update:retryUntilTemplateMet', val)
-})
-
-const localRetryIntervalHours = computed({
-  get: () => props.retryIntervalHours,
-  set: (val) => emit('update:retryIntervalHours', val)
-})
-
-const localRetryMaxAttempts = computed({
-  get: () => props.retryMaxAttempts,
-  set: (val) => emit('update:retryMaxAttempts', val)
-})
-
 </script>
 
 <template>
   <div class="tab-content">
-    <h2>Image Quality & Performance</h2>
-
-    <!-- Image Quality Settings -->
-    <div class="section" :class="{ 'unsaved-changes': imageQualityChanged }">
-      <h3>Image Quality</h3>
-      <p class="section-description">
-        Configure output format and compression settings
-      </p>
-
-      <label>
-        <span class="label-text">Output Format</span>
-        <select v-model="localOutputFormat">
-          <option value="jpg">JPEG</option>
-          <option value="png">PNG</option>
-          <option value="webp">WebP</option>
-        </select>
-      </label>
-
-      <div v-if="localOutputFormat === 'jpg'" class="quality-control">
-        <label>
-          <span class="label-text">JPEG Quality: {{ localJpgQuality }}%</span>
-          <input
-            type="range"
-            v-model.number="localJpgQuality"
-            min="1"
-            max="100"
-            step="1"
-          />
-          <span class="help-text">Higher = better quality, larger file size</span>
-        </label>
-      </div>
-
-      <div v-if="localOutputFormat === 'png'" class="quality-control">
-        <label>
-          <span class="label-text">PNG Compression: {{ localPngCompression }}</span>
-          <input
-            type="range"
-            v-model.number="localPngCompression"
-            min="0"
-            max="9"
-            step="1"
-          />
-          <span class="help-text">0 = no compression (fast), 9 = max compression (slow)</span>
-        </label>
-      </div>
-
-      <div v-if="localOutputFormat === 'webp'" class="quality-control">
-        <label>
-          <span class="label-text">WebP Quality: {{ localWebpQuality }}</span>
-          <input
-            type="range"
-            v-model.number="localWebpQuality"
-            min="1"
-            max="100"
-            step="1"
-          />
-          <span class="help-text">Higher = better quality, larger file size</span>
-        </label>
-      </div>
-    </div>
+    <h2>Performance</h2>
 
     <!-- Rendering Performance -->
     <div class="section" :class="{ 'unsaved-changes': performanceChanged }">
@@ -263,76 +124,6 @@ const localRetryMaxAttempts = computed({
           step="5"
         />
         <span class="help-text">Default: 20 (TVDB free tier: 20 req/10s)</span>
-      </label>
-    </div>
-
-    <!-- Automatic Poster Generation -->
-    <div class="section" :class="{ 'unsaved-changes': automationChanged }">
-      <h3>Automatic Poster Generation</h3>
-      <p class="section-description">
-        Configure automatic poster generation and delivery via webhooks (Radarr, Sonarr, Tautulli).
-        Webhooks automatically trigger poster generation when new media is added.
-      </p>
-
-      <label class="checkbox-label">
-        <input type="checkbox" v-model="localWebhookAutoSend" />
-        <span>Automatically Send to Plex</span>
-      </label>
-      <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, webhook-generated posters are automatically sent to Plex and replace the existing poster
-      </p>
-
-      <label class="checkbox-label">
-        <input type="checkbox" v-model="localWebhookAlwaysRegenerateSeason" />
-        <span>Always Regenerate Season Poster</span>
-      </label>
-      <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, a new season poster is generated every time a new episode webhook is received. When disabled, season posters that have already been sent to Plex are skipped.
-      </p>
-
-      <label>
-        <span class="label-text">Existing Content — Poster Behaviour</span>
-        <select v-model="localExistingContentMode">
-          <option value="regenerate">Regenerate — always create a new poster</option>
-          <option value="resend">Resend — reuse the last sent poster if available</option>
-        </select>
-        <span class="help-text">
-          When a webhook or scheduled scan fires for a title that already has a Simposter-generated poster,
-          <strong>Resend</strong> pushes the cached rendered poster straight back to Plex without regenerating.
-          Useful when you have manually tuned a poster and don't want it overwritten by future Radarr/Sonarr events.
-        </span>
-      </label>
-
-      <label class="checkbox-label">
-        <input type="checkbox" v-model="localRetryUntilTemplateMet" />
-        <span>Retry Poster Generation Until Ideal Template Is Met</span>
-      </label>
-      <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, if a poster is generated but the ideal template conditions weren't met (e.g. a logo was required but none was available, or a textless poster was needed), Simposter will keep a retry queue and attempt to regenerate on the interval below. Once the ideal poster is created it stops retrying. A manual send always overrides and stops retries for that title.
-      </p>
-
-      <template v-if="localRetryUntilTemplateMet">
-        <label>
-          <span class="label-text">Retry Interval (hours)</span>
-          <input type="number" v-model.number="localRetryIntervalHours" min="1" max="720" step="1" style="width:100px" />
-          <span class="help-text">How often (in hours) to check the retry queue and attempt regeneration.</span>
-        </label>
-
-        <label>
-          <span class="label-text">Max Retry Attempts (0 = unlimited)</span>
-          <input type="number" v-model.number="localRetryMaxAttempts" min="0" max="9999" step="1" style="width:100px" />
-          <span class="help-text">Stop retrying after this many attempts. Set to 0 to retry indefinitely.</span>
-        </label>
-      </template>
-
-      <label>
-        <span class="label-text">Default Labels for Webhook Posters</span>
-        <input
-          type="text"
-          v-model="localWebhookAutoLabels"
-          placeholder="Simposter, Auto"
-        />
-        <span class="help-text">Comma-separated list of labels to apply to webhook-generated posters (e.g., "Simposter, Auto")</span>
       </label>
     </div>
 
@@ -476,44 +267,9 @@ label {
   margin-top: -12px;
 }
 
-select,
-input[type="text"],
 input[type="range"] {
   width: 100%;
   max-width: 400px;
-}
-
-select {
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-select:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-input[type="text"] {
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-input[type="text"]:focus {
-  outline: none;
-  border-color: var(--accent);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-input[type="range"] {
   height: 6px;
   background: rgba(255, 255, 255, 0.1);
   border-radius: 3px;
@@ -535,12 +291,6 @@ input[type="range"]::-moz-range-thumb {
   background: var(--accent);
   cursor: pointer;
   border: none;
-}
-
-.quality-control {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
 }
 
 .cache-actions {

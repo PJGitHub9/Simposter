@@ -13,16 +13,23 @@ const props = defineProps<{
   dbImportText: string
   apiOrder: string[]
   unsavedChanges: boolean
+  dbExportIncludeSecrets: boolean
 }>()
 
 const emit = defineEmits<{
   'update:showDbImportModal': [value: boolean]
   'update:dbImportText': [value: string]
   'update:apiOrder': [value: string[]]
+  'update:dbExportIncludeSecrets': [value: boolean]
   'export-db': []
   'import-db': []
   'save': []
 }>()
+
+const localDbExportIncludeSecrets = computed({
+  get: () => props.dbExportIncludeSecrets,
+  set: (val) => emit('update:dbExportIncludeSecrets', val)
+})
 
 const localShowDbImportModal = computed({
   get: () => props.showDbImportModal,
@@ -163,6 +170,16 @@ const moveApiDown = (api: string) => {
           <div class="preset-info">
             <strong>Export Database</strong>
             <p>Download complete database backup as a JSON file for backup or migration</p>
+            <label class="checkbox-label" style="margin-top: 8px;">
+              <input type="checkbox" v-model="localDbExportIncludeSecrets" />
+              <span>Include API keys and tokens (Plex token, TMDb/TVDB/Fanart keys, webhook secret)</span>
+            </label>
+            <p class="help-text" v-if="localDbExportIncludeSecrets">
+              The exported file will contain your credentials in plain text — store it securely.
+            </p>
+            <p class="help-text" v-else>
+              Credentials will be left out of the export; you'll need to re-enter them after restoring.
+            </p>
           </div>
           <button
             @click="emit('export-db')"

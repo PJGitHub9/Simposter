@@ -196,13 +196,67 @@ def api_presets_default_template():
 
 @router.get("/presets/export")
 def api_presets_export():
-    """Export all presets as JSON."""
+    """Export all presets — IDs are internal and excluded; import generates fresh ones."""
     try:
         data = db.get_all_presets()
+        # Strip internal IDs — export is name+options only
+        for tdata in data.values():
+            for preset in tdata.get("presets", []):
+                preset.pop("id", None)
         return data
     except Exception as e:
         logger.error(f"[PRESETS] Error exporting presets: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export presets: {e}")
+
+
+# Default values that are stripped from compact exports to keep shared presets small
+_PRESET_DEFAULTS = {
+    "poster_zoom": 1, "poster_shift_y": -0.04, "matte_height_ratio": 0.22,
+    "fade_height_ratio": 0.21, "vignette_strength": 0.03, "grain_amount": 0.22,
+    "logo_scale": 0.45, "logo_offset": 0.88, "uniform_logo_max_w": 1282,
+    "uniform_logo_max_h": 352, "uniform_logo_offset_x": 0.5, "uniform_logo_offset_y": 0.83,
+    "uniform_logo_h_align": "center", "uniform_logo_v_align": "center",
+    "border_enabled": False, "border_px": 14, "border_color": "#ffffff",
+    "overlay_file": "", "overlay_opacity": 0.4, "overlay_mode": "screen",
+    "poster_filter": "textless", "logo_preference": "white", "logo_mode": "original",
+    "logo_hex": "#4b5efc", "text_overlay_enabled": False, "custom_text": "",
+    "font_family": "Arial", "font_size": 120, "font_weight": "700",
+    "text_color": "#ffffff", "text_align": "center", "text_transform": "uppercase",
+    "letter_spacing": 2, "line_height": 1.2, "position_y": 0.75,
+    "shadow_enabled": False, "shadow_blur": 10, "shadow_offset_x": 0,
+    "shadow_offset_y": 4, "shadow_color": "#000000", "shadow_opacity": 0.8,
+    "stroke_enabled": False, "stroke_width": 4, "stroke_color": "#000000",
+    "logoSource": "tmdb_fanart",
+}
+
+
+def _compact_options(opts: dict) -> dict:
+    """Strip fields that match built-in defaults; keep everything else."""
+    return {k: v for k, v in opts.items() if _PRESET_DEFAULTS.get(k, "__missing__") != v}
+
+
+@router.get("/presets/export-compact")
+def api_presets_export_compact():
+    """Export presets for sharing — defaults stripped, internal IDs omitted, season_options omitted when identical to options."""
+    try:
+        data = db.get_all_presets()
+        compact: dict = {}
+        for template_id, tdata in data.items():
+            compact_presets = []
+            for preset in tdata.get("presets", []):
+                opts = _compact_options(preset.get("options", {}))
+                season = preset.get("season_options") or {}
+                season_compact = _compact_options(season)
+                # id is intentionally omitted — import will generate a fresh one to avoid conflicts
+                entry: dict = {"name": preset["name"], "options": opts}
+                if season and season != preset.get("options", {}):
+                    entry["season_options"] = season_compact
+                compact_presets.append(entry)
+            compact[template_id] = {"presets": compact_presets}
+        return compact
+    except Exception as e:
+        logger.error(f"[PRESETS] Error exporting compact presets: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to export: {e}")
 
 
 @router.post("/presets/import")
@@ -247,8 +301,9 @@ def api_save_preset(req: PresetSaveRequest):
     options = _apply_global_template_defaults(merged)
 
     try:
-        # Save to database
-        db.save_preset(template_id, preset_id, preset_id, options, season_options)
+        # Save to database (use explicit name if provided, fall back to preset_id)
+        preset_name = req.name if req.name else preset_id
+        db.save_preset(template_id, preset_id, preset_name, options, season_options)
         logger.info(f"[PRESETS] Saved preset {preset_id} for template {template_id}")
         
         # Generate and save overlay cache

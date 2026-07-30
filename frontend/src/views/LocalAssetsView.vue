@@ -15,6 +15,16 @@ type LocalAsset = {
   library_name?: string
   movie_title?: string
   movie_year?: string | number | null
+  rating_key?: string
+  is_tv?: boolean
+}
+
+type ResendResult = {
+  path: string
+  rating_key?: string
+  title?: string
+  status: 'ok' | 'skipped' | 'error'
+  reason?: string
 }
 
 const localAssets = ref<LocalAsset[]>([])
@@ -26,6 +36,11 @@ const selectedAsset = ref<LocalAsset | null>(null)
 const showModal = ref(false)
 const deletingAsset = ref(false)
 const showMovieTitles = ref(false)
+
+// Multi-select + bulk resend
+const selectedPaths = ref<Set<string>>(new Set())
+const resending = ref(false)
+const resendSummary = ref<string | null>(null)
 
 const route = useRoute()
 const apiBase = getApiBase()
@@ -135,6 +150,78 @@ const filteredAssets = computed(() => {
   return result
 })
 
+// --- Multi-select + bulk resend ---
+// Only assets saved with a Plex rating key (added when this feature shipped) can be
+// resent — older files predate that metadata and have no reliable way to know which
+// Plex item they belong to.
+const canResend = (asset: LocalAsset) => !!asset.rating_key
+
+const resendableVisibleAssets = computed(() => filteredAssets.value.filter(canResend))
+
+const selectedCount = computed(() => selectedPaths.value.size)
+
+const allVisibleSelected = computed(() =>
+  resendableVisibleAssets.value.length > 0 &&
+  resendableVisibleAssets.value.every(a => selectedPaths.value.has(a.path))
+)
+
+const isSelected = (asset: LocalAsset) => selectedPaths.value.has(asset.path)
+
+const toggleSelect = (asset: LocalAsset) => {
+  if (!canResend(asset)) return
+  const next = new Set(selectedPaths.value)
+  if (next.has(asset.path)) next.delete(asset.path)
+  else next.add(asset.path)
+  selectedPaths.value = next
+}
+
+const toggleSelectAllVisible = () => {
+  if (allVisibleSelected.value) {
+    const next = new Set(selectedPaths.value)
+    resendableVisibleAssets.value.forEach(a => next.delete(a.path))
+    selectedPaths.value = next
+  } else {
+    const next = new Set(selectedPaths.value)
+    resendableVisibleAssets.value.forEach(a => next.add(a.path))
+    selectedPaths.value = next
+  }
+}
+
+const clearSelection = () => {
+  selectedPaths.value = new Set()
+}
+
+const bulkResend = async () => {
+  if (selectedPaths.value.size === 0) return
+  if (!window.confirm(`Resend ${selectedPaths.value.size} poster(s) to Plex?`)) return
+
+  resending.value = true
+  resendSummary.value = null
+  try {
+    const res = await fetch(`${apiBase}/api/local-assets/resend`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: Array.from(selectedPaths.value) })
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    const results: ResendResult[] = data.results || []
+    const ok = results.filter(r => r.status === 'ok').length
+    const skipped = results.filter(r => r.status === 'skipped').length
+    const failed = results.filter(r => r.status === 'error').length
+    const parts = [`${ok} sent`]
+    if (skipped) parts.push(`${skipped} skipped`)
+    if (failed) parts.push(`${failed} failed`)
+    resendSummary.value = parts.join(', ')
+    clearSelection()
+  } catch (err: unknown) {
+    resendSummary.value = `Failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+  } finally {
+    resending.value = false
+    setTimeout(() => { resendSummary.value = null }, 6000)
+  }
+}
+
 // Format file size
 const formatFileSize = (bytes: number): string => {
   if (bytes < 1024) return `${bytes} B`
@@ -231,7 +318,21 @@ onMounted(() => {
       <div class="asset-count">
         {{ filteredAssets.length }} {{ filteredAssets.length === 1 ? 'asset' : 'assets' }}
       </div>
+      <label v-if="resendableVisibleAssets.length > 0" class="select-all-label">
+        <input type="checkbox" :checked="allVisibleSelected" @change="toggleSelectAllVisible" />
+        Select all resendable
+      </label>
     </div>
+
+    <!-- Bulk selection action bar -->
+    <div v-if="selectedCount > 0" class="selection-bar">
+      <span>{{ selectedCount }} selected</span>
+      <button class="btn-resend-bulk" @click="bulkResend" :disabled="resending">
+        {{ resending ? 'Resending...' : `Resend ${selectedCount} to Plex` }}
+      </button>
+      <button class="btn-clear-selection" @click="clearSelection" :disabled="resending">Clear</button>
+    </div>
+    <div v-if="resendSummary" class="resend-summary">{{ resendSummary }}</div>
 
     <!-- Assets Grid -->
     <div v-if="localAssetsLoading" class="loading">
@@ -251,7 +352,12 @@ onMounted(() => {
       <p class="empty-hint">Saved posters will appear here</p>
     </div>
     <div v-else class="assets-grid">
-      <div v-for="asset in filteredAssets" :key="asset.path" class="asset-card">
+      <div
+        v-for="asset in filteredAssets"
+        :key="asset.path"
+        class="asset-card"
+        :class="{ selected: isSelected(asset) }"
+      >
         <div class="asset-image" @click="openModal(asset)">
           <img
             :src="`${apiBase}/api/local-assets/${asset.path}`"
@@ -266,6 +372,21 @@ onMounted(() => {
               <path d="M8 11h6"/>
             </svg>
           </div>
+          <input
+            v-if="canResend(asset)"
+            type="checkbox"
+            class="asset-select"
+            :checked="isSelected(asset)"
+            title="Select for bulk resend"
+            @click.stop="toggleSelect(asset)"
+          />
+          <span v-else class="asset-select-disabled" title="No Plex rating key saved with this file — can't be resent (saved before this feature was added)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          </span>
           <button class="btn-delete" @click.stop="deleteAsset(asset)" :disabled="deletingAsset">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18"/>
@@ -467,6 +588,76 @@ onMounted(() => {
   white-space: nowrap;
 }
 
+.select-all-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: rgba(91, 141, 238, 0.12);
+  border: 1px solid rgba(91, 141, 238, 0.35);
+  border-radius: 8px;
+  color: #d7e6ff;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.btn-resend-bulk {
+  padding: 0.5rem 1rem;
+  background: rgba(91, 141, 238, 0.3);
+  border: 1px solid rgba(91, 141, 238, 0.6);
+  border-radius: 6px;
+  color: #8ab4f8;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-resend-bulk:hover:not(:disabled) {
+  background: rgba(91, 141, 238, 0.45);
+}
+
+.btn-resend-bulk:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-clear-selection {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: var(--text-secondary, #aaa);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn-clear-selection:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.resend-summary {
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  background: rgba(61, 214, 183, 0.1);
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  border-radius: 8px;
+  color: var(--accent, #3dd6b7);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
 .btn-refresh {
   display: flex;
   align-items: center;
@@ -566,6 +757,37 @@ onMounted(() => {
   border-color: var(--accent, #3dd6b7);
   transform: translateY(-4px);
   box-shadow: 0 8px 20px rgba(61, 214, 183, 0.2);
+}
+
+.asset-card.selected {
+  border-color: rgba(91, 141, 238, 0.7);
+  box-shadow: 0 0 0 2px rgba(91, 141, 238, 0.4);
+}
+
+.asset-select {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 20px;
+  height: 20px;
+  z-index: 10;
+  cursor: pointer;
+  accent-color: var(--accent, #3dd6b7);
+}
+
+.asset-select-disabled {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 20px;
+  height: 20px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 4px;
 }
 
 .asset-image {

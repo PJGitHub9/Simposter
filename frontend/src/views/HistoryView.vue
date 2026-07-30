@@ -61,6 +61,31 @@ const records = ref<HistoryRecord[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
 
+// Preset name lookup — fetch once so we can resolve preset_id → display name
+const presetMap = ref<Record<string, Record<string, string>>>({}) // { template_id: { preset_id: name } }
+
+const fetchPresetNames = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/presets`)
+    if (!res.ok) return
+    const data: Record<string, { presets: Array<{ id: string; name: string }> }> = await res.json()
+    const map: Record<string, Record<string, string>> = {}
+    for (const [tplId, tpl] of Object.entries(data)) {
+      map[tplId] = {}
+      for (const p of tpl.presets || []) {
+        map[tplId][p.id] = p.name || p.id
+      }
+    }
+    presetMap.value = map
+  } catch { /* non-fatal */ }
+}
+
+const resolvePresetName = (templateId: string | null, presetId: string | null): string => {
+  if (!presetId) return '—'
+  if (!templateId) return presetId
+  return presetMap.value[templateId]?.[presetId] ?? presetId
+}
+
 // Tab state
 const activeTab = ref<'history' | 'retry-queue'>('history')
 
@@ -70,12 +95,14 @@ const retryLoading = ref(false)
 const retryCount = ref(0)
 const retryActionInProgress = ref<string | null>(null)
 
-// Preview popup state
+// Preview popup state (shared between history and retry queue)
 const previewRecord = ref<HistoryRecord | null>(null)
+const previewRetryItem = ref<RetryQueueItem | null>(null)
 const previewPosition = ref({ x: 0, y: 0 })
 const previewLoading = ref(false)
 const previewError = ref<string | null>(null)
 const previewImageUrl = ref<string | null>(null)
+const previewTitle = ref<string | null>(null)
 let hoverTimeout: ReturnType<typeof setTimeout> | null = null
 
 // Filters
@@ -83,6 +110,7 @@ const selectedLibrary = ref<string>('all')
 const selectedTemplate = ref<string>('all')
 const selectedAction = ref<string>('all')
 const selectedSource = ref<string>('all')
+const titleSearch = ref<string>('')
 
 // Map library IDs to display names
 const getLibraryName = (libraryId: string | null): string => {
@@ -139,6 +167,11 @@ const filteredRecords = computed(() => {
       if (selectedSource.value === 'auto') return r.source === 'auto' || r.source === 'auto_generate'
       return r.source === selectedSource.value
     })
+  }
+
+  if (titleSearch.value.trim()) {
+    const term = titleSearch.value.trim().toLowerCase()
+    filtered = filtered.filter(r => r.title?.toLowerCase().includes(term))
   }
 
   return filtered
@@ -357,6 +390,7 @@ const clearFilters = () => {
   selectedTemplate.value = 'all'
   selectedAction.value = 'all'
   selectedSource.value = 'all'
+  titleSearch.value = ''
 }
 
 // Check if a record can be previewed
@@ -437,8 +471,39 @@ const hidePreview = () => {
     hoverTimeout = null
   }
   previewRecord.value = null
+  previewRetryItem.value = null
   previewImageUrl.value = null
   previewError.value = null
+  previewTitle.value = null
+}
+
+// Show poster preview for retry queue items (shows current Plex poster)
+const showRetryPreview = (item: RetryQueueItem, event: MouseEvent) => {
+  if (hoverTimeout) clearTimeout(hoverTimeout)
+  const delay = isMobile.value ? 0 : 200
+  hoverTimeout = setTimeout(() => {
+    previewRetryItem.value = item
+    previewRecord.value = null
+    previewTitle.value = item.title || item.rating_key
+    previewError.value = null
+    previewLoading.value = false
+
+    const rect = (event.target as HTMLElement).getBoundingClientRect()
+    previewPosition.value = isMobile.value
+      ? { x: Math.max(10, (window.innerWidth - 200) / 2), y: Math.max(60, rect.top - 300) }
+      : { x: rect.left - 220, y: rect.top - 100 }
+
+    const path = item.media_type === 'tv' ? 'tv-show' : 'movie'
+    previewImageUrl.value = `${apiBase}/api/${path}/${item.rating_key}/poster`
+  }, delay)
+}
+
+const toggleRetryPreview = (item: RetryQueueItem, event: MouseEvent) => {
+  if (previewRetryItem.value?.id === item.id) {
+    hidePreview()
+  } else {
+    showRetryPreview(item, event)
+  }
 }
 
 // Handle image load error
@@ -470,6 +535,7 @@ onMounted(async () => {
     await settings.load()
   }
   fetchHistory()
+  fetchPresetNames()
   // Load retry count for badge indicator (non-blocking)
   fetchRetryQueue()
 })
@@ -497,6 +563,15 @@ onMounted(async () => {
     <template v-if="activeTab === 'history'">
     <div class="filters">
       <div class="filter-group">
+        <label class="search-label">
+          <span>Search</span>
+          <input
+            v-model="titleSearch"
+            type="text"
+            placeholder="Filter by title…"
+            class="search-input"
+          />
+        </label>
         <label>
           <span>Library</span>
           <select v-model="selectedLibrary" @change="fetchHistory">
@@ -619,7 +694,7 @@ onMounted(async () => {
               {{ record.template_id || '—' }}
             </td>
             <td class="preset-cell">
-              {{ record.preset_id || '—' }}
+              {{ resolvePresetName(record.template_id, record.preset_id) }}
             </td>
             <td class="source-cell">
               <span :class="['source-badge', getSourceClass(record.source)]">
@@ -684,6 +759,7 @@ onMounted(async () => {
         <table class="history-table">
           <thead>
             <tr>
+              <th class="preview-th">Preview</th>
               <th>Title</th>
               <th>Type</th>
               <th>Library</th>
@@ -697,6 +773,14 @@ onMounted(async () => {
           </thead>
           <tbody>
             <tr v-for="item in retryItems" :key="item.id">
+              <td class="preview-cell">
+                <button
+                  class="btn-preview"
+                  @click="toggleRetryPreview(item, $event)"
+                  @mouseenter="!isMobile && showRetryPreview(item, $event)"
+                  @mouseleave="!isMobile && hidePreview()"
+                >View</button>
+              </td>
               <td class="title-cell">
                 <button
                   class="btn-open-item"
@@ -715,7 +799,7 @@ onMounted(async () => {
               <td class="date-cell">
                 {{ item.last_attempted_at ? formatDate(item.last_attempted_at) : 'Not yet' }}
               </td>
-              <td class="year-cell">{{ item.template_id }} / {{ item.preset_id }}</td>
+              <td class="year-cell">{{ item.template_id }} / {{ resolvePresetName(item.template_id, item.preset_id) }}</td>
               <td>
                 <span :class="['action-badge', item.status === 'pending' ? 'action-plex' : 'action-local']">
                   {{ item.status }}
@@ -746,9 +830,9 @@ onMounted(async () => {
     <!-- Preview Popup -->
     <Teleport to="body">
       <!-- Mobile backdrop -->
-      <div v-if="previewRecord && isMobile" class="preview-backdrop" @click="hidePreview"></div>
+      <div v-if="(previewRecord || previewRetryItem) && isMobile" class="preview-backdrop" @click="hidePreview"></div>
       <div
-        v-if="previewRecord"
+        v-if="previewRecord || previewRetryItem"
         class="preview-popup"
         :style="{
           left: `${previewPosition.x}px`,
@@ -766,13 +850,13 @@ onMounted(async () => {
           <img
             v-else-if="previewImageUrl"
             :src="previewImageUrl"
-            :alt="previewRecord.title || 'Poster preview'"
+            :alt="previewRecord?.title || 'Poster preview'"
             class="preview-image"
             @error="handlePreviewError"
             @load="handlePreviewLoad"
           />
         </div>
-        <div class="preview-title">{{ previewRecord.title }}</div>
+        <div class="preview-title">{{ previewRecord?.title ?? previewTitle }}</div>
       </div>
     </Teleport>
   </div>
@@ -822,6 +906,25 @@ onMounted(async () => {
   flex-direction: column;
   gap: 6px;
   min-width: 180px;
+}
+
+.search-label {
+  min-width: 220px !important;
+}
+
+.search-input {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent, #3dd6b7);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .filter-group label span {

@@ -5,11 +5,34 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from ..config import settings, logger, resolve_library_ids
+from ..config import settings, logger, resolve_library_ids, SECRET_MASK, SECRET_FIELD_PATHS
 from ..schemas import UISettings
+from ..save_paths import DEFAULT_MOVIE_SAVE_LOCATION, DEFAULT_TV_SAVE_LOCATION
 from .. import database as db
 
 router = APIRouter()
+
+
+def _mask_secrets(data: dict) -> dict:
+    """Replace credential fields with SECRET_MASK for API responses. Shallow-copies only
+    the sections that hold a secret so unrelated nested dicts aren't needlessly cloned."""
+    masked = dict(data)
+    for section, field in SECRET_FIELD_PATHS:
+        section_data = masked.get(section)
+        if isinstance(section_data, dict) and section_data.get(field):
+            masked[section] = {**section_data, field: SECRET_MASK}
+    return masked
+
+
+def _restore_unchanged_secrets(incoming: dict, current: dict) -> dict:
+    """If a secret field in `incoming` is still the mask sentinel, the caller never
+    edited it (GET returns the mask, save round-trips whatever it received) — keep the
+    real stored value instead of overwriting it with the literal placeholder string."""
+    for section, field in SECRET_FIELD_PATHS:
+        incoming_section = incoming.get(section)
+        if isinstance(incoming_section, dict) and incoming_section.get(field) == SECRET_MASK:
+            incoming_section[field] = (current.get(section) or {}).get(field, "")
+    return incoming
 
 # Legacy file paths for migration check
 _settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
@@ -84,6 +107,23 @@ def _normalize_plex_payload(data: dict) -> dict:
     return data
 
 
+def _migrate_legacy_save_location(merged: dict) -> dict:
+    """One-time, idempotent migration for the pre-consolidation `saveLocation` field:
+    if a user customized only that legacy field and never touched the newer
+    `movieSaveLocation`/`tvShowSaveLocation` fields (still at their untouched
+    defaults), carry the legacy value over to whichever of the two is still default.
+    Runs on every read but is a no-op as soon as either new field has a real value —
+    no separate "migrated" flag needed."""
+    legacy = merged.get("saveLocation")
+    if not legacy or legacy == DEFAULT_MOVIE_SAVE_LOCATION:
+        return merged
+    if merged.get("movieSaveLocation") == DEFAULT_MOVIE_SAVE_LOCATION:
+        merged["movieSaveLocation"] = legacy
+    if merged.get("tvShowSaveLocation") == DEFAULT_TV_SAVE_LOCATION:
+        merged["tvShowSaveLocation"] = legacy
+    return merged
+
+
 def _apply_runtime_settings(merged: dict):
     """Update global settings with latest UI settings so runtime calls use fresh values."""
     plex_data = merged.get("plex", {}) or {}
@@ -144,6 +184,11 @@ def _apply_runtime_settings(merged: dict):
     except Exception:
         tv_ids = tv_names
     object.__setattr__(settings, "PLEX_TV_SHOW_LIB_IDS", tv_ids)
+
+    # Webhook shared secret (DB-backed, falls back to WEBHOOK_SECRET env var if never set in UI)
+    automation_data = merged.get("automation", {}) or {}
+    webhook_secret = automation_data.get("webhookSecret") or os.getenv("WEBHOOK_SECRET") or ""
+    object.__setattr__(settings, "WEBHOOK_SECRET", webhook_secret)
 
 
 def _default_ui_settings() -> UISettings:
@@ -282,6 +327,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
                     logger.debug("[UI_SETTINGS] Database has user settings, ENV overrides disabled")
 
         merged = _normalize_plex_payload(merged)
+        merged = _migrate_legacy_save_location(merged)
         _apply_runtime_settings(merged)
         return UISettings(**merged)
     except Exception as e:
@@ -292,7 +338,8 @@ def _read_settings(include_env: bool = True) -> UISettings:
 @router.get("/ui-settings")
 def get_ui_settings():
     settings_obj = _read_settings()
-    return JSONResponse(content=settings_obj.model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False))
+    data = settings_obj.model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False)
+    return JSONResponse(content=_mask_secrets(data))
 
 @router.get("/ping")
 def api_ping():
@@ -314,6 +361,10 @@ def save_ui_settings_endpoint(payload: UISettings):
         incoming = payload.model_dump(
             exclude_none=False, exclude_defaults=False, exclude_unset=False
         )
+        # The frontend never sees real secret values (GET returns SECRET_MASK) — if a
+        # secret field still holds that placeholder, the user didn't change it, so keep
+        # the real stored value rather than clobbering it with the literal placeholder.
+        incoming = _restore_unchanged_secrets(incoming, current)
         merged = {**defaults, **current, **incoming}
         for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {
@@ -364,7 +415,7 @@ def save_ui_settings_endpoint(payload: UISettings):
         env_overrides = _env_overrides()
         for nested_key, nested_values in env_overrides.items():
             merged_with_env[nested_key] = {**merged_with_env.get(nested_key, {}), **nested_values}
-        return merged_with_env
+        return _mask_secrets(merged_with_env)
     except Exception as e:
         logger.error(f"[UI_SETTINGS] Failed to save settings: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")

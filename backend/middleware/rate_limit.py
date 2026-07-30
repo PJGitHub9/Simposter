@@ -44,10 +44,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Endpoint-specific limits (requests per window)
         self.endpoint_limits = {
             # Expensive rendering operations
-            "/api/preview": 30,
+            # 400ms debounce on slider/option changes means bursts of edits can still
+            # produce a preview roughly every 400-500ms in the worst case — 30/min was
+            # tight enough to trip during normal active editing, so this has headroom.
+            "/api/preview": 120,
             "/api/save": 20,
             "/api/plexsend": 20,
-            "/api/batch": 5,  # Very expensive
+            "/api/batch": 5,  # Legacy /api/batch endpoint — very expensive
+            "/api/batch-movies": 5,  # Very expensive: renders the whole selection server-side
+            "/api/batch-tv-shows": 5,  # Very expensive: renders the whole selection server-side
 
             # Library operations
             "/api/scan-library": 5,
@@ -67,6 +72,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/ui-settings": 30,
             "/api/logs": 20,
             "/api/history": 30,
+        }
+
+        # Cheap, frequently-polled status endpoints — the frontend polls batch progress
+        # every 200ms and scan progress every 3s while a job is running, which would
+        # blow through almost any per-minute limit. These just read an in-memory dict,
+        # so there's nothing expensive here to protect against.
+        self.exempt_endpoints = {
+            "/api/batch-progress",
+            "/api/scan-progress",
         }
 
     def _get_endpoint_pattern(self, path: str) -> str:
@@ -111,9 +125,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if endpoint in self.endpoint_limits:
             return self.endpoint_limits[endpoint]
 
-        # Check for prefix match
+        # Prefix match on a path-segment boundary only — plain .startswith() would let
+        # "/api/batch" match "/api/batch-progress" or "/api/batch-tv-shows" (same text
+        # prefix, different endpoint) and apply the wrong, much stricter limit.
         for pattern, limit in self.endpoint_limits.items():
-            if endpoint.startswith(pattern):
+            if endpoint.startswith(pattern + "/"):
                 return limit
 
         return self.default_limit
@@ -174,6 +190,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Get client identifier and endpoint
         client_ip = self._get_client_ip(request)
         endpoint = self._get_endpoint_pattern(request.url.path)
+
+        if endpoint in self.exempt_endpoints:
+            return await call_next(request)
         limit = self._get_limit_for_endpoint(endpoint)
 
         # Get or create request history for this client/endpoint

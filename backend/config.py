@@ -32,6 +32,24 @@ def mask_sensitive(value: str, visible_chars: int = 4) -> str:
         return "*" * len(value) if value else ""
     return "*" * (len(value) - visible_chars) + value[-visible_chars:]
 
+
+# Sentinel returned by GET /api/ui-settings (and DB export, when secrets are excluded)
+# in place of a real secret value. On save, the frontend echoes back whatever it
+# received; if a field still holds this exact sentinel, the caller never touched it,
+# so we keep the existing stored value instead of overwriting it with this placeholder.
+SECRET_MASK = "********"
+
+# (UISettings section, field) pairs that hold credentials and must never be returned
+# in plaintext from a read endpoint. Shared between ui_settings.py (nested JSON shape)
+# and database.py (flat "section.field" DB keys).
+SECRET_FIELD_PATHS = (
+    ("plex", "token"),
+    ("tmdb", "apiKey"),
+    ("tvdb", "apiKey"),
+    ("fanart", "apiKey"),
+    ("automation", "webhookSecret"),
+)
+
 # Simple docker/container detection for better guidance when connecting to Plex
 def _running_in_container() -> bool:
     try:

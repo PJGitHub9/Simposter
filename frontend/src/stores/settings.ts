@@ -65,6 +65,7 @@ export type AutomationSettings = {
   webhookAutoSend: boolean
   webhookAutoLabels: string
   webhookAlwaysRegenerateSeason: boolean
+  webhookSecret?: string
   existingContentMode?: 'resend' | 'regenerate'
   retryUntilTemplateMet?: boolean
   retryIntervalHours?: number
@@ -101,6 +102,7 @@ export type UISettings = {
   tvShowSaveLocation?: string
   tvShowSaveMode?: string
   saveBatchInSubfolder?: boolean
+  saveToAssetFolderOnSend?: boolean
   plex?: PlexSettings
   tmdb?: TMDBSettings
   tvdb?: TVDBSettings
@@ -130,6 +132,7 @@ const movieSaveLocation = ref<string>('/config/output/{library}/{title}.jpg')
 const tvShowSaveLocation = ref<string>('/config/output/{library}/{title} ({year}).jpg')
 const tvShowSaveMode = ref<string>('flat')
 const saveBatchInSubfolder = ref<boolean>(false)
+const saveToAssetFolderOnSend = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
@@ -138,7 +141,7 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false, existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0 })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0 })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
   discordWebhookUrl: '',
@@ -189,6 +192,7 @@ async function loadSettings() {
     tvShowSaveLocation.value = data.tvShowSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title} ({year}).jpg"
     tvShowSaveMode.value = data.tvShowSaveMode ?? 'flat'
     saveBatchInSubfolder.value = !!data.saveBatchInSubfolder
+    saveToAssetFolderOnSend.value = !!data.saveToAssetFolderOnSend
     plex.value = {
       url: data.plex?.url ?? '',
       token: data.plex?.token ?? '',
@@ -227,6 +231,7 @@ async function loadSettings() {
       webhookAutoSend: data.automation?.webhookAutoSend ?? true,
       webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Simposter',
       webhookAlwaysRegenerateSeason: data.automation?.webhookAlwaysRegenerateSeason ?? false,
+      webhookSecret: data.automation?.webhookSecret ?? '',
       existingContentMode: data.automation?.existingContentMode ?? 'regenerate',
       retryUntilTemplateMet: data.automation?.retryUntilTemplateMet ?? false,
       retryIntervalHours: data.automation?.retryIntervalHours ?? 24,
@@ -274,6 +279,7 @@ async function saveSettings() {
       tvShowSaveLocation: tvShowSaveLocation.value,
       tvShowSaveMode: tvShowSaveMode.value,
       saveBatchInSubfolder: saveBatchInSubfolder.value,
+      saveToAssetFolderOnSend: saveToAssetFolderOnSend.value,
       plex: { ...plex.value },
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
@@ -332,6 +338,7 @@ export function useSettingsStore() {
     tvShowSaveLocation,
     tvShowSaveMode,
     saveBatchInSubfolder,
+    saveToAssetFolderOnSend,
     load: loadSettings,
     save: saveSettings
   }

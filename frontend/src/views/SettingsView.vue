@@ -12,8 +12,9 @@ import { setSessionStorage, getSessionStorage } from '../composables/useSessionS
 import GeneralTab from './settings/GeneralTab.vue'
 import LibrariesTab from './settings/LibrariesTab.vue'
 // IntegrationsTab removed
-import SaveLocationsTab from './settings/SaveLocationsTab.vue'
+import OutputTab from './settings/OutputTab.vue'
 import PerformanceTab from './settings/PerformanceTab.vue'
+import AutomationTab from './settings/AutomationTab.vue'
 import AdvancedTab from './settings/AdvancedTab.vue'
 import NotificationsTab from './settings/NotificationsTab.vue'
 
@@ -48,7 +49,7 @@ const route = useRoute()
 const router = useRouter()
 
 // Active tab state - initialize from URL or default to 'general'
-const activeTab = ref<'general' | 'libraries' | 'save-locations' | 'performance' | 'notifications' | 'advanced'>(
+const activeTab = ref<'general' | 'libraries' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced'>(
   (route.query.tab as any) || 'general'
 )
 
@@ -87,6 +88,7 @@ const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
 const localTvShowSaveLocation = ref('/config/output/{library}/{title}.jpg')
 const localTvShowSaveMode = ref('flat')
 const localSaveBatch = ref(false)
+const localSaveToAssetFolderOnSend = ref(false)
 const localDefaultLabelsToRemove = ref<Record<string, string[]>>({})
 const localDefaultTvLabelsToRemove = ref<Record<string, string[]>>({})
 const localPlexUrl = ref('')
@@ -120,6 +122,7 @@ let scanPoller: number | null = null
 const localWebhookAutoSend = ref(true)
 const localWebhookAutoLabels = ref('Overlay')
 const localWebhookAlwaysRegenerateSeason = ref(false)
+const localWebhookSecret = ref('')
 const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
 const localRetryUntilTemplateMet = ref(false)
 const localRetryIntervalHours = ref(24)
@@ -155,6 +158,7 @@ const schedulerStatus = ref<string>('not_initialized')
 // DB import/export states
 const dbExporting = ref(false)
 const dbImporting = ref(false)
+const dbExportIncludeSecrets = ref(true)
 const showDbImportModal = ref(false)
 const dbImportText = ref('')
 
@@ -193,6 +197,7 @@ const loadLocalSettings = async () => {
   localTvShowSaveLocation.value = settings.tvShowSaveLocation.value
   localTvShowSaveMode.value = settings.tvShowSaveMode.value || 'flat'
   localSaveBatch.value = settings.saveBatchInSubfolder.value
+  localSaveToAssetFolderOnSend.value = settings.saveToAssetFolderOnSend.value
   localDefaultLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultLabelsToRemove.value))
   localDefaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(settings.defaultTvLabelsToRemove.value))
   localPlexUrl.value = settings.plex.value.url
@@ -264,6 +269,7 @@ const loadLocalSettings = async () => {
   localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
   localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
   localWebhookAlwaysRegenerateSeason.value = settings.automation?.value?.webhookAlwaysRegenerateSeason ?? false
+  localWebhookSecret.value = settings.automation?.value?.webhookSecret ?? ''
   localExistingContentMode.value = (settings.automation?.value?.existingContentMode as 'resend' | 'regenerate') ?? 'regenerate'
   localRetryUntilTemplateMet.value = settings.automation?.value?.retryUntilTemplateMet ?? false
   localRetryIntervalHours.value = settings.automation?.value?.retryIntervalHours ?? 24
@@ -300,6 +306,7 @@ const captureSettingsSnapshot = () => {
     tvShowSaveLocation: localTvShowSaveLocation.value,
     tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
+    saveToAssetFolderOnSend: localSaveToAssetFolderOnSend.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
     defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
     plexUrl: localPlexUrl.value,
@@ -325,6 +332,7 @@ const captureSettingsSnapshot = () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
@@ -372,6 +380,7 @@ const checkForChanges = () => {
     tvShowSaveLocation: localTvShowSaveLocation.value,
     tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
+    saveToAssetFolderOnSend: localSaveToAssetFolderOnSend.value,
     defaultLabelsToRemove: localDefaultLabelsToRemove.value,
     defaultTvLabelsToRemove: localDefaultTvLabelsToRemove.value,
     plexUrl: localPlexUrl.value,
@@ -397,6 +406,7 @@ const checkForChanges = () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
@@ -432,7 +442,8 @@ const checkForChanges = () => {
     localMovieSaveLocation.value !== initial.movieSaveLocation ||
     localTvShowSaveLocation.value !== initial.tvShowSaveLocation ||
     localTvShowSaveMode.value !== initial.tvShowSaveMode ||
-    localSaveBatch.value !== initial.saveBatch
+    localSaveBatch.value !== initial.saveBatch ||
+    localSaveToAssetFolderOnSend.value !== initial.saveToAssetFolderOnSend
 
   sectionsWithChanges.value.connections =
     localPlexUrl.value !== initial.plexUrl ||
@@ -463,6 +474,7 @@ const saveSettings = async () => {
   settings.tvShowSaveLocation.value = localTvShowSaveLocation.value
   settings.tvShowSaveMode.value = localTvShowSaveMode.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
+  settings.saveToAssetFolderOnSend.value = localSaveToAssetFolderOnSend.value
   settings.defaultLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultLabelsToRemove.value))
   settings.defaultTvLabelsToRemove.value = JSON.parse(JSON.stringify(localDefaultTvLabelsToRemove.value))
   settings.apiOrder.value = [...apiOrder.value]
@@ -520,6 +532,7 @@ const saveSettings = async () => {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
+    webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
@@ -653,23 +666,24 @@ const testSingleApiKey = async (keyType: string, apiKey: string) => {
   try {
     const apiBase = getApiBase()
     let endpoint: string
-    let options: RequestInit
 
     if (keyType === 'tmdb') {
-      endpoint = `/api/test-tmdb?api_key=${encodeURIComponent(apiKey)}`
-      options = { method: 'GET' }
+      endpoint = '/api/test-tmdb'
     } else if (keyType === 'tvdb') {
-      endpoint = `/api/test-tvdb?api_key=${encodeURIComponent(apiKey)}`
-      options = { method: 'GET' }
+      endpoint = '/api/test-tvdb'
     } else if (keyType === 'fanart') {
       endpoint = '/api/test-fanart'
-      options = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: apiKey })
-      }
     } else {
       return
+    }
+
+    // POST with the key in the body (not a query param) so it never lands in access logs.
+    // If the field still holds the mask placeholder (user didn't edit an already-saved key),
+    // the backend resolves it to the currently stored key.
+    const options: RequestInit = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey })
     }
 
     const res = await fetch(`${apiBase}${endpoint}`, options)
@@ -908,7 +922,7 @@ const handleDbExport = async () => {
   dbExporting.value = true
   try {
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/database/export`)
+    const res = await fetch(`${apiBase}/api/database/export?include_secrets=${dbExportIncludeSecrets.value}`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -1059,6 +1073,7 @@ watch([
   localMovieSaveLocation,
   localTvShowSaveLocation,
   localSaveBatch,
+  localSaveToAssetFolderOnSend,
   localDefaultLabelsToRemove,
   localDefaultTvLabelsToRemove,
   localPlexUrl,
@@ -1176,16 +1191,22 @@ onMounted(() => {
         </button>
         <!-- Integrations tab removed -->
         <button
-          :class="['tab', { active: activeTab === 'save-locations' }]"
-          @click="activeTab = 'save-locations'"
+          :class="['tab', { active: activeTab === 'output' }]"
+          @click="activeTab = 'output'"
         >
-          Save Locations
+          Output
         </button>
         <button
           :class="['tab', { active: activeTab === 'performance' }]"
           @click="activeTab = 'performance'"
         >
           Performance
+        </button>
+        <button
+          :class="['tab', { active: activeTab === 'automation' }]"
+          @click="activeTab = 'automation'"
+        >
+          Automation
         </button>
         <button
           :class="['tab', { active: activeTab === 'notifications' }]"
@@ -1269,17 +1290,28 @@ onMounted(() => {
 
       <!-- Integrations content removed -->
 
-      <SaveLocationsTab
-        v-if="activeTab === 'save-locations'"
+      <OutputTab
+        v-if="activeTab === 'output'"
         :movieSaveLocation="localMovieSaveLocation"
         :tvShowSaveLocation="localTvShowSaveLocation"
         :tvShowSaveMode="localTvShowSaveMode"
         :saveBatchInSubfolder="localSaveBatch"
+        :saveToAssetFolderOnSend="localSaveToAssetFolderOnSend"
+        :outputFormat="localOutputFormat"
+        :jpgQuality="localJpgQuality"
+        :pngCompression="localPngCompression"
+        :webpQuality="localWebpQuality"
+        :imageQualityChanged="sectionsWithChanges.imageQuality"
         :unsavedChanges="hasUnsavedChanges"
         @update:movieSaveLocation="localMovieSaveLocation = $event"
         @update:tvShowSaveLocation="localTvShowSaveLocation = $event"
         @update:tvShowSaveMode="localTvShowSaveMode = $event"
         @update:saveBatchInSubfolder="localSaveBatch = $event"
+        @update:saveToAssetFolderOnSend="localSaveToAssetFolderOnSend = $event"
+        @update:outputFormat="localOutputFormat = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:jpgQuality="localJpgQuality = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:pngCompression="localPngCompression = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
+        @update:webpQuality="localWebpQuality = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
         @save="saveSettings"
       />
 
@@ -1289,41 +1321,40 @@ onMounted(() => {
         :useOverlayCache="localUseOverlayCache"
         :unsavedChanges="hasUnsavedChanges"
         :scanRunning="scan.running.value"
-        :outputFormat="localOutputFormat"
-        :jpgQuality="localJpgQuality"
-        :pngCompression="localPngCompression"
-        :webpQuality="localWebpQuality"
         :tmdbRateLimit="localTmdbRateLimit"
         :tvdbRateLimit="localTvdbRateLimit"
         :memoryLimit="localMemoryLimit"
+        :performanceChanged="sectionsWithChanges.performance"
+        @update:concurrentRenders="localConcurrentRenders = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:useOverlayCache="localUseOverlayCache = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:tmdbRateLimit="localTmdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:tvdbRateLimit="localTvdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @update:memoryLimit="localMemoryLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        @clear-frontend-cache="clearCache"
+        @clear-backend-cache="clearBackendCache"
+        @save="saveSettings"
+      />
+
+      <AutomationTab
+        v-if="activeTab === 'automation'"
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
         :webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason"
+        :webhookSecret="localWebhookSecret"
         :existingContentMode="localExistingContentMode"
         :retryUntilTemplateMet="localRetryUntilTemplateMet"
         :retryIntervalHours="localRetryIntervalHours"
         :retryMaxAttempts="localRetryMaxAttempts"
-        :imageQualityChanged="sectionsWithChanges.imageQuality"
-        :performanceChanged="sectionsWithChanges.performance"
         :automationChanged="sectionsWithChanges.automation"
-        @update:concurrentRenders="localConcurrentRenders = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
-        @update:useOverlayCache="localUseOverlayCache = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
-        @update:outputFormat="localOutputFormat = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
-        @update:jpgQuality="localJpgQuality = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
-        @update:pngCompression="localPngCompression = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
-        @update:webpQuality="localWebpQuality = $event; sectionsWithChanges.imageQuality = true; hasUnsavedChanges = true"
-        @update:tmdbRateLimit="localTmdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
-        @update:tvdbRateLimit="localTvdbRateLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
-        @update:memoryLimit="localMemoryLimit = $event; sectionsWithChanges.performance = true; hasUnsavedChanges = true"
+        :unsavedChanges="hasUnsavedChanges"
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:webhookSecret="localWebhookSecret = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:existingContentMode="localExistingContentMode = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryUntilTemplateMet="localRetryUntilTemplateMet = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryIntervalHours="localRetryIntervalHours = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryMaxAttempts="localRetryMaxAttempts = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
-        @clear-frontend-cache="clearCache"
-        @clear-backend-cache="clearBackendCache"
         @save="saveSettings"
       />
 
@@ -1371,9 +1402,11 @@ onMounted(() => {
         :dbImportText="dbImportText"
         :apiOrder="apiOrder"
         :unsavedChanges="hasUnsavedChanges"
+        :dbExportIncludeSecrets="dbExportIncludeSecrets"
         @update:showDbImportModal="showDbImportModal = $event"
         @update:dbImportText="dbImportText = $event"
         @update:apiOrder="apiOrder = $event; sectionsWithChanges.apiKeys = true; hasUnsavedChanges = true"
+        @update:dbExportIncludeSecrets="dbExportIncludeSecrets = $event"
         @export-db="handleDbExport"
         @import-db="handleDbImport"
         @save="saveSettings"

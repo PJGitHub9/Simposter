@@ -1,15 +1,19 @@
 """
 API endpoints for database backup and restore operations.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Dict, Any
 from .. import database as db
-from ..config import logger
+from ..config import logger, SECRET_FIELD_PATHS
 import sqlite3
 from pathlib import Path
 
 router = APIRouter()
+
+# Dotted DB keys ("section.field") that hold credentials — see database.save_ui_settings
+# for how the nested UISettings shape gets flattened into these keys.
+_SECRET_DB_KEYS = {f"{section}.{field}" for section, field in SECRET_FIELD_PATHS}
 
 
 class DatabaseImportRequest(BaseModel):
@@ -20,7 +24,14 @@ class DatabaseImportRequest(BaseModel):
 
 
 @router.get("/database/export")
-def api_export_database():
+def api_export_database(
+    include_secrets: bool = Query(
+        False,
+        description="Include Plex token / TMDb / TVDB / Fanart API keys / webhook secret in the export. "
+                     "Defaults to False so a bare request never leaks credentials; the Settings UI passes "
+                     "true explicitly when the user opts in via the 'Include API keys and tokens' checkbox."
+    )
+):
     """
     Export the complete database as JSON.
 
@@ -40,6 +51,7 @@ def api_export_database():
                     "category": row["category"]
                 }
                 for row in settings_rows
+                if include_secrets or row["key"] not in _SECRET_DB_KEYS
             }
 
             # Export presets
@@ -76,6 +88,7 @@ def api_export_database():
 
             return {
                 "version": "1.0",
+                "secrets_included": include_secrets,
                 "settings": settings,
                 "presets": presets,
                 "templates": templates

@@ -343,6 +343,7 @@ def _run_poster_retry():
         from . import database as db
         from .api.ui_settings import _read_settings
         from .api.batch import process_single_movie_poster, process_single_tv_show_poster
+        from .api.webhooks import _get_default_remove_labels
 
         ui = db.get_ui_settings() or {}
         automation = ui.get("automation", {})
@@ -353,6 +354,10 @@ def _run_poster_retry():
 
         max_attempts = int(automation.get("retryMaxAttempts", 0))
         send_logos = bool(ui.get("plex", {}).get("sendLogosToPlex", False))
+
+        # Build base label list (same source as auto_generate / webhooks)
+        auto_labels_raw = automation.get("webhookAutoLabels", "Simposter")
+        auto_labels = [l.strip() for l in auto_labels_raw.split(",") if l.strip()]
 
         pending = db.get_pending_retry_items(max_attempts=max_attempts)
         if not pending:
@@ -379,6 +384,13 @@ def _run_poster_retry():
             logger.info("[RETRY] Retrying %s (%s) attempt #%d", title, media_type, retry_count + 1)
             db.update_retry_attempt(rating_key)
 
+            # Merge global auto_labels with per-library default labels for this item
+            remove_labels = list(auto_labels)
+            if library_id:
+                lib_default_labels = _get_default_remove_labels(library_id)
+                if lib_default_labels:
+                    remove_labels = list({*remove_labels, *lib_default_labels})
+
             try:
                 if media_type == "tv":
                     result = process_single_tv_show_poster(
@@ -387,10 +399,11 @@ def _run_poster_retry():
                         preset_id=preset_id,
                         send_to_plex=True,
                         library_id=library_id,
-                        labels=[],
+                        labels=remove_labels,
                         include_seasons=True,
                         source="auto_generate",
                         send_logos_to_plex=send_logos,
+                        send_only_if_ideal=True,
                     )
                     sub_results = result.get("results", []) if isinstance(result, dict) else []
                     still_needs_retry = any(r.get("needs_retry") for r in sub_results)
@@ -401,9 +414,10 @@ def _run_poster_retry():
                         preset_id=preset_id,
                         send_to_plex=True,
                         library_id=library_id,
-                        labels=[],
+                        labels=remove_labels,
                         source="auto_generate",
                         send_logos_to_plex=send_logos,
+                        send_only_if_ideal=True,
                     )
                     still_needs_retry = result.get("needs_retry", False) if isinstance(result, dict) else True
 

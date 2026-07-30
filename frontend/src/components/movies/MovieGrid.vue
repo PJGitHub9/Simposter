@@ -14,11 +14,14 @@ type Entry = {
 defineProps<{
   heading: string
   items: Entry[]
+  cachedKeys?: Set<string>
+  isTV?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'select', movie: Entry): void
   (e: 'refresh', key: string): void
+  (e: 'resend-done', key: string): void
 }>()
 </script>
 
@@ -39,8 +42,11 @@ const emit = defineEmits<{
         :status="item.status"
         :ratingKey="item.key"
         :edition="item.edition"
+        :hasCachedPoster="cachedKeys?.has(item.key) ?? false"
+        :isTV="isTV"
         @select="emit('select', item)"
         @refresh="emit('refresh', item.key)"
+        @resend-done="emit('resend-done', item.key)"
       />
     </div>
   </section>
