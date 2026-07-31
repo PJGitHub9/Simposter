@@ -41,8 +41,14 @@ COPY --from=frontend-builder /tmp/version-info.json /tmp/version-info.json
 # Docker image tag — passed via --build-arg DOCKER_TAG=latest at build time
 ARG DOCKER_TAG=unknown
 
-# Install git temporarily, detect branch, create build-info.json with version, branch, and tag, then cleanup
-RUN apt-get update && apt-get install -y --no-install-recommends git jq \
+# Install git+jq (for version/branch detection, purged after use) and fonts+gosu (runtime deps,
+# kept) in a single apt-get pass — fewer network round-trips means fewer chances to hit a
+# transient DNS/connection blip mid-build, and Acquire::Retries rides out blips that do happen.
+# Copy .ttf files into /app/config/fonts so the /api/fonts endpoint and _load_font() can find
+# them without scanning /usr/share.
+RUN apt-get update -o Acquire::Retries=5 \
+    && apt-get install -y -o Acquire::Retries=5 --no-install-recommends \
+        git jq fonts-dejavu-core fonts-liberation gosu \
     && DETECTED_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown") \
     && APP_VERSION=$(jq -r '.app_version' /tmp/version-info.json) \
     && echo "Detected git branch: ${DETECTED_BRANCH}" \
@@ -50,19 +56,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git jq \
     && echo "Docker tag: ${DOCKER_TAG}" \
     && echo "{\"git_branch\": \"${DETECTED_BRANCH}\", \"app_version\": \"${APP_VERSION}\", \"docker_tag\": \"${DOCKER_TAG}\"}" > /app/build-info.json \
     && rm -rf .git /tmp/version-info.json \
+    && mkdir -p /app/config/fonts \
+    && find /usr/share/fonts -name "*.ttf" -exec cp {} /app/config/fonts/ \; \
     && apt-get purge -y git jq \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install fonts (DejaVu + Liberation) and gosu; copy .ttf files into /app/config/fonts
-# so the /api/fonts endpoint and _load_font() can find them without scanning /usr/share
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fonts-liberation gosu \
-    && mkdir -p /app/config/fonts \
-    && find /usr/share/fonts -name "*.ttf" -exec cp {} /app/config/fonts/ \; \
-    && rm -rf /var/lib/apt/lists/*
 
 # Ensure default folders exist in image (mount overrides are fine)
 RUN mkdir -p /config/output /config/uploads /config/assets /config/settings /config/logs

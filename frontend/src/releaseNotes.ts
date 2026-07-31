@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.20',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a Docker build failure ("Unable to connect to deb.debian.org", missing font packages) caused by the build hitting Debian\'s package servers twice instead of once — a transient network blip on the second pass could fail the whole build. Combined into one pass with automatic retries.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.19',
     date: '2026-07-31',
     sections: [
