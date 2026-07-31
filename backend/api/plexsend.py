@@ -139,7 +139,7 @@ def api_plex_send(req: PlexSendRequest):
             quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
     except Exception:
         pass
-    img.convert("RGB").save(buf, "JPEG", quality=quality)
+    img.convert("RGB").save(buf, "JPEG", quality=quality, subsampling=0)
     payload = buf.getvalue()
 
     plex_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}/posters"
@@ -545,7 +545,7 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
             # format, matching every other send-to-Plex path in the app.
             img = Image.open(file_path).convert("RGB")
             buf = BytesIO()
-            img.save(buf, "JPEG", quality=95)
+            img.save(buf, "JPEG", quality=95, subsampling=0)
             payload = buf.getvalue()
 
             plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"

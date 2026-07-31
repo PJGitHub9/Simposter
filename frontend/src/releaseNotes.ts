@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.19',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed visible artifacts (color bleeding/blockiness, especially around colored logos) that only showed up on the poster after sending to Plex, never in preview or a local save. Root cause: posters sent to Plex are always converted to JPEG, and the JPEG encoder was using a lower-quality default color setting that\'s more noticeable on that conversion than elsewhere. Fixed for all previews, saves, and sends going forward.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.18',
     date: '2026-07-31',
     sections: [

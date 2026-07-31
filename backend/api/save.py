@@ -212,7 +212,7 @@ def api_save(req: SaveRequest):
         })
         exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
         exif_bytes = exif.tobytes()
-        img_rgb.save(out_path, "JPEG", quality=fmt_settings["quality"], exif=exif_bytes)
+        img_rgb.save(out_path, "JPEG", quality=fmt_settings["quality"], exif=exif_bytes, subsampling=0)
 
     logger.info("Saved poster to %s (library: %s)", out_path, library_label)
     return {"status": "ok", "saved_path": out_path}

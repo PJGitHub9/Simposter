@@ -363,7 +363,7 @@ def _process_single_movie(
                 })
                 exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
                 exif_bytes = exif.tobytes()
-                img_rgb.save(save_path, "JPEG", quality=fmt_settings["quality"], exif=exif_bytes)
+                img_rgb.save(save_path, "JPEG", quality=fmt_settings["quality"], exif=exif_bytes, subsampling=0)
 
             logger.info(f"[BATCH] Saved locally: {save_path} (library: {library_label})")
             # Record history entry for local save
@@ -407,7 +407,7 @@ def _process_single_movie(
                     plex_quality = plex_ui["imageQuality"].get("jpgQuality", 95)
             except Exception:
                 pass
-            img.convert("RGB").save(buf, "JPEG", quality=plex_quality)
+            img.convert("RGB").save(buf, "JPEG", quality=plex_quality, subsampling=0)
             payload = buf.getvalue()
 
             plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
@@ -1309,7 +1309,7 @@ def _render_and_save_poster(
                     "simposter_is_tv": "1" if is_tv else "0",
                 })
                 exif[0x9286] = metadata_json.encode('utf-8')
-                rendered_rgb.save(str(save_path), "JPEG", quality=fmt_settings["quality"], exif=exif.tobytes())
+                rendered_rgb.save(str(save_path), "JPEG", quality=fmt_settings["quality"], exif=exif.tobytes(), subsampling=0)
             logger.info("[BATCH] Saved %s to: %s", title, save_path)
 
             # Record history
@@ -1354,7 +1354,7 @@ def _render_and_save_poster(
                 plex_quality = plex_ui["imageQuality"].get("jpgQuality", 95)
         except Exception:
             pass
-        rendered.convert("RGB").save(buf, "JPEG", quality=plex_quality)
+        rendered.convert("RGB").save(buf, "JPEG", quality=plex_quality, subsampling=0)
         payload = buf.getvalue()
 
         try:

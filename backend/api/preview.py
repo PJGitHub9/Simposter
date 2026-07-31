@@ -658,7 +658,7 @@ def api_preview(req: PreviewRequest):
                 quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
     except (ImportError, AttributeError, KeyError, sqlite3.Error) as e:
         logger.debug("Failed to load image quality settings: %s", e)
-    img.convert("RGB").save(buf, "JPEG", quality=quality)
+    img.convert("RGB").save(buf, "JPEG", quality=quality, subsampling=0)
 
     import base64
     return {"image_base64": base64.b64encode(buf.getvalue()).decode()}

@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.6.19 (2026-07-31)
+### Bug Fixes
+- **Visible artifacts (color bleeding/blockiness) appeared on posters only after sending to Plex, not in the preview or a local save**: every JPEG encode in the render pipeline (`preview`, `save`, `batch`, `send-to-Plex`) relied on Pillow's default JPEG chroma subsampling (4:2:0 — halves color resolution), which is normally not very noticeable but becomes visible as color bleeding around saturated edges (colored clearlogos, badges, title text) and interacts badly with this app's grain/noise effects. Because posters sent to Plex are *always* re-encoded as JPEG regardless of your configured local save format (a deliberate, pre-existing choice — Plex's poster upload endpoint is JPEG-only in practice), anyone saving locally as PNG (lossless) would only ever see the subsampling artifact on the copy that actually reaches Plex, never in preview or on disk. All JPEG encodes now use full 4:4:4 chroma (no subsampling); measured on a synthetic saturated-edge test image, this cut average color error at a hard color boundary by ~60% (mean abs error 7.3 → 2.8, max 45 → 16) at the cost of roughly 2x JPEG file size — a reasonable tradeoff for final poster artwork. No settings changed; this applies automatically to all future sends/saves.
+
 ## v1.6.18 (2026-07-31)
 ### New Features
 - **Logo upload**: the manual editor's Logo section (movies and TV shows) now has a drag-and-drop / click-to-upload zone, matching the existing custom poster upload. Uploaded logos can be selected, replaced, or removed just like an uploaded poster, and are sent through the same preview/save/send pipeline as any TMDb/Fanart-sourced logo. The shared upload endpoint (`POST /api/upload/background`) now takes an optional `kind` field so uploaded logos are saved with a `logo_` filename prefix instead of `bg_`, purely for readability if you ever browse the `uploads/` folder directly — existing callers are unaffected.
