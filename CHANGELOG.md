@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.6.24 (2026-07-31)
+### Bug Fixes
+- **Root cause found for the `500 Internal Server Error` some users hit when sending to Plex after v1.6.22's always-PNG change: Plex's `/posters` endpoint rejects uploads over roughly 10MB.** At the app's fixed 2000x3000 render canvas, a PNG (lossless) encode of a poster with a lot of fine detail or heavy grain can cross that threshold, and Plex responds with a bare 500 rather than a clear "too large" error — which is exactly why it could work fine on one server/poster and fail on another with the same code: it depends on how large that specific poster's PNG happens to be, not on the Plex server itself.
+- **Fix**: `encode_poster_for_plex()` (`backend/api/save.py`) now encodes PNG at maximum compression and checks the actual output size — if it's still over the limit (leaving headroom under Plex's real cap), it automatically falls back to a high-quality JPEG (quality floor 98, no chroma subsampling) for that poster instead of sending something Plex will reject. Most posters stay PNG (verified: a synthetic poster using this app's actual max-intensity grain effect at full 2000x3000 resolution encoded to ~3.75MB, well under the limit); only unusually large/detailed ones fall back automatically. Also flattens to RGB before encoding either way, dropping a functionally-meaningless alpha channel that the render pipeline leaves in.
+- Bulk resend from Local Assets gets the same size-aware fallback: an on-disk PNG over the limit re-encodes as JPEG at upload time instead of failing; on-disk JPEG files are unaffected (JPEG file sizes were never the problem) and still upload as-is with zero extra generation loss.
+- Verified: backend imports cleanly; a pure-noise pathological test image (PNG far over the limit) correctly triggers the JPEG fallback; a realistic max-grain poster stays PNG and well under budget.
+
 ## v1.6.23 (2026-07-31)
 ### Security
 - **Dependency audit and patch**: ran `pip-audit` against `requirements.txt` and `npm audit` against the frontend. Applied all low-risk, same-major-version fixes and verified them (package imports, JPEG/PNG encode round-trip, full backend import):

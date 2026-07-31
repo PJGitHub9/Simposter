@@ -42,27 +42,52 @@ def get_output_format_settings() -> dict:
         return {"format": "jpg", "ext": ".jpg", "pil_format": "JPEG", "quality": jpg_quality}
 
 
+# Plex's /posters upload endpoint rejects payloads over roughly 10MB (returns a
+# 500, not a helpful "too large" error). Leave headroom under the real cap.
+_PLEX_UPLOAD_SIZE_LIMIT = 9_500_000
+
+
 def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
     """Encode a freshly-rendered poster for upload to Plex's /posters endpoint.
 
-    Always PNG (lossless), regardless of the user's local save format setting.
-    A Plex upload is a one-time transfer, not a disk-space-constrained archive
-    copy, so there's no reason to introduce any JPEG generation loss here —
-    especially since Plex generates its own thumbnails from this upload, making
-    it a second lossy pass on top of whatever we'd have introduced."""
+    PNG (lossless) by default, regardless of the user's local save format
+    setting — a Plex upload is a one-time transfer, not a disk-space-constrained
+    archive copy, so there's no reason to introduce JPEG generation loss when we
+    don't have to. Always flattened to RGB first (the render pipeline returns
+    RGBA — every pixel ends up fully opaque, but the file would otherwise carry
+    a real, functionally meaningless alpha channel) and encoded at max PNG
+    compression to get the smallest possible lossless file.
+
+    If that PNG would still exceed Plex's ~10MB upload cap (this app's grain/
+    matte effects compress poorly under PNG's lossless algorithm at the fixed
+    2000x3000 canvas size — this is exactly what caused real 500s from Plex on
+    some posters), falls back to a high-quality JPEG instead, which reliably
+    stays well under the limit."""
     from .. import database as db
 
-    png_compression = 6
+    jpg_quality = 95
     try:
         settings_data = db.get_ui_settings()
         if settings_data and "imageQuality" in settings_data:
-            png_compression = settings_data["imageQuality"].get("pngCompression", 6)
+            jpg_quality = settings_data["imageQuality"].get("jpgQuality", 95)
     except Exception:
         pass
 
+    rgb = img.convert("RGB")
+
     buf = BytesIO()
-    img.save(buf, "PNG", compress_level=png_compression)
-    return buf.getvalue(), "image/png"
+    rgb.save(buf, "PNG", compress_level=9)
+    png_bytes = buf.getvalue()
+    if len(png_bytes) <= _PLEX_UPLOAD_SIZE_LIMIT:
+        return png_bytes, "image/png"
+
+    logger.warning(
+        "[PLEX] Rendered PNG (%.1fMB) exceeds Plex's upload size limit, falling back to JPEG",
+        len(png_bytes) / 1_000_000,
+    )
+    buf2 = BytesIO()
+    rgb.save(buf2, "JPEG", quality=max(jpg_quality, 98), subsampling=0)
+    return buf2.getvalue(), "image/jpeg"
 
 
 def embed_library_metadata(

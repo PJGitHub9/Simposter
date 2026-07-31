@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.24',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Found the real cause of the "500 Internal Server Error" some users hit sending to Plex: Plex rejects poster uploads over ~10MB, and a high-detail or heavy-grain poster saved as PNG can cross that line. Sending to Plex still uses PNG (full quality, no compression artifacts) whenever it fits, and now automatically falls back to a high-quality JPEG only for the rare poster that would otherwise be too large — so sends can no longer fail this way.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.23',
     date: '2026-07-31',
     sections: [

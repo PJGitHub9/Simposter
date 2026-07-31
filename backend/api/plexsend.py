@@ -12,7 +12,7 @@ from ..config import settings, plex_headers, plex_session, plex_remove_label, lo
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
 from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render
-from .save import encode_poster_for_plex
+from .save import encode_poster_for_plex, _PLEX_UPLOAD_SIZE_LIMIT
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url, _read_image_metadata, _find_asset_under_roots
 from .notifications import send_discord_notification, send_apprise_notification
 
@@ -536,8 +536,12 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
             # stays JPEG) rather than re-encoding, so there's zero extra generation
             # loss beyond what was already baked in when it was saved. WEBP has no
             # native Plex poster support, so that one case still gets converted.
+            #
+            # Plex's /posters endpoint rejects payloads over ~10MB (a 500, not a
+            # helpful error) — a saved PNG that's too large falls back to a
+            # high-quality JPEG re-encode instead of failing the resend outright.
             ext = file_path.suffix.lower()
-            if ext == ".png":
+            if ext == ".png" and file_path.stat().st_size <= _PLEX_UPLOAD_SIZE_LIMIT:
                 payload, content_type = file_path.read_bytes(), "image/png"
             elif ext in (".jpg", ".jpeg"):
                 payload, content_type = file_path.read_bytes(), "image/jpeg"
