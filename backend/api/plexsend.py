@@ -12,6 +12,7 @@ from ..config import settings, plex_headers, plex_session, plex_remove_label, lo
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
 from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render
+from .save import encode_poster_for_plex
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url, _read_image_metadata, _find_asset_under_roots
 from .notifications import send_discord_notification, send_apprise_notification
 
@@ -128,24 +129,14 @@ def api_plex_send(req: PlexSendRequest):
         options,
     )
 
-    # Encode for Plex
-    buf = BytesIO()
-    # Get JPEG quality from settings
-    quality = 95
-    try:
-        from .. import database as db
-        ui_settings_data = db.get_ui_settings()
-        if ui_settings_data and "imageQuality" in ui_settings_data:
-            quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
-    except Exception:
-        pass
-    img.convert("RGB").save(buf, "JPEG", quality=quality, subsampling=0)
-    payload = buf.getvalue()
+    # Encode for Plex — PNG when the user's output format is PNG (lossless, matches a
+    # manual Plex upload of their saved file), otherwise a high-quality JPEG.
+    payload, content_type = encode_poster_for_plex(img)
 
     plex_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}/posters"
     headers = {
         "X-Plex-Token": settings.PLEX_TOKEN,
-        "Content-Type": "image/jpeg",
+        "Content-Type": content_type,
     }
 
     logger.info("[PLEX] Uploading poster rating_key=%s template=%s preset=%s", req.rating_key, req.template_id, req.preset_id)
@@ -541,17 +532,25 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
         is_tv = bool(metadata.get("is_tv"))
 
         try:
-            # Posters are always uploaded as JPEG regardless of the on-disk save
-            # format, matching every other send-to-Plex path in the app.
-            img = Image.open(file_path).convert("RGB")
-            buf = BytesIO()
-            img.save(buf, "JPEG", quality=95, subsampling=0)
-            payload = buf.getvalue()
+            # Resending an already-saved file: upload it as-is (PNG stays PNG, JPEG
+            # stays JPEG) rather than re-encoding, so there's zero extra generation
+            # loss beyond what was already baked in when it was saved. WEBP has no
+            # native Plex poster support, so that one case still gets converted.
+            ext = file_path.suffix.lower()
+            if ext == ".png":
+                payload, content_type = file_path.read_bytes(), "image/png"
+            elif ext in (".jpg", ".jpeg"):
+                payload, content_type = file_path.read_bytes(), "image/jpeg"
+            else:
+                img = Image.open(file_path).convert("RGB")
+                buf = BytesIO()
+                img.save(buf, "JPEG", quality=98, subsampling=0)
+                payload, content_type = buf.getvalue(), "image/jpeg"
 
             plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
             plex_session.post(
                 plex_url,
-                headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                headers={**plex_headers(), "Content-Type": content_type},
                 data=payload,
                 timeout=20,
             ).raise_for_status()

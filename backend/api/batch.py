@@ -398,22 +398,15 @@ def _process_single_movie(
             _update_batch_status({
                 "current_step": "Sending to Plex",
             })
-            buf = BytesIO()
-            # Read JPEG quality from user settings (Plex always receives JPEG)
-            plex_quality = 95
-            try:
-                plex_ui = db.get_ui_settings()
-                if plex_ui and "imageQuality" in plex_ui:
-                    plex_quality = plex_ui["imageQuality"].get("jpgQuality", 95)
-            except Exception:
-                pass
-            img.convert("RGB").save(buf, "JPEG", quality=plex_quality, subsampling=0)
-            payload = buf.getvalue()
+            # PNG when the user's output format is PNG (lossless, matches a manual
+            # Plex upload of the saved file), otherwise a high-quality JPEG.
+            from .save import encode_poster_for_plex
+            payload, content_type = encode_poster_for_plex(img)
 
             plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
             headers = {
                 "X-Plex-Token": settings.PLEX_TOKEN,
-                "Content-Type": "image/jpeg",
+                "Content-Type": content_type,
             }
 
             r = requests.post(plex_url, headers=headers, data=payload, timeout=20)
@@ -1345,23 +1338,16 @@ def _render_and_save_poster(
             "current_step": "Uploading to Plex",
         })
 
-        buf = BytesIO()
-        # Read JPEG quality from user settings (Plex always receives JPEG)
-        plex_quality = 95
-        try:
-            plex_ui = db.get_ui_settings()
-            if plex_ui and "imageQuality" in plex_ui:
-                plex_quality = plex_ui["imageQuality"].get("jpgQuality", 95)
-        except Exception:
-            pass
-        rendered.convert("RGB").save(buf, "JPEG", quality=plex_quality, subsampling=0)
-        payload = buf.getvalue()
+        # PNG when the user's output format is PNG (lossless, matches a manual Plex
+        # upload of the saved file), otherwise a high-quality JPEG.
+        from .save import encode_poster_for_plex
+        payload, content_type = encode_poster_for_plex(rendered)
 
         try:
             upload_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
             headers = {
                 "X-Plex-Token": settings.PLEX_TOKEN,
-                "Content-Type": "image/jpeg",
+                "Content-Type": content_type,
             }
             upload_resp = requests.post(upload_url, headers=headers, data=payload, timeout=20)
             upload_resp.raise_for_status()

@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.22',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Sending to Plex now always uploads a lossless, uncompressed version of the poster, regardless of your Output format setting — no more guessing at the "right" quality level. This should fully resolve the lingering artifacts some users saw even after the last release\'s fix.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.21',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Sending to Plex could still show visible JPEG artifacts on some setups, even after last release\'s fix. If your Output format is set to PNG, sending to Plex now uploads PNG (lossless) instead of always converting to JPEG, matching what you\'d get manually re-uploading a saved file. Still-JPEG users get a quality bump on the Plex-bound copy specifically. (This one is a best-effort fix — let us know if it doesn\'t fully resolve it for you.)',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.20',
     date: '2026-07-31',
     sections: [

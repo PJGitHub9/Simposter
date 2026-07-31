@@ -1,6 +1,7 @@
 # backend/api/save.py
 from fastapi import APIRouter, HTTPException
-from typing import Optional
+from typing import Optional, Tuple
+from io import BytesIO
 from PIL import Image, PngImagePlugin
 
 from ..config import logger
@@ -39,6 +40,29 @@ def get_output_format_settings() -> dict:
         return {"format": "webp", "ext": ".webp", "pil_format": "WEBP", "quality": webp_quality}
     else:
         return {"format": "jpg", "ext": ".jpg", "pil_format": "JPEG", "quality": jpg_quality}
+
+
+def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
+    """Encode a freshly-rendered poster for upload to Plex's /posters endpoint.
+
+    Always PNG (lossless), regardless of the user's local save format setting.
+    A Plex upload is a one-time transfer, not a disk-space-constrained archive
+    copy, so there's no reason to introduce any JPEG generation loss here —
+    especially since Plex generates its own thumbnails from this upload, making
+    it a second lossy pass on top of whatever we'd have introduced."""
+    from .. import database as db
+
+    png_compression = 6
+    try:
+        settings_data = db.get_ui_settings()
+        if settings_data and "imageQuality" in settings_data:
+            png_compression = settings_data["imageQuality"].get("pngCompression", 6)
+    except Exception:
+        pass
+
+    buf = BytesIO()
+    img.save(buf, "PNG", compress_level=png_compression)
+    return buf.getvalue(), "image/png"
 
 
 def embed_library_metadata(
