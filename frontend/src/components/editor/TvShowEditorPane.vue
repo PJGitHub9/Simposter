@@ -107,6 +107,48 @@ const clearUploadedPoster = () => {
   uploadedPosterUrl.value = null
   if (wasSelected) selectedPoster.value = posters.value[0]?.url || null
 }
+
+// Custom uploaded logo
+const uploadedLogoUrl = ref<string | null>(null)
+const logoUploading = ref(false)
+const logoDropActive = ref(false)
+
+const uploadLogoFile = async (file: File) => {
+  if (!file.type.startsWith('image/')) return
+  logoUploading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('kind', 'logo')
+    const res = await fetch(`${apiBase}/api/upload/background`, { method: 'POST', body: fd })
+    if (!res.ok) throw new Error('Upload failed')
+    const data = await res.json()
+    uploadedLogoUrl.value = `${apiBase}${data.url}`
+    selectedLogo.value = uploadedLogoUrl.value
+  } catch (e) {
+    console.error('[TvShowEditorPane] Logo upload failed:', e)
+  } finally {
+    logoUploading.value = false
+  }
+}
+
+const onLogoFileInput = (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (file) uploadLogoFile(file)
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+const onLogoDrop = (e: DragEvent) => {
+  logoDropActive.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (file) uploadLogoFile(file)
+}
+
+const clearUploadedLogo = () => {
+  const wasSelected = selectedLogo.value === uploadedLogoUrl.value
+  uploadedLogoUrl.value = null
+  if (wasSelected) selectedLogo.value = filteredLogos.value[0]?.url || null
+}
 // Cache full settings per season/series to prevent cross-contamination
 const settingsCache = ref<Record<string, any>>({})
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
@@ -2700,6 +2742,33 @@ watch(tmdbId, () => {
                 </label>
               </div>
               <div class="poster-counts">TMDb: {{ logoCounts.tmdb }} · Fanart: {{ logoCounts.fanart }} · TVDB: {{ logoCounts.tvdb }}</div>
+
+              <!-- Custom upload -->
+              <div
+                class="logo-upload-zone"
+                :class="{ 'drag-over': logoDropActive, 'has-upload': !!uploadedLogoUrl }"
+                @dragover.prevent="logoDropActive = true"
+                @dragleave="logoDropActive = false"
+                @drop.prevent="onLogoDrop"
+                @click="!uploadedLogoUrl && ($refs.logoFileInput as HTMLInputElement)?.click()"
+              >
+                <template v-if="uploadedLogoUrl">
+                  <img :src="uploadedLogoUrl" class="upload-preview" alt="Uploaded logo" />
+                  <div class="upload-overlay">
+                    <button class="upload-reselect" @click.stop="selectedLogo = uploadedLogoUrl" :class="{ active: selectedLogo === uploadedLogoUrl }">Use this</button>
+                    <button class="upload-replace" @click.stop="($refs.logoFileInput as HTMLInputElement)?.click()">Replace</button>
+                    <button class="upload-remove" @click.stop="clearUploadedLogo">✕</button>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="upload-prompt">
+                    <span v-if="logoUploading">Uploading…</span>
+                    <span v-else>&#8679; Drop image or click to upload</span>
+                  </div>
+                </template>
+              </div>
+              <input ref="logoFileInput" type="file" accept="image/*" style="display:none" @change="onLogoFileInput" />
+
               <div class="thumb-strip logo-strip">
                 <div
                   v-for="l in filteredLogos"
@@ -3328,8 +3397,8 @@ watch(tmdbId, () => {
   text-transform: uppercase;
 }
 
-/* Custom poster upload zone */
-.poster-upload-zone {
+/* Custom poster/logo upload zone */
+.poster-upload-zone, .logo-upload-zone {
   position: relative;
   border: 1.5px dashed var(--border, #2a2f3e);
   border-radius: 8px;
@@ -3342,11 +3411,12 @@ watch(tmdbId, () => {
   overflow: hidden;
   margin-bottom: 6px;
 }
-.poster-upload-zone:hover, .poster-upload-zone.drag-over {
+.poster-upload-zone:hover, .poster-upload-zone.drag-over,
+.logo-upload-zone:hover, .logo-upload-zone.drag-over {
   border-color: rgba(61, 214, 183, 0.6);
   background: rgba(61, 214, 183, 0.05);
 }
-.poster-upload-zone.has-upload {
+.poster-upload-zone.has-upload, .logo-upload-zone.has-upload {
   height: 130px;
   cursor: default;
 }
@@ -3367,7 +3437,8 @@ watch(tmdbId, () => {
   opacity: 0;
   transition: opacity 0.15s;
 }
-.poster-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
+.poster-upload-zone.has-upload:hover .upload-overlay,
+.logo-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
 .upload-reselect, .upload-replace, .upload-remove {
   border: 1px solid rgba(255,255,255,0.3);
   background: rgba(255,255,255,0.15);

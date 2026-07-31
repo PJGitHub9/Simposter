@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.6.18 (2026-07-31)
+### New Features
+- **Logo upload**: the manual editor's Logo section (movies and TV shows) now has a drag-and-drop / click-to-upload zone, matching the existing custom poster upload. Uploaded logos can be selected, replaced, or removed just like an uploaded poster, and are sent through the same preview/save/send pipeline as any TMDb/Fanart-sourced logo. The shared upload endpoint (`POST /api/upload/background`) now takes an optional `kind` field so uploaded logos are saved with a `logo_` filename prefix instead of `bg_`, purely for readability if you ever browse the `uploads/` folder directly — existing callers are unaffected.
+
 ## v1.6.17 (2026-07-31)
 ### Bug Fixes
 - **Uploading a custom poster (or a custom background from the editor) failed with `API preview failed (400): Private/internal network URLs are not allowed for this host`**: the upload endpoint (`POST /api/upload/background`) serves files back from `GET /api/uploaded/{filename}`, but the SSRF allowlist that grants an exception for the app's own known-safe local endpoints still listed a stale `/uploads/` path that has never actually existed as a route — so as soon as the frontend built the full URL (`http://<your-host>:8003/api/uploaded/...`) and the backend tried to fetch it for preview/save/send, it got flagged as an unrecognized private-network host and rejected. This affected every self-hosted deployment, since the app is always reached over a LAN/localhost address. Allowlist corrected to the real `/api/uploaded/` path — uploaded posters and backgrounds now preview, save, and send normally again.

@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.18',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'You can now upload your own logo in the editor, the same way you could already upload a custom poster — drag and drop or click to upload, in the Logo section for both movies and TV shows. (Thanks Spyro!)',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.17',
     date: '2026-07-31',
     sections: [
