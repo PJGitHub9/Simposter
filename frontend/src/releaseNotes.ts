@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.17',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed uploading a custom poster or background failing with "Private/internal network URLs are not allowed for this host" — the security check protecting against malicious URLs didn\'t recognize the app\'s own upload endpoint as safe. Uploaded posters/backgrounds now preview, save, and send to Plex normally.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.16',
     date: '2026-07-31',
     sections: [

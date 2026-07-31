@@ -28,7 +28,7 @@ def api_plex_send(req: PlexSendRequest):
     if not (
         req.background_url.startswith("http://")
         or req.background_url.startswith("https://")
-        or req.background_url.startswith("/uploads/")
+        or req.background_url.startswith("/api/uploaded/")
     ):
         raise HTTPException(400, "Invalid background_url")
 
