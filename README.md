@@ -48,35 +48,41 @@
 
 ## Quick Start
 
-### Docker (Recommended)
+Simposter isn't published to a container registry — you build the image locally from source. This keeps you running exactly the code you downloaded, and means updates are just "pull the new code, rebuild."
+
+### 1. Get the code
 
 ```bash
-docker run -d \
-  --name simposter \
-  -p 8003:8003 \
-  -v /path/to/config:/config \
-  simposter:latest
+git clone https://github.com/PJGitHub9/Simposter.git
+cd Simposter
 ```
+
+(Not comfortable with git? Use GitHub's green **Code → Download ZIP** button and extract it instead.)
+
+### 2. Build and run (Docker Compose — recommended)
+
+```bash
+docker-compose up -d --build
+```
+
+This builds the image from the included `Dockerfile` and starts the container using the settings already in `docker-compose.yml` — port `8003`, and `./config` mounted into the container so your database, presets, and saved posters persist across rebuilds.
 
 Open `http://localhost:8003` and configure Plex/TMDb in Settings.
 
-### Docker Compose
+Optionally set `PLEX_URL`, `PLEX_TOKEN`, `TMDB_API_KEY`, etc. as environment variables in `docker-compose.yml` — or just leave them out and configure everything from the Settings UI after first launch.
 
-```yaml
-services:
-  simposter:
-    image: simposter:latest
-    ports:
-      - "8003:8003"
-    volumes:
-      - ./config:/config
-    environment:
-      - PLEX_URL=http://plex:32400
-      - PLEX_TOKEN=your_token_here
-      - TMDB_API_KEY=your_tmdb_key
+### Updating
+
+```bash
+git pull
+docker-compose up -d --build
 ```
 
-### Building Locally
+`./config` is a bind-mounted folder, not part of the image — rebuilding never touches your settings, database, or saved posters.
+
+### Alternative: build script + `docker run`
+
+If you'd rather manage the container yourself instead of using Compose:
 
 ```bash
 # Windows
@@ -85,11 +91,17 @@ build-docker.bat
 # Linux/Mac
 ./build-docker.sh
 
-# Manual (specify branch label)
-docker build --build-arg GIT_BRANCH=dev -t simposter:latest .
+# Then run it
+docker run -d \
+  --name simposter \
+  -p 8003:8003 \
+  -v /path/to/config:/config \
+  simposter:latest
 ```
 
-### Local Development
+Both scripts accept an optional tag argument (e.g. `build-docker.bat dev`) if you want to label the image something other than `latest`/`local`.
+
+### Local Development (no Docker)
 
 ```bash
 # Backend
@@ -159,7 +171,7 @@ Badge visibility can also be controlled with Plex labels: `show_if_label` / `hid
 
 When a poster is generated via batch, webhook, or auto-scan and the ideal template conditions aren't met (e.g., no clearlogo found, or no textless poster available), Simposter adds the item to a **retry queue**. A background job periodically re-attempts the poster until the ideal result is achieved, then resolves the item and removes it from the queue.
 
-- **Toggle** on/off in Settings → Performance
+- **Toggle** on/off in Settings → Automation
 - **Retry interval** — configurable in hours
 - **Max attempts** — 0 = unlimited, or set a cap
 - **Manual override** — sending a poster manually removes it from the queue immediately
@@ -206,7 +218,7 @@ http://your-server:8003/api/webhook/tautulli?template_id=uniformlogo&preset_id=d
 
 **Scheduled scans:** Configure a cron expression in Settings → Libraries (e.g., `0 2 * * *` for 2 AM daily).
 
-**Existing content mode** (Settings → Performance):
+**Existing content mode** (Settings → Automation):
 - `Regenerate` *(default)* — always creates a fresh poster
 - `Resend` — if a Simposter poster already exists for the title, pushes the cached render back to Plex without regenerating. Useful when you've manually tuned a poster and don't want webhooks overwriting it.
 
@@ -220,8 +232,9 @@ http://your-server:8003/api/webhook/tautulli?template_id=uniformlogo&preset_id=d
 |-----|--------------|
 | **General** | Theme, poster display density, deduplication, default sort |
 | **Libraries** | Plex connection, library mappings, auto-generate preset, webhook ignore labels, label removal |
-| **Save Locations** | Output path templates for movies and TV shows, batch subfolder option |
-| **Performance** | Image format/quality, concurrent renders, overlay cache, API rate limits, automation (retry queue, existing content mode) |
+| **Output** | Save-location path templates (with Kometa-compatible presets) for movies and TV shows, batch subfolder option, image format/quality |
+| **Automation** | Webhook URL generator, automatic poster generation (auto-send, retry queue, existing content mode, webhook secret) |
+| **Performance** | Concurrent renders, overlay cache, API rate limits, cache management |
 | **Notifications** | Discord webhook and Apprise URLs, per-event toggles (batch / manual / webhook / auto-generate) |
 | **Advanced** | API source priority order, database backup/restore |
 

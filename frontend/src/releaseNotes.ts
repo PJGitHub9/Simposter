@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.16',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Documentation',
+        items: [
+          'README\'s setup instructions rewritten — Simposter has never been published to a container registry, so "docker pull"-style examples were misleading. Now leads with the actual supported flow (docker-compose build + run) and explains updating is just "pull the code, rebuild."',
+          'Fixed the Mac/Linux build script (build-docker.sh) so it tags images the same way the Windows one does — previously it never set the Docker tag, so Mac/Linux-built images silently lost the "unmaintained tag" warning banner in the UI.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.15',
     date: '2026-07-27',
     sections: [
