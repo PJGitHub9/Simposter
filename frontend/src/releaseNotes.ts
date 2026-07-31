@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.23',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Security',
+        items: [
+          'Routine dependency security patching — updated several backend and frontend libraries to their latest secure versions. No user-facing behavior changes.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.22',
     date: '2026-07-31',
     sections: [

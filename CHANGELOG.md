@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.23 (2026-07-31)
+### Security
+- **Dependency audit and patch**: ran `pip-audit` against `requirements.txt` and `npm audit` against the frontend. Applied all low-risk, same-major-version fixes and verified them (package imports, JPEG/PNG encode round-trip, full backend import):
+  - Backend: `requests` 2.32.3→2.32.5, `python-dotenv` 1.0.1→1.2.2, `python-multipart` 0.0.20→0.0.32, `pillow` 12.0.0→12.3.0, `cairosvg` 2.7.1→2.9.0.
+  - Frontend: `npm audit fix` (no `--force`) resolved the critical (shell-quote) and moderate (ajv) findings plus most highs (vite, rollup, postcss, @babel/core) — all devDependencies (build tooling), none shipped to end users.
+- **Two findings deliberately deferred, not fixed in this release**:
+  - **Starlette** (pulled in transitively via FastAPI) has several known CVEs, but none are patched within FastAPI 0.122.0's allowed range (`starlette<0.51.0`) — the fixes only exist in starlette 1.x. Getting them requires bumping FastAPI itself to 0.141.1 (a 19 minor-version jump), which touches routing/middleware behavior across every API router in the app. This needs its own dedicated testing pass, not a same-session bundle with five other fixes.
+  - **ESLint 9.x's dependency tree** has a `minimatch` ReDoS (15 "high" npm audit findings, all inside eslint/typescript-eslint/eslint-plugin-vue). Pure lint tooling, never shipped to users, low real-world exploit risk. Fixing requires forcing ESLint to a major version bump (9→10) with config/plugin compatibility risk — deferred until a deliberate ESLint 10 upgrade.
+
 ## v1.6.22 (2026-07-31)
 ### Improvements
 - **Send-to-Plex now always uploads a lossless PNG, regardless of the configured local save format** — a direct follow-up to v1.6.21, after a user confirmed they could still see faint artifacts on a sent poster even with that fix in place. Rather than continuing to chase the "right" JPEG quality/subsampling combination, `encode_poster_for_plex()` (`backend/api/save.py`) now skips JPEG entirely for freshly-rendered Plex uploads (manual send, batch, and the two batch send paths) — a Plex upload is a one-time transfer, not a disk-space-constrained archive copy, so there's no good reason to introduce any lossy generation there at all. Bulk resend from Local Assets is unchanged (still uploads the exact bytes already on disk — if that file was originally saved as JPEG, converting it to PNG post-hoc wouldn't recover any lost quality, so it stays as-is).
