@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
+from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id, get_movie_folder_name
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -313,6 +313,7 @@ def _process_single_movie(
                 year=int(movie_year) if movie_year else None,
                 rating_key=rating_key,
                 library_label=library_label,
+                folder_name=get_movie_folder_name(rating_key),
             )
             save_path = resolve_save_path(ctx, fmt_settings["ext"], batch_subfolder=req.batch_subfolder)
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -425,6 +426,7 @@ def _process_single_movie(
                     year=int(movie_details["year"]) if movie_details.get("year") else None,
                     rating_key=rating_key,
                     library_label=resolve_library_label(req.library_id),
+                    folder_name=get_movie_folder_name(rating_key),
                 )
             except Exception:
                 cache_ctx = None
@@ -1256,6 +1258,7 @@ def _render_and_save_poster(
                 rating_key=rating_key,
                 library_label=library_label,
                 season=season_index if is_tv else None,
+                folder_name=get_movie_folder_name(rating_key) if not is_tv else None,
             )
             save_path = resolve_save_path(ctx, fmt_settings["ext"], batch_subfolder=req.batch_subfolder)
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1374,6 +1377,7 @@ def _render_and_save_poster(
                     rating_key=rating_key,
                     library_label=resolve_library_label(req.library_id) if req.library_id else "",
                     season=season_index if is_tv else None,
+                    folder_name=get_movie_folder_name(rating_key) if not is_tv else None,
                 )
             except Exception:
                 cache_ctx = None
