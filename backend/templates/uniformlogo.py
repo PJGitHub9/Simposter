@@ -93,8 +93,9 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
         else:  # center
             y = cy - new_h // 2
 
-        canvas.paste(logo_res, (x, y), logo_res)
-
+        from .universal import _composite_with_shadow
+        _composite_with_shadow(canvas, logo_res, x, y, options)
+        
     # ------------- TEXT OVERLAY (outside logo check) -------------
     text_overlay_enabled = bool(options.get("text_overlay_enabled", False))
     if text_overlay_enabled:
