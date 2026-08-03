@@ -33,15 +33,23 @@ ENV PYTHONUNBUFFERED=1 \
     LOG_DIR=/config/logs
 
 WORKDIR /app
+# Copy .git directory and version info from frontend build
+COPY .git .git
 COPY --from=frontend-builder /tmp/version-info.json /tmp/version-info.json
 # Docker image tag — passed via --build-arg DOCKER_TAG=latest at build time
 ARG DOCKER_TAG=unknown
-ARG GIT_BRANCH=custom-fork
-RUN APP_VERSION=$(python3 -c "import json; print(json.load(open('/tmp/version-info.json'))['app_version'])") \
+# Install git temporarily, detect branch, create build-info.json with version, branch, and tag, then cleanup
+RUN apt-get update && apt-get install -y --no-install-recommends git jq \
+    && DETECTED_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown") \
+    && APP_VERSION=$(jq -r '.app_version' /tmp/version-info.json) \
+    && echo "Detected git branch: ${DETECTED_BRANCH}" \
     && echo "Detected app version: ${APP_VERSION}" \
     && echo "Docker tag: ${DOCKER_TAG}" \
-    && echo "{\"git_branch\": \"${GIT_BRANCH}\", \"app_version\": \"${APP_VERSION}\", \"docker_tag\": \"${DOCKER_TAG}\"}" > /app/build-info.json \
-    && rm -f /tmp/version-info.json
+    && echo "{\"git_branch\": \"${DETECTED_BRANCH}\", \"app_version\": \"${APP_VERSION}\", \"docker_tag\": \"${DOCKER_TAG}\"}" > /app/build-info.json \
+    && rm -rf .git /tmp/version-info.json \
+    && apt-get purge -y git jq \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
