@@ -1,9 +1,8 @@
-# backend/api/save.py
 from fastapi import APIRouter, HTTPException
 from typing import Optional
 from PIL import Image, PngImagePlugin
 
-from ..config import logger
+from ..config import logger, get_movie_folder_name
 from ..rendering import render_poster_image
 from ..schemas import SaveRequest
 from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, PathTraversalError
@@ -153,6 +152,13 @@ def api_save(req: SaveRequest):
 
     fmt_settings = get_output_format_settings()
 
+    # {folder} template variable: resolve the real on-disk folder name from Plex
+    # (movies only -- TV shows/seasons have no single <Part> file to derive it from,
+    # apply_save_location_variables() falls back to {title} automatically).
+    folder_name = None
+    if req.rating_key and not req.is_tv:
+        folder_name = get_movie_folder_name(req.rating_key)
+
     ctx = SaveContext(
         media_type="tv-show" if req.is_tv else "movie",
         title=req.movie_title,
@@ -161,6 +167,7 @@ def api_save(req: SaveRequest):
         library_label=library_label,
         season=req.season_index if req.is_tv else None,
         filename_override=req.filename,
+        folder_name=folder_name,
     )
     try:
         out_path = resolve_save_path(ctx, fmt_settings["ext"])
