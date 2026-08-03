@@ -783,7 +783,7 @@ def render_universal(
         y_logo = int((H - logo.height) * logo_offset)
         x_logo = (W - logo.width) // 2
 
-        canvas.alpha_composite(logo, (x_logo, y_logo))
+        _composite_with_shadow(canvas, logo, x_logo, y_logo, options)
 
     # ------------- TEXT OVERLAY -------------
     text_overlay_enabled = bool(options.get("text_overlay_enabled", False))
