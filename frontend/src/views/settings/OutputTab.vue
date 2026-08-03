@@ -242,7 +242,12 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
           :readonly="!isCustomActive"
         />
         <span class="help-text">
-          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{year}</code>, <code>{key}</code>, <code>{filename}</code>
+          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{folder}</code>, <code>{year}</code>, <code>{key}</code>, <code>{filename}</code>
+        </span>
+        <span class="help-text extra-note">
+          <code>{folder}</code> resolves to the real on-disk folder name Plex knows for this movie
+          (independent of Plex's display-language title) — falls back to <code>{title}</code> if it
+          can't be resolved.
         </span>
       </label>
 
@@ -332,6 +337,12 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
           <div class="example-label">Organized by year folder (Custom):</div>
           <code>/config/output/{library}/{year}/{title}.jpg</code>
           <div class="example-result">→ /config/output/Movies/2024/Dune Part Two.jpg</div>
+        </div>
+
+        <div class="example-item">
+          <div class="example-label">Using the real on-disk folder name (Custom):</div>
+          <code>/config/output/{library}/{folder}/poster.jpg</code>
+          <div class="example-result">→ /config/output/Films/Before Sunrise (1995)/poster.jpg</div>
         </div>
       </div>
     </div>
