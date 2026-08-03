@@ -392,7 +392,8 @@ def render_with_overlay_cache(
                     else:
                         y = cy - new_h // 2
 
-                    canvas.paste(logo_res, (x, y), logo_res)
+                    from .templates.universal import _composite_with_shadow
+                    _composite_with_shadow(canvas, logo_res, x, y, render_options)
 
                     logger.info("[CACHE] Applied uniformlogo positioning with cached overlay")
                 else:
