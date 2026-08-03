@@ -115,6 +115,68 @@ def _solid_color_logo(logo: Image.Image, color: tuple[int, int, int]) -> Image.I
     )
 
 
+def _apply_drop_shadow(logo: Image.Image, opacity: float, size: float) -> tuple[Image.Image, int]:
+    """
+    Photoshop-style drop shadow silhouette of `logo`, fixed to match:
+    Blend mode Normal, Angle 0, Distance 0, Spread(Choke) 0 -- i.e. a soft black
+    halo centered directly behind the logo shape, no directional offset.
+    Only Opacity (0..1) and Size (0..1, mapped to blur radius) are exposed.
+
+    Returns (shadow_layer, pad):
+      shadow_layer -- RGBA image, padded around the logo's own size to leave
+                       room for the blur without clipping.
+      pad          -- padding added on each side. When compositing, paste
+                       shadow_layer at (logo_x - pad, logo_y - pad) so the
+                       (unblurred) shadow silhouette stays exactly aligned
+                       behind the logo.
+    """
+    opacity = max(0.0, min(1.0, opacity))
+    size = max(0.0, min(1.0, size))
+
+    if opacity <= 0 or size <= 0 or logo.width == 0 or logo.height == 0:
+        return Image.new("RGBA", (1, 1), (0, 0, 0, 0)), 0
+
+    # "Size" -> blur radius, scaled relative to the logo's own largest dimension
+    # so it looks proportional whether the logo is small or fills the box.
+    max_blur_radius = max(logo.size) * 0.20
+    blur_radius = size * max_blur_radius
+    pad = int(blur_radius * 3) + 1  # headroom so the gaussian blur isn't clipped
+
+    alpha = logo.split()[-1] if logo.mode == "RGBA" else Image.new("L", logo.size, 255)
+    padded_alpha = Image.new("L", (logo.width + pad * 2, logo.height + pad * 2), 0)
+    padded_alpha.paste(alpha, (pad, pad))
+
+    if blur_radius > 0:
+        padded_alpha = padded_alpha.filter(ImageFilter.GaussianBlur(blur_radius))
+
+    if opacity < 1.0:
+        padded_alpha = padded_alpha.point(lambda p: int(p * opacity))
+
+    shadow = Image.new("RGBA", padded_alpha.size, (0, 0, 0, 0))
+    shadow.putalpha(padded_alpha)
+    return shadow, pad
+
+
+def _composite_with_shadow(
+    canvas: Image.Image,
+    logo: Image.Image,
+    x: int,
+    y: int,
+    options: Dict[str, Any],
+) -> None:
+    """Paste `logo` onto `canvas` at (x, y), first compositing a drop shadow
+    behind it if uniform_logo_shadow_enabled is set. Mutates `canvas` in place."""
+    if options.get("uniform_logo_shadow_enabled", False):
+        shadow_opacity = float(options.get("uniform_logo_shadow_opacity", 1.0))
+        shadow_size = float(options.get("uniform_logo_shadow_size", 0.7))
+        shadow_layer, pad = _apply_drop_shadow(logo, shadow_opacity, shadow_size)
+        if shadow_layer.size != (1, 1):
+            shadow_full = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            shadow_full.paste(shadow_layer, (x - pad, y - pad), shadow_layer)
+            canvas.alpha_composite(shadow_full)
+
+    canvas.paste(logo, (x, y), logo)
+
 def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     """
     Load a font by name. Searches in this order:
