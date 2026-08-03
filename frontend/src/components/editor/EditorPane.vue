@@ -122,6 +122,9 @@ const options = ref({
   uniformLogoOffsetY: 78,
   uniformLogoHAlign: 'center' as 'left' | 'center' | 'right',
   uniformLogoVAlign: 'center' as 'top' | 'center' | 'bottom',
+  uniformLogoShadowEnabled: false,
+  uniformLogoShadowOpacity: 100,
+  uniformLogoShadowSize: 70,
   borderEnabled: false,
   borderThickness: 0,
   borderColor: '#ffffff',
@@ -425,6 +428,9 @@ const optionsPayload = computed(() => ({
   uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
   uniform_logo_h_align: options.value.uniformLogoHAlign,
   uniform_logo_v_align: options.value.uniformLogoVAlign,
+  uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+  uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity / 100,
+  uniform_logo_shadow_size: options.value.uniformLogoShadowSize / 100,
   border_enabled: options.value.borderEnabled,
   border_px: options.value.borderThickness,
   border_color: options.value.borderColor,
@@ -501,6 +507,9 @@ const reloadPreset = async () => {
     if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
     if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
     if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+    options.value.uniformLogoShadowEnabled = !!o.uniform_logo_shadow_enabled
+    if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = Math.round(o.uniform_logo_shadow_opacity * 100)
+    if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = Math.round(o.uniform_logo_shadow_size * 100)
     options.value.borderEnabled = !!o.border_enabled
     options.value.borderThickness = Number(o.border_px) || 0
     if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -569,6 +578,9 @@ const saveCurrentPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity / 100,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize / 100,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -630,6 +642,9 @@ const saveAsNewPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity / 100,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize / 100,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -1024,6 +1039,9 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
   if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
   if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+  options.value.uniformLogoShadowEnabled = !!o.uniform_logo_shadow_enabled
+  if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = Math.round(o.uniform_logo_shadow_opacity * 100)
+  if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = Math.round(o.uniform_logo_shadow_size * 100)
   options.value.borderEnabled = !!o.border_enabled
   options.value.borderThickness = Number(o.border_px) || 0
   if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -1412,6 +1430,28 @@ watch(
                     <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
                   </div>
                 </div>
+                <div class="slider">
+                  <label class="checkbox-label">
+                    <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
+                    Logo Drop Shadow
+                  </label>
+                </div>
+                <template v-if="options.uniformLogoShadowEnabled">
+                  <div class="slider">
+                    <label>Shadow Opacity %</label>
+                    <div class="slider-row">
+                      <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
+                      <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
+                    </div>
+                  </div>
+                  <div class="slider">
+                    <label>Shadow Size %</label>
+                    <div class="slider-row">
+                      <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="100" />
+                      <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="100" class="slider-num" />
+                    </div>
+                  </div>
+                </template>
                 <div class="slider">
                   <label>Horizontal Align</label>
                   <div class="align-btn-group">
