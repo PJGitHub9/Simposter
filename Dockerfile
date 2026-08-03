@@ -33,11 +33,14 @@ ENV PYTHONUNBUFFERED=1 \
     LOG_DIR=/config/logs
 
 WORKDIR /app
+
 # Copy .git directory and version info from frontend build
 COPY .git .git
 COPY --from=frontend-builder /tmp/version-info.json /tmp/version-info.json
+
 # Docker image tag — passed via --build-arg DOCKER_TAG=latest at build time
 ARG DOCKER_TAG=unknown
+
 # Install git temporarily, detect branch, create build-info.json with version, branch, and tag, then cleanup
 RUN apt-get update && apt-get install -y --no-install-recommends git jq \
     && DETECTED_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown") \
