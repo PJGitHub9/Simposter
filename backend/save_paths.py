@@ -1,4 +1,3 @@
-# backend/save_paths.py
 """
 Single source of truth for turning a save-location template + render context into a
 final, sanitized, traversal-checked filesystem path.
@@ -44,6 +43,7 @@ class SaveContext:
     library_label: Optional[str] = None
     season: Optional[int] = None        # None => movie, or TV series-level poster
     filename_override: Optional[str] = None  # used only when the template has no file suffix
+    folder_name: Optional[str] = None   # real on-disk folder name (from Plex), movies only
 
     @property
     def is_tv(self) -> bool:
@@ -145,8 +145,13 @@ def _resolve_filename_token(ctx: SaveContext) -> str:
 
 def apply_save_location_variables(template: str, ctx: SaveContext) -> str:
     """
-    Substitute {library}/{title}/{year}/{key}/{season}/{filename} in a save-location
-    template.
+    Substitute {library}/{title}/{folder}/{year}/{key}/{season}/{filename} in a
+    save-location template.
+
+    {folder} resolves to the real on-disk folder name Plex knows for this movie
+    (independent of Plex's display-language title) -- falls back to {title} when
+    unavailable (TV shows/seasons, or if Plex lookup failed). See
+    config.get_movie_folder_name().
 
     Two modes, chosen purely by whether the template contains the literal "{filename}"
     (no stored/migrated flag needed — this is recomputed from the template string
@@ -166,6 +171,7 @@ def apply_save_location_variables(template: str, ctx: SaveContext) -> str:
     result = template.replace("{library}", ctx.library_label or "")
     result = result.replace("{year}", str(ctx.year) if ctx.year else "")
     result = result.replace("{key}", ctx.rating_key or "")
+    result = result.replace("{folder}", ctx.folder_name or ctx.title)
 
     if "{filename}" in result:
         result = result.replace("{filename}", _resolve_filename_token(ctx))
