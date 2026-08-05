@@ -620,14 +620,15 @@ const stopBackupPolling = () => {
 
 ;(window as any).startBackupPolling = startBackupPolling
 
-const handleSearchSelect = (item: { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show' }) => {
+const handleSearchSelect = (item: { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show'; tmdb_id?: string | number; tvdb_id?: string | number }) => {
   const mediaType = item.mediaType || 'movie'
-  if (mediaType === 'tv-show') {
-    router.push({ name: 'tv-shows' })
-  } else {
-    router.push({ name: 'movies' })
-  }
+  const routeName = mediaType === 'tv-show' ? 'tv-shows' : 'movies'
+  const itemId = mediaType === 'tv-show' ? (item.tvdb_id || item.key) : (item.tmdb_id || item.key)
   ui.setSelectedMovie({ ...item, mediaType })
+  // Must carry the same `edit` query param handleSelect() sets — the route.query.edit
+  // watcher below treats a missing edit param as "user closed the editor" and clears
+  // the selection, which is what caused search-select to bounce back to the library grid.
+  router.push({ name: routeName, query: { ...route.query, edit: String(itemId) } })
 }
 
 const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {

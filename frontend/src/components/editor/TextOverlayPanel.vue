@@ -22,6 +22,7 @@ const props = defineProps<{
   strokeEnabled: boolean
   strokeWidth: number
   strokeColor: string
+  bboxEnabled: boolean
   availableFonts: string[]
 }>()
 
@@ -46,6 +47,7 @@ const emit = defineEmits<{
   (e: 'update:strokeEnabled', value: boolean): void
   (e: 'update:strokeWidth', value: number): void
   (e: 'update:strokeColor', value: string): void
+  (e: 'update:bboxEnabled', value: boolean): void
 }>()
 
 const fontWeights = ['100', '200', '300', '400', '500', '600', '700', '800', '900']
@@ -416,6 +418,23 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
               type="color"
             />
           </label>
+        </div>
+      </div>
+
+      <hr class="mini-divider" />
+
+      <!-- Bounding Box -->
+      <div class="field-group">
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            :checked="bboxEnabled"
+            @change="emit('update:bboxEnabled', ($event.target as HTMLInputElement).checked)"
+          />
+          <span>Restrict to Logo Bounding Box</span>
+        </label>
+        <div class="field-hint" style="margin-top: -6px;">
+          Fits the text inside the same box reserved for the logo (Logo section → Max Width/Height/Position), shrinking font size automatically instead of overflowing. Useful when Logo Mode is "No Logo" and text takes its place — enable "Show bounding box" (next to the preview) to see the box while you adjust it.
         </div>
       </div>
     </div>

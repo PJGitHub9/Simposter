@@ -12,7 +12,7 @@ from ..config import settings, plex_headers, plex_session, plex_remove_label, lo
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
 from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render
-from .save import encode_poster_for_plex, _PLEX_UPLOAD_SIZE_LIMIT
+from .save import encode_poster_for_plex, normalize_logo_for_plex, _PLEX_UPLOAD_SIZE_LIMIT
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url, _read_image_metadata, _find_asset_under_roots
 from .notifications import send_discord_notification, send_apprise_notification
 
@@ -248,6 +248,8 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
             raise HTTPException(500, f"Failed to download logo: {e}")
     else:
         raise HTTPException(400, "Either logo_url or logo_data must be provided.")
+
+    logo_bytes, content_type = normalize_logo_for_plex(logo_bytes, content_type)
 
     # Upload to Plex clearLogos endpoint
     plex_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}/clearLogos"

@@ -90,6 +90,28 @@ def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
     return buf2.getvalue(), "image/jpeg"
 
 
+def normalize_logo_for_plex(logo_bytes: bytes, fallback_content_type: str = "image/png") -> Tuple[bytes, str]:
+    """Normalize logo bytes through PIL before upload to Plex's clearLogos endpoint,
+    rather than forwarding raw bytes from an arbitrary source (TMDb/Fanart/upload)
+    untouched. Rules out source format quirks (indexed color, ICC profiles,
+    interlacing, unusual bit depth) that have caused logos to appear cropped once
+    in Plex despite looking correct everywhere in Simposter, without touching
+    dimensions/aspect ratio. Falls back to the original bytes/content-type if the
+    image can't be parsed, rather than failing the upload outright.
+
+    Every code path that uploads a logo to Plex — the standalone "Send Logo"
+    button, and logo uploads during batch/webhook/retry/auto-generate sends —
+    must go through this rather than posting fetched bytes directly."""
+    try:
+        img = Image.open(BytesIO(logo_bytes)).convert("RGBA")
+        buf = BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue(), "image/png"
+    except Exception as e:
+        logger.warning("[PLEX] Failed to normalize logo image, uploading raw bytes instead: %s", e)
+        return logo_bytes, fallback_content_type
+
+
 def embed_library_metadata(
     img: Image.Image,
     library_id: Optional[str],

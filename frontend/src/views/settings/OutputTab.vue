@@ -145,7 +145,10 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
     <div class="section" :class="{ 'unsaved-changes': imageQualityChanged }">
       <h3>Image Quality</h3>
       <p class="section-description">
-        Configure output format and compression settings
+        Configure output format and compression settings. <strong>This only affects the live Preview and "Save to Disk"</strong> — it does not control the quality of a fresh "Send to Plex".
+      </p>
+      <p class="section-description">
+        Sending to Plex always uses the best quality that fits (PNG when it's under Plex's upload size limit, otherwise a high-quality JPEG), regardless of what's configured here. The one exception: <em>resending</em> an already-saved file (e.g. bulk resend from Local Assets) reuses that file's original bytes as-is — so if you saved it at a lower quality here, a later resend of that same file will still be that lower quality.
       </p>
 
       <label>

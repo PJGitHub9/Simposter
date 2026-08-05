@@ -10,6 +10,60 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.28',
+    date: '2026-08-05',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'The previous logo-cropping fix only covered the standalone "Send Logo" button. Batch renders, webhooks, the retry queue, and auto-generate (i.e. the "Also send logos to Plex" option) were sending logos through a separate, still-unfixed code path — now fixed the same way.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.27',
+    date: '2026-08-04',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Text overlays can now be restricted to a bounding box — turn on "Restrict to Logo Bounding Box" in the Custom Text section and the font size automatically shrinks to fit the same box your logo uses (Logo section → Max Width/Height/Position), instead of overflowing. Handy for season posters or any preset where text takes the place of a logo. The "Show bounding box" preview toggle moved from the Logo section to the preview toolbar, since it is now useful for both.',
+        ]
+      },
+      {
+        title: 'Documentation',
+        items: [
+          'Clarified in Settings → Output that Image Quality settings only affect Preview and Save to Disk — sending to Plex always uses the best quality that fits, regardless of what\'s configured there. (Resending an already-saved file is the one exception — it reuses that file\'s original quality.)',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.26',
+    date: '2026-08-04',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the standalone "Send Logo to Plex" button sometimes producing a cropped-looking logo once uploaded, even though it looked correct everywhere in Simposter. The logo is now cleaned up through the same image pipeline as everything else before sending.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.25',
+    date: '2026-08-04',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the search bar sometimes bouncing you back to the library grid instead of opening the item you selected, when used while already editing something.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.24',
     date: '2026-07-31',
     sections: [

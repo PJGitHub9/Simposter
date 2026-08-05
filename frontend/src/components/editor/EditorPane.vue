@@ -195,6 +195,7 @@ const shadowOpacity = ref(80)
 const strokeEnabled = ref(false)
 const strokeWidth = ref(4)
 const strokeColor = ref('#000000')
+const textBboxEnabled = ref(false)
 const availableFonts = ref<string[]>([])
 
 // Overlay configs
@@ -270,7 +271,8 @@ const saveEditorStateImmediate = () => {
         shadowOpacity: shadowOpacity.value,
         strokeEnabled: strokeEnabled.value,
         strokeWidth: strokeWidth.value,
-        strokeColor: strokeColor.value
+        strokeColor: strokeColor.value,
+        bboxEnabled: textBboxEnabled.value
       }
     }
     localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(state))
@@ -350,6 +352,7 @@ const loadEditorState = () => {
       strokeEnabled.value = state.textOverlay.strokeEnabled ?? false
       strokeWidth.value = state.textOverlay.strokeWidth ?? 4
       strokeColor.value = state.textOverlay.strokeColor ?? '#000000'
+      textBboxEnabled.value = state.textOverlay.bboxEnabled ?? false
     }
   } catch (e) {
     console.warn('Failed to load editor state:', e)
@@ -498,6 +501,7 @@ const optionsPayload = computed(() => ({
   stroke_enabled: strokeEnabled.value,
   stroke_width: strokeWidth.value,
   stroke_color: strokeColor.value,
+  text_bbox_enabled: textBboxEnabled.value,
   overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
 }))
 
@@ -530,6 +534,7 @@ const reloadPreset = async () => {
     strokeEnabled.value = false
     strokeWidth.value = 4
     strokeColor.value = '#000000'
+    textBboxEnabled.value = false
     options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
     options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
     options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
@@ -583,6 +588,7 @@ const reloadPreset = async () => {
     if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
     if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
     if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
+    textBboxEnabled.value = !!o.text_bbox_enabled
 
     applyPosterFilter()
     applyLogoPreference()
@@ -641,7 +647,8 @@ const saveCurrentPreset = async () => {
     shadow_opacity: shadowOpacity.value / 100,
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
-    stroke_color: strokeColor.value
+    stroke_color: strokeColor.value,
+    text_bbox_enabled: textBboxEnabled.value
   }
 
   await presetService.savePreset(backendOptions)
@@ -702,7 +709,8 @@ const saveAsNewPreset = async () => {
     shadow_opacity: shadowOpacity.value / 100,
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
-    stroke_color: strokeColor.value
+    stroke_color: strokeColor.value,
+    text_bbox_enabled: textBboxEnabled.value
   }
 
   const newId = newPresetId.value.trim()
@@ -999,7 +1007,8 @@ watch([
   shadowOpacity,
   strokeEnabled,
   strokeWidth,
-  strokeColor
+  strokeColor,
+  textBboxEnabled
 ], () => {
   saveEditorState()
 }, { deep: true })
@@ -1052,6 +1061,7 @@ const applyPresetOptions = (id: string) => {
   strokeEnabled.value = false
   strokeWidth.value = 4
   strokeColor.value = '#000000'
+  textBboxEnabled.value = false
 
   options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
@@ -1106,6 +1116,7 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
   if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
   if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
+  textBboxEnabled.value = !!o.text_bbox_enabled
 
   applyPosterFilter()
   applyLogoPreference()
@@ -1146,7 +1157,8 @@ watch(
     shadowOpacity,
     strokeEnabled,
     strokeWidth,
-    strokeColor
+    strokeColor,
+    textBboxEnabled
   ],
   () => {
     if (previewTimer) clearTimeout(previewTimer)
@@ -1333,10 +1345,6 @@ watch(
             </svg>
           </button>
           <div v-show="sectionOpen.logo" class="acc-body">
-            <label v-if="isUniformLogo && !isLogoNone" class="inline-field checkbox" style="margin-bottom: 4px;">
-              <input type="checkbox" v-model="showBoundingBox" />
-              <span>Show bounding box</span>
-            </label>
             <!-- Logo mode + color (preset-level — used by batch & webhook) -->
             <div class="sub-section-title" style="margin-top: 0">Preset / Batch / Webhook</div>
             <label class="field-label">
@@ -1539,6 +1547,7 @@ watch(
               v-model:strokeEnabled="strokeEnabled"
               v-model:strokeWidth="strokeWidth"
               v-model:strokeColor="strokeColor"
+              v-model:bboxEnabled="textBboxEnabled"
               :availableFonts="availableFonts"
             />
           </div>
@@ -1643,6 +1652,10 @@ watch(
             <span v-if="loading" class="status-badge">Rendering...</span>
             <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
             <div class="preview-actions float-right">
+              <label v-if="isUniformLogo" class="send-logo-toggle" title="Show the logo/text bounding box on the preview">
+                <input type="checkbox" v-model="showBoundingBox" />
+                <span>Show bounding box</span>
+              </label>
               <label class="send-logo-toggle" title="Also send the selected logo to Plex">
                 <input type="checkbox" v-model="sendLogo" />
                 <span>Send logo</span>
@@ -1682,7 +1695,7 @@ watch(
               <p>Rendering...</p>
             </div>
 
-            <!-- Bounding Box for Uniform Logo -->
+            <!-- Bounding Box (Uniform Logo template) — same box for logo placement and text-bbox mode -->
             <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
           </div>
         </div>

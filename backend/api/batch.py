@@ -12,7 +12,7 @@ from backend.assets.selection import pick_poster, pick_logo, map_logo_mode_to_pr
 from backend.logo_sources import get_logos_merged
 from .movies import fetch_and_cache_poster
 from .tv_shows import plex_session, plex_headers, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
-from .save import embed_library_metadata
+from .save import embed_library_metadata, normalize_logo_for_plex
 from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, save_or_cache_render
 from datetime import datetime, timezone
 from PIL import Image, PngImagePlugin
@@ -457,9 +457,10 @@ def _process_single_movie(
                     logo_r = requests.get(logo_url, timeout=10)
                     if logo_r.status_code == 200:
                         ct = logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
+                        logo_bytes, ct = normalize_logo_for_plex(logo_r.content, ct)
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
-                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_r.content, timeout=20)
+                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
                         logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
                     else:
                         logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
@@ -1380,9 +1381,10 @@ def _render_and_save_poster(
                     logo_r = requests.get(logo_url, timeout=10)
                     if logo_r.status_code == 200:
                         ct = logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
+                        logo_bytes, ct = normalize_logo_for_plex(logo_r.content, ct)
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
-                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_r.content, timeout=20)
+                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
                         logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
                     else:
                         logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)

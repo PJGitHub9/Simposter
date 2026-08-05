@@ -371,6 +371,16 @@ def _render_text_overlay(
     stroke_width = int(options.get("stroke_width", 4))
     stroke_color = _hex_to_rgb(options.get("stroke_color", "#000000"))
 
+    # Bounding box option — when enabled, font_size auto-shrinks (down to a floor)
+    # until the wrapped text block fits inside the *same* box the uniformlogo
+    # template reserves for the logo (uniform_logo_max_w/h + offset_x/y), instead
+    # of overflowing. Deliberately reuses the logo's box rather than adding a
+    # separate set of size/position options — the two are never both in that spot
+    # at once (logo vs. text-instead-of-logo, e.g. season posters with logo_mode
+    # 'none'), so one box definition serves both.
+    bbox_enabled = bool(options.get("text_bbox_enabled", False))
+    bbox_min_font_size = int(options.get("text_bbox_min_font_size", 20))
+
     # Replace template variables
     movie_title = str(options.get("movie_title", ""))
     movie_year = str(options.get("movie_year", ""))
@@ -388,107 +398,134 @@ def _render_text_overlay(
     elif text_transform == "capitalize":
         text = text.title()
 
-    # Load font
-    font = _load_font(font_family, font_size, font_weight)
-    logger.debug("[TEXT] Rendering '%s' font=%s size=%d", text[:40], font_family, font_size)
+    logger.debug("[TEXT] Rendering '%s' font=%s size=%d bbox=%s", text[:40], font_family, font_size, bbox_enabled)
 
     # Create a drawing context for text measurement (needs proper size for accurate bbox)
     temp_img = Image.new("RGBA", (W, H))
     temp_draw = ImageDraw.Draw(temp_img)
 
-    # Helper function to apply letter spacing
-    def apply_letter_spacing(text_line: str) -> str:
-        if letter_spacing > 0:
-            return ''.join(c + ' ' * letter_spacing for c in text_line).rstrip()
-        return text_line
-
-    # Helper function to measure text width
-    def measure_text_width(text_line: str) -> int:
-        spaced = apply_letter_spacing(text_line)
-        bbox = temp_draw.textbbox((0, 0), spaced, font=font)
-        return bbox[2] - bbox[0]
-
-    # Helper function to wrap a line if it's too wide
-    def wrap_line(line: str, max_width: int) -> list[str]:
-        """Wrap a line into multiple lines if it exceeds max_width"""
-        if not line:
-            return ['']
-
-        # Check if the whole line fits
-        if measure_text_width(line) <= max_width:
-            return [line]
-
-        # Split into words and wrap
-        words = line.split(' ')
-        wrapped_lines = []
-        current_line = ''
-
-        for word in words:
-            # Try adding the word
-            test_line = current_line + (' ' if current_line else '') + word
-
-            if measure_text_width(test_line) <= max_width:
-                current_line = test_line
-            else:
-                # Word doesn't fit, check if we need to break the word itself
-                if current_line:
-                    wrapped_lines.append(current_line)
-                    current_line = word
-                else:
-                    # Single word is too long, need to break it by characters
-                    if measure_text_width(word) > max_width:
-                        # Break word character by character
-                        for char in word:
-                            test_line = current_line + char
-                            if measure_text_width(test_line) <= max_width:
-                                current_line = test_line
-                            else:
-                                if current_line:
-                                    wrapped_lines.append(current_line)
-                                current_line = char
-                    else:
-                        current_line = word
-
-        if current_line:
-            wrapped_lines.append(current_line)
-
-        return wrapped_lines if wrapped_lines else ['']
-
-    # Calculate max width (canvas width minus margins)
+    # Wrap width and anchor point: the full canvas (minus fixed margins) centered
+    # at position_y by default, or the uniformlogo bounding box (size + position)
+    # when bbox mode is on.
     margin_left = 100
     margin_right = 100
-    max_text_width = W - margin_left - margin_right
+    if bbox_enabled:
+        max_text_width = int(options.get("uniform_logo_max_w", 600))
+        box_h = int(options.get("uniform_logo_max_h", 240))
+        box_cx = W * float(options.get("uniform_logo_offset_x", 0.5))
+        box_cy = H * float(options.get("uniform_logo_offset_y", 0.78))
+    else:
+        max_text_width = W - margin_left - margin_right
+        box_cx = W / 2
+        box_cy = H * position_y
 
-    # Split text into lines and wrap if needed
-    lines = text.split('\n')
-    wrapped_lines = []
-    for line in lines:
-        wrapped_lines.extend(wrap_line(line, max_text_width))
+    def layout_at_size(size: int):
+        """Load the font at `size`, wrap `text` to max_text_width, and measure the
+        resulting block. Returns (font, wrapped_lines, line_widths, line_heights,
+        total_height, max_line_width)."""
+        f = _load_font(font_family, size, font_weight)
 
-    # Measure all wrapped lines
-    line_heights = []
-    line_widths = []
+        def apply_letter_spacing(text_line: str) -> str:
+            if letter_spacing > 0:
+                return ''.join(c + ' ' * letter_spacing for c in text_line).rstrip()
+            return text_line
 
-    for line in wrapped_lines:
-        spaced_line = apply_letter_spacing(line)
-        bbox = temp_draw.textbbox((0, 0), spaced_line, font=font)
-        line_width = bbox[2] - bbox[0]
-        line_height_val = bbox[3] - bbox[1]
+        def measure_text_width(text_line: str) -> int:
+            spaced = apply_letter_spacing(text_line)
+            bbox = temp_draw.textbbox((0, 0), spaced, font=f)
+            return bbox[2] - bbox[0]
 
-        line_widths.append(line_width)
-        line_heights.append(line_height_val)
+        def wrap_line(line: str, max_width: int) -> list[str]:
+            """Wrap a line into multiple lines if it exceeds max_width"""
+            if not line:
+                return ['']
+            if measure_text_width(line) <= max_width:
+                return [line]
 
-    # Calculate total text block height with line spacing
-    total_height = sum(line_heights) + int(font_size * (line_height - 1) * (len(wrapped_lines) - 1))
-    max_width = max(line_widths) if line_widths else 0
+            words = line.split(' ')
+            lines_out = []
+            current_line = ''
 
-    # Calculate Y position
-    y_pos = int(H * position_y - total_height / 2)
+            for word in words:
+                test_line = current_line + (' ' if current_line else '') + word
+                if measure_text_width(test_line) <= max_width:
+                    current_line = test_line
+                else:
+                    if current_line:
+                        lines_out.append(current_line)
+                        current_line = word
+                    else:
+                        if measure_text_width(word) > max_width:
+                            for char in word:
+                                test_line = current_line + char
+                                if measure_text_width(test_line) <= max_width:
+                                    current_line = test_line
+                                else:
+                                    if current_line:
+                                        lines_out.append(current_line)
+                                    current_line = char
+                        else:
+                            current_line = word
+
+            if current_line:
+                lines_out.append(current_line)
+            return lines_out if lines_out else ['']
+
+        lines_split = text.split('\n')
+        w_lines: list[str] = []
+        for ln in lines_split:
+            w_lines.extend(wrap_line(ln, max_text_width))
+
+        l_heights = []
+        l_widths = []
+        for ln in w_lines:
+            spaced_line = apply_letter_spacing(ln)
+            bbox = temp_draw.textbbox((0, 0), spaced_line, font=f)
+            l_widths.append(bbox[2] - bbox[0])
+            l_heights.append(bbox[3] - bbox[1])
+
+        t_height = sum(l_heights) + int(size * (line_height - 1) * (len(w_lines) - 1))
+        m_width = max(l_widths) if l_widths else 0
+        return f, w_lines, l_widths, l_heights, t_height, m_width, apply_letter_spacing
+
+    if bbox_enabled:
+        lo, hi = bbox_min_font_size, font_size
+        best_size = bbox_min_font_size
+        best_layout = None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            candidate = layout_at_size(mid)
+            _, _, _, _, cand_height, cand_width, _ = candidate
+            if cand_height <= box_h and cand_width <= max_text_width:
+                best_size = mid
+                best_layout = candidate
+                lo = mid + 1  # fits — try a larger size
+            else:
+                hi = mid - 1  # too big — try smaller
+        font_size = best_size
+        if best_layout is None:
+            # Nothing fit even at the floor size — render at the floor anyway
+            # (best effort) rather than showing no text at all.
+            best_layout = layout_at_size(bbox_min_font_size)
+        font, wrapped_lines, line_widths, line_heights, total_height, max_width, apply_letter_spacing = best_layout
+        logger.debug("[TEXT] Bounding box shrunk font to size=%d (box=%dx%d)", font_size, max_text_width, box_h)
+    else:
+        font, wrapped_lines, line_widths, line_heights, total_height, max_width, apply_letter_spacing = layout_at_size(font_size)
+
+    # Calculate Y position — centered on the box (bbox mode) or the position_y
+    # anchor (default mode); box_cy already holds the right value for either.
+    y_pos = int(box_cy - total_height / 2)
 
     # Create layer for text with extra space for shadow/stroke
     padding = max(shadow_blur + abs(shadow_offset_x) + abs(shadow_offset_y), stroke_width) + 50
     text_layer = Image.new("RGBA", (W + padding * 2, H + padding * 2), (0, 0, 0, 0))
     draw = ImageDraw.Draw(text_layer)
+
+    # Left/right alignment anchors to the box edges — box_cx/max_text_width
+    # already hold the right values for either mode (the uniformlogo box in
+    # bbox mode, or the full canvas centered at position_y otherwise).
+    box_left = box_cx - max_text_width / 2
+    box_right = box_cx + max_text_width / 2
 
     # Draw each line
     current_y = y_pos + padding
@@ -499,11 +536,11 @@ def _render_text_overlay(
         # Calculate X position based on alignment
         line_width = line_widths[i]
         if text_align == "center":
-            x_pos = (W - line_width) // 2 + padding
+            x_pos = int(box_cx - line_width / 2) + padding
         elif text_align == "right":
-            x_pos = W - line_width - 100 + padding  # 100px margin from right
+            x_pos = int(box_right - line_width) + padding
         else:  # left
-            x_pos = 100 + padding  # 100px margin from left
+            x_pos = int(box_left) + padding
 
         # Draw shadow if enabled
         if shadow_enabled and shadow_blur > 0:
