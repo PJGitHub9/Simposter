@@ -405,8 +405,13 @@ def _run_poster_retry():
                         send_logos_to_plex=send_logos,
                         send_only_if_ideal=True,
                     )
-                    sub_results = result.get("results", []) if isinstance(result, dict) else []
-                    still_needs_retry = any(r.get("needs_retry") for r in sub_results)
+                    # A dict without a populated "results" list means the render errored out
+                    # before producing per-season results (e.g. a transient TMDb/network failure) —
+                    # treat that as "still needs retry", not "nothing left to retry".
+                    if isinstance(result, dict) and result.get("results"):
+                        still_needs_retry = any(r.get("needs_retry", True) for r in result["results"])
+                    else:
+                        still_needs_retry = True
                 else:
                     result = process_single_movie_poster(
                         rating_key=rating_key,
@@ -419,7 +424,10 @@ def _run_poster_retry():
                         send_logos_to_plex=send_logos,
                         send_only_if_ideal=True,
                     )
-                    still_needs_retry = result.get("needs_retry", False) if isinstance(result, dict) else True
+                    # Default True: an error dict (e.g. TMDb request failure) has no "needs_retry"
+                    # key, and must NOT be read as "ideal conditions met" — that silently drops the
+                    # item from the queue on a transient failure instead of leaving it pending.
+                    still_needs_retry = result.get("needs_retry", True) if isinstance(result, dict) else True
 
                 if not still_needs_retry:
                     db.resolve_retry_queue_item(rating_key, "resolved")

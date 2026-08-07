@@ -10,6 +10,31 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.30',
+    date: '2026-08-07',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Simposter Asset" studio/streaming badges failing to load in the Overlay Manager preview (502 error, "Private/internal network URLs are not allowed" in the logs). Actual poster generation was never affected — this was preview-only.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.29',
+    date: '2026-08-07',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the retry queue silently emptying itself when a retry attempt hit a transient failure (e.g. a brief network blip) — it was being misread as "fixed" instead of "still needs another try," so a single bad retry pass could wipe out the whole queue at once.',
+          'Fixed "Unknown"-titled FAILED entries in History being impossible to identify — they now show the Plex rating key instead of just "Unknown" when a render fails before the title could be fetched.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.28',
     date: '2026-08-05',
     sections: [

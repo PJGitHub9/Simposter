@@ -535,7 +535,7 @@ def _process_single_movie(
             db.record_poster_history(
                 rating_key=rating_key,
                 library_id=str(req.library_id or ""),
-                title=title_hint if title_hint != rating_key else None,
+                title=title_hint if title_hint != rating_key else f"(rating key {rating_key})",
                 year=None,
                 template_id=req.template_id,
                 preset_id=req.preset_id,
@@ -685,7 +685,7 @@ def _process_single_tv_show(
             db.record_poster_history(
                 rating_key=rating_key,
                 library_id=str(req.library_id or ""),
-                title=title_hint if title_hint != rating_key else None,
+                title=title_hint if title_hint != rating_key else f"(rating key {rating_key})",
                 year=None,
                 template_id=req.template_id,
                 preset_id=req.preset_id,

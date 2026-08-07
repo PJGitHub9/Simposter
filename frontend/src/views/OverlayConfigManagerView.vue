@@ -890,6 +890,25 @@ const loadUrlImage = (url: string): Promise<HTMLImageElement> => {
   })
 }
 
+// For URLs already served by this app's own backend (e.g. /api/asset-image) — load directly,
+// no CORS-relay proxy needed. Routing a same-origin URL through /api/proxy-image makes it fetch
+// itself over the LAN, which the proxy's SSRF guard correctly refuses.
+const loadDirectImage = (url: string): Promise<HTMLImageElement> => {
+  return new Promise((resolve, reject) => {
+    if (urlImageCache.value[url]) {
+      resolve(urlImageCache.value[url])
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      urlImageCache.value[url] = img
+      resolve(img)
+    }
+    img.onerror = reject
+    img.src = url
+  })
+}
+
 // Normalize known URL patterns: GitHub blob viewer → raw CDN, strip ?raw suffix
 const normalizeBadgeUrl = (url: string): string => {
   if (!url) return url
@@ -1074,8 +1093,7 @@ const renderPreviewElement = async (
             const cid = previewItemMetadata.value['studio_company_id']
             if (cid) assetUrl += `&company_id=${encodeURIComponent(cid)}`
           }
-          const proxyUrl = assetUrl
-          const img = await loadUrlImage(proxyUrl)
+          const img = await loadDirectImage(assetUrl)
           if (_renderVer !== ver) return  // stale render
           const effectiveEl = {
             ...el,
