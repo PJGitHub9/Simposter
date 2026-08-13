@@ -589,9 +589,10 @@ def _process_single_tv_show(
         logo_preference = map_logo_mode_to_preference(logo_preference)
         logo_mode = base_logo_mode
 
-        # For TV show season rendering, use season-specific options if available
+        # For TV show season rendering, use season-specific options if available, merged on
+        # top of the series options so a sparse season-preset diff resolves to a complete set.
         season_poster_filter_final = season_poster_filter or base_poster_filter
-        season_options_final = dict(season_options or base_options)
+        season_options_final = db.resolve_season_options(base_options, season_options)
 
         logger.info("[BATCH TV] Start rating_key=%s template=%s include_seasons=%s season_poster_filter=%s",
                     rating_key, template_id, req.include_seasons, season_poster_filter_final)
@@ -854,8 +855,9 @@ def _render_all_tv_seasons(
                          If None or empty, process all seasons (batch mode).
     """
     show_title = show_details.get("name", "Unknown")
-    # Use season-specific options if provided
-    final_season_options = dict(season_options or render_options)
+    # Use season-specific options if provided, merged on top of the series options so a
+    # season preset stored as a sparse diff (v1.6.32+) still resolves to a complete option set.
+    final_season_options = db.resolve_season_options(render_options, season_options)
 
     # Fetch seasons from Plex
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
@@ -1102,8 +1104,9 @@ def _render_all_tv_seasons(
                 tpl_presets = presets_data.get(fallback_template, {}).get("presets", [])
                 fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None) if fallback_preset else None
                 if fpreset:
-                    # Use season_options from fallback preset since this is a season
-                    fp_opts = fpreset.get("season_options", {}) if "season_options" in fpreset else fpreset.get("options", {})
+                    # Use the fallback preset's season options, resolved against its own base
+                    # options (season_options may be stored as a sparse diff, not a full copy).
+                    fp_opts = db.resolve_season_options(fpreset.get("options", {}), fpreset.get("season_options", {}))
                     season_render_options = {**final_season_options, **fp_opts}
                     season_template_id = fallback_template
                     season_preset_id = fallback_preset

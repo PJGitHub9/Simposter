@@ -158,8 +158,11 @@ const hasSeasonOptions = (preset: Preset) => {
 
 const getActiveOpts = (key: string, preset: Preset): Record<string, unknown> => {
   const tab = getPresetTab(key)
+  // season_options may be a sparse diff (only the fields that differ from options) rather
+  // than a full copy — merge it on top of options so the season tab always displays a
+  // complete, correct set of values instead of one missing anything not in the diff.
   return (tab === 'season' && hasSeasonOptions(preset))
-    ? preset.season_options as Record<string, unknown>
+    ? { ...preset.options, ...(preset.season_options as Record<string, unknown>) }
     : preset.options
 }
 

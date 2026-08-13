@@ -6,6 +6,7 @@ import sqlite3
 from ..config import logger, load_presets, get_movie_tmdb_id
 from ..rendering import render_poster_image, render_with_overlay_cache
 from ..schemas import PreviewRequest
+from .. import database as db
 from ..tmdb_client import get_images_for_movie, get_movie_details
 from ..assets.selection import pick_poster, pick_logo, map_logo_mode_to_preference
 from ..logo_sources import get_logos_merged
@@ -119,9 +120,11 @@ def api_preview(req: PreviewRequest):
                         logger.debug("Failed to parse season_text: %s", e)
                         is_season = False
 
-                    # Prefer season_options when rendering a season target
+                    # Prefer season_options when rendering a season target — resolved on top of
+                    # the base options, since season_options may be stored as a sparse diff
+                    # (only the fields that differ) rather than a full copy.
                     if is_season and isinstance(preset.get("season_options"), dict):
-                        preset_options = preset.get("season_options", {})
+                        preset_options = db.resolve_season_options(preset.get("options", {}), preset.get("season_options", {}))
                         logger.info("[PREVIEW] Using season_options for preset '%s' (season_text='%s')", req.preset_id, st)
                         logger.info("[PREVIEW] season_options from DB: text_overlay_enabled=%s custom_text=%s logo_mode=%s", 
                                     preset_options.get("text_overlay_enabled"), 
@@ -454,9 +457,10 @@ def api_preview(req: PreviewRequest):
                                 tpl_presets = presets.get(fallback_poster_template, {}).get("presets", [])
                                 fpreset = next((p for p in tpl_presets if p.get("id") == fallback_poster_preset), None) if fallback_poster_preset else None
                                 if fpreset:
-                                    # Use season_options if this is a season poster, otherwise use regular options
+                                    # Use the fallback preset's season options if this is a season poster,
+                                    # resolved against its own base options (season_options may be a sparse diff).
                                     if req.season_index is not None and "season_options" in fpreset:
-                                        fp_opts = fpreset.get("season_options", {})
+                                        fp_opts = db.resolve_season_options(fpreset.get("options", {}), fpreset.get("season_options", {}))
                                         logger.debug("[PREVIEW] Using season_options from fallback preset")
                                     else:
                                         fp_opts = fpreset.get("options", {})

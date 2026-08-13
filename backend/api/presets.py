@@ -142,51 +142,17 @@ def api_presets_default_template():
                         "fallbackLogoTemplate": "uniformlogo",
                         "fallbackLogoPreset": "stock-poster",
                     },
+                    # Only the fields that actually differ from "options" above — merged on
+                    # top of it via resolve_season_options() wherever season posters render.
                     "season_options": {
-                        "poster_zoom": 1,
-                        "poster_shift_y": -0.04,
-                        "matte_height_ratio": 0.22,
-                        "fade_height_ratio": 0.21,
-                        "vignette_strength": 0.03,
-                        "grain_amount": 0.22,
-                        "logo_scale": 0.45,
-                        "logo_offset": 0.88,
-                        "uniform_logo_max_w": 1282,
-                        "uniform_logo_max_h": 352,
-                        "uniform_logo_offset_x": 0.5,
-                        "uniform_logo_offset_y": 0.83,
-                        "uniform_logo_h_align": "center",
-                        "uniform_logo_v_align": "center",
-                        "border_enabled": False,
-                        "border_px": 14,
-                        "border_color": "#ffffff",
-                        "overlay_file": "",
-                        "overlay_opacity": 0.4,
-                        "overlay_mode": "screen",
-                        "poster_filter": "textless",
-                        "logo_preference": "white",
                         "logo_mode": "none",
-                        "logo_hex": "#4b5efc",
                         "text_overlay_enabled": True,
                         "custom_text": "{season}",
-                        "font_family": "Arial",
                         "font_size": 150,
-                        "font_weight": "700",
-                        "text_color": "#ffffff",
-                        "text_align": "center",
-                        "text_transform": "uppercase",
                         "letter_spacing": 1,
-                        "line_height": 1.2,
                         "position_y": 0.85,
                         "shadow_enabled": False,
                         "shadow_blur": 0,
-                        "shadow_offset_x": 0,
-                        "shadow_offset_y": 4,
-                        "shadow_color": "#000000",
-                        "shadow_opacity": 0.8,
-                        "stroke_enabled": False,
-                        "stroke_width": 4,
-                        "stroke_color": "#000000",
                     },
                 }
             ]
@@ -237,20 +203,25 @@ def _compact_options(opts: dict) -> dict:
 
 @router.get("/presets/export-compact")
 def api_presets_export_compact():
-    """Export presets for sharing — defaults stripped, internal IDs omitted, season_options omitted when identical to options."""
+    """Export presets for sharing — defaults stripped from options, internal IDs omitted,
+    season_options reduced to only the fields that differ from options."""
     try:
         data = db.get_all_presets()
         compact: dict = {}
         for template_id, tdata in data.items():
             compact_presets = []
             for preset in tdata.get("presets", []):
-                opts = _compact_options(preset.get("options", {}))
-                season = preset.get("season_options") or {}
-                season_compact = _compact_options(season)
+                raw_options = preset.get("options", {})
+                opts = _compact_options(raw_options)
+                # Diff against the raw (uncompacted) options, not the global defaults — a
+                # season field's fallback is "inherit from this preset's options" via
+                # resolve_season_options(), not "fall back to the factory default," so it
+                # must not be stripped just because it happens to equal _PRESET_DEFAULTS.
+                season_diff = db.diff_season_options(raw_options, preset.get("season_options") or {})
                 # id is intentionally omitted — import will generate a fresh one to avoid conflicts
                 entry: dict = {"name": preset["name"], "options": opts}
-                if season and season != preset.get("options", {}):
-                    entry["season_options"] = season_compact
+                if season_diff:
+                    entry["season_options"] = season_diff
                 compact_presets.append(entry)
             compact[template_id] = {"presets": compact_presets}
         return compact
@@ -345,13 +316,18 @@ def api_save_season_options(req: dict = Body(...)):
         current = db.get_preset(template_id, preset_id)
         if not current:
             raise HTTPException(status_code=404, detail="Preset not found")
-        
+
+        # Store only what differs from the base options — the editor sends a complete
+        # options blob here, but persisting it verbatim would duplicate ~45 fields that
+        # are almost always identical to the series preset.
+        season_diff = db.diff_season_options(current["options"], season_options)
+
         # Update only season_options_json in the database
         with db.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE presets SET season_options_json = ?, updated_at = CURRENT_TIMESTAMP WHERE template_id = ? AND id = ?",
-                (json.dumps(season_options), template_id, preset_id)
+                (json.dumps(season_diff), template_id, preset_id)
             )
         
         logger.info(f"[PRESETS] Saved season options for preset {preset_id}")

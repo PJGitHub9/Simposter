@@ -478,15 +478,24 @@ def _render_text_overlay(
 
         l_heights = []
         l_widths = []
+        l_top_offsets = []
         for ln in w_lines:
             spaced_line = apply_letter_spacing(ln)
             bbox = temp_draw.textbbox((0, 0), spaced_line, font=f)
             l_widths.append(bbox[2] - bbox[0])
             l_heights.append(bbox[3] - bbox[1])
+            # PIL's default text anchor draws relative to the font's ascender line, not the
+            # tight glyph bbox — bbox[1] is the gap between them (varies with content: ~18px
+            # for all-caps text, ~38px for lowercase with descenders at 100px Arial Bold).
+            # Drawing at the raw y-position without subtracting this pushes every line's
+            # actual pixels down by that amount, which barely shows when text is centered
+            # (slack on both sides absorbs it) but overflows the box when flush top/bottom-
+            # aligned (see uniform_logo_v_align below) — must be subtracted at draw time.
+            l_top_offsets.append(bbox[1])
 
         t_height = sum(l_heights) + int(size * (line_height - 1) * (len(w_lines) - 1))
         m_width = max(l_widths) if l_widths else 0
-        return f, w_lines, l_widths, l_heights, t_height, m_width, apply_letter_spacing
+        return f, w_lines, l_widths, l_heights, l_top_offsets, t_height, m_width, apply_letter_spacing
 
     if bbox_enabled:
         lo, hi = bbox_min_font_size, font_size
@@ -495,7 +504,7 @@ def _render_text_overlay(
         while lo <= hi:
             mid = (lo + hi) // 2
             candidate = layout_at_size(mid)
-            _, _, _, _, cand_height, cand_width, _ = candidate
+            _, _, _, _, _, cand_height, cand_width, _ = candidate
             if cand_height <= box_h and cand_width <= max_text_width:
                 best_size = mid
                 best_layout = candidate
@@ -507,25 +516,56 @@ def _render_text_overlay(
             # Nothing fit even at the floor size — render at the floor anyway
             # (best effort) rather than showing no text at all.
             best_layout = layout_at_size(bbox_min_font_size)
-        font, wrapped_lines, line_widths, line_heights, total_height, max_width, apply_letter_spacing = best_layout
+        font, wrapped_lines, line_widths, line_heights, line_top_offsets, total_height, max_width, apply_letter_spacing = best_layout
         logger.debug("[TEXT] Bounding box shrunk font to size=%d (box=%dx%d)", font_size, max_text_width, box_h)
     else:
-        font, wrapped_lines, line_widths, line_heights, total_height, max_width, apply_letter_spacing = layout_at_size(font_size)
+        font, wrapped_lines, line_widths, line_heights, line_top_offsets, total_height, max_width, apply_letter_spacing = layout_at_size(font_size)
 
-    # Calculate Y position — centered on the box (bbox mode) or the position_y
-    # anchor (default mode); box_cy already holds the right value for either.
-    y_pos = int(box_cy - total_height / 2)
+    # In bbox mode, uniform_logo_h_align/uniform_logo_v_align position the text block
+    # (using its actual measured size, which is often smaller than the box once the
+    # binary search above picks a font size) within the box — the same two controls
+    # that already position the logo within this box (uniformlogo.py). Previously these
+    # were read only by the logo renderer; text always centered on the box regardless
+    # of what the Horizontal/Vertical Align buttons were set to. text_align then
+    # justifies individual lines within that block's own width, same as it always has.
+    anchor_cx, anchor_cy, anchor_width = box_cx, box_cy, max_text_width
+    if bbox_enabled:
+        h_align = str(options.get("uniform_logo_h_align", "center"))
+        v_align = str(options.get("uniform_logo_v_align", "center"))
+        box_top = box_cy - box_h / 2
+        box_bottom = box_cy + box_h / 2
+        box_left_edge = box_cx - max_text_width / 2
+        box_right_edge = box_cx + max_text_width / 2
+
+        if v_align == "top":
+            anchor_cy = box_top + total_height / 2
+        elif v_align == "bottom":
+            anchor_cy = box_bottom - total_height / 2
+
+        if h_align == "left":
+            anchor_cx = box_left_edge + max_width / 2
+            anchor_width = max_width
+        elif h_align == "right":
+            anchor_cx = box_right_edge - max_width / 2
+            anchor_width = max_width
+        # h_align == "center" (default) leaves anchor_cx/anchor_width at the box's own
+        # center/full width — text_align continues to justify lines across the whole
+        # box exactly as before this feature existed, not just the block's own width.
+
+    # Calculate Y position — centered on the block's anchor (which is the box center
+    # unless bbox mode + a non-center vertical align shifted it, see above).
+    y_pos = int(anchor_cy - total_height / 2)
 
     # Create layer for text with extra space for shadow/stroke
     padding = max(shadow_blur + abs(shadow_offset_x) + abs(shadow_offset_y), stroke_width) + 50
     text_layer = Image.new("RGBA", (W + padding * 2, H + padding * 2), (0, 0, 0, 0))
     draw = ImageDraw.Draw(text_layer)
 
-    # Left/right alignment anchors to the box edges — box_cx/max_text_width
-    # already hold the right values for either mode (the uniformlogo box in
-    # bbox mode, or the full canvas centered at position_y otherwise).
-    box_left = box_cx - max_text_width / 2
-    box_right = box_cx + max_text_width / 2
+    # Left/right alignment anchors to the block's edges — anchor_cx/anchor_width hold
+    # the box's full width and center by default, or the measured block's own
+    # (possibly narrower) width and its aligned position when bbox mode shifted it.
+    box_left = anchor_cx - anchor_width / 2
+    box_right = anchor_cx + anchor_width / 2
 
     # Draw each line
     current_y = y_pos + padding
@@ -536,11 +576,17 @@ def _render_text_overlay(
         # Calculate X position based on alignment
         line_width = line_widths[i]
         if text_align == "center":
-            x_pos = int(box_cx - line_width / 2) + padding
+            x_pos = int(anchor_cx - line_width / 2) + padding
         elif text_align == "right":
             x_pos = int(box_right - line_width) + padding
         else:  # left
             x_pos = int(box_left) + padding
+
+        # Draw at the actual glyph top, not the font's ascender line (see l_top_offsets
+        # above) — without this, drawn pixels land below the position used for all the
+        # box-fit/alignment math, most visibly overflowing the box when flush top/bottom-
+        # aligned.
+        draw_y = current_y - line_top_offsets[i]
 
         # Draw shadow if enabled
         if shadow_enabled and shadow_blur > 0:
@@ -549,7 +595,7 @@ def _render_text_overlay(
             shadow_draw = ImageDraw.Draw(shadow_layer)
 
             shadow_x = x_pos + shadow_offset_x
-            shadow_y = current_y + shadow_offset_y
+            shadow_y = draw_y + shadow_offset_y
 
             # Draw shadow with stroke if stroke is enabled
             if stroke_enabled:
@@ -576,7 +622,7 @@ def _render_text_overlay(
         # Draw text with stroke/outline if enabled
         if stroke_enabled:
             draw.text(
-                (x_pos, current_y),
+                (x_pos, draw_y),
                 spaced_line,
                 font=font,
                 fill=(*text_color, 255),
@@ -585,7 +631,7 @@ def _render_text_overlay(
             )
         else:
             draw.text(
-                (x_pos, current_y),
+                (x_pos, draw_y),
                 spaced_line,
                 font=font,
                 fill=(*text_color, 255)

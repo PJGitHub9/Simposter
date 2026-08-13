@@ -10,6 +10,151 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.42',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Changing the preset in the TV show editor now re-renders every other selected season/series in the background, not just the one you\'re currently viewing — switching to another poster now shows the new preset right away instead of stale settings from the old one.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.41',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Restrict Custom Text to this box" sometimes not applying a season\'s saved preset value — it was missing from the internal tracking that lets other season-specific settings correctly fall back to what\'s actually saved instead of getting stuck on whatever was last displayed.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.40',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed text overflowing past the bounding box when top or bottom aligned — a small measurement/draw mismatch that barely showed with center alignment became visible once flush top/bottom alignment (added in v1.6.39) had no slack left to absorb it.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.39',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the Bounding Box section\'s Horizontal/Vertical Align buttons having no effect on Custom Text — they only ever moved the logo. Text now honors them too, positioning itself within the box instead of always sitting dead-center.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.38',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          '"Show bounding box" moved from the preview toolbar into the Bounding Box section, next to the other box-related controls.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.37',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the TV show editor\'s ‹ › season-navigation arrows not loading that season\'s settings (bounding box and everything else) — they moved focus but skipped the save/restore step every other way of switching seasons already did.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.36',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          '"Bounding Box" is now its own section in the manual editor (between Custom Text and Overlay & Border) instead of being tucked inside Logo — it holds the box size/position controls plus the "Restrict Custom Text to this box" toggle, since the box is shared between Logo and Custom Text rather than belonging to either one.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.35',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Restrict to Logo Bounding Box" (Custom Text) leaving you with no way to adjust the box — the Position & Size sliders were hidden whenever Logo Mode was set to "No Logo," which is exactly the setup this feature is meant for. They now stay visible regardless of Logo Mode.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.34',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a bug where editing a season poster\'s settings (like the logo bounding box) could, under the right timing, get saved into the series poster\'s settings too instead of staying season-specific — a stale internal flag could momentarily point at the wrong poster type right after switching between series and season.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.33',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the TV show editor\'s "Rendered Posters" strip sometimes highlighting the wrong thumbnail after switching between already-rendered seasons — the big preview was always correct, just the highlight lagged behind.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.32',
+    date: '2026-08-12',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'TV presets are much smaller now. Season poster settings were always saved as a full duplicate of every field, even though only a handful usually differ from the series settings — they are now stored as just the differences, roughly halving preset size. Existing presets are shrunk automatically the first time the app starts on this version, with no change to how they render.',
+          '"Copy Compact" exports of TV presets are correspondingly smaller too.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.31',
+    date: '2026-08-07',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a TV show editor bug where switching seasons while a preview was still rendering could cause that render to land on the wrong season once it finished, making it look like the preview was stuck or showing the wrong poster.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.30',
     date: '2026-08-07',
     sections: [

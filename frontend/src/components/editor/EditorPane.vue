@@ -224,6 +224,7 @@ const sectionOpen = ref({
   poster: true,
   logo: true,
   text: false,
+  boundingBox: false,
   overlay: false,
 })
 const toggleSection = (key: keyof typeof sectionOpen.value) => {
@@ -1442,10 +1443,13 @@ watch(
                   <span>No Logo</span>
                 </button>
               </div>
+            </template>
 
-              <!-- Logo position & size -->
-              <div class="sub-section-title">Position &amp; Size</div>
+            <!-- Position & Size only applies to non-Uniform-Logo templates now — Uniform Logo
+                 geometry moved to its own "Bounding Box" section, since that box is shared
+                 between Logo and Custom Text, not a Logo-only concept. -->
               <template v-if="!isUniformLogo">
+                <div class="sub-section-title">Position &amp; Size</div>
                 <div class="slider">
                   <label>Logo Scale %</label>
                   <div class="slider-row">
@@ -1461,59 +1465,6 @@ watch(
                   </div>
                 </div>
               </template>
-              <template v-if="isUniformLogo">
-                <div class="slider">
-                  <label>Max Width (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoMaxW" type="range" min="50" max="1800" />
-                    <input v-model.number="options.uniformLogoMaxW" type="number" min="50" max="1800" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Max Height (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
-                    <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Logo Box X %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoOffsetX" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoOffsetX" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Logo Box Y %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Horizontal Align</label>
-                  <div class="align-btn-group">
-                    <button
-                      v-for="opt in (['left', 'center', 'right'] as const)"
-                      :key="opt"
-                      :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
-                      @click="options.uniformLogoHAlign = opt"
-                    >{{ opt }}</button>
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Vertical Align</label>
-                  <div class="align-btn-group">
-                    <button
-                      v-for="opt in (['top', 'center', 'bottom'] as const)"
-                      :key="opt"
-                      :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
-                      @click="options.uniformLogoVAlign = opt"
-                    >{{ opt }}</button>
-                  </div>
-                </div>
-              </template>
-            </template>
           </div>
         </div>
 
@@ -1547,13 +1498,87 @@ watch(
               v-model:strokeEnabled="strokeEnabled"
               v-model:strokeWidth="strokeWidth"
               v-model:strokeColor="strokeColor"
-              v-model:bboxEnabled="textBboxEnabled"
               :availableFonts="availableFonts"
             />
           </div>
         </div>
 
-        <!-- 5. Overlay & Border -->
+        <!-- 5. Bounding Box (Uniform Logo templates only) -->
+        <div v-if="isUniformLogo" class="acc-section">
+          <button class="acc-header" @click="toggleSection('boundingBox')">
+            <span>Bounding Box</span>
+            <svg class="acc-chevron" :class="{ open: sectionOpen.boundingBox }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="sectionOpen.boundingBox" class="acc-body">
+            <div class="field-hint" style="margin-bottom: 12px;">
+              This box defines where the logo sits. Custom Text can optionally fit itself inside
+              the same box instead of overflowing — handy when Logo Mode is "No Logo" and text
+              takes its place.
+            </div>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="showBoundingBox" />
+              <span>Show bounding box on preview</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="textBboxEnabled" />
+              <span>Restrict Custom Text to this box</span>
+            </label>
+            <div class="slider">
+              <label>Max Width (px)</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoMaxW" type="range" min="50" max="1800" />
+                <input v-model.number="options.uniformLogoMaxW" type="number" min="50" max="1800" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Max Height (px)</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
+                <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Box X %</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoOffsetX" type="range" min="0" max="100" />
+                <input v-model.number="options.uniformLogoOffsetX" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Box Y %</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
+                <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Horizontal Align</label>
+              <div class="align-btn-group">
+                <button
+                  v-for="opt in (['left', 'center', 'right'] as const)"
+                  :key="opt"
+                  :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
+                  @click="options.uniformLogoHAlign = opt"
+                >{{ opt }}</button>
+              </div>
+            </div>
+            <div class="slider">
+              <label>Vertical Align</label>
+              <div class="align-btn-group">
+                <button
+                  v-for="opt in (['top', 'center', 'bottom'] as const)"
+                  :key="opt"
+                  :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
+                  @click="options.uniformLogoVAlign = opt"
+                >{{ opt }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6. Overlay & Border -->
         <div class="acc-section">
           <button class="acc-header" @click="toggleSection('overlay')">
             <span>Overlay &amp; Border</span>
@@ -1652,10 +1677,6 @@ watch(
             <span v-if="loading" class="status-badge">Rendering...</span>
             <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
             <div class="preview-actions float-right">
-              <label v-if="isUniformLogo" class="send-logo-toggle" title="Show the logo/text bounding box on the preview">
-                <input type="checkbox" v-model="showBoundingBox" />
-                <span>Show bounding box</span>
-              </label>
               <label class="send-logo-toggle" title="Also send the selected logo to Plex">
                 <input type="checkbox" v-model="sendLogo" />
                 <span>Send logo</span>
@@ -2191,6 +2212,13 @@ watch(
 
 .checkbox-label input[type='checkbox'] {
   cursor: pointer;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: rgba(61, 214, 183, 0.7);
+  font-style: italic;
+  line-height: 1.4;
 }
 
 .label-chips {

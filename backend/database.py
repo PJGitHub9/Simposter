@@ -269,7 +269,15 @@ def init_database():
         if "season_options_json" not in cols:
             cursor.execute("ALTER TABLE presets ADD COLUMN season_options_json TEXT NOT NULL DEFAULT '{}' ")
 
-        # Backfill/update season_options_json to ensure all season fields are present
+        # Backfill/normalize season_options_json:
+        # - Empty (newly created column, or a preset with no season customization yet) →
+        #   seed it with the standard season-default overrides, stored as a sparse diff
+        #   against options_json (not a full clone) — see resolve_season_options()/
+        #   diff_season_options() above, which every consumer merges through.
+        # - Already populated → normalize to a diff against options_json. This is a one-time
+        #   bloat cleanup for presets saved before v1.6.32, which stored a full duplicate of
+        #   every field (~45 keys) instead of just the ~8 that actually differ. Diffing an
+        #   already-sparse value is a no-op, so this is safe to run on every startup.
         cursor.execute("""
             SELECT id, options_json, season_options_json
             FROM presets
@@ -277,19 +285,12 @@ def init_database():
         rows = cursor.fetchall()
         for row in rows:
             try:
-                # Load existing season options or create from base
                 season_raw = row["season_options_json"] if "season_options_json" in row.keys() else None
                 base_opts = json.loads(row["options_json"]) if row["options_json"] else {}
 
-                # Check if season_options is empty (newly created column defaults to '{}')
-                # or if it's a non-empty user-customized value
                 is_empty = not season_raw or season_raw.strip() in ("", "{}", "null", "NULL")
 
                 if is_empty:
-                    # Empty season options - initialize from base with season-specific defaults
-                    season_opts = dict(base_opts or {})
-
-                    # Apply season-specific overrides for initial setup
                     season_defaults = {
                         "logo_mode": "none",
                         "poster_filter": "textless",
@@ -302,17 +303,22 @@ def init_database():
                         "letter_spacing": 1,
                         "position_y": 0.85,
                     }
-                    season_opts.update(season_defaults)
-
+                    season_diff = diff_season_options(base_opts, season_defaults)
                     cursor.execute(
                         "UPDATE presets SET season_options_json = ? WHERE id = ?",
-                        (json.dumps(season_opts), row["id"]),
+                        (json.dumps(season_diff), row["id"]),
                     )
                 else:
-                    # User has custom season options - DO NOT overwrite them
-                    # Just ensure it's valid JSON by loading and re-saving
+                    # User has custom season options — normalize storage to a diff against the
+                    # base options without changing effective behavior (resolve_season_options()
+                    # reconstructs the same values from a diff or a full copy identically).
                     season_opts = json.loads(season_raw)
-                    # No changes - preserve user settings exactly as they are
+                    season_diff = diff_season_options(base_opts, season_opts)
+                    if season_diff != season_opts:
+                        cursor.execute(
+                            "UPDATE presets SET season_options_json = ? WHERE id = ?",
+                            (json.dumps(season_diff), row["id"]),
+                        )
             except Exception as backfill_err:
                 logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row["id"], backfill_err)
 
@@ -1076,6 +1082,31 @@ def save_log_config(config: Dict[str, Any]) -> None:
 #  Presets Operations
 # ============================================
 
+def resolve_season_options(options: Dict[str, Any], season_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge season-specific overrides on top of the base preset options.
+
+    season_options_json may hold either a sparse diff (only the fields that differ from
+    options — the format used since v1.6.32) or a full legacy copy of every field — both
+    resolve identically here, since a value equal to the base is a harmless no-op overwrite.
+    Every consumer that needs the effective season option set must go through this function
+    rather than treating season_options as already-complete on its own.
+    """
+    return {**(options or {}), **(season_options or {})}
+
+
+def diff_season_options(options: Dict[str, Any], season_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Reduce season_options to only the fields that actually differ from options.
+
+    This is what keeps season_options_json small instead of duplicating the ~45-field base
+    preset. Idempotent — diffing an already-sparse dict returns it unchanged — so it's safe
+    to run on both new saves and legacy full-copy data (the startup migration in
+    init_database() uses this to shrink existing presets in place).
+    """
+    options = options or {}
+    season_options = season_options or {}
+    return {k: v for k, v in season_options.items() if k not in options or options[k] != v}
+
+
 def get_all_presets() -> Dict[str, Dict[str, Any]]:
     """
     Get all presets organized by template_id.
@@ -1149,8 +1180,9 @@ def save_preset(template_id: str, preset_id: str, name: str, options: Dict[str, 
         options_json = json.dumps(options)
 
         if season_options is not None:
-            # Caller explicitly provided season_options — write them.
-            season_json = json.dumps(season_options)
+            # Caller explicitly provided season_options — store only what differs from
+            # options, regardless of whether the caller sent a full copy or a diff already.
+            season_json = json.dumps(diff_season_options(options, season_options))
             cursor.execute("""
                 INSERT INTO presets (id, template_id, name, options_json, season_options_json, updated_at)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -1386,7 +1418,7 @@ def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
                 if not pid:
                     continue
                 options_json = json.dumps(options)
-                season_options_json = json.dumps(preset.get("season_options") or {})
+                season_options_json = json.dumps(diff_season_options(options, preset.get("season_options") or {}))
                 cursor.execute("""
                     INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -1428,7 +1460,7 @@ def merge_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
                         suffix += 1
 
                 options_json = json.dumps(options)
-                season_options_json = json.dumps(preset.get("season_options") or {})
+                season_options_json = json.dumps(diff_season_options(options, preset.get("season_options") or {}))
                 cursor.execute("""
                     INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
