@@ -1,4 +1,3 @@
-# backend/config.py
 from dotenv import load_dotenv
 import os
 import json
@@ -802,6 +801,60 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
         logger.debug("[CACHE] media info update failed: %s", e)
 
     return tmdb_id
+
+
+# ==========================================================================
+# {folder} template variable support
+# ==========================================================================
+# Resolves the REAL on-disk folder name for a movie, straight from Plex's own
+# knowledge of the media file path -- independent of whichever metadata
+# language/title Plex happens to be displaying. Works regardless of which tool
+# (Radarr, manual import, etc.) originally created the folder, since Plex
+# always reflects the true filesystem structure.
+def extract_folder_name_from_metadata(xml_text: str) -> Optional[str]:
+    """Extract the parent folder name of the video file from Plex metadata XML
+    (real on-disk path, e.g. 'Before Sunrise (1995)')."""
+    if not xml_text or xml_text.startswith("<html"):
+        return None
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+
+    part = root.find(".//Part")
+    if part is None:
+        return None
+    file_path = part.get("file")
+    if not file_path:
+        return None
+
+    clean_path = file_path.replace("\\", "/").rstrip("/")
+    segments = clean_path.split("/")
+    # Require the file to sit inside its own per-title subfolder, i.e. at least two
+    # directory levels above the filename (.../<library-root>/<title-folder>/<file>).
+    # Flat libraries (.../<library-root>/<file>.mkv, no per-movie subfolder) would
+    # otherwise resolve segments[-2] to the shared library-root folder name (e.g.
+    # "movies") for every item, silently colliding every movie's {folder} onto the
+    # same save path instead of falling back to {title} as intended.
+    if len(segments) >= 4:
+        return segments[-2]
+    return None
+
+
+def get_movie_folder_name(rating_key: str) -> Optional[str]:
+    """Fetch the real on-disk folder name for this rating_key.
+
+    Returns None for TV shows/seasons (no <Part> at that metadata level) or on
+    any lookup failure -- callers should fall back to {title} in that case,
+    which apply_save_location_variables() in save_paths.py already does."""
+    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+    try:
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
+        r.raise_for_status()
+    except Exception as e:
+        logger.debug("[PLEX] Failed to fetch metadata for folder name %s: %s", rating_key, e)
+        return None
+    return extract_folder_name_from_metadata(r.text)
 
 
 def get_library_section_id(rating_key: str) -> Optional[str]:

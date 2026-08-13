@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id
+from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id, get_movie_folder_name
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -13,7 +13,7 @@ from backend.logo_sources import get_logos_merged
 from .movies import fetch_and_cache_poster
 from .tv_shows import plex_session, plex_headers, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
 from .save import embed_library_metadata, normalize_logo_for_plex
-from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, save_or_cache_render
+from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, save_or_cache_render, save_to_asset_folder_on_send_enabled
 from datetime import datetime, timezone
 from PIL import Image, PngImagePlugin
 from .. import database as db
@@ -66,6 +66,17 @@ def _process_single_movie(
 ):
     """Process a single movie in the batch. Returns result dict."""
     title_hint = rating_key  # updated once we have movie_details, used in error reporting
+
+    # Lazy, memoized {folder} lookup -- a single-element list dodges the need for
+    # `nonlocal` while still letting both the save_locally and send_to_plex blocks
+    # below share one Plex metadata fetch instead of firing it twice per movie.
+    _folder_name_cache: list = []
+
+    def _get_movie_folder_name_once() -> Optional[str]:
+        if not _folder_name_cache:
+            _folder_name_cache.append(get_movie_folder_name(rating_key))
+        return _folder_name_cache[0]
+
     try:
         template_id = req.template_id
         preset_id = req.preset_id
@@ -313,6 +324,7 @@ def _process_single_movie(
                 year=int(movie_year) if movie_year else None,
                 rating_key=rating_key,
                 library_label=library_label,
+                folder_name=_get_movie_folder_name_once(),
             )
             save_path = resolve_save_path(ctx, fmt_settings["ext"], batch_subfolder=req.batch_subfolder)
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -418,6 +430,7 @@ def _process_single_movie(
                     year=int(movie_details["year"]) if movie_details.get("year") else None,
                     rating_key=rating_key,
                     library_label=resolve_library_label(req.library_id),
+                    folder_name=_get_movie_folder_name_once() if save_to_asset_folder_on_send_enabled() else None,
                 )
             except Exception:
                 cache_ctx = None
@@ -1194,6 +1207,18 @@ def _render_and_save_poster(
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
     display_title = f"{title} - {season_title}" if season_title else title
 
+    # Lazy, memoized {folder} lookup -- shares one Plex metadata fetch between the
+    # save_locally and send_to_plex blocks below instead of firing it twice per item.
+    # Movies only; TV shows/seasons always pass folder_name=None.
+    _folder_name_cache: list = []
+
+    def _get_movie_folder_name_once() -> Optional[str]:
+        if is_tv:
+            return None
+        if not _folder_name_cache:
+            _folder_name_cache.append(get_movie_folder_name(rating_key))
+        return _folder_name_cache[0]
+
     needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used
     # Retry-queue runs only want to upload once the render actually meets the template spec
     skip_send_not_ideal = getattr(req, 'send_only_if_ideal', False) and needs_retry
@@ -1253,6 +1278,7 @@ def _render_and_save_poster(
                 rating_key=rating_key,
                 library_label=library_label,
                 season=season_index if is_tv else None,
+                folder_name=_get_movie_folder_name_once(),
             )
             save_path = resolve_save_path(ctx, fmt_settings["ext"], batch_subfolder=req.batch_subfolder)
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1364,6 +1390,7 @@ def _render_and_save_poster(
                     rating_key=rating_key,
                     library_label=resolve_library_label(req.library_id) if req.library_id else "",
                     season=season_index if is_tv else None,
+                    folder_name=_get_movie_folder_name_once() if save_to_asset_folder_on_send_enabled() else None,
                 )
             except Exception:
                 cache_ctx = None

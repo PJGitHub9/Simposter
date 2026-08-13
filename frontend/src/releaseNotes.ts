@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.43',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a {folder} save-path variable (Settings → Output) that resolves to the real on-disk folder name Plex knows for a movie, independent of its display-language title — useful when your save-location template needs to match folder names created by Radarr/Sonarr/Kometa rather than Plex\'s metadata title. Falls back to {title} for TV shows/seasons or when it can\'t be resolved. (Thank you romquenin!)',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the filename sanitizer stripping valid punctuation (commas, apostrophes, ampersands, etc.) from saved poster filenames, causing them to drift from the real on-disk names Radarr/Sonarr/Kometa use (e.g. "Widow\'s Bay" became "Widows Bay").',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.42',
     date: '2026-08-13',
     sections: [
