@@ -205,9 +205,9 @@ def apply_save_location_variables(template: str, ctx: SaveContext) -> str:
 def _sanitize(save_path: str) -> str:
     """Remove only characters that are genuinely illegal in Windows/Linux filenames.
     Keeps everything else (including punctuation like , ' : & ! that commonly appear
-    in real movie titles) -- the previous whitelist silently stripped these, causing
-    generated folder names to drift from the real on-disk names Radarr/Kometa use
-    (e.g. "Lock, Stock..." became "Lock Stock...", "L'Écume" lost its apostrophe)."""
+    in real movie/show titles) -- the previous whitelist silently stripped these,
+    causing generated folder names to drift from the real on-disk names Radarr/
+    Sonarr/Kometa use (e.g. "Widow's Bay" became "Widows Bay")."""
     illegal = '<>:"|?*\0'
     safe = "".join(c for c in save_path if c not in illegal and ord(c) >= 32)
     return safe.strip()
