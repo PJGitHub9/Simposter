@@ -16,6 +16,8 @@
 - **Multi-source artwork** — TMDb, TVDB, and Fanart.tv with configurable priority
 - **Logo system** — Clearlogos with white/color/first preference, hex tinting, and fallback rules
 - **ClearLogo editor** — Browse, select, or upload logos and push them to Plex independently
+- **Season posters** — Edit each season of a TV show independently (its own artwork, logo, and text), alongside the series poster, with per-season presets
+- **Text bounding box** — Custom text can auto-shrink to fit inside the logo's bounding box instead of overflowing — handy for season posters that use text in place of a logo
 
 ### Batch & Automation
 - **Batch edit** — Select your whole library and apply a preset in one run
@@ -232,7 +234,7 @@ http://your-server:8003/api/webhook/tautulli?template_id=uniformlogo&preset_id=d
 |-----|--------------|
 | **General** | Theme, poster display density, deduplication, default sort |
 | **Libraries** | Plex connection, library mappings, auto-generate preset, webhook ignore labels, label removal |
-| **Output** | Save-location path templates (with Kometa-compatible presets) for movies and TV shows, batch subfolder option, image format/quality |
+| **Output** | Save-location path templates (with Kometa-compatible presets, including a `{folder}` variable that matches Radarr/Sonarr's real on-disk folder names) for movies and TV shows, batch subfolder option, image format/quality |
 | **Automation** | Webhook URL generator, automatic poster generation (auto-send, retry queue, existing content mode, webhook secret) |
 | **Performance** | Concurrent renders, overlay cache, API rate limits, cache management |
 | **Notifications** | Discord webhook and Apprise URLs, per-event toggles (batch / manual / webhook / auto-generate) |
@@ -372,6 +374,8 @@ Legacy `presets.json` and `ui_settings.json` migrate automatically to SQLite on 
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Technical architecture, API routers, rendering pipeline
 - [CHANGELOG.md](CHANGELOG.md) — Full version history
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Dev setup, PR expectations, and code conventions if you'd like to contribute
+- [SECURITY.md](SECURITY.md) — Security model and how to report a vulnerability
 
 ---
 

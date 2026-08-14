@@ -1,0 +1,78 @@
+name: Bug Report
+description: Report something that's broken or not working as expected
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Logs and steps to reproduce make it much faster to track down — please include what you can.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+      placeholder: When I click "Send to Plex", the poster uploads but the logo looks cropped.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the manual editor for a movie
+        2. Select a logo
+        3. Click "Send to Plex"
+        4. Check the poster in Plex
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Simposter version
+      description: Shown in the sidebar footer / Settings.
+      placeholder: v1.6.43
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running Simposter?
+      options:
+        - Docker (docker-compose)
+        - Docker (manual docker build/run)
+        - Local dev (Python + Node, no Docker)
+    validations:
+      required: true
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser (if this is a UI issue)
+      options:
+        - Chrome / Edge / Brave (Chromium)
+        - Firefox
+        - Safari
+        - Not applicable
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste any relevant lines from `config/logs/simposter.log` or the Logs tab in the UI. Please redact any API keys or Plex tokens first.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, library size, the template/preset you were using, anything else that might help.
+    validations:
+      required: false

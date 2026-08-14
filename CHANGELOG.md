@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.6.43 (2026-08-13)
+### New Features
+- **Added a `{folder}` save-path variable** (Settings → Output) that resolves to the real on-disk folder name Plex knows for a movie — parsed from Plex's own file path, not derived from the display-language title — for save-location templates that need to match folder names created by Radarr/Sonarr/Kometa rather than Plex's metadata title. Falls back to `{title}` for TV shows/seasons or whenever it can't be resolved. Thank you romquenin for the suggestion!
+
+### Bug Fixes
+- **Fixed the filename sanitizer stripping valid punctuation** (commas, apostrophes, ampersands, etc.) from saved poster filenames, causing them to drift from the real on-disk names Radarr/Sonarr/Kometa use — e.g. "Widow's Bay" was being saved as "Widows Bay". The sanitizer now only strips characters that are actually illegal in Windows/Linux filenames instead of whitelisting a narrow allowed set.
+
+### Other
+- Docker builds no longer need `.git` in the build context — the branch name is now passed in explicitly as a `GIT_BRANCH` build-arg instead of being detected via `git rev-parse` at build time (which required copying `.git` into the image and installing/removing `git`+`jq`). Local build scripts and the GHCR CI workflow were updated to pass it.
+
 ## v1.6.42 (2026-08-13)
 ### Improvements
 - **Changing the preset in the TV show editor now refreshes every other selected season/series, not just the one you're currently viewing.** `watch(selectedPreset, ...)` previously only applied the new preset to the currently-focused poster — every other season/series kept its `settingsCache` entry (and rendered preview thumbnail) from whatever preset was selected before, so switching to one of them showed stale settings until something else happened to trigger a fresh render. It now clears all cached settings and rendered previews (except the one you're actively viewing, which the normal preview flow already handles) and triggers a background re-render of everything else, matching how "Select All Seasons" already works.
