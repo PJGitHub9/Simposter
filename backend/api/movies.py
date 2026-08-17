@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Body, Query
 from fastapi.responses import Response, FileResponse, JSONResponse
+from pydantic import BaseModel
 from PIL import Image
 
 import requests
@@ -1345,41 +1346,70 @@ def api_local_asset_file(path: str):
         raise HTTPException(status_code=500, detail=f"Failed to serve file: {e}")
 
 
+def _delete_local_asset_file(path: str) -> dict:
+    """Delete a single local asset file and clean up any empty parent folders left
+    behind. Shared by the single-file DELETE endpoint and the bulk-delete endpoint."""
+    file_path = _find_asset_under_roots(path)
+    output_root = next(r for r in _get_unique_asset_roots() if file_path.is_relative_to(r))
+
+    file_path.unlink()
+    logger.info(f"[LOCAL_ASSETS] Deleted file: {file_path}")
+
+    # Clean up empty parent folders
+    deleted_folders = []
+    parent_dir = file_path.parent
+    while parent_dir != output_root and parent_dir > output_root:
+        try:
+            # Check if directory is empty
+            if not any(parent_dir.iterdir()):
+                parent_dir.rmdir()
+                deleted_folders.append(str(parent_dir.relative_to(output_root)))
+                logger.info(f"[LOCAL_ASSETS] Deleted empty folder: {parent_dir}")
+                parent_dir = parent_dir.parent
+            else:
+                # Directory not empty, stop cleanup
+                break
+        except Exception as e:
+            logger.debug(f"[LOCAL_ASSETS] Could not delete folder {parent_dir}: {e}")
+            break
+
+    result = {"success": True, "message": f"Deleted {path}"}
+    if deleted_folders:
+        result["deleted_folders"] = deleted_folders
+    return result
+
+
 @router.delete("/local-assets/{path:path}")
 def api_delete_local_asset(path: str):
     """Delete a local asset file."""
     try:
-        file_path = _find_asset_under_roots(path)
-        output_root = next(r for r in _get_unique_asset_roots() if file_path.is_relative_to(r))
-
-        # Delete the file
-        file_path.unlink()
-        logger.info(f"[LOCAL_ASSETS] Deleted file: {file_path}")
-
-        # Clean up empty parent folders
-        deleted_folders = []
-        parent_dir = file_path.parent
-        while parent_dir != output_root and parent_dir > output_root:
-            try:
-                # Check if directory is empty
-                if not any(parent_dir.iterdir()):
-                    parent_dir.rmdir()
-                    deleted_folders.append(str(parent_dir.relative_to(output_root)))
-                    logger.info(f"[LOCAL_ASSETS] Deleted empty folder: {parent_dir}")
-                    parent_dir = parent_dir.parent
-                else:
-                    # Directory not empty, stop cleanup
-                    break
-            except Exception as e:
-                logger.debug(f"[LOCAL_ASSETS] Could not delete folder {parent_dir}: {e}")
-                break
-
-        result = {"success": True, "message": f"Deleted {path}"}
-        if deleted_folders:
-            result["deleted_folders"] = deleted_folders
-        return result
+        return _delete_local_asset_file(path)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"[LOCAL_ASSETS] Failed to delete file {path}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
+
+
+class LocalAssetBulkDeleteRequest(BaseModel):
+    paths: List[str]  # relative asset paths, as returned by GET /local-assets
+
+
+@router.post("/local-assets/delete-bulk")
+def api_local_assets_delete_bulk(req: LocalAssetBulkDeleteRequest):
+    """Bulk-delete one or more saved local asset files."""
+    results = []
+    for rel_path in req.paths:
+        entry: dict = {"path": rel_path}
+        try:
+            _delete_local_asset_file(rel_path)
+            entry["status"] = "ok"
+        except HTTPException as e:
+            entry.update(status="error", reason=str(e.detail))
+        except Exception as e:
+            logger.error(f"[LOCAL_ASSETS] Failed to delete file {rel_path}: {e}")
+            entry.update(status="error", reason=str(e))
+        results.append(entry)
+
+    succeeded = sum(1 for r in results if r["status"] == "ok")
+    return {"status": "ok", "succeeded": succeeded, "total": len(results), "results": results}

@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.45',
+    date: '2026-08-17',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Local Assets now supports bulk delete, alongside the existing bulk resend — select multiple posters and delete them all at once.',
+        ]
+      },
+      {
+        title: 'Performance',
+        items: [
+          'Faster preview loading when opening a movie or TV show in the editor for the first time — the poster and logo now download at the same time instead of one after the other. No change to how posters look or render.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.44',
     date: '2026-08-13',
     sections: [

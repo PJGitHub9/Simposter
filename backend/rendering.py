@@ -232,17 +232,26 @@ def render_poster_image(
     if options is None:
         options = {}
 
-    # 1) Download images
-    bg = _download_image(background_url)
-
-    logo = None
+    # 1) Download images — poster and logo are independent, so fetch them in parallel
+    # rather than one after the other. Matters most on a cold cache (e.g. the first
+    # preview after opening the editor for a movie); once both are cached, this is
+    # already near-instant either way. Same downloads, same decode, same pixels —
+    # purely a wait-time change.
     if logo_url:
-        try:
-            logo = _download_image(logo_url)
-        except ValueError:
-            # If logo fails, we just render without a logo
-            logger.warning("Logo download failed, continuing without logo: %s", logo_url)
-            logo = None
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            bg_future = executor.submit(_download_image, background_url)
+            logo_future = executor.submit(_download_image, logo_url)
+            bg = bg_future.result()
+            try:
+                logo = logo_future.result()
+            except ValueError:
+                # If logo fails, we just render without a logo
+                logger.warning("Logo download failed, continuing without logo: %s", logo_url)
+                logo = None
+    else:
+        bg = _download_image(background_url)
+        logo = None
 
     logger.debug(
         "[RENDER] template=%s bg=%s logo=%s options_keys=%s",
@@ -286,29 +295,28 @@ def render_with_overlay_cache(
         try:
             logger.info(f"[CACHE] Overlay cache enabled and found: {overlay_path}")
 
-            # Download poster and logo in parallel
+            # Download poster and logo in parallel, reusing the shared _download_image()
+            # helper instead of a bespoke fetch — gives this path the same LRU byte cache
+            # (so repeated renders of the same poster/logo skip the network entirely after
+            # the first fetch), retry/backoff on slow connections, SSRF validation, and SVG
+            # logo support that the non-cached render path already had. No change to the
+            # decoded pixels themselves, just fewer/faster fetches.
             from concurrent.futures import ThreadPoolExecutor
-            
-            def download_image(url: str):
-                """Helper to download image from URL."""
-                resp = requests.get(url, timeout=20)
-                resp.raise_for_status()
-                return BytesIO(resp.content)
-            
+
             bg = None
-            logo_bytes = None
-            
+            logo_img = None
+
             with ThreadPoolExecutor(max_workers=2) as executor:
                 # Submit both downloads
-                bg_future = executor.submit(download_image, poster_url)
-                logo_future = executor.submit(download_image, logo_url) if logo_url else None
-                
+                bg_future = executor.submit(_download_image, poster_url)
+                logo_future = executor.submit(_download_image, logo_url) if logo_url else None
+
                 # Get background (always needed)
-                bg = Image.open(bg_future.result()).convert("RGBA")
-                
+                bg = bg_future.result()
+
                 # Get logo if present
                 if logo_future:
-                    logo_bytes = logo_future.result()
+                    logo_img = logo_future.result()
 
             # Base canvas with poster zoom/shift
             canvas_w, canvas_h = 2000, 3000
@@ -333,8 +341,8 @@ def render_with_overlay_cache(
                 canvas = canvas_rgb.convert("RGBA")
 
             # Logo handling
-            if logo_url and logo_bytes:
-                logo = Image.open(logo_bytes).convert("RGBA")
+            if logo_url and logo_img:
+                logo = logo_img
 
                 logo_mode = str(render_options.get("logo_mode", "stock") or "stock")
                 logo_hex = str(render_options.get("logo_hex", "#FFFFFF") or "#FFFFFF")

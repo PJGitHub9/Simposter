@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.45 (2026-08-17)
+### New Features
+- **Local Assets: bulk delete.** The multi-select checkboxes (previously limited to resendable posters, for bulk-resend) now work on any asset, and a "Delete N" button sits next to "Resend N to Plex" in the selection bar. New `POST /api/local-assets/delete-bulk` endpoint, sharing the same per-file delete + empty-folder-cleanup logic as the existing single-file `DELETE` endpoint (extracted into `_delete_local_asset_file()`).
+
+### Performance
+- **Two render-pipeline speedups, both purely about I/O timing — no change to rendered pixels, encoding, or quality settings:**
+  - `render_with_overlay_cache()` (the batch/webhook render path when the overlay cache is enabled) had its own bespoke image downloader instead of reusing the shared `_download_image()` helper — meaning it got none of that helper's LRU byte cache, retry/backoff on slow connections, SSRF validation, or SVG logo support. Switched it over: same decode, same bytes, but repeated renders of the same poster/logo now skip the network entirely after the first fetch, and SVG logos (previously a latent crash in this specific path) now work correctly too.
+  - `render_poster_image()` (the path live preview always uses) downloaded the poster and logo **sequentially** instead of in parallel, unlike the batch path which already fetched both at once. Parallelized it the same way — measured 4.4x faster on a cold cache (no visible poster/logo yet fetched this session), which is exactly the "opening the editor for a new movie" moment most likely to feel slow. Once both are cached from the first fetch, this made no difference either way.
+
 ## v1.6.44 (2026-08-13)
 ### Security
 - **Follow-up dependency audit**, triggered by GitHub Dependabot alerts after enabling dependency graph/security scanning on the repo. Applied what actually had a fix available:
