@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.44 (2026-08-13)
+### Security
+- **Follow-up dependency audit**, triggered by GitHub Dependabot alerts after enabling dependency graph/security scanning on the repo. Applied what actually had a fix available:
+  - Backend: `requests` 2.32.5 → 2.34.2.
+  - Frontend: `npm audit fix` (no `--force`) resolved `js-yaml` (quadratic CPU consumption in `!!omap` resolution) and `nanoid` (non-terminating loop with negative/zero size) — both down to 0 vulnerabilities per `npm audit`.
+- **Not fixed, no action available yet**: `pillow` (12.3.0), `cairosvg` (2.9.0), and `python-multipart` (0.0.32) are already pinned at the newest version published on PyPI for each — the GitHub alert doesn't have a fixed version to move to yet. Nothing to do but wait for upstream.
+- **Still deliberately deferred**: the `starlette` CVEs (pulled in transitively via FastAPI) still have no fix within FastAPI 0.122.0's allowed range — same root cause documented in v1.6.23, unchanged. Fixing requires bumping FastAPI to 0.141.1+, a large jump that needs its own dedicated testing pass.
+- **Discrepancy worth noting**: GitHub's alert list also flagged `shell-quote`, `postcss`, `brace-expansion`, `vite`, `flatted`, `minimatch`, and `rollup` in `frontend/package-lock.json` — a fresh `npm ci` + `npm audit` against the exact committed lockfile shows none of these as vulnerable at their current pinned versions. GitHub's Advisory Database and npm's own audit registry don't have full parity in coverage; this isn't a contradiction so much as two different databases disagreeing. All of these are frontend *build tooling* (not shipped in the built bundle users' browsers load), so real-world exposure is limited to the dev/CI environment even if the alerts turn out to be accurate — worth revisiting via the specific GHSA advisory IDs if they don't clear on their own after GitHub's next scan.
+
 ## v1.6.43 (2026-08-13)
 ### New Features
 - **Added a `{folder}` save-path variable** (Settings → Output) that resolves to the real on-disk folder name Plex knows for a movie — parsed from Plex's own file path, not derived from the display-language title — for save-location templates that need to match folder names created by Radarr/Sonarr/Kometa rather than Plex's metadata title. Falls back to `{title}` for TV shows/seasons or whenever it can't be resolved. Thank you romquenin for the suggestion!
