@@ -8,10 +8,10 @@ from PIL import Image
 from pydantic import BaseModel
 from typing import List, Optional
 
-from ..config import settings, plex_headers, plex_session, plex_remove_label, logger
+from ..config import settings, plex_headers, plex_session, plex_remove_label, logger, get_movie_folder_name
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
-from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render
+from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render, save_to_asset_folder_on_send_enabled
 from .save import encode_poster_for_plex, normalize_logo_for_plex, _PLEX_UPLOAD_SIZE_LIMIT
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url, _read_image_metadata, _find_asset_under_roots
 from .notifications import send_discord_notification, send_apprise_notification
@@ -149,6 +149,17 @@ def api_plex_send(req: PlexSendRequest):
 
     try:
         library_label = resolve_library_label(req.library_id or movie_details.get("library_id"))
+        # {folder} template variable: resolve the real on-disk folder name from Plex
+        # (movies only — TV shows/seasons have no single <Part> file to derive it from,
+        # apply_save_location_variables() falls back to {title} automatically). This was
+        # previously never resolved on the send-to-Plex path at all (only save-to-disk
+        # had it), so {folder} silently fell back to the plain — possibly Plex-localized —
+        # title with no year whenever "save to asset folder on send" was enabled. Only
+        # worth the extra Plex metadata fetch when that setting is actually on — it's off
+        # by default, and save_or_cache_render() ignores folder_name entirely otherwise.
+        folder_name = None
+        if not is_tv and save_to_asset_folder_on_send_enabled():
+            folder_name = get_movie_folder_name(req.rating_key)
         cache_ctx = SaveContext(
             media_type="tv-show" if is_tv else "movie",
             title=movie_details.get("title") or "",
@@ -156,6 +167,7 @@ def api_plex_send(req: PlexSendRequest):
             rating_key=req.rating_key,
             library_label=library_label,
             season=req.season_index if is_tv else None,
+            folder_name=folder_name,
         )
     except Exception:
         cache_ctx = None
@@ -297,7 +309,7 @@ class ResendCachedRequest(BaseModel):
 @router.get("/render-cache/cached-keys")
 def api_render_cache_cached_keys():
     """Return the set of rating_keys that have a saved poster available to resend."""
-    from ..save_paths import save_to_asset_folder_on_send_enabled, resolve_save_path
+    from ..save_paths import save_to_asset_folder_on_send_enabled, resolve_save_path, get_save_template
 
     if not save_to_asset_folder_on_send_enabled():
         cache_dir = Path(settings.CONFIG_DIR) / "cache" / "poster_renders"
@@ -308,6 +320,12 @@ def api_render_cache_cached_keys():
     # Asset-folder mode: no single hidden directory to list, so check the resolved
     # path for every known movie/show (top-level posters only — matches what the
     # library grid's resend button checks).
+    #
+    # Only resolve {folder} (one live Plex metadata fetch per movie) if the movie
+    # save template actually uses it — checked once, not per item, so libraries that
+    # don't use {folder} don't pay for a Plex round-trip per movie in this loop.
+    movie_template_uses_folder = "{folder}" in get_save_template("movie")
+
     from .. import database as db
     keys = []
     for m in db.get_cached_movies():
@@ -318,6 +336,7 @@ def api_render_cache_cached_keys():
                 year=m.get("year"),
                 rating_key=m.get("rating_key"),
                 library_label=resolve_library_label(m.get("library_id")),
+                folder_name=get_movie_folder_name(m.get("rating_key")) if movie_template_uses_folder else None,
             )
             if resolve_save_path(ctx, ".jpg").exists():
                 keys.append(m["rating_key"])
@@ -359,6 +378,9 @@ def api_render_cache_preview(
 
     title, year = db.get_title_for_rating_key(rating_key)
     try:
+        folder_name = None
+        if not is_tv and save_to_asset_folder_on_send_enabled():
+            folder_name = get_movie_folder_name(rating_key)
         ctx = SaveContext(
             media_type="tv-show" if is_tv else "movie",
             title=title or "",
@@ -366,6 +388,7 @@ def api_render_cache_preview(
             rating_key=rating_key,
             library_label=resolve_library_label(library_id),
             season=season_index if is_tv else None,
+            folder_name=folder_name,
         )
     except Exception:
         ctx = None
@@ -429,12 +452,16 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
 
     _title_for_ctx, _year_for_ctx = db.get_title_for_rating_key(rating_key)
     try:
+        _folder_name_for_ctx = None
+        if not req.is_tv and save_to_asset_folder_on_send_enabled():
+            _folder_name_for_ctx = get_movie_folder_name(rating_key)
         top_ctx = SaveContext(
             media_type="tv-show" if req.is_tv else "movie",
             title=_title_for_ctx or "",
             year=_year_for_ctx,
             rating_key=rating_key,
             library_label=resolve_library_label(library_id),
+            folder_name=_folder_name_for_ctx,
         )
     except Exception:
         top_ctx = None

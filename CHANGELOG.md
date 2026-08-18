@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.6.46 (2026-08-18)
+### Bug Fixes
+- **`{folder}` never resolved on any "Send to Plex" path — always fell back to the plain, possibly Plex-localized, title with no year.** Reported by an external contributor (PR #28/#29) with two clean repro cases: a same-title movie losing its year ("Toy Story 5" instead of "Toy Story 5 (2026)"), and a French-localized title resolving to the Plex display title ("L'impasse") instead of the real on-disk folder name ("Carlito's Way (1993)"). Root cause: `backend/api/save.py` (manual Save to Disk) and `backend/api/batch.py` (batch/webhook save *and* send) both correctly resolve the real on-disk folder name via `get_movie_folder_name()` before building a `SaveContext`, but `backend/api/plexsend.py` (manual Send to Plex, and the resend/preview endpoints that need to find a file saved that way later) had six separate `SaveContext` constructions that never called it at all — not gated behind a setting, just entirely missing.
+- Fixed by resolving `folder_name` in all six, matching `batch.py`'s existing gating exactly (movies only; only when "save to asset folder on send" is enabled, since that's the only thing that reads it — the setting is off by default, so this doesn't add a Plex round-trip to a plain Plex send for most users). The one bulk-lookup site (`/api/render-cache/cached-keys`, which checks every cached movie for a resendable file) additionally only pays for the per-movie Plex fetch when the user's actual save template contains `{folder}` at all, checked once up front — otherwise a large library would mean one live Plex call per movie on every page load for no reason.
+- Verified directly against both of the reporter's repro cases: `{folder}` now resolves to `Toy Story 5 (2026)` and `Carlito's Way (1993)` respectively, matching what Save to Disk already produced.
+
 ## v1.6.45 (2026-08-17)
 ### New Features
 - **Local Assets: bulk delete.** The multi-select checkboxes (previously limited to resendable posters, for bulk-resend) now work on any asset, and a "Delete N" button sits next to "Resend N to Plex" in the selection bar. New `POST /api/local-assets/delete-bulk` endpoint, sharing the same per-file delete + empty-folder-cleanup logic as the existing single-file `DELETE` endpoint (extracted into `_delete_local_asset_file()`).

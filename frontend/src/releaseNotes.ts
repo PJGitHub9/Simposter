@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.46',
+    date: '2026-08-18',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the {folder} save-path variable never working when sending to Plex (only Save to Disk had it) — it silently fell back to the plain title with no year, or the Plex-localized title for non-English libraries, instead of the real on-disk folder name.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.45',
     date: '2026-08-17',
     sections: [
