@@ -341,6 +341,14 @@ def render_with_overlay_cache(
                 canvas = canvas_rgb.convert("RGBA")
 
             # Logo handling
+            # Apply "Place Below" overlay configs FIRST, before the logo is composited
+            from .templates.universal import apply_overlay_config as _apply_overlay_config_below
+            _all_overlay_ids_b = render_options.get("overlay_config_ids") or []
+            _below_ids_selected_b = render_options.get("overlay_config_ids_below") or []
+            _below_ids_b = [cid for cid in _all_overlay_ids_b if cid in _below_ids_selected_b]
+            if _below_ids_b:
+                canvas = _apply_overlay_config_below(canvas, render_options.get("preset_id"), template_id, render_options.get("metadata", {}), _below_ids_b)
+
             if logo_url and logo_img:
                 logo = logo_img
 
@@ -425,6 +433,8 @@ def render_with_overlay_cache(
             from .templates.universal import apply_overlay_config
             metadata = render_options.get("metadata", {})
             overlay_config_ids = render_options.get("overlay_config_ids")
+            _below_ids_selected_b2 = render_options.get("overlay_config_ids_below") or []
+            overlay_config_ids = [cid for cid in (overlay_config_ids or []) if cid not in _below_ids_selected_b2]
             if preset_id or overlay_config_ids:
                 canvas = apply_overlay_config(canvas, preset_id, template_id, metadata, overlay_config_ids)
 
