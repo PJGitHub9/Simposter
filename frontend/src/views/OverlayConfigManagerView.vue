@@ -467,6 +467,8 @@ const addElement = (type: string) => {
     defaults.font_size = 30
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
+  } else if (type === 'full_cover_image') {
+    // No defaults needed -- just asset_id, filled in on file selection
   } else if (type === 'text_label') {
     defaults.font_size = 40
     defaults.font_color = '#FFFFFF'
@@ -495,6 +497,7 @@ const elementTypeLabel = (type: string): string => {
     streaming_platform_badge: 'Streaming Badge',
     studio_badge: 'Studio Badge',
     custom_image: 'Custom Image',
+    full_cover_image: 'Full Cover',
     text_label: 'Text Label',
     // Legacy types
     resolution_badge: 'Resolution Badge',
@@ -512,6 +515,7 @@ const elementTypeColor = (type: string): string => {
     streaming_platform_badge: '#10b981',
     studio_badge: '#f97316',
     custom_image: '#34d399',
+    full_cover_image: '#ec4899',
     text_label: '#fbbf24',
     // Legacy types
     resolution_badge: '#60a5fa',
@@ -1126,6 +1130,18 @@ const renderPreviewElement = async (
     } else {
       drawBadge(ctx, x, y, 'IMG', 9, '#34d399', 'rgba(52, 211, 153, 0.15)', idx, isHovered)
     }
+  } else if (el.type === 'full_cover_image') {
+    if (el.asset_id) {
+      try {
+        const img = await loadAssetImage(el.asset_id)
+        if (_renderVer !== ver) return  // stale render
+        drawAssetOnCanvas(ctx, img, el, x, y, scale, idx, isHovered, '#ec4899')
+        return
+      } catch { /* fallback */ }
+      drawBadge(ctx, x, y, 'IMG?', 9, '#ec4899', 'rgba(236, 72, 153, 0.2)', idx, isHovered)
+    } else {
+      drawBadge(ctx, x, y, 'FULL COVER', 9, '#ec4899', 'rgba(236, 72, 153, 0.15)', idx, isHovered)
+    }
   } else if (el.type === 'text_label') {
     const text = el.text || 'Text'
     const fontSize = Math.max(4, Math.round((el.font_size || 40) * scale))
@@ -1201,7 +1217,7 @@ const drawAssetOnCanvas = (
     if (drawH > maxH) { drawW *= maxH / drawH; drawH = maxH }
   }
 
-  const maxDim = PREVIEW_W * 0.5
+  const maxDim = el.type === 'full_cover_image' ? Infinity : PREVIEW_W * 0.5
   if (drawW > maxDim || drawH > maxDim) {
     const r = maxDim / Math.max(drawW, drawH)
     drawW *= r; drawH *= r
@@ -1459,6 +1475,7 @@ onMounted(() => {
                   <button class="btn-add" @click="addElement('streaming_platform_badge')">+ Stream</button>
                   <button class="btn-add" @click="addElement('studio_badge')">+ Studio</button>
                   <button class="btn-add" @click="addElement('custom_image')">+ Image</button>
+                  <button class="btn-add" @click="addElement('full_cover_image')">+ Full Cover</button>
                   <button class="btn-add" @click="addElement('text_label')">+ Text</button>
                 </div>
               </div>
@@ -1491,6 +1508,7 @@ onMounted(() => {
                   </div>
 
                   <div class="element-fields">
+                    <template v-if="element.type !== 'full_cover_image'">
                     <!-- Position (all types) -->
                     <label>
                       <span>X Position</span>
@@ -1501,6 +1519,7 @@ onMounted(() => {
                       <input type="number" v-model.number="element.position_y" min="0" max="1" step="0.01" />
                     </label>
 
+                    </template>
                     <!-- Scale + Anchor (custom_image only — badge types use per-value overrides) -->
                     <template v-if="element.type === 'custom_image'">
                       <label>
@@ -2028,6 +2047,16 @@ onMounted(() => {
                       </template>
                     </template>
 
+                    <!-- Full Cover Image -->
+                    <template v-if="element.type === 'full_cover_image'">
+                      <label class="field-full">
+                        <span>Asset</span>
+                        <select v-model="element.asset_id">
+                          <option :value="undefined">Select asset...</option>
+                          <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }} ({{ asset.width }}x{{ asset.height }})</option>
+                        </select>
+                      </label>
+                    </template>
                     <!-- Custom Image -->
                     <template v-if="element.type === 'custom_image'">
                       <label class="field-full">
