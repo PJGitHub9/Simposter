@@ -171,7 +171,8 @@ const options = ref({
   overlayFile: '',
   overlayOpacity: 40,
   overlayMode: 'screen',
-  overlayConfigIds: [] as string[]
+  overlayConfigIds: [] as string[],
+  overlayConfigIdsBelow: [] as string[]
 })
 
 // Text overlay settings
@@ -503,7 +504,8 @@ const optionsPayload = computed(() => ({
   stroke_width: strokeWidth.value,
   stroke_color: strokeColor.value,
   text_bbox_enabled: textBboxEnabled.value,
-  overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
+  overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+  overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
 }))
 
 const bgUrl = computed(() => selectedPoster.value || '')
@@ -557,6 +559,7 @@ const reloadPreset = async () => {
     if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
     if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
     if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
+    if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
     if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
       posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
     }
@@ -969,6 +972,15 @@ const toggleOverlayConfig = (configId: string) => {
   }
 }
 
+const toggleOverlayConfigBelow = (configId: string) => {
+  const idx = options.value.overlayConfigIdsBelow.indexOf(configId)
+  if (idx >= 0) {
+    options.value.overlayConfigIdsBelow.splice(idx, 1)
+  } else {
+    options.value.overlayConfigIdsBelow.push(configId)
+  }
+}
+
 // Load saved state on mount
 onMounted(async () => {
   await loadGlobalFallbackSettings()
@@ -1085,6 +1097,7 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
   if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
+    if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }
@@ -1615,6 +1628,14 @@ watch(
                     @change="toggleOverlayConfig(cfg.id)"
                   />
                   {{ cfg.name }}
+                  <label v-if="options.overlayConfigIds.includes(cfg.id)" class="checkbox-label overlay-config-below" style="margin-left: 12px;">
+                    <input
+                      type="checkbox"
+                      :checked="options.overlayConfigIdsBelow.includes(cfg.id)"
+                      @change="toggleOverlayConfigBelow(cfg.id)"
+                    />
+                    Place Below
+                  </label>
                 </label>
               </div>
             </div>
