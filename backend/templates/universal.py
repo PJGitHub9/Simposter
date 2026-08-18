@@ -1042,6 +1042,8 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
         return _apply_metadata_badge(canvas, element, x, y, metadata, default_field, default_font_size)
     elif element_type == "custom_image":
         return _apply_custom_image(canvas, element, x, y)
+    elif element_type == "full_cover_image":
+        return _apply_full_cover_image(canvas, element)
     elif element_type == "text_label":
         return _apply_text_label(canvas, element, x, y)
     elif element_type == "label_badge":
@@ -1412,6 +1414,26 @@ def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y:
     badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     badge_layer.paste(overlay_img, (paste_x, paste_y))
     return Image.alpha_composite(canvas, badge_layer)
+
+
+def _apply_full_cover_image(canvas: Image.Image, element: Dict[str, Any]) -> Image.Image:
+    """Apply a full-cover image overlay -- stretched to exactly match the canvas
+    size, ignoring position/scale/anchor (unlike custom_image). Intended for
+    pre-made gradient/vignette PNGs sized to the poster itself."""
+    from .. import database as db
+    asset_id = element.get("asset_id")
+    if not asset_id:
+        return canvas
+    asset = db.get_overlay_asset(asset_id)
+    if not asset:
+        return canvas
+    asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
+    if not asset_path.exists():
+        return canvas
+    overlay_img = Image.open(asset_path).convert("RGBA")
+    W, H = canvas.size
+    overlay_img = overlay_img.resize((W, H), Image.LANCZOS)
+    return Image.alpha_composite(canvas, overlay_img)
 
 
 def _apply_text_label(canvas: Image.Image, element: Dict[str, Any], x: int, y: int) -> Image.Image:
