@@ -13,6 +13,14 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
 
     # Build base (zoom, matte, fade, grain, etc.)
     canvas = build_base_poster(bg, options)
+
+    # Apply "Place Below" overlay configs FIRST, before the logo is composited
+    from .universal import apply_overlay_config as _apply_overlay_config_below
+    _all_overlay_ids = options.get("overlay_config_ids") or []
+    _below_ids_selected = options.get("overlay_config_ids_below") or []
+    _below_ids = [cid for cid in _all_overlay_ids if cid in _below_ids_selected]
+    if _below_ids:
+        canvas = _apply_overlay_config_below(canvas, options.get("preset_id"), "uniformlogo", options.get("metadata", {}), _below_ids)
     W, H = canvas.size
 
     # Handle logo rendering if logo is provided
@@ -115,6 +123,8 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
     metadata = options.get("metadata", {})
     preset_id = options.get("preset_id")
     overlay_config_ids = options.get("overlay_config_ids")
+    _below_ids_selected2 = options.get("overlay_config_ids_below") or []
+    overlay_config_ids = [cid for cid in (overlay_config_ids or []) if cid not in _below_ids_selected2]
     if preset_id or overlay_config_ids:
         canvas = apply_overlay_config(canvas, preset_id, "uniformlogo", metadata, overlay_config_ids)
 
