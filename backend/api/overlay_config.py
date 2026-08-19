@@ -72,6 +72,14 @@ def api_save_overlay_config(req: OverlayConfigSaveRequest):
         raise HTTPException(500, "Failed to save overlay configuration")
 
 
+@router.get("/overlay-configs/{config_id}/usage")
+def api_get_overlay_config_usage(config_id: str):
+    """List presets that currently reference this overlay config, for the
+    delete-confirmation warning."""
+    presets = db.get_presets_using_overlay_config(config_id)
+    return {"presets": presets, "count": len(presets)}
+
+
 @router.delete("/overlay-configs/{config_id}")
 def api_delete_overlay_config(config_id: str):
     """Delete an overlay configuration."""

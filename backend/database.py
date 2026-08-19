@@ -1291,12 +1291,33 @@ def delete_overlay_config(config_id: str) -> bool:
     """Delete an overlay configuration. Returns True if deleted, False if not found."""
     with get_db() as conn:
         cursor = conn.cursor()
-        # First, unlink any presets using this overlay config
+
+        # Unlink the legacy singular column (kept for old data; no live write path today)
         cursor.execute("""
             UPDATE presets
             SET overlay_config_id = NULL
             WHERE overlay_config_id = ?
         """, (config_id,))
+
+        # Strip this id out of every preset's live overlay_config_ids / overlay_config_ids_below
+        # arrays — without this, a deleted config's id lingers forever inside options_json
+        # (harmless at render time, since _apply_overlay_element already skips missing configs,
+        # but confusing/stale saved state otherwise).
+        cursor.execute("SELECT id, template_id, options_json FROM presets")
+        for row in cursor.fetchall():
+            opts = json.loads(row["options_json"])
+            changed = False
+            for key in ("overlay_config_ids", "overlay_config_ids_below"):
+                ids = opts.get(key)
+                if ids and config_id in ids:
+                    opts[key] = [cid for cid in ids if cid != config_id]
+                    changed = True
+            if changed:
+                cursor.execute(
+                    "UPDATE presets SET options_json = ?, updated_at = CURRENT_TIMESTAMP WHERE template_id = ? AND id = ?",
+                    (json.dumps(opts), row["template_id"], row["id"])
+                )
+
         # Then delete the config
         cursor.execute("""
             DELETE FROM overlay_configs WHERE id = ?
@@ -1306,6 +1327,31 @@ def delete_overlay_config(config_id: str) -> bool:
     if deleted:
         logger.info(f"[DB] Deleted overlay config {config_id}")
     return deleted
+
+
+def get_presets_using_overlay_config(config_id: str) -> List[Dict[str, str]]:
+    """Find every preset whose saved options reference this overlay config, via the
+    live overlay_config_ids / overlay_config_ids_below arrays (the only mechanism
+    actually reachable from the UI today — the legacy singular presets.overlay_config_id
+    column has no live write path, checked separately below for completeness on older data).
+    Used to warn the user, by preset name, before they delete a config that's in use."""
+    results = []
+    all_presets = get_all_presets()
+    for template_id, template_data in all_presets.items():
+        for preset in template_data.get("presets", []):
+            opts = preset.get("options") or {}
+            ids = set(opts.get("overlay_config_ids") or []) | set(opts.get("overlay_config_ids_below") or [])
+            if config_id in ids:
+                results.append({"template_id": template_id, "preset_id": preset["id"], "name": preset.get("name") or preset["id"]})
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT template_id, id, name FROM presets WHERE overlay_config_id = ?", (config_id,))
+        for row in cursor.fetchall():
+            if not any(r["template_id"] == row["template_id"] and r["preset_id"] == row["id"] for r in results):
+                results.append({"template_id": row["template_id"], "preset_id": row["id"], "name": row["name"] or row["id"]})
+
+    return results
 
 
 def get_all_overlay_assets() -> List[Dict[str, Any]]:

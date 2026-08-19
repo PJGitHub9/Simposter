@@ -263,7 +263,7 @@ class BatchRequest(BaseModel):
 
 # Overlay Configuration schemas
 class OverlayElement(BaseModel):
-    type: str  # "video_badge" | "audio_badge" | "edition_badge" | "streaming_platform_badge" | "studio_badge" | "custom_image" | "text_label"
+    type: str  # "video_badge" | "audio_badge" | "edition_badge" | "streaming_platform_badge" | "studio_badge" | "custom_image" | "full_cover_image" | "text_label"
                # Legacy aliases (still render, hidden from UI): "resolution_badge" | "codec_badge" | "label_badge"
     position_x: float = 0.5  # 0.0 to 1.0 (left to right)
     position_y: float = 0.5  # 0.0 to 1.0 (top to bottom)
@@ -273,7 +273,7 @@ class OverlayElement(BaseModel):
     max_height: Optional[int] = None  # Max height in pixels
     scale: Optional[float] = None  # Scale multiplier for images (0.1 to 2.0), applied before width/height
     anchor: Optional[str] = None  # Image anchor: "top-left"|"top-center"|"top-right"|"center-left"|"center"|"center-right"|"bottom-left"|"bottom-center"|"bottom-right" (default: "center")
-    asset_id: Optional[str] = None  # For custom_image: reference to overlay_assets
+    asset_id: Optional[str] = None  # For custom_image/full_cover_image: reference to overlay_assets. full_cover_image ignores position/width/height/scale/anchor — always stretches to the full canvas.
     text: Optional[str] = None  # For text_label: the text to display
     font_family: Optional[str] = None  # For text_label
     font_size: Optional[int] = None  # For text_label

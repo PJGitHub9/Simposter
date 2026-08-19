@@ -167,13 +167,20 @@ const options = ref({
   uniformLogoOffsetY: 78,
   uniformLogoHAlign: 'center' as 'left' | 'center' | 'right',
   uniformLogoVAlign: 'center' as 'top' | 'center' | 'bottom',
+  uniformLogoShadowEnabled: false,
+  uniformLogoShadowOpacity: 60,
+  uniformLogoShadowAngle: -45,
+  uniformLogoShadowDistance: 8,
+  uniformLogoShadowSize: 15,
+  uniformLogoShadowColor: '#000000',
   borderEnabled: false,
   borderThickness: 0,
   borderColor: '#ffffff',
   overlayFile: '',
   overlayOpacity: 40,
   overlayMode: 'screen',
-  overlayConfigIds: [] as string[]
+  overlayConfigIds: [] as string[],
+  overlayConfigIdsBelow: [] as string[]
 })
 
 // Text overlay settings
@@ -476,6 +483,12 @@ const optionsPayload = computed(() => ({
   uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
   uniform_logo_h_align: options.value.uniformLogoHAlign,
   uniform_logo_v_align: options.value.uniformLogoVAlign,
+  uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+  uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+  uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+  uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+  uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+  uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
   border_enabled: options.value.borderEnabled,
   border_px: options.value.borderThickness,
   border_color: options.value.borderColor,
@@ -507,7 +520,8 @@ const optionsPayload = computed(() => ({
   stroke_width: strokeWidth.value,
   stroke_color: strokeColor.value,
   text_bbox_enabled: textBboxEnabled.value,
-  overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
+  overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+  overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
 }))
 
 const bgUrl = computed(() => selectedPoster.value || '')
@@ -556,6 +570,12 @@ const reloadPreset = async () => {
     if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
     if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
     if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+    options.value.uniformLogoShadowEnabled = !!o.uniform_logo_shadow_enabled
+    if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = o.uniform_logo_shadow_opacity
+    if (typeof o.uniform_logo_shadow_angle === 'number') options.value.uniformLogoShadowAngle = o.uniform_logo_shadow_angle
+    if (typeof o.uniform_logo_shadow_distance === 'number') options.value.uniformLogoShadowDistance = o.uniform_logo_shadow_distance
+    if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = o.uniform_logo_shadow_size
+    if (o.uniform_logo_shadow_color) options.value.uniformLogoShadowColor = String(o.uniform_logo_shadow_color)
     options.value.borderEnabled = !!o.border_enabled
     options.value.borderThickness = Number(o.border_px) || 0
     if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -563,6 +583,7 @@ const reloadPreset = async () => {
     if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
     if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
     if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
+    if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
     if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
       posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
     }
@@ -627,6 +648,12 @@ const saveCurrentPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+    uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+    uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+    uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -657,7 +684,9 @@ const saveCurrentPreset = async () => {
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
-    text_bbox_enabled: textBboxEnabled.value
+    text_bbox_enabled: textBboxEnabled.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
   await presetService.savePreset(backendOptions)
@@ -703,6 +732,12 @@ const saveAsNewPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+    uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+    uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+    uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -733,7 +768,9 @@ const saveAsNewPreset = async () => {
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
-    text_bbox_enabled: textBboxEnabled.value
+    text_bbox_enabled: textBboxEnabled.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
   await presetService.savePresetAs(slugified, backendOptions)
@@ -985,8 +1022,19 @@ const toggleOverlayConfig = (configId: string) => {
   const idx = options.value.overlayConfigIds.indexOf(configId)
   if (idx >= 0) {
     options.value.overlayConfigIds.splice(idx, 1)
+    const belowIdx = options.value.overlayConfigIdsBelow.indexOf(configId)
+    if (belowIdx >= 0) options.value.overlayConfigIdsBelow.splice(belowIdx, 1)
   } else {
     options.value.overlayConfigIds.push(configId)
+  }
+}
+
+const toggleOverlayConfigBelow = (configId: string) => {
+  const idx = options.value.overlayConfigIdsBelow.indexOf(configId)
+  if (idx >= 0) {
+    options.value.overlayConfigIdsBelow.splice(idx, 1)
+  } else {
+    options.value.overlayConfigIdsBelow.push(configId)
   }
 }
 
@@ -1101,6 +1149,12 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
   if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
   if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+  options.value.uniformLogoShadowEnabled = !!o.uniform_logo_shadow_enabled
+  if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = o.uniform_logo_shadow_opacity
+  if (typeof o.uniform_logo_shadow_angle === 'number') options.value.uniformLogoShadowAngle = o.uniform_logo_shadow_angle
+  if (typeof o.uniform_logo_shadow_distance === 'number') options.value.uniformLogoShadowDistance = o.uniform_logo_shadow_distance
+  if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = o.uniform_logo_shadow_size
+  if (o.uniform_logo_shadow_color) options.value.uniformLogoShadowColor = String(o.uniform_logo_shadow_color)
   options.value.borderEnabled = !!o.border_enabled
   options.value.borderThickness = Number(o.border_px) || 0
   if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -1108,6 +1162,7 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
   if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
+  if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }
@@ -1490,6 +1545,51 @@ watch(
               </div>
             </template>
 
+            <!-- Drop Shadow: Uniform Logo templates only — box geometry for the logo itself
+                 lives in the separate "Bounding Box" section (shared with Custom Text), but the
+                 shadow effect only ever applies to the logo, so it lives here instead. -->
+            <template v-if="isUniformLogo">
+              <div class="sub-section-title">Drop Shadow</div>
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
+                <span>Drop shadow</span>
+              </label>
+              <template v-if="options.uniformLogoShadowEnabled">
+                <div class="slider">
+                  <label>Shadow Color</label>
+                  <input v-model="options.uniformLogoShadowColor" type="color" />
+                </div>
+                <div class="slider">
+                  <label>Opacity (%)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
+                    <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Angle (°)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowAngle" type="range" min="-180" max="180" />
+                    <input v-model.number="options.uniformLogoShadowAngle" type="number" min="-180" max="180" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Distance (px)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowDistance" type="range" min="0" max="100" />
+                    <input v-model.number="options.uniformLogoShadowDistance" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Size / Blur (px)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="150" />
+                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="150" class="slider-num" />
+                  </div>
+                </div>
+              </template>
+            </template>
+
             <!-- Position & Size only applies to non-Uniform-Logo templates now — Uniform Logo
                  geometry moved to its own "Bounding Box" section, since that box is shared
                  between Logo and Custom Text, not a Logo-only concept. -->
@@ -1653,14 +1753,24 @@ watch(
             <div v-if="overlayConfigs.length > 0" class="slider">
               <label>Overlay Configs</label>
               <div class="overlay-config-checkboxes">
-                <label v-for="cfg in overlayConfigs" :key="cfg.id" class="checkbox-label overlay-config-item">
-                  <input
-                    type="checkbox"
-                    :checked="options.overlayConfigIds.includes(cfg.id)"
-                    @change="toggleOverlayConfig(cfg.id)"
-                  />
-                  {{ cfg.name }}
-                </label>
+                <div v-for="cfg in overlayConfigs" :key="cfg.id" class="overlay-config-item">
+                  <label class="checkbox-label">
+                    <input
+                      type="checkbox"
+                      :checked="options.overlayConfigIds.includes(cfg.id)"
+                      @change="toggleOverlayConfig(cfg.id)"
+                    />
+                    {{ cfg.name }}
+                  </label>
+                  <label v-if="options.overlayConfigIds.includes(cfg.id)" class="checkbox-label overlay-config-below-row">
+                    <input
+                      type="checkbox"
+                      :checked="options.overlayConfigIdsBelow.includes(cfg.id)"
+                      @change="toggleOverlayConfigBelow(cfg.id)"
+                    />
+                    Place below logo &amp; text
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -2257,6 +2367,12 @@ watch(
 
 .checkbox-label input[type='checkbox'] {
   cursor: pointer;
+}
+
+.overlay-config-below-row {
+  margin-left: 22px;
+  opacity: 0.85;
+  font-size: 0.9em;
 }
 
 .field-hint {

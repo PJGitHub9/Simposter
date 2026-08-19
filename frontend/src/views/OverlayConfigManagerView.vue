@@ -325,7 +325,20 @@ const saveConfig = async () => {
 }
 
 const deleteConfig = async (configId: string) => {
-  if (!confirm('Delete this overlay configuration? This will unlink it from any presets using it.')) return
+  let message = 'Delete this overlay configuration?'
+  try {
+    const usageRes = await fetch(`${apiBase}/api/overlay-configs/${configId}/usage`)
+    if (usageRes.ok) {
+      const usage = await usageRes.json()
+      if (usage.count > 0) {
+        const names = usage.presets.map((p: { name: string }) => p.name).join(', ')
+        message = `This overlay is tied to these presets: ${names}. Still want to delete? It will be removed from those presets.`
+      }
+    }
+  } catch {
+    // Usage check failed — fall back to the generic message rather than blocking delete
+  }
+  if (!confirm(message)) return
   try {
     const res = await fetch(`${apiBase}/api/overlay-configs/${configId}`, { method: 'DELETE' })
     if (res.ok) {
@@ -495,6 +508,7 @@ const elementTypeLabel = (type: string): string => {
     streaming_platform_badge: 'Streaming Badge',
     studio_badge: 'Studio Badge',
     custom_image: 'Custom Image',
+    full_cover_image: 'Full Cover',
     text_label: 'Text Label',
     // Legacy types
     resolution_badge: 'Resolution Badge',
@@ -512,6 +526,7 @@ const elementTypeColor = (type: string): string => {
     streaming_platform_badge: '#10b981',
     studio_badge: '#f97316',
     custom_image: '#34d399',
+    full_cover_image: '#22d3ee',
     text_label: '#fbbf24',
     // Legacy types
     resolution_badge: '#60a5fa',
@@ -1126,6 +1141,24 @@ const renderPreviewElement = async (
     } else {
       drawBadge(ctx, x, y, 'IMG', 9, '#34d399', 'rgba(52, 211, 153, 0.15)', idx, isHovered)
     }
+  } else if (el.type === 'full_cover_image') {
+    if (el.asset_id) {
+      try {
+        const img = await loadAssetImage(el.asset_id)
+        if (_renderVer !== ver) return  // stale render
+        ctx.drawImage(img, 0, 0, PREVIEW_W, PREVIEW_H)
+        if (isHovered) {
+          ctx.strokeStyle = '#22d3ee'
+          ctx.lineWidth = 2
+          ctx.strokeRect(1, 1, PREVIEW_W - 2, PREVIEW_H - 2)
+        }
+        drawElementIndex(ctx, 14, 14, idx)
+        return
+      } catch { /* fallback */ }
+      drawBadge(ctx, PREVIEW_W / 2, PREVIEW_H / 2, 'IMG?', 9, '#22d3ee', 'rgba(34, 211, 238, 0.2)', idx, isHovered)
+    } else {
+      drawBadge(ctx, PREVIEW_W / 2, PREVIEW_H / 2, 'FULL COVER', 9, '#22d3ee', 'rgba(34, 211, 238, 0.15)', idx, isHovered)
+    }
   } else if (el.type === 'text_label') {
     const text = el.text || 'Text'
     const fontSize = Math.max(4, Math.round((el.font_size || 40) * scale))
@@ -1459,6 +1492,7 @@ onMounted(() => {
                   <button class="btn-add" @click="addElement('streaming_platform_badge')">+ Stream</button>
                   <button class="btn-add" @click="addElement('studio_badge')">+ Studio</button>
                   <button class="btn-add" @click="addElement('custom_image')">+ Image</button>
+                  <button class="btn-add" @click="addElement('full_cover_image')">+ Full Cover</button>
                   <button class="btn-add" @click="addElement('text_label')">+ Text</button>
                 </div>
               </div>
@@ -1491,15 +1525,17 @@ onMounted(() => {
                   </div>
 
                   <div class="element-fields">
-                    <!-- Position (all types) -->
-                    <label>
-                      <span>X Position</span>
-                      <input type="number" v-model.number="element.position_x" min="0" max="1" step="0.01" />
-                    </label>
-                    <label>
-                      <span>Y Position</span>
-                      <input type="number" v-model.number="element.position_y" min="0" max="1" step="0.01" />
-                    </label>
+                    <!-- Position (all types except full_cover_image, which always fills the canvas) -->
+                    <template v-if="element.type !== 'full_cover_image'">
+                      <label>
+                        <span>X Position</span>
+                        <input type="number" v-model.number="element.position_x" min="0" max="1" step="0.01" />
+                      </label>
+                      <label>
+                        <span>Y Position</span>
+                        <input type="number" v-model.number="element.position_y" min="0" max="1" step="0.01" />
+                      </label>
+                    </template>
 
                     <!-- Scale + Anchor (custom_image only — badge types use per-value overrides) -->
                     <template v-if="element.type === 'custom_image'">
@@ -2045,6 +2081,18 @@ onMounted(() => {
                         <span>Max Height (px)</span>
                         <input type="number" v-model.number="element.max_height" min="0" step="10" placeholder="none" />
                       </label>
+                    </template>
+
+                    <!-- Full Cover Image -->
+                    <template v-if="element.type === 'full_cover_image'">
+                      <label class="field-full">
+                        <span>Asset</span>
+                        <select v-model="element.asset_id">
+                          <option :value="undefined">Select asset...</option>
+                          <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }} ({{ asset.width }}x{{ asset.height }})</option>
+                        </select>
+                      </label>
+                      <p class="field-full" style="font-size: 12px; color: var(--muted); margin: 0;">Stretches to fill the full canvas — no position, scale, or anchor controls apply.</p>
                     </template>
 
                     <!-- Text Label -->

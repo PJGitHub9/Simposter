@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.6.52 (2026-08-19)
+### Improvements
+- **Moved the logo Drop Shadow controls from the Bounding Box section into the Logo section** (both editors) — the shadow only ever applies to the logo (never Custom Text, which also uses the Bounding Box section for its optional fit-to-box mode), so it belongs with the other logo controls rather than the shared geometry section. Still gated to Uniform Logo templates only; no functional change, UI placement only.
+
+## v1.6.51 (2026-08-19)
+### Bug Fixes
+- **Movie editor never saved overlay config selections into presets.** `TvShowEditorPane.vue`'s `saveCurrentPreset()`/`saveAsNewPreset()` already included `overlay_config_ids`/`overlay_config_ids_below` when writing a preset, but `EditorPane.vue`'s (movie) equivalent two functions never did — enabling an overlay config and saving a preset from the movie editor silently didn't persist that selection at all, so reloading the preset (or triggering a batch/webhook render from it) never applied the overlay. Fixed by adding the same two fields to both functions, matching the pattern already used everywhere else in both files.
+### New Features
+- **Deleting an overlay config now warns which presets use it, by name**, instead of a generic "this will unlink it from any presets" message regardless of actual usage. New `GET /api/overlay-configs/{id}/usage` endpoint (`db.get_presets_using_overlay_config()`) checks presets' live `overlay_config_ids`/`overlay_config_ids_below` selections (plus the legacy singular `presets.overlay_config_id` column for older data) and lists the actual preset names in the confirmation dialog. `delete_overlay_config()` was also fixed to actually strip the deleted id out of every preset's saved `overlay_config_ids`/`overlay_config_ids_below` arrays — previously it only nulled a legacy column with no live write path, leaving deleted ids to linger silently in every preset that had used them (harmless at render time — a missing config is already skipped with a warning — but confusing stale state with no way for a user to know).
+
+## v1.6.50 (2026-08-19)
+### New Features
+- **Full Cover overlay image type.** A new `full_cover_image` overlay element (Overlay Manager) stretches an uploaded asset to fill the entire poster canvas — no position/scale/anchor controls, unlike the existing Custom Image type — for pre-made gradient/vignette PNGs that don't need Kometa or other external processing to apply.
+- **"Place below logo & text" per overlay config.** Each overlay config selected in the manual editor's "Overlay & Border" section can now be individually flagged to render *below* the logo and custom text instead of above (the previous, still-default behavior). Implemented as a two-bucket split in the render pipeline — below-flagged overlays render right after the base poster (matte/fade/vignette/grain), everything else renders in its original position (last, after logo/text/border) — rather than three independently-orderable stages. Mirrored in both the live render path (`uniformlogo.py`) and the cached-overlay batch-render path (`rendering.py`), which reimplement logo/text compositing independently and have to be kept in sync by hand.
+- **Logo drop shadow.** A Photoshop-style drop shadow (Color/Opacity/Angle/Distance/Size) for the rendered logo itself, in the Bounding Box section of both editors. New `backend/drop_shadow.py` blurs and offsets the logo's own alpha silhouette behind the sharp logo. No "Spread" control — found to cause multi-second/timeout-length renders on poster-sized images with no fast PIL alternative.
+- These three features originated from an external contributor's PR (#35) — reimplemented against the current codebase (the PR was based on a commit from months earlier and wasn't mergeable as-is) with one deliberate design change from the original: the "place below" flag is relative to the logo *and* text as one group, not the logo alone, so text's position in the pipeline can't end up ignoring the flag the way it did in the original PR.
+
 ## v1.6.49 (2026-08-18)
 ### Improvements
 - **Manual editor decluttering pass** (movie and TV editors), following up on user feedback that the editor felt "overwhelming":

@@ -10,6 +10,50 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.52',
+    date: '2026-08-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Moved the logo Drop Shadow controls from the Bounding Box section into the Logo section, since the shadow only ever applies to the logo.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.51',
+    date: '2026-08-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the movie editor not saving overlay config selections into presets — enabling an overlay and saving a preset now actually sticks, so it loads (and applies during batch/webhook renders) next time.',
+        ]
+      },
+      {
+        title: 'New Features',
+        items: [
+          'Deleting an overlay config now tells you which presets use it by name before you confirm, instead of a generic warning — and actually removes it from those presets once deleted.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.50',
+    date: '2026-08-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a "Full Cover" overlay image type that stretches an uploaded gradient/vignette image to fill the whole poster — no positioning needed. Thank you romquenin for the contribution!',
+          'Overlay configs can now be placed below the logo and custom text instead of above, per config, in the Overlay & Border section. Thank you romquenin for the contribution!',
+          'Added a logo drop shadow (color, opacity, angle, distance, size) in the Logo section of both editors. Thank you romquenin for the contribution!',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.49',
     date: '2026-08-18',
     sections: [

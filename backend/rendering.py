@@ -340,6 +340,16 @@ def render_with_overlay_cache(
                 canvas_rgb = _add_grain(canvas_rgb, grain_amount)
                 canvas = canvas_rgb.convert("RGBA")
 
+            # ---- Overlay configs, "below logo+text" bucket (must mirror uniformlogo.py) ----
+            from .templates.universal import apply_overlay_config
+            metadata = render_options.get("metadata", {})
+            overlay_config_ids = render_options.get("overlay_config_ids") or []
+            overlay_config_ids_below = [
+                cid for cid in (render_options.get("overlay_config_ids_below") or []) if cid in overlay_config_ids
+            ]
+            if overlay_config_ids_below:
+                canvas = apply_overlay_config(canvas, None, template_id, metadata, overlay_config_ids_below)
+
             # Logo handling
             if logo_url and logo_img:
                 logo = logo_img
@@ -400,7 +410,19 @@ def render_with_overlay_cache(
                     else:
                         y = cy - new_h // 2
 
-                    canvas.paste(logo_res, (x, y), logo_res)
+                    if render_options.get("uniform_logo_shadow_enabled", False):
+                        from .drop_shadow import add_drop_shadow
+                        shadowed, pad = add_drop_shadow(
+                            logo_res,
+                            opacity_pct=float(render_options.get("uniform_logo_shadow_opacity", 60)),
+                            angle_deg=float(render_options.get("uniform_logo_shadow_angle", -45)),
+                            distance_px=float(render_options.get("uniform_logo_shadow_distance", 8)),
+                            size_px=float(render_options.get("uniform_logo_shadow_size", 15)),
+                            shadow_color=_hex_to_rgb(str(render_options.get("uniform_logo_shadow_color", "#000000"))),
+                        )
+                        canvas.paste(shadowed, (x - pad, y - pad), shadowed)
+                    else:
+                        canvas.paste(logo_res, (x, y), logo_res)
 
                     logger.info("[CACHE] Applied uniformlogo positioning with cached overlay")
                 else:
@@ -421,12 +443,10 @@ def render_with_overlay_cache(
                     border_color = render_options.get("border_color", "#FFFFFF")
                     canvas = ImageOps.expand(canvas, border=px, fill=border_color)
 
-            # Apply overlay configurations (resolution badges, codec badges, etc.)
-            from .templates.universal import apply_overlay_config
-            metadata = render_options.get("metadata", {})
-            overlay_config_ids = render_options.get("overlay_config_ids")
-            if preset_id or overlay_config_ids:
-                canvas = apply_overlay_config(canvas, preset_id, template_id, metadata, overlay_config_ids)
+            # Apply overlay configurations, "above logo+text" bucket (mirrors uniformlogo.py)
+            overlay_config_ids_above = [cid for cid in overlay_config_ids if cid not in overlay_config_ids_below]
+            if preset_id or overlay_config_ids_above:
+                canvas = apply_overlay_config(canvas, preset_id, template_id, metadata, overlay_config_ids_above)
 
             logger.info("[CACHE] Successfully rendered with cached overlay")
             return canvas.convert("RGB")
