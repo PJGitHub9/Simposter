@@ -3,6 +3,7 @@
 from PIL import Image
 from ..config import settings, logger
 from .universal import build_base_poster, _hex_to_rgb, _solid_color_logo, _render_text_overlay
+from ..drop_shadow import add_drop_shadow
 
 
 def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Image.Image:
@@ -101,7 +102,18 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
         else:  # center
             y = cy - new_h // 2
 
-        canvas.paste(logo_res, (x, y), logo_res)
+        if options.get("uniform_logo_shadow_enabled", False):
+            shadowed, shadow_padding = add_drop_shadow(
+                logo_res,
+                opacity_pct=options.get("uniform_logo_shadow_opacity", 60),
+                angle_deg=options.get("uniform_logo_shadow_angle", -45),
+                distance_px=options.get("uniform_logo_shadow_distance", 8),
+                size_px=options.get("uniform_logo_shadow_size", 15),
+                shadow_color=_hex_to_rgb(options.get("uniform_logo_shadow_color", "#000000")),
+            )
+            canvas.paste(shadowed, (x - shadow_padding, y - shadow_padding), shadowed)
+        else:
+            canvas.paste(logo_res, (x, y), logo_res)
 
     # ------------- TEXT OVERLAY (outside logo check) -------------
     text_overlay_enabled = bool(options.get("text_overlay_enabled", False))
