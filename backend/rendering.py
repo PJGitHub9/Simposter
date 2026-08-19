@@ -408,7 +408,19 @@ def render_with_overlay_cache(
                     else:
                         y = cy - new_h // 2
 
-                    canvas.paste(logo_res, (x, y), logo_res)
+                    if render_options.get("uniform_logo_shadow_enabled", False):
+                        from .drop_shadow import add_drop_shadow
+                        shadowed, shadow_padding = add_drop_shadow(
+                            logo_res,
+                            opacity_pct=render_options.get("uniform_logo_shadow_opacity", 60),
+                            angle_deg=render_options.get("uniform_logo_shadow_angle", -45),
+                            distance_px=render_options.get("uniform_logo_shadow_distance", 8),
+                            size_px=render_options.get("uniform_logo_shadow_size", 15),
+                            shadow_color=_hex_to_rgb(render_options.get("uniform_logo_shadow_color", "#000000")),
+                        )
+                        canvas.paste(shadowed, (x - shadow_padding, y - shadow_padding), shadowed)
+                    else:
+                        canvas.paste(logo_res, (x, y), logo_res)
 
                     logger.info("[CACHE] Applied uniformlogo positioning with cached overlay")
                 else:
