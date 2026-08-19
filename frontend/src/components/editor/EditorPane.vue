@@ -165,6 +165,12 @@ const options = ref({
   uniformLogoOffsetY: 78,
   uniformLogoHAlign: 'center' as 'left' | 'center' | 'right',
   uniformLogoVAlign: 'center' as 'top' | 'center' | 'bottom',
+  uniformLogoShadowEnabled: false,
+  uniformLogoShadowColor: '#000000',
+  uniformLogoShadowOpacity: 100,
+  uniformLogoShadowAngle: 0,
+  uniformLogoShadowDistance: 0,
+  uniformLogoShadowSize: 125,
   borderEnabled: false,
   borderThickness: 0,
   borderColor: '#ffffff',
@@ -473,6 +479,12 @@ const optionsPayload = computed(() => ({
   uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
   uniform_logo_h_align: options.value.uniformLogoHAlign,
   uniform_logo_v_align: options.value.uniformLogoVAlign,
+  uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+  uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
+  uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+  uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+  uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+  uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
   border_enabled: options.value.borderEnabled,
   border_px: options.value.borderThickness,
   border_color: options.value.borderColor,
@@ -531,6 +543,14 @@ const reloadPreset = async () => {
     shadowEnabled.value = false
     shadowBlur.value = 10
     shadowOffsetX.value = 0
+    // Reset Drop Shadow / Place Below defaults (added after the pattern above)
+    options.value.uniformLogoShadowEnabled = false
+    options.value.uniformLogoShadowColor = '#000000'
+    options.value.uniformLogoShadowOpacity = 100
+    options.value.uniformLogoShadowAngle = 0
+    options.value.uniformLogoShadowDistance = 0
+    options.value.uniformLogoShadowSize = 125
+    options.value.overlayConfigIdsBelow = []
     shadowOffsetY.value = 4
     shadowColor.value = '#000000'
     shadowOpacity.value = 80
@@ -552,6 +572,12 @@ const reloadPreset = async () => {
     if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
     if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
     if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+    if (typeof o.uniform_logo_shadow_enabled === 'boolean') options.value.uniformLogoShadowEnabled = o.uniform_logo_shadow_enabled
+    if (typeof o.uniform_logo_shadow_color === 'string') options.value.uniformLogoShadowColor = o.uniform_logo_shadow_color
+    if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = o.uniform_logo_shadow_opacity
+    if (typeof o.uniform_logo_shadow_angle === 'number') options.value.uniformLogoShadowAngle = o.uniform_logo_shadow_angle
+    if (typeof o.uniform_logo_shadow_distance === 'number') options.value.uniformLogoShadowDistance = o.uniform_logo_shadow_distance
+    if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = o.uniform_logo_shadow_size
     options.value.borderEnabled = !!o.border_enabled
     options.value.borderThickness = Number(o.border_px) || 0
     if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -622,6 +648,12 @@ const saveCurrentPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+  uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+  uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
+  uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+  uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+  uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+  uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -684,6 +716,12 @@ const saveAsNewPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+  uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+  uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
+  uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+  uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+  uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+  uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -1068,6 +1106,14 @@ const applyPresetOptions = (id: string) => {
   shadowEnabled.value = false
   shadowBlur.value = 10
   shadowOffsetX.value = 0
+  // Reset Drop Shadow / Place Below defaults (added after the pattern above)
+  options.value.uniformLogoShadowEnabled = false
+  options.value.uniformLogoShadowColor = '#000000'
+  options.value.uniformLogoShadowOpacity = 100
+  options.value.uniformLogoShadowAngle = 0
+  options.value.uniformLogoShadowDistance = 0
+  options.value.uniformLogoShadowSize = 125
+  options.value.overlayConfigIdsBelow = []
   shadowOffsetY.value = 4
   shadowColor.value = '#000000'
   shadowOpacity.value = 80
@@ -1090,6 +1136,12 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
   if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
   if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+    if (typeof o.uniform_logo_shadow_enabled === 'boolean') options.value.uniformLogoShadowEnabled = o.uniform_logo_shadow_enabled
+    if (typeof o.uniform_logo_shadow_color === 'string') options.value.uniformLogoShadowColor = o.uniform_logo_shadow_color
+    if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = o.uniform_logo_shadow_opacity
+    if (typeof o.uniform_logo_shadow_angle === 'number') options.value.uniformLogoShadowAngle = o.uniform_logo_shadow_angle
+    if (typeof o.uniform_logo_shadow_distance === 'number') options.value.uniformLogoShadowDistance = o.uniform_logo_shadow_distance
+    if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = o.uniform_logo_shadow_size
   options.value.borderEnabled = !!o.border_enabled
   options.value.borderThickness = Number(o.border_px) || 0
   if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -1566,6 +1618,44 @@ watch(
                 <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
               </div>
             </div>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
+              <span>Drop Shadow</span>
+            </label>
+            <template v-if="options.uniformLogoShadowEnabled">
+              <label class="field-label">
+                Color
+                <input v-model="options.uniformLogoShadowColor" type="color" />
+              </label>
+              <div class="slider">
+                <label>Opacity %</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
+                  <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Angle °</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowAngle" type="range" min="-180" max="180" />
+                  <input v-model.number="options.uniformLogoShadowAngle" type="number" min="-180" max="180" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Distance px</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowDistance" type="range" min="0" max="100" />
+                  <input v-model.number="options.uniformLogoShadowDistance" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Size px</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
+                  <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
+                </div>
+              </div>
+            </template>
             <div class="slider">
               <label>Horizontal Align</label>
               <div class="align-btn-group">
