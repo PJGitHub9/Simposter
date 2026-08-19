@@ -6,6 +6,7 @@ from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger
 from ..schemas import PresetDeleteRequest, PresetSaveRequest
 from .. import database as db
 from .template_manager import _get_fallback_settings
+from ..middleware.validation import validate_preset_id
 
 router = APIRouter()
 
@@ -94,6 +95,8 @@ def api_presets_default_template():
                         "poster_shift_y": -0.04,
                         "matte_height_ratio": 0.22,
                         "fade_height_ratio": 0.21,
+                        "top_matte_height_ratio": 0.0,
+                        "top_fade_height_ratio": 0.0,
                         "vignette_strength": 0.03,
                         "grain_amount": 0.22,
                         "logo_scale": 0.45,
@@ -178,7 +181,8 @@ def api_presets_export():
 # Default values that are stripped from compact exports to keep shared presets small
 _PRESET_DEFAULTS = {
     "poster_zoom": 1, "poster_shift_y": -0.04, "matte_height_ratio": 0.22,
-    "fade_height_ratio": 0.21, "vignette_strength": 0.03, "grain_amount": 0.22,
+    "fade_height_ratio": 0.21, "top_matte_height_ratio": 0.0, "top_fade_height_ratio": 0.0,
+    "vignette_strength": 0.03, "grain_amount": 0.22,
     "logo_scale": 0.45, "logo_offset": 0.88, "uniform_logo_max_w": 1282,
     "uniform_logo_max_h": 352, "uniform_logo_offset_x": 0.5, "uniform_logo_offset_y": 0.83,
     "uniform_logo_h_align": "center", "uniform_logo_v_align": "center",
@@ -257,7 +261,7 @@ def api_save_preset(req: PresetSaveRequest):
     from ..config import settings
 
     template_id = req.template_id or "uniformlogo"
-    preset_id = req.preset_id
+    preset_id = validate_preset_id(req.preset_id)
     # Keep season_options as None when not provided — db.save_preset will preserve the existing value
     season_options = req.season_options
 

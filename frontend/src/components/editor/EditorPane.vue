@@ -155,6 +155,8 @@ const options = ref({
   posterShiftY: 0,
   matteHeight: 0,
   fadeHeight: 0,
+  topMatteHeight: 0,
+  topFadeHeight: 0,
   vignette: 0,
   grain: 0,
   logoScale: 50,
@@ -206,7 +208,7 @@ const loading = render.loading
 const error = render.error
 const lastPreview = render.lastPreview
 
-const { success, error: notifyError } = useNotification()
+const { success, error: notifyError, info: notifyInfo } = useNotification()
 
 const presetService = usePresetService()
 const templates = presetService.templates
@@ -220,7 +222,7 @@ const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 
 // Accordion section open/close state
 const sectionOpen = ref({
-  template: true,
+  template: false,
   poster: true,
   logo: true,
   text: false,
@@ -462,6 +464,8 @@ const optionsPayload = computed(() => ({
   poster_shift_y: options.value.posterShiftY / 100,
   matte_height_ratio: options.value.matteHeight / 100,
   fade_height_ratio: options.value.fadeHeight / 100,
+  top_matte_height_ratio: options.value.topMatteHeight / 100,
+  top_fade_height_ratio: options.value.topFadeHeight / 100,
   vignette_strength: options.value.vignette / 100,
   grain_amount: options.value.grain / 100,
   logo_scale: options.value.logoScale / 100,
@@ -540,6 +544,8 @@ const reloadPreset = async () => {
     options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
     options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
     options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+    options.value.topMatteHeight = Math.round((Number(o.top_matte_height_ratio) || 0) * 100)
+    options.value.topFadeHeight = Math.round((Number(o.top_fade_height_ratio) || 0) * 100)
     options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
     options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
     options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
@@ -609,6 +615,8 @@ const saveCurrentPreset = async () => {
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -666,11 +674,25 @@ const saveAsNewPreset = async () => {
     return
   }
 
+  // Preset IDs are used as filenames/DB keys and only allow letters, numbers, hyphens,
+  // and underscores server-side — slugify here so a natural-language name like "top overlay"
+  // doesn't silently succeed on save but then fail every subsequent preview/render.
+  const slugified = newPresetId.value.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '')
+  if (!slugified) {
+    notifyError('Preset id must contain letters, numbers, hyphens, or underscores')
+    return
+  }
+  if (slugified !== newPresetId.value.trim()) {
+    notifyInfo(`Preset id can't contain spaces or special characters — saving as "${slugified}"`)
+  }
+
   const backendOptions = {
     poster_zoom: options.value.posterZoom / 100,
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -714,10 +736,9 @@ const saveAsNewPreset = async () => {
     text_bbox_enabled: textBboxEnabled.value
   }
 
-  const newId = newPresetId.value.trim()
-  await presetService.savePresetAs(newId, backendOptions)
+  await presetService.savePresetAs(slugified, backendOptions)
   if (!presetService.error.value) {
-    selectedPreset.value = newId
+    selectedPreset.value = slugified
     success('Preset saved as new!')
     newPresetId.value = ''
   } else {
@@ -1068,6 +1089,8 @@ const applyPresetOptions = (id: string) => {
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
   options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
   options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+  options.value.topMatteHeight = Math.round((Number(o.top_matte_height_ratio) || 0) * 100)
+  options.value.topFadeHeight = Math.round((Number(o.top_fade_height_ratio) || 0) * 100)
   options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
   options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
   options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
@@ -1232,6 +1255,7 @@ watch(
           </button>
           <div v-show="sectionOpen.poster" class="acc-body">
             <!-- Poster source -->
+            <div class="sub-section-title" style="margin-top: 0">Source</div>
             <label class="field-label">
               Filter
               <select v-model="posterFilter">
@@ -1258,6 +1282,7 @@ watch(
                 <span>Fanart</span>
               </label>
             </div>
+            <div class="sub-section-title">Upload &amp; Selection</div>
             <!-- Custom upload -->
             <div
               class="poster-upload-zone"
@@ -1298,7 +1323,7 @@ watch(
             </div>
 
             <!-- Poster adjustments -->
-            <div class="sub-section-title">Adjustments</div>
+            <div class="sub-section-title">Position</div>
             <div class="slider">
               <label>Poster Shift Y %</label>
               <div class="slider-row">
@@ -1306,20 +1331,40 @@ watch(
                 <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
               </div>
             </div>
+
+            <div class="sub-section-title">Top Fade</div>
             <div class="slider">
-              <label>Matte Height %</label>
+              <label>Top Matte Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.topMatteHeight" type="range" min="0" max="50" />
+                <input v-model.number="options.topMatteHeight" type="number" min="0" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Top Fade Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.topFadeHeight" type="range" min="0" max="100" />
+                <input v-model.number="options.topFadeHeight" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+
+            <div class="sub-section-title">Bottom Fade</div>
+            <div class="slider">
+              <label>Bottom Matte Height %</label>
               <div class="slider-row">
                 <input v-model.number="options.matteHeight" type="range" min="0" max="50" />
                 <input v-model.number="options.matteHeight" type="number" min="0" max="50" class="slider-num" />
               </div>
             </div>
             <div class="slider">
-              <label>Fade Height %</label>
+              <label>Bottom Fade Height %</label>
               <div class="slider-row">
                 <input v-model.number="options.fadeHeight" type="range" min="0" max="100" />
                 <input v-model.number="options.fadeHeight" type="number" min="0" max="100" class="slider-num" />
               </div>
             </div>
+
+            <div class="sub-section-title">Effects</div>
             <div class="slider">
               <label>Vignette</label>
               <div class="slider-row">
@@ -1362,12 +1407,12 @@ watch(
               <input v-model="logoHex" type="color" />
             </label>
 
-            <div class="sub-section-title">Manual Selection</div>
+            <div class="sub-section-title">Preview Logo (Manual Selection)</div>
 
             <!-- Logo source + thumbnails -->
             <template v-if="!isLogoNone">
               <label class="field-label">
-                Preference
+                Logo Style
                 <select v-model="logoPreference">
                   <option value="first">First Available</option>
                   <option value="white">White Logos</option>

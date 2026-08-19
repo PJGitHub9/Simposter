@@ -681,6 +681,9 @@ def build_base_poster(
     matte_height_ratio = float(options.get("matte_height_ratio", 0.0))  # 0..0.5
     fade_height_ratio = float(options.get("fade_height_ratio", 0.0))    # 0..0.5
 
+    top_matte_height_ratio = float(options.get("top_matte_height_ratio", 0.0))  # 0..0.5
+    top_fade_height_ratio = float(options.get("top_fade_height_ratio", 0.0))    # 0..1
+
     vignette_strength = float(options.get("vignette_strength", 0.0))    # 0..1
     grain_amount = float(options.get("grain_amount", 0.0))              # 0..0.6
 
@@ -694,6 +697,9 @@ def build_base_poster(
     matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
     fade_height_ratio = clamp(fade_height_ratio, 0.0, 1.0)
 
+    top_matte_height_ratio = clamp(top_matte_height_ratio, 0.0, 0.5)
+    top_fade_height_ratio = clamp(top_fade_height_ratio, 0.0, 1.0)
+
     vignette_strength = clamp(vignette_strength, 0.0, 1.0)
     grain_amount = clamp(grain_amount, 0.0, 0.6)
 
@@ -704,23 +710,38 @@ def build_base_poster(
     shift_px = int(poster_shift_y * canvas_h)
     base.paste(poster, (0, shift_px))
 
-    # ------------- MATTE + FADE -------------
+    # ------------- MATTE + FADE (bottom + top) -------------
     matte_h = int(canvas_h * matte_height_ratio)
     fade_h = int(canvas_h * fade_height_ratio)
+    top_matte_h = int(canvas_h * top_matte_height_ratio)
+    top_fade_h = int(canvas_h * top_fade_height_ratio)
 
-    if matte_h > 0 or fade_h > 0:
-        matte_start = canvas_h - matte_h               # where solid matte begins
-        fade_start = max(0, matte_start - fade_h)      # top of fade
-
+    if matte_h > 0 or fade_h > 0 or top_matte_h > 0 or top_fade_h > 0:
         # Build a 1-D alpha column using numpy (vectorised), then broadcast to
         # full canvas width via a single C-level resize.  This replaces the
         # O(W × H) pure-Python pixel loop (6 M iterations at 2000×3000) with
         # O(H) numpy ops + a Pillow C resize — ~100–200× faster.
         col = np.zeros(canvas_h, dtype=np.float32)
-        n_fade = matte_start - fade_start
-        if n_fade > 0:
-            col[fade_start:matte_start] = np.arange(n_fade, dtype=np.float32) / max(fade_h, 1) * 255
-        col[matte_start:] = 255.0
+
+        if matte_h > 0 or fade_h > 0:
+            matte_start = canvas_h - matte_h               # where solid matte begins
+            fade_start = max(0, matte_start - fade_h)      # top of fade
+            n_fade = matte_start - fade_start
+            if n_fade > 0:
+                col[fade_start:matte_start] = np.arange(n_fade, dtype=np.float32) / max(fade_h, 1) * 255
+            col[matte_start:] = 255.0
+
+        if top_matte_h > 0 or top_fade_h > 0:
+            top_matte_end = top_matte_h                              # solid top matte occupies [0, top_matte_end)
+            top_fade_end = min(canvas_h, top_matte_end + top_fade_h) # fade occupies [top_matte_end, top_fade_end)
+            top_col = np.zeros(canvas_h, dtype=np.float32)
+            top_col[:top_matte_end] = 255.0
+            n_top_fade = top_fade_end - top_matte_end
+            if n_top_fade > 0:
+                ramp = np.arange(n_top_fade, dtype=np.float32) / max(top_fade_h, 1) * 255
+                top_col[top_matte_end:top_fade_end] = 255.0 - ramp  # mirror of the bottom ramp
+            col = np.maximum(col, top_col)
+
         col_img = Image.fromarray(col.astype(np.uint8).reshape(canvas_h, 1), mode="L")
         matte_mask = col_img.resize((canvas_w, canvas_h), Image.NEAREST)
 

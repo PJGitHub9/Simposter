@@ -287,6 +287,8 @@ const options = ref({
   posterShiftY: 0,
   matteHeight: 0,
   fadeHeight: 0,
+  topMatteHeight: 0,
+  topFadeHeight: 0,
   vignette: 0,
   grain: 0,
   logoScale: 50,
@@ -435,7 +437,7 @@ const saveCurrentSettings = () => {
     const presetFields = [
       'logoMode', 'textOverlayEnabled', 'customText', 'fontFamily', 'fontSize',
       'shadowEnabled', 'letterSpacing', 'positionY', 'posterZoom', 'posterShiftY',
-      'matteHeight', 'fadeHeight', 'vignette', 'grain', 'logoScale', 'logoOffset',
+      'matteHeight', 'fadeHeight', 'topMatteHeight', 'topFadeHeight', 'vignette', 'grain', 'logoScale', 'logoOffset',
       'textBboxEnabled'
     ]
 
@@ -519,7 +521,7 @@ const ensurePosterSelected = () => {
   }
 }
 
-const { success, error: notifyError } = useNotification()
+const { success, error: notifyError, info: notifyInfo } = useNotification()
 
 // Watch for preview changes and store them in carousel
 watch(lastPreview, (newPreview) => {
@@ -547,43 +549,6 @@ watch(lastPreview, (newPreview) => {
   }
 })
 
-// Switch to a rendered preview
-async function switchToRenderedPreview(index: number) {
-  if (index < 0 || index >= renderedPreviews.value.length) return
-  activePreviewIndex.value = index
-
-  saveCurrentSettings()
-
-  const preview = renderedPreviews.value[index]
-  if (preview) {
-    lastPreview.value = preview.imageUrl
-    const seasonIndex = Array.from(selectedSeasons.value).findIndex(key => key === preview.seasonKey)
-    if (seasonIndex >= 0) {
-      // Suppress auto-preview watcher during preview switching
-      suppressAutoPreview = true
-
-      try {
-        currentSeasonIndex.value = seasonIndex
-
-        // Restore cached poster BEFORE fetching images to prevent applyPosterFilter from changing it
-        const cachedPoster = selectedPosterCache.value[preview.seasonKey]
-        if (cachedPoster) {
-          selectedPoster.value = cachedPoster
-        }
-
-        // Load season-specific assets when switching to this preview
-        // Skip restore in fetchImagesForCurrentSeason since we call restoreSettingsForCurrent explicitly below
-        await fetchImagesForCurrentSeason(true)
-        restoreSettingsForCurrent()
-      } finally {
-        // Always re-enable auto-preview, even if there's an error
-        await nextTick()
-        suppressAutoPreview = false
-      }
-    }
-  }
-}
-
 function syncRenderedPlaceholders() {
   const selectedKeys = new Set(selectedSeasons.value)
   // Drop previews for deselected seasons
@@ -605,20 +570,6 @@ function syncRenderedPlaceholders() {
   }
 }
 
-function cycleRenderedPreviews(direction: 1 | -1) {
-  const total = renderedPreviews.value.length
-  if (!total) return
-  const nextIndex = (activePreviewIndex.value + direction + total) % total
-  switchToRenderedPreview(nextIndex)
-}
-
-function onPreviewWheel(event: WheelEvent) {
-  if (!renderedPreviews.value.length) return
-  event.preventDefault()
-  const direction: 1 | -1 = event.deltaY > 0 ? 1 : -1
-  cycleRenderedPreviews(direction)
-}
-
 const presetService = usePresetService()
 const templates = presetService.templates
 const presets = presetService.presets
@@ -631,7 +582,7 @@ const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 
 // Accordion section open/close state
 const sectionOpen = ref({
-  template: true,
+  template: false,
   poster: true,
   logo: true,
   text: false,
@@ -918,6 +869,8 @@ const optionsPayload = computed(() => {
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -995,6 +948,8 @@ const saveCurrentPreset = async () => {
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -1080,11 +1035,25 @@ const saveAsNewPreset = async () => {
     return
   }
 
+  // Preset IDs are used as filenames/DB keys and only allow letters, numbers, hyphens,
+  // and underscores server-side — slugify here so a natural-language name like "top overlay"
+  // doesn't silently succeed on save but then fail every subsequent preview/render.
+  const slugified = newPresetId.value.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '')
+  if (!slugified) {
+    notifyError('Preset id must contain letters, numbers, hyphens, or underscores')
+    return
+  }
+  if (slugified !== newPresetId.value.trim()) {
+    notifyInfo(`Preset id can't contain spaces or special characters — saving as "${slugified}"`)
+  }
+
   const backendOptions = {
     poster_zoom: options.value.posterZoom / 100,
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -1129,13 +1098,12 @@ const saveAsNewPreset = async () => {
     overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
   }
 
-  const newId = newPresetId.value.trim()
   if (selectedPosterType.value === 'season') {
     notifyError('Cannot save season options as new preset - use regular options only')
   } else {
-    await presetService.savePresetAs(newId, backendOptions)
+    await presetService.savePresetAs(slugified, backendOptions)
     if (!presetService.error.value) {
-      selectedPreset.value = newId
+      selectedPreset.value = slugified
       success('Preset saved as new!')
       newPresetId.value = ''
     } else {
@@ -1452,6 +1420,8 @@ const doPreview = async (skipBackgroundRender = false) => {
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -2060,42 +2030,30 @@ function toggleSelectionOnly(seasonKey: string) {
   renderAllSelectedSeasons()
 }
 
-async function toggleSeasonSelection(seasonKey: string) {
-  // Persist current target settings before switching to avoid bleed-over
-  saveCurrentSettings()
-
+async function focusSeason(seasonKey: string) {
   const season = seasons.value.find(s => s.key === seasonKey)
   if (!season) return
 
   const wasSelected = selectedSeasons.value.has(seasonKey)
   const isCurrentlyFocused = currentSeason.value?.key === seasonKey
 
-  // If clicking an already-selected season that's currently focused, deselect it
-  // Otherwise, if it's selected but not focused, just switch to it
-  // If it's not selected, add it and switch to it
+  // Clicking the season you're already viewing is a no-op — it used to silently
+  // deselect it, which was confusing (re-clicking the focused row felt like it should
+  // just re-confirm focus, not drop it from the batch). Deselecting a focused season is
+  // now only possible via its checkbox (toggleSelectionOnly), which keeps that as an
+  // explicit, separate action from focus-switching.
+  if (wasSelected && isCurrentlyFocused) {
+    return
+  }
+
+  // Persist current target settings before switching to avoid bleed-over
+  saveCurrentSettings()
+
+  // If it's selected but not focused, just switch to it. If it's not selected, add it
+  // and switch to it.
   const newSelection = new Set(selectedSeasons.value)
 
-  if (wasSelected && isCurrentlyFocused) {
-    // Deselect the focused season
-    newSelection.delete(seasonKey)
-    selectedSeasons.value = newSelection
-
-    // If no seasons left, force select the series
-    if (newSelection.size === 0) {
-      const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
-      selectedSeasons.value = new Set([seriesKey])
-      currentSeasonIndex.value = 0
-      await nextTick()
-      await fetchImagesForCurrentSeason()
-      restoreSettingsForCurrent()
-      await fetchExistingPoster()
-      syncRenderedPlaceholders()
-      await doPreview()
-    } else {
-      // Just removed a season, sync the rendered previews
-      syncRenderedPlaceholders()
-    }
-  } else if (wasSelected && !isCurrentlyFocused) {
+  if (wasSelected && !isCurrentlyFocused) {
     // Season already selected, just switch focus to it (use cached render if available)
     const selected = Array.from(newSelection)
     const idx = selected.findIndex(k => k === seasonKey)
@@ -2362,6 +2320,8 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
   options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
   options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+  options.value.topMatteHeight = Math.round((Number(o.top_matte_height_ratio) || 0) * 100)
+  options.value.topFadeHeight = Math.round((Number(o.top_fade_height_ratio) || 0) * 100)
   options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
   options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
   options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
@@ -2479,6 +2439,8 @@ watch(() => options.value.posterZoom, () => markFieldModified('posterZoom'))
 watch(() => options.value.posterShiftY, () => markFieldModified('posterShiftY'))
 watch(() => options.value.matteHeight, () => markFieldModified('matteHeight'))
 watch(() => options.value.fadeHeight, () => markFieldModified('fadeHeight'))
+watch(() => options.value.topMatteHeight, () => markFieldModified('topMatteHeight'))
+watch(() => options.value.topFadeHeight, () => markFieldModified('topFadeHeight'))
 watch(() => options.value.vignette, () => markFieldModified('vignette'))
 watch(() => options.value.grain, () => markFieldModified('grain'))
 watch(() => options.value.logoScale, () => markFieldModified('logoScale'))
@@ -2541,7 +2503,7 @@ watch(currentSeason, async () => {
   await fetchImagesForCurrentSeason()
   // Central safety net: load the now-current target's cached settings (or preset defaults)
   // regardless of which code path changed currentSeasonIndex. Some switch paths (e.g.
-  // toggleSeasonSelection) already call this explicitly too — reapplying is a harmless no-op,
+  // focusSeason) already call this explicitly too — reapplying is a harmless no-op,
   // but this is what makes season-navigation via the </> arrows (nextSeason/prevSeason, which
   // have no restore logic of their own) actually load the right settings instead of leaving
   // whichever poster was previously in focus's values on screen.
@@ -2577,7 +2539,7 @@ watch(tmdbId, () => {
           <span class="mobile-season-strip-label">Seasons</span>
           <div class="mobile-season-strip-actions">
             <button class="mobile-season-ctrl-btn" @click="selectAllSeasons">All</button>
-            <button class="mobile-season-ctrl-btn" @click="deselectAllSeasons">None</button>
+            <button class="mobile-season-ctrl-btn" @click="deselectAllSeasons">Series Only</button>
           </div>
         </div>
         <div class="mobile-season-pills">
@@ -2589,7 +2551,7 @@ watch(tmdbId, () => {
               active: currentSeason && currentSeason.key === season.key,
               selected: selectedSeasons.has(season.key)
             }"
-            @click="toggleSeasonSelection(season.key)"
+            @click="focusSeason(season.key)"
           >
             <span v-if="season.isSeries">Series</span>
             <span v-else>S{{ season.index }}</span>
@@ -2648,6 +2610,7 @@ watch(tmdbId, () => {
             </svg>
           </button>
           <div v-show="sectionOpen.poster" class="acc-body">
+            <div class="sub-section-title" style="margin-top: 0">Source</div>
             <label class="field-label">
               Filter
               <select v-model="posterFilter">
@@ -2672,13 +2635,14 @@ watch(tmdbId, () => {
                 <input type="checkbox" v-model="showFanartPosters" />
                 <span>Fanart</span>
               </label>
-              <label class="inline-field checkbox">
+              <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
                 <input type="checkbox" v-model="showTvdbPosters" />
                 <span>TVDB</span>
               </label>
             </div>
             <div class="poster-counts">TMDb: {{ posterCounts.tmdb }} · Fanart: {{ posterCounts.fanart }} · TVDB: {{ posterCounts.tvdb }}</div>
 
+            <div class="sub-section-title">Upload &amp; Selection</div>
             <!-- Custom upload -->
             <div
               class="poster-upload-zone"
@@ -2718,7 +2682,7 @@ watch(tmdbId, () => {
               </div>
             </div>
 
-            <div class="sub-section-title">Adjustments</div>
+            <div class="sub-section-title">Position</div>
             <div class="slider">
               <label>Poster Shift Y %</label>
               <div class="slider-row">
@@ -2726,20 +2690,40 @@ watch(tmdbId, () => {
                 <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
               </div>
             </div>
+
+            <div class="sub-section-title">Top Fade</div>
             <div class="slider">
-              <label>Matte Height %</label>
+              <label>Top Matte Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.topMatteHeight" type="range" min="0" max="50" />
+                <input v-model.number="options.topMatteHeight" type="number" min="0" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Top Fade Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.topFadeHeight" type="range" min="0" max="100" />
+                <input v-model.number="options.topFadeHeight" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+
+            <div class="sub-section-title">Bottom Fade</div>
+            <div class="slider">
+              <label>Bottom Matte Height %</label>
               <div class="slider-row">
                 <input v-model.number="options.matteHeight" type="range" min="0" max="50" />
                 <input v-model.number="options.matteHeight" type="number" min="0" max="50" class="slider-num" />
               </div>
             </div>
             <div class="slider">
-              <label>Fade Height %</label>
+              <label>Bottom Fade Height %</label>
               <div class="slider-row">
                 <input v-model.number="options.fadeHeight" type="range" min="0" max="100" />
                 <input v-model.number="options.fadeHeight" type="number" min="0" max="100" class="slider-num" />
               </div>
             </div>
+
+            <div class="sub-section-title">Effects</div>
             <div class="slider">
               <label>Vignette</label>
               <div class="slider-row">
@@ -2781,10 +2765,10 @@ watch(tmdbId, () => {
               <input v-model="logoHex" type="color" />
             </label>
 
-            <div class="sub-section-title">Manual Selection</div>
+            <div class="sub-section-title">Preview Logo (Manual Selection)</div>
             <template v-if="!isLogoNone">
               <label class="field-label">
-                Preference
+                Logo Style
                 <select v-model="logoPreference">
                   <option value="first">First Available</option>
                   <option value="white">White Logos</option>
@@ -2811,7 +2795,7 @@ watch(tmdbId, () => {
                   <input type="checkbox" v-model="showFanartLogos" />
                   <span>Fanart</span>
                 </label>
-                <label class="inline-field checkbox">
+                <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
                   <input type="checkbox" v-model="showTvdbLogos" />
                   <span>TVDB</span>
                 </label>
@@ -3064,7 +3048,7 @@ watch(tmdbId, () => {
         <div class="season-title">Seasons</div>
         <div class="season-controls">
           <button @click="selectAllSeasons" class="season-ctrl-btn" title="Select All">All</button>
-          <button @click="deselectAllSeasons" class="season-ctrl-btn" title="Deselect All">None</button>
+          <button @click="deselectAllSeasons" class="season-ctrl-btn" title="Deselect all except the series poster">Series Only</button>
         </div>
       </div>
 
@@ -3081,12 +3065,12 @@ watch(tmdbId, () => {
           <div class="banner-title">{{ currentSeason.title }}</div>
         </div>
         <div class="banner-nav">
-          <button @click="prevSeason" class="nav-btn" title="Previous Season">
+          <button @click="prevSeason" class="nav-btn" title="Previous selected season">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </button>
-          <button @click="nextSeason" class="nav-btn" title="Next Season">
+          <button @click="nextSeason" class="nav-btn" title="Next selected season">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="9 18 15 12 9 6" />
             </svg>
@@ -3103,7 +3087,7 @@ watch(tmdbId, () => {
             selected: selectedSeasons.has(season.key),
             active: currentSeason && currentSeason.key === season.key
           }"
-          @click="toggleSeasonSelection(season.key)"
+          @click="focusSeason(season.key)"
         >
           <div class="season-thumb-wrap">
             <img
@@ -3236,7 +3220,6 @@ watch(tmdbId, () => {
           <div v-if="renderedPreviews.length" class="rendered-previews-section">
           <div class="carousel-label">
             Rendered Posters ({{ renderedPreviews.filter(p => p.imageUrl).length }})
-            <span class="carousel-hint">Click to load • Scroll to cycle</span>
           </div>
           <div class="carousel-scroll">
             <div
@@ -3244,7 +3227,6 @@ watch(tmdbId, () => {
               :key="preview.seasonKey"
               class="carousel-item"
               :class="{ active: index === activePreviewIndex }"
-              @click="switchToRenderedPreview(index)"
               :title="preview.seasonTitle"
             >
               <template v-if="preview.imageUrl">
@@ -4103,6 +4085,11 @@ button:disabled {
   background: rgba(61, 214, 183, 0.25);
 }
 
+.season-item.active:not(.selected) {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
 .season-item.disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -4735,18 +4722,11 @@ button:disabled {
 .carousel-item {
   flex-shrink: 0;
   width: 100px;
-  cursor: pointer;
   border-radius: 6px;
   overflow: hidden;
   border: 2px solid transparent;
   transition: all 0.2s ease;
   background: rgba(255, 255, 255, 0.02);
-}
-
-.carousel-item:hover {
-  border-color: rgba(99, 102, 241, 0.4);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 .carousel-item.active {

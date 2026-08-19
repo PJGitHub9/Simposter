@@ -456,46 +456,64 @@ def generate_overlay(
     # Extract options with defaults
     matte_height_ratio = float(options.get("matte_height_ratio", 0.0))
     fade_height_ratio = float(options.get("fade_height_ratio", 0.0))
+    top_matte_height_ratio = float(options.get("top_matte_height_ratio", 0.0))
+    top_fade_height_ratio = float(options.get("top_fade_height_ratio", 0.0))
     vignette_strength = float(options.get("vignette_strength", 0.0))
     v12_wash_strength = float(options.get("v12_wash_strength", 0.0))
-    
+
     # Clamp values
     def clamp(v, lo, hi):
         return max(lo, min(hi, v))
-    
+
     matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
     fade_height_ratio = clamp(fade_height_ratio, 0.0, 1.0)
+    top_matte_height_ratio = clamp(top_matte_height_ratio, 0.0, 0.5)
+    top_fade_height_ratio = clamp(top_fade_height_ratio, 0.0, 1.0)
     vignette_strength = clamp(vignette_strength, 0.0, 1.0)
     v12_wash_strength = clamp(v12_wash_strength, 0.0, 1.0)
     
     # Start with transparent canvas
     overlay = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     
-    # --- MATTE + FADE ---
-    # These create opacity gradients that darken the bottom portion
+    # --- MATTE + FADE (bottom + top) ---
+    # These create opacity gradients that darken the bottom and/or top portion
     matte_h = int(canvas_h * matte_height_ratio)
     fade_h = int(canvas_h * fade_height_ratio)
-    
-    if matte_h > 0 or fade_h > 0:
+    top_matte_h = int(canvas_h * top_matte_height_ratio)
+    top_fade_h = int(canvas_h * top_fade_height_ratio)
+
+    if matte_h > 0 or fade_h > 0 or top_matte_h > 0 or top_fade_h > 0:
         # Create black layer with alpha gradient
         matte_layer = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         pixels = matte_layer.load()
-        
+
         matte_start = canvas_h - matte_h
         fade_start = max(0, matte_start - fade_h)
-        
+        top_matte_end = top_matte_h
+        top_fade_end = min(canvas_h, top_matte_end + top_fade_h)
+
         for y in range(canvas_h):
             if y >= matte_start:
-                alpha = 255  # solid black
+                bottom_alpha = 255  # solid black
             elif y >= fade_start:
                 t = (y - fade_start) / max(fade_h, 1)
-                alpha = int(255 * t)
+                bottom_alpha = int(255 * t)
             else:
-                alpha = 0  # transparent
-            
+                bottom_alpha = 0  # transparent
+
+            if y < top_matte_end:
+                top_alpha = 255  # solid black
+            elif y < top_fade_end:
+                t = (top_fade_end - y) / max(top_fade_h, 1)  # mirror of the bottom ramp
+                top_alpha = int(255 * t)
+            else:
+                top_alpha = 0  # transparent
+
+            alpha = max(bottom_alpha, top_alpha)
+
             for x in range(canvas_w):
                 pixels[x, y] = (0, 0, 0, alpha)
-        
+
         overlay = Image.alpha_composite(overlay, matte_layer)
     
     # --- VIGNETTE ---

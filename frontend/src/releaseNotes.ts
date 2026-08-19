@@ -10,6 +10,44 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.49',
+    date: '2026-08-18',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Manual editor decluttering pass: renamed the Logo "Preference" dropdown to "Logo Style" (it sat too close to a similarly-worded but unrelated Logo Mode option), the Preset section starts collapsed to reduce initial clutter, and the Poster section\'s controls are now grouped into Source / Upload & Selection alongside the existing sliders.',
+          'TV editor: fixed a bug where clicking the season you were already viewing would silently remove it from the render batch — it now just does nothing, as expected. Also renamed the "None" season button to "Series Only" (it never actually cleared the selection), added clarifying tooltips around season navigation, and made the "Rendered Posters" strip read-only since its highlight could point at a different season than the one actually in focus.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.48',
+    date: '2026-08-18',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Save As" letting you save a preset name with spaces, which then silently failed to preview or render afterward. Spaces/special characters are now converted automatically (e.g. "Top Overlay" → "Top-Overlay") with a heads-up when that happens.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.47',
+    date: '2026-08-18',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added an independent Top Matte + Fade effect — mirrors the existing bottom matte/fade, but fully separate. Use one, both, or neither.',
+          'The Poster section in the manual editor is now organized into labeled groups (Position, Top Fade, Bottom Fade, Effects) instead of one long list, making room for the new sliders without adding clutter.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.46',
     date: '2026-08-18',
     sections: [
