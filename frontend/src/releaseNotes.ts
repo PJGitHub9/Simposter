@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.53',
+    date: '2026-08-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a new {season number} template variable for Custom Text — just the season number (e.g. "3"), separate from {season} which always spells out "Season 3" in English. Great for other languages or a custom format.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Raised the logo drop shadow\'s Size/Blur slider max from 150px to 250px.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.52',
     date: '2026-08-19',
     sections: [

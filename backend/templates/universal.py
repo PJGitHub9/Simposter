@@ -385,10 +385,12 @@ def _render_text_overlay(
     movie_title = str(options.get("movie_title", ""))
     movie_year = str(options.get("movie_year", ""))
     season_text = str(options.get("season_text", ""))
+    season_number = str(options.get("season_number", ""))
 
     text = text.replace("{title}", movie_title)
     text = text.replace("{year}", movie_year)
     text = text.replace("{season}", season_text)
+    text = text.replace("{season number}", season_number)
 
     # Apply text transform
     if text_transform == "uppercase":

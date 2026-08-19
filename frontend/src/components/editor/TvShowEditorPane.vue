@@ -313,7 +313,8 @@ const options = ref({
   overlayMode: 'screen',
   overlayConfigIds: [] as string[],
   overlayConfigIdsBelow: [] as string[],
-  season_text: undefined as string | undefined
+  season_text: undefined as string | undefined,
+  season_number: undefined as string | undefined
 })
 
 // Text overlay settings
@@ -461,9 +462,12 @@ const saveCurrentSettings = () => {
       }
     })
   } else {
-    // For series, ensure season_text is never saved
+    // For series, ensure season_text/season_number are never saved
     if (settings.options && settings.options.season_text) {
       delete settings.options.season_text
+    }
+    if (settings.options && settings.options.season_number) {
+      delete settings.options.season_number
     }
   }
 
@@ -483,16 +487,22 @@ const restoreSettingsForCurrent = () => {
       applySettings(cached)
     }
   } else {
-    // This is a series poster - explicitly clear season_text
+    // This is a series poster - explicitly clear season_text/season_number
     if (options.value.season_text) {
       delete options.value.season_text
+    }
+    if (options.value.season_number) {
+      delete options.value.season_number
     }
 
     if (cached) {
       applySettings(cached)
-      // Ensure season_text is not in cached settings for series
+      // Ensure season_text/season_number are not in cached settings for series
       if (options.value.season_text) {
         delete options.value.season_text
+      }
+      if (options.value.season_number) {
+        delete options.value.season_number
       }
     } else {
       applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false })
@@ -862,16 +872,18 @@ const filteredLogos = computed(() => {
 const optionsPayload = computed(() => {
   // Generate season text (e.g., "Season 1" or "Specials") - only for actual seasons, not series
   let seasonText = ""
+  let seasonNumber = ""
   if (currentSeason.value && !currentSeason.value.isSeries) {
     if (currentSeason.value.index === 0) {
       seasonText = "Specials"
     } else {
       seasonText = `Season ${currentSeason.value.index}`
     }
+    seasonNumber = String(currentSeason.value.index)
   }
 
-  // Replace {season} placeholder in custom text
-  const processedCustomText = customText.value.replace('{season}', seasonText)
+  // Replace {season} and {season number} placeholders in custom text
+  const processedCustomText = customText.value.replace('{season}', seasonText).replace('{season number}', seasonNumber)
 
   const payload: Record<string, any> = {
     poster_zoom: options.value.posterZoom / 100,
@@ -931,9 +943,10 @@ const optionsPayload = computed(() => {
     overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
-  // Only include season_text if it's not empty (for seasons, not series)
+  // Only include season_text/season_number if they're not empty (for seasons, not series)
   if (seasonText) {
     payload.season_text = seasonText
+    payload.season_number = seasonNumber
   }
 
   return payload
@@ -1434,16 +1447,18 @@ const doPreview = async (skipBackgroundRender = false) => {
 
   // Capture season text at the start to prevent wrong text appearing
   let capturedSeasonText = ""
+  let capturedSeasonNumber = ""
   if (season && !season.isSeries) {
     if (season.index === 0) {
       capturedSeasonText = "Specials"
     } else {
       capturedSeasonText = `Season ${season.index}`
     }
+    capturedSeasonNumber = String(season.index)
   }
 
   // Build options payload with captured season text
-  const processedCustomText = customText.value.replace('{season}', capturedSeasonText)
+  const processedCustomText = customText.value.replace('{season}', capturedSeasonText).replace('{season number}', capturedSeasonNumber)
 
   const capturedOptionsPayload: Record<string, any> = {
     poster_zoom: options.value.posterZoom / 100,
@@ -1503,9 +1518,10 @@ const doPreview = async (skipBackgroundRender = false) => {
     overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
-  // Only include season_text if it's not empty (for seasons, not series)
+  // Only include season_text/season_number if they're not empty (for seasons, not series)
   if (capturedSeasonText) {
     capturedOptionsPayload.season_text = capturedSeasonText
+    capturedOptionsPayload.season_number = capturedSeasonNumber
   }
 
   // Generate cache key based on captured settings
@@ -1575,6 +1591,7 @@ const renderAllSelectedSeasons = async () => {
   // Keep text_overlay_enabled and logo_mode - they'll be handled per-season below
   delete (baseOptions as any).custom_text
   delete (baseOptions as any).season_text
+  delete (baseOptions as any).season_number
 
   // Build array of seasons to render (excluding current which is already rendered)
   const seasonsToRender = selectedKeys
@@ -1643,11 +1660,14 @@ const renderAllSelectedSeasons = async () => {
     // Build options using preset defaults + any cached customizations
     let seasonOptions = { ...baseOptions }
 
-    // Add season_text for season-specific rendering
+    // Add season_text/season_number for season-specific rendering
     let thisSeasonText = ''
+    let thisSeasonNumber = ''
     if (!seasonIsSeries) {
       thisSeasonText = seasonTitle.includes('Special') ? 'Specials' : `Season ${seasonIndex}`
+      thisSeasonNumber = String(seasonIndex)
       seasonOptions.season_text = thisSeasonText
+      seasonOptions.season_number = thisSeasonNumber
     }
 
     // For background renders, don't send text overlay, logo mode, or custom text
@@ -1671,9 +1691,10 @@ const renderAllSelectedSeasons = async () => {
         }
         return acc
       }, {} as any)
-      // Keep season_text for backend placeholder replacement (only if not empty)
+      // Keep season_text/season_number for backend placeholder replacement (only if not empty)
       if (thisSeasonText) {
         seasonOptions.season_text = thisSeasonText
+        seasonOptions.season_number = thisSeasonNumber
       }
     } else {
       // User has modified this season - apply their customizations
@@ -1767,6 +1788,7 @@ const doSave = async () => {
   const baseOptions = { ...optionsPayload.value }
   delete (baseOptions as any).custom_text
   delete (baseOptions as any).season_text
+  delete (baseOptions as any).season_number
 
   // Save for each selected season
   for (const seasonKey of selectedSeasonKeys) {
@@ -1810,11 +1832,14 @@ const doSave = async () => {
     // Build season-specific options
     let seasonOptions = { ...baseOptions }
 
-    // Add season_text for season-specific rendering
+    // Add season_text/season_number for season-specific rendering
     let thisSeasonText = ''
+    let thisSeasonNumber = ''
     if (!season.isSeries) {
       thisSeasonText = season.title.includes('Special') ? 'Specials' : `Season ${season.index}`
+      thisSeasonNumber = String(season.index)
       seasonOptions.season_text = thisSeasonText
+      seasonOptions.season_number = thisSeasonNumber
     }
 
     // Apply cached settings if user modified this season
@@ -1844,9 +1869,10 @@ const doSave = async () => {
         }
         return acc
       }, {} as any)
-      // Keep season_text for backend placeholder replacement
+      // Keep season_text/season_number for backend placeholder replacement
       if (thisSeasonText) {
         seasonOptions.season_text = thisSeasonText
+        seasonOptions.season_number = thisSeasonNumber
       }
     }
 
@@ -2949,8 +2975,8 @@ watch(tmdbId, () => {
                 <div class="slider">
                   <label>Size / Blur (px)</label>
                   <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="150" />
-                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="150" class="slider-num" />
+                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
+                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
                   </div>
                 </div>
               </template>

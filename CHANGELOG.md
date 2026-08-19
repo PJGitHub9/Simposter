@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.6.53 (2026-08-19)
+### Improvements
+- **Logo drop shadow's Size/Blur slider max raised from 150px to 250px.** The backend (`add_drop_shadow()`) never had an upper bound on this value — the 150 cap was frontend-only — so this is a pure UI change, no backend clamp to touch.
+### New Features
+- **New Custom Text template variable: `{season number}`** — resolves to just the season's number (e.g. `3`), separate from the existing `{season}` variable which always resolves to the full English phrase (`Season 3`, `Specials`). Lets users write season text in other languages or formats — e.g. `Temporada {season number}`, `S{season number}`, or a bare `{season number}` with no "Season" word at all. Empty for series-level posters, same as `{season}`. Wired through every place `season_text` already flows (live preview, batch/webhook renders, background season pre-rendering) — see CLAUDE.md Quirk #13 for why this file has so many separate call sites that all needed the same treatment.
+
 ## v1.6.52 (2026-08-19)
 ### Improvements
 - **Moved the logo Drop Shadow controls from the Bounding Box section into the Logo section** (both editors) — the shadow only ever applies to the logo (never Custom Text, which also uses the Bounding Box section for its optional fit-to-box mode), so it belongs with the other logo controls rather than the shared geometry section. Still gated to Uniform Logo templates only; no functional change, UI placement only.

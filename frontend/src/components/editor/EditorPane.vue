@@ -1583,8 +1583,8 @@ watch(
                 <div class="slider">
                   <label>Size / Blur (px)</label>
                   <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="150" />
-                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="150" class="slider-num" />
+                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
+                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
                   </div>
                 </div>
               </template>

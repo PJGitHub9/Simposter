@@ -1154,8 +1154,9 @@ def _render_all_tv_seasons(
         poster_url = poster.get("url")
         logo_url = logo.get("url") if logo else None
 
-        # Add season_text to season-specific options
+        # Add season_text/season_number to season-specific options
         season_render_options["season_text"] = season_title
+        season_render_options["season_number"] = str(season_index) if season_index is not None else ""
 
         # Render the poster with potentially updated template/preset from fallback
         result = _render_and_save_poster(
