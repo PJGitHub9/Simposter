@@ -90,7 +90,11 @@ const testTmdb = async () => {
   tmdbStatus.value = 'testing'
   tmdbStatusMsg.value = ''
   try {
-    const res = await fetch(`${apiBase}/api/test-tmdb?api_key=${encodeURIComponent(tmdbApiKey.value.trim())}`)
+    const res = await fetch(`${apiBase}/api/test-tmdb`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: tmdbApiKey.value.trim() }),
+    })
     const data = await res.json()
     if (data.status === 'ok') { tmdbStatus.value = 'ok'; tmdbStatusMsg.value = data.example || 'Valid' }
     else { tmdbStatus.value = 'error'; tmdbStatusMsg.value = data.error || 'Invalid key' }
@@ -102,7 +106,11 @@ const testTvdb = async () => {
   tvdbStatus.value = 'testing'
   tvdbStatusMsg.value = ''
   try {
-    const res = await fetch(`${apiBase}/api/test-tvdb?api_key=${encodeURIComponent(tvdbApiKey.value.trim())}`)
+    const res = await fetch(`${apiBase}/api/test-tvdb`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: tvdbApiKey.value.trim() }),
+    })
     const data = await res.json()
     if (data.status === 'ok') { tvdbStatus.value = 'ok'; tvdbStatusMsg.value = 'Valid' }
     else { tvdbStatus.value = 'error'; tvdbStatusMsg.value = data.error || 'Invalid key' }

@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.54',
+    date: '2026-08-20',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the onboarding wizard\'s TMDb and TVDB "Test" buttons failing with a generic error instead of actually validating the key — they were still using an old request format that pre-dated a security change to those endpoints. Testing keys from Settings was not affected.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.53',
     date: '2026-08-19',
     sections: [
