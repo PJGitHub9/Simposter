@@ -470,6 +470,12 @@ def init_database():
         coll_cols = [row["name"] for row in cursor.fetchall()]
         if "library_id" not in coll_cols:
             cursor.execute("ALTER TABLE collection_cache ADD COLUMN library_id TEXT DEFAULT 'default'")
+        if "tmdb_collection_id" not in coll_cols:
+            # Resolved once via a title search against TMDb's /search/collection
+            # (Plex collections carry no TMDb ID of their own) and cached here so
+            # opening the Simposter Creator for the same collection again doesn't
+            # repeat that search — see get_collection_tmdb_id()/set_collection_tmdb_id().
+            cursor.execute("ALTER TABLE collection_cache ADD COLUMN tmdb_collection_id INTEGER")
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_collection_cache_updated
             ON collection_cache(updated_at)
@@ -2193,15 +2199,24 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
     Replace cache entries to match the provided collections list.
     Also removes orphaned poster files.
     """
+    # Defensively skip any entry with no rating_key — a prior bug (fixed) briefly
+    # let a shape-mismatched caller write rows with rating_key=NULL here. Since
+    # SQL's `NULL NOT IN (...)` is neither true nor false, the orphan-cleanup
+    # query below silently could never match/delete those rows once written —
+    # they'd sit as permanent duplicate "blank poster" entries. Guarding the
+    # insert here stops new ones; the `IS NULL OR` below cleans up existing ones.
+    collections = [c for c in collections if c.get("rating_key")]
     keys = [c["rating_key"] for c in collections]
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # Get rating_keys that will be deleted (orphaned entries)
+        # Get rating_keys that will be deleted (orphaned entries) — `rating_key IS
+        # NULL OR rating_key NOT IN (...)` so any already-corrupted NULL-keyed
+        # rows are finally caught too (plain `NOT IN` never matches NULL).
         if keys:
             cursor.execute(f"""
                 SELECT rating_key FROM collection_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+                WHERE (rating_key IS NULL OR rating_key NOT IN ({",".join("?" for _ in keys)})) AND library_id = ?
             """, keys + [library_id])
             orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
         else:
@@ -2228,11 +2243,15 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
                 library_id,
             ))
 
-        # Drop database entries that are no longer present
+        # Drop database entries that are no longer present (including any
+        # NULL-keyed rows — see the IS NULL note above). Deliberately left as
+        # the original `if keys:` guard — an empty incoming list intentionally
+        # leaves existing rows alone rather than wiping the cache, in case
+        # that's a transient/failed fetch rather than a genuinely empty library.
         if keys:
             cursor.execute(f"""
                 DELETE FROM collection_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+                WHERE (rating_key IS NULL OR rating_key NOT IN ({",".join("?" for _ in keys)})) AND library_id = ?
             """, keys + [library_id])
 
     # Clean up orphaned poster files on disk
@@ -2271,6 +2290,28 @@ def get_cached_collections(library_id: Optional[str] = None) -> List[Dict[str, A
             "library_id": row["library_id"],
         })
     return out
+
+
+def get_collection_tmdb_id(rating_key: str) -> Optional[int]:
+    """Previously-resolved TMDb collection ID for a Plex collection, if any.
+    None means "never looked up yet" — distinct from a stored 0/negative
+    sentinel, which callers may use for "looked up, no match found"."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT tmdb_collection_id FROM collection_cache WHERE rating_key = ?", (rating_key,))
+        row = cursor.fetchone()
+    if row is None or row["tmdb_collection_id"] is None:
+        return None
+    return int(row["tmdb_collection_id"])
+
+
+def set_collection_tmdb_id(rating_key: str, tmdb_collection_id: Optional[int]) -> None:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE collection_cache SET tmdb_collection_id = ? WHERE rating_key = ?",
+            (tmdb_collection_id, rating_key),
+        )
 
 
 def get_collection_cache_stats(library_id: Optional[str] = None) -> Dict[str, Any]:

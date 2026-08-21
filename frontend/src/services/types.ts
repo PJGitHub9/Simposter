@@ -1,6 +1,6 @@
 export type PresetOptions = Record<string, unknown>
 
-export type MediaType = 'movie' | 'tv-show'
+export type MediaType = 'movie' | 'tv-show' | 'collection'
 
 export type MovieInput = {
   key: string

@@ -197,6 +197,7 @@ def api_preview(req: PreviewRequest):
         # Check if this is a Plex URL or API URL - if so, extract rating key and fetch from TMDB
         rating_key = None
         is_tv_show = False
+        tmdb_id = None
         if background_url:
             if "/library/metadata/" in background_url and "/thumb" in background_url:
                 # Plex URL format
@@ -586,8 +587,12 @@ def api_preview(req: PreviewRequest):
                     except Exception as plex_err:
                         logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
 
-        # Final check: if we still don't have a background_url, raise a clear error
-        if not background_url:
+        # Final check: if we still don't have a background_url, raise a clear error.
+        # Exception: the "kometa" template has no photo background at all (collections
+        # have no TMDb/Fanart art source) — render_poster_image() synthesizes a flat-color
+        # canvas from options.kometa_base_color instead, so an empty background_url here
+        # is expected, not an error.
+        if not background_url and template_id != "kometa":
             logger.error("[PREVIEW] No background URL available after all lookups (rating_key=%s, is_tv=%s)", rating_key, is_tv_show)
             raise HTTPException(status_code=400, detail="Could not find a poster image. Check that the item has a valid TMDB/TVDB ID or Plex poster.")
 

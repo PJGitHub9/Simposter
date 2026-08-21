@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 const props = defineProps<{
   movieSaveLocation: string
   tvShowSaveLocation: string
+  collectionSaveLocation: string
   tvShowSaveMode: string
   saveBatchInSubfolder: boolean
   saveToAssetFolderOnSend: boolean
@@ -18,6 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:movieSaveLocation': [value: string]
   'update:tvShowSaveLocation': [value: string]
+  'update:collectionSaveLocation': [value: string]
   'update:tvShowSaveMode': [value: string]
   'update:saveBatchInSubfolder': [value: boolean]
   'update:saveToAssetFolderOnSend': [value: boolean]
@@ -36,6 +38,11 @@ const localMovieSaveLocation = computed({
 const localTvShowSaveLocation = computed({
   get: () => props.tvShowSaveLocation,
   set: (val) => emit('update:tvShowSaveLocation', val)
+})
+
+const localCollectionSaveLocation = computed({
+  get: () => props.collectionSaveLocation,
+  set: (val) => emit('update:collectionSaveLocation', val)
 })
 
 const localTvShowSaveMode = computed({
@@ -269,6 +276,23 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
           <code>{filename}</code> resolves to <code>poster</code> (movie or show poster) or <code>SeasonNN</code> (a season
           poster) — Kometa's exact asset-naming convention. Templates without <code>{filename}</code> fall back to the
           "TV Show File Structure" setting below instead.
+        </span>
+      </label>
+
+      <label>
+        <span class="label-text">Collection Save Location</span>
+        <input
+          v-model="localCollectionSaveLocation"
+          type="text"
+          placeholder="/config/output/{library}/Collections/{title}.jpg"
+          :readonly="!isCustomActive"
+        />
+        <span class="help-text">
+          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{key}</code>, <code>{filename}</code>
+        </span>
+        <span class="help-text extra-note">
+          Used when saving or sending a Plex collection poster (Simposter Creator or Kometa Creator).
+          <code>{title}</code> is the collection's name — collections have no year or season.
         </span>
       </label>
 

@@ -61,6 +61,14 @@ const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
+// Collections have no logo source of their own (TMDb collections carry
+// posters/backdrops only) — this lets the user borrow a logo from one of the
+// collection's member movies instead (works for a franchise's shared logo,
+// not for studio/curated collections with no single representative movie).
+const collectionMovies = ref<{ key: string; title: string; year?: number | null }[]>([])
+const selectedCollectionMovieKey = ref<string | null>(null)
+const loadingCollectionLogo = ref(false)
+
 // Custom uploaded poster
 const uploadedPosterUrl = ref<string | null>(null)
 const posterUploading = ref(false)
@@ -813,8 +821,36 @@ const fetchTmdbAssets = async () => {
   selectedPoster.value = null
   selectedLogo.value = null
   try {
-    // Detect media type (movie or TV show)
     const mediaType = props.movie.mediaType || 'movie'
+
+    if (mediaType === 'collection') {
+      // Plex collections carry no TMDb ID of their own — resolved via a
+      // one-time title search, cached server-side (collection_cache.tmdb_collection_id).
+      // TMDb collections have posters/backdrops but no logos (unlike movies/shows) —
+      // Fanart.tv does have franchise-wide logos, tagged under the same TMDb
+      // collection ID in its /v3/movies/{id} namespace (verified live against
+      // the LOTR collection). Falls back to an empty list if Fanart has none
+      // for this collection; the "Import Logo From Movie" picker still covers that case.
+      fetchCollectionMovies()
+
+      const tmdbRes = await fetch(`${apiBase}/api/collection/${props.movie.key}/tmdb`)
+      const tmdb = await tmdbRes.json()
+      tmdbId.value = tmdb.tmdb_id || null
+      if (!tmdbId.value) return
+
+      const [imgRes, fanartRes] = await Promise.all([
+        fetch(`${apiBase}/api/tmdb/collection/${tmdbId.value}/images`),
+        fetch(`${apiBase}/api/tmdb/collection/${tmdbId.value}/fanart-logos`)
+      ])
+      const imgs = await imgRes.json()
+      const fanart = await fanartRes.json()
+      posters.value = imgs.posters || []
+      logos.value = fanart.logos || []
+      applyPosterFilter()
+      applyLogoPreference()
+      return
+    }
+
     const isTvShow = mediaType === 'tv-show'
 
     // Use appropriate endpoint for TMDB ID lookup
@@ -840,6 +876,41 @@ const fetchTmdbAssets = async () => {
     applyLogoPreference()
   } catch (e) {
     console.error(e)
+  }
+}
+
+const fetchCollectionMovies = async () => {
+  collectionMovies.value = []
+  selectedCollectionMovieKey.value = null
+  try {
+    const res = await fetch(`${apiBase}/api/collection/${props.movie.key}/movies`)
+    if (!res.ok) return
+    const data = await res.json()
+    collectionMovies.value = data.movies || []
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+const importLogoFromMovie = async (movieKey: string | null) => {
+  if (!movieKey) return
+  loadingCollectionLogo.value = true
+  try {
+    const tmdbRes = await fetch(`${apiBase}/api/movie/${movieKey}/tmdb`)
+    const tmdb = await tmdbRes.json()
+    const movieTmdbId = tmdb.tmdb_id || null
+    if (!movieTmdbId) {
+      logos.value = []
+      return
+    }
+    const imgRes = await fetch(`${apiBase}/api/tmdb/${movieTmdbId}/images`)
+    const imgs = await imgRes.json()
+    logos.value = imgs.logos || []
+    applyLogoPreference()
+  } catch (e) {
+    console.error(e)
+  } finally {
+    loadingCollectionLogo.value = false
   }
 }
 
@@ -1466,6 +1537,26 @@ watch(
 
             <!-- Logo source + thumbnails -->
             <template v-if="!isLogoNone">
+              <template v-if="props.movie.mediaType === 'collection'">
+                <p class="muted-text" v-if="logos.length">
+                  Showing {{ logos.length }} franchise logo{{ logos.length === 1 ? '' : 's' }} from Fanart.tv, or import one from a specific movie below.
+                </p>
+                <label class="field-label">
+                  Import Logo From Movie {{ logos.length ? '(overrides the list above)' : '' }}
+                  <select
+                    v-model="selectedCollectionMovieKey"
+                    @change="importLogoFromMovie(selectedCollectionMovieKey)"
+                  >
+                    <option :value="null">Select a movie in this collection…</option>
+                    <option v-for="m in collectionMovies" :key="m.key" :value="m.key">
+                      {{ m.title }}{{ m.year ? ` (${m.year})` : '' }}
+                    </option>
+                  </select>
+                </label>
+                <p class="muted-text" v-if="loadingCollectionLogo">Loading logo options…</p>
+                <p class="muted-text" v-else-if="!logos.length && collectionMovies.length === 0">No movies found in this collection.</p>
+                <p class="muted-text" v-else-if="!logos.length">No franchise logo found on Fanart.tv for this collection — try importing one from a movie instead.</p>
+              </template>
               <label class="field-label">
                 Logo Style
                 <select v-model="logoPreference">

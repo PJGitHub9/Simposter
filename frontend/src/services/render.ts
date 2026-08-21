@@ -48,7 +48,8 @@ export function useRenderService() {
     logo_url: logoUrl || null,
     movie_title: movie.title,
     movie_year: movie.year ?? null,
-    options: options ?? undefined
+    options: options ?? undefined,
+    is_collection: movie.mediaType === 'collection'
   })
 
   const preview = async (

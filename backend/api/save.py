@@ -224,14 +224,16 @@ def api_save(req: SaveRequest):
     fmt_settings = get_output_format_settings()
 
     # {folder} template variable: resolve the real on-disk folder name from Plex
-    # (movies only -- TV shows/seasons have no single <Part> file to derive it from,
-    # apply_save_location_variables() falls back to {title} automatically).
+    # (movies only -- TV shows/seasons and collections have no single <Part> file
+    # to derive it from, apply_save_location_variables() falls back to {title}
+    # automatically).
     folder_name = None
-    if req.rating_key and not req.is_tv:
+    if req.rating_key and not req.is_tv and not req.is_collection:
         folder_name = get_movie_folder_name(req.rating_key)
 
+    media_type = "collection" if req.is_collection else ("tv-show" if req.is_tv else "movie")
     ctx = SaveContext(
-        media_type="tv-show" if req.is_tv else "movie",
+        media_type=media_type,
         title=req.movie_title,
         year=req.movie_year,
         rating_key=req.rating_key,

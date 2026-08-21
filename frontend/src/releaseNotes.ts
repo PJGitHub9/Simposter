@@ -10,6 +10,27 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.55',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Plex Collections now have two dedicated poster creators, alongside Movies and TV Shows: the Simposter Creator (the familiar manual editor, now genuinely collection-aware — pulls real posters from TMDb) and the new Kometa Creator, a from-scratch poster style with flat/textured backgrounds, gradient fades, a centered logo, text, and a border — modeled on the Kometa community\'s own poster conventions.',
+          'Collection logos: if Fanart.tv has franchise-wide art for a collection (e.g. a shared "The Lord of the Rings" logo), it now loads automatically in both creators. If not, you can manually import a logo from any movie in the collection instead.',
+          'Collections gained their own Save Location setting (Settings → Output), a "Refresh Cache" button, and a working per-card refresh button.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed collections occasionally showing duplicate or blank poster cards after a library scan.',
+          'Fixed some collections resolving to the wrong TMDb collection (e.g. a documentary about a franchise instead of the actual trilogy).',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.54',
     date: '2026-08-20',
     sections: [

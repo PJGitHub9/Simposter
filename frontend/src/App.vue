@@ -5,6 +5,7 @@ import Sidebar, { type MenuItem } from './components/layout/Sidebar.vue'
 import TopNav from './components/layout/TopNav.vue'
 import EditorPane from './components/editor/EditorPane.vue'
 import TvShowEditorPane from './components/editor/TvShowEditorPane.vue'
+import KometaCreatorPane from './components/editor/KometaCreatorPane.vue'
 import NotificationContainer from './components/NotificationContainer.vue'
 import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
@@ -38,7 +39,7 @@ const tabs = computed<MenuItem[]>(() => {
     label: `\u{1F3AC} ${lib.displayName || lib.title || `Library ${idx + 1}`}`,
     submenu: [
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
-      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
+      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections (NEW)' },
       { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
@@ -353,13 +354,15 @@ const activeSubmenu = computed<string>(() => {
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
 
-const handleSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null; tmdb_id?: string | number; tvdb_id?: string | number }) => {
+const handleSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null; tmdb_id?: string | number; tvdb_id?: string | number; mediaType?: 'movie' | 'tv-show' | 'collection'; creatorMode?: 'simposter' | 'kometa' }) => {
   // Guard against native DOM events being passed instead of movie objects
   if (!movie || typeof movie !== 'object' || !movie.key || !movie.title) {
     return
   }
-  // Detect media type based on current route
-  const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
+  // Trust an explicitly emitted mediaType (e.g. collections, which carry their own
+  // creatorMode too) — only fall back to route-based inference for the plain
+  // movie/TV grids, which don't emit one.
+  const mediaType = movie.mediaType || (route.name === 'tv-shows' ? 'tv-show' : 'movie')
   ui.setSelectedMovie({ ...movie, mediaType })
 
   // Push a new history entry so the browser back button returns to the exact page/sort state
@@ -788,6 +791,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       <section class="main-pane glass">
         <TvShowEditorPane
           v-if="ui.selectedMovie.value.mediaType === 'tv-show'"
+          :movie="ui.selectedMovie.value"
+          @close="ui.setSelectedMovie(null)"
+        />
+        <KometaCreatorPane
+          v-else-if="ui.selectedMovie.value.mediaType === 'collection' && ui.selectedMovie.value.creatorMode === 'kometa'"
           :movie="ui.selectedMovie.value"
           @close="ui.setSelectedMovie(null)"
         />

@@ -43,6 +43,7 @@ class PreviewRequest(BaseModel):
     logoSource: Optional[str] = None
     disableOverlayCache: Optional[bool] = None
     skip_fallback: Optional[bool] = None  # When True, never apply poster/logo fallback (for manual editor preview)
+    is_collection: Optional[bool] = False  # True for Plex collection posters (Kometa Creator or Simposter Creator on a collection)
 
 
 class SaveRequest(PreviewRequest):
@@ -154,6 +155,7 @@ class UISettings(BaseModel):
     saveLocation: str = "/config/output/{library}/{title}.jpg"  # Legacy field for backwards compatibility
     movieSaveLocation: str = "/config/output/{library}/{title}.jpg"
     tvShowSaveLocation: str = "/config/output/{library}/{title} ({year}).jpg"
+    collectionSaveLocation: str = "/config/output/{library}/Collections/{title}.jpg"
     saveBatchInSubfolder: bool = False
     tvShowSaveMode: str = "flat"  # "flat" (all in one folder with prefixes) or "nested" (each show in its own folder)
     saveToAssetFolderOnSend: bool = False  # When true, "Send to Plex" also writes the render to the
@@ -185,12 +187,13 @@ class PlexSendRequest(BaseModel):
     template_id: str
     preset_id: str  # ADD THIS
     rating_key: str
-    background_url: str  # Keep for extracting tmdb_id
+    background_url: Optional[str] = None  # Keep for extracting tmdb_id; empty for collections (no photo background)
     logo_url: Optional[str] = None  # Can be removed
     options: Optional[Dict[str, Any]] = None  # Can be removed
     labels: Optional[List[str]] = None
     library_id: Optional[str] = None  # For history tracking
     is_tv: bool = False  # Needed for the "save to asset folder on send" template resolution
+    is_collection: bool = False  # True when sending a Plex collection poster (uses /library/collections/ instead of /library/metadata/)
     season_index: Optional[int] = None  # Set when sending a specific season's poster
 
 

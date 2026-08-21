@@ -13,8 +13,8 @@ import requests
 from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR
 from .. import cache, database as db
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
-from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, TMDBError
-from ..fanart_client import get_images_for_movie as get_fanart_images
+from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, search_collection, get_collection_images, TMDBError
+from ..fanart_client import get_images_for_movie as get_fanart_images, get_logos_for_movie as get_fanart_logos
 from .. import tvdb_client
 from .tv_shows import _get_plex_tv_shows, api_tv_show_labels
 from ..middleware.validation import (
@@ -656,6 +656,155 @@ def api_movie_tmdb(rating_key: str):
     return MovieTMDbResponse(tmdb_id=tmdb_id)
 
 
+def _best_collection_match(title: str, results: List[dict]) -> Optional[dict]:
+    """Pick the right TMDb collection out of /search/collection's results for a
+    plain title like Plex's ("The Lord of the Rings"). Naive exact-string-or-
+    first-result matching picks the wrong thing here: TMDb's own results for
+    that exact query are, in order, 'The Making of The Lord of the Rings
+    Collection' (a documentary), 'The Lord of the Rings Collection' (the
+    actual trilogy), and 'The Lord of the Rings (Animated) Collection' — i.e.
+    TMDb's relevance ranking is not "the main franchise first", and TMDb's own
+    naming convention (an appended "Collection", sometimes with a qualifier
+    prefix/suffix) means a plain title never exactly matches any real entry
+    either. Normalizing away the "Collection" suffix and preferring the
+    shortest name that starts with (or at minimum contains) the target title
+    reliably picks the main collection over "Making of"/spin-off variants,
+    which are always longer, qualified names."""
+    if not results:
+        return None
+
+    def normalize(name: str) -> str:
+        n = (name or "").strip().lower()
+        if n.endswith(" collection"):
+            n = n[: -len(" collection")]
+        return n.strip()
+
+    target = normalize(title)
+
+    exact = [r for r in results if normalize(r.get("name") or "") == target]
+    if exact:
+        return exact[0]
+
+    starts_with = [r for r in results if normalize(r.get("name") or "").startswith(target)]
+    if starts_with:
+        return min(starts_with, key=lambda r: len(r.get("name") or ""))
+
+    contains = [r for r in results if target in normalize(r.get("name") or "")]
+    if contains:
+        return min(contains, key=lambda r: len(r.get("name") or ""))
+
+    return results[0]
+
+
+@router.get("/collection/{rating_key}/tmdb", response_model=MovieTMDbResponse)
+def api_collection_tmdb(rating_key: str):
+    """Resolve a Plex collection to a TMDb collection ID, for the Simposter
+    Creator's poster browsing. Plex collections carry no TMDb ID of their own,
+    so this is a one-time title search against TMDb's /search/collection,
+    cached afterward in collection_cache.tmdb_collection_id (0 = looked up,
+    no match found — distinct from None/never looked up) so repeat editor
+    opens for the same collection don't repeat the search."""
+    rating_key = validate_rating_key(rating_key)
+
+    cached = db.get_collection_tmdb_id(rating_key)
+    if cached is not None:
+        return MovieTMDbResponse(tmdb_id=cached or None)
+
+    title = None
+    with db.get_db() as conn:
+        row = conn.execute("SELECT title FROM collection_cache WHERE rating_key = ?", (rating_key,)).fetchone()
+        if row:
+            title = row["title"]
+
+    tmdb_collection_id = None
+    if title:
+        try:
+            results = search_collection(title)
+            best = _best_collection_match(title, results)
+            if best:
+                tmdb_collection_id = best.get("id")
+        except TMDBError as e:
+            logger.warning("[TMDB] Collection search failed for '%s': %s", title, e)
+
+    try:
+        db.set_collection_tmdb_id(rating_key, tmdb_collection_id or 0)
+    except Exception as e:
+        logger.debug("[DB] Failed to cache tmdb_collection_id for %s: %s", rating_key, e)
+
+    return MovieTMDbResponse(tmdb_id=tmdb_collection_id)
+
+
+@router.get("/tmdb/collection/{collection_id}/images")
+def api_tmdb_collection_images(collection_id: int):
+    """Poster/backdrop candidates for a TMDb collection — TMDb only (no
+    Fanart/TVDB equivalent for collections), unlike the movie/TV image merge."""
+    collection_id = validate_tmdb_id(collection_id)
+    try:
+        imgs = get_collection_images(collection_id)
+    except TMDBError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "posters": imgs.get("posters") or [],
+        "backdrops": imgs.get("backdrops") or [],
+        "logos": [],
+    }
+
+
+@router.get("/tmdb/collection/{collection_id}/fanart-logos")
+def api_tmdb_collection_fanart_logos(collection_id: int):
+    """Franchise-wide logo/clearart candidates for a TMDb collection.
+
+    Fanart.tv has no dedicated "collection" resource in its v3 API, but its
+    contributor community tags collection-wide art (hdmovielogo, clearart,
+    etc.) under the collection's own TMDb ID in the same /v3/movies/{id}
+    namespace used for individual films — the endpoint is agnostic to what
+    kind of TMDb ID it's given. Verified live against the LOTR collection
+    (id 119): returns 12 hdmovielogo + 3 hdmovieclearart entries, none of
+    which belong to any single film. `get_logos_for_movie()` already handles
+    this shape unmodified — no new Fanart client code needed."""
+    collection_id = validate_tmdb_id(collection_id)
+    try:
+        logos = get_fanart_logos(collection_id)
+    except Exception as e:
+        logger.warning("[FANART] Collection logo fetch failed for tmdb_collection_id=%s: %s", collection_id, e)
+        logos = []
+    return {"logos": logos}
+
+
+@router.get("/collection/{rating_key}/movies")
+def api_collection_movies(rating_key: str):
+    """List the movies belonging to a Plex collection — same Plex '/children'
+    pattern used for TV show seasons (api_tv_show_seasons), just returning
+    <Video> (leaf/movie) elements instead of <Directory> (season) ones. Used
+    by the Simposter Creator's Logo section: TMDb/Fanart have no logo image
+    type for a collection itself (see get_collection_images — posters/
+    backdrops only), but franchise logos on an individual member movie (e.g.
+    a "THE LORD OF THE RINGS" clearlogo on the first film) often represent the
+    whole series well enough to reuse as the collection's own logo. Won't be
+    meaningful for a studio/genre/etc. collection with unrelated movies —
+    that's a per-collection judgment call for whoever's using it, not
+    something this endpoint can determine."""
+    rating_key = validate_rating_key(rating_key)
+    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
+    try:
+        r = plex_session.get(url, headers=plex_headers(), timeout=10)
+        r.raise_for_status()
+        root = ET.fromstring(r.text)
+    except Exception as e:
+        logger.warning("[PLEX] Failed to fetch movies for collection %s: %s", rating_key, e)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch collection movies: {e}")
+
+    movies = []
+    for video in root.findall(".//Video"):
+        key = video.get("ratingKey")
+        title = video.get("title") or ""
+        year = video.get("year")
+        if key and title:
+            movies.append({"key": key, "title": title, "year": int(year) if year and year.isdigit() else None})
+
+    return {"movies": movies}
+
+
 @router.get("/movie/{rating_key}/labels", response_model=LabelsResponse)
 def api_movie_labels(rating_key: str):
     rating_key = validate_rating_key(rating_key)
@@ -1215,9 +1364,16 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
             scan_status.update({"processed": processed, "current": coll.get("title") or ""})
         
-        # Bulk refresh collection cache per library
+        # Bulk refresh collection cache per library. cache.refresh_collections_from_list()
+        # expects the *raw* _get_plex_collections() shape (a "key" field, etc.) and
+        # translates it into the rating_key-shaped rows the DB layer wants — but
+        # coll_cache_by_lib entries above are already built directly in that
+        # rating_key shape, so going through that translator a second time read a
+        # nonexistent "key" field as None on every item, silently overwriting every
+        # scanned collection's cached rating_key with NULL. Call the DB layer
+        # directly instead, since the shape here already matches what it expects.
         for lib_id, cached_colls in coll_cache_by_lib.items():
-            cache.refresh_collections_from_list(cached_colls)
+            db.bulk_refresh_collection_cache(cached_colls, library_id=lib_id)
             logger.info(f"[SCAN] Cached {len(cached_colls)} collections for library {lib_id}")
 
         logger.info(f"[SCAN] Completed full library sync")
