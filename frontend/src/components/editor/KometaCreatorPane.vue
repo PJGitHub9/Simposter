@@ -4,12 +4,14 @@ import type { MovieInput } from '../../services/types'
 import { useRenderService } from '../../services/render'
 import { usePresetService } from '../../services/presets'
 import { useNotification } from '../../composables/useNotification'
+import { useSettingsStore } from '../../stores/settings'
 import { getApiBase } from '../../services/apiBase'
 
 const props = defineProps<{ movie: MovieInput }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const apiBase = getApiBase()
+const settings = useSettingsStore()
 
 // ---------------------------------------------------------------------------
 // Background — flat color + a Gradient Style dropdown matching create_poster.ps1's
@@ -392,6 +394,58 @@ const fetchExistingPoster = async (forceRefresh = false) => {
   }
 }
 
+// Existing Plex logo — same /api/logo/{rating_key} endpoint the movie/TV
+// editors use (reads a collection's clearLogo via Plex's generic
+// /library/metadata/{id} JSON metadata, which works the same for a
+// collection's rating key as it does for a movie's).
+const existingLogo = ref<string | null>(null)
+const logoRefreshKey = ref(0)
+const fetchExistingLogo = async (forceRefresh = false) => {
+  try {
+    const params = `${forceRefresh ? 'force_refresh=1&' : ''}v=${Date.now()}`
+    const url = `${apiBase}/api/logo/${props.movie.key}?${params}`
+    const res = await fetch(url)
+    existingLogo.value = res.ok ? url : null
+  } catch {
+    existingLogo.value = null
+  } finally {
+    logoRefreshKey.value += 1
+  }
+}
+
+// Send logo to Plex — same standalone endpoint the movie/TV editors use.
+// No is_collection flag needed: /api/plex/send-logo uploads via Plex's
+// /library/metadata/{id}/clearLogos path, which works for a collection's
+// rating key the same as a movie's (verified working by direct testing).
+const sendLogo = ref((settings.plex.value as any).sendLogosToPlex ?? false)
+const logoSending = ref(false)
+const doSendLogoOnly = async () => {
+  if (!logoUrl.value) {
+    notifyError('No logo selected to send.')
+    return
+  }
+  logoSending.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/plex/send-logo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rating_key: props.movie.key,
+        logo_url: logoUrl.value,
+        is_tv: false,
+      }),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    success('Logo sent to Plex!')
+    await fetchExistingLogo()
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to send logo to Plex'
+    notifyError(message)
+  } finally {
+    logoSending.value = false
+  }
+}
+
 const optionsPayload = computed(() => ({
   kometa_base_color: kometaBaseColor.value,
   kometa_white_wash: kometaWhiteWash.value,
@@ -450,8 +504,13 @@ const doSave = async () => {
 
 const doSend = async () => {
   try {
-    const result = await render.send(props.movie, '', logoUrl.value, optionsPayload.value, [], 'kometa', selectedPreset.value, false)
-    if (result) success('Successfully sent poster to Plex!')
+    const result = await render.send(props.movie, '', logoUrl.value, optionsPayload.value, [], 'kometa', selectedPreset.value, sendLogo.value)
+    if (result) {
+      success('Successfully sent poster to Plex!')
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      await fetchExistingPoster(true)
+      await fetchExistingLogo()
+    }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to send poster to Plex'
     notifyError(message)
@@ -490,6 +549,7 @@ onMounted(async () => {
 
   fetchFanartCollectionLogos()
   fetchExistingPoster()
+  fetchExistingLogo()
 
   await loadKometaPresets()
   const p = presets.value.find((x) => x.id === selectedPreset.value)
@@ -841,11 +901,34 @@ onMounted(async () => {
           </div>
           <img v-if="existingPoster" :key="posterRefreshKey" :src="existingPoster" alt="Existing poster" class="existing-img" />
           <div v-else class="preview-empty small">No poster</div>
+
+          <div class="preview-label" style="margin-top: 14px;">
+            <span>Current Plex Logo</span>
+            <button class="refresh-btn" title="Fetch logo from Plex" @click="fetchExistingLogo(true)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10" />
+                <polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+          </div>
+          <div class="existing-logo-area">
+            <img v-if="existingLogo" :key="logoRefreshKey" :src="existingLogo" alt="Existing logo" class="existing-logo-img" />
+            <div v-else class="preview-empty small">No logo</div>
+          </div>
         </div>
         <div class="preview-main">
           <div class="preview-label">
             <span>Preview</span>
             <div class="preview-actions float-right">
+              <label class="send-logo-toggle" title="Also send the selected logo to Plex">
+                <input type="checkbox" v-model="sendLogo" />
+                <span>Send logo</span>
+              </label>
+              <button title="Send Logo to Plex" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+                <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo' }}</span>
+              </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
               <button title="Send to Plex" class="btn-plex btn-inline" :disabled="loading" @click="doSend">📺 <span class="btn-label">Send to Plex</span></button>
             </div>
@@ -1249,6 +1332,70 @@ onMounted(async () => {
   padding: 20px 8px;
   width: 160px;
   box-sizing: border-box;
+}
+
+.existing-logo-area {
+  width: 160px;
+  background: #0a0b12;
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  box-sizing: border-box;
+}
+
+.existing-logo-img {
+  width: 100%;
+  max-height: 72px;
+  object-fit: contain;
+  display: block;
+}
+
+.send-logo-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #a8b3cf;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  transition: all 0.15s;
+}
+.send-logo-toggle:has(input:checked) {
+  color: #eef2ff;
+  border-color: rgba(61, 214, 183, 0.35);
+}
+.send-logo-toggle input {
+  margin: 0;
+  accent-color: var(--accent, #3dd6b7);
+}
+
+.btn-send-logo {
+  background: rgba(61, 214, 183, 0.12);
+  color: #3dd6b7;
+  border: 1px solid rgba(61, 214, 183, 0.3);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-send-logo:hover:not(:disabled) {
+  background: rgba(61, 214, 183, 0.22);
+  border-color: rgba(61, 214, 183, 0.55);
+}
+.btn-send-logo:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn-send-logo .spin {
+  animation: spin-inline 0.9s linear infinite;
+}
+@keyframes spin-inline {
+  to { transform: rotate(360deg); }
 }
 
 .preview-main {

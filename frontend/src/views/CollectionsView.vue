@@ -153,29 +153,31 @@ watch(defaultLibraryId, (val, oldVal) => {
       @resend-done="handleRefreshPoster"
     />
 
-    <div v-if="pendingCollection" class="modal-backdrop" @click.self="cancelCreatorChoice">
-      <div class="modal glass">
-        <p class="label">Choose your creator</p>
-        <h3>{{ pendingCollection.title }}</h3>
-        <div class="creator-list">
-          <button class="creator-item" @click="chooseCreator('simposter')">
-            <div>
-              <p class="name">Simposter Creator</p>
-              <p class="desc">The standard manual editor — upload your own poster and logo art.</p>
-            </div>
-            <span class="pill">Use</span>
-          </button>
-          <button class="creator-item" @click="chooseCreator('kometa')">
-            <div>
-              <p class="name">Kometa Creator</p>
-              <p class="desc">Flat-color background, gradient fade, and a centered logo — Kometa-style collection posters.</p>
-            </div>
-            <span class="pill">Use</span>
-          </button>
+    <Teleport to="body">
+      <div v-if="pendingCollection" class="modal-backdrop" @click.self="cancelCreatorChoice">
+        <div class="modal glass">
+          <p class="label">Choose your creator</p>
+          <h3>{{ pendingCollection.title }}</h3>
+          <div class="creator-list">
+            <button class="creator-item" @click="chooseCreator('simposter')">
+              <div>
+                <p class="name">Simposter Creator</p>
+                <p class="desc">The standard manual editor — upload your own poster and logo art.</p>
+              </div>
+              <span class="pill">Use</span>
+            </button>
+            <button class="creator-item" @click="chooseCreator('kometa')">
+              <div>
+                <p class="name">Kometa Creator</p>
+                <p class="desc">Flat-color background, gradient fade, and a centered logo — Kometa-style collection posters.</p>
+              </div>
+              <span class="pill">Use</span>
+            </button>
+          </div>
+          <button class="cancel" @click="cancelCreatorChoice">Cancel</button>
         </div>
-        <button class="cancel" @click="cancelCreatorChoice">Cancel</button>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 

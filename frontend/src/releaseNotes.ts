@@ -10,6 +10,38 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.57',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed items that were deleted or reorganized in Plex getting stuck in the retry queue forever, silently adding a new "failed" entry to History every retry cycle. These are now automatically detected and removed from the queue.',
+          'Failed History entries now show the actual movie/show title when available, instead of just "(rating key 12345)".',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.56',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Kometa Creator now has full logo parity with the Simposter Creator: a "Current Plex Logo" preview, a "Send logo" toggle, and a standalone "Send Logo" button.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the "Choose your creator" popup on the Collections page sometimes appearing off-screen (requiring a scroll to find it) if you\'d scrolled down a long collections list before clicking one.',
+          'Fixed API rate-limiting returning a generic server error instead of a proper "please slow down" response when a client sent too many requests too quickly.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.55',
     date: '2026-08-21',
     sections: [
