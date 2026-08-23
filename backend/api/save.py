@@ -3,7 +3,7 @@ from typing import Optional, Tuple
 from io import BytesIO
 from PIL import Image, PngImagePlugin
 
-from ..config import logger, get_movie_folder_name
+from ..config import logger, get_movie_folder_name, get_media_folder_name
 from ..rendering import render_poster_image
 from ..schemas import SaveRequest
 from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, PathTraversalError
@@ -227,8 +227,8 @@ def api_save(req: SaveRequest):
     # (movies only -- TV shows/seasons have no single <Part> file to derive it from,
     # apply_save_location_variables() falls back to {title} automatically).
     folder_name = None
-    if req.rating_key and not req.is_tv:
-        folder_name = get_movie_folder_name(req.rating_key)
+    if req.rating_key:
+        folder_name = get_media_folder_name(req.rating_key, req.is_tv)
 
     ctx = SaveContext(
         media_type="tv-show" if req.is_tv else "movie",
