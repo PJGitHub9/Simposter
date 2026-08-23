@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id, get_movie_folder_name
+from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id, get_movie_folder_name, get_media_folder_name
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -1210,14 +1210,20 @@ def _render_and_save_poster(
 
     # Lazy, memoized {folder} lookup -- shares one Plex metadata fetch between the
     # save_locally and send_to_plex blocks below instead of firing it twice per item.
-    # Movies only; TV shows/seasons always pass folder_name=None.
+    # TV: show-level only (season_title is None) -- a show's folder is fetched by
+    # walking up from an episode's file path, so resolving it once per show is
+    # enough; per-season resolution would mean N redundant Plex fetches per show
+    # (episodes always live under the same one show folder either way). Season
+    # posters keep falling back to {title}, matching the existing documented
+    # behavior (see OutputTab.vue's "{folder} ... show-level only, not individual
+    # seasons" copy).
     _folder_name_cache: list = []
 
     def _get_movie_folder_name_once() -> Optional[str]:
-        if is_tv:
+        if is_tv and season_title is not None:
             return None
         if not _folder_name_cache:
-            _folder_name_cache.append(get_movie_folder_name(rating_key))
+            _folder_name_cache.append(get_media_folder_name(rating_key, is_tv))
         return _folder_name_cache[0]
 
     needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used

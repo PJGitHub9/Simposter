@@ -3,7 +3,7 @@ from typing import Optional, Tuple
 from io import BytesIO
 from PIL import Image, PngImagePlugin
 
-from ..config import logger, get_movie_folder_name, get_media_folder_name
+from ..config import logger, get_media_folder_name
 from ..rendering import render_poster_image
 from ..schemas import SaveRequest
 from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, PathTraversalError

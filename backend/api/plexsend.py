@@ -8,7 +8,7 @@ from PIL import Image
 from pydantic import BaseModel
 from typing import List, Optional
 
-from ..config import settings, plex_headers, plex_session, plex_remove_label, logger, get_movie_folder_name, get_media_folder_name
+from ..config import settings, plex_headers, plex_session, plex_remove_label, logger, get_media_folder_name
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
 from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render, save_to_asset_folder_on_send_enabled
