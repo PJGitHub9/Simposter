@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.6.55 (2026-08-23)
+### New Features
+- **`{folder}` save-path variable now works for TV shows**, not just movies — resolves to the real on-disk show folder name (e.g. from `/data/tv/Fallout (2024)/Season 01/ep.mkv`, resolves to `Fallout (2024)`), independent of Plex's display-language title. Show-level only, not per-season (a season's episodes always live under the same one show folder, so resolving it once per show — not once per season — avoids redundant Plex lookups for an identical value). New `get_show_folder_name()`/`extract_show_folder_name_from_episode_metadata()` in `backend/config.py`, handling both `Show/Season NN/episode.ext` and flat `Show/episode.ext` layouts, unified behind a new `get_media_folder_name(rating_key, is_tv)` entry point that's byte-identical to the existing movie behavior when `is_tv=False`. Wired into `save.py`, all five `SaveContext` sites in `plexsend.py`, and (as a follow-up fix beyond the original PR's scope) `batch.py`'s shared movie/TV/season renderer, so batch and webhook-triggered TV renders get it too, not just manual Save/Send. Contributed by romquenin (PR #36) — thank you!
+### Bug Fixes
+- **Fixed TV series-level saves including a stray "(Series)" in the `{title}` variable.** `TvShowEditorPane.vue` builds the series tab's display object with `` `${title} (Series)` `` for the season list UI, but `doSave()` was reusing that decorated title directly when saving — producing filenames like `Show Name (Series).jpg` instead of `Show Name.jpg`. Fixed to use the real show title for the actual save request, keeping the "(Series)" suffix only where it's meant to be (the tab label). Contributed by romquenin (PR #36) — thank you!
+
+## v1.6.54 (2026-08-20)
+### Bug Fixes
+- **Fixed the onboarding wizard's TMDb/TVDB "Test" buttons failing with a generic error instead of validating the key.** `testTmdb()`/`testTvdb()` in `OnboardingModal.vue` were still sending GET requests with the key in the query string — left over from before the v1.6.10 security pass made `/api/test-tmdb`/`/api/test-tvdb` POST-only with the key in the request body. `testFanart()` in the same file was already correct; its two siblings were missed. Settings page key tests were unaffected (already used the correct pattern).
+
 ## v1.6.53 (2026-08-19)
 ### Improvements
 - **Logo drop shadow's Size/Blur slider max raised from 150px to 250px.** The backend (`add_drop_shadow()`) never had an upper bound on this value — the 150 cap was frontend-only — so this is a pure UI change, no backend clamp to touch.
