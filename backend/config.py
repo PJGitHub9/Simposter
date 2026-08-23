@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import os
 import json
+import re
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import shutil
@@ -855,6 +856,95 @@ def get_movie_folder_name(rating_key: str) -> Optional[str]:
         logger.debug("[PLEX] Failed to fetch metadata for folder name %s: %s", rating_key, e)
         return None
     return extract_folder_name_from_metadata(r.text)
+
+
+def extract_show_folder_name_from_episode_metadata(xml_text: str) -> Optional[str]:
+    """Extract the show-level parent folder name from an EPISODE's Plex metadata
+    XML. Handles TWO structures: Show/Season NN/episode.ext (most shows, goes
+    up 3 levels), or Show/episode.ext (no season subfolder, goes up 2 levels)
+    -- detected by checking if the immediate parent looks like a season folder."""
+    if not xml_text or xml_text.startswith("<html"):
+        return None
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+
+    part = root.find(".//Part")
+    if part is None:
+        return None
+    file_path = part.get("file")
+    if not file_path:
+        return None
+
+    clean_path = file_path.replace("\\", "/").rstrip("/")
+    segments = [s for s in clean_path.split("/") if s]
+
+    if len(segments) < 2:
+        return None
+
+    parent = segments[-2]
+    is_season_folder = bool(re.match(r'^(season\s*\d+|specials?)$', parent, re.IGNORECASE))
+
+    if is_season_folder:
+        if len(segments) < 3:
+            return None
+        return segments[-3]
+    else:
+        return parent
+
+
+def get_show_folder_name(rating_key: str) -> Optional[str]:
+    """Fetch the real on-disk folder name for a TV show's rating_key.
+
+    Unlike movies, a show's own metadata has no <Part> element (only episodes
+    do), so this first fetches the show's episode list and uses the first
+    episode found to derive the parent show folder.
+
+    Returns None if the show has no episodes yet, or on any lookup failure --
+    callers should fall back to {title} in that case, same as movies."""
+    episodes_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/allLeaves"
+    try:
+        r = plex_session.get(episodes_url, headers=plex_headers(), timeout=6)
+        r.raise_for_status()
+    except Exception as e:
+        logger.debug("[PLEX] Failed to fetch episode list for show folder name %s: %s", rating_key, e)
+        return None
+
+    try:
+        root = ET.fromstring(r.text)
+    except ET.ParseError:
+        return None
+
+    first_episode = root.find(".//Video")
+    if first_episode is None:
+        return None
+    episode_rating_key = first_episode.get("ratingKey")
+    if not episode_rating_key:
+        return None
+
+    episode_url = f"{settings.PLEX_URL}/library/metadata/{episode_rating_key}"
+    try:
+        r2 = plex_session.get(episode_url, headers=plex_headers(), timeout=6)
+        r2.raise_for_status()
+    except Exception as e:
+        logger.debug("[PLEX] Failed to fetch episode metadata for show folder name %s: %s", rating_key, e)
+        return None
+
+    return extract_show_folder_name_from_episode_metadata(r2.text)
+
+
+def get_media_folder_name(rating_key: str, is_tv: bool = False) -> Optional[str]:
+    """Single entry point for {folder} resolution -- routes to get_show_folder_name()
+    for TV shows or get_movie_folder_name() for movies. Callers should use this
+    instead of calling get_movie_folder_name() directly, so TV shows also get
+    a resolved {folder} instead of always falling back to {title}.
+
+    Behavior for movies is byte-identical to calling get_movie_folder_name()
+    directly (this just forwards to it) -- no change to existing behavior."""
+    if is_tv:
+        return get_show_folder_name(rating_key)
+    return get_movie_folder_name(rating_key)
 
 
 def get_library_section_id(rating_key: str) -> Optional[str]:

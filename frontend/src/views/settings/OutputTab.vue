@@ -255,7 +255,7 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
           Available variables: <code>{library}</code>, <code>{title}</code>, <code>{folder}</code>, <code>{year}</code>, <code>{key}</code>, <code>{filename}</code>
         </span>
         <span class="help-text extra-note">
-          <code>{folder}</code> resolves to the real on-disk folder name Plex knows for this movie
+          <code>{folder}</code> resolves to the real on-disk folder name Plex knows for this movie or TV show (show-level only, not individual seasons)
           (independent of Plex's display-language title) — falls back to <code>{title}</code> if it
           can't be resolved.
         </span>
@@ -270,7 +270,7 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
           :readonly="!isCustomActive"
         />
         <span class="help-text">
-          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{year}</code>, <code>{season}</code>, <code>{filename}</code>
+          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{folder}</code>, <code>{year}</code>, <code>{season}</code>, <code>{filename}</code>
         </span>
         <span class="help-text extra-note">
           <code>{filename}</code> resolves to <code>poster</code> (movie or show poster) or <code>SeasonNN</code> (a season

@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.58',
+    date: '2026-08-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'The {folder} save-path variable now works for TV shows, not just movies — resolves to the real on-disk show folder name instead of falling back to the title. Thank you romquenin for the contribution!',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed TV series poster filenames including a stray "(Series)" when using {title} in a save path. Thank you romquenin for the contribution!',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.57',
     date: '2026-08-21',
     sections: [
