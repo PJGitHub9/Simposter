@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.59',
+    date: '2026-08-23',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the Kometa Creator not showing a "Preset saved!" confirmation when saving a preset.',
+          'Fixed the Kometa Creator not saving the selected logo with a preset — reloading or reselecting the preset now correctly restores the logo you had set.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.58',
     date: '2026-08-23',
     sections: [

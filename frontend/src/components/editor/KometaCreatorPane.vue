@@ -298,6 +298,7 @@ const applyPresetOptions = (o: Record<string, any>) => {
   kometaLogoOffsetY.value = typeof o.kometa_logo_offset_y === 'number' ? Math.round(o.kometa_logo_offset_y) : 0
 
   kometaTextureUrl.value = typeof o.kometa_texture_url === 'string' && o.kometa_texture_url ? o.kometa_texture_url : null
+  uploadedLogoUrl.value = typeof o.kometa_logo_url === 'string' && o.kometa_logo_url ? o.kometa_logo_url : null
 
   matteHeight.value = Math.round((Number(o.matte_height_ratio) || 0) * 100)
   fadeHeight.value = Math.round((Number(o.fade_height_ratio) || 0) * 100)
@@ -333,6 +334,11 @@ const slugify = (raw: string) => raw.trim().replace(/\s+/g, '-').replace(/[^a-zA
 
 const saveCurrentPreset = async () => {
   await presetService.savePreset(optionsPayload.value)
+  if (!presetService.error.value) {
+    success('Preset saved!')
+  } else {
+    notifyError(`Failed to save: ${presetService.error.value}`)
+  }
   await loadKometaPresets()
 }
 
@@ -343,6 +349,11 @@ const saveAsNewPreset = async () => {
     notifyInfo(`Preset id sanitized to "${slug}"`)
   }
   await presetService.savePresetAs(slug, optionsPayload.value)
+  if (!presetService.error.value) {
+    success('Preset saved!')
+  } else {
+    notifyError(`Failed to save: ${presetService.error.value}`)
+  }
   newPresetId.value = ''
   await loadKometaPresets()
 }
@@ -459,6 +470,13 @@ const optionsPayload = computed(() => ({
   // real key in the request that correctly overrides the merge, and
   // kometa.py's `if texture_url:` already treats '' as falsy (no texture).
   kometa_texture_url: kometaTextureUrl.value || '',
+  // Unlike the movie/TV editors (where a preset is a reusable style applied
+  // across many different items, so the item-specific logo is deliberately
+  // NOT saved into the preset), a Kometa preset is normally built for one
+  // specific collection — its logo is part of that poster's design, not
+  // something you'd want a different collection's preset save to overwrite
+  // with. Same explicit-'' pattern as the texture URL above.
+  kometa_logo_url: uploadedLogoUrl.value || '',
   matte_height_ratio: matteHeight.value / 100,
   fade_height_ratio: fadeHeight.value / 100,
   top_matte_height_ratio: topMatteHeight.value / 100,
