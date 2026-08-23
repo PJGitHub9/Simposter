@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import type { MovieInput } from '../../services/types'
@@ -1886,7 +1886,7 @@ const doSave = async () => {
     }
 
     // Create a temporary movie object for this season with proper media type
-    const seasonMovie = { ...props.movie, key: seasonKey, title: season.title, mediaType: 'tv-show' as const }
+    const seasonMovie = { ...props.movie, key: seasonKey, title: season.isSeries ? props.movie.title : season.title, mediaType: 'tv-show' as const }
 
     // Pass season index (null for series poster)
     const seasonIndex = season.isSeries ? null : season.index
