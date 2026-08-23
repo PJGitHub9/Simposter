@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import os
 import json
+import re
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import shutil
@@ -859,10 +860,9 @@ def get_movie_folder_name(rating_key: str) -> Optional[str]:
 
 def extract_show_folder_name_from_episode_metadata(xml_text: str) -> Optional[str]:
     """Extract the show-level parent folder name from an EPISODE's Plex metadata
-    XML (real on-disk path, e.g. '/tv/Lanterns/Season 01/Lanterns - S01E01.mkv'
-    -> 'Lanterns'). Same principle as extract_folder_name_from_metadata() for
-    movies, but goes up THREE directory levels instead of two, since a show's
-    structure is Show/Season NN/episode.ext rather than Movie (Year)/file.ext."""
+    XML. Handles TWO structures: Show/Season NN/episode.ext (most shows, goes
+    up 3 levels), or Show/episode.ext (no season subfolder, goes up 2 levels)
+    -- detected by checking if the immediate parent looks like a season folder."""
     if not xml_text or xml_text.startswith("<html"):
         return None
     try:
@@ -878,10 +878,20 @@ def extract_show_folder_name_from_episode_metadata(xml_text: str) -> Optional[st
         return None
 
     clean_path = file_path.replace("\\", "/").rstrip("/")
-    segments = clean_path.split("/")
-    if len(segments) >= 5:
+    segments = [s for s in clean_path.split("/") if s]
+
+    if len(segments) < 2:
+        return None
+
+    parent = segments[-2]
+    is_season_folder = bool(re.match(r'^(season\s*\d+|specials?)$', parent, re.IGNORECASE))
+
+    if is_season_folder:
+        if len(segments) < 3:
+            return None
         return segments[-3]
-    return None
+    else:
+        return parent
 
 
 def get_show_folder_name(rating_key: str) -> Optional[str]:
