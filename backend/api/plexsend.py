@@ -8,7 +8,7 @@ from PIL import Image
 from pydantic import BaseModel
 from typing import List, Optional
 
-from ..config import settings, plex_headers, plex_session, plex_remove_label, logger, get_movie_folder_name
+from ..config import settings, plex_headers, plex_session, plex_remove_label, logger, get_movie_folder_name, get_media_folder_name
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
 from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render, save_to_asset_folder_on_send_enabled
@@ -158,8 +158,8 @@ def api_plex_send(req: PlexSendRequest):
         # worth the extra Plex metadata fetch when that setting is actually on — it's off
         # by default, and save_or_cache_render() ignores folder_name entirely otherwise.
         folder_name = None
-        if not is_tv and save_to_asset_folder_on_send_enabled():
-            folder_name = get_movie_folder_name(req.rating_key)
+        if save_to_asset_folder_on_send_enabled():
+            folder_name = get_media_folder_name(req.rating_key, is_tv)
         cache_ctx = SaveContext(
             media_type="tv-show" if is_tv else "movie",
             title=movie_details.get("title") or "",
@@ -336,12 +336,13 @@ def api_render_cache_cached_keys():
                 year=m.get("year"),
                 rating_key=m.get("rating_key"),
                 library_label=resolve_library_label(m.get("library_id")),
-                folder_name=get_movie_folder_name(m.get("rating_key")) if movie_template_uses_folder else None,
+                folder_name=get_media_folder_name(m.get("rating_key"), False) if movie_template_uses_folder else None,
             )
             if resolve_save_path(ctx, ".jpg").exists():
                 keys.append(m["rating_key"])
         except Exception:
             continue
+    tv_template_uses_folder = "{folder}" in get_save_template("tv-show")
     for s in db.get_cached_tv_shows():
         try:
             ctx = SaveContext(
@@ -350,6 +351,7 @@ def api_render_cache_cached_keys():
                 year=s.get("year"),
                 rating_key=s.get("rating_key"),
                 library_label=resolve_library_label(s.get("library_id")),
+                folder_name=get_media_folder_name(s.get("rating_key"), True) if tv_template_uses_folder else None,
             )
             if resolve_save_path(ctx, ".jpg").exists():
                 keys.append(s["rating_key"])
@@ -379,8 +381,8 @@ def api_render_cache_preview(
     title, year = db.get_title_for_rating_key(rating_key)
     try:
         folder_name = None
-        if not is_tv and save_to_asset_folder_on_send_enabled():
-            folder_name = get_movie_folder_name(rating_key)
+        if save_to_asset_folder_on_send_enabled():
+            folder_name = get_media_folder_name(rating_key, is_tv)
         ctx = SaveContext(
             media_type="tv-show" if is_tv else "movie",
             title=title or "",
@@ -453,8 +455,8 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
     _title_for_ctx, _year_for_ctx = db.get_title_for_rating_key(rating_key)
     try:
         _folder_name_for_ctx = None
-        if not req.is_tv and save_to_asset_folder_on_send_enabled():
-            _folder_name_for_ctx = get_movie_folder_name(rating_key)
+        if save_to_asset_folder_on_send_enabled():
+            _folder_name_for_ctx = get_media_folder_name(rating_key, req.is_tv)
         top_ctx = SaveContext(
             media_type="tv-show" if req.is_tv else "movie",
             title=_title_for_ctx or "",
