@@ -165,6 +165,7 @@ def api_retry_now(rating_key: str):
                 include_seasons=True,
                 source="auto_generate",
                 send_logos_to_plex=send_logos,
+                send_only_if_ideal=True,
             )
             sub_results = result.get("results", []) if isinstance(result, dict) else []
             still_needs_retry = any(r.get("needs_retry") for r in sub_results)
@@ -178,6 +179,7 @@ def api_retry_now(rating_key: str):
                 labels=[],
                 source="auto_generate",
                 send_logos_to_plex=send_logos,
+                send_only_if_ideal=True,
             )
             still_needs_retry = result.get("needs_retry", True) if isinstance(result, dict) else True
 

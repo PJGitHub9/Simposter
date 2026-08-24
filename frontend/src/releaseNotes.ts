@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.64',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the manual "Retry Now" button (History → Retry Queue) always re-sending a poster to Plex even when it still didn\'t meet the template (missing logo, fallback poster/logo used) — it now checks first and only sends when the render actually meets spec, matching how the automatic background retry already worked.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.63',
     date: '2026-08-24',
     sections: [
