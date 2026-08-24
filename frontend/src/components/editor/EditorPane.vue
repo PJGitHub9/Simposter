@@ -223,6 +223,12 @@ const loading = render.loading
 const error = render.error
 const lastPreview = render.lastPreview
 
+// Monotonic counter guarding against out-of-order preview responses: dragging a
+// slider can fire several overlapping preview requests for the same movie (network/
+// render time varies), and without this an older, slower response landing after a
+// newer one would stomp the current preview with stale slider values.
+let previewRequestSeq = 0
+
 const { success, error: notifyError, info: notifyInfo } = useNotification()
 
 const presetService = usePresetService()
@@ -1017,7 +1023,18 @@ const toggleLabel = (label: string) => {
 
 const doPreview = async () => {
   if (!bgUrl.value) return
-  await render.preview(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
+  // Capture the target item's identity and this request's sequence number before
+  // it goes out. If the user switches to a different movie/collection, or fires
+  // another preview (e.g. dragging a slider) while this one is still in flight, a
+  // slower earlier request resolving later must not overwrite the preview of
+  // whatever is now current (skipLastPreviewUpdate=true — see the identical
+  // pattern in TvShowEditorPane.vue's doPreview() for the season-switching case).
+  const capturedMovieKey = props.movie.key
+  const requestSeq = ++previewRequestSeq
+  const result = await render.preview(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value, false, true)
+  if (result?.image_base64 && props.movie.key === capturedMovieKey && requestSeq === previewRequestSeq) {
+    render.lastPreview.value = `data:image/jpeg;base64,${result.image_base64}`
+  }
 }
 
 const doSave = async () => {

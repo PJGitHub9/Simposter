@@ -198,6 +198,13 @@ const selectedPosterType = computed<PosterType>(() => {
 const renderedPreviews = ref<RenderedPreview[]>([])
 const activePreviewIndex = ref(0)
 
+// Monotonic counter guarding against out-of-order preview responses for the *same*
+// season: dragging a slider can fire several overlapping preview requests before the
+// first resolves (render/network time varies), and the season-identity check alone
+// doesn't protect against an older, slower response for that same season landing
+// after a newer one and stomping the preview with stale slider values.
+let previewRequestSeq = 0
+
 // Sorted rendered previews by season order (series first, then seasons 0, 1, 2, etc.)
 const sortedRenderedPreviews = computed(() => {
   return [...renderedPreviews.value].sort((a, b) => {
@@ -1538,6 +1545,7 @@ const doPreview = async (skipBackgroundRender = false) => {
   // globally-watched lastPreview ref would get attributed to whichever season is current by the time
   // it resolves, not the season it was actually rendered for. Instead, attribute the result to the
   // captured season explicitly below, and only update the visible preview if that season is still current.
+  const requestSeq = ++previewRequestSeq
   const result = await render.preview(props.movie, capturedBgUrl, capturedLogoUrl, capturedOptionsPayload, capturedTemplate, capturedPreset, false, true)
 
   if (result?.image_base64) {
@@ -1558,9 +1566,11 @@ const doPreview = async (skipBackgroundRender = false) => {
       }
 
       // Only touch the visible preview if the user hasn't switched to a different season
-      // while this render was in flight — otherwise this stale response would overwrite
-      // whatever season is now being viewed.
-      if (currentSeason.value?.key === season.key) {
+      // while this render was in flight (otherwise this stale response would overwrite
+      // whatever season is now being viewed), and if no newer preview request for this
+      // same season has since superseded it (otherwise a slow response to an old slider
+      // value could stomp a newer, already-applied one).
+      if (currentSeason.value?.key === season.key && requestSeq === previewRequestSeq) {
         const idx = renderedPreviews.value.findIndex(p => p.seasonKey === season.key)
         activePreviewIndex.value = idx >= 0 ? idx : renderedPreviews.value.length - 1
         lastPreview.value = imageUrl

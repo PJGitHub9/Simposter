@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.61',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the movie/collection editor preview sometimes showing a different movie\'s poster after switching items, or "jumping" back to an older slider value while dragging — a slower, stale render could land after a newer one and overwrite it.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.60',
     date: '2026-08-24',
     sections: [
