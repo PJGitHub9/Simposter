@@ -16,6 +16,43 @@ class TMDBError(Exception):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Short-TTL response cache
+# ---------------------------------------------------------------------------
+# During live editing the manual editor fires a fresh /api/preview on every
+# slider debounce (every ~400ms), and every one of those re-fetched movie
+# details + images from TMDb from scratch, even though nothing about the
+# movie itself changed -- just a slider value. That redundant call volume
+# was also enough to trip _apply_rate_limit()'s sliding-window limiter,
+# which sleeps synchronously (see below) when the window fills up -- so a
+# burst of slider changes could turn into several seconds of blocked
+# rendering with no image ever actually changing. Caching responses for a
+# few minutes eliminates both the redundant network round-trips and the
+# self-inflicted rate-limit stalls, with no risk of meaningfully stale data
+# (nobody expects a movie's TMDb art to change minute-to-minute).
+_response_cache_lock = threading.Lock()
+_response_cache: Dict[tuple, tuple] = {}  # (path, frozenset(params)) -> (expires_at, data)
+_RESPONSE_CACHE_TTL = 300  # seconds
+
+
+def _cached_tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    key = (path, frozenset((k, v) for k, v in params.items() if k != "api_key"))
+    now = time.time()
+    with _response_cache_lock:
+        cached = _response_cache.get(key)
+        if cached and cached[0] > now:
+            return cached[1]
+    data = _tmdb_get(path, params)
+    with _response_cache_lock:
+        _response_cache[key] = (now + _RESPONSE_CACHE_TTL, data)
+        # Opportunistic cleanup so this doesn't grow unbounded over a long-running process
+        if len(_response_cache) > 500:
+            expired = [k for k, v in _response_cache.items() if v[0] <= now]
+            for k in expired:
+                del _response_cache[k]
+    return data
+
+
 # Rate limiting: Track requests in a sliding window
 _rate_limit_lock = threading.Lock()
 _rate_limit_requests = []  # List of (timestamp,) tuples
@@ -85,12 +122,12 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_tv_external_ids(tmdb_id: int) -> Dict[str, Any]:
     """Get external IDs (including TVDB) for a TV show."""
-    return _tmdb_get(f"/tv/{tmdb_id}/external_ids", {})
+    return _cached_tmdb_get(f"/tv/{tmdb_id}/external_ids", {})
 
 
 def get_movie_external_ids(tmdb_id: int) -> Dict[str, Any]:
     """Get external IDs (including IMDB) for a movie."""
-    return _tmdb_get(f"/movie/{tmdb_id}/external_ids", {})
+    return _cached_tmdb_get(f"/movie/{tmdb_id}/external_ids", {})
 
 
 def _make_img_url(file_path: str, size: str = "original") -> str:
@@ -158,7 +195,7 @@ def get_images_for_movie(tmdb_id: int, original_language: Optional[str] = None) 
     logger.info("[TMDB] Fetching images tmdb_id=%s", tmdb_id)
     language_pref = db.get_setting("pref.language") or "en"
     include_lang = _build_lang_param(language_pref, original_language)
-    data = _tmdb_get(
+    data = _cached_tmdb_get(
         f"/movie/{tmdb_id}/images",
         {
             "include_image_language": include_lang,
@@ -240,7 +277,7 @@ def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
     Fetch movie details from TMDb (title, year, etc.)
     """
     logger.info("[TMDB] Fetching movie details tmdb_id=%s", tmdb_id)
-    data = _tmdb_get(f"/movie/{tmdb_id}", {})
+    data = _cached_tmdb_get(f"/movie/{tmdb_id}", {})
 
     title = data.get("title", "")
     original_title = data.get("original_title", "")
@@ -264,7 +301,7 @@ def get_images_for_tv_show(tmdb_id: int, original_language: Optional[str] = None
     logger.info("[TMDB] Fetching TV show images tmdb_id=%s", tmdb_id)
     language_pref = db.get_setting("pref.language") or "en"
     include_lang = _build_lang_param(language_pref, original_language)
-    data = _tmdb_get(
+    data = _cached_tmdb_get(
         f"/tv/{tmdb_id}/images",
         {
             "include_image_language": include_lang,
@@ -307,7 +344,7 @@ def get_images_for_tv_show(tmdb_id: int, original_language: Optional[str] = None
 def get_tv_show_details(tmdb_id: int) -> Dict[str, Any]:
     """Fetch TV show details from TMDb."""
     logger.info("[TMDB] Fetching TV show details tmdb_id=%s", tmdb_id)
-    data = _tmdb_get(f"/tv/{tmdb_id}", {})
+    data = _cached_tmdb_get(f"/tv/{tmdb_id}", {})
 
     name = data.get("name", "")
     original_name = data.get("original_name", "")
@@ -333,7 +370,7 @@ def get_tv_season_images(tmdb_id: int, season_number: int, original_language: Op
     logger.info("[TMDB] Fetching TV season images tmdb_id=%s season=%d", tmdb_id, season_number)
     language_pref = db.get_setting("pref.language") or "en"
     include_lang = _build_lang_param(language_pref, original_language)
-    data = _tmdb_get(
+    data = _cached_tmdb_get(
         f"/tv/{tmdb_id}/season/{season_number}/images",
         {
             "include_image_language": include_lang,

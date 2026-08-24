@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.62',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Performance',
+        items: [
+          'Live preview and rendering could take several seconds to over 10 seconds in some cases — TMDb and Fanart.tv lookups were being re-fetched from scratch on every slider change instead of being reused. These are now cached briefly, which should make editing noticeably snappier.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.61',
     date: '2026-08-24',
     sections: [
