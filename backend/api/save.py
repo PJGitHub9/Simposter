@@ -223,15 +223,18 @@ def api_save(req: SaveRequest):
 
     fmt_settings = get_output_format_settings()
 
-    # {folder} template variable: resolve the real on-disk folder name from Plex
-    # (movies only -- TV shows/seasons have no single <Part> file to derive it from,
-    # apply_save_location_variables() falls back to {title} automatically).
+    # {folder} template variable: resolve the real on-disk folder name from Plex.
+    # get_media_folder_name() routes to the movie or show-level resolver based on
+    # is_tv (see backend/config.py) -- collections have no single <Part>/episode
+    # file to derive one from, so they're excluded here and
+    # apply_save_location_variables() falls back to {title} automatically.
     folder_name = None
-    if req.rating_key:
+    if req.rating_key and not req.is_collection:
         folder_name = get_media_folder_name(req.rating_key, req.is_tv)
 
+    media_type = "collection" if req.is_collection else ("tv-show" if req.is_tv else "movie")
     ctx = SaveContext(
-        media_type="tv-show" if req.is_tv else "movie",
+        media_type=media_type,
         title=req.movie_title,
         year=req.movie_year,
         rating_key=req.rating_key,

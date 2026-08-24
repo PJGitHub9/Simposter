@@ -337,6 +337,30 @@ def cancel_poster_retry():
         return False
 
 
+def _plex_item_exists(rating_key: str) -> Optional[bool]:
+    """Check whether a rating_key still exists in Plex at all.
+
+    Returns True/False on a definitive answer, or None if the check itself
+    failed (network blip, timeout, etc.) — callers must treat None as "unknown,
+    don't act on it" rather than "gone", so a transient error never gets
+    mistaken for a deleted item.
+    """
+    try:
+        from .config import settings, plex_headers, plex_session
+        r = plex_session.get(
+            f"{settings.PLEX_URL}/library/metadata/{rating_key}",
+            headers=plex_headers(),
+            timeout=6,
+        )
+        if r.status_code == 404:
+            return False
+        if r.status_code == 200:
+            return True
+        return None
+    except Exception:
+        return None
+
+
 def _run_poster_retry():
     """Retry pending items from the poster retry queue."""
     try:
@@ -437,6 +461,20 @@ def _run_poster_retry():
 
             except Exception as retry_err:
                 logger.warning("[RETRY] Error retrying %s: %s", title, retry_err)
+                # A render error here (as opposed to a clean "needs_retry" result
+                # above) most often means the Plex fetch itself failed -- and if
+                # that's because the item was deleted/reorganized in Plex (a
+                # definitive 404, not a transient network error), it will NEVER
+                # succeed no matter how many times this job retries it. Without
+                # this check such an item retries forever whenever
+                # retryMaxAttempts is 0 (unlimited), silently filling History
+                # with a fresh "failed" entry every retry cycle.
+                if _plex_item_exists(rating_key) is False:
+                    db.resolve_retry_queue_item(rating_key, "abandoned")
+                    logger.info(
+                        "[RETRY] %s (rating_key=%s) no longer exists in Plex — removed from retry queue",
+                        title, rating_key
+                    )
 
         logger.info("[RETRY] Retry job complete")
 

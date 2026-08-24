@@ -1,10 +1,12 @@
 # backend/templates/__init__.py
 from .uniformlogo import render_uniform_logo
+from .kometa import render_kometa
 
 # Simple registry so we can grow later if needed
 # Map template IDs → renderer functions
 TEMPLATES = {
-    "uniformlogo": render_uniform_logo
+    "uniformlogo": render_uniform_logo,
+    "kometa": render_kometa,
 }
 
 def get_renderer(template_id: str):
@@ -25,6 +27,13 @@ def list_templates():
                 "templates": [
                     {"id": "uniformlogo", "name": "Uniform Logo"},
                 ],
-            }
+            },
+            {
+                "id": "collections",
+                "label": "Collections",
+                "templates": [
+                    {"id": "kometa", "name": "Kometa Style"},
+                ],
+            },
         ]
     }

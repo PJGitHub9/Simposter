@@ -10,7 +10,7 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
-    version: 'v1.6.56',
+    version: 'v1.6.60',
     date: '2026-08-24',
     sections: [
       {
@@ -22,7 +22,20 @@ export const releaseNotes: ReleaseNote[] = [
     ]
   },
   {
-    version: 'v1.6.55',
+    version: 'v1.6.59',
+    date: '2026-08-23',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the Kometa Creator not showing a "Preset saved!" confirmation when saving a preset.',
+          'Fixed the Kometa Creator not saving the selected logo with a preset — reloading or reselecting the preset now correctly restores the logo you had set.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.58',
     date: '2026-08-23',
     sections: [
       {
@@ -35,6 +48,59 @@ export const releaseNotes: ReleaseNote[] = [
         title: 'Bug Fixes',
         items: [
           'Fixed TV series poster filenames including a stray "(Series)" when using {title} in a save path. Thank you romquenin for the contribution!',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.57',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed items that were deleted or reorganized in Plex getting stuck in the retry queue forever, silently adding a new "failed" entry to History every retry cycle. These are now automatically detected and removed from the queue.',
+          'Failed History entries now show the actual movie/show title when available, instead of just "(rating key 12345)".',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.56',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Kometa Creator now has full logo parity with the Simposter Creator: a "Current Plex Logo" preview, a "Send logo" toggle, and a standalone "Send Logo" button.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the "Choose your creator" popup on the Collections page sometimes appearing off-screen (requiring a scroll to find it) if you\'d scrolled down a long collections list before clicking one.',
+          'Fixed API rate-limiting returning a generic server error instead of a proper "please slow down" response when a client sent too many requests too quickly.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.55',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Plex Collections now have two dedicated poster creators, alongside Movies and TV Shows: the Simposter Creator (the familiar manual editor, now genuinely collection-aware — pulls real posters from TMDb) and the new Kometa Creator, a from-scratch poster style with flat/textured backgrounds, gradient fades, a centered logo, text, and a border — modeled on the Kometa community\'s own poster conventions.',
+          'Collection logos: if Fanart.tv has franchise-wide art for a collection (e.g. a shared "The Lord of the Rings" logo), it now loads automatically in both creators. If not, you can manually import a logo from any movie in the collection instead.',
+          'Collections gained their own Save Location setting (Settings → Output), a "Refresh Cache" button, and a working per-card refresh button.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed collections occasionally showing duplicate or blank poster cards after a library scan.',
+          'Fixed some collections resolving to the wrong TMDb collection (e.g. a documentary about a franchise instead of the actual trilogy).',
         ]
       }
     ]

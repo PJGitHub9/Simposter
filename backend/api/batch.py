@@ -544,11 +544,20 @@ def _process_single_movie(
 
     except Exception as e:
         logger.error("[BATCH] Error for %s (%s): %s", title_hint, rating_key, e)
+        # A failure this early (e.g. "No TMDb ID found") means title_hint never
+        # advanced past the raw rating_key. That's usually recoverable — the last
+        # library scan's movie_cache already has Plex's own title/year for this
+        # item, independent of any TMDb match, so History can show a real title
+        # instead of an opaque "(rating key N)" the user has to look up by hand.
+        display_title = title_hint
+        if display_title == rating_key:
+            cached_title, _ = db.get_title_for_rating_key(rating_key)
+            display_title = cached_title or f"(rating key {rating_key})"
         try:
             db.record_poster_history(
                 rating_key=rating_key,
                 library_id=str(req.library_id or ""),
-                title=title_hint if title_hint != rating_key else f"(rating key {rating_key})",
+                title=display_title,
                 year=None,
                 template_id=req.template_id,
                 preset_id=req.preset_id,
@@ -561,7 +570,7 @@ def _process_single_movie(
             pass
         return {
             "rating_key": rating_key,
-            "title": title_hint if title_hint != rating_key else "",
+            "title": display_title if display_title != f"(rating key {rating_key})" else "",
             "status": "error",
             "error": str(e),
             "poster_fallback": False,
@@ -695,11 +704,18 @@ def _process_single_tv_show(
 
     except Exception as e:
         logger.error("[BATCH TV] Error for %s (%s): %s", title_hint, rating_key, e)
+        # See the matching comment in _process_single_movie's except block: fall
+        # back to tv_cache's own Plex title (from the last scan) before the
+        # opaque "(rating key N)" placeholder.
+        display_title = title_hint
+        if display_title == rating_key:
+            cached_title, _ = db.get_title_for_rating_key(rating_key)
+            display_title = cached_title or f"(rating key {rating_key})"
         try:
             db.record_poster_history(
                 rating_key=rating_key,
                 library_id=str(req.library_id or ""),
-                title=title_hint if title_hint != rating_key else f"(rating key {rating_key})",
+                title=display_title,
                 year=None,
                 template_id=req.template_id,
                 preset_id=req.preset_id,
@@ -712,7 +728,7 @@ def _process_single_tv_show(
             pass
         return {
             "rating_key": rating_key,
-            "show_title": title_hint if title_hint != rating_key else "",
+            "show_title": display_title if display_title != f"(rating key {rating_key})" else "",
             "status": "error",
             "error": str(e),
             "poster_fallback": False,

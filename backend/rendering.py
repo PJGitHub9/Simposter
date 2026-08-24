@@ -232,12 +232,39 @@ def render_poster_image(
     if options is None:
         options = {}
 
+    if template_id == "kometa":
+        # Collections have no photo background source (no TMDb/Fanart art for a
+        # Plex collection) — synthesize a flat-color canvas instead of fetching one,
+        # unless a background texture was chosen (kometa_texture_url), in which case
+        # that image IS the background — fetched independently of the logo, so a
+        # texture and a real logo can be composited together (texture underneath,
+        # logo on top, same as they would be over a flat color).
+        texture_url = options.get("kometa_texture_url")
+        if texture_url:
+            try:
+                bg = _download_image(texture_url).convert("RGB")
+            except ValueError:
+                logger.warning("Texture download failed, falling back to flat color: %s", texture_url)
+                texture_url = None
+        if not texture_url:
+            from .templates.universal import _hex_to_rgb
+            base_color = _hex_to_rgb(str(options.get("kometa_base_color", "#202020")))
+            bg = Image.new("RGB", (2000, 3000), base_color)
+
+        if logo_url:
+            try:
+                logo = _download_image(logo_url)
+            except ValueError:
+                logger.warning("Logo download failed, continuing without logo: %s", logo_url)
+                logo = None
+        else:
+            logo = None
     # 1) Download images — poster and logo are independent, so fetch them in parallel
     # rather than one after the other. Matters most on a cold cache (e.g. the first
     # preview after opening the editor for a movie); once both are cached, this is
     # already near-instant either way. Same downloads, same decode, same pixels —
     # purely a wait-time change.
-    if logo_url:
+    elif logo_url:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=2) as executor:
             bg_future = executor.submit(_download_image, background_url)

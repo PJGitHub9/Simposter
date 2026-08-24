@@ -86,6 +86,7 @@ const localTimezone = ref('UTC')
 const localSaveLocation = ref('')  // Legacy, kept for backwards compatibility
 const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
 const localTvShowSaveLocation = ref('/config/output/{library}/{title}.jpg')
+const localCollectionSaveLocation = ref('/config/output/{library}/Collections/{title}.jpg')
 const localTvShowSaveMode = ref('flat')
 const localSaveBatch = ref(false)
 const localSaveToAssetFolderOnSend = ref(false)
@@ -195,6 +196,7 @@ const loadLocalSettings = async () => {
   localSaveLocation.value = settings.saveLocation.value
   localMovieSaveLocation.value = settings.movieSaveLocation.value
   localTvShowSaveLocation.value = settings.tvShowSaveLocation.value
+  localCollectionSaveLocation.value = settings.collectionSaveLocation.value
   localTvShowSaveMode.value = settings.tvShowSaveMode.value || 'flat'
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localSaveToAssetFolderOnSend.value = settings.saveToAssetFolderOnSend.value
@@ -304,6 +306,7 @@ const captureSettingsSnapshot = () => {
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
     tvShowSaveLocation: localTvShowSaveLocation.value,
+    collectionSaveLocation: localCollectionSaveLocation.value,
     tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
     saveToAssetFolderOnSend: localSaveToAssetFolderOnSend.value,
@@ -378,6 +381,7 @@ const checkForChanges = () => {
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
     tvShowSaveLocation: localTvShowSaveLocation.value,
+    collectionSaveLocation: localCollectionSaveLocation.value,
     tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
     saveToAssetFolderOnSend: localSaveToAssetFolderOnSend.value,
@@ -441,6 +445,7 @@ const checkForChanges = () => {
     localSaveLocation.value !== initial.saveLocation ||
     localMovieSaveLocation.value !== initial.movieSaveLocation ||
     localTvShowSaveLocation.value !== initial.tvShowSaveLocation ||
+    localCollectionSaveLocation.value !== initial.collectionSaveLocation ||
     localTvShowSaveMode.value !== initial.tvShowSaveMode ||
     localSaveBatch.value !== initial.saveBatch ||
     localSaveToAssetFolderOnSend.value !== initial.saveToAssetFolderOnSend
@@ -472,6 +477,7 @@ const saveSettings = async () => {
   settings.saveLocation.value = localSaveLocation.value
   settings.movieSaveLocation.value = localMovieSaveLocation.value
   settings.tvShowSaveLocation.value = localTvShowSaveLocation.value
+  settings.collectionSaveLocation.value = localCollectionSaveLocation.value
   settings.tvShowSaveMode.value = localTvShowSaveMode.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.saveToAssetFolderOnSend.value = localSaveToAssetFolderOnSend.value
@@ -1072,6 +1078,7 @@ watch([
   localSaveLocation,
   localMovieSaveLocation,
   localTvShowSaveLocation,
+  localCollectionSaveLocation,
   localSaveBatch,
   localSaveToAssetFolderOnSend,
   localDefaultLabelsToRemove,
@@ -1294,6 +1301,7 @@ onMounted(() => {
         v-if="activeTab === 'output'"
         :movieSaveLocation="localMovieSaveLocation"
         :tvShowSaveLocation="localTvShowSaveLocation"
+        :collectionSaveLocation="localCollectionSaveLocation"
         :tvShowSaveMode="localTvShowSaveMode"
         :saveBatchInSubfolder="localSaveBatch"
         :saveToAssetFolderOnSend="localSaveToAssetFolderOnSend"
@@ -1305,6 +1313,7 @@ onMounted(() => {
         :unsavedChanges="hasUnsavedChanges"
         @update:movieSaveLocation="localMovieSaveLocation = $event"
         @update:tvShowSaveLocation="localTvShowSaveLocation = $event"
+        @update:collectionSaveLocation="localCollectionSaveLocation = $event"
         @update:tvShowSaveMode="localTvShowSaveMode = $event"
         @update:saveBatchInSubfolder="localSaveBatch = $event"
         @update:saveToAssetFolderOnSend="localSaveToAssetFolderOnSend = $event"

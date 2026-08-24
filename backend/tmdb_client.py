@@ -198,6 +198,43 @@ def get_images_for_movie(tmdb_id: int, original_language: Optional[str] = None) 
     }
 
 
+def search_collection(query: str) -> List[Dict[str, Any]]:
+    """Search TMDb for a collection (franchise) by name — GET /search/collection.
+    Returns raw TMDb result dicts (id, name, poster_path, backdrop_path), most
+    relevant first (TMDb's own ordering). Plex collections carry no TMDb ID of
+    their own, so this title search is the only way to resolve one."""
+    logger.info("[TMDB] Searching collections for query='%s'", query)
+    data = _tmdb_get("/search/collection", {"query": query})
+    results = data.get("results", []) or []
+    logger.debug("[TMDB] Collection search '%s' -> %d result(s)", query, len(results))
+    return results
+
+
+def get_collection_images(collection_id: int) -> Dict[str, List[Dict[str, Any]]]:
+    """Fetch collection-level images from TMDb — GET /collection/{id}/images.
+    Posters and backdrops only; TMDb collections have no logo images."""
+    logger.info("[TMDB] Fetching collection images tmdb_collection_id=%s", collection_id)
+    data = _tmdb_get(f"/collection/{collection_id}/images", {})
+
+    posters: List[Dict[str, Any]] = []
+    for p in data.get("posters", []):
+        entry = _build_image_entry(p, "poster")
+        if entry:
+            posters.append(entry)
+
+    backdrops: List[Dict[str, Any]] = []
+    for b in data.get("backdrops", []):
+        entry = _build_image_entry(b, "backdrop")
+        if entry:
+            backdrops.append(entry)
+
+    logger.debug(
+        "[TMDB] collection_id=%s posters=%d backdrops=%d",
+        collection_id, len(posters), len(backdrops),
+    )
+    return {"posters": posters, "backdrops": backdrops, "logos": []}
+
+
 def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
     """
     Fetch movie details from TMDb (title, year, etc.)

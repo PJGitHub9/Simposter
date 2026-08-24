@@ -19,14 +19,21 @@ from .notifications import send_discord_notification, send_apprise_notification
 router = APIRouter()
 
 
+def _plex_media_segment(is_collection: bool) -> str:
+    """Plex's poster/logo upload path segment: /library/collections/ for a
+    collection, /library/metadata/ for everything else (movies, shows, seasons)."""
+    return "collections" if is_collection else "metadata"
+
+
 @router.post("/plex/send")
 def api_plex_send(req: PlexSendRequest):
     # Validate Plex settings
     if not settings.PLEX_URL or not settings.PLEX_TOKEN:
         raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
 
-    # Allow ANY URL (TMDB, uploaded, custom)
-    if not (
+    # Allow ANY URL (TMDB, uploaded, custom) — collections have no photo background
+    # (kometa synthesizes one), so background_url is legitimately empty there.
+    if req.background_url and not (
         req.background_url.startswith("http://")
         or req.background_url.startswith("https://")
         or req.background_url.startswith("/api/uploaded/")
@@ -89,6 +96,12 @@ def api_plex_send(req: PlexSendRequest):
         except Exception as cache_err:
             logger.debug("[PLEX] Failed to get details from cache: %s", cache_err)
 
+    # Collections aren't movies or shows — Plex's metadata XML represents a
+    # collection as a <Directory> too (same as shows/seasons), which would
+    # otherwise misdetect it as a TV show above.
+    if req.is_collection:
+        is_tv = False
+
     # Add movie details to options for template variable substitution
     options["movie_title"] = movie_details.get("title", "")
     options["movie_year"] = movie_details.get("year", "")
@@ -97,29 +110,31 @@ def api_plex_send(req: PlexSendRequest):
     if req.preset_id:
         options["preset_id"] = req.preset_id
 
-    # Inject Plex media metadata for overlay badge rendering
-    try:
-        from ..config import get_plex_media_info
-        plex_media = get_plex_media_info(req.rating_key)
-        if plex_media:
-            existing_meta = options.get("metadata") or {}
-            options["metadata"] = {**existing_meta, **plex_media}
-            logger.info("[PLEX] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
-    except Exception as e:
-        logger.debug("[PLEX] Failed to inject media info: %s", e)
-
-    # Inject tmdb_id and media_type so studio/streaming platform badges can resolve
-    if plex_xml_text:
+    # Inject Plex media metadata / tmdb_id for overlay badge rendering — collections
+    # have no resolution/codec/edition metadata and no TMDb entry, so skip entirely.
+    if not req.is_collection:
         try:
-            tmdb_id = extract_tmdb_id_from_metadata(plex_xml_text)
-            if tmdb_id:
-                is_tv = bool(movie_details) and root.find('.//Directory') is not None
-                options.setdefault("metadata", {})
-                options["metadata"]["tmdb_id"] = tmdb_id
-                options["metadata"]["media_type"] = "tv" if is_tv else "movie"
-                logger.info("[PLEX] Injected tmdb_id=%s media_type=%s for studio/streaming badge resolution", tmdb_id, options["metadata"]["media_type"])
+            from ..config import get_plex_media_info
+            plex_media = get_plex_media_info(req.rating_key)
+            if plex_media:
+                existing_meta = options.get("metadata") or {}
+                options["metadata"] = {**existing_meta, **plex_media}
+                logger.info("[PLEX] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
         except Exception as e:
-            logger.debug("[PLEX] Failed to inject tmdb_id: %s", e)
+            logger.debug("[PLEX] Failed to inject media info: %s", e)
+
+        # Inject tmdb_id and media_type so studio/streaming platform badges can resolve
+        if plex_xml_text:
+            try:
+                tmdb_id = extract_tmdb_id_from_metadata(plex_xml_text)
+                if tmdb_id:
+                    is_tv = bool(movie_details) and root.find('.//Directory') is not None
+                    options.setdefault("metadata", {})
+                    options["metadata"]["tmdb_id"] = tmdb_id
+                    options["metadata"]["media_type"] = "tv" if is_tv else "movie"
+                    logger.info("[PLEX] Injected tmdb_id=%s media_type=%s for studio/streaming badge resolution", tmdb_id, options["metadata"]["media_type"])
+            except Exception as e:
+                logger.debug("[PLEX] Failed to inject tmdb_id: %s", e)
 
     # Render poster using template + preset options
     img = render_poster_image(
@@ -133,7 +148,7 @@ def api_plex_send(req: PlexSendRequest):
     # manual Plex upload of their saved file), otherwise a high-quality JPEG.
     payload, content_type = encode_poster_for_plex(img)
 
-    plex_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}/posters"
+    plex_url = f"{settings.PLEX_URL}/library/{_plex_media_segment(req.is_collection)}/{req.rating_key}/posters"
     headers = {
         "X-Plex-Token": settings.PLEX_TOKEN,
         "Content-Type": content_type,
@@ -158,10 +173,11 @@ def api_plex_send(req: PlexSendRequest):
         # worth the extra Plex metadata fetch when that setting is actually on — it's off
         # by default, and save_or_cache_render() ignores folder_name entirely otherwise.
         folder_name = None
-        if save_to_asset_folder_on_send_enabled():
+        if not req.is_collection and save_to_asset_folder_on_send_enabled():
             folder_name = get_media_folder_name(req.rating_key, is_tv)
+        media_type = "collection" if req.is_collection else ("tv-show" if is_tv else "movie")
         cache_ctx = SaveContext(
-            media_type="tv-show" if is_tv else "movie",
+            media_type=media_type,
             title=movie_details.get("title") or "",
             year=movie_details.get("year"),
             rating_key=req.rating_key,

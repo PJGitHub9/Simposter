@@ -24,6 +24,7 @@ from .config import settings
 
 DEFAULT_MOVIE_SAVE_LOCATION = "/config/output/{library}/{title}.jpg"
 DEFAULT_TV_SAVE_LOCATION = "/config/output/{library}/{title} ({year}).jpg"
+DEFAULT_COLLECTION_SAVE_LOCATION = "/config/output/{library}/Collections/{title}.jpg"
 
 # Kept only as the legacy field's default value (for the one-time migration in
 # ui_settings.py) and as a last-resort fallback; no longer exposed in the UI.
@@ -36,7 +37,7 @@ class PathTraversalError(ValueError):
 
 @dataclass
 class SaveContext:
-    media_type: str                     # "movie" | "tv-show"
+    media_type: str                     # "movie" | "tv-show" | "collection"
     title: str
     year: Optional[int] = None
     rating_key: Optional[str] = None
@@ -99,8 +100,12 @@ def resolve_library_label(library_id: Optional[str]) -> str:
 def get_save_template(media_type: str = "movie") -> str:
     """Read the save-location template for a media type from UI settings, with a
     DB -> settings.json -> legacy config.json -> hardcoded-default fallback chain."""
-    field = "tvShowSaveLocation" if media_type == "tv-show" else "movieSaveLocation"
-    default = DEFAULT_TV_SAVE_LOCATION if media_type == "tv-show" else DEFAULT_MOVIE_SAVE_LOCATION
+    if media_type == "tv-show":
+        field, default = "tvShowSaveLocation", DEFAULT_TV_SAVE_LOCATION
+    elif media_type == "collection":
+        field, default = "collectionSaveLocation", DEFAULT_COLLECTION_SAVE_LOCATION
+    else:
+        field, default = "movieSaveLocation", DEFAULT_MOVIE_SAVE_LOCATION
 
     try:
         from . import database as db  # local import to avoid circular

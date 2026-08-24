@@ -115,12 +115,99 @@ def _solid_color_logo(logo: Image.Image, color: tuple[int, int, int]) -> Image.I
     )
 
 
+# Kometa Creator default fonts, from Kometa-Team/Defaults-Image-Creation's
+# create_defaults/fonts/ (MIT licensed) — the same alias table
+# create_poster.ps1 itself uses (Get-BundledFontPath), so names typed exactly
+# as in that ecosystem (e.g. "ComfortAa-Medium") resolve correctly.
+_KOMETA_REMOTE_FONTS_BASE_URL = (
+    "https://raw.githubusercontent.com/Kometa-Team/Defaults-Image-Creation/"
+    "main/create_defaults/fonts/"
+)
+_KOMETA_REMOTE_FONTS = {
+    "barlowregular": "Barlow-Regular.ttf",
+    "bebasregular": "Bebas-Regular.ttf",
+    "boecklinsuniverse": "BoecklinsUniverse.ttf",
+    "boogalooregular": "Boogaloo-Regular.ttf",
+    "cherrycreamsoda": "CherryCreamSoda-Regular.ttf",
+    "cherrycreamsodaregular": "CherryCreamSoda-Regular.ttf",
+    "comfortaamedium": "Comfortaa-Medium.ttf",
+    "helveticabold": "Helvetica-Bold.ttf",
+    "jurabold": "Jura-Bold.ttf",
+    "limelightregular": "Limelight-Regular.ttf",
+    "monoton": "Monoton-Regular.ttf",
+    "monotonregular": "Monoton-Regular.ttf",
+    "pressstart2p": "Press-Start-2P.ttf",
+    "righteous": "Righteous-Regular.ttf",
+    "righteousregular": "Righteous-Regular.ttf",
+    "ryeregular": "Rye-Regular.ttf",
+    "specialelite": "SpecialElite-Regular.ttf",
+    "specialeliteregular": "SpecialElite-Regular.ttf",
+    "trochut": "Trochut-Regular.ttf",
+    "trochutregular": "Trochut-Regular.ttf",
+    "unifrakturcook": "UnifrakturCook-Bold.ttf",
+    "unifrakturcookbold": "UnifrakturCook-Bold.ttf",
+    "yesteryear": "Yesteryear-Regular.ttf",
+    "yesteryearregular": "Yesteryear-Regular.ttf",
+}
+
+
+def _normalize_font_token(name: str) -> str:
+    return "".join(c for c in (name or "").lower() if c.isalnum())
+
+
+def _kometa_fonts_cache_dir() -> Path:
+    cache_dir = Path(settings.CONFIG_DIR) / "fonts_cache"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return cache_dir
+
+
+def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
+    """
+    Fetch-and-cache-on-first-use: if font_family matches one of the Kometa
+    Creator default fonts, fetch it once from Kometa-Team/Defaults-Image-
+    Creation into a local disk cache, then load from there on every call
+    after (never re-fetched, never fetched at all for fonts never requested).
+    Fails soft (returns None) on any network/IO error so a GitHub outage never
+    breaks rendering — _load_font()'s remaining fallback chain (system fonts,
+    then PIL's default) still applies.
+    """
+    filename = _KOMETA_REMOTE_FONTS.get(_normalize_font_token(font_family))
+    if not filename:
+        return None
+
+    cache_path = _kometa_fonts_cache_dir() / filename
+    if not cache_path.exists():
+        try:
+            import requests
+            resp = requests.get(_KOMETA_REMOTE_FONTS_BASE_URL + filename, timeout=10)
+            resp.raise_for_status()
+            cache_path.write_bytes(resp.content)
+            logger.info("[FONT] Fetched and cached '%s' from Kometa-Team defaults repo", filename)
+        except Exception as e:
+            logger.debug("[FONT] Failed to fetch remote font '%s': %s", filename, e)
+            return None
+
+    try:
+        return ImageFont.truetype(str(cache_path), font_size)
+    except Exception as e:
+        logger.debug("[FONT] Failed to load cached remote font %s: %s", cache_path, e)
+        return None
+
+
 def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     """
     Load a font by name. Searches in this order:
     1. /config/fonts (mounted volume for custom fonts)
-    2. repo config/fonts (bundled fonts)
-    3. System font directories
+    2. repo config/fonts (bundled fonts — Docker seeds this from system font
+       packages at build time; see Dockerfile)
+    3. Kometa Creator default fonts — fetched from Kometa-Team/Defaults-Image-
+       Creation (MIT licensed) and cached to disk on first use rather than
+       vendored in this repo, so upstream additions/updates there don't need a
+       manual re-fetch pass. See _load_remote_kometa_font() below.
+    4. System font directories
 
     Supports exact matches, partial matches, and weight-specific variants.
     Users can upload custom .ttf or .otf files to /config/fonts/
@@ -224,7 +311,12 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     if font_obj:
         return font_obj
 
-    # 3) System font directories (Windows/Linux/macOS)
+    # 3) Kometa Creator default fonts (fetched + cached on first use, see below)
+    font_obj = _load_remote_kometa_font(font_family, font_size, boldish)
+    if font_obj:
+        return font_obj
+
+    # 4) System font directories (Windows/Linux/macOS)
     system_font_dirs = [
         Path('/usr/share/fonts'),  # Linux
         Path('/System/Library/Fonts'),  # macOS system

@@ -100,6 +100,7 @@ export type UISettings = {
   saveLocation?: string  // Legacy field for backwards compatibility
   movieSaveLocation?: string
   tvShowSaveLocation?: string
+  collectionSaveLocation?: string
   tvShowSaveMode?: string
   saveBatchInSubfolder?: boolean
   saveToAssetFolderOnSend?: boolean
@@ -130,6 +131,7 @@ const loaded = ref(false)
 const saveLocation = ref<string>('/output')  // Legacy, kept for backwards compatibility
 const movieSaveLocation = ref<string>('/config/output/{library}/{title}.jpg')
 const tvShowSaveLocation = ref<string>('/config/output/{library}/{title} ({year}).jpg')
+const collectionSaveLocation = ref<string>('/config/output/{library}/Collections/{title}.jpg')
 const tvShowSaveMode = ref<string>('flat')
 const saveBatchInSubfolder = ref<boolean>(false)
 const saveToAssetFolderOnSend = ref<boolean>(false)
@@ -190,6 +192,7 @@ async function loadSettings() {
     // New separate save locations with backwards compatibility
     movieSaveLocation.value = data.movieSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title}.jpg"
     tvShowSaveLocation.value = data.tvShowSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title} ({year}).jpg"
+    collectionSaveLocation.value = data.collectionSaveLocation ?? "/config/output/{library}/Collections/{title}.jpg"
     tvShowSaveMode.value = data.tvShowSaveMode ?? 'flat'
     saveBatchInSubfolder.value = !!data.saveBatchInSubfolder
     saveToAssetFolderOnSend.value = !!data.saveToAssetFolderOnSend
@@ -277,6 +280,7 @@ async function saveSettings() {
       saveLocation: saveLocation.value,
       movieSaveLocation: movieSaveLocation.value,
       tvShowSaveLocation: tvShowSaveLocation.value,
+      collectionSaveLocation: collectionSaveLocation.value,
       tvShowSaveMode: tvShowSaveMode.value,
       saveBatchInSubfolder: saveBatchInSubfolder.value,
       saveToAssetFolderOnSend: saveToAssetFolderOnSend.value,
@@ -336,6 +340,7 @@ export function useSettingsStore() {
     saveLocation,
     movieSaveLocation,
     tvShowSaveLocation,
+    collectionSaveLocation,
     tvShowSaveMode,
     saveBatchInSubfolder,
     saveToAssetFolderOnSend,

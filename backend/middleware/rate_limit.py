@@ -8,7 +8,8 @@ fair resource allocation across API requests.
 import time
 from collections import defaultdict, deque
 from typing import Dict, Deque, Tuple
-from fastapi import Request, HTTPException, status
+from fastapi import Request, status
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import logging
 
@@ -214,9 +215,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 f"({len(timestamps)}/{limit} requests in {self.window_seconds}s)"
             )
 
-            raise HTTPException(
+            # Return a response directly rather than `raise HTTPException(...)`: this
+            # dispatch() runs inside BaseHTTPMiddleware's own anyio task group, which
+            # sits outside FastAPI's exception-handling layer — a raised HTTPException
+            # here never reaches the handler that turns it into a proper response, it
+            # just becomes an unhandled exception and Starlette reports a generic 500
+            # instead of this intended 429 (a real, live 500 from a rate-limited
+            # request confirmed this in production before this fix).
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={
+                content={
                     "error": "Rate limit exceeded",
                     "limit": limit,
                     "window_seconds": self.window_seconds,
