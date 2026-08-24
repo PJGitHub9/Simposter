@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.56',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a webhook bug that could reprocess the wrong movie or TV show when one TMDb/TVDb ID happened to be a numeric prefix of another (e.g. ID 58 vs ID 5825) — the item matching logic was doing a substring check instead of an exact match.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.55',
     date: '2026-08-23',
     sections: [

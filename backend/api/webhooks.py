@@ -375,10 +375,12 @@ def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -
 
             for video in root.findall(".//Video"):
                 rating_key = video.get("ratingKey")
-                # Check GUID for TMDb match
+                # Check GUID for TMDb match. Must be an exact match -- "tmdb://58" is a
+                # literal substring of "tmdb://5825", so a naive `in` check here would
+                # match the wrong movie whenever one TMDb ID is a numeric prefix of another.
                 for guid in video.findall("Guid"):
                     guid_id = guid.get("id", "")
-                    if f"tmdb://{tmdb_id}" in guid_id:
+                    if guid_id == f"tmdb://{tmdb_id}":
                         logger.info(f"[WEBHOOK] Found movie rating_key={rating_key} in library={lib_key} for TMDb ID {tmdb_id}")
                         return (rating_key, lib_key)
 
@@ -427,10 +429,11 @@ def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) ->
 
             for video in root.findall(".//Directory[@type='show']"):
                 rating_key = video.get("ratingKey")
-                # Check GUID for TVDb match
+                # Check GUID for TVDb match. Must be an exact match -- see the identical
+                # fix/comment in find_plex_movie_by_tmdb_id() above.
                 for guid in video.findall("Guid"):
                     guid_id = guid.get("id", "")
-                    if f"tvdb://{tvdb_id}" in guid_id:
+                    if guid_id == f"tvdb://{tvdb_id}":
                         logger.info(f"[WEBHOOK] Found TV show rating_key={rating_key} in library={lib_key} for TVDb ID {tvdb_id}")
                         return (rating_key, lib_key)
 
