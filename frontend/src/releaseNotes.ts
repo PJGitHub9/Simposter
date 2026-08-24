@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.63',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed posters getting stuck failing to load when quickly cycling through several library pages — the poster/logo endpoints had a rate limit too low for large "Poster Density" page sizes and were getting tripped by normal browsing.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.62',
     date: '2026-08-24',
     sections: [
