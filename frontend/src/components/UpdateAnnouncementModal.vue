@@ -2,15 +2,48 @@
 import { ref, onMounted } from 'vue'
 import { APP_VERSION } from '../version'
 import { releaseNotes, type ReleaseNote } from '../releaseNotes'
+import { majorReleases, type MajorRelease } from '../majorReleases'
 
 const STORAGE_KEY = 'simposter-last-seen-version'
 
+const emit = defineEmits<{
+  (e: 'view-full-changelog'): void
+}>()
+
 const visible = ref(false)
 const missedNotes = ref<ReleaseNote[]>([])
+const activeMajorRelease = ref<MajorRelease | null>(null)
+
+// Compares two 'vX.Y.Z'-style version strings. Returns <0 if a<b, 0 if equal, >0 if a>b.
+function compareVersions(a: string, b: string): number {
+  const parts = (v: string) => v.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
+  const [pa, pb] = [parts(a), parts(b)]
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
 
 onMounted(() => {
   const lastSeen = localStorage.getItem(STORAGE_KEY)
   if (lastSeen === APP_VERSION) return
+
+  // A returning user (has a lastSeen) whose last visit predates a curated major-
+  // release milestone gets that highlight reel instead of the granular per-version
+  // dump below — crossing dozens of versions at once is exactly what majorReleases.ts
+  // exists for. Fresh installs (no lastSeen) skip this — onboarding already covers
+  // the intro for them, they don't need a "look what you missed" tour of the past.
+  if (lastSeen) {
+    const crossed = majorReleases.find(
+      (m) => compareVersions(APP_VERSION, m.version) >= 0 && compareVersions(lastSeen, m.version) < 0
+    )
+    if (crossed) {
+      activeMajorRelease.value = crossed
+      visible.value = true
+      return
+    }
+  }
 
   // Collect all release notes newer than the last seen version.
   // releaseNotes is ordered newest-first. If no lastSeen, only show the current version.
@@ -35,11 +68,44 @@ function dismiss() {
   localStorage.setItem(STORAGE_KEY, APP_VERSION)
   visible.value = false
 }
+
+function viewFullChangelog() {
+  dismiss()
+  emit('view-full-changelog')
+}
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="visible && missedNotes.length" class="announcement-overlay" @click.self="dismiss">
+    <!-- Major-release highlight reel -->
+    <div v-if="visible && activeMajorRelease" class="announcement-overlay" @click.self="dismiss">
+      <div class="announcement-modal major glass">
+        <div class="announcement-header major-header">
+          <div>
+            <span class="major-eyebrow">Major Update</span>
+            <h2>{{ activeMajorRelease.title }}</h2>
+          </div>
+          <button class="close-btn" @click="dismiss">&times;</button>
+        </div>
+        <div class="announcement-body">
+          <p class="major-intro">{{ activeMajorRelease.intro }}</p>
+          <div class="highlight-grid">
+            <div v-for="h in activeMajorRelease.highlights" :key="h.title" class="highlight-card">
+              <div class="highlight-icon">{{ h.icon }}</div>
+              <div class="highlight-title">{{ h.title }}</div>
+              <div class="highlight-desc">{{ h.description }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="announcement-footer">
+          <button class="btn-link" @click="viewFullChangelog">View full changelog</button>
+          <button class="btn-dismiss" @click="dismiss">Got it</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Regular per-version "what's new" -->
+    <div v-else-if="visible && missedNotes.length" class="announcement-overlay" @click.self="dismiss">
       <div class="announcement-modal glass">
         <div class="announcement-header">
           <h2 v-if="missedNotes.length === 1">What's New in {{ missedNotes[0]!.version }}</h2>
@@ -198,8 +264,107 @@ function dismiss() {
 .announcement-footer {
   padding: 12px 24px 20px;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
   border-top: 1px solid var(--border);
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #8892b0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 8px 4px;
+  margin-right: auto;
+  transition: color 0.15s ease;
+}
+
+.btn-link:hover {
+  color: var(--accent-2);
+  text-decoration: underline;
+}
+
+/* ── Major release highlight reel ───────────────────────────────────────── */
+
+.announcement-modal.major {
+  max-width: 720px;
+}
+
+.major-header {
+  align-items: flex-start;
+}
+
+.major-eyebrow {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  margin-bottom: 4px;
+}
+
+.major-header h2 {
+  font-size: 22px;
+}
+
+.major-intro {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #c9d1e3;
+}
+
+.highlight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+@media (max-width: 640px) {
+  .highlight-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.highlight-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.highlight-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.highlight-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #eef2ff;
+  margin-bottom: 6px;
+}
+
+.highlight-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #a9b2c8;
+}
+
+:root[data-theme='light'] .major-intro {
+  color: #4a5568;
+}
+
+:root[data-theme='light'] .highlight-desc {
+  color: #718096;
+}
+
+:root[data-theme='light'] .btn-link {
+  color: #718096;
 }
 
 .btn-dismiss {

@@ -63,7 +63,7 @@ def api_plex_send(req: PlexSendRequest):
     is_tv = False
     try:
         metadata_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}"
-        resp = requests.get(metadata_url, headers=plex_headers(), timeout=5)
+        resp = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
         if resp.ok:
             plex_xml_text = resp.text
             root = ET.fromstring(resp.text)
@@ -156,7 +156,7 @@ def api_plex_send(req: PlexSendRequest):
 
     logger.info("[PLEX] Uploading poster rating_key=%s template=%s preset=%s", req.rating_key, req.template_id, req.preset_id)
     try:
-        r = requests.post(plex_url, headers=headers, data=payload, timeout=20)
+        r = plex_session.post(plex_url, headers=headers, data=payload, timeout=20)
         r.raise_for_status()
     except Exception as e:
         logger.error("[PLEX] Upload failed rating_key=%s err=%s", req.rating_key, e)
@@ -196,9 +196,27 @@ def api_plex_send(req: PlexSendRequest):
     except Exception:
         pass
 
-    # Remove labels if requested
+    # Remove labels if requested. content_type is derived here from the metadata XML
+    # already fetched above (for {title}/{year} substitution) when available, using the
+    # identical detection plex_remove_label() would otherwise do itself — skips it
+    # re-fetching the exact same /library/metadata/{rating_key} a second time per label.
+    # Falls back to None (plex_remove_label's own detection) if that fetch failed/is unavailable.
+    label_content_type = None
+    try:
+        if plex_xml_text and 'root' in locals():
+            if root.find(".//Directory[@type='show']") is not None:
+                label_content_type = "2"
+            elif root.find(".//Directory[@type='season']") is not None:
+                label_content_type = "3"
+            elif root.find(".//Video[@type='episode']") is not None:
+                label_content_type = "4"
+            else:
+                label_content_type = "1"
+    except Exception:
+        label_content_type = None
+
     for label in req.labels or []:
-        plex_remove_label(req.rating_key, label)
+        plex_remove_label(req.rating_key, label, content_type=label_content_type)
 
     # Refresh cached poster so future calls use the updated image
     try:
@@ -287,7 +305,7 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
     }
     logger.info("[PLEX] Uploading clearlogo rating_key=%s is_tv=%s", req.rating_key, req.is_tv)
     try:
-        r = requests.post(plex_url, headers=upload_headers, data=logo_bytes, timeout=20)
+        r = plex_session.post(plex_url, headers=upload_headers, data=logo_bytes, timeout=20)
         r.raise_for_status()
     except Exception as e:
         logger.error("[PLEX] Logo upload failed rating_key=%s err=%s", req.rating_key, e)

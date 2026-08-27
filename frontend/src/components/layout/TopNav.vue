@@ -41,6 +41,30 @@ const posterCache = ref<Record<string, string | null>>({})
 const versionInfo = ref<VersionInfo | null>(null)
 const apiBase = getApiBase()
 
+type PlexStatus = 'unknown' | 'up' | 'down' | 'unconfigured'
+const plexStatus = ref<PlexStatus>('unknown')
+
+const checkPlexStatus = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/plex-status`)
+    if (res.ok) {
+      const data = await res.json()
+      plexStatus.value = (data.status as PlexStatus) || 'down'
+    } else {
+      plexStatus.value = 'down'
+    }
+  } catch {
+    plexStatus.value = 'down'
+  }
+}
+
+const plexStatusTitle = computed(() => {
+  if (plexStatus.value === 'up') return 'Plex server is online'
+  if (plexStatus.value === 'down') return 'Plex server is unreachable — check that it\'s running and PLEX_URL is correct'
+  if (plexStatus.value === 'unconfigured') return 'Plex URL not configured yet'
+  return 'Checking Plex server status...'
+})
+
 const normalizePoster = (url: string | null | undefined) => {
   if (!url) return null
   return url.startsWith('http') ? url : `${apiBase}${url}`
@@ -158,19 +182,28 @@ const unsupportedTagTitle = computed(() => {
 })
 
 let posterCacheInterval: number | null = null
+let plexStatusInterval: number | null = null
 
 onMounted(() => {
   loadPosterCache()
   fetchVersionInfo()
+  checkPlexStatus()
   // Watch for changes to the poster cache in sessionStorage every 500ms
   posterCacheInterval = window.setInterval(() => {
     loadPosterCache()
   }, 500)
+  // Poll Plex reachability every 30s so a downed server shows up quickly
+  plexStatusInterval = window.setInterval(() => {
+    checkPlexStatus()
+  }, 30000)
 })
 
 onUnmounted(() => {
   if (posterCacheInterval !== null) {
     clearInterval(posterCacheInterval)
+  }
+  if (plexStatusInterval !== null) {
+    clearInterval(plexStatusInterval)
   }
 })
 
@@ -206,6 +239,10 @@ onUnmounted(() => {
           {{ displayVersion }}
           <span v-if="versionInfo?.update_available" class="update-dot"></span>
         </button>
+        <div class="plex-status-badge" :class="plexStatus" :title="plexStatusTitle">
+          <span class="plex-status-dot"></span>
+          <span class="plex-status-label">Plex</span>
+        </div>
       </div>
     </div>
     <div class="search-container">
@@ -400,6 +437,52 @@ onUnmounted(() => {
   }
 }
 
+.plex-status-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.plex-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6b7280;
+  flex-shrink: 0;
+}
+
+.plex-status-badge.up {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #86efac;
+}
+.plex-status-badge.up .plex-status-dot {
+  background: #22c55e;
+}
+
+.plex-status-badge.down {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+.plex-status-badge.down .plex-status-dot {
+  background: #ef4444;
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.plex-status-badge.unconfigured .plex-status-dot,
+.plex-status-badge.unknown .plex-status-dot {
+  background: #6b7280;
+}
+
 .search-container {
   flex: 1;
   max-width: 720px;
@@ -534,6 +617,14 @@ onUnmounted(() => {
 
   .version-badge {
     display: none;
+  }
+
+  .plex-status-label {
+    display: none;
+  }
+
+  .plex-status-badge {
+    padding: 4px;
   }
 
   .search-container {

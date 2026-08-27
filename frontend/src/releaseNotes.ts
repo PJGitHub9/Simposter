@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.65',
+    date: '2026-08-27',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a Plex status indicator in the top bar so you know right away if your Plex server goes down, instead of finding out when something silently stops working.',
+          'Settings and the setup wizard now note that a Fanart.tv API key is needed for Collection posters to auto-find a logo — TMDb has no artwork for Collections at all.',
+        ]
+      },
+      {
+        title: 'Performance',
+        items: [
+          "Sending a poster to Plex (manual or batch) now reuses an existing connection instead of opening a new one for every upload, and label removal no longer re-fetches metadata it just fetched moments earlier.",
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.64',
     date: '2026-08-24',
     sections: [

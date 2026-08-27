@@ -422,6 +422,26 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
         }
 
 
+@router.get("/plex-status")
+def api_plex_status():
+    """
+    Lightweight Plex reachability check for the header status indicator — polled
+    periodically by the frontend, so this deliberately hits the cheap, usually-
+    unauthenticated `/identity` endpoint rather than `/library/sections` (what
+    test_plex_connection above uses), and never raises: any failure just means "down".
+    """
+    if not settings.PLEX_URL:
+        return {"status": "unconfigured"}
+
+    try:
+        r = plex_session.get(f"{settings.PLEX_URL}/identity", headers=plex_headers(), timeout=5)
+        r.raise_for_status()
+        return {"status": "up"}
+    except Exception as e:
+        logger.debug(f"[PLEX_STATUS] Plex unreachable: {e}")
+        return {"status": "down", "message": str(e)}
+
+
 def _cache_fresh(max_age_seconds: int, library_id: Optional[str] = None) -> bool:
     stats = db.get_movie_cache_stats(library_id=library_id)
     if not stats.get("count"):

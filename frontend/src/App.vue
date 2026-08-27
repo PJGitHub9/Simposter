@@ -673,7 +673,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <NotificationContainer />
     <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true" />
     <QuickStartGuide v-if="showQuickGuide" @done="handleQuickGuideDone" />
-    <UpdateAnnouncementModal />
+    <UpdateAnnouncementModal @view-full-changelog="showChangelog = true" />
 
     <!-- Mobile sidebar overlay -->
     <div v-if="sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>

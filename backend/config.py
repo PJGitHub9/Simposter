@@ -983,8 +983,14 @@ def find_rating_key_by_title_year(title: str, year: Optional[int], library_ids: 
     return None
 
 
-def plex_remove_label(rating_key: str, label: str):
-    """Attempts 3 different Plex label removal methods. Works for movies, TV shows, and seasons."""
+def plex_remove_label(rating_key: str, label: str, content_type: Optional[str] = None):
+    """Attempts 3 different Plex label removal methods. Works for movies, TV shows, and seasons.
+
+    content_type (1=movie, 2=show, 3=season, 4=episode): pass this when the caller has
+    already fetched this item's metadata moments earlier (e.g. api_plex_send() parses it
+    for {title}/{year} substitution first) so this function doesn't re-fetch the exact
+    same metadata a second time just to re-derive a value the caller already has.
+    """
 
     if not label:
         return
@@ -992,24 +998,25 @@ def plex_remove_label(rating_key: str, label: str):
     # Resolve library for this item (fallback to default)
     lib_id = get_library_section_id(rating_key) or PLEX_DEFAULT_MOVIE_LIB_ID
 
-    # Detect content type (1=movie, 2=show, 3=season, 4=episode)
-    # Try to determine from metadata
-    content_type = "1"  # Default to movie
-    try:
-        metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-        r = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
-        if r.status_code == 200:
-            root = ET.fromstring(r.text)
-            # Check for Directory (TV show/season) vs Video (movie/episode)
-            if root.find(".//Directory[@type='show']") is not None:
-                content_type = "2"  # TV show
-            elif root.find(".//Directory[@type='season']") is not None:
-                content_type = "3"  # Season
-            elif root.find(".//Video[@type='episode']") is not None:
-                content_type = "4"  # Episode
-            # Otherwise stays as "1" for movie
-    except Exception:
-        pass  # Use default type if detection fails
+    if content_type is None:
+        # Detect content type (1=movie, 2=show, 3=season, 4=episode)
+        # Try to determine from metadata
+        content_type = "1"  # Default to movie
+        try:
+            metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+            r = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
+            if r.status_code == 200:
+                root = ET.fromstring(r.text)
+                # Check for Directory (TV show/season) vs Video (movie/episode)
+                if root.find(".//Directory[@type='show']") is not None:
+                    content_type = "2"  # TV show
+                elif root.find(".//Directory[@type='season']") is not None:
+                    content_type = "3"  # Season
+                elif root.find(".//Video[@type='episode']") is not None:
+                    content_type = "4"  # Episode
+                # Otherwise stays as "1" for movie
+        except Exception:
+            pass  # Use default type if detection fails
 
     # Method 1: Use library sections endpoint with detected type
     try:

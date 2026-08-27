@@ -511,6 +511,7 @@ onMounted(() => {
               </div>
               <div v-if="fanartStatus === 'ok'" class="ob-key-status ok">✓ {{ fanartStatusMsg }}</div>
               <div v-else-if="fanartStatus === 'error'" class="ob-key-status error">✗ {{ fanartStatusMsg }}</div>
+              <div class="ob-hint-text">Recommended if you plan to make posters for Plex Collections — it's the only source of franchise/collection logos (TMDb has none).</div>
             </div>
           </div>
           <div class="ob-actions">

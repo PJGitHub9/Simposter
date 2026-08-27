@@ -421,7 +421,7 @@ def _process_single_movie(
                 "Content-Type": content_type,
             }
 
-            r = requests.post(plex_url, headers=headers, data=payload, timeout=20)
+            r = plex_session.post(plex_url, headers=headers, data=payload, timeout=20)
             r.raise_for_status()
             try:
                 cache_ctx = SaveContext(
@@ -449,7 +449,9 @@ def _process_single_movie(
                 removed_labels = []
                 try:
                     for label in req.labels:
-                        plex_remove_label(rating_key, label)
+                        # This function is movie-only — content_type is always "1", so
+                        # skip plex_remove_label()'s own metadata fetch to determine it.
+                        plex_remove_label(rating_key, label, content_type="1")
                         logger.info("[BATCH] Removed label '%s' from %s", label, rating_key)
                         removed_labels.append(label.lower())
                 except Exception as label_err:
@@ -473,7 +475,7 @@ def _process_single_movie(
                         logo_bytes, ct = normalize_logo_for_plex(logo_r.content, ct)
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
-                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
+                        plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
                         logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
                     else:
                         logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
@@ -1402,7 +1404,7 @@ def _render_and_save_poster(
                 "X-Plex-Token": settings.PLEX_TOKEN,
                 "Content-Type": content_type,
             }
-            upload_resp = requests.post(upload_url, headers=headers, data=payload, timeout=20)
+            upload_resp = plex_session.post(upload_url, headers=headers, data=payload, timeout=20)
             upload_resp.raise_for_status()
             logger.info("[BATCH] Uploaded poster to Plex for %s", title)
             try:
@@ -1437,7 +1439,7 @@ def _render_and_save_poster(
                         logo_bytes, ct = normalize_logo_for_plex(logo_r.content, ct)
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
-                        requests.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
+                        plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
                         logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
                     else:
                         logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
