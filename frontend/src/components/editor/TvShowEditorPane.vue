@@ -1888,11 +1888,18 @@ const doSave = async () => {
 
     // Get logo for this season
     // If no user modifications, check if preset uses logo_mode=none
-    let seasonLogoUrl = cachedSettings?.selectedLogo || logoUrl.value
+    let seasonLogoUrl: string | null = cachedSettings?.selectedLogo || logoUrl.value
     if (!hasUserModifications) {
       // When relying on preset season_options, let the backend decide logo mode
       // Only pass logo URL if user explicitly selected one for this season
       seasonLogoUrl = cachedSettings?.selectedLogo || null
+    } else if (cachedSettings?.logoMode === 'none') {
+      // User explicitly set this season's Logo Mode to "No Logo". Without this,
+      // falling back to logoUrl.value below sends whatever logo the *currently
+      // focused* season/series happens to have loaded -- not this season's -- since
+      // this save loop never switches the live editing context per season the way
+      // doSend()/restoreSettingsForKey() does.
+      seasonLogoUrl = null
     }
 
     // Create a temporary movie object for this season with proper media type

@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.67',
+    date: '2026-08-27',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "No Logo" mode being ignored when using Save to Disk for TV show posters — a logo could still get added even with Logo Mode set to "No Logo". Only affected the manual TV editor\'s Save to Disk button; Send to Plex was never affected.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.66',
     date: '2026-08-27',
     sections: [
