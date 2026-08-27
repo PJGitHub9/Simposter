@@ -3,6 +3,7 @@ Background task scheduler for periodic operations like library scans.
 Uses APScheduler for cron-style scheduling.
 """
 import logging
+import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime
@@ -389,6 +390,7 @@ def _run_poster_retry():
             return
 
         logger.info("[RETRY] Running retry job — %d pending items (max_attempts=%s)", len(pending), max_attempts or "unlimited")
+        _job_start = time.time()
 
         for item in pending:
             rating_key = item["rating_key"]
@@ -407,6 +409,7 @@ def _run_poster_retry():
 
             logger.info("[RETRY] Retrying %s (%s) attempt #%d", title, media_type, retry_count + 1)
             db.update_retry_attempt(rating_key)
+            _retry_item_start = time.time()
 
             # Merge global auto_labels with per-library default labels for this item
             remove_labels = list(auto_labels)
@@ -453,14 +456,15 @@ def _run_poster_retry():
                     # item from the queue on a transient failure instead of leaving it pending.
                     still_needs_retry = result.get("needs_retry", True) if isinstance(result, dict) else True
 
+                _retry_elapsed = time.time() - _retry_item_start
                 if not still_needs_retry:
                     db.resolve_retry_queue_item(rating_key, "resolved")
-                    logger.info("[RETRY] Successfully resolved %s — ideal template conditions met", title)
+                    logger.info("[RETRY] Successfully resolved %s in %.1fs — ideal template conditions met", title, _retry_elapsed)
                 else:
-                    logger.info("[RETRY] %s still pending (attempt #%d) — will retry again", title, retry_count + 1)
+                    logger.info("[RETRY] %s still pending in %.1fs (attempt #%d) — will retry again", title, _retry_elapsed, retry_count + 1)
 
             except Exception as retry_err:
-                logger.warning("[RETRY] Error retrying %s: %s", title, retry_err)
+                logger.warning("[RETRY] Error retrying %s after %.1fs: %s", title, time.time() - _retry_item_start, retry_err)
                 # A render error here (as opposed to a clean "needs_retry" result
                 # above) most often means the Plex fetch itself failed -- and if
                 # that's because the item was deleted/reorganized in Plex (a
@@ -476,7 +480,7 @@ def _run_poster_retry():
                         title, rating_key
                     )
 
-        logger.info("[RETRY] Retry job complete")
+        logger.info("[RETRY] Retry job complete — %d items in %.1fs", len(pending), time.time() - _job_start)
 
     except Exception as e:
         logger.error("[RETRY] Unexpected error in retry job: %s", e, exc_info=True)

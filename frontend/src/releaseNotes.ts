@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.66',
+    date: '2026-08-27',
+    sections: [
+      {
+        title: 'Performance',
+        items: [
+          'Sending a poster to Plex (manual or batch) is noticeably faster — the PNG encode now tries a quick pass first and only falls back to the slower, maximum-effort one on the rare poster that actually needs it, with no change in image quality either way.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Backend logs now show the actual movie/show name and how long each step took, instead of just an internal ID — makes it much easier to see what\'s happening during a batch run or troubleshoot a slow send.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.65',
     date: '2026-08-27',
     sections: [

@@ -65,7 +65,17 @@ def _process_single_movie(
     source: str = "batch",
 ):
     """Process a single movie in the batch. Returns result dict."""
-    title_hint = rating_key  # updated once we have movie_details, used in error reporting
+    _item_start = time.time()
+    # Best-effort display title, upgraded to the real TMDb title below once fetched —
+    # a cheap local DB cache lookup (movie_cache, from the last library scan) so even
+    # the very first "Start" log line can show a name instead of just a rating_key.
+    title_hint = rating_key
+    try:
+        _cached_title, _ = db.get_title_for_rating_key(rating_key)
+        if _cached_title:
+            title_hint = _cached_title
+    except Exception:
+        pass
 
     # Lazy, memoized {folder} lookup -- a single-element list dodges the need for
     # `nonlocal` while still letting both the save_locally and send_to_plex blocks
@@ -86,7 +96,7 @@ def _process_single_movie(
         logo_preference = map_logo_mode_to_preference(logo_preference)
         logo_mode = base_logo_mode
 
-        logger.info("[BATCH] Start rating_key=%s template=%s", rating_key, template_id)
+        logger.info("[BATCH] Start rating_key=%s [%s] template=%s", rating_key, title_hint, template_id)
 
         # ---------------------------
         # TMDb Fetch
@@ -99,11 +109,11 @@ def _process_single_movie(
         tmdb_id = get_movie_tmdb_id(rating_key)
         if not tmdb_id:
             raise Exception("No TMDb ID found.")
-        logger.debug("[BATCH] rating_key=%s tmdb_id=%s", rating_key, tmdb_id)
+        logger.debug("[BATCH] rating_key=%s [%s] tmdb_id=%s", rating_key, title_hint, tmdb_id)
 
         # Fetch movie details for template variables
         movie_details = get_movie_details(tmdb_id)
-        title_hint = movie_details.get("title") or rating_key
+        title_hint = movie_details.get("title") or title_hint
         # Fetch images honoring preferred languages (fallback to movie original language)
         imgs = get_images_for_movie(tmdb_id, movie_details.get("original_language"))
         posters = imgs.get("posters", [])
@@ -112,8 +122,9 @@ def _process_single_movie(
         logo_source_pref = render_options_base.get("logoSource") or render_options_base.get("logo_source")
         logos = get_logos_merged(tmdb_id, logo_source_pref, movie_details.get("original_language"), tmdb_imgs=imgs)
         logger.debug(
-            "[BATCH] rating_key=%s posters=%d logos=%d filter=%s logo_pref=%s",
+            "[BATCH] rating_key=%s [%s] posters=%d logos=%d filter=%s logo_pref=%s",
             rating_key,
+            title_hint,
             len(posters),
             len(logos),
             poster_filter,
@@ -196,7 +207,7 @@ def _process_single_movie(
             fallback_logo_action = render_options_base.get("fallbackLogoAction") or "continue"
             fallback_logo_template = render_options_base.get("fallbackLogoTemplate")
             fallback_logo_preset = render_options_base.get("fallbackLogoPreset")
-            logger.info("[BATCH] No logo found for %s — fallback action: %s", rating_key, fallback_logo_action)
+            logger.info("[BATCH] No logo found for %s [%s] — fallback action: %s", rating_key, title_hint, fallback_logo_action)
             if fallback_logo_action == "template" and fallback_logo_template:
                 logo_fallback_used = True
                 logo_fallback_template_used = fallback_logo_template
@@ -249,9 +260,9 @@ def _process_single_movie(
         # Set final logo_url if not already set by fallback override
         if logo_url is None:
             logo_url = logo.get("url") if logo else None
-        logger.info(f"[BATCH] Picked logo pref={logo_preference}")
-        logger.info(f"[BATCH] Picked poster={poster_url}")
-        logger.info(f"[BATCH] Picked logo={logo_url}")
+        logger.info(f"[BATCH] [{title_hint}] Picked logo pref={logo_preference}")
+        logger.info(f"[BATCH] [{title_hint}] Picked poster={poster_url}")
+        logger.info(f"[BATCH] [{title_hint}] Picked logo={logo_url}")
 
         # Determine whether the ideal template conditions were met.
         # logo_was_expected uses the original logo_mode (before fallback may have overwritten it
@@ -405,7 +416,7 @@ def _process_single_movie(
         # ---------------------------
         payload = None
         if skip_send_not_ideal:
-            logger.info("[BATCH] Skipping Plex upload for %s — still needs_retry and send_only_if_ideal is set", rating_key)
+            logger.info("[BATCH] Skipping Plex upload for %s [%s] — still needs_retry and send_only_if_ideal is set", rating_key, title_hint)
         elif req.send_to_plex:
             _update_batch_status({
                 "current_step": "Sending to Plex",
@@ -445,28 +456,28 @@ def _process_single_movie(
 
             # Label removal
             if req.labels:
-                logger.info("[BATCH] Removing labels %s from %s", req.labels, rating_key)
+                logger.info("[BATCH] Removing labels %s from %s [%s]", req.labels, rating_key, title_hint)
                 removed_labels = []
                 try:
                     for label in req.labels:
                         # This function is movie-only — content_type is always "1", so
                         # skip plex_remove_label()'s own metadata fetch to determine it.
                         plex_remove_label(rating_key, label, content_type="1")
-                        logger.info("[BATCH] Removed label '%s' from %s", label, rating_key)
+                        logger.info("[BATCH] Removed label '%s' from %s [%s]", label, rating_key, title_hint)
                         removed_labels.append(label.lower())
                 except Exception as label_err:
-                    logger.warning("[BATCH] Label removal failed for %s: %s", rating_key, label_err)
+                    logger.warning("[BATCH] Label removal failed for %s [%s]: %s", rating_key, title_hint, label_err)
                 # Sync label cache — strip removed labels so the filter doesn't show stale results
                 if removed_labels:
                     current = db.get_movie_labels(rating_key)
                     updated = [l for l in current if l.lower() not in removed_labels]
                     db.update_movie_labels(rating_key, updated)
 
-            logger.info(f"[BATCH] Uploaded to Plex: {rating_key}")
+            logger.info("[BATCH] Uploaded to Plex: %s [%s]", rating_key, title_hint)
 
             # Send logo to Plex if requested and a logo was used
-            logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s",
-                        getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key)
+            logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s [%s]",
+                        getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key, title_hint)
             if getattr(req, 'send_logos_to_plex', False) and logo_url:
                 try:
                     logo_r = requests.get(logo_url, timeout=10)
@@ -476,11 +487,11 @@ def _process_single_movie(
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
-                        logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
+                        logger.info("[BATCH] Uploaded logo to Plex for %s [%s]", rating_key, title_hint)
                     else:
-                        logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
+                        logger.warning("[BATCH] Logo fetch returned %s for %s [%s] — skipping clearLogo upload", logo_r.status_code, rating_key, title_hint)
                 except Exception as logo_err:
-                    logger.warning("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
+                    logger.warning("[BATCH] Logo send to Plex failed for %s [%s]: %s", rating_key, title_hint, logo_err)
 
             try:
                 db.record_poster_history(
@@ -508,12 +519,14 @@ def _process_single_movie(
         try:
             fetch_and_cache_poster(rating_key, force_refresh=True)
         except Exception as cache_err:
-            logger.debug("[BATCH] Failed to refresh poster cache for %s: %s", rating_key, cache_err)
+            logger.debug("[BATCH] Failed to refresh poster cache for %s [%s]: %s", rating_key, title_hint, cache_err)
 
         try:
             db.update_movie_logo_url(rating_key, logo_url)
         except Exception as logo_cache_err:
-            logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
+            logger.debug("[BATCH] Failed to cache logo_url for %s [%s]: %s", rating_key, title_hint, logo_cache_err)
+
+        logger.info("[BATCH] '%s' done in %.1fs (rating_key=%s)", title_hint, time.time() - _item_start, rating_key)
 
         result = {
             "rating_key": rating_key,
@@ -603,7 +616,18 @@ def _process_single_tv_show(
                          Used by webhooks to only generate posters for newly added seasons.
                          If None or empty, process all seasons.
     """
-    title_hint = rating_key  # updated once we have show_details, used in error reporting
+    _show_start = time.time()
+    # Best-effort display title, upgraded to the real TMDb show name below once
+    # fetched — a cheap local DB cache lookup (tv_cache, from the last library scan)
+    # so even the very first "Start" log line can show a name instead of just a
+    # rating_key.
+    title_hint = rating_key
+    try:
+        _cached_title, _ = db.get_title_for_rating_key(rating_key)
+        if _cached_title:
+            title_hint = _cached_title
+    except Exception:
+        pass
     try:
         template_id = req.template_id
         preset_id = req.preset_id
@@ -618,8 +642,8 @@ def _process_single_tv_show(
         season_poster_filter_final = season_poster_filter or base_poster_filter
         season_options_final = db.resolve_season_options(base_options, season_options)
 
-        logger.info("[BATCH TV] Start rating_key=%s template=%s include_seasons=%s season_poster_filter=%s",
-                    rating_key, template_id, req.include_seasons, season_poster_filter_final)
+        logger.info("[BATCH TV] Start rating_key=%s [%s] template=%s include_seasons=%s season_poster_filter=%s",
+                    rating_key, title_hint, template_id, req.include_seasons, season_poster_filter_final)
 
         # Fetch TV show TMDB/TVDB IDs from Plex
         _update_batch_status({
@@ -664,11 +688,11 @@ def _process_single_tv_show(
         if not tmdb_id:
             raise Exception("No TMDB ID found for TV show")
 
-        logger.debug("[BATCH TV] rating_key=%s tmdb_id=%s tvdb_id=%s", rating_key, tmdb_id, tvdb_id)
+        logger.debug("[BATCH TV] rating_key=%s [%s] tmdb_id=%s tvdb_id=%s", rating_key, title_hint, tmdb_id, tvdb_id)
 
         # Fetch TV show details
         show_details = get_tv_show_details(tmdb_id)
-        show_title = show_details.get("name", "Unknown")
+        show_title = show_details.get("name") or title_hint
         title_hint = show_title
 
         include_series = getattr(req, 'include_series', True)
@@ -1190,6 +1214,9 @@ def _render_all_tv_seasons(
         )
         results.append(result)
 
+    logger.info("[BATCH TV] '%s' done in %.1fs (rating_key=%s, %d season(s))",
+                show_title, time.time() - _show_start, rating_key, len(results))
+
     return {
         "rating_key": rating_key,
         "show_title": show_title,
@@ -1223,6 +1250,7 @@ def _render_and_save_poster(
     logo_was_expected: bool = True,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
+    _render_start = time.time()
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
     display_title = f"{title} - {season_title}" if season_title else title
 
@@ -1429,8 +1457,8 @@ def _render_and_save_poster(
                     pass
 
             # Send logo to Plex if requested and a logo was used
-            logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s",
-                        getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key)
+            logger.info("[BATCH] Logo upload check: send_logos_to_plex=%s logo_url=%s rating_key=%s [%s]",
+                        getattr(req, 'send_logos_to_plex', False), bool(logo_url), rating_key, display_title)
             if getattr(req, 'send_logos_to_plex', False) and logo_url:
                 try:
                     logo_r = requests.get(logo_url, timeout=10)
@@ -1440,33 +1468,33 @@ def _render_and_save_poster(
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
-                        logger.info("[BATCH] Uploaded logo to Plex for %s", rating_key)
+                        logger.info("[BATCH] Uploaded logo to Plex for %s [%s]", rating_key, display_title)
                     else:
-                        logger.warning("[BATCH] Logo fetch returned %s for %s — skipping clearLogo upload", logo_r.status_code, rating_key)
+                        logger.warning("[BATCH] Logo fetch returned %s for %s [%s] — skipping clearLogo upload", logo_r.status_code, rating_key, display_title)
                 except Exception as logo_err:
-                    logger.warning("[BATCH] Logo send to Plex failed for %s: %s", rating_key, logo_err)
+                    logger.warning("[BATCH] Logo send to Plex failed for %s [%s]: %s", rating_key, display_title, logo_err)
 
             # Invalidate poster cache so UI shows updated poster
             if is_tv:
                 from .tv_shows import _remove_poster_cache as _remove_tv_poster_cache
                 _remove_tv_poster_cache(rating_key, "tv")
-                logger.info("[BATCH] Invalidated TV poster cache for %s", rating_key)
+                logger.info("[BATCH] Invalidated TV poster cache for %s [%s]", rating_key, display_title)
             else:
                 from .movies import _remove_poster_cache as _remove_movie_poster_cache
                 _remove_movie_poster_cache(rating_key)
-                logger.info("[BATCH] Invalidated movie poster cache for %s", rating_key)
+                logger.info("[BATCH] Invalidated movie poster cache for %s [%s]", rating_key, display_title)
 
             # Remove labels if specified
             if req.labels:
-                logger.info("[BATCH] Removing labels %s from %s (%s)", req.labels, rating_key, title)
+                logger.info("[BATCH] Removing labels %s from %s (%s)", req.labels, rating_key, display_title)
                 removed_labels = []
                 try:
                     for label_name in req.labels:
                         plex_remove_label(rating_key, label_name)
-                        logger.info("[BATCH] Removed label '%s' from %s", label_name, rating_key)
+                        logger.info("[BATCH] Removed label '%s' from %s [%s]", label_name, rating_key, display_title)
                         removed_labels.append(label_name.lower())
                 except Exception as label_err:
-                    logger.warning("[BATCH] Label removal failed for %s: %s", rating_key, label_err)
+                    logger.warning("[BATCH] Label removal failed for %s [%s]: %s", rating_key, display_title, label_err)
                 # Sync label cache — strip removed labels so the filter doesn't show stale results
                 if removed_labels:
                     current = db.get_tv_labels(rating_key)
@@ -1506,7 +1534,9 @@ def _render_and_save_poster(
         else:
             db.update_movie_logo_url(rating_key, logo_url)
     except Exception as logo_cache_err:
-        logger.debug("[BATCH] Failed to cache logo_url for %s: %s", rating_key, logo_cache_err)
+        logger.debug("[BATCH] Failed to cache logo_url for %s [%s]: %s", rating_key, display_title, logo_cache_err)
+
+    logger.info("[BATCH] '%s' done in %.1fs (rating_key=%s)", display_title, time.time() - _render_start, rating_key)
 
     result = {
         "rating_key": rating_key,

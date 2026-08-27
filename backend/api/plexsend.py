@@ -1,4 +1,5 @@
 import base64
+import time
 import requests
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
@@ -27,6 +28,8 @@ def _plex_media_segment(is_collection: bool) -> str:
 
 @router.post("/plex/send")
 def api_plex_send(req: PlexSendRequest):
+    _send_start = time.time()
+
     # Validate Plex settings
     if not settings.PLEX_URL or not settings.PLEX_TOKEN:
         raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
@@ -119,7 +122,7 @@ def api_plex_send(req: PlexSendRequest):
             if plex_media:
                 existing_meta = options.get("metadata") or {}
                 options["metadata"] = {**existing_meta, **plex_media}
-                logger.info("[PLEX] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
+                logger.info("[PLEX] Injected media info for rating_key=%s [%s]: %s", req.rating_key, movie_details.get("title") or "?", plex_media)
         except Exception as e:
             logger.debug("[PLEX] Failed to inject media info: %s", e)
 
@@ -154,12 +157,12 @@ def api_plex_send(req: PlexSendRequest):
         "Content-Type": content_type,
     }
 
-    logger.info("[PLEX] Uploading poster rating_key=%s template=%s preset=%s", req.rating_key, req.template_id, req.preset_id)
+    logger.info("[PLEX] Uploading poster rating_key=%s [%s] template=%s preset=%s", req.rating_key, movie_details.get("title") or "?", req.template_id, req.preset_id)
     try:
         r = plex_session.post(plex_url, headers=headers, data=payload, timeout=20)
         r.raise_for_status()
     except Exception as e:
-        logger.error("[PLEX] Upload failed rating_key=%s err=%s", req.rating_key, e)
+        logger.error("[PLEX] Upload failed rating_key=%s [%s] err=%s", req.rating_key, movie_details.get("title") or "?", e)
         raise
 
     try:
@@ -261,7 +264,9 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as notif_err:
         logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
 
-    logger.info(f"Sent poster to Plex for ratingKey={req.rating_key}")
+    elapsed = time.time() - _send_start
+    display_title = movie_details.get("title") or f"rating key {req.rating_key}"
+    logger.info("[PLEX] Poster for '%s' sent in %.1fs (rating_key=%s)", display_title, elapsed, req.rating_key)
     return {"status": "ok"}
 
 
@@ -269,6 +274,17 @@ def api_plex_send(req: PlexSendRequest):
 def api_plex_send_logo(req: PlexLogoSendRequest):
     if not settings.PLEX_URL or not settings.PLEX_TOKEN:
         raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
+
+    # Best-effort display title for log readability — cheap local DB cache lookup,
+    # never a network call (this endpoint doesn't otherwise fetch movie/show details).
+    _logo_title = "?"
+    try:
+        from .. import database as _db_title
+        _t, _y = _db_title.get_title_for_rating_key(req.rating_key)
+        if _t:
+            _logo_title = f"{_t} ({_y})" if _y else _t
+    except Exception:
+        pass
 
     # Resolve logo bytes
     logo_bytes = None
@@ -303,12 +319,12 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
         "X-Plex-Token": settings.PLEX_TOKEN,
         "Content-Type": content_type,
     }
-    logger.info("[PLEX] Uploading clearlogo rating_key=%s is_tv=%s", req.rating_key, req.is_tv)
+    logger.info("[PLEX] Uploading clearlogo rating_key=%s [%s] is_tv=%s", req.rating_key, _logo_title, req.is_tv)
     try:
         r = plex_session.post(plex_url, headers=upload_headers, data=logo_bytes, timeout=20)
         r.raise_for_status()
     except Exception as e:
-        logger.error("[PLEX] Logo upload failed rating_key=%s err=%s", req.rating_key, e)
+        logger.error("[PLEX] Logo upload failed rating_key=%s [%s] err=%s", req.rating_key, _logo_title, e)
         raise HTTPException(500, f"Failed to upload logo to Plex: {e}")
 
     # Save uploaded bytes directly to cache — no need to re-fetch from Plex
@@ -327,7 +343,7 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
     except Exception as e:
         logger.debug("[PLEX] Failed to update logo cache after upload: %s", e)
 
-    logger.info("[PLEX] Clearlogo sent for ratingKey=%s", req.rating_key)
+    logger.info("[PLEX] Clearlogo sent for ratingKey=%s [%s]", req.rating_key, _logo_title)
     return {"status": "ok", "logo_url": new_logo_url}
 
 

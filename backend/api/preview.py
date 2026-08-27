@@ -221,16 +221,30 @@ def api_preview(req: PreviewRequest):
             rating_key = req.rating_key
             logger.info("[PREVIEW] Using rating_key from request body: %s", rating_key)
 
-        logger.info("[PREVIEW] Detected rating_key=%s is_tv_show=%s", rating_key, is_tv_show)
+        # Best-effort display title for log readability — a cheap local DB cache lookup
+        # (movie_cache/tv_cache from the last library scan, or poster_history as a last
+        # resort), never a network call. Falls back to silently omitting the name below
+        # when not cached (e.g. an item that's never been scanned).
+        display_title = None
+        if rating_key:
+            try:
+                _title, _year = db.get_title_for_rating_key(rating_key)
+                if _title:
+                    display_title = f"{_title} ({_year})" if _year else _title
+            except Exception:
+                display_title = None
+        _dt = f" [{display_title}]" if display_title else ""
+
+        logger.info("[PREVIEW] Detected rating_key=%s%s is_tv_show=%s", rating_key, _dt, is_tv_show)
 
         if rating_key and not is_tv_show:
             try:
-                logger.debug("[PREVIEW] Detected rating_key=%s from URL", rating_key)
+                logger.debug("[PREVIEW] Detected rating_key=%s%s from URL", rating_key, _dt)
 
                 # Get TMDB ID
                 tmdb_id = get_movie_tmdb_id(rating_key)
                 if tmdb_id:
-                    logger.debug("[PREVIEW] Found tmdb_id=%s for rating_key=%s", tmdb_id, rating_key)
+                    logger.debug("[PREVIEW] Found tmdb_id=%s for rating_key=%s%s", tmdb_id, rating_key, _dt)
 
                     # Fetch TMDB images (respect language preference with original language fallback)
                     movie_details = get_movie_details(tmdb_id)
@@ -365,7 +379,7 @@ def api_preview(req: PreviewRequest):
                     elif logo_mode == "none":
                         logger.debug("[PREVIEW] Skipping logo fetch because logo_mode='none'")
                 else:
-                    logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s, trying Plex poster", rating_key)
+                    logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s%s, trying Plex poster", rating_key, _dt)
                     # Fallback: Try Plex poster directly
                     if not background_url:
                         try:
@@ -398,7 +412,7 @@ def api_preview(req: PreviewRequest):
                 from .. import tvdb_client
                 from ..fanart_client import get_images_for_tv_show as get_fanart_tv_images
 
-                logger.debug("[PREVIEW] Detected TV show rating_key=%s season_index=%s from URL", rating_key, req.season_index)
+                logger.debug("[PREVIEW] Detected TV show rating_key=%s%s season_index=%s from URL", rating_key, _dt, req.season_index)
 
                 # Fetch TV show metadata from Plex
                 url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
@@ -416,7 +430,7 @@ def api_preview(req: PreviewRequest):
                         pass
 
                 if tmdb_id:
-                    logger.debug("[PREVIEW] Found TV show tmdb_id=%s for rating_key=%s", tmdb_id, rating_key)
+                    logger.debug("[PREVIEW] Found TV show tmdb_id=%s for rating_key=%s%s", tmdb_id, rating_key, _dt)
 
                     # Get TV show details and images
                     show_details = get_tv_show_details(tmdb_id)
@@ -538,7 +552,7 @@ def api_preview(req: PreviewRequest):
                     elif logo_mode == "none":
                         logger.debug("[PREVIEW] Skipping TV show logo fetch because logo_mode='none'")
                 else:
-                    logger.warning("[PREVIEW] Could not find TMDB ID for TV show rating_key=%s, trying TVDB", rating_key)
+                    logger.warning("[PREVIEW] Could not find TMDB ID for TV show rating_key=%s%s, trying TVDB", rating_key, _dt)
                     # Fallback 1: Try TVDB if we have a tvdb_id
                     if tvdb_id and not background_url:
                         try:
@@ -593,7 +607,7 @@ def api_preview(req: PreviewRequest):
         # canvas from options.kometa_base_color instead, so an empty background_url here
         # is expected, not an error.
         if not background_url and template_id != "kometa":
-            logger.error("[PREVIEW] No background URL available after all lookups (rating_key=%s, is_tv=%s)", rating_key, is_tv_show)
+            logger.error("[PREVIEW] No background URL available after all lookups (rating_key=%s%s, is_tv=%s)", rating_key, _dt, is_tv_show)
             raise HTTPException(status_code=400, detail="Could not find a poster image. Check that the item has a valid TMDB/TVDB ID or Plex poster.")
 
         # Inject real Plex media metadata (video_resolution, audio_codec, etc.)
@@ -605,9 +619,9 @@ def api_preview(req: PreviewRequest):
             if plex_media:
                 existing_meta = render_options.get("metadata") or {}
                 render_options["metadata"] = {**existing_meta, **plex_media}
-                logger.info("[PREVIEW] Injected Plex media info for rating_key=%s: %s", rating_key, plex_media)
+                logger.info("[PREVIEW] Injected Plex media info for rating_key=%s%s: %s", rating_key, _dt, plex_media)
             else:
-                logger.info("[PREVIEW] No media info found for rating_key=%s", rating_key)
+                logger.info("[PREVIEW] No media info found for rating_key=%s%s", rating_key, _dt)
 
         # Inject tmdb_id and media_type for streaming platform badge resolution
         if tmdb_id:

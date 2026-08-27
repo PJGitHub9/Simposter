@@ -54,14 +54,20 @@ def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
     archive copy, so there's no reason to introduce JPEG generation loss when we
     don't have to. Always flattened to RGB first (the render pipeline returns
     RGBA — every pixel ends up fully opaque, but the file would otherwise carry
-    a real, functionally meaningless alpha channel) and encoded at max PNG
-    compression to get the smallest possible lossless file.
+    a real, functionally meaningless alpha channel).
 
-    If that PNG would still exceed Plex's ~10MB upload cap (this app's grain/
-    matte effects compress poorly under PNG's lossless algorithm at the fixed
-    2000x3000 canvas size — this is exactly what caused real 500s from Plex on
-    some posters), falls back to a high-quality JPEG instead, which reliably
-    stays well under the limit."""
+    Tiered PNG compression effort, not a tiered quality — every level from 0-9
+    decodes to byte-for-byte identical pixels, `compress_level` only trades CPU
+    time for a smaller file. Grain/matte effects compress poorly (and slowly)
+    under PNG at this canvas size, so a max-effort level-9 encode on every single
+    send was measured taking several seconds even though the overwhelming
+    majority of posters land well under Plex's size cap either way. Try the fast,
+    default level first; only pay for the slow max-effort pass on the rare poster
+    where the fast attempt doesn't already fit. If even level 9 doesn't fit,
+    falls back to a high-quality JPEG, which reliably stays well under the limit
+    (this is the one genuinely lossy step, unchanged from before, and unaffected
+    by any of this — it's Plex's ~10MB upload cap that forces it, not the PNG
+    encode being fast or slow)."""
     from .. import database as db
 
     jpg_quality = 95
@@ -75,14 +81,21 @@ def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
     rgb = img.convert("RGB")
 
     buf = BytesIO()
-    rgb.save(buf, "PNG", compress_level=9)
+    rgb.save(buf, "PNG", compress_level=6)
     png_bytes = buf.getvalue()
     if len(png_bytes) <= _PLEX_UPLOAD_SIZE_LIMIT:
         return png_bytes, "image/png"
 
+    # Fast pass didn't fit — worth paying for max compression before giving up on PNG.
+    buf_slow = BytesIO()
+    rgb.save(buf_slow, "PNG", compress_level=9)
+    png_bytes_slow = buf_slow.getvalue()
+    if len(png_bytes_slow) <= _PLEX_UPLOAD_SIZE_LIMIT:
+        return png_bytes_slow, "image/png"
+
     logger.warning(
-        "[PLEX] Rendered PNG (%.1fMB) exceeds Plex's upload size limit, falling back to JPEG",
-        len(png_bytes) / 1_000_000,
+        "[PLEX] Rendered PNG (%.1fMB even at max compression) exceeds Plex's upload size limit, falling back to JPEG",
+        len(png_bytes_slow) / 1_000_000,
     )
     buf2 = BytesIO()
     rgb.save(buf2, "JPEG", quality=max(jpg_quality, 98), subsampling=0)

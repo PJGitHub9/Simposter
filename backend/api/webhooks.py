@@ -328,7 +328,11 @@ def _should_skip_webhook(rating_key: str, library_id: str, is_tv: bool = False) 
     ignore_labels_lower = [l.lower() for l in ignore_labels]
     for label in item_labels:
         if label.lower() in ignore_labels_lower:
-            logger.info(f"[WEBHOOK] Skipping {rating_key} - has ignore label '{label}'")
+            try:
+                _t, _ = db.get_title_for_rating_key(rating_key)
+            except Exception:
+                _t = None
+            logger.info("[WEBHOOK] Skipping %s [%s] - has ignore label '%s'", rating_key, _t or "?", label)
             return True
 
     return False
@@ -381,7 +385,7 @@ def find_plex_movie_by_tmdb_id(tmdb_id: int, library_id: Optional[str] = None) -
                 for guid in video.findall("Guid"):
                     guid_id = guid.get("id", "")
                     if guid_id == f"tmdb://{tmdb_id}":
-                        logger.info(f"[WEBHOOK] Found movie rating_key={rating_key} in library={lib_key} for TMDb ID {tmdb_id}")
+                        logger.info("[WEBHOOK] Found movie rating_key=%s [%s] in library=%s for TMDb ID %s", rating_key, video.get("title", "?"), lib_key, tmdb_id)
                         return (rating_key, lib_key)
 
         logger.warning(f"[WEBHOOK] Could not find Plex movie with TMDb ID {tmdb_id}")
@@ -434,7 +438,7 @@ def find_plex_show_by_tvdb_id(tvdb_id: int, library_id: Optional[str] = None) ->
                 for guid in video.findall("Guid"):
                     guid_id = guid.get("id", "")
                     if guid_id == f"tvdb://{tvdb_id}":
-                        logger.info(f"[WEBHOOK] Found TV show rating_key={rating_key} in library={lib_key} for TVDb ID {tvdb_id}")
+                        logger.info("[WEBHOOK] Found TV show rating_key=%s [%s] in library=%s for TVDb ID %s", rating_key, video.get("title", "?"), lib_key, tvdb_id)
                         return (rating_key, lib_key)
 
         logger.warning(f"[WEBHOOK] Could not find Plex TV show with TVDb ID {tvdb_id}")
@@ -636,6 +640,17 @@ def process_webhook_poster_generation(
         affected_seasons: For TV shows, only process these specific seasons.
                          If None or empty, process all seasons (for new series).
     """
+    _wh_start = time.time()
+    # Best-effort display title for log readability — a cheap local DB cache lookup,
+    # never a network call. Upgraded to the real title below once the batch functions
+    # return one, but this covers every log line before that point too.
+    title_hint = rating_key
+    try:
+        _cached_title, _ = db.get_title_for_rating_key(rating_key)
+        if _cached_title:
+            title_hint = _cached_title
+    except Exception:
+        pass
     try:
         # ------------------------------------------------------------------
         # Resend cached poster if the setting is "resend" and a cached
@@ -654,7 +669,8 @@ def process_webhook_poster_generation(
                             data=cached,
                             timeout=20,
                         ).raise_for_status()
-                        logger.info("[WEBHOOK] Resent cached poster for %s (existingContentMode=resend)", rating_key)
+                        logger.info("[WEBHOOK] Resent cached poster for %s [%s] (existingContentMode=resend) in %.1fs",
+                                    rating_key, title_hint, time.time() - _wh_start)
                         _title, _year = db.get_title_for_rating_key(rating_key)
                         try:
                             db.record_poster_history(
@@ -678,21 +694,21 @@ def process_webhook_poster_generation(
                                 if lib_default_labels:
                                     resend_labels = list({*resend_labels, *lib_default_labels})
                             if resend_labels:
-                                logger.info("[WEBHOOK] Removing labels %s from %s (resend)", resend_labels, rating_key)
+                                logger.info("[WEBHOOK] Removing labels %s from %s [%s] (resend)", resend_labels, rating_key, title_hint)
                                 removed = []
                                 for lbl in resend_labels:
                                     plex_remove_label(rating_key, lbl)
-                                    logger.info("[WEBHOOK] Removed label '%s' from %s", lbl, rating_key)
+                                    logger.info("[WEBHOOK] Removed label '%s' from %s [%s]", lbl, rating_key, title_hint)
                                     removed.append(lbl.lower())
                                 if removed:
                                     current = db.get_movie_labels(rating_key)
                                     updated = [l for l in current if l.lower() not in removed]
                                     db.update_movie_labels(rating_key, updated)
                         except Exception as lbl_err:
-                            logger.warning("[WEBHOOK] Label removal after resend failed for %s: %s", rating_key, lbl_err)
+                            logger.warning("[WEBHOOK] Label removal after resend failed for %s [%s]: %s", rating_key, title_hint, lbl_err)
                         return
             except Exception as resend_err:
-                logger.warning("[WEBHOOK] Cache resend check failed for %s: %s — falling through to generation", rating_key, resend_err)
+                logger.warning("[WEBHOOK] Cache resend check failed for %s [%s]: %s — falling through to generation", rating_key, title_hint, resend_err)
 
         from .batch import _process_single_movie, _process_single_tv_show
 
@@ -780,14 +796,14 @@ def process_webhook_poster_generation(
             # Check result status - batch functions return "ok" on success
             result_status = result.get("status")
             if result_status == "ok":
-                logger.info(f"[WEBHOOK] Successfully processed TV show {rating_key}")
+                show_title = result.get("show_title") or title_hint
+                logger.info("[WEBHOOK] Successfully processed TV show %s [%s] in %.1fs", rating_key, show_title, time.time() - _wh_start)
                 # Enqueue for retry if ideal template conditions weren't met
                 try:
                     _ui = db.get_ui_settings() or {}
                     if _ui.get("automation", {}).get("retryUntilTemplateMet", False):
                         sub_results = result.get("results", [])
                         needs_retry_items = [r for r in sub_results if r.get("needs_retry")]
-                        show_title = result.get("show_title", rating_key)
                         if needs_retry_items:
                             db.add_to_retry_queue(
                                 rating_key=rating_key,
@@ -802,13 +818,13 @@ def process_webhook_poster_generation(
                         else:
                             db.remove_from_retry_queue(rating_key)
                 except Exception as q_err:
-                    logger.debug("[WEBHOOK] TV retry queue update failed for %s: %s", rating_key, q_err)
+                    logger.debug("[WEBHOOK] TV retry queue update failed for %s [%s]: %s", rating_key, show_title, q_err)
                 # Update cache so the show appears in library view
                 try:
-                    logger.info(f"[WEBHOOK] Updating TV cache for {rating_key} (library_id={library_id})")
+                    logger.info("[WEBHOOK] Updating TV cache for %s [%s] (library_id=%s)", rating_key, show_title, library_id)
                     _update_tv_cache(rating_key, library_id)
                 except Exception as cache_err:
-                    logger.warning(f"[WEBHOOK] Failed to update TV cache for {rating_key}: {cache_err}", exc_info=True)
+                    logger.warning("[WEBHOOK] Failed to update TV cache for %s [%s]: %s", rating_key, show_title, cache_err, exc_info=True)
                 # Only notify if at least one poster was actually created/sent.
                 # Sub-results with status != "ok" mean the season was skipped (already had a poster,
                 # no poster found, etc.) — e.g. a Sonarr episode webhook for S01E03 when S01
@@ -816,7 +832,7 @@ def process_webhook_poster_generation(
                 sub_results = result.get("results", [])
                 posters_created = [r for r in sub_results if r.get("status") == "ok"]
                 if not posters_created:
-                    logger.debug(f"[WEBHOOK] No new posters created for TV show {rating_key} — skipping notifications")
+                    logger.debug("[WEBHOOK] No new posters created for TV show %s [%s] — skipping notifications", rating_key, show_title)
                 else:
                     _tv_notif_kwargs = dict(
                         title=result.get("show_title", "Unknown TV Show"),
@@ -837,9 +853,9 @@ def process_webhook_poster_generation(
                         logger.debug(f"[WEBHOOK] Failed to send Apprise notification: {notif_err}")
             else:
                 # Log full result for debugging
-                logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")
+                logger.debug("[WEBHOOK] Result dict for %s [%s]: %s", rating_key, title_hint, result)
                 error_msg = result.get('error') or result.get('message', 'Unknown error')
-                logger.warning(f"[WEBHOOK] Unexpected result status for TV show {rating_key}: status={result_status}, error={error_msg}")
+                logger.warning("[WEBHOOK] Unexpected result status for TV show %s [%s]: status=%s, error=%s", rating_key, title_hint, result_status, error_msg)
 
         else:
             # Create movie batch request
@@ -881,13 +897,13 @@ def process_webhook_poster_generation(
             # Check result status - batch functions return "ok" on success
             result_status = result.get("status")
             if result_status == "ok":
-                logger.info(f"[WEBHOOK] Successfully processed movie {rating_key}")
+                movie_title = result.get("title") or title_hint
+                logger.info("[WEBHOOK] Successfully processed movie %s [%s] in %.1fs", rating_key, movie_title, time.time() - _wh_start)
                 # Enqueue for retry if ideal template conditions weren't met
                 try:
                     _ui = db.get_ui_settings() or {}
                     if _ui.get("automation", {}).get("retryUntilTemplateMet", False):
                         if result.get("needs_retry"):
-                            movie_title = result.get("title", rating_key)
                             db.add_to_retry_queue(
                                 rating_key=rating_key,
                                 media_type="movie",
@@ -901,13 +917,13 @@ def process_webhook_poster_generation(
                         else:
                             db.remove_from_retry_queue(rating_key)
                 except Exception as q_err:
-                    logger.debug("[WEBHOOK] Retry queue update failed for %s: %s", rating_key, q_err)
+                    logger.debug("[WEBHOOK] Retry queue update failed for %s [%s]: %s", rating_key, movie_title, q_err)
                 # Update cache so the movie appears in library view
                 try:
-                    logger.info(f"[WEBHOOK] Updating movie cache for {rating_key} (library_id={library_id})")
+                    logger.info("[WEBHOOK] Updating movie cache for %s [%s] (library_id=%s)", rating_key, movie_title, library_id)
                     _update_movie_cache(rating_key, library_id)
                 except Exception as cache_err:
-                    logger.warning(f"[WEBHOOK] Failed to update movie cache for {rating_key}: {cache_err}", exc_info=True)
+                    logger.warning("[WEBHOOK] Failed to update movie cache for %s [%s]: %s", rating_key, movie_title, cache_err, exc_info=True)
                 # Send Discord notification (include poster image)
                 try:
                     # Get movie title from cache if available
@@ -933,12 +949,12 @@ def process_webhook_poster_generation(
                     logger.debug(f"[WEBHOOK] Failed to send Apprise notification: {notif_err}")
             else:
                 # Log full result for debugging
-                logger.debug(f"[WEBHOOK] Result dict for {rating_key}: {result}")
+                logger.debug("[WEBHOOK] Result dict for %s [%s]: %s", rating_key, title_hint, result)
                 error_msg = result.get('error') or result.get('message', 'Unknown error')
-                logger.warning(f"[WEBHOOK] Unexpected result status for movie {rating_key}: status={result_status}, error={error_msg}")
+                logger.warning("[WEBHOOK] Unexpected result status for movie %s [%s]: status=%s, error=%s", rating_key, title_hint, result_status, error_msg)
 
     except Exception as e:
-        logger.error(f"[WEBHOOK] Error in background poster generation: {e}", exc_info=True)
+        logger.error("[WEBHOOK] Error in background poster generation for %s [%s]: %s", rating_key, title_hint, e, exc_info=True)
 
 
 # ============================================================================

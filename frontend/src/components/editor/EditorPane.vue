@@ -1082,9 +1082,12 @@ const doSend = async () => {
   try {
     await render.send(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value)
     success('Successfully sent poster to Plex!')
-    // Wait 600ms for Plex to process, then refresh poster and labels
+    // Wait 600ms for Plex to process, then refresh poster and labels. The backend's
+    // /api/plex/send already force-refreshes its own poster cache as part of the send
+    // itself, so this doesn't need force_refresh=true again — that would just trigger
+    // a second, redundant Plex round-trip for a cache entry that's already fresh.
     await new Promise(resolve => setTimeout(resolve, 600))
-    await fetchExistingPoster(true)
+    await fetchExistingPoster()
     await fetchExistingLogo()
     await fetchLabels()
   } catch (err: unknown) {
