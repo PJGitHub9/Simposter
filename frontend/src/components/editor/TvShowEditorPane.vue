@@ -841,6 +841,18 @@ const logoCounts = computed(() => {
   return { tmdb, fanart, tvdb, total: logos.value.length }
 })
 
+// TMDb serves `thumb` as a resized w300 PNG and `url` as the original file -- for
+// SVG-sourced or newly-added logos, the resized thumbnail variant can 404 (a known
+// TMDb CDN propagation quirk) even though the original loads fine. Track which thumbs
+// have failed so the <img> can fall back to the full-size url instead of staying blank.
+const failedLogoThumbs = ref(new Set<string>())
+const logoThumbSrc = (l: { url: string; thumb?: string }) => (failedLogoThumbs.value.has(l.url) ? l.url : (l.thumb || l.url))
+const onLogoThumbError = (l: { url: string; thumb?: string }) => {
+  if (l.thumb && l.thumb !== l.url && !failedLogoThumbs.value.has(l.url)) {
+    failedLogoThumbs.value = new Set(failedLogoThumbs.value).add(l.url)
+  }
+}
+
 const filteredLogos = computed(() => {
   let items = logos.value
   // Only apply language filter if there's a language tag (logos without language tags are universal)
@@ -2943,7 +2955,7 @@ watch(tmdbId, () => {
                   :class="{ active: selectedLogo === l.url }"
                   @click="selectedLogo = l.url"
                 >
-                  <img :src="l.thumb || l.url" alt="" />
+                  <img :src="logoThumbSrc(l)" alt="" @error="onLogoThumbError(l)" />
                   <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
                   <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
                 </div>

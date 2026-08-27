@@ -415,6 +415,12 @@ def _process_single_movie(
         # Upload to Plex (if requested)
         # ---------------------------
         payload = None
+        # Defaults to the raw source URL (today's existing behavior for the DB's cached
+        # logo_url); upgraded to a locally-cached URL further below if a logo actually
+        # gets uploaded to Plex this run. Must be set unconditionally here since it's
+        # read unconditionally at the bottom of this function, regardless of whether
+        # a Plex send even happens this run.
+        logo_url_for_cache = logo_url
         if skip_send_not_ideal:
             logger.info("[BATCH] Skipping Plex upload for %s [%s] — still needs_retry and send_only_if_ideal is set", rating_key, title_hint)
         elif req.send_to_plex:
@@ -488,6 +494,19 @@ def _process_single_movie(
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
                         logger.info("[BATCH] Uploaded logo to Plex for %s [%s]", rating_key, title_hint)
+                        # Cache the just-uploaded bytes locally and point the DB's cached
+                        # logo_url at that copy (served via /api/logo/{rating_key}) instead of
+                        # the raw external TMDb/Fanart source below -- matches the safe pattern
+                        # plexsend.py's dedicated send-logo endpoint already uses. Re-fetching
+                        # from Plex right now would be unsafe (Plex may not have processed the
+                        # upload yet), so this reuses the bytes already in hand. Without this,
+                        # the Logos tab (LogosView.vue) depends on the external host staying
+                        # reachable indefinitely for every batch-sent logo — see CLAUDE.md
+                        # Quirk #29 for the class of failure ("tile shows up blank") this invites.
+                        from .movies import _save_logo_cache, _logo_cache_url
+                        cached_logo_path = _save_logo_cache(rating_key, logo_bytes, ct)
+                        if cached_logo_path:
+                            logo_url_for_cache = _logo_cache_url(rating_key, cached_logo_path)
                     else:
                         logger.warning("[BATCH] Logo fetch returned %s for %s [%s] — skipping clearLogo upload", logo_r.status_code, rating_key, title_hint)
                 except Exception as logo_err:
@@ -522,7 +541,7 @@ def _process_single_movie(
             logger.debug("[BATCH] Failed to refresh poster cache for %s [%s]: %s", rating_key, title_hint, cache_err)
 
         try:
-            db.update_movie_logo_url(rating_key, logo_url)
+            db.update_movie_logo_url(rating_key, logo_url_for_cache)
         except Exception as logo_cache_err:
             logger.debug("[BATCH] Failed to cache logo_url for %s [%s]: %s", rating_key, title_hint, logo_cache_err)
 
@@ -1414,6 +1433,12 @@ def _render_and_save_poster(
 
     # Send to Plex if requested
     payload = None
+    # Defaults to the raw source URL (today's existing behavior for the DB's cached
+    # logo_url); upgraded to a locally-cached URL further below if a logo actually
+    # gets uploaded to Plex this run. Must be set unconditionally here since it's
+    # read unconditionally at the bottom of this function, regardless of whether
+    # a Plex send even happens this run.
+    logo_url_for_cache = logo_url
     if skip_send_not_ideal:
         logger.info("[BATCH] Skipping Plex upload for %s — still needs_retry and send_only_if_ideal is set", display_title)
     elif req.send_to_plex:
@@ -1469,6 +1494,18 @@ def _render_and_save_poster(
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
                         logger.info("[BATCH] Uploaded logo to Plex for %s [%s]", rating_key, display_title)
+                        # Cache the just-uploaded bytes locally instead of caching the raw
+                        # external TMDb/Fanart URL below -- see the matching comment in
+                        # _process_single_movie() and CLAUDE.md Quirk #29 for why. The logo
+                        # disk cache is shared and media-type-agnostic (keyed by rating_key,
+                        # which is unique across the whole Plex server), so this always comes
+                        # from movies.py even for TV/season items -- tv_shows.py has no logo
+                        # cache functions of its own (the scan path for TV shows already
+                        # reuses movies.py's fetch_and_cache_logo() the same way).
+                        from .movies import _save_logo_cache, _logo_cache_url
+                        cached_logo_path = _save_logo_cache(rating_key, logo_bytes, ct)
+                        if cached_logo_path:
+                            logo_url_for_cache = _logo_cache_url(rating_key, cached_logo_path)
                     else:
                         logger.warning("[BATCH] Logo fetch returned %s for %s [%s] — skipping clearLogo upload", logo_r.status_code, rating_key, display_title)
                 except Exception as logo_err:
@@ -1530,9 +1567,9 @@ def _render_and_save_poster(
 
     try:
         if is_tv:
-            db.update_tv_logo_url(rating_key, logo_url)
+            db.update_tv_logo_url(rating_key, logo_url_for_cache)
         else:
-            db.update_movie_logo_url(rating_key, logo_url)
+            db.update_movie_logo_url(rating_key, logo_url_for_cache)
     except Exception as logo_cache_err:
         logger.debug("[BATCH] Failed to cache logo_url for %s [%s]: %s", rating_key, display_title, logo_cache_err)
 

@@ -28,6 +28,21 @@ const emit = defineEmits<{
 
 const apiBase = getApiBase()
 const availableLogos = ref<LogoSource[]>([])
+// TMDb serves `thumb` as a resized w300 PNG and `url` as the original file -- for
+// SVG-sourced or newly-added logos, the resized thumbnail variant can 404 (a known
+// TMDb CDN propagation quirk) even though the original loads fine. Track which thumbs
+// have failed so the <img> can fall back to the full-size url instead of staying blank.
+const failedLogoThumbs = ref(new Set<string>())
+const logoThumbSrc = (l: LogoSource) => (failedLogoThumbs.value.has(l.url) ? l.url : (l.thumb || l.url))
+const onLogoThumbError = (l: LogoSource) => {
+  if (l.thumb && l.thumb !== l.url && !failedLogoThumbs.value.has(l.url)) {
+    failedLogoThumbs.value = new Set(failedLogoThumbs.value).add(l.url)
+  }
+}
+// Same class of failure as failedLogoThumbs above, but for the single fixed "Current
+// Logo" preview -- no thumb/original pair to fall back between, so on failure this
+// just swaps to the "No logo cached yet" placeholder instead of a broken image icon.
+const currentLogoFailed = ref(false)
 const selectedUrl = ref<string | null>(null)
 const uploadedData = ref<string | null>(null)
 const uploadedName = ref<string | null>(null)
@@ -173,7 +188,7 @@ onMounted(fetchAvailableLogos)
         <div class="section">
           <div class="section-label">Current Logo</div>
           <div class="current-logo-area">
-            <img v-if="item.logo_url" :src="item.logo_url" :alt="item.title" class="current-logo-img" />
+            <img v-if="item.logo_url && !currentLogoFailed" :src="item.logo_url" :alt="item.title" class="current-logo-img" @error="currentLogoFailed = true" />
             <div v-else class="no-current">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
                 <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -201,7 +216,7 @@ onMounted(fetchAvailableLogos)
               :class="{ active: selectedUrl === logo.url }"
               @click="selectLogo(logo.url)"
             >
-              <img :src="logo.thumb || logo.url" :alt="logo.source" />
+              <img :src="logoThumbSrc(logo)" :alt="logo.source" @error="onLogoThumbError(logo)" />
               <div class="source-badge">{{ (logo.source || 'tmdb').toUpperCase() }}</div>
             </div>
           </div>

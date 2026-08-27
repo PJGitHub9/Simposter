@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.68',
+    date: '2026-08-27',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed logo thumbnails sometimes showing up as a blank tile in the logo picker — a resized preview image occasionally failed to load even though the logo itself was fine; it now automatically falls back to the full-size image.',
+          'Fixed logo tiles in the Logos tab sometimes showing up blank after a batch or webhook send — the cached logo was pointing at an external image link instead of a local copy, so it depended on that external source staying available.',
+          'Fixed the "Current Logo" preview at the top of the logo editor popup showing a broken image icon instead of a clean "No logo cached yet" message when its logo failed to load.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.67',
     date: '2026-08-27',
     sections: [
