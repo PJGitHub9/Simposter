@@ -663,6 +663,65 @@ def api_clear_cache():
         raise HTTPException(status_code=500, detail=f"Failed to clear cache: {e}")
 
 
+@router.delete("/library/{library_id}")
+def api_remove_library(library_id: str):
+    """
+    Purge everything cache-layer for a library that's being removed in Settings
+    (LibrariesTab.vue's Remove button). Deliberately scoped to what actually goes
+    stale/orphaned once a library is no longer tracked: DB cache rows (movie/TV/
+    collection), on-disk poster+logo cache files, and pending retry-queue entries.
+
+    Deliberately does NOT touch poster_history (History is a record of past
+    activity, kept intentionally even after the library's gone) or on-disk saved
+    output files (those are the user's actual exported posters, a different and
+    much more destructive thing to delete than "cache"). Settings persistence
+    (actually removing the library from libraryMappings) happens separately via
+    the normal POST /api/ui-settings save -- this endpoint is purely the cache
+    cleanup half of "remove a library".
+    """
+    try:
+        from .tv_shows import _remove_poster_cache as _remove_tv_poster_cache
+
+        movies = db.get_cached_movies(library_id=library_id)
+        tv_shows = db.get_cached_tv_shows(library_id=library_id)
+
+        removed_files = 0
+        for item, is_tv in [(m, False) for m in movies] + [(s, True) for s in tv_shows]:
+            rating_key = item.get("rating_key")
+            if not rating_key:
+                continue
+            removed = _remove_tv_poster_cache(rating_key, "tv") if is_tv else _remove_poster_cache(rating_key)
+            if removed:
+                removed_files += 1
+            logo_path = _logo_cache_path(rating_key)
+            if logo_path:
+                try:
+                    logo_path.unlink()
+                    removed_files += 1
+                except OSError as e:
+                    logger.warning("[LIBRARY] Failed to remove cached logo %s: %s", logo_path, e)
+
+        db.clear_movie_cache(library_id)
+        db.clear_tv_cache(library_id)
+        db.clear_collection_cache(library_id)
+        retry_removed = db.clear_retry_queue_for_library(library_id)
+
+        logger.info(
+            "[LIBRARY] Removed library %s: %d movies, %d TV shows, %d cache files, %d retry queue entries",
+            library_id, len(movies), len(tv_shows), removed_files, retry_removed
+        )
+        return {
+            "status": "ok",
+            "movies_removed": len(movies),
+            "tv_shows_removed": len(tv_shows),
+            "cache_files_removed": removed_files,
+            "retry_queue_removed": retry_removed,
+        }
+    except Exception as e:
+        logger.error("[LIBRARY] Failed to remove library %s: %s", library_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to remove library cache: {e}")
+
+
 @router.get("/scan-progress")
 def api_scan_progress():
     """Return last known scan progress."""

@@ -62,7 +62,9 @@ const watchersEnabled = ref(false)
 const sectionsWithChanges = ref({
   appearance: false,
   output: false,
-  connections: false,
+  plexConnection: false,
+  movieLibraries: false,
+  tvLibraries: false,
   apiKeys: false,
   imageQuality: false,
   performance: false,
@@ -100,6 +102,11 @@ const localLibraries = ref<LibraryMapping[]>([])
 const savedLibraryIds = ref<Set<string>>(new Set())
 const localTvShowLibraries = ref<LibraryMapping[]>([])
 const savedTvShowLibraryIds = ref<Set<string>>(new Set())
+// Library IDs confirmed-removed via LibrariesTab's Remove button (see its own confirm()
+// dialog) -- cache cleanup for these is deferred until the settings save actually
+// succeeds, rather than firing immediately on Remove, so a removal isn't "final" until
+// you save, consistent with every other change on this page.
+const pendingLibraryCacheCleanup = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 const localFanartApiKey = ref('')
@@ -359,7 +366,9 @@ const captureSettingsSnapshot = () => {
 
   sectionsWithChanges.value.appearance = false
   sectionsWithChanges.value.output = false
-  sectionsWithChanges.value.connections = false
+  sectionsWithChanges.value.plexConnection = false
+  sectionsWithChanges.value.movieLibraries = false
+  sectionsWithChanges.value.tvLibraries = false
   sectionsWithChanges.value.apiKeys = false
   sectionsWithChanges.value.imageQuality = false
   sectionsWithChanges.value.performance = false
@@ -450,10 +459,12 @@ const checkForChanges = () => {
     localSaveBatch.value !== initial.saveBatch ||
     localSaveToAssetFolderOnSend.value !== initial.saveToAssetFolderOnSend
 
-  sectionsWithChanges.value.connections =
+  sectionsWithChanges.value.plexConnection =
     localPlexUrl.value !== initial.plexUrl ||
-    localPlexToken.value !== initial.plexToken ||
-    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries) ||
+    localPlexToken.value !== initial.plexToken
+  sectionsWithChanges.value.movieLibraries =
+    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries)
+  sectionsWithChanges.value.tvLibraries =
     JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries)
 
   sectionsWithChanges.value.performance =
@@ -561,16 +572,49 @@ const saveSettings = async () => {
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
   }
 
+  // Capture which libraries are newly-added (present now, weren't in the last-saved set)
+  // before savedLibraryIds/savedTvShowLibraryIds get overwritten below, so we know which
+  // ones to auto-scan once the save actually succeeds.
+  const newlyAddedLibraryIds = [
+    ...localLibraries.value.filter(l => l.id && !savedLibraryIds.value.has(String(l.id))).map(l => String(l.id)),
+    ...localTvShowLibraries.value.filter(l => l.id && !savedTvShowLibraryIds.value.has(String(l.id))).map(l => String(l.id)),
+  ]
+
   await settings.save()
 
   if (!settings.error.value) {
     await updateScheduler()
   }
 
+  // Now that the settings save itself succeeded, purge cache/DB references for any
+  // library removed (with confirmation) since the last save. Deferred to this point
+  // rather than firing at Remove-click time so a removal isn't "final" until saved.
+  if (!settings.error.value && pendingLibraryCacheCleanup.value.size > 0) {
+    const apiBase = getApiBase()
+    for (const libraryId of pendingLibraryCacheCleanup.value) {
+      try {
+        await fetch(`${apiBase}/api/library/${libraryId}`, { method: 'DELETE' })
+      } catch (e) {
+        console.error('[SETTINGS] Failed to clean up cache for removed library', libraryId, e)
+      }
+    }
+    pendingLibraryCacheCleanup.value = new Set()
+  }
+
   saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
   savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
   savedTvShowLibraryIds.value = new Set(localTvShowLibraries.value.filter(l => l.id).map(l => String(l.id)))
+
+  // Auto-scan any newly-added library now that it's actually saved -- otherwise it'd sit
+  // there empty until the next scheduled scan or a manual click, which isn't obvious for
+  // a library you just added. Sequential (not Promise.all) since scanLibrary() guards
+  // against overlapping scans and would just reject a concurrent second call.
+  if (!settings.error.value && newlyAddedLibraryIds.length > 0) {
+    for (const libraryId of newlyAddedLibraryIds) {
+      await scanLibrary(libraryId)
+    }
+  }
 
   watchersEnabled.value = false
   await nextTick()
@@ -1278,7 +1322,9 @@ onMounted(() => {
         :defaultTvLabelsToRemove="localDefaultTvLabelsToRemove"
         :unsavedChanges="hasUnsavedChanges"
         :schedulerChanged="sectionsWithChanges.scheduler"
-        :connectionsChanged="sectionsWithChanges.connections"
+        :plexConnectionChanged="sectionsWithChanges.plexConnection"
+        :movieLibrariesChanged="sectionsWithChanges.movieLibraries"
+        :tvLibrariesChanged="sectionsWithChanges.tvLibraries"
         :sendLogosToPlex="localSendLogosToPlex"
         @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @update:plexUrl="localPlexUrl = $event"
@@ -1293,6 +1339,7 @@ onMounted(() => {
         @test-connection="testPlexConnection"
         @scan-library="scanLibrary"
         @save="saveSettings"
+        @library-removed="pendingLibraryCacheCleanup.add($event)"
       />
 
       <!-- Integrations content removed -->

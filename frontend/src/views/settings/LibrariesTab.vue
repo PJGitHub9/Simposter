@@ -55,7 +55,9 @@ const props = defineProps<{
   defaultTvLabelsToRemove: Record<string, string[]>
   unsavedChanges: boolean
   schedulerChanged?: boolean
-  connectionsChanged?: boolean
+  plexConnectionChanged?: boolean
+  movieLibrariesChanged?: boolean
+  tvLibrariesChanged?: boolean
   sendLogosToPlex: boolean
 }>()
 
@@ -77,6 +79,7 @@ const emit = defineEmits<{
   'test-connection': []
   'scan-library': [libraryId?: string]
   'save': []
+  'library-removed': [libraryId: string]
 }>()
 
 const localPlexUrl = computed({
@@ -324,7 +327,18 @@ const addLibrary = () => {
 }
 
 const removeLibrary = (idx: number) => {
+  const target = localLibraries.value[idx]
+  const wasSaved = target?.id && props.savedLibraryIds.has(String(target.id))
+  if (wasSaved) {
+    const label = target!.displayName || target!.title || target!.id
+    if (!window.confirm(`Remove "${label}"? This also deletes its cached posters/labels and pending retry-queue entries once you save (History is kept). This can't be undone.`)) {
+      return
+    }
+  }
   localLibraries.value = localLibraries.value.filter((_, i) => i !== idx)
+  if (wasSaved && target?.id) {
+    emit('library-removed', String(target.id))
+  }
 }
 
 const addTvShowLibrary = () => {
@@ -339,7 +353,18 @@ const addTvShowLibrary = () => {
 }
 
 const removeTvShowLibrary = (idx: number) => {
+  const target = localTvShowLibraries.value[idx]
+  const wasSaved = target?.id && props.savedTvShowLibraryIds.has(String(target.id))
+  if (wasSaved) {
+    const label = target!.displayName || target!.title || target!.id
+    if (!window.confirm(`Remove "${label}"? This also deletes its cached posters/labels and pending retry-queue entries once you save (History is kept). This can't be undone.`)) {
+      return
+    }
+  }
   localTvShowLibraries.value = localTvShowLibraries.value.filter((_, i) => i !== idx)
+  if (wasSaved && target?.id) {
+    emit('library-removed', String(target.id))
+  }
 }
 
 const availableLibrariesForScheduler = computed(() => {
@@ -423,7 +448,7 @@ watch(
     <h2>Libraries</h2>
 
     <!-- Plex Connection -->
-    <div :class="['section', { 'section-unsaved': connectionsChanged }]">
+    <div :class="['section', { 'section-unsaved': plexConnectionChanged }]">
       <h3>Plex Connection</h3>
 
       <div class="plex-connection-grid">
@@ -488,7 +513,7 @@ watch(
     <!-- Libraries Grid -->
     <div class="libraries-grid">
       <!-- Movie Libraries -->
-      <div class="section">
+      <div :class="['section', { 'section-unsaved': movieLibrariesChanged }]">
         <div class="section-header-inline">
           <h3>Movie Libraries</h3>
           <button @click="addLibrary" class="secondary-small">
@@ -503,6 +528,7 @@ watch(
             <select
               v-model="lib.id"
               :disabled="savedLibraryIds.has(String(lib.id))"
+              @change="updateLibraries"
             >
               <option value="">Select a library...</option>
               <option
@@ -521,6 +547,7 @@ watch(
               v-model="lib.displayName"
               type="text"
               placeholder="Custom display name"
+              @input="updateLibraries"
             />
           </label>
         </div>
@@ -590,7 +617,6 @@ watch(
             v-if="localLibraries.length > 1"
             @click="removeLibrary(idx)"
             class="remove-btn"
-            :disabled="savedLibraryIds.has(String(lib.id))"
           >
             Remove
           </button>
@@ -599,7 +625,7 @@ watch(
       </div>
 
       <!-- TV Show Libraries -->
-      <div class="section">
+      <div :class="['section', { 'section-unsaved': tvLibrariesChanged }]">
         <div class="section-header-inline">
           <h3>TV Show Libraries</h3>
           <button @click="addTvShowLibrary" class="secondary-small">
@@ -614,6 +640,7 @@ watch(
             <select
               v-model="lib.id"
               :disabled="savedTvShowLibraryIds.has(String(lib.id))"
+              @change="updateTvShowLibraries"
             >
               <option value="">Select a library...</option>
               <option
@@ -632,6 +659,7 @@ watch(
               v-model="lib.displayName"
               type="text"
               placeholder="Custom display name"
+              @input="updateTvShowLibraries"
             />
           </label>
         </div>
@@ -700,7 +728,6 @@ watch(
             v-if="localTvShowLibraries.length > 1"
             @click="removeTvShowLibrary(idx)"
             class="remove-btn"
-            :disabled="savedTvShowLibraryIds.has(String(lib.id))"
           >
             Remove
           </button>

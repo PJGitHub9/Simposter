@@ -2740,6 +2740,18 @@ def remove_from_retry_queue(rating_key: str) -> None:
     logger.debug("[RETRY] Removed %s from retry queue (manual override)", rating_key)
 
 
+def clear_retry_queue_for_library(library_id: str) -> int:
+    """Remove every retry queue entry for a library (used when a library is removed
+    from Settings — there's no point retrying posters for a library Simposter no
+    longer tracks). Returns the number of rows removed."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM poster_retry_queue WHERE library_id = ?", (library_id,))
+        removed = cursor.rowcount
+    logger.info("[RETRY] Cleared %d retry queue entries for library %s", removed, library_id)
+    return removed
+
+
 def get_pending_retry_items(max_attempts: int = 0) -> List[Dict[str, Any]]:
     """
     Return all pending retry items, optionally filtered by max_attempts.

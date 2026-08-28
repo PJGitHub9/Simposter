@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.69',
+    date: '2026-08-28',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the TV editor\'s "Save to Disk" sometimes saving a poster with a logo even when Logo Mode was set to "No Logo", and sometimes not applying a season\'s own text color or other custom settings.',
+          'Fixed editing one show or season\'s settings occasionally bleeding into a different season\'s or the series\' saved poster.',
+          'Fixed the "Rendered Posters" thumbnail strip not updating after a settings change until you clicked into that season.',
+          'Fixed adding or removing a Plex library in Settings silently not saving — picking a library from the dropdown could look like it worked but never actually persisted.',
+          'Fixed the "Flat" TV save layout creating a subfolder per show instead of truly flat files, and season posters sometimes saving with the season\'s own label (e.g. "Season 1") instead of the show\'s name.',
+        ]
+      },
+      {
+        title: 'New Features',
+        items: [
+          'Removing a library in Settings now works properly, with a confirmation and full cleanup of its cached posters/labels once you save.',
+          'Adding a new library now automatically scans it as soon as you save, instead of leaving it empty until the next scheduled scan.',
+          'Settings sections now only show "unsaved changes" for the specific section you actually changed.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.68',
     date: '2026-08-27',
     sections: [

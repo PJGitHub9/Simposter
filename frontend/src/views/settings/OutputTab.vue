@@ -89,9 +89,12 @@ interface SavePreset {
 }
 
 // The {filename} token resolves to "poster" (movies, TV series poster) or "SeasonNN"
-// (TV season poster) at save time — see backend/save_paths.py. Kometa has no flat-file
-// convention for season posters, so Flat and Asset folders necessarily produce the
-// same TV layout; they only differ for movies.
+// (TV season poster) at save time — see backend/save_paths.py. Flat and Asset folders
+// both use {filename} for per-item naming (poster vs SeasonNN) so movie and season
+// posters never collide on disk — they differ only in whether that filename sits
+// directly in the library folder (Flat) or inside a per-title subfolder (Asset
+// folders, Kometa's own on-disk convention). "Flat" here is Simposter's own take,
+// not a Kometa convention — Kometa itself has no flat-file layout for season posters.
 const PRESETS: SavePreset[] = [
   {
     key: 'default',
@@ -102,10 +105,10 @@ const PRESETS: SavePreset[] = [
   },
   {
     key: 'flat',
-    label: 'Flat (Kometa)',
-    description: 'Movies as flat "Title (Year).ext" files. TV shows use per-item folders — Kometa has no flat season-poster naming.',
+    label: 'Flat',
+    description: 'Everything as flat "Title (Year) filename.ext" files in one folder per library — no per-title subfolders.',
     movie: '/config/output/{library}/{title} ({year}).jpg',
-    tv: '/config/output/{library}/{title} ({year})/{filename}.jpg',
+    tv: '/config/output/{library}/{title} ({year}) {filename}.jpg',
   },
   {
     key: 'assetFolders',
@@ -347,9 +350,16 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
         </div>
 
         <div class="example-item">
-          <div class="example-label">Flat (Kometa) — movie:</div>
+          <div class="example-label">Flat — movie:</div>
           <code>/config/output/{library}/{title} ({year}).jpg</code>
           <div class="example-result">→ /config/output/Movies/Inception (2010).jpg</div>
+        </div>
+
+        <div class="example-item">
+          <div class="example-label">Flat — TV show:</div>
+          <code>/config/output/{library}/{title} ({year}) {filename}.jpg</code>
+          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008) poster.jpg</div>
+          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008) Season01.jpg</div>
         </div>
 
         <div class="example-item">

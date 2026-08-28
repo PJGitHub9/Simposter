@@ -453,7 +453,7 @@ const saveCurrentSettings = () => {
       'logoMode', 'textOverlayEnabled', 'customText', 'fontFamily', 'fontSize',
       'shadowEnabled', 'letterSpacing', 'positionY', 'posterZoom', 'posterShiftY',
       'matteHeight', 'fadeHeight', 'topMatteHeight', 'topFadeHeight', 'vignette', 'grain', 'logoScale', 'logoOffset',
-      'textBboxEnabled',
+      'textBboxEnabled', 'textColor',
       'uniformLogoShadowEnabled', 'uniformLogoShadowOpacity', 'uniformLogoShadowAngle',
       'uniformLogoShadowDistance', 'uniformLogoShadowSize', 'uniformLogoShadowColor'
     ]
@@ -480,6 +480,56 @@ const saveCurrentSettings = () => {
 
   settingsCache.value[key] = settings
   if (selectedPoster.value) selectedPosterCache.value[key] = selectedPoster.value
+}
+
+// Applies every season-customizable field -- the exact same set saveCurrentSettings()'s
+// presetFields list treats as season-specific (and what the backend's own season_options
+// diffing tracks, see CLAUDE.md Quirk #13/v1.6.32) -- from a cached settings object onto a
+// snake_case render-options object.
+//
+// This exists because doSave()'s and renderAllSelectedSeasons()'s season loops both build
+// seasonOptions by starting from a full copy of the CURRENTLY-FOCUSED item's live options
+// (matte/vignette/grain/border/etc. -- fields genuinely meant to be shared across a whole
+// show, so inheriting them is correct) and only patching a handful of season-specific fields
+// on top. That handful used to be just logo_mode/text_overlay_enabled/custom_text/font_size/
+// font_family -- every OTHER season-customizable field (poster position, matte/fade/vignette/
+// grain *if the user overrode them for this season specifically*, text color/spacing/position,
+// logo drop shadow) silently leaked through from whatever the currently-focused item showed
+// instead of this season's own value. Editing Series's Logo Mode could appear to also change
+// a season's rendered poster in other ways, purely because the season's own override for one
+// of these un-patched fields never got applied. Route every season-specific override through
+// this one function instead of hand-picking fields piecemeal, so the two can't drift apart again.
+const applyCachedPresetFields = (target: Record<string, any>, cached: any) => {
+  if (!cached) return
+  if (cached.logoMode) target.logo_mode = cached.logoMode
+  if (cached.textOverlayEnabled !== undefined) target.text_overlay_enabled = cached.textOverlayEnabled
+  if (cached.customText !== undefined) target.custom_text = cached.customText
+  if (cached.fontFamily) target.font_family = cached.fontFamily
+  if (cached.fontSize) target.font_size = cached.fontSize
+  if (cached.shadowEnabled !== undefined) target.shadow_enabled = cached.shadowEnabled
+  if (cached.letterSpacing !== undefined) target.letter_spacing = cached.letterSpacing
+  if (cached.positionY !== undefined) target.position_y = cached.positionY / 100
+  if (cached.textBboxEnabled !== undefined) target.text_bbox_enabled = cached.textBboxEnabled
+  if (cached.textColor) target.text_color = cached.textColor
+  const o = cached.options
+  if (o) {
+    if (o.posterZoom !== undefined) target.poster_zoom = o.posterZoom / 100
+    if (o.posterShiftY !== undefined) target.poster_shift_y = o.posterShiftY / 100
+    if (o.matteHeight !== undefined) target.matte_height_ratio = o.matteHeight / 100
+    if (o.fadeHeight !== undefined) target.fade_height_ratio = o.fadeHeight / 100
+    if (o.topMatteHeight !== undefined) target.top_matte_height_ratio = o.topMatteHeight / 100
+    if (o.topFadeHeight !== undefined) target.top_fade_height_ratio = o.topFadeHeight / 100
+    if (o.vignette !== undefined) target.vignette_strength = o.vignette / 100
+    if (o.grain !== undefined) target.grain_amount = o.grain / 100
+    if (o.logoScale !== undefined) target.logo_scale = o.logoScale / 100
+    if (o.logoOffset !== undefined) target.logo_offset = o.logoOffset / 100
+    if (o.uniformLogoShadowEnabled !== undefined) target.uniform_logo_shadow_enabled = o.uniformLogoShadowEnabled
+    if (o.uniformLogoShadowOpacity !== undefined) target.uniform_logo_shadow_opacity = o.uniformLogoShadowOpacity
+    if (o.uniformLogoShadowAngle !== undefined) target.uniform_logo_shadow_angle = o.uniformLogoShadowAngle
+    if (o.uniformLogoShadowDistance !== undefined) target.uniform_logo_shadow_distance = o.uniformLogoShadowDistance
+    if (o.uniformLogoShadowSize !== undefined) target.uniform_logo_shadow_size = o.uniformLogoShadowSize
+    if (o.uniformLogoShadowColor) target.uniform_logo_shadow_color = o.uniformLogoShadowColor
+  }
 }
 
 const restoreSettingsForCurrent = () => {
@@ -1695,7 +1745,12 @@ const renderAllSelectedSeasons = async () => {
     // For background renders, don't send text overlay, logo mode, or custom text
     // Let the backend preset's season_options define these per-season
     // Only send season_text so backend can use it for {season} placeholder replacement
-    const hasUserModifications = cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
+    // markFieldModified() only ever tracks changes for actual seasons, never the series
+    // (see its own isSeason check) -- userModifiedFields is deliberately empty for a
+    // series key. saveCurrentSettings() caches the series' full live state unconditionally
+    // (no preset-field stripping, unlike seasons), so for the series what matters is simply
+    // whether cached data exists at all, not whether a specific field was flagged modified.
+    const hasUserModifications = seasonIsSeries ? !!cachedSettings : cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
 
     if (!hasUserModifications) {
       // No user modifications - let backend preset season_options handle everything
@@ -1719,17 +1774,9 @@ const renderAllSelectedSeasons = async () => {
         seasonOptions.season_number = thisSeasonNumber
       }
     } else {
-      // User has modified this season - apply their customizations
-      if (cachedSettings.logoMode) seasonOptions.logo_mode = cachedSettings.logoMode
-      if (cachedSettings.textOverlayEnabled !== undefined) {
-        seasonOptions.text_overlay_enabled = cachedSettings.textOverlayEnabled
-        // Send custom_text as-is (with {season} template) - let backend replace it
-        if (cachedSettings.customText !== undefined) {
-          seasonOptions.custom_text = cachedSettings.customText
-        }
-      }
-      if (cachedSettings.fontSize) seasonOptions.font_size = cachedSettings.fontSize
-      if (cachedSettings.fontFamily) seasonOptions.font_family = cachedSettings.fontFamily
+      // User has modified this season - apply all of their season-specific customizations,
+      // not just a hand-picked subset (see applyCachedPresetFields()'s own comment for why).
+      applyCachedPresetFields(seasonOptions, cachedSettings)
     }
 
     const seasonLogoUrl = cachedSettings?.selectedLogo || currentLogoUrl
@@ -1737,9 +1784,20 @@ const renderAllSelectedSeasons = async () => {
     // Generate cache key
     const cacheKey = `${seasonKey}_${seasonBgUrl}_${seasonLogoUrl}_${JSON.stringify(seasonOptions)}`
 
-    // Check if already in preview cache
-    const existingPreview = renderedPreviews.value.find(p => p.seasonKey === seasonKey)
-    if (existingPreview?.imageUrl) {
+    // Skip only if THIS exact combination of poster/logo/options was already rendered --
+    // checking renderedPreviews by seasonKey alone (the old check) meant a season with
+    // ANY prior render, however stale, was skipped forever on every subsequent call,
+    // so a settings change (e.g. switching a season to "No Logo") never showed up in
+    // the "Rendered Posters" strip until you manually clicked into that season and
+    // triggered a real render through the normal (non-background) preview flow.
+    const cachedImage = renderedPreviewCache.value[cacheKey]
+    if (cachedImage) {
+      const existingIndex = renderedPreviews.value.findIndex(p => p.seasonKey === seasonKey)
+      if (existingIndex >= 0) {
+        renderedPreviews.value[existingIndex]!.imageUrl = cachedImage
+      } else {
+        renderedPreviews.value.push({ seasonKey, seasonTitle, imageUrl: cachedImage })
+      }
       return
     }
 
@@ -1790,6 +1848,15 @@ const renderAllSelectedSeasons = async () => {
 
 const doSave = async () => {
   if (!bgUrl.value) return
+
+  // Flush the currently-focused season/series' live UI state into settingsCache
+  // before reading from it below -- without this, if you're saving the season
+  // you're currently looking at, settingsCache still holds whatever it was last
+  // synced to (e.g. before you just changed Logo Mode to "None"), not what's
+  // actually on screen. Every other switch/save path in this file already does
+  // this (see doSend() and the season-navigation handlers) -- this was the one
+  // gap, matching the general pattern documented in CLAUDE.md Quirk #13.
+  saveCurrentSettings()
 
   // Get selected seasons or use the movie itself if no seasons
   const selectedSeasonKeys = Array.from(selectedSeasons.value)
@@ -1864,18 +1931,20 @@ const doSave = async () => {
       seasonOptions.season_number = thisSeasonNumber
     }
 
-    // Apply cached settings if user modified this season
-    const hasUserModifications = cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
+    // Apply cached settings if user modified this season. markFieldModified() only ever
+    // tracks changes for actual seasons, never the series (see its own isSeason check) --
+    // userModifiedFields is deliberately empty for a series key. saveCurrentSettings()
+    // caches the series' full live state unconditionally (no preset-field stripping,
+    // unlike seasons), so for the series what matters is simply whether cached data
+    // exists at all, not whether a specific field was flagged modified -- without this,
+    // the series always fell into the "no modifications" branch below regardless of what
+    // was actually changed (e.g. Logo Mode), silently deferring to the preset's saved
+    // defaults instead of what's on screen.
+    const hasUserModifications = season.isSeries ? !!cachedSettings : cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
     if (hasUserModifications) {
-      if (cachedSettings.logoMode) seasonOptions.logo_mode = cachedSettings.logoMode
-      if (cachedSettings.textOverlayEnabled !== undefined) {
-        seasonOptions.text_overlay_enabled = cachedSettings.textOverlayEnabled
-        if (cachedSettings.customText !== undefined) {
-          seasonOptions.custom_text = cachedSettings.customText
-        }
-      }
-      if (cachedSettings.fontSize) seasonOptions.font_size = cachedSettings.fontSize
-      if (cachedSettings.fontFamily) seasonOptions.font_family = cachedSettings.fontFamily
+      // Apply all of this season/series's own season-specific customizations, not just a
+      // hand-picked subset (see applyCachedPresetFields()'s own comment for why).
+      applyCachedPresetFields(seasonOptions, cachedSettings)
     } else {
       // No user modifications - let backend preset season_options handle text overlay
       const fieldsToRemove = [
@@ -1914,8 +1983,12 @@ const doSave = async () => {
       seasonLogoUrl = null
     }
 
-    // Create a temporary movie object for this season with proper media type
-    const seasonMovie = { ...props.movie, key: seasonKey, title: season.isSeries ? props.movie.title : season.title, mediaType: 'tv-show' as const }
+    // Create a temporary movie object for this season with proper media type. title is
+    // always the real show name (props.movie.title), never season.title (a display label
+    // like "Season 1") -- the season itself is conveyed separately via seasonIndex below.
+    // Using season.title here was why Asset-folder/Flat saves put season posters in a
+    // folder/filename literally named "Season 1 (Year)" instead of the show's own name.
+    const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title, mediaType: 'tv-show' as const }
 
     // Pass season index (null for series poster)
     const seasonIndex = season.isSeries ? null : season.index
@@ -2004,8 +2077,9 @@ const doSend = async () => {
         await fetchImagesForCurrentSeason()
         await restoreSettingsForKey(seasonKey)
 
-        // Create a temporary movie object for this season
-        const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
+        // Create a temporary movie object for this season. title is always the real show
+        // name -- see the identical fix/comment in doSave()'s equivalent line.
+        const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title }
         const seasonIndex = season.isSeries ? null : season.index
         await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex)
 
@@ -2546,6 +2620,7 @@ watch(shadowEnabled, () => markFieldModified('shadowEnabled'))
 watch(letterSpacing, () => markFieldModified('letterSpacing'))
 watch(positionY, () => markFieldModified('positionY'))
 watch(textBboxEnabled, () => markFieldModified('textBboxEnabled'))
+watch(textColor, () => markFieldModified('textColor'))
 
 // Track modifications to options fields
 watch(() => options.value.posterZoom, () => markFieldModified('posterZoom'))
