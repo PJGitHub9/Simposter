@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.70',
+    date: '2026-08-28',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Save As" in the TV editor always failing with "Cannot save season options as new preset" when creating a new preset while viewing a season poster.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.69',
     date: '2026-08-28',
     sections: [

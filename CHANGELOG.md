@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.6.70 (2026-08-28)
+### Bug Fixes
+- **TV editor's "Save As" (create new preset) always failed with "Cannot save season options as new preset" whenever attempted while viewing a season poster, not just when actually trying to save it as a season-specific override.** `saveAsNewPreset()` (`TvShowEditorPane.vue`) unconditionally blocked the season case with an error toast instead of following the same pattern already used for "Save Preset" (overwrite): a *new* preset has no `season_options` of its own to diff against yet, so there was never a real reason to block this — the currently-focused season's fully-resolved effective options (already what's displayed while viewing a season, via the same `resolve_season_options()` merge the backend uses for reads) are a perfectly valid base `options` payload for a brand-new preset. Fixed by removing the block; saving as new from a season tab now creates the new preset using that season's effective settings as its base template, with a toast clarifying that's what happened (rather than creating a season-specific override, which isn't possible for a preset that doesn't exist yet).
+
 ## v1.6.69 (2026-08-28)
 ### Bug Fixes
 - **TV editor's `doSave()` was missing the `saveCurrentSettings()` call every other save/switch path in the file already has.** Saving right after a live change (e.g. setting Logo Mode to "No Logo") without navigating away first used stale cached settings, since the currently-focused season/series' live UI state was never flushed into `settingsCache` before `doSave()` read from it.

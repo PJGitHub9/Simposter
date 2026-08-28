@@ -1210,17 +1210,25 @@ const saveAsNewPreset = async () => {
     overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
-  if (selectedPosterType.value === 'season') {
-    notifyError('Cannot save season options as new preset - use regular options only')
+  // "Save As" always creates a brand-new preset from the currently-effective options —
+  // whether that's the series' own options or a season's resolved (options + season_options
+  // diff) view. A new preset has no season_options of its own yet, so when saving from a
+  // season tab, this season's effective settings become the new preset's base `options`
+  // (not a season-specific override) — there's nothing to diff against for a preset that
+  // doesn't exist yet. See Quirk #13's `resolve_season_options()` pattern for why season
+  // views always show fully-resolved values, which is exactly what makes this safe to reuse
+  // as a new preset's base.
+  await presetService.savePresetAs(slugified, backendOptions)
+  if (!presetService.error.value) {
+    selectedPreset.value = slugified
+    success(
+      selectedPosterType.value === 'season'
+        ? 'Preset saved as new! (using this season\'s settings as the base template)'
+        : 'Preset saved as new!'
+    )
+    newPresetId.value = ''
   } else {
-    await presetService.savePresetAs(slugified, backendOptions)
-    if (!presetService.error.value) {
-      selectedPreset.value = slugified
-      success('Preset saved as new!')
-      newPresetId.value = ''
-    } else {
-      notifyError(`Failed to save: ${presetService.error.value}`)
-    }
+    notifyError(`Failed to save: ${presetService.error.value}`)
   }
 }
 
