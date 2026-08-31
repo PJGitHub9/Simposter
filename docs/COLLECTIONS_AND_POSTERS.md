@@ -89,6 +89,9 @@ For collections Fanart has no art for (studio/curated/genre collections with no 
 
 <img width="1616" height="1014" alt="image" src="https://github.com/user-attachments/assets/7667d735-5f0e-409a-abc2-cbb62f1877c2" />
 
+<img width="1567" height="1006" alt="image" src="https://github.com/user-attachments/assets/20eee1d8-4c5e-422d-9d76-a01864075990" />
+
+
 
 ---
 
