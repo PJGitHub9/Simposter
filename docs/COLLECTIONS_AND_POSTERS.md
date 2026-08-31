@@ -87,6 +87,9 @@ This is the one non-obvious part: TMDb has **no artwork endpoint for Collections
 
 For collections Fanart has no art for (studio/curated/genre collections with no single representative franchise, e.g. "Christmas Movies"), the Simposter Creator's Logo section has an **"Import Logo From Movie"** picker — pulls in a member movie's own logo instead.
 
+<img width="1616" height="1014" alt="image" src="https://github.com/user-attachments/assets/7667d735-5f0e-409a-abc2-cbb62f1877c2" />
+
+
 ---
 
 ## Batch Processing
