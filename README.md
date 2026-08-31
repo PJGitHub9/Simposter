@@ -2,10 +2,7 @@
 
 > **Template-based poster generation for Plex** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
 
-![Simposter UI](https://github.com/user-attachments/assets/bc31ee99-0d68-4ba0-a54f-d6b4a1b119b7)
-
-<!-- SCREENSHOT SUGGESTION: Replace the hero above — it predates the Collections feature and
-     the current UI. A wider shot of the movie grid with a mix of generated posters, 1400–1600px. -->
+![Simposter UI](https://github.com/user-attachments/assets/fa22c97f-ad8c-4a7e-b6ef-1aaa3d7a5022)
 
 ---
 
