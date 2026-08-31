@@ -129,6 +129,8 @@ let scanPoller: number | null = null
 // Automation settings
 const localWebhookAutoSend = ref(true)
 const localWebhookAutoLabels = ref('Overlay')
+const localLabelToAdd = ref('')
+const localKometaCompatibility = ref(false)
 const localWebhookAlwaysRegenerateSeason = ref(false)
 const localWebhookSecret = ref('')
 const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
@@ -277,6 +279,8 @@ const loadLocalSettings = async () => {
   localSchedulerLibraryIds.value = settings.scheduler.value.libraryIds || []
   localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
   localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
+  localLabelToAdd.value = settings.automation?.value?.labelToAdd ?? ''
+  localKometaCompatibility.value = settings.automation?.value?.kometaCompatibility ?? false
   localWebhookAlwaysRegenerateSeason.value = settings.automation?.value?.webhookAlwaysRegenerateSeason ?? false
   localWebhookSecret.value = settings.automation?.value?.webhookSecret ?? ''
   localExistingContentMode.value = (settings.automation?.value?.existingContentMode as 'resend' | 'regenerate') ?? 'regenerate'
@@ -341,6 +345,8 @@ const captureSettingsSnapshot = () => {
     schedulerLibraryIds: localSchedulerLibraryIds.value,
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
+    labelToAdd: localLabelToAdd.value,
+    kometaCompatibility: localKometaCompatibility.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
     webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
@@ -418,6 +424,8 @@ const checkForChanges = () => {
     schedulerLibraryIds: localSchedulerLibraryIds.value,
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
+    labelToAdd: localLabelToAdd.value,
+    kometaCompatibility: localKometaCompatibility.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
     webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
@@ -548,6 +556,8 @@ const saveSettings = async () => {
   settings.automation.value = {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
+    labelToAdd: localLabelToAdd.value,
+    kometaCompatibility: localKometaCompatibility.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
     webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
@@ -575,10 +585,29 @@ const saveSettings = async () => {
   // Capture which libraries are newly-added (present now, weren't in the last-saved set)
   // before savedLibraryIds/savedTvShowLibraryIds get overwritten below, so we know which
   // ones to auto-scan once the save actually succeeds.
-  const newlyAddedLibraryIds = [
-    ...localLibraries.value.filter(l => l.id && !savedLibraryIds.value.has(String(l.id))).map(l => String(l.id)),
-    ...localTvShowLibraries.value.filter(l => l.id && !savedTvShowLibraryIds.value.has(String(l.id))).map(l => String(l.id)),
-  ]
+  const newlyAddedMovieLibraryIds = localLibraries.value.filter(l => l.id && !savedLibraryIds.value.has(String(l.id))).map(l => String(l.id))
+  const newlyAddedTvLibraryIds = localTvShowLibraries.value.filter(l => l.id && !savedTvShowLibraryIds.value.has(String(l.id))).map(l => String(l.id))
+  const newlyAddedLibraryIds = [...newlyAddedMovieLibraryIds, ...newlyAddedTvLibraryIds]
+
+  // Kometa Compatibility: auto-check "Overlay" for any library added since the last save
+  // (settings.defaultLabelsToRemove/defaultTvLabelsToRemove.value already hold what's about
+  // to be saved, assigned above from localDefaultLabelsToRemove/localDefaultTvLabelsToRemove).
+  // Mirrors what the startup wizard's "Using Kometa?" toggle does for libraries selected
+  // during onboarding — this covers the same thing for libraries added afterward.
+  if (localKometaCompatibility.value) {
+    for (const id of newlyAddedMovieLibraryIds) {
+      const current = settings.defaultLabelsToRemove.value[id] || []
+      if (!current.includes('Overlay')) {
+        settings.defaultLabelsToRemove.value = { ...settings.defaultLabelsToRemove.value, [id]: [...current, 'Overlay'] }
+      }
+    }
+    for (const id of newlyAddedTvLibraryIds) {
+      const current = settings.defaultTvLabelsToRemove.value[id] || []
+      if (!current.includes('Overlay')) {
+        settings.defaultTvLabelsToRemove.value = { ...settings.defaultTvLabelsToRemove.value, [id]: [...current, 'Overlay'] }
+      }
+    }
+  }
 
   await settings.save()
 
@@ -1326,7 +1355,9 @@ onMounted(() => {
         :movieLibrariesChanged="sectionsWithChanges.movieLibraries"
         :tvLibrariesChanged="sectionsWithChanges.tvLibraries"
         :sendLogosToPlex="localSendLogosToPlex"
+        :kometaCompatibility="localKometaCompatibility"
         @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
+        @update:kometaCompatibility="localKometaCompatibility = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
         @update:libraries="localLibraries = $event; hasUnsavedChanges = true"
@@ -1395,6 +1426,7 @@ onMounted(() => {
         v-if="activeTab === 'automation'"
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
+        :labelToAdd="localLabelToAdd"
         :webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason"
         :webhookSecret="localWebhookSecret"
         :existingContentMode="localExistingContentMode"
@@ -1405,6 +1437,7 @@ onMounted(() => {
         :unsavedChanges="hasUnsavedChanges"
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:labelToAdd="localLabelToAdd = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookSecret="localWebhookSecret = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:existingContentMode="localExistingContentMode = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"

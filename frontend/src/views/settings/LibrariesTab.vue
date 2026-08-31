@@ -59,6 +59,7 @@ const props = defineProps<{
   movieLibrariesChanged?: boolean
   tvLibrariesChanged?: boolean
   sendLogosToPlex: boolean
+  kometaCompatibility: boolean
 }>()
 
 const apiBase = getApiBase()
@@ -76,6 +77,7 @@ const emit = defineEmits<{
   'update:defaultLabelsToRemove': [value: Record<string, string[]>]
   'update:defaultTvLabelsToRemove': [value: Record<string, string[]>]
   'update:sendLogosToPlex': [value: boolean]
+  'update:kometaCompatibility': [value: boolean]
   'test-connection': []
   'scan-library': [libraryId?: string]
   'save': []
@@ -159,6 +161,11 @@ const localSchedulerCronExpression = computed({
 const localSchedulerLibraryIds = computed({
   get: () => props.schedulerLibraryIds,
   set: (val) => emit('update:schedulerLibraryIds', val)
+})
+
+const localKometaCompatibility = computed({
+  get: () => props.kometaCompatibility,
+  set: (val) => emit('update:kometaCompatibility', val)
 })
 
 const localLabelsToRemove = computed({
@@ -743,6 +750,13 @@ watch(
           <h3 style="margin-bottom: 4px;">Default Labels to Remove</h3>
           <p class="section-description" style="margin-bottom: 0;">
             When sending to Plex, these labels will be removed by default for each library
+          </p>
+          <label class="checkbox-label" style="margin-top: 10px;">
+            <input type="checkbox" v-model="localKometaCompatibility" />
+            <span>Kometa Compatibility</span>
+          </label>
+          <p class="section-description" style="margin: 2px 0 0 0;">
+            When enabled, any library you add from now on automatically gets "Overlay" checked here too — matching what the "Using Kometa?" step in the startup wizard does for libraries selected during onboarding, but for libraries added afterward.
           </p>
         </div>
         <button @click="fetchLibraryLabels" class="refresh-labels-btn" :disabled="labelsLoading">

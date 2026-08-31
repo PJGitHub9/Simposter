@@ -10,6 +10,139 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.79',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Docs: Getting Started now covers pulling the pre-built Docker image from GHCR, not just building from source — the old docs incorrectly said no registry image existed.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.78',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          '"Label to Add After Sending" now actually applies the label. The previous fix only added better detection that it wasn\'t working — this release fixes the actual cause: Plex doesn\'t support the "append one label" API call this used, so it now fetches an item\'s existing labels and writes the full set back (existing + new) the way Plex\'s API actually expects.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.77',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'The new "Label to Add After Sending" feature could report success without the label actually landing on the Plex item — it now verifies the label actually stuck (re-checking the item) before considering it done, and tries every fallback method until one genuinely works.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Removed the redundant "Labels to Remove After Sending" field from Settings → Automation — Settings → Libraries\' per-library "Default Labels to Remove" is the one that actually matters and was already covering this.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.76',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added "Kometa Compatibility" (Settings → Libraries) — when enabled, any library you add from now on automatically gets "Overlay" checked in Default Labels to Remove, matching what the startup wizard\'s "Using Kometa?" step already does for libraries selected during onboarding.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Refreshed the "budget-daps" starter preset\'s look (repositioned/resized logo box, lower vignette).',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.75',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a new "textless-border" starter preset and refreshed "budget-daps" with an updated look — now 4 Uniform Logo presets + 2 Kometa presets ship as starter presets (onboarding and Template Manager\'s "Import Simposter defaults").',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.74',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Simposter can now actually tag Plex items with a label after sending a poster (Settings → Automation → "Label to Add After Sending"). Works across every send path — manual, batch, webhook, auto-generate, and resend.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the onboarding wizard\'s "Apply a label after sending a poster?" toggle silently doing nothing — it was wired to the (unrelated) label-removal setting instead of actually adding a label.',
+          'Relabeled Settings → Automation\'s "Default Labels for Webhook Posters" to "Labels to Remove After Sending" and clarified its description — it strips labels, it never added them, despite the old name suggesting otherwise.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.73',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a "Run Startup Wizard" button to Settings → Advanced, so the first-time setup wizard can be re-run any time (e.g. if it was skipped) instead of only appearing on first launch.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.72',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added an "Import Simposter defaults" button to Template Manager\'s Import/Export section — pulls in the same 5 starter presets onboarding offers, any time, not just on first run.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.71',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Onboarding now imports a full set of 5 starter presets (3 Uniform Logo looks + 2 Kometa collection presets) instead of just one.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          '"Copy Compact" (Template Manager) and the webhook URL copy button in Settings → Automation no longer fail with "navigator.clipboard is undefined" when the app is reached over plain HTTP.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.70',
     date: '2026-08-28',
     sections: [

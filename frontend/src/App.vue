@@ -18,6 +18,7 @@ import { useSettingsStore } from './stores/settings'
 import { useScanStore } from './stores/scan'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
+import { onboardingLaunchRequested } from '@/composables/useOnboardingLauncher'
 
 const tabs = computed<MenuItem[]>(() => {
   // Check if Plex is configured
@@ -81,6 +82,13 @@ const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true'
 const showChangelog = ref(false)
 const showOnboarding = ref(false)
 const showQuickGuide = ref(false)
+
+// Settings → Advanced's "Run Startup Wizard" button lives in a routed view, well outside
+// where OnboardingModal is mounted here — see useOnboardingLauncher.ts for why this is a
+// counter rather than a boolean re-triggering `showOnboarding`.
+watch(onboardingLaunchRequested, (val) => {
+  if (val > 0) showOnboarding.value = true
+})
 
 const handleQuickGuideDone = () => {
   showQuickGuide.value = false

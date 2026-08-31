@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, logger, get_movie_tmdb_id, get_movie_folder_name, get_media_folder_name
+from ..config import settings, plex_remove_label, plex_add_label, get_label_to_add, logger, get_movie_tmdb_id, get_movie_folder_name, get_media_folder_name
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -478,6 +478,19 @@ def _process_single_movie(
                     current = db.get_movie_labels(rating_key)
                     updated = [l for l in current if l.lower() not in removed_labels]
                     db.update_movie_labels(rating_key, updated)
+
+            # Add tracking label if configured (opposite direction from the removal above —
+            # see get_label_to_add()'s docstring)
+            label_to_add = get_label_to_add()
+            if label_to_add:
+                try:
+                    plex_add_label(rating_key, label_to_add, content_type="1")
+                    logger.info("[BATCH] Added label '%s' to %s [%s]", label_to_add, rating_key, title_hint)
+                    current = db.get_movie_labels(rating_key)
+                    if label_to_add.lower() not in [l.lower() for l in current]:
+                        db.update_movie_labels(rating_key, current + [label_to_add])
+                except Exception as label_err:
+                    logger.warning("[BATCH] Label add failed for %s [%s]: %s", rating_key, title_hint, label_err)
 
             logger.info("[BATCH] Uploaded to Plex: %s [%s]", rating_key, title_hint)
 
@@ -1537,6 +1550,19 @@ def _render_and_save_poster(
                     current = db.get_tv_labels(rating_key)
                     updated = [l for l in current if l.lower() not in removed_labels]
                     db.update_tv_labels(rating_key, updated, library_id=req.library_id or "default")
+
+            # Add tracking label if configured (opposite direction from the removal above —
+            # see get_label_to_add()'s docstring)
+            label_to_add = get_label_to_add()
+            if label_to_add:
+                try:
+                    plex_add_label(rating_key, label_to_add)
+                    logger.info("[BATCH] Added label '%s' to %s [%s]", label_to_add, rating_key, display_title)
+                    current = db.get_tv_labels(rating_key)
+                    if label_to_add.lower() not in [l.lower() for l in current]:
+                        db.update_tv_labels(rating_key, current + [label_to_add], library_id=req.library_id or "default")
+                except Exception as label_err:
+                    logger.warning("[BATCH] Label add failed for %s [%s]: %s", rating_key, display_title, label_err)
 
             # Record history
             try:

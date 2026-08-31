@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 import time
 import threading
 
-from ..config import logger, settings, plex_headers, plex_session, load_presets, load_render_cache, plex_remove_label
+from ..config import logger, settings, plex_headers, plex_session, load_presets, load_render_cache, plex_remove_label, plex_add_label, get_label_to_add
 from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
 from .. import database as db
 from .. import cache
@@ -706,6 +706,18 @@ def process_webhook_poster_generation(
                                     db.update_movie_labels(rating_key, updated)
                         except Exception as lbl_err:
                             logger.warning("[WEBHOOK] Label removal after resend failed for %s [%s]: %s", rating_key, title_hint, lbl_err)
+                        # Add tracking label if configured (opposite direction from the
+                        # removal above — see get_label_to_add()'s docstring)
+                        try:
+                            label_to_add = get_label_to_add()
+                            if label_to_add:
+                                plex_add_label(rating_key, label_to_add, content_type="1")
+                                logger.info("[WEBHOOK] Added label '%s' to %s [%s] (resend)", label_to_add, rating_key, title_hint)
+                                current = db.get_movie_labels(rating_key)
+                                if label_to_add.lower() not in [l.lower() for l in current]:
+                                    db.update_movie_labels(rating_key, current + [label_to_add])
+                        except Exception as lbl_err:
+                            logger.warning("[WEBHOOK] Label add after resend failed for %s [%s]: %s", rating_key, title_hint, lbl_err)
                         return
             except Exception as resend_err:
                 logger.warning("[WEBHOOK] Cache resend check failed for %s [%s]: %s — falling through to generation", rating_key, title_hint, resend_err)

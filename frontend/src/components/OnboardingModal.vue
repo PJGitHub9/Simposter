@@ -236,7 +236,18 @@ const saveSettings = async () => {
       ...settings.automation.value,
       existingContentMode: existingContentMode.value,
       webhookAutoSend: true,
-      webhookAutoLabels: sendLabel.value ? labelName.value : '',
+      // "Apply a label after sending" (this step's toggle) tags an item with a label
+      // once Simposter sends its poster — that's labelToAdd, not webhookAutoLabels
+      // (which instead strips a pre-existing label, e.g. one Kometa/Radarr/Sonarr
+      // applied to mark "needs a poster" — handled separately above via
+      // defaultLabelsToRemove/usingKometa). Previously this toggle was wired to
+      // webhookAutoLabels by mistake, which meant "apply a label" silently did
+      // nothing (removing a label that was never there is a no-op) — see CLAUDE.md.
+      labelToAdd: sendLabel.value ? labelName.value : '',
+      // Persist "Using Kometa?" as an ongoing setting too (Settings → Libraries →
+      // "Kometa Compatibility"), not just a one-time apply to libraries selected right
+      // now — so a library added later also gets "Overlay" auto-checked.
+      kometaCompatibility: usingKometa.value,
       webhookAlwaysRegenerateSeason: false,
       retryUntilTemplateMet: true,
     }
@@ -687,17 +698,17 @@ onMounted(() => {
         <template v-else-if="step === 'finish'">
           <div class="ob-icon">🎉</div>
           <h2 class="ob-title">You're all set!</h2>
-          <p class="ob-sub">Simposter is configured and your library scan has started. Your default preset is ready to go.</p>
+          <p class="ob-sub">Simposter is configured and your library scan has started. A set of starter presets is ready to go.</p>
 
           <div class="ob-preset-card" :class="{ imported: presetImported }">
             <div class="ob-preset-card-icon">{{ importingPreset ? '⏳' : presetImported ? '✅' : '🎨' }}</div>
             <div class="ob-preset-card-body">
-              <div class="ob-preset-card-name">Default preset</div>
+              <div class="ob-preset-card-name">Starter presets</div>
               <div class="ob-preset-card-desc">
                 <span v-if="importingPreset">Importing...</span>
-                <span v-else-if="presetImported">Imported — Uniformlogo · white logo · textless poster</span>
+                <span v-else-if="presetImported">Imported — simposter-main, budget-daps, textless-border, stock-poster (Uniform Logo) + Plex-Requests, LEAVING-SOON (Kometa)</span>
                 <span v-else-if="presetError" class="ob-preset-card-err">{{ presetError }}</span>
-                <span v-else>Uniformlogo · white logo · textless poster · season text overlay</span>
+                <span v-else>4 Uniform Logo looks + 2 Kometa collection presets</span>
               </div>
             </div>
             <div class="ob-preset-card-action">

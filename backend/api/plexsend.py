@@ -9,7 +9,7 @@ from PIL import Image
 from pydantic import BaseModel
 from typing import List, Optional
 
-from ..config import settings, plex_headers, plex_session, plex_remove_label, logger, get_media_folder_name
+from ..config import settings, plex_headers, plex_session, plex_remove_label, plex_add_label, get_label_to_add, logger, get_media_folder_name
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
 from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render, save_to_asset_folder_on_send_enabled
@@ -220,6 +220,15 @@ def api_plex_send(req: PlexSendRequest):
 
     for label in req.labels or []:
         plex_remove_label(req.rating_key, label, content_type=label_content_type)
+
+    # Add tracking label if configured (opposite direction from the removal above — see
+    # get_label_to_add()'s docstring)
+    try:
+        label_to_add = get_label_to_add()
+        if label_to_add:
+            plex_add_label(req.rating_key, label_to_add, content_type=label_content_type)
+    except Exception as e:
+        logger.warning("[PLEX] Label add failed for %s: %s", req.rating_key, e)
 
     # Refresh cached poster so future calls use the updated image
     try:
@@ -485,6 +494,27 @@ def _remove_labels_for_key(rating_key: str, is_tv: bool, library_id: Optional[st
         logger.warning("[PLEXSEND] Label removal failed for %s: %s", rating_key, e)
 
 
+def _add_label_for_key(rating_key: str, is_tv: bool, library_id: Optional[str], db) -> None:
+    """Add the configured tracking label to Plex and sync the label cache — the opposite
+    direction from _remove_labels_for_key() above, see get_label_to_add()'s docstring."""
+    try:
+        label_to_add = get_label_to_add()
+        if not label_to_add:
+            return
+        plex_add_label(rating_key, label_to_add)
+        logger.info("[PLEXSEND] Added label '%s' to %s (resend)", label_to_add, rating_key)
+        if is_tv:
+            current = db.get_tv_labels(rating_key)
+            if label_to_add.lower() not in [l.lower() for l in current]:
+                db.update_tv_labels(rating_key, current + [label_to_add], library_id=library_id or "default")
+        else:
+            current = db.get_movie_labels(rating_key)
+            if label_to_add.lower() not in [l.lower() for l in current]:
+                db.update_movie_labels(rating_key, current + [label_to_add])
+    except Exception as e:
+        logger.warning("[PLEXSEND] Label add failed for %s: %s", rating_key, e)
+
+
 @router.post("/render-cache/{rating_key}/resend")
 def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
     """Resend a previously cached rendered poster to Plex (no re-render)."""
@@ -535,6 +565,7 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
     logger.info("[PLEXSEND] Resent cached poster for %s (%s)", rating_key, _title_for_ctx)
 
     _remove_labels_for_key(rating_key, req.is_tv, library_id, db)
+    _add_label_for_key(rating_key, req.is_tv, library_id, db)
 
     resent_seasons = 0
     if req.include_seasons:
@@ -567,6 +598,7 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                     resent_seasons += 1
                     logger.info("[PLEXSEND] Resent cached season poster for %s", season_key)
                     _remove_labels_for_key(season_key, True, library_id, db)
+                    _add_label_for_key(season_key, True, library_id, db)
                 except Exception as se:
                     logger.warning("[PLEXSEND] Failed to resend season %s: %s", season_key, se)
 
@@ -646,6 +678,7 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
 
         logger.info("[LOCAL_ASSETS] Resent %s (rating_key=%s) to Plex", rel_path, rating_key)
         _remove_labels_for_key(rating_key, is_tv, metadata.get("library_id"), db)
+        _add_label_for_key(rating_key, is_tv, metadata.get("library_id"), db)
         entry["status"] = "ok"
         results.append(entry)
 

@@ -11,13 +11,16 @@ Thanks for considering a contribution! Simposter is a small, mostly solo-maintai
 
 ```bash
 # Backend
+pip install -r requirements.txt
 uvicorn backend.main:app --reload --port 8003
 
 # Frontend (separate terminal)
 cd frontend && npm install && npm run dev
 ```
 
-See the [README](README.md#local-development-no-docker) for the full local dev setup, and [ARCHITECTURE.md](ARCHITECTURE.md) for how the backend, frontend, and rendering pipeline fit together.
+Or `cd frontend && npm install && npm run dev:full` to run both concurrently in one terminal.
+
+See [Getting Started](docs/GETTING_STARTED.md#local-development-no-docker) for the full local dev setup, and [ARCHITECTURE.md](ARCHITECTURE.md) for how the backend, frontend, and rendering pipeline fit together.
 
 ## Before opening a PR
 

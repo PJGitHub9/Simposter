@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Simposter doesn't publish versioned releases to a container registry — you build from source, and updates are `git pull` + rebuild. Because of that, only the latest code on the `main` branch is supported. If you're running an older commit, please update before reporting a security issue.
+Simposter doesn't publish tagged/versioned releases — images on [ghcr.io/pjgithub9/simposter](https://github.com/PJGithub9/Simposter/pkgs/container/simposter) are built continuously per-branch, and `latest` tracks whatever's on `main`. Only the latest code on `main` (or the `latest` image) is supported. If you're running an older commit or an image pinned to an older branch tag, please update before reporting a security issue.
 
 ## Reporting a Vulnerability
 

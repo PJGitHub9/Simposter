@@ -64,12 +64,14 @@ export type SchedulerSettings = {
 export type AutomationSettings = {
   webhookAutoSend: boolean
   webhookAutoLabels: string
+  labelToAdd?: string
   webhookAlwaysRegenerateSeason: boolean
   webhookSecret?: string
   existingContentMode?: 'resend' | 'regenerate'
   retryUntilTemplateMet?: boolean
   retryIntervalHours?: number
   retryMaxAttempts?: number
+  kometaCompatibility?: boolean
 }
 
 export type NotificationSettings = {
@@ -143,7 +145,7 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0 })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', labelToAdd: '', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0, kometaCompatibility: false })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
   discordWebhookUrl: '',
@@ -233,6 +235,8 @@ async function loadSettings() {
     automation.value = {
       webhookAutoSend: data.automation?.webhookAutoSend ?? true,
       webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Simposter',
+      labelToAdd: data.automation?.labelToAdd ?? '',
+      kometaCompatibility: data.automation?.kometaCompatibility ?? false,
       webhookAlwaysRegenerateSeason: data.automation?.webhookAlwaysRegenerateSeason ?? false,
       webhookSecret: data.automation?.webhookSecret ?? '',
       existingContentMode: data.automation?.existingContentMode ?? 'regenerate',

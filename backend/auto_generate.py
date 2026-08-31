@@ -9,7 +9,7 @@ from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
 from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels, _webhook_cooldowns, _webhook_cooldown_lock, WEBHOOK_COOLDOWN_SECONDS
 from .api.notifications import send_apprise_notification, send_discord_notification
-from .config import settings, plex_session, plex_headers, load_render_cache, save_render_cache, plex_remove_label
+from .config import settings, plex_session, plex_headers, load_render_cache, save_render_cache, plex_remove_label, plex_add_label, get_label_to_add
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
@@ -176,6 +176,18 @@ def process_new_content_for_library(
                                                     db.update_movie_labels(rating_key, [l for l in _cur if l.lower() not in _removed])
                                         except Exception as _lbl_err:
                                             logger.warning(f"[AUTO_GEN] Label removal after resend failed for {title}: {_lbl_err}")
+                                        # Add tracking label if configured (opposite direction
+                                        # from the removal above — see get_label_to_add()'s docstring)
+                                        try:
+                                            _label_to_add = get_label_to_add()
+                                            if _label_to_add:
+                                                plex_add_label(rating_key, _label_to_add, content_type="1")
+                                                logger.info(f"[AUTO_GEN] Added label '{_label_to_add}' to {rating_key} (resend)")
+                                                _cur = db.get_movie_labels(rating_key)
+                                                if _label_to_add.lower() not in [l.lower() for l in _cur]:
+                                                    db.update_movie_labels(rating_key, _cur + [_label_to_add])
+                                        except Exception as _lbl_err:
+                                            logger.warning(f"[AUTO_GEN] Label add after resend failed for {title}: {_lbl_err}")
                                     except Exception as resend_err:
                                         logger.warning(f"[AUTO_GEN] Cache resend failed for {title}: {resend_err} — falling through to generation")
                                     else:
@@ -324,6 +336,18 @@ def process_new_content_for_library(
                                                     db.update_tv_labels(rating_key, [l for l in _cur if l.lower() not in _removed], library_id=library_id)
                                         except Exception as _lbl_err:
                                             logger.warning(f"[AUTO_GEN] Label removal after resend failed for {title}: {_lbl_err}")
+                                        # Add tracking label if configured (opposite direction
+                                        # from the removal above — see get_label_to_add()'s docstring)
+                                        try:
+                                            _label_to_add = get_label_to_add()
+                                            if _label_to_add:
+                                                plex_add_label(rating_key, _label_to_add)
+                                                logger.info(f"[AUTO_GEN] Added label '{_label_to_add}' to {rating_key} (resend)")
+                                                _cur = db.get_tv_labels(rating_key)
+                                                if _label_to_add.lower() not in [l.lower() for l in _cur]:
+                                                    db.update_tv_labels(rating_key, _cur + [_label_to_add], library_id=library_id)
+                                        except Exception as _lbl_err:
+                                            logger.warning(f"[AUTO_GEN] Label add after resend failed for {title}: {_lbl_err}")
                                     except Exception as resend_err:
                                         logger.warning(f"[AUTO_GEN] Cache resend failed for {title}: {resend_err} — falling through to generation")
                                     else:

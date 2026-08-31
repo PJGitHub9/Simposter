@@ -120,12 +120,18 @@ class AutomationSettings(BaseModel):
     """Settings for automatic poster generation via webhooks"""
     webhookAutoSend: bool = True
     webhookAutoLabels: str = "Simposter"
+    labelToAdd: str = ""  # Optional label applied to a Plex item after a poster is sent
+                           # successfully — the opposite direction from webhookAutoLabels
+                           # (which strips a pre-existing label), see plex_add_label().
     webhookAlwaysRegenerateSeason: bool = False
     webhookSecret: str = ""
     existingContentMode: str = "regenerate"  # "regenerate" or "resend"
     retryUntilTemplateMet: bool = False
     retryIntervalHours: int = 24
     retryMaxAttempts: int = 0
+    kometaCompatibility: bool = False  # When true, any newly-added library automatically
+                                        # gets "Overlay" added to its Default Labels to
+                                        # Remove — see SettingsView.vue's saveSettings()
 
 
 class NotificationSettings(BaseModel):

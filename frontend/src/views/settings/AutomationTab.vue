@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import { copyToClipboard } from '@/services/clipboard'
 
 interface Preset {
   id: string
@@ -10,6 +11,7 @@ interface Preset {
 const props = defineProps<{
   webhookAutoSend: boolean
   webhookAutoLabels: string
+  labelToAdd: string
   webhookAlwaysRegenerateSeason: boolean
   webhookSecret: string
   existingContentMode: 'resend' | 'regenerate'
@@ -23,6 +25,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:webhookAutoSend': [value: boolean]
   'update:webhookAutoLabels': [value: string]
+  'update:labelToAdd': [value: string]
   'update:webhookAlwaysRegenerateSeason': [value: boolean]
   'update:webhookSecret': [value: string]
   'update:existingContentMode': [value: 'resend' | 'regenerate']
@@ -40,6 +43,11 @@ const localWebhookAutoSend = computed({
 const localWebhookAutoLabels = computed({
   get: () => props.webhookAutoLabels,
   set: (val) => emit('update:webhookAutoLabels', val)
+})
+
+const localLabelToAdd = computed({
+  get: () => props.labelToAdd,
+  set: (val) => emit('update:labelToAdd', val)
 })
 
 const localWebhookAlwaysRegenerateSeason = computed({
@@ -123,8 +131,9 @@ const generatedWebhookUrl = computed(() => {
   return ''
 })
 
-const copyWebhookUrl = () => {
-  navigator.clipboard.writeText(generatedWebhookUrl.value)
+const copyWebhookUrl = async () => {
+  const ok = await copyToClipboard(generatedWebhookUrl.value)
+  if (!ok) return
   copiedWebhook.value = true
   setTimeout(() => {
     copiedWebhook.value = false
@@ -218,14 +227,21 @@ const webhookInstructions = computed(() => {
         </label>
       </template>
 
+      <!-- The global "Labels to Remove After Sending" field (webhookAutoLabels) was removed
+           from this UI — it duplicated Settings → Libraries' per-library "Default Labels to
+           Remove", which is the actually-used mechanism (and more precise, since it's scoped
+           per library). The underlying webhookAutoLabels setting/merge logic is untouched
+           server-side for any install that already has a value stored there; it's just no
+           longer editable from this tab. -->
+
       <label>
-        <span class="label-text">Default Labels for Webhook Posters</span>
+        <span class="label-text">Label to Add After Sending</span>
         <input
           type="text"
-          v-model="localWebhookAutoLabels"
-          placeholder="Simposter, Auto"
+          v-model="localLabelToAdd"
+          placeholder="e.g. Simposter"
         />
-        <span class="help-text">Comma-separated list of labels to apply to webhook-generated posters (e.g., "Simposter, Auto")</span>
+        <span class="help-text">Optional — tags an item with this label after Simposter successfully sends a poster to Plex, so you can see (or filter/smart-collection on) which items got a Simposter-generated poster. Leave blank to disable. Applies to every send path: manual, batch, webhook, auto-generate, and resend.</span>
       </label>
 
       <label>

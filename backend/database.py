@@ -931,6 +931,7 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "fanart.apiKey",
     "automation.webhookSecret",
     "automation.webhookAutoLabels",
+    "automation.labelToAdd",
     "notifications.discordWebhookUrl",
 }
 
