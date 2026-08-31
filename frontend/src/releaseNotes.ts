@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.80',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Test Connection" (Settings and the setup wizard) failing with a Plex URL that has a trailing slash — it built a double-slash path that Plex rejects. The URL is also cleaned up automatically when saved, so this can\'t linger even if it was already saved with a trailing slash.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.79',
     date: '2026-08-31',
     sections: [

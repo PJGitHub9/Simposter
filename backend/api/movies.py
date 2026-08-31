@@ -363,7 +363,17 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
     # masked placeholder (Settings UI never sees the real saved token), treat that the
     # same as "not provided" so we test the actual stored token instead of the literal
     # placeholder string.
-    test_url = plex_url or settings.PLEX_URL
+    #
+    # Strip a trailing slash the same way _apply_runtime_settings() does for the saved
+    # value (settings.PLEX_URL) -- this endpoint additionally accepts a raw `plex_url`
+    # query param straight from whatever's currently typed in the URL field (Settings'
+    # "Test Connection" button and the onboarding wizard both call it this way, before
+    # the value is ever saved/normalized), so it needs the same normalization applied
+    # here too. Without it, a URL typed/pasted with a trailing "/" builds a double-slash
+    # path below (".../32400//library/sections") that 404s -- this is exactly why a
+    # freshly-typed URL can connect fine once (e.g. during initial setup, if it happened
+    # not to have a trailing slash that time) but fail on a later re-test that does.
+    test_url = (plex_url or settings.PLEX_URL or "").rstrip("/")
     test_token = plex_token if (plex_token and plex_token != SECRET_MASK) else settings.PLEX_TOKEN
 
     try:

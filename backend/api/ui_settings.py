@@ -50,6 +50,16 @@ def _normalize_plex_payload(data: dict) -> dict:
     plex = data.get("plex", {}) or {}
     normalized = plex.copy()
 
+    # Strip a trailing slash from the saved URL itself, not just the runtime copy
+    # (_apply_runtime_settings() already strips settings.PLEX_URL, but that's a separate
+    # in-memory value -- without this, the raw DB-stored/GET-returned url keeps the
+    # trailing slash forever, which re-populates the Settings field with it on every
+    # load and feeds it back into anything that builds a URL from the raw value
+    # directly instead of settings.PLEX_URL, e.g. test_plex_connection()'s plex_url
+    # query param).
+    if normalized.get("url"):
+        normalized["url"] = str(normalized["url"]).rstrip("/")
+
     if "movieLibraryName" in normalized:
         normalized["movieLibraryName"] = str(normalized["movieLibraryName"])
     # Ensure list exists and is stringified
