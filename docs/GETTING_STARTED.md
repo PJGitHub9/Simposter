@@ -161,19 +161,19 @@ For batches instead of one at a time, see **Batch Processing** in [COLLECTIONS_A
 
 ## Environment Variables
 
-All of these can also be set (and changed later) via the Settings UI or the onboarding wizard — you don't need to set any of them up front.
+**None of these are required.** Everything below — Plex connection, API keys, library names — can be set (and changed later) through the setup wizard or the Settings UI instead, with no env vars or config file editing at all. Setting them as env vars is purely a convenience for pre-filling values (e.g. scripted/repeatable Docker deployments) so you don't have to re-enter them through the UI.
 
-| Variable | Required | Example |
-|----------|----------|---------|
-| `PLEX_URL` | Yes | `http://plex:32400` |
-| `PLEX_TOKEN` | Yes | `xxxyyyzzz` |
-| `PLEX_MOVIE_LIBRARY_NAME` | No | `Movies` |
-| `TMDB_API_KEY` | Recommended | `abcd1234` |
-| `TVDB_API_KEY` | No | `efgh5678` |
-| `FANART_API_KEY` | No | `ijkl9012` |
-| `CONFIG_DIR` | No (Docker default: `/config`) | `/config` |
+| Variable | What it pre-fills | Example |
+|----------|--------------------|---------|
+| `PLEX_URL` | Plex server URL | `http://plex:32400` |
+| `PLEX_TOKEN` | Plex auth token | `xxxyyyzzz` |
+| `PLEX_MOVIE_LIBRARY_NAME` | Movie library name | `Movies` |
+| `TMDB_API_KEY` | TMDb API key | `abcd1234` |
+| `TVDB_API_KEY` | TVDB API key | `efgh5678` |
+| `FANART_API_KEY` | Fanart.tv API key | `ijkl9012` |
+| `CONFIG_DIR` | Config directory path (Docker default: `/config`) | `/config` |
 
-For Docker, set these under `environment:` in `docker-compose.yml`. For local dev, put them in a `.env` file at the repo root (see [`.env.example`](../.env.example)).
+For Docker, set these under `environment:` in `docker-compose.yml`. For local dev, put them in a `.env` file at the repo root (see [`.env.example`](../.env.example)). Env vars only seed a **fresh, unconfigured** database on first startup — once you've set something through the wizard or Settings, that saved value takes priority from then on, so changing/removing an env var later won't silently override what you've already configured in the UI.
 
 ---
 

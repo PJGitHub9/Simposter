@@ -37,7 +37,7 @@ Template and preset are part of the URL path, not query params — e.g. `.../api
 
 Radarr sends its own fixed payload shape (no template configuration needed on Radarr's side) — Simposter reads `movie.tmdbId`, `movie.title`, `movie.year` from it and looks up the matching Plex item by TMDb ID. The match is exact, not a substring check — a webhook for TMDb ID `58` won't accidentally match an unrelated item whose ID happens to start with those digits (e.g. `5825`).
 
-**Test/dry-run:** append `&test=true` to the URL. Logs the event and what *would* happen, without generating or sending a poster.
+**Test/dry-run:** append `?test=true` to the URL (the base Radarr URL has no other query params, so this is the first one — `&test=true` only if you're also passing `?secret=...`, in which case it becomes `&test=true` after that). Logs the event and what *would* happen, without generating or sending a poster.
 
 ---
 
@@ -58,7 +58,7 @@ Optional query param:
 
 Matches the Plex show by TVDb ID (exact match). A newly-added show generates both the series poster and every season poster in one run; an episode import for an existing show only regenerates the affected season.
 
-**Test/dry-run:** append `&test=true`.
+**Test/dry-run:** append `?test=true` (or `&test=true` if you're already passing `?secret=...` or `?include_seasons=...`).
 
 ---
 
@@ -113,8 +113,14 @@ Unlike Radarr/Sonarr, Tautulli's template/preset are query params, not path segm
 
 ## Debugging a webhook that isn't firing
 
-1. Check **Settings → Logs** — every webhook call is logged with the media title and how long it took (`[RADARR_WEBHOOK]`/`[SONARR_WEBHOOK]`/`[TAUTULLI_WEBHOOK]` prefixes).
-2. Try the `test=true` dry-run first — it tells you whether the event even reached Simposter and what it parsed out of the payload, without touching Plex.
-3. Confirm the item isn't hitting a Webhook Ignore Label.
-4. If you've set a webhook secret, double check it's actually being sent — a mismatched or missing secret is a silent rejection (403), not an error dialog.
-5. `GET /api/webhook/test` is a plain connectivity check — hit it directly in a browser to confirm the server is reachable at all before troubleshooting further.
+This is a general troubleshooting checklist — two of the steps below use test tools that are easy to confuse with each other, so read #2 and #5 carefully: they're different things.
+
+1. **`GET /api/webhook/test`** — a plain, generic connectivity check, unrelated to Radarr/Sonarr/Tautulli specifically. Hit it directly in a browser (`http://your-server:8003/api/webhook/test`) to confirm the Simposter server itself is reachable at all, before troubleshooting anything webhook-specific.
+2. **`test=true`** — a dry-run flag for one *specific* webhook call. It's not something you configure inside Radarr/Sonarr/Tautulli or set anywhere in Simposter's Settings — you add it yourself, by hand, as an extra query param on the exact same webhook URL you already set up (the one from the Radarr/Sonarr/Tautulli sections above), then paste that into a browser or `curl` it directly. It logs what Simposter received and parsed out of the payload without touching Plex or generating anything, e.g.:
+   ```
+   http://your-server:8003/api/webhook/radarr/uniformlogo/default?test=true
+   ```
+   Use `?test=true` if it's the first query param on the URL, or `&test=true` if you're already passing `secret`/`include_seasons`/`template_id` — see each section above for the exact join character for that source.
+3. Check **Settings → Logs** — every real (non-test) webhook call is also logged with the media title and how long it took (`[RADARR_WEBHOOK]`/`[SONARR_WEBHOOK]`/`[TAUTULLI_WEBHOOK]` prefixes), so you can confirm it arrived even without appending `test=true`.
+4. Confirm the item isn't hitting a Webhook Ignore Label.
+5. If you've set a webhook secret, double check it's actually being sent — a mismatched or missing secret is a silent rejection (403), not an error dialog.
