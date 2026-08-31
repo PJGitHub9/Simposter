@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.6.81 (2026-08-31)
+### New Features
+- **Added a real logo mark to the brand** — `TopNav.vue`'s header logo and `Sidebar.vue`'s header (expanded state only) now show a small inline SVG icon (dark rounded-square badge, layered poster-stack + film-strip motif) next to the "Simposter" wordmark, replacing plain text alone. Inlined directly as SVG markup in both components (no new asset file/network request) — same icon reused in both places for consistency, sized 24px in the top bar and 28px in the sidebar. Collapsed-sidebar behavior is unchanged (icon and text both stay hidden there, matching the pre-existing collapsed-state design); mobile's existing `.logo-text { display: none }` breakpoint also unchanged, so the icon alone becomes the compact mobile brand mark there.
+
 ## v1.6.80 (2026-08-31)
 ### Bug Fixes
 - **"Test Connection" (Settings → Libraries and the setup wizard's Plex step) failed with a trailing slash on the Plex URL.** `test_plex_connection()` (`backend/api/movies.py`) builds `f"{test_url}/library/sections"` from whatever `plex_url` query param the caller sends — both `SettingsView.vue`'s `testPlexConnection()` and `OnboardingModal.vue`'s `testPlex()` pass the live, currently-typed field value straight through, with no normalization. A URL with a trailing slash (e.g. `https://.../32400/`, easy to end up with from copy-pasting a Plex remote-access URL) produced a double-slash path (`.../32400//library/sections`) that Plex rejects — while the *initial* connection during setup could still succeed depending on whether that specific attempt happened to go through a path that stripped it (`_apply_runtime_settings()` already `.rstrip("/")`s the value it copies into the runtime `settings.PLEX_URL`, but that's a separate in-memory copy from the raw value this endpoint's query param uses), which is what made it look like it "connects fine" initially but fails on a later re-test.

@@ -220,6 +220,38 @@ onUnmounted(() => {
         </svg>
       </button>
       <div class="logo">
+        <svg class="logo-icon" width="24" height="24" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="256" height="256" rx="48" fill="#0F172A"/>
+          <g transform="translate(128,140)">
+            <g transform="rotate(-16)">
+              <rect x="-95" y="-85" width="100" height="150" rx="10" fill="#334155"/>
+            </g>
+            <g transform="rotate(16)">
+              <rect x="-5" y="-85" width="100" height="150" rx="10" fill="#334155"/>
+            </g>
+            <g transform="rotate(-8)">
+              <rect x="-80" y="-90" width="100" height="150" rx="10" fill="#64748B"/>
+            </g>
+            <g transform="rotate(8)">
+              <rect x="-20" y="-90" width="100" height="150" rx="10" fill="#64748B"/>
+            </g>
+            <rect x="-52" y="-98" width="104" height="150" rx="10" fill="#3B82F6"/>
+            <g clip-path="url(#topNavLogoClip)">
+              <rect x="-42" y="-88" width="84" height="76" fill="#60A5FA"/>
+              <circle cx="18" cy="-64" r="14" fill="#EFF6FF" opacity="0.9"/>
+              <path d="M-42 -12 L-20 -44 L-4 -26 L14 -56 L42 -12 Z" fill="#1D4ED8"/>
+            </g>
+            <clipPath id="topNavLogoClip">
+              <rect x="-42" y="-88" width="84" height="76" rx="3"/>
+            </clipPath>
+            <rect x="-42" y="-4" width="60" height="7" rx="3.5" fill="#F8FAFC"/>
+            <rect x="-42" y="10" width="78" height="5" rx="2.5" fill="#F8FAFC" opacity="0.6"/>
+            <rect x="-42" y="22" width="48" height="4" rx="2" fill="#F8FAFC" opacity="0.4"/>
+            <g fill="#F8FAFC">
+              <path d="M96 -95 L102 -80 L117 -74 L102 -68 L96 -53 L90 -68 L75 -74 L90 -80 Z"/>
+            </g>
+          </g>
+        </svg>
         <span class="logo-text" :class="{ 'logo-warn': isUnsupportedTag }">Simposter</span>
         <div v-if="isUnsupportedTag" class="unsupported-tag-badge" :title="unsupportedTagTitle">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -334,6 +366,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.logo-icon {
+  flex-shrink: 0;
+  border-radius: 5px;
 }
 
 .logo-text {

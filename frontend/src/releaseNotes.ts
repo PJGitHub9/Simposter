@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.81',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a real logo mark next to the Simposter wordmark in the top bar and the sidebar, instead of just text.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.80',
     date: '2026-08-31',
     sections: [

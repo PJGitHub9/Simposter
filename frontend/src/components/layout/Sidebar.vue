@@ -55,7 +55,41 @@ const getTextLabel = (label: string) => label.replace(/^[\p{Emoji_Presentation}\
 <template>
   <aside :class="['sidebar', 'glass', { 'mobile-open': mobileOpen, 'collapsed': collapsed }]">
     <div class="sidebar__header">
-      <span v-if="!collapsed" class="sidebar__title">Simposter</span>
+      <div v-if="!collapsed" class="sidebar__brand">
+        <svg class="sidebar__logo-icon" width="28" height="28" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect width="256" height="256" rx="48" fill="#0F172A"/>
+          <g transform="translate(128,140)">
+            <g transform="rotate(-16)">
+              <rect x="-95" y="-85" width="100" height="150" rx="10" fill="#334155"/>
+            </g>
+            <g transform="rotate(16)">
+              <rect x="-5" y="-85" width="100" height="150" rx="10" fill="#334155"/>
+            </g>
+            <g transform="rotate(-8)">
+              <rect x="-80" y="-90" width="100" height="150" rx="10" fill="#64748B"/>
+            </g>
+            <g transform="rotate(8)">
+              <rect x="-20" y="-90" width="100" height="150" rx="10" fill="#64748B"/>
+            </g>
+            <rect x="-52" y="-98" width="104" height="150" rx="10" fill="#3B82F6"/>
+            <g clip-path="url(#sidebarLogoClip)">
+              <rect x="-42" y="-88" width="84" height="76" fill="#60A5FA"/>
+              <circle cx="18" cy="-64" r="14" fill="#EFF6FF" opacity="0.9"/>
+              <path d="M-42 -12 L-20 -44 L-4 -26 L14 -56 L42 -12 Z" fill="#1D4ED8"/>
+            </g>
+            <clipPath id="sidebarLogoClip">
+              <rect x="-42" y="-88" width="84" height="76" rx="3"/>
+            </clipPath>
+            <rect x="-42" y="-4" width="60" height="7" rx="3.5" fill="#F8FAFC"/>
+            <rect x="-42" y="10" width="78" height="5" rx="2.5" fill="#F8FAFC" opacity="0.6"/>
+            <rect x="-42" y="22" width="48" height="4" rx="2" fill="#F8FAFC" opacity="0.4"/>
+            <g fill="#F8FAFC">
+              <path d="M96 -95 L102 -80 L117 -74 L102 -68 L96 -53 L90 -68 L75 -74 L90 -80 Z"/>
+            </g>
+          </g>
+        </svg>
+        <span class="sidebar__title">Sim<span class="sidebar__title-accent">poster</span></span>
+      </div>
       <button class="collapse-btn" :title="collapsed ? 'Expand sidebar' : 'Collapse sidebar'" @click="emit('toggleCollapse')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline v-if="collapsed" points="9 18 15 12 9 6" />
@@ -133,13 +167,31 @@ const getTextLabel = (label: string) => label.replace(/^[\p{Emoji_Presentation}\
   justify-content: center;
 }
 
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sidebar__logo-icon {
+  flex-shrink: 0;
+  border-radius: 6px;
+}
+
 .sidebar__title {
   font-weight: 700;
-  letter-spacing: 0.4px;
-  color: var(--accent);
-  padding: 0 4px;
+  font-size: 17px;
+  letter-spacing: 0.2px;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar__title-accent {
+  color: var(--accent);
 }
 
 nav {
