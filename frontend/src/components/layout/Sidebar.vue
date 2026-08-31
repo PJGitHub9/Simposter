@@ -57,7 +57,6 @@ const getTextLabel = (label: string) => label.replace(/^[\p{Emoji_Presentation}\
     <div class="sidebar__header">
       <div v-if="!collapsed" class="sidebar__brand">
         <svg class="sidebar__logo-icon" width="28" height="28" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <rect width="256" height="256" rx="48" fill="#0F172A"/>
           <g transform="translate(128,140)">
             <g transform="rotate(-16)">
               <rect x="-95" y="-85" width="100" height="150" rx="10" fill="#334155"/>
@@ -83,7 +82,11 @@ const getTextLabel = (label: string) => label.replace(/^[\p{Emoji_Presentation}\
             <rect x="-42" y="-4" width="60" height="7" rx="3.5" fill="#F8FAFC"/>
             <rect x="-42" y="10" width="78" height="5" rx="2.5" fill="#F8FAFC" opacity="0.6"/>
             <rect x="-42" y="22" width="48" height="4" rx="2" fill="#F8FAFC" opacity="0.4"/>
-            <g fill="#F8FAFC">
+            <!-- Sparkle sits outside the colored cards, directly on the surrounding nav
+                 background -- unlike the text bars/circle above (which are always on the
+                 blue card, so a fixed near-white is safe), this needs to track the theme's
+                 own text color or it goes invisible against a light theme's light background. -->
+            <g fill="var(--text-primary, #F8FAFC)">
               <path d="M96 -95 L102 -80 L117 -74 L102 -68 L96 -53 L90 -68 L75 -74 L90 -80 Z"/>
             </g>
           </g>

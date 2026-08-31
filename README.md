@@ -1,3 +1,5 @@
+<img src=".github/logo.svg" alt="Simposter logo" width="96" height="96">
+
 # Simposter
 
 > **Template-based poster generation for Plex** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.

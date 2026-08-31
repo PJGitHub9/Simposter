@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.83',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the browser tab icon showing up blank — an embedded stylesheet in the favicon (added for light/dark theme support) wasn\'t reliably handled by some browsers\' favicon renderer. Removed it in favor of a simpler, always-visible design.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.82',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the new logo mark looking off in light theme — dropped the dark background square from the sidebar/top bar icon, and the sparkle accent now tracks the current theme\'s text color instead of a fixed near-white that was invisible against a light background.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.81',
     date: '2026-08-31',
     sections: [
