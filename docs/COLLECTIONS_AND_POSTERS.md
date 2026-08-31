@@ -12,8 +12,8 @@ How templates, presets, logos, and badges fit together, how batch processing wor
 
 **Presets** store a named snapshot of template settings — logo zone, effect intensities, text overlays (with `{title}`/`{year}`/`{season}` variables), linked overlay badge configuration, and fallback rules (switch templates/presets when a logo or textless poster is missing). Presets can be exported and imported as JSON, and shared between installs. A small set of starter presets ships with Simposter (a few Uniform Logo looks plus Kometa Creator presets) — imported automatically at the end of the setup wizard, or pull them in any time via **Import Simposter defaults** in Template Manager's Import/Export section.
 
-<!-- SCREENSHOT SUGGESTION: Template Manager page showing a preset list on the left and
-     the options panel on the right, with logo zone and effects visible -->
+<img width="1917" height="1036" alt="image" src="https://github.com/user-attachments/assets/25b8457f-0bff-4a30-8291-ef1ef7e48f21" />
+
 
 ---
 
@@ -41,8 +41,10 @@ Logos are sourced from TMDb, Fanart.tv, and TVDB, then merged with priority/fall
 
 A logo drop shadow (Photoshop-style — angle, distance, size, opacity) is also available in the Logo section for the Uniform Logo template.
 
-<!-- SCREENSHOT SUGGESTION: Side-by-side showing the same poster with white logo, color logo,
-     and the hex-tinted variant -->
+<img width="1471" height="934" alt="image" src="https://github.com/user-attachments/assets/6c31bbc8-62e3-4dd3-ab4a-f36fa6514e3c" />
+
+<img width="1458" height="940" alt="image" src="https://github.com/user-attachments/assets/9fa85950-6fd8-4934-95ba-badc8ec96930" />
+
 
 ---
 
@@ -62,8 +64,8 @@ Each badge value can be individually set to **None**, **Text**, or **Image** mod
 
 Badge visibility can be controlled with Plex labels: `show_if_label` / `hide_if_label`.
 
-<!-- SCREENSHOT SUGGESTION: Overlay Config Manager showing a configured badge set on the left
-     and a rendered poster preview with badges visible on the right -->
+<img width="1102" height="904" alt="image" src="https://github.com/user-attachments/assets/55866bfe-aded-499a-b321-a45c77893cbe" />
+
 
 ---
 
@@ -98,8 +100,11 @@ For collections Fanart has no art for (studio/curated/genre collections with no 
 
 If Settings → Automation's **Label to Add After Sending** is set, every successfully-sent item in the batch gets tagged with it too — that's a global setting, not something you configure per batch run.
 
-<!-- SCREENSHOT SUGGESTION: Batch Edit page with several items selected (checkboxes visible)
-     and the batch results panel open at the bottom showing succeeded/fallback counts -->
+<img width="1576" height="913" alt="image" src="https://github.com/user-attachments/assets/ac1848aa-4301-4a47-a661-d652ba30db82" />
+
+<img width="1920" height="4283" alt="image" src="https://github.com/user-attachments/assets/1947c391-8c7c-4892-91ac-9632d735c2c1" />
+
+
 
 Batch rendering uses the **overlay cache** (pre-rendered effect layers) for a 3-5x speedup over a from-scratch render, and runs multiple items concurrently — see the concurrency tip in [Getting Started → Settings Reference](GETTING_STARTED.md#settings-reference) if a batch feels slow.
 
@@ -116,8 +121,8 @@ When a poster is generated via batch, webhook, or auto-scan and the ideal templa
 
 Visible in **History → Retry Queue tab**, with per-item reason badges (*No Logo*, *Poster Fallback*, or *Both*), attempt count, and per-item **Retry Now**/**Dismiss** actions.
 
-<!-- SCREENSHOT SUGGESTION: History page with the Retry Queue tab active, showing a handful
-     of items with their reason badges and action buttons -->
+<img width="1854" height="984" alt="image" src="https://github.com/user-attachments/assets/58df4675-190d-465c-9922-7e6e7bd81ccb" />
+
 
 ---
 
@@ -131,8 +136,7 @@ Every poster generation is logged in the **History** tab:
 
 ![History](https://github.com/user-attachments/assets/2e7b7b23-770e-463e-91e6-62f0d061fff1)
 
-<!-- SCREENSHOT SUGGESTION: Replace the above with a shot showing both History and Retry Queue
-     tabs — ideally with Retry Queue active and 2-3 items visible -->
+
 
 ---
 
