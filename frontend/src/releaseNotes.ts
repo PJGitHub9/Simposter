@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.85',
+    date: '2026-09-01',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a movie or show removed from Plex retrying forever in the background, generating a new failed entry in History every retry cycle instead of being removed from the retry queue once it was confirmed gone.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.84',
+    date: '2026-09-01',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the browser tab icon (and any other file dropped in the app\'s public assets folder) not showing up when running Simposter in Docker, even though it worked fine in a local dev environment — the built-in web server was serving the wrong content for it.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.83',
     date: '2026-08-31',
     sections: [

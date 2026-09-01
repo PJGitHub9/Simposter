@@ -460,6 +460,24 @@ def _run_poster_retry():
                 if not still_needs_retry:
                     db.resolve_retry_queue_item(rating_key, "resolved")
                     logger.info("[RETRY] Successfully resolved %s in %.1fs — ideal template conditions met", title, _retry_elapsed)
+                    continue
+
+                # _process_single_movie()/_process_single_tv_show() already caught their own
+                # exception internally (e.g. "No TMDb ID found" from a deleted/reorganized Plex
+                # item) and returned a normal-looking error dict instead of raising -- so a hard
+                # failure like this never reaches the `except Exception as retry_err` block below,
+                # and the existence check there never runs. Checking here too closes that gap:
+                # without it, an item whose Plex entry is genuinely gone retries forever, exactly
+                # like the except block's own comment already warns about, just via a path it can't
+                # see. Confirmed live: a deleted movie retried 72 times over ~18 days, a fresh
+                # "failed" History row every cycle, before this branch existed.
+                is_hard_error = isinstance(result, dict) and result.get("status") == "error"
+                if is_hard_error and _plex_item_exists(rating_key) is False:
+                    db.resolve_retry_queue_item(rating_key, "abandoned")
+                    logger.info(
+                        "[RETRY] %s (rating_key=%s) no longer exists in Plex — removed from retry queue",
+                        title, rating_key
+                    )
                 else:
                     logger.info("[RETRY] %s still pending in %.1fs (attempt #%d) — will retry again", title, _retry_elapsed, retry_count + 1)
 

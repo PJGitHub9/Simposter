@@ -62,10 +62,27 @@ if (frontend_path / "index.html").exists():
     if (frontend_path / "assets").exists():
         app.mount("/assets", StaticFiles(directory=str(frontend_path / "assets")), name="assets")
 
-    # Catch-all route to serve index.html for SPA routing
+    # Catch-all route to serve index.html for SPA routing. Only /assets is mounted as
+    # StaticFiles above -- everything else under frontend_path (favicon.svg, favicon.ico,
+    # and anything else dropped in frontend/public/) was previously swallowed by this
+    # route unconditionally returning index.html, so those files 404'd in effect (got
+    # index.html's HTML bytes back with the wrong content-type instead of the real file)
+    # in the built/Docker app, while working fine against the Vite dev server locally
+    # (which serves frontend/public/* directly, never reaching this backend route at all).
+    frontend_path_resolved = frontend_path.resolve()
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        """Serve index.html for all non-API routes to support Vue Router."""
+        """Serve a real static file under frontend_path if one exists at this path
+        (e.g. favicon.svg); otherwise fall back to index.html for Vue Router."""
+        candidate = (frontend_path / full_path).resolve()
+        try:
+            candidate.relative_to(frontend_path_resolved)
+        except ValueError:
+            # Path traversal attempt (e.g. ../../etc/passwd) -- never serve outside frontend_path
+            return FileResponse(str(frontend_path / "index.html"))
+        if candidate.is_file():
+            return FileResponse(str(candidate))
         return FileResponse(str(frontend_path / "index.html"))
 else:
     # Development mode - mount source directory
