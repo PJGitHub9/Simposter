@@ -1,4 +1,4 @@
-<img src=".github/logo.svg" alt="Simposter logo" width="96" height="96">
+<img src=".github/icon-512.png" alt="Simposter logo" width="96" height="96">
 
 # Simposter
 

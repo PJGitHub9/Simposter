@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.87',
+    date: '2026-09-02',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Added proper PNG app icons (192px, 512px, and an Apple touch icon) alongside the SVG favicon, for browsers/devices that don\'t render SVG favicons and for "Add to Home Screen" on mobile.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.86',
     date: '2026-09-02',
     sections: [
