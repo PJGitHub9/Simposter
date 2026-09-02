@@ -648,7 +648,6 @@ def _process_single_tv_show(
                          Used by webhooks to only generate posters for newly added seasons.
                          If None or empty, process all seasons.
     """
-    _show_start = time.time()
     # Best-effort display title, upgraded to the real TMDb show name below once
     # fetched — a cheap local DB cache lookup (tv_cache, from the last library scan)
     # so even the very first "Start" log line can show a name instead of just a
@@ -941,6 +940,7 @@ def _render_all_tv_seasons(
                          Used by webhooks to only generate posters for newly added seasons.
                          If None or empty, process all seasons (batch mode).
     """
+    _seasons_start = time.time()
     show_title = show_details.get("name", "Unknown")
     # Use season-specific options if provided, merged on top of the series options so a
     # season preset stored as a sparse diff (v1.6.32+) still resolves to a complete option set.
@@ -1247,7 +1247,7 @@ def _render_all_tv_seasons(
         results.append(result)
 
     logger.info("[BATCH TV] '%s' done in %.1fs (rating_key=%s, %d season(s))",
-                show_title, time.time() - _show_start, rating_key, len(results))
+                show_title, time.time() - _seasons_start, rating_key, len(results))
 
     return {
         "rating_key": rating_key,

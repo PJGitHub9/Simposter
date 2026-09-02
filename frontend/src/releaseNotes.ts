@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.86',
+    date: '2026-09-02',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed webhook-triggered TV season renders showing "FAILED" in History even when the season poster was already up to date and nothing needed to change — Simposter was crashing on its own logging after correctly determining there was nothing to do.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.85',
     date: '2026-09-01',
     sections: [
