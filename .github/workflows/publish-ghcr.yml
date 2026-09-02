@@ -44,7 +44,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
