@@ -18,7 +18,7 @@
     "dev:full": "npm-run-all -p api dev"
   },
   "dependencies": {
-    "vue": "^3.5.25",
+    "vue": "^3.5.42",
     "vue-router": "^4.6.3"
   },
   "devDependencies": {
