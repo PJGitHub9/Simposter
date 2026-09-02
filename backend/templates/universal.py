@@ -115,12 +115,99 @@ def _solid_color_logo(logo: Image.Image, color: tuple[int, int, int]) -> Image.I
     )
 
 
+# Kometa Creator default fonts, from Kometa-Team/Defaults-Image-Creation's
+# create_defaults/fonts/ (MIT licensed) — the same alias table
+# create_poster.ps1 itself uses (Get-BundledFontPath), so names typed exactly
+# as in that ecosystem (e.g. "ComfortAa-Medium") resolve correctly.
+_KOMETA_REMOTE_FONTS_BASE_URL = (
+    "https://raw.githubusercontent.com/Kometa-Team/Defaults-Image-Creation/"
+    "main/create_defaults/fonts/"
+)
+_KOMETA_REMOTE_FONTS = {
+    "barlowregular": "Barlow-Regular.ttf",
+    "bebasregular": "Bebas-Regular.ttf",
+    "boecklinsuniverse": "BoecklinsUniverse.ttf",
+    "boogalooregular": "Boogaloo-Regular.ttf",
+    "cherrycreamsoda": "CherryCreamSoda-Regular.ttf",
+    "cherrycreamsodaregular": "CherryCreamSoda-Regular.ttf",
+    "comfortaamedium": "Comfortaa-Medium.ttf",
+    "helveticabold": "Helvetica-Bold.ttf",
+    "jurabold": "Jura-Bold.ttf",
+    "limelightregular": "Limelight-Regular.ttf",
+    "monoton": "Monoton-Regular.ttf",
+    "monotonregular": "Monoton-Regular.ttf",
+    "pressstart2p": "Press-Start-2P.ttf",
+    "righteous": "Righteous-Regular.ttf",
+    "righteousregular": "Righteous-Regular.ttf",
+    "ryeregular": "Rye-Regular.ttf",
+    "specialelite": "SpecialElite-Regular.ttf",
+    "specialeliteregular": "SpecialElite-Regular.ttf",
+    "trochut": "Trochut-Regular.ttf",
+    "trochutregular": "Trochut-Regular.ttf",
+    "unifrakturcook": "UnifrakturCook-Bold.ttf",
+    "unifrakturcookbold": "UnifrakturCook-Bold.ttf",
+    "yesteryear": "Yesteryear-Regular.ttf",
+    "yesteryearregular": "Yesteryear-Regular.ttf",
+}
+
+
+def _normalize_font_token(name: str) -> str:
+    return "".join(c for c in (name or "").lower() if c.isalnum())
+
+
+def _kometa_fonts_cache_dir() -> Path:
+    cache_dir = Path(settings.CONFIG_DIR) / "fonts_cache"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return cache_dir
+
+
+def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
+    """
+    Fetch-and-cache-on-first-use: if font_family matches one of the Kometa
+    Creator default fonts, fetch it once from Kometa-Team/Defaults-Image-
+    Creation into a local disk cache, then load from there on every call
+    after (never re-fetched, never fetched at all for fonts never requested).
+    Fails soft (returns None) on any network/IO error so a GitHub outage never
+    breaks rendering — _load_font()'s remaining fallback chain (system fonts,
+    then PIL's default) still applies.
+    """
+    filename = _KOMETA_REMOTE_FONTS.get(_normalize_font_token(font_family))
+    if not filename:
+        return None
+
+    cache_path = _kometa_fonts_cache_dir() / filename
+    if not cache_path.exists():
+        try:
+            import requests
+            resp = requests.get(_KOMETA_REMOTE_FONTS_BASE_URL + filename, timeout=10)
+            resp.raise_for_status()
+            cache_path.write_bytes(resp.content)
+            logger.info("[FONT] Fetched and cached '%s' from Kometa-Team defaults repo", filename)
+        except Exception as e:
+            logger.debug("[FONT] Failed to fetch remote font '%s': %s", filename, e)
+            return None
+
+    try:
+        return ImageFont.truetype(str(cache_path), font_size)
+    except Exception as e:
+        logger.debug("[FONT] Failed to load cached remote font %s: %s", cache_path, e)
+        return None
+
+
 def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     """
     Load a font by name. Searches in this order:
     1. /config/fonts (mounted volume for custom fonts)
-    2. repo config/fonts (bundled fonts)
-    3. System font directories
+    2. repo config/fonts (bundled fonts — Docker seeds this from system font
+       packages at build time; see Dockerfile)
+    3. Kometa Creator default fonts — fetched from Kometa-Team/Defaults-Image-
+       Creation (MIT licensed) and cached to disk on first use rather than
+       vendored in this repo, so upstream additions/updates there don't need a
+       manual re-fetch pass. See _load_remote_kometa_font() below.
+    4. System font directories
 
     Supports exact matches, partial matches, and weight-specific variants.
     Users can upload custom .ttf or .otf files to /config/fonts/
@@ -224,7 +311,12 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     if font_obj:
         return font_obj
 
-    # 3) System font directories (Windows/Linux/macOS)
+    # 3) Kometa Creator default fonts (fetched + cached on first use, see below)
+    font_obj = _load_remote_kometa_font(font_family, font_size, boldish)
+    if font_obj:
+        return font_obj
+
+    # 4) System font directories (Windows/Linux/macOS)
     system_font_dirs = [
         Path('/usr/share/fonts'),  # Linux
         Path('/System/Library/Fonts'),  # macOS system
@@ -371,14 +463,26 @@ def _render_text_overlay(
     stroke_width = int(options.get("stroke_width", 4))
     stroke_color = _hex_to_rgb(options.get("stroke_color", "#000000"))
 
+    # Bounding box option — when enabled, font_size auto-shrinks (down to a floor)
+    # until the wrapped text block fits inside the *same* box the uniformlogo
+    # template reserves for the logo (uniform_logo_max_w/h + offset_x/y), instead
+    # of overflowing. Deliberately reuses the logo's box rather than adding a
+    # separate set of size/position options — the two are never both in that spot
+    # at once (logo vs. text-instead-of-logo, e.g. season posters with logo_mode
+    # 'none'), so one box definition serves both.
+    bbox_enabled = bool(options.get("text_bbox_enabled", False))
+    bbox_min_font_size = int(options.get("text_bbox_min_font_size", 20))
+
     # Replace template variables
     movie_title = str(options.get("movie_title", ""))
     movie_year = str(options.get("movie_year", ""))
     season_text = str(options.get("season_text", ""))
+    season_number = str(options.get("season_number", ""))
 
     text = text.replace("{title}", movie_title)
     text = text.replace("{year}", movie_year)
     text = text.replace("{season}", season_text)
+    text = text.replace("{season number}", season_number)
 
     # Apply text transform
     if text_transform == "uppercase":
@@ -388,107 +492,174 @@ def _render_text_overlay(
     elif text_transform == "capitalize":
         text = text.title()
 
-    # Load font
-    font = _load_font(font_family, font_size, font_weight)
-    logger.debug("[TEXT] Rendering '%s' font=%s size=%d", text[:40], font_family, font_size)
+    logger.debug("[TEXT] Rendering '%s' font=%s size=%d bbox=%s", text[:40], font_family, font_size, bbox_enabled)
 
     # Create a drawing context for text measurement (needs proper size for accurate bbox)
     temp_img = Image.new("RGBA", (W, H))
     temp_draw = ImageDraw.Draw(temp_img)
 
-    # Helper function to apply letter spacing
-    def apply_letter_spacing(text_line: str) -> str:
-        if letter_spacing > 0:
-            return ''.join(c + ' ' * letter_spacing for c in text_line).rstrip()
-        return text_line
-
-    # Helper function to measure text width
-    def measure_text_width(text_line: str) -> int:
-        spaced = apply_letter_spacing(text_line)
-        bbox = temp_draw.textbbox((0, 0), spaced, font=font)
-        return bbox[2] - bbox[0]
-
-    # Helper function to wrap a line if it's too wide
-    def wrap_line(line: str, max_width: int) -> list[str]:
-        """Wrap a line into multiple lines if it exceeds max_width"""
-        if not line:
-            return ['']
-
-        # Check if the whole line fits
-        if measure_text_width(line) <= max_width:
-            return [line]
-
-        # Split into words and wrap
-        words = line.split(' ')
-        wrapped_lines = []
-        current_line = ''
-
-        for word in words:
-            # Try adding the word
-            test_line = current_line + (' ' if current_line else '') + word
-
-            if measure_text_width(test_line) <= max_width:
-                current_line = test_line
-            else:
-                # Word doesn't fit, check if we need to break the word itself
-                if current_line:
-                    wrapped_lines.append(current_line)
-                    current_line = word
-                else:
-                    # Single word is too long, need to break it by characters
-                    if measure_text_width(word) > max_width:
-                        # Break word character by character
-                        for char in word:
-                            test_line = current_line + char
-                            if measure_text_width(test_line) <= max_width:
-                                current_line = test_line
-                            else:
-                                if current_line:
-                                    wrapped_lines.append(current_line)
-                                current_line = char
-                    else:
-                        current_line = word
-
-        if current_line:
-            wrapped_lines.append(current_line)
-
-        return wrapped_lines if wrapped_lines else ['']
-
-    # Calculate max width (canvas width minus margins)
+    # Wrap width and anchor point: the full canvas (minus fixed margins) centered
+    # at position_y by default, or the uniformlogo bounding box (size + position)
+    # when bbox mode is on.
     margin_left = 100
     margin_right = 100
-    max_text_width = W - margin_left - margin_right
+    if bbox_enabled:
+        max_text_width = int(options.get("uniform_logo_max_w", 600))
+        box_h = int(options.get("uniform_logo_max_h", 240))
+        box_cx = W * float(options.get("uniform_logo_offset_x", 0.5))
+        box_cy = H * float(options.get("uniform_logo_offset_y", 0.78))
+    else:
+        max_text_width = W - margin_left - margin_right
+        box_cx = W / 2
+        box_cy = H * position_y
 
-    # Split text into lines and wrap if needed
-    lines = text.split('\n')
-    wrapped_lines = []
-    for line in lines:
-        wrapped_lines.extend(wrap_line(line, max_text_width))
+    def layout_at_size(size: int):
+        """Load the font at `size`, wrap `text` to max_text_width, and measure the
+        resulting block. Returns (font, wrapped_lines, line_widths, line_heights,
+        total_height, max_line_width)."""
+        f = _load_font(font_family, size, font_weight)
 
-    # Measure all wrapped lines
-    line_heights = []
-    line_widths = []
+        def apply_letter_spacing(text_line: str) -> str:
+            if letter_spacing > 0:
+                return ''.join(c + ' ' * letter_spacing for c in text_line).rstrip()
+            return text_line
 
-    for line in wrapped_lines:
-        spaced_line = apply_letter_spacing(line)
-        bbox = temp_draw.textbbox((0, 0), spaced_line, font=font)
-        line_width = bbox[2] - bbox[0]
-        line_height_val = bbox[3] - bbox[1]
+        def measure_text_width(text_line: str) -> int:
+            spaced = apply_letter_spacing(text_line)
+            bbox = temp_draw.textbbox((0, 0), spaced, font=f)
+            return bbox[2] - bbox[0]
 
-        line_widths.append(line_width)
-        line_heights.append(line_height_val)
+        def wrap_line(line: str, max_width: int) -> list[str]:
+            """Wrap a line into multiple lines if it exceeds max_width"""
+            if not line:
+                return ['']
+            if measure_text_width(line) <= max_width:
+                return [line]
 
-    # Calculate total text block height with line spacing
-    total_height = sum(line_heights) + int(font_size * (line_height - 1) * (len(wrapped_lines) - 1))
-    max_width = max(line_widths) if line_widths else 0
+            words = line.split(' ')
+            lines_out = []
+            current_line = ''
 
-    # Calculate Y position
-    y_pos = int(H * position_y - total_height / 2)
+            for word in words:
+                test_line = current_line + (' ' if current_line else '') + word
+                if measure_text_width(test_line) <= max_width:
+                    current_line = test_line
+                else:
+                    if current_line:
+                        lines_out.append(current_line)
+                        current_line = word
+                    else:
+                        if measure_text_width(word) > max_width:
+                            for char in word:
+                                test_line = current_line + char
+                                if measure_text_width(test_line) <= max_width:
+                                    current_line = test_line
+                                else:
+                                    if current_line:
+                                        lines_out.append(current_line)
+                                    current_line = char
+                        else:
+                            current_line = word
+
+            if current_line:
+                lines_out.append(current_line)
+            return lines_out if lines_out else ['']
+
+        lines_split = text.split('\n')
+        w_lines: list[str] = []
+        for ln in lines_split:
+            w_lines.extend(wrap_line(ln, max_text_width))
+
+        l_heights = []
+        l_widths = []
+        l_top_offsets = []
+        for ln in w_lines:
+            spaced_line = apply_letter_spacing(ln)
+            bbox = temp_draw.textbbox((0, 0), spaced_line, font=f)
+            l_widths.append(bbox[2] - bbox[0])
+            l_heights.append(bbox[3] - bbox[1])
+            # PIL's default text anchor draws relative to the font's ascender line, not the
+            # tight glyph bbox — bbox[1] is the gap between them (varies with content: ~18px
+            # for all-caps text, ~38px for lowercase with descenders at 100px Arial Bold).
+            # Drawing at the raw y-position without subtracting this pushes every line's
+            # actual pixels down by that amount, which barely shows when text is centered
+            # (slack on both sides absorbs it) but overflows the box when flush top/bottom-
+            # aligned (see uniform_logo_v_align below) — must be subtracted at draw time.
+            l_top_offsets.append(bbox[1])
+
+        t_height = sum(l_heights) + int(size * (line_height - 1) * (len(w_lines) - 1))
+        m_width = max(l_widths) if l_widths else 0
+        return f, w_lines, l_widths, l_heights, l_top_offsets, t_height, m_width, apply_letter_spacing
+
+    if bbox_enabled:
+        lo, hi = bbox_min_font_size, font_size
+        best_size = bbox_min_font_size
+        best_layout = None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            candidate = layout_at_size(mid)
+            _, _, _, _, _, cand_height, cand_width, _ = candidate
+            if cand_height <= box_h and cand_width <= max_text_width:
+                best_size = mid
+                best_layout = candidate
+                lo = mid + 1  # fits — try a larger size
+            else:
+                hi = mid - 1  # too big — try smaller
+        font_size = best_size
+        if best_layout is None:
+            # Nothing fit even at the floor size — render at the floor anyway
+            # (best effort) rather than showing no text at all.
+            best_layout = layout_at_size(bbox_min_font_size)
+        font, wrapped_lines, line_widths, line_heights, line_top_offsets, total_height, max_width, apply_letter_spacing = best_layout
+        logger.debug("[TEXT] Bounding box shrunk font to size=%d (box=%dx%d)", font_size, max_text_width, box_h)
+    else:
+        font, wrapped_lines, line_widths, line_heights, line_top_offsets, total_height, max_width, apply_letter_spacing = layout_at_size(font_size)
+
+    # In bbox mode, uniform_logo_h_align/uniform_logo_v_align position the text block
+    # (using its actual measured size, which is often smaller than the box once the
+    # binary search above picks a font size) within the box — the same two controls
+    # that already position the logo within this box (uniformlogo.py). Previously these
+    # were read only by the logo renderer; text always centered on the box regardless
+    # of what the Horizontal/Vertical Align buttons were set to. text_align then
+    # justifies individual lines within that block's own width, same as it always has.
+    anchor_cx, anchor_cy, anchor_width = box_cx, box_cy, max_text_width
+    if bbox_enabled:
+        h_align = str(options.get("uniform_logo_h_align", "center"))
+        v_align = str(options.get("uniform_logo_v_align", "center"))
+        box_top = box_cy - box_h / 2
+        box_bottom = box_cy + box_h / 2
+        box_left_edge = box_cx - max_text_width / 2
+        box_right_edge = box_cx + max_text_width / 2
+
+        if v_align == "top":
+            anchor_cy = box_top + total_height / 2
+        elif v_align == "bottom":
+            anchor_cy = box_bottom - total_height / 2
+
+        if h_align == "left":
+            anchor_cx = box_left_edge + max_width / 2
+            anchor_width = max_width
+        elif h_align == "right":
+            anchor_cx = box_right_edge - max_width / 2
+            anchor_width = max_width
+        # h_align == "center" (default) leaves anchor_cx/anchor_width at the box's own
+        # center/full width — text_align continues to justify lines across the whole
+        # box exactly as before this feature existed, not just the block's own width.
+
+    # Calculate Y position — centered on the block's anchor (which is the box center
+    # unless bbox mode + a non-center vertical align shifted it, see above).
+    y_pos = int(anchor_cy - total_height / 2)
 
     # Create layer for text with extra space for shadow/stroke
     padding = max(shadow_blur + abs(shadow_offset_x) + abs(shadow_offset_y), stroke_width) + 50
     text_layer = Image.new("RGBA", (W + padding * 2, H + padding * 2), (0, 0, 0, 0))
     draw = ImageDraw.Draw(text_layer)
+
+    # Left/right alignment anchors to the block's edges — anchor_cx/anchor_width hold
+    # the box's full width and center by default, or the measured block's own
+    # (possibly narrower) width and its aligned position when bbox mode shifted it.
+    box_left = anchor_cx - anchor_width / 2
+    box_right = anchor_cx + anchor_width / 2
 
     # Draw each line
     current_y = y_pos + padding
@@ -499,11 +670,17 @@ def _render_text_overlay(
         # Calculate X position based on alignment
         line_width = line_widths[i]
         if text_align == "center":
-            x_pos = (W - line_width) // 2 + padding
+            x_pos = int(anchor_cx - line_width / 2) + padding
         elif text_align == "right":
-            x_pos = W - line_width - 100 + padding  # 100px margin from right
+            x_pos = int(box_right - line_width) + padding
         else:  # left
-            x_pos = 100 + padding  # 100px margin from left
+            x_pos = int(box_left) + padding
+
+        # Draw at the actual glyph top, not the font's ascender line (see l_top_offsets
+        # above) — without this, drawn pixels land below the position used for all the
+        # box-fit/alignment math, most visibly overflowing the box when flush top/bottom-
+        # aligned.
+        draw_y = current_y - line_top_offsets[i]
 
         # Draw shadow if enabled
         if shadow_enabled and shadow_blur > 0:
@@ -512,7 +689,7 @@ def _render_text_overlay(
             shadow_draw = ImageDraw.Draw(shadow_layer)
 
             shadow_x = x_pos + shadow_offset_x
-            shadow_y = current_y + shadow_offset_y
+            shadow_y = draw_y + shadow_offset_y
 
             # Draw shadow with stroke if stroke is enabled
             if stroke_enabled:
@@ -539,7 +716,7 @@ def _render_text_overlay(
         # Draw text with stroke/outline if enabled
         if stroke_enabled:
             draw.text(
-                (x_pos, current_y),
+                (x_pos, draw_y),
                 spaced_line,
                 font=font,
                 fill=(*text_color, 255),
@@ -548,7 +725,7 @@ def _render_text_overlay(
             )
         else:
             draw.text(
-                (x_pos, current_y),
+                (x_pos, draw_y),
                 spaced_line,
                 font=font,
                 fill=(*text_color, 255)
@@ -598,6 +775,9 @@ def build_base_poster(
     matte_height_ratio = float(options.get("matte_height_ratio", 0.0))  # 0..0.5
     fade_height_ratio = float(options.get("fade_height_ratio", 0.0))    # 0..0.5
 
+    top_matte_height_ratio = float(options.get("top_matte_height_ratio", 0.0))  # 0..0.5
+    top_fade_height_ratio = float(options.get("top_fade_height_ratio", 0.0))    # 0..1
+
     vignette_strength = float(options.get("vignette_strength", 0.0))    # 0..1
     grain_amount = float(options.get("grain_amount", 0.0))              # 0..0.6
 
@@ -611,6 +791,9 @@ def build_base_poster(
     matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
     fade_height_ratio = clamp(fade_height_ratio, 0.0, 1.0)
 
+    top_matte_height_ratio = clamp(top_matte_height_ratio, 0.0, 0.5)
+    top_fade_height_ratio = clamp(top_fade_height_ratio, 0.0, 1.0)
+
     vignette_strength = clamp(vignette_strength, 0.0, 1.0)
     grain_amount = clamp(grain_amount, 0.0, 0.6)
 
@@ -621,23 +804,38 @@ def build_base_poster(
     shift_px = int(poster_shift_y * canvas_h)
     base.paste(poster, (0, shift_px))
 
-    # ------------- MATTE + FADE -------------
+    # ------------- MATTE + FADE (bottom + top) -------------
     matte_h = int(canvas_h * matte_height_ratio)
     fade_h = int(canvas_h * fade_height_ratio)
+    top_matte_h = int(canvas_h * top_matte_height_ratio)
+    top_fade_h = int(canvas_h * top_fade_height_ratio)
 
-    if matte_h > 0 or fade_h > 0:
-        matte_start = canvas_h - matte_h               # where solid matte begins
-        fade_start = max(0, matte_start - fade_h)      # top of fade
-
+    if matte_h > 0 or fade_h > 0 or top_matte_h > 0 or top_fade_h > 0:
         # Build a 1-D alpha column using numpy (vectorised), then broadcast to
         # full canvas width via a single C-level resize.  This replaces the
         # O(W × H) pure-Python pixel loop (6 M iterations at 2000×3000) with
         # O(H) numpy ops + a Pillow C resize — ~100–200× faster.
         col = np.zeros(canvas_h, dtype=np.float32)
-        n_fade = matte_start - fade_start
-        if n_fade > 0:
-            col[fade_start:matte_start] = np.arange(n_fade, dtype=np.float32) / max(fade_h, 1) * 255
-        col[matte_start:] = 255.0
+
+        if matte_h > 0 or fade_h > 0:
+            matte_start = canvas_h - matte_h               # where solid matte begins
+            fade_start = max(0, matte_start - fade_h)      # top of fade
+            n_fade = matte_start - fade_start
+            if n_fade > 0:
+                col[fade_start:matte_start] = np.arange(n_fade, dtype=np.float32) / max(fade_h, 1) * 255
+            col[matte_start:] = 255.0
+
+        if top_matte_h > 0 or top_fade_h > 0:
+            top_matte_end = top_matte_h                              # solid top matte occupies [0, top_matte_end)
+            top_fade_end = min(canvas_h, top_matte_end + top_fade_h) # fade occupies [top_matte_end, top_fade_end)
+            top_col = np.zeros(canvas_h, dtype=np.float32)
+            top_col[:top_matte_end] = 255.0
+            n_top_fade = top_fade_end - top_matte_end
+            if n_top_fade > 0:
+                ramp = np.arange(n_top_fade, dtype=np.float32) / max(top_fade_h, 1) * 255
+                top_col[top_matte_end:top_fade_end] = 255.0 - ramp  # mirror of the bottom ramp
+            col = np.maximum(col, top_col)
+
         col_img = Image.fromarray(col.astype(np.uint8).reshape(canvas_h, 1), mode="L")
         matte_mask = col_img.resize((canvas_w, canvas_h), Image.NEAREST)
 
@@ -959,6 +1157,8 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
         return _apply_metadata_badge(canvas, element, x, y, metadata, default_field, default_font_size)
     elif element_type == "custom_image":
         return _apply_custom_image(canvas, element, x, y)
+    elif element_type == "full_cover_image":
+        return _apply_full_cover_image(canvas, element)
     elif element_type == "text_label":
         return _apply_text_label(canvas, element, x, y)
     elif element_type == "label_badge":
@@ -1329,6 +1529,28 @@ def _apply_custom_image(canvas: Image.Image, element: Dict[str, Any], x: int, y:
     badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     badge_layer.paste(overlay_img, (paste_x, paste_y))
     return Image.alpha_composite(canvas, badge_layer)
+
+
+def _apply_full_cover_image(canvas: Image.Image, element: Dict[str, Any]) -> Image.Image:
+    """Apply a full-bleed image overlay that stretches to the canvas's current
+    size at this point in the pipeline — intentional, not a bug: behaves like
+    _apply_custom_image, which is also canvas-size-relative."""
+    from .. import database as db
+
+    asset_id = element.get("asset_id")
+    if not asset_id:
+        return canvas
+    asset = db.get_overlay_asset(asset_id)
+    if not asset:
+        return canvas
+    asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
+    if not asset_path.exists():
+        return canvas
+
+    overlay_img = Image.open(asset_path).convert("RGBA")
+    W, H = canvas.size
+    overlay_img = overlay_img.resize((W, H), Image.LANCZOS)
+    return Image.alpha_composite(canvas, overlay_img)
 
 
 def _apply_text_label(canvas: Image.Image, element: Dict[str, Any], x: int, y: int) -> Image.Image:

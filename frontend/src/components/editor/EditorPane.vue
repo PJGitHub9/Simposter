@@ -61,6 +61,14 @@ const selectedPoster = ref<string | null>(null)
 const selectedLogo = ref<string | null>(null)
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
+// Collections have no logo source of their own (TMDb collections carry
+// posters/backdrops only) — this lets the user borrow a logo from one of the
+// collection's member movies instead (works for a franchise's shared logo,
+// not for studio/curated collections with no single representative movie).
+const collectionMovies = ref<{ key: string; title: string; year?: number | null }[]>([])
+const selectedCollectionMovieKey = ref<string | null>(null)
+const loadingCollectionLogo = ref(false)
+
 // Custom uploaded poster
 const uploadedPosterUrl = ref<string | null>(null)
 const posterUploading = ref(false)
@@ -103,6 +111,49 @@ const clearUploadedPoster = () => {
   }
 }
 
+// Custom uploaded logo
+const uploadedLogoUrl = ref<string | null>(null)
+const logoUploading = ref(false)
+const logoDropActive = ref(false)
+
+const uploadLogoFile = async (file: File) => {
+  if (!file.type.startsWith('image/')) return
+  logoUploading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('kind', 'logo')
+    const res = await fetch(`${apiBase}/api/upload/background`, { method: 'POST', body: fd })
+    if (!res.ok) throw new Error('Upload failed')
+    const data = await res.json()
+    uploadedLogoUrl.value = `${apiBase}${data.url}`
+    selectedLogo.value = uploadedLogoUrl.value
+  } catch (e) {
+    console.error('[EditorPane] Logo upload failed:', e)
+  } finally {
+    logoUploading.value = false
+  }
+}
+
+const onLogoFileInput = (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (file) uploadLogoFile(file)
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+const onLogoDrop = (e: DragEvent) => {
+  logoDropActive.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (file) uploadLogoFile(file)
+}
+
+const clearUploadedLogo = () => {
+  uploadedLogoUrl.value = null
+  if (selectedLogo.value && selectedLogo.value === uploadedLogoUrl.value) {
+    selectedLogo.value = filteredLogos.value[0]?.url || null
+  }
+}
+
 const showBoundingBox = ref(false)
 const previewImgRef = ref<HTMLImageElement | null>(null)
 const posterRefreshKey = ref(0)
@@ -112,6 +163,8 @@ const options = ref({
   posterShiftY: 0,
   matteHeight: 0,
   fadeHeight: 0,
+  topMatteHeight: 0,
+  topFadeHeight: 0,
   vignette: 0,
   grain: 0,
   logoScale: 50,
@@ -122,13 +175,20 @@ const options = ref({
   uniformLogoOffsetY: 78,
   uniformLogoHAlign: 'center' as 'left' | 'center' | 'right',
   uniformLogoVAlign: 'center' as 'top' | 'center' | 'bottom',
+  uniformLogoShadowEnabled: false,
+  uniformLogoShadowOpacity: 60,
+  uniformLogoShadowAngle: -45,
+  uniformLogoShadowDistance: 8,
+  uniformLogoShadowSize: 15,
+  uniformLogoShadowColor: '#000000',
   borderEnabled: false,
   borderThickness: 0,
   borderColor: '#ffffff',
   overlayFile: '',
   overlayOpacity: 40,
   overlayMode: 'screen',
-  overlayConfigIds: [] as string[]
+  overlayConfigIds: [] as string[],
+  overlayConfigIdsBelow: [] as string[]
 })
 
 // Text overlay settings
@@ -152,6 +212,7 @@ const shadowOpacity = ref(80)
 const strokeEnabled = ref(false)
 const strokeWidth = ref(4)
 const strokeColor = ref('#000000')
+const textBboxEnabled = ref(false)
 const availableFonts = ref<string[]>([])
 
 // Overlay configs
@@ -162,7 +223,13 @@ const loading = render.loading
 const error = render.error
 const lastPreview = render.lastPreview
 
-const { success, error: notifyError } = useNotification()
+// Monotonic counter guarding against out-of-order preview responses: dragging a
+// slider can fire several overlapping preview requests for the same movie (network/
+// render time varies), and without this an older, slower response landing after a
+// newer one would stomp the current preview with stale slider values.
+let previewRequestSeq = 0
+
+const { success, error: notifyError, info: notifyInfo } = useNotification()
 
 const presetService = usePresetService()
 const templates = presetService.templates
@@ -176,10 +243,11 @@ const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 
 // Accordion section open/close state
 const sectionOpen = ref({
-  template: true,
+  template: false,
   poster: true,
   logo: true,
   text: false,
+  boundingBox: false,
   overlay: false,
 })
 const toggleSection = (key: keyof typeof sectionOpen.value) => {
@@ -227,7 +295,8 @@ const saveEditorStateImmediate = () => {
         shadowOpacity: shadowOpacity.value,
         strokeEnabled: strokeEnabled.value,
         strokeWidth: strokeWidth.value,
-        strokeColor: strokeColor.value
+        strokeColor: strokeColor.value,
+        bboxEnabled: textBboxEnabled.value
       }
     }
     localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(state))
@@ -307,6 +376,7 @@ const loadEditorState = () => {
       strokeEnabled.value = state.textOverlay.strokeEnabled ?? false
       strokeWidth.value = state.textOverlay.strokeWidth ?? 4
       strokeColor.value = state.textOverlay.strokeColor ?? '#000000'
+      textBboxEnabled.value = state.textOverlay.bboxEnabled ?? false
     }
   } catch (e) {
     console.warn('Failed to load editor state:', e)
@@ -379,6 +449,18 @@ const filteredPosters = computed(() => {
   return items
 })
 
+// TMDb serves `thumb` as a resized w300 PNG and `url` as the original file -- for
+// SVG-sourced or newly-added logos, the resized thumbnail variant can 404 (a known
+// TMDb CDN propagation quirk) even though the original loads fine. Track which thumbs
+// have failed so the <img> can fall back to the full-size url instead of staying blank.
+const failedLogoThumbs = ref(new Set<string>())
+const logoThumbSrc = (l: { url: string; thumb?: string }) => (failedLogoThumbs.value.has(l.url) ? l.url : (l.thumb || l.url))
+const onLogoThumbError = (l: { url: string; thumb?: string }) => {
+  if (l.thumb && l.thumb !== l.url && !failedLogoThumbs.value.has(l.url)) {
+    failedLogoThumbs.value = new Set(failedLogoThumbs.value).add(l.url)
+  }
+}
+
 const filteredLogos = computed(() => {
   let items = logos.value
   if (logoLanguageFilter.value === 'en') {
@@ -415,6 +497,8 @@ const optionsPayload = computed(() => ({
   poster_shift_y: options.value.posterShiftY / 100,
   matte_height_ratio: options.value.matteHeight / 100,
   fade_height_ratio: options.value.fadeHeight / 100,
+  top_matte_height_ratio: options.value.topMatteHeight / 100,
+  top_fade_height_ratio: options.value.topFadeHeight / 100,
   vignette_strength: options.value.vignette / 100,
   grain_amount: options.value.grain / 100,
   logo_scale: options.value.logoScale / 100,
@@ -425,6 +509,12 @@ const optionsPayload = computed(() => ({
   uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
   uniform_logo_h_align: options.value.uniformLogoHAlign,
   uniform_logo_v_align: options.value.uniformLogoVAlign,
+  uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+  uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+  uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+  uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+  uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+  uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
   border_enabled: options.value.borderEnabled,
   border_px: options.value.borderThickness,
   border_color: options.value.borderColor,
@@ -455,7 +545,9 @@ const optionsPayload = computed(() => ({
   stroke_enabled: strokeEnabled.value,
   stroke_width: strokeWidth.value,
   stroke_color: strokeColor.value,
-  overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
+  text_bbox_enabled: textBboxEnabled.value,
+  overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+  overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
 }))
 
 const bgUrl = computed(() => selectedPoster.value || '')
@@ -487,10 +579,13 @@ const reloadPreset = async () => {
     strokeEnabled.value = false
     strokeWidth.value = 4
     strokeColor.value = '#000000'
+    textBboxEnabled.value = false
     options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
     options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
     options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
     options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+    options.value.topMatteHeight = Math.round((Number(o.top_matte_height_ratio) || 0) * 100)
+    options.value.topFadeHeight = Math.round((Number(o.top_fade_height_ratio) || 0) * 100)
     options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
     options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
     options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
@@ -501,6 +596,12 @@ const reloadPreset = async () => {
     if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
     if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
     if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+    options.value.uniformLogoShadowEnabled = !!o.uniform_logo_shadow_enabled
+    if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = o.uniform_logo_shadow_opacity
+    if (typeof o.uniform_logo_shadow_angle === 'number') options.value.uniformLogoShadowAngle = o.uniform_logo_shadow_angle
+    if (typeof o.uniform_logo_shadow_distance === 'number') options.value.uniformLogoShadowDistance = o.uniform_logo_shadow_distance
+    if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = o.uniform_logo_shadow_size
+    if (o.uniform_logo_shadow_color) options.value.uniformLogoShadowColor = String(o.uniform_logo_shadow_color)
     options.value.borderEnabled = !!o.border_enabled
     options.value.borderThickness = Number(o.border_px) || 0
     if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -508,6 +609,7 @@ const reloadPreset = async () => {
     if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
     if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
     if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
+    if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
     if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
       posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
     }
@@ -540,6 +642,7 @@ const reloadPreset = async () => {
     if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
     if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
     if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
+    textBboxEnabled.value = !!o.text_bbox_enabled
 
     applyPosterFilter()
     applyLogoPreference()
@@ -559,6 +662,8 @@ const saveCurrentPreset = async () => {
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -569,6 +674,12 @@ const saveCurrentPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+    uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+    uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+    uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -598,7 +709,10 @@ const saveCurrentPreset = async () => {
     shadow_opacity: shadowOpacity.value / 100,
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
-    stroke_color: strokeColor.value
+    stroke_color: strokeColor.value,
+    text_bbox_enabled: textBboxEnabled.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
   await presetService.savePreset(backendOptions)
@@ -615,11 +729,25 @@ const saveAsNewPreset = async () => {
     return
   }
 
+  // Preset IDs are used as filenames/DB keys and only allow letters, numbers, hyphens,
+  // and underscores server-side — slugify here so a natural-language name like "top overlay"
+  // doesn't silently succeed on save but then fail every subsequent preview/render.
+  const slugified = newPresetId.value.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '')
+  if (!slugified) {
+    notifyError('Preset id must contain letters, numbers, hyphens, or underscores')
+    return
+  }
+  if (slugified !== newPresetId.value.trim()) {
+    notifyInfo(`Preset id can't contain spaces or special characters — saving as "${slugified}"`)
+  }
+
   const backendOptions = {
     poster_zoom: options.value.posterZoom / 100,
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -630,6 +758,12 @@ const saveAsNewPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+    uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+    uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+    uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -659,13 +793,15 @@ const saveAsNewPreset = async () => {
     shadow_opacity: shadowOpacity.value / 100,
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
-    stroke_color: strokeColor.value
+    stroke_color: strokeColor.value,
+    text_bbox_enabled: textBboxEnabled.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
-  const newId = newPresetId.value.trim()
-  await presetService.savePresetAs(newId, backendOptions)
+  await presetService.savePresetAs(slugified, backendOptions)
   if (!presetService.error.value) {
-    selectedPreset.value = newId
+    selectedPreset.value = slugified
     success('Preset saved as new!')
     newPresetId.value = ''
   } else {
@@ -703,8 +839,36 @@ const fetchTmdbAssets = async () => {
   selectedPoster.value = null
   selectedLogo.value = null
   try {
-    // Detect media type (movie or TV show)
     const mediaType = props.movie.mediaType || 'movie'
+
+    if (mediaType === 'collection') {
+      // Plex collections carry no TMDb ID of their own — resolved via a
+      // one-time title search, cached server-side (collection_cache.tmdb_collection_id).
+      // TMDb collections have posters/backdrops but no logos (unlike movies/shows) —
+      // Fanart.tv does have franchise-wide logos, tagged under the same TMDb
+      // collection ID in its /v3/movies/{id} namespace (verified live against
+      // the LOTR collection). Falls back to an empty list if Fanart has none
+      // for this collection; the "Import Logo From Movie" picker still covers that case.
+      fetchCollectionMovies()
+
+      const tmdbRes = await fetch(`${apiBase}/api/collection/${props.movie.key}/tmdb`)
+      const tmdb = await tmdbRes.json()
+      tmdbId.value = tmdb.tmdb_id || null
+      if (!tmdbId.value) return
+
+      const [imgRes, fanartRes] = await Promise.all([
+        fetch(`${apiBase}/api/tmdb/collection/${tmdbId.value}/images`),
+        fetch(`${apiBase}/api/tmdb/collection/${tmdbId.value}/fanart-logos`)
+      ])
+      const imgs = await imgRes.json()
+      const fanart = await fanartRes.json()
+      posters.value = imgs.posters || []
+      logos.value = fanart.logos || []
+      applyPosterFilter()
+      applyLogoPreference()
+      return
+    }
+
     const isTvShow = mediaType === 'tv-show'
 
     // Use appropriate endpoint for TMDB ID lookup
@@ -730,6 +894,41 @@ const fetchTmdbAssets = async () => {
     applyLogoPreference()
   } catch (e) {
     console.error(e)
+  }
+}
+
+const fetchCollectionMovies = async () => {
+  collectionMovies.value = []
+  selectedCollectionMovieKey.value = null
+  try {
+    const res = await fetch(`${apiBase}/api/collection/${props.movie.key}/movies`)
+    if (!res.ok) return
+    const data = await res.json()
+    collectionMovies.value = data.movies || []
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+const importLogoFromMovie = async (movieKey: string | null) => {
+  if (!movieKey) return
+  loadingCollectionLogo.value = true
+  try {
+    const tmdbRes = await fetch(`${apiBase}/api/movie/${movieKey}/tmdb`)
+    const tmdb = await tmdbRes.json()
+    const movieTmdbId = tmdb.tmdb_id || null
+    if (!movieTmdbId) {
+      logos.value = []
+      return
+    }
+    const imgRes = await fetch(`${apiBase}/api/tmdb/${movieTmdbId}/images`)
+    const imgs = await imgRes.json()
+    logos.value = imgs.logos || []
+    applyLogoPreference()
+  } catch (e) {
+    console.error(e)
+  } finally {
+    loadingCollectionLogo.value = false
   }
 }
 
@@ -836,7 +1035,18 @@ const toggleLabel = (label: string) => {
 
 const doPreview = async () => {
   if (!bgUrl.value) return
-  await render.preview(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value)
+  // Capture the target item's identity and this request's sequence number before
+  // it goes out. If the user switches to a different movie/collection, or fires
+  // another preview (e.g. dragging a slider) while this one is still in flight, a
+  // slower earlier request resolving later must not overwrite the preview of
+  // whatever is now current (skipLastPreviewUpdate=true — see the identical
+  // pattern in TvShowEditorPane.vue's doPreview() for the season-switching case).
+  const capturedMovieKey = props.movie.key
+  const requestSeq = ++previewRequestSeq
+  const result = await render.preview(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, selectedTemplate.value, selectedPreset.value, false, true)
+  if (result?.image_base64 && props.movie.key === capturedMovieKey && requestSeq === previewRequestSeq) {
+    render.lastPreview.value = `data:image/jpeg;base64,${result.image_base64}`
+  }
 }
 
 const doSave = async () => {
@@ -884,9 +1094,12 @@ const doSend = async () => {
   try {
     await render.send(props.movie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value)
     success('Successfully sent poster to Plex!')
-    // Wait 600ms for Plex to process, then refresh poster and labels
+    // Wait 600ms for Plex to process, then refresh poster and labels. The backend's
+    // /api/plex/send already force-refreshes its own poster cache as part of the send
+    // itself, so this doesn't need force_refresh=true again — that would just trigger
+    // a second, redundant Plex round-trip for a cache entry that's already fresh.
     await new Promise(resolve => setTimeout(resolve, 600))
-    await fetchExistingPoster(true)
+    await fetchExistingPoster()
     await fetchExistingLogo()
     await fetchLabels()
   } catch (err: unknown) {
@@ -912,8 +1125,19 @@ const toggleOverlayConfig = (configId: string) => {
   const idx = options.value.overlayConfigIds.indexOf(configId)
   if (idx >= 0) {
     options.value.overlayConfigIds.splice(idx, 1)
+    const belowIdx = options.value.overlayConfigIdsBelow.indexOf(configId)
+    if (belowIdx >= 0) options.value.overlayConfigIdsBelow.splice(belowIdx, 1)
   } else {
     options.value.overlayConfigIds.push(configId)
+  }
+}
+
+const toggleOverlayConfigBelow = (configId: string) => {
+  const idx = options.value.overlayConfigIdsBelow.indexOf(configId)
+  if (idx >= 0) {
+    options.value.overlayConfigIdsBelow.splice(idx, 1)
+  } else {
+    options.value.overlayConfigIdsBelow.push(configId)
   }
 }
 
@@ -956,7 +1180,8 @@ watch([
   shadowOpacity,
   strokeEnabled,
   strokeWidth,
-  strokeColor
+  strokeColor,
+  textBboxEnabled
 ], () => {
   saveEditorState()
 }, { deep: true })
@@ -1009,11 +1234,14 @@ const applyPresetOptions = (id: string) => {
   strokeEnabled.value = false
   strokeWidth.value = 4
   strokeColor.value = '#000000'
+  textBboxEnabled.value = false
 
   options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
   options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
   options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+  options.value.topMatteHeight = Math.round((Number(o.top_matte_height_ratio) || 0) * 100)
+  options.value.topFadeHeight = Math.round((Number(o.top_fade_height_ratio) || 0) * 100)
   options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
   options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
   options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
@@ -1024,6 +1252,12 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
   if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
   if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+  options.value.uniformLogoShadowEnabled = !!o.uniform_logo_shadow_enabled
+  if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = o.uniform_logo_shadow_opacity
+  if (typeof o.uniform_logo_shadow_angle === 'number') options.value.uniformLogoShadowAngle = o.uniform_logo_shadow_angle
+  if (typeof o.uniform_logo_shadow_distance === 'number') options.value.uniformLogoShadowDistance = o.uniform_logo_shadow_distance
+  if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = o.uniform_logo_shadow_size
+  if (o.uniform_logo_shadow_color) options.value.uniformLogoShadowColor = String(o.uniform_logo_shadow_color)
   options.value.borderEnabled = !!o.border_enabled
   options.value.borderThickness = Number(o.border_px) || 0
   if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -1031,6 +1265,7 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
   if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
+  if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }
@@ -1063,6 +1298,7 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
   if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
   if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
+  textBboxEnabled.value = !!o.text_bbox_enabled
 
   applyPosterFilter()
   applyLogoPreference()
@@ -1103,7 +1339,8 @@ watch(
     shadowOpacity,
     strokeEnabled,
     strokeWidth,
-    strokeColor
+    strokeColor,
+    textBboxEnabled
   ],
   () => {
     if (previewTimer) clearTimeout(previewTimer)
@@ -1176,6 +1413,7 @@ watch(
           </button>
           <div v-show="sectionOpen.poster" class="acc-body">
             <!-- Poster source -->
+            <div class="sub-section-title" style="margin-top: 0">Source</div>
             <label class="field-label">
               Filter
               <select v-model="posterFilter">
@@ -1202,6 +1440,7 @@ watch(
                 <span>Fanart</span>
               </label>
             </div>
+            <div class="sub-section-title">Upload &amp; Selection</div>
             <!-- Custom upload -->
             <div
               class="poster-upload-zone"
@@ -1242,7 +1481,7 @@ watch(
             </div>
 
             <!-- Poster adjustments -->
-            <div class="sub-section-title">Adjustments</div>
+            <div class="sub-section-title">Position</div>
             <div class="slider">
               <label>Poster Shift Y %</label>
               <div class="slider-row">
@@ -1250,20 +1489,40 @@ watch(
                 <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
               </div>
             </div>
+
+            <div class="sub-section-title">Top Fade</div>
             <div class="slider">
-              <label>Matte Height %</label>
+              <label>Top Matte Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.topMatteHeight" type="range" min="0" max="50" />
+                <input v-model.number="options.topMatteHeight" type="number" min="0" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Top Fade Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.topFadeHeight" type="range" min="0" max="100" />
+                <input v-model.number="options.topFadeHeight" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+
+            <div class="sub-section-title">Bottom Fade</div>
+            <div class="slider">
+              <label>Bottom Matte Height %</label>
               <div class="slider-row">
                 <input v-model.number="options.matteHeight" type="range" min="0" max="50" />
                 <input v-model.number="options.matteHeight" type="number" min="0" max="50" class="slider-num" />
               </div>
             </div>
             <div class="slider">
-              <label>Fade Height %</label>
+              <label>Bottom Fade Height %</label>
               <div class="slider-row">
                 <input v-model.number="options.fadeHeight" type="range" min="0" max="100" />
                 <input v-model.number="options.fadeHeight" type="number" min="0" max="100" class="slider-num" />
               </div>
             </div>
+
+            <div class="sub-section-title">Effects</div>
             <div class="slider">
               <label>Vignette</label>
               <div class="slider-row">
@@ -1290,10 +1549,6 @@ watch(
             </svg>
           </button>
           <div v-show="sectionOpen.logo" class="acc-body">
-            <label v-if="isUniformLogo && !isLogoNone" class="inline-field checkbox" style="margin-bottom: 4px;">
-              <input type="checkbox" v-model="showBoundingBox" />
-              <span>Show bounding box</span>
-            </label>
             <!-- Logo mode + color (preset-level — used by batch & webhook) -->
             <div class="sub-section-title" style="margin-top: 0">Preset / Batch / Webhook</div>
             <label class="field-label">
@@ -1310,12 +1565,32 @@ watch(
               <input v-model="logoHex" type="color" />
             </label>
 
-            <div class="sub-section-title">Manual Selection</div>
+            <div class="sub-section-title">Preview Logo (Manual Selection)</div>
 
             <!-- Logo source + thumbnails -->
             <template v-if="!isLogoNone">
+              <template v-if="props.movie.mediaType === 'collection'">
+                <p class="muted-text" v-if="logos.length">
+                  Showing {{ logos.length }} franchise logo{{ logos.length === 1 ? '' : 's' }} from Fanart.tv, or import one from a specific movie below.
+                </p>
+                <label class="field-label">
+                  Import Logo From Movie {{ logos.length ? '(overrides the list above)' : '' }}
+                  <select
+                    v-model="selectedCollectionMovieKey"
+                    @change="importLogoFromMovie(selectedCollectionMovieKey)"
+                  >
+                    <option :value="null">Select a movie in this collection…</option>
+                    <option v-for="m in collectionMovies" :key="m.key" :value="m.key">
+                      {{ m.title }}{{ m.year ? ` (${m.year})` : '' }}
+                    </option>
+                  </select>
+                </label>
+                <p class="muted-text" v-if="loadingCollectionLogo">Loading logo options…</p>
+                <p class="muted-text" v-else-if="!logos.length && collectionMovies.length === 0">No movies found in this collection.</p>
+                <p class="muted-text" v-else-if="!logos.length">No franchise logo found on Fanart.tv for this collection — try importing one from a movie instead.</p>
+              </template>
               <label class="field-label">
-                Preference
+                Logo Style
                 <select v-model="logoPreference">
                   <option value="first">First Available</option>
                   <option value="white">White Logos</option>
@@ -1344,6 +1619,33 @@ watch(
                   <span>Fanart</span>
                 </label>
               </div>
+
+              <!-- Custom upload -->
+              <div
+                class="logo-upload-zone"
+                :class="{ 'drag-over': logoDropActive, 'has-upload': !!uploadedLogoUrl }"
+                @dragover.prevent="logoDropActive = true"
+                @dragleave="logoDropActive = false"
+                @drop.prevent="onLogoDrop"
+                @click="!uploadedLogoUrl && ($refs.logoFileInput as HTMLInputElement)?.click()"
+              >
+                <template v-if="uploadedLogoUrl">
+                  <img :src="uploadedLogoUrl" class="upload-preview" alt="Uploaded logo" />
+                  <div class="upload-overlay">
+                    <button class="upload-reselect" @click.stop="selectedLogo = uploadedLogoUrl" :class="{ active: selectedLogo === uploadedLogoUrl }">Use this</button>
+                    <button class="upload-replace" @click.stop="($refs.logoFileInput as HTMLInputElement)?.click()">Replace</button>
+                    <button class="upload-remove" @click.stop="clearUploadedLogo">✕</button>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="upload-prompt">
+                    <span v-if="logoUploading">Uploading…</span>
+                    <span v-else>&#8679; Drop image or click to upload</span>
+                  </div>
+                </template>
+              </div>
+              <input ref="logoFileInput" type="file" accept="image/*" style="display:none" @change="onLogoFileInput" />
+
               <div class="thumb-strip logo-strip">
                 <div
                   v-for="l in filteredLogos"
@@ -1352,7 +1654,7 @@ watch(
                   :class="{ active: selectedLogo === l.url }"
                   @click="selectedLogo = l.url"
                 >
-                  <img :src="l.thumb || l.url" alt="" />
+                  <img :src="logoThumbSrc(l)" alt="" @error="onLogoThumbError(l)" />
                   <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
                   <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
                 </div>
@@ -1364,10 +1666,58 @@ watch(
                   <span>No Logo</span>
                 </button>
               </div>
+            </template>
 
-              <!-- Logo position & size -->
-              <div class="sub-section-title">Position &amp; Size</div>
+            <!-- Drop Shadow: Uniform Logo templates only — box geometry for the logo itself
+                 lives in the separate "Bounding Box" section (shared with Custom Text), but the
+                 shadow effect only ever applies to the logo, so it lives here instead. -->
+            <template v-if="isUniformLogo">
+              <div class="sub-section-title">Drop Shadow</div>
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
+                <span>Drop shadow</span>
+              </label>
+              <template v-if="options.uniformLogoShadowEnabled">
+                <div class="slider">
+                  <label>Shadow Color</label>
+                  <input v-model="options.uniformLogoShadowColor" type="color" />
+                </div>
+                <div class="slider">
+                  <label>Opacity (%)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
+                    <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Angle (°)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowAngle" type="range" min="-180" max="180" />
+                    <input v-model.number="options.uniformLogoShadowAngle" type="number" min="-180" max="180" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Distance (px)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowDistance" type="range" min="0" max="100" />
+                    <input v-model.number="options.uniformLogoShadowDistance" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Size / Blur (px)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
+                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
+                  </div>
+                </div>
+              </template>
+            </template>
+
+            <!-- Position & Size only applies to non-Uniform-Logo templates now — Uniform Logo
+                 geometry moved to its own "Bounding Box" section, since that box is shared
+                 between Logo and Custom Text, not a Logo-only concept. -->
               <template v-if="!isUniformLogo">
+                <div class="sub-section-title">Position &amp; Size</div>
                 <div class="slider">
                   <label>Logo Scale %</label>
                   <div class="slider-row">
@@ -1383,59 +1733,6 @@ watch(
                   </div>
                 </div>
               </template>
-              <template v-if="isUniformLogo">
-                <div class="slider">
-                  <label>Max Width (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoMaxW" type="range" min="50" max="1800" />
-                    <input v-model.number="options.uniformLogoMaxW" type="number" min="50" max="1800" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Max Height (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
-                    <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Logo Box X %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoOffsetX" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoOffsetX" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Logo Box Y %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Horizontal Align</label>
-                  <div class="align-btn-group">
-                    <button
-                      v-for="opt in (['left', 'center', 'right'] as const)"
-                      :key="opt"
-                      :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
-                      @click="options.uniformLogoHAlign = opt"
-                    >{{ opt }}</button>
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Vertical Align</label>
-                  <div class="align-btn-group">
-                    <button
-                      v-for="opt in (['top', 'center', 'bottom'] as const)"
-                      :key="opt"
-                      :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
-                      @click="options.uniformLogoVAlign = opt"
-                    >{{ opt }}</button>
-                  </div>
-                </div>
-              </template>
-            </template>
           </div>
         </div>
 
@@ -1474,7 +1771,82 @@ watch(
           </div>
         </div>
 
-        <!-- 5. Overlay & Border -->
+        <!-- 5. Bounding Box (Uniform Logo templates only) -->
+        <div v-if="isUniformLogo" class="acc-section">
+          <button class="acc-header" @click="toggleSection('boundingBox')">
+            <span>Bounding Box</span>
+            <svg class="acc-chevron" :class="{ open: sectionOpen.boundingBox }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="sectionOpen.boundingBox" class="acc-body">
+            <div class="field-hint" style="margin-bottom: 12px;">
+              This box defines where the logo sits. Custom Text can optionally fit itself inside
+              the same box instead of overflowing — handy when Logo Mode is "No Logo" and text
+              takes its place.
+            </div>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="showBoundingBox" />
+              <span>Show bounding box on preview</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="textBboxEnabled" />
+              <span>Restrict Custom Text to this box</span>
+            </label>
+            <div class="slider">
+              <label>Max Width (px)</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoMaxW" type="range" min="50" max="1800" />
+                <input v-model.number="options.uniformLogoMaxW" type="number" min="50" max="1800" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Max Height (px)</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
+                <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Box X %</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoOffsetX" type="range" min="0" max="100" />
+                <input v-model.number="options.uniformLogoOffsetX" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Box Y %</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
+                <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Horizontal Align</label>
+              <div class="align-btn-group">
+                <button
+                  v-for="opt in (['left', 'center', 'right'] as const)"
+                  :key="opt"
+                  :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
+                  @click="options.uniformLogoHAlign = opt"
+                >{{ opt }}</button>
+              </div>
+            </div>
+            <div class="slider">
+              <label>Vertical Align</label>
+              <div class="align-btn-group">
+                <button
+                  v-for="opt in (['top', 'center', 'bottom'] as const)"
+                  :key="opt"
+                  :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
+                  @click="options.uniformLogoVAlign = opt"
+                >{{ opt }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6. Overlay & Border -->
         <div class="acc-section">
           <button class="acc-header" @click="toggleSection('overlay')">
             <span>Overlay &amp; Border</span>
@@ -1504,14 +1876,24 @@ watch(
             <div v-if="overlayConfigs.length > 0" class="slider">
               <label>Overlay Configs</label>
               <div class="overlay-config-checkboxes">
-                <label v-for="cfg in overlayConfigs" :key="cfg.id" class="checkbox-label overlay-config-item">
-                  <input
-                    type="checkbox"
-                    :checked="options.overlayConfigIds.includes(cfg.id)"
-                    @change="toggleOverlayConfig(cfg.id)"
-                  />
-                  {{ cfg.name }}
-                </label>
+                <div v-for="cfg in overlayConfigs" :key="cfg.id" class="overlay-config-item">
+                  <label class="checkbox-label">
+                    <input
+                      type="checkbox"
+                      :checked="options.overlayConfigIds.includes(cfg.id)"
+                      @change="toggleOverlayConfig(cfg.id)"
+                    />
+                    {{ cfg.name }}
+                  </label>
+                  <label v-if="options.overlayConfigIds.includes(cfg.id)" class="checkbox-label overlay-config-below-row">
+                    <input
+                      type="checkbox"
+                      :checked="options.overlayConfigIdsBelow.includes(cfg.id)"
+                      @change="toggleOverlayConfigBelow(cfg.id)"
+                    />
+                    Place below logo &amp; text
+                  </label>
+                </div>
               </div>
             </div>
 
@@ -1612,7 +1994,7 @@ watch(
               <p>Rendering...</p>
             </div>
 
-            <!-- Bounding Box for Uniform Logo -->
+            <!-- Bounding Box (Uniform Logo template) — same box for logo placement and text-bbox mode -->
             <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
           </div>
         </div>
@@ -1865,8 +2247,8 @@ watch(
   object-fit: cover;
 }
 
-/* Custom poster upload zone */
-.poster-upload-zone {
+/* Custom poster/logo upload zone */
+.poster-upload-zone, .logo-upload-zone {
   position: relative;
   border: 1.5px dashed var(--border, #2a2f3e);
   border-radius: 8px;
@@ -1879,11 +2261,12 @@ watch(
   overflow: hidden;
   margin-bottom: 6px;
 }
-.poster-upload-zone:hover, .poster-upload-zone.drag-over {
+.poster-upload-zone:hover, .poster-upload-zone.drag-over,
+.logo-upload-zone:hover, .logo-upload-zone.drag-over {
   border-color: rgba(61, 214, 183, 0.6);
   background: rgba(61, 214, 183, 0.05);
 }
-.poster-upload-zone.has-upload {
+.poster-upload-zone.has-upload, .logo-upload-zone.has-upload {
   height: 130px;
   cursor: default;
 }
@@ -1904,7 +2287,8 @@ watch(
   opacity: 0;
   transition: opacity 0.15s;
 }
-.poster-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
+.poster-upload-zone.has-upload:hover .upload-overlay,
+.logo-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
 .upload-reselect, .upload-replace, .upload-remove {
   border: 1px solid rgba(255,255,255,0.3);
   background: rgba(255,255,255,0.15);
@@ -2106,6 +2490,19 @@ watch(
 
 .checkbox-label input[type='checkbox'] {
   cursor: pointer;
+}
+
+.overlay-config-below-row {
+  margin-left: 22px;
+  opacity: 0.85;
+  font-size: 0.9em;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: rgba(61, 214, 183, 0.7);
+  font-style: italic;
+  line-height: 1.4;
 }
 
 .label-chips {

@@ -8,7 +8,8 @@ fair resource allocation across API requests.
 import time
 from collections import defaultdict, deque
 from typing import Dict, Deque, Tuple
-from fastapi import Request, HTTPException, status
+from fastapi import Request, status
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import logging
 
@@ -58,6 +59,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/scan-library": 5,
             "/api/movies": 100,
             "/api/tv-shows": 100,
+
+            # Per-item library endpoints (poster/logo/labels/tmdb for one rating_key)
+            # were falling through to the low default_limit (300/60s) meant for
+            # unlisted, mostly-expensive endpoints. Browsing the grid fires two
+            # requests per visible card (poster ?meta=1 + ?raw=1) -- and "poster
+            # density" (Settings -> General) allows up to 100 items per page, so a
+            # single max-density page already uses ~200 of that 300 budget, and
+            # flipping through more than one page in under a minute 429'd every
+            # poster after. Poster/logo are cheap disk-cache reads (not external
+            # API calls in the common case), so a generous limit here is safe --
+            # this bucket also covers /api/movie/{id}/tmdb, which does hit TMDb,
+            # so it isn't fully exempted like /api/batch-progress.
+            "/api/movie": 2000,
+            "/api/tv-show": 2000,
+            "/api/logo": 1500,
 
             # Moderate operations
             "/api/tmdb": 40,  # Match TMDB's own limit
@@ -214,9 +230,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 f"({len(timestamps)}/{limit} requests in {self.window_seconds}s)"
             )
 
-            raise HTTPException(
+            # Return a response directly rather than `raise HTTPException(...)`: this
+            # dispatch() runs inside BaseHTTPMiddleware's own anyio task group, which
+            # sits outside FastAPI's exception-handling layer — a raised HTTPException
+            # here never reaches the handler that turns it into a proper response, it
+            # just becomes an unhandled exception and Starlette reports a generic 500
+            # instead of this intended 429 (a real, live 500 from a rate-limited
+            # request confirmed this in production before this fix).
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={
+                content={
                     "error": "Rate limit exceeded",
                     "limit": limit,
                     "window_seconds": self.window_seconds,

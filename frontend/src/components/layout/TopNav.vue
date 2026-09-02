@@ -41,6 +41,30 @@ const posterCache = ref<Record<string, string | null>>({})
 const versionInfo = ref<VersionInfo | null>(null)
 const apiBase = getApiBase()
 
+type PlexStatus = 'unknown' | 'up' | 'down' | 'unconfigured'
+const plexStatus = ref<PlexStatus>('unknown')
+
+const checkPlexStatus = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/plex-status`)
+    if (res.ok) {
+      const data = await res.json()
+      plexStatus.value = (data.status as PlexStatus) || 'down'
+    } else {
+      plexStatus.value = 'down'
+    }
+  } catch {
+    plexStatus.value = 'down'
+  }
+}
+
+const plexStatusTitle = computed(() => {
+  if (plexStatus.value === 'up') return 'Plex server is online'
+  if (plexStatus.value === 'down') return 'Plex server is unreachable — check that it\'s running and PLEX_URL is correct'
+  if (plexStatus.value === 'unconfigured') return 'Plex URL not configured yet'
+  return 'Checking Plex server status...'
+})
+
 const normalizePoster = (url: string | null | undefined) => {
   if (!url) return null
   return url.startsWith('http') ? url : `${apiBase}${url}`
@@ -158,19 +182,28 @@ const unsupportedTagTitle = computed(() => {
 })
 
 let posterCacheInterval: number | null = null
+let plexStatusInterval: number | null = null
 
 onMounted(() => {
   loadPosterCache()
   fetchVersionInfo()
+  checkPlexStatus()
   // Watch for changes to the poster cache in sessionStorage every 500ms
   posterCacheInterval = window.setInterval(() => {
     loadPosterCache()
   }, 500)
+  // Poll Plex reachability every 30s so a downed server shows up quickly
+  plexStatusInterval = window.setInterval(() => {
+    checkPlexStatus()
+  }, 30000)
 })
 
 onUnmounted(() => {
   if (posterCacheInterval !== null) {
     clearInterval(posterCacheInterval)
+  }
+  if (plexStatusInterval !== null) {
+    clearInterval(plexStatusInterval)
   }
 })
 
@@ -187,6 +220,41 @@ onUnmounted(() => {
         </svg>
       </button>
       <div class="logo">
+        <svg class="logo-icon" width="24" height="24" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <g transform="translate(128,140)">
+            <g transform="rotate(-16)">
+              <rect x="-95" y="-85" width="100" height="150" rx="10" fill="#334155"/>
+            </g>
+            <g transform="rotate(16)">
+              <rect x="-5" y="-85" width="100" height="150" rx="10" fill="#334155"/>
+            </g>
+            <g transform="rotate(-8)">
+              <rect x="-80" y="-90" width="100" height="150" rx="10" fill="#64748B"/>
+            </g>
+            <g transform="rotate(8)">
+              <rect x="-20" y="-90" width="100" height="150" rx="10" fill="#64748B"/>
+            </g>
+            <rect x="-52" y="-98" width="104" height="150" rx="10" fill="#3B82F6"/>
+            <g clip-path="url(#topNavLogoClip)">
+              <rect x="-42" y="-88" width="84" height="76" fill="#60A5FA"/>
+              <circle cx="18" cy="-64" r="14" fill="#EFF6FF" opacity="0.9"/>
+              <path d="M-42 -12 L-20 -44 L-4 -26 L14 -56 L42 -12 Z" fill="#1D4ED8"/>
+            </g>
+            <clipPath id="topNavLogoClip">
+              <rect x="-42" y="-88" width="84" height="76" rx="3"/>
+            </clipPath>
+            <rect x="-42" y="-4" width="60" height="7" rx="3.5" fill="#F8FAFC"/>
+            <rect x="-42" y="10" width="78" height="5" rx="2.5" fill="#F8FAFC" opacity="0.6"/>
+            <rect x="-42" y="22" width="48" height="4" rx="2" fill="#F8FAFC" opacity="0.4"/>
+            <!-- Sparkle sits outside the colored cards, directly on the surrounding nav
+                 background -- unlike the text bars/circle above (which are always on the
+                 blue card, so a fixed near-white is safe), this needs to track the theme's
+                 own text color or it goes invisible against a light theme's light background. -->
+            <g fill="var(--text-primary, #F8FAFC)">
+              <path d="M96 -95 L102 -80 L117 -74 L102 -68 L96 -53 L90 -68 L75 -74 L90 -80 Z"/>
+            </g>
+          </g>
+        </svg>
         <span class="logo-text" :class="{ 'logo-warn': isUnsupportedTag }">Simposter</span>
         <div v-if="isUnsupportedTag" class="unsupported-tag-badge" :title="unsupportedTagTitle">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -206,6 +274,10 @@ onUnmounted(() => {
           {{ displayVersion }}
           <span v-if="versionInfo?.update_available" class="update-dot"></span>
         </button>
+        <div class="plex-status-badge" :class="plexStatus" :title="plexStatusTitle">
+          <span class="plex-status-dot"></span>
+          <span class="plex-status-label">Plex</span>
+        </div>
       </div>
     </div>
     <div class="search-container">
@@ -297,6 +369,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.logo-icon {
+  flex-shrink: 0;
+  border-radius: 5px;
 }
 
 .logo-text {
@@ -398,6 +475,52 @@ onUnmounted(() => {
     opacity: 0.6;
     transform: scale(0.8);
   }
+}
+
+.plex-status-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.plex-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6b7280;
+  flex-shrink: 0;
+}
+
+.plex-status-badge.up {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #86efac;
+}
+.plex-status-badge.up .plex-status-dot {
+  background: #22c55e;
+}
+
+.plex-status-badge.down {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+.plex-status-badge.down .plex-status-dot {
+  background: #ef4444;
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.plex-status-badge.unconfigured .plex-status-dot,
+.plex-status-badge.unknown .plex-status-dot {
+  background: #6b7280;
 }
 
 .search-container {
@@ -534,6 +657,14 @@ onUnmounted(() => {
 
   .version-badge {
     display: none;
+  }
+
+  .plex-status-label {
+    display: none;
+  }
+
+  .plex-status-badge {
+    padding: 4px;
   }
 
   .search-container {

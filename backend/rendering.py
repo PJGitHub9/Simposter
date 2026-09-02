@@ -232,17 +232,53 @@ def render_poster_image(
     if options is None:
         options = {}
 
-    # 1) Download images
-    bg = _download_image(background_url)
+    if template_id == "kometa":
+        # Collections have no photo background source (no TMDb/Fanart art for a
+        # Plex collection) — synthesize a flat-color canvas instead of fetching one,
+        # unless a background texture was chosen (kometa_texture_url), in which case
+        # that image IS the background — fetched independently of the logo, so a
+        # texture and a real logo can be composited together (texture underneath,
+        # logo on top, same as they would be over a flat color).
+        texture_url = options.get("kometa_texture_url")
+        if texture_url:
+            try:
+                bg = _download_image(texture_url).convert("RGB")
+            except ValueError:
+                logger.warning("Texture download failed, falling back to flat color: %s", texture_url)
+                texture_url = None
+        if not texture_url:
+            from .templates.universal import _hex_to_rgb
+            base_color = _hex_to_rgb(str(options.get("kometa_base_color", "#202020")))
+            bg = Image.new("RGB", (2000, 3000), base_color)
 
-    logo = None
-    if logo_url:
-        try:
-            logo = _download_image(logo_url)
-        except ValueError:
-            # If logo fails, we just render without a logo
-            logger.warning("Logo download failed, continuing without logo: %s", logo_url)
+        if logo_url:
+            try:
+                logo = _download_image(logo_url)
+            except ValueError:
+                logger.warning("Logo download failed, continuing without logo: %s", logo_url)
+                logo = None
+        else:
             logo = None
+    # 1) Download images — poster and logo are independent, so fetch them in parallel
+    # rather than one after the other. Matters most on a cold cache (e.g. the first
+    # preview after opening the editor for a movie); once both are cached, this is
+    # already near-instant either way. Same downloads, same decode, same pixels —
+    # purely a wait-time change.
+    elif logo_url:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            bg_future = executor.submit(_download_image, background_url)
+            logo_future = executor.submit(_download_image, logo_url)
+            bg = bg_future.result()
+            try:
+                logo = logo_future.result()
+            except ValueError:
+                # If logo fails, we just render without a logo
+                logger.warning("Logo download failed, continuing without logo: %s", logo_url)
+                logo = None
+    else:
+        bg = _download_image(background_url)
+        logo = None
 
     logger.debug(
         "[RENDER] template=%s bg=%s logo=%s options_keys=%s",
@@ -286,29 +322,28 @@ def render_with_overlay_cache(
         try:
             logger.info(f"[CACHE] Overlay cache enabled and found: {overlay_path}")
 
-            # Download poster and logo in parallel
+            # Download poster and logo in parallel, reusing the shared _download_image()
+            # helper instead of a bespoke fetch — gives this path the same LRU byte cache
+            # (so repeated renders of the same poster/logo skip the network entirely after
+            # the first fetch), retry/backoff on slow connections, SSRF validation, and SVG
+            # logo support that the non-cached render path already had. No change to the
+            # decoded pixels themselves, just fewer/faster fetches.
             from concurrent.futures import ThreadPoolExecutor
-            
-            def download_image(url: str):
-                """Helper to download image from URL."""
-                resp = requests.get(url, timeout=20)
-                resp.raise_for_status()
-                return BytesIO(resp.content)
-            
+
             bg = None
-            logo_bytes = None
-            
+            logo_img = None
+
             with ThreadPoolExecutor(max_workers=2) as executor:
                 # Submit both downloads
-                bg_future = executor.submit(download_image, poster_url)
-                logo_future = executor.submit(download_image, logo_url) if logo_url else None
-                
+                bg_future = executor.submit(_download_image, poster_url)
+                logo_future = executor.submit(_download_image, logo_url) if logo_url else None
+
                 # Get background (always needed)
-                bg = Image.open(bg_future.result()).convert("RGBA")
-                
+                bg = bg_future.result()
+
                 # Get logo if present
                 if logo_future:
-                    logo_bytes = logo_future.result()
+                    logo_img = logo_future.result()
 
             # Base canvas with poster zoom/shift
             canvas_w, canvas_h = 2000, 3000
@@ -332,9 +367,19 @@ def render_with_overlay_cache(
                 canvas_rgb = _add_grain(canvas_rgb, grain_amount)
                 canvas = canvas_rgb.convert("RGBA")
 
+            # ---- Overlay configs, "below logo+text" bucket (must mirror uniformlogo.py) ----
+            from .templates.universal import apply_overlay_config
+            metadata = render_options.get("metadata", {})
+            overlay_config_ids = render_options.get("overlay_config_ids") or []
+            overlay_config_ids_below = [
+                cid for cid in (render_options.get("overlay_config_ids_below") or []) if cid in overlay_config_ids
+            ]
+            if overlay_config_ids_below:
+                canvas = apply_overlay_config(canvas, None, template_id, metadata, overlay_config_ids_below)
+
             # Logo handling
-            if logo_url and logo_bytes:
-                logo = Image.open(logo_bytes).convert("RGBA")
+            if logo_url and logo_img:
+                logo = logo_img
 
                 logo_mode = str(render_options.get("logo_mode", "stock") or "stock")
                 logo_hex = str(render_options.get("logo_hex", "#FFFFFF") or "#FFFFFF")
@@ -392,7 +437,19 @@ def render_with_overlay_cache(
                     else:
                         y = cy - new_h // 2
 
-                    canvas.paste(logo_res, (x, y), logo_res)
+                    if render_options.get("uniform_logo_shadow_enabled", False):
+                        from .drop_shadow import add_drop_shadow
+                        shadowed, pad = add_drop_shadow(
+                            logo_res,
+                            opacity_pct=float(render_options.get("uniform_logo_shadow_opacity", 60)),
+                            angle_deg=float(render_options.get("uniform_logo_shadow_angle", -45)),
+                            distance_px=float(render_options.get("uniform_logo_shadow_distance", 8)),
+                            size_px=float(render_options.get("uniform_logo_shadow_size", 15)),
+                            shadow_color=_hex_to_rgb(str(render_options.get("uniform_logo_shadow_color", "#000000"))),
+                        )
+                        canvas.paste(shadowed, (x - pad, y - pad), shadowed)
+                    else:
+                        canvas.paste(logo_res, (x, y), logo_res)
 
                     logger.info("[CACHE] Applied uniformlogo positioning with cached overlay")
                 else:
@@ -413,12 +470,10 @@ def render_with_overlay_cache(
                     border_color = render_options.get("border_color", "#FFFFFF")
                     canvas = ImageOps.expand(canvas, border=px, fill=border_color)
 
-            # Apply overlay configurations (resolution badges, codec badges, etc.)
-            from .templates.universal import apply_overlay_config
-            metadata = render_options.get("metadata", {})
-            overlay_config_ids = render_options.get("overlay_config_ids")
-            if preset_id or overlay_config_ids:
-                canvas = apply_overlay_config(canvas, preset_id, template_id, metadata, overlay_config_ids)
+            # Apply overlay configurations, "above logo+text" bucket (mirrors uniformlogo.py)
+            overlay_config_ids_above = [cid for cid in overlay_config_ids if cid not in overlay_config_ids_below]
+            if preset_id or overlay_config_ids_above:
+                canvas = apply_overlay_config(canvas, preset_id, template_id, metadata, overlay_config_ids_above)
 
             logger.info("[CACHE] Successfully rendered with cached overlay")
             return canvas.convert("RGB")
@@ -448,46 +503,64 @@ def generate_overlay(
     # Extract options with defaults
     matte_height_ratio = float(options.get("matte_height_ratio", 0.0))
     fade_height_ratio = float(options.get("fade_height_ratio", 0.0))
+    top_matte_height_ratio = float(options.get("top_matte_height_ratio", 0.0))
+    top_fade_height_ratio = float(options.get("top_fade_height_ratio", 0.0))
     vignette_strength = float(options.get("vignette_strength", 0.0))
     v12_wash_strength = float(options.get("v12_wash_strength", 0.0))
-    
+
     # Clamp values
     def clamp(v, lo, hi):
         return max(lo, min(hi, v))
-    
+
     matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
     fade_height_ratio = clamp(fade_height_ratio, 0.0, 1.0)
+    top_matte_height_ratio = clamp(top_matte_height_ratio, 0.0, 0.5)
+    top_fade_height_ratio = clamp(top_fade_height_ratio, 0.0, 1.0)
     vignette_strength = clamp(vignette_strength, 0.0, 1.0)
     v12_wash_strength = clamp(v12_wash_strength, 0.0, 1.0)
     
     # Start with transparent canvas
     overlay = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     
-    # --- MATTE + FADE ---
-    # These create opacity gradients that darken the bottom portion
+    # --- MATTE + FADE (bottom + top) ---
+    # These create opacity gradients that darken the bottom and/or top portion
     matte_h = int(canvas_h * matte_height_ratio)
     fade_h = int(canvas_h * fade_height_ratio)
-    
-    if matte_h > 0 or fade_h > 0:
+    top_matte_h = int(canvas_h * top_matte_height_ratio)
+    top_fade_h = int(canvas_h * top_fade_height_ratio)
+
+    if matte_h > 0 or fade_h > 0 or top_matte_h > 0 or top_fade_h > 0:
         # Create black layer with alpha gradient
         matte_layer = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
         pixels = matte_layer.load()
-        
+
         matte_start = canvas_h - matte_h
         fade_start = max(0, matte_start - fade_h)
-        
+        top_matte_end = top_matte_h
+        top_fade_end = min(canvas_h, top_matte_end + top_fade_h)
+
         for y in range(canvas_h):
             if y >= matte_start:
-                alpha = 255  # solid black
+                bottom_alpha = 255  # solid black
             elif y >= fade_start:
                 t = (y - fade_start) / max(fade_h, 1)
-                alpha = int(255 * t)
+                bottom_alpha = int(255 * t)
             else:
-                alpha = 0  # transparent
-            
+                bottom_alpha = 0  # transparent
+
+            if y < top_matte_end:
+                top_alpha = 255  # solid black
+            elif y < top_fade_end:
+                t = (top_fade_end - y) / max(top_fade_h, 1)  # mirror of the bottom ramp
+                top_alpha = int(255 * t)
+            else:
+                top_alpha = 0  # transparent
+
+            alpha = max(bottom_alpha, top_alpha)
+
             for x in range(canvas_w):
                 pixels[x, y] = (0, 0, 0, alpha)
-        
+
         overlay = Image.alpha_composite(overlay, matte_layer)
     
     # --- VIGNETTE ---

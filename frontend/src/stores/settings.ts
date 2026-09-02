@@ -64,12 +64,14 @@ export type SchedulerSettings = {
 export type AutomationSettings = {
   webhookAutoSend: boolean
   webhookAutoLabels: string
+  labelToAdd?: string
   webhookAlwaysRegenerateSeason: boolean
   webhookSecret?: string
   existingContentMode?: 'resend' | 'regenerate'
   retryUntilTemplateMet?: boolean
   retryIntervalHours?: number
   retryMaxAttempts?: number
+  kometaCompatibility?: boolean
 }
 
 export type NotificationSettings = {
@@ -100,6 +102,7 @@ export type UISettings = {
   saveLocation?: string  // Legacy field for backwards compatibility
   movieSaveLocation?: string
   tvShowSaveLocation?: string
+  collectionSaveLocation?: string
   tvShowSaveMode?: string
   saveBatchInSubfolder?: boolean
   saveToAssetFolderOnSend?: boolean
@@ -130,6 +133,7 @@ const loaded = ref(false)
 const saveLocation = ref<string>('/output')  // Legacy, kept for backwards compatibility
 const movieSaveLocation = ref<string>('/config/output/{library}/{title}.jpg')
 const tvShowSaveLocation = ref<string>('/config/output/{library}/{title} ({year}).jpg')
+const collectionSaveLocation = ref<string>('/config/output/{library}/Collections/{title}.jpg')
 const tvShowSaveMode = ref<string>('flat')
 const saveBatchInSubfolder = ref<boolean>(false)
 const saveToAssetFolderOnSend = ref<boolean>(false)
@@ -141,7 +145,7 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0 })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', labelToAdd: '', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0, kometaCompatibility: false })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
   discordWebhookUrl: '',
@@ -190,6 +194,7 @@ async function loadSettings() {
     // New separate save locations with backwards compatibility
     movieSaveLocation.value = data.movieSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title}.jpg"
     tvShowSaveLocation.value = data.tvShowSaveLocation ?? data.saveLocation ?? "/config/output/{library}/{title} ({year}).jpg"
+    collectionSaveLocation.value = data.collectionSaveLocation ?? "/config/output/{library}/Collections/{title}.jpg"
     tvShowSaveMode.value = data.tvShowSaveMode ?? 'flat'
     saveBatchInSubfolder.value = !!data.saveBatchInSubfolder
     saveToAssetFolderOnSend.value = !!data.saveToAssetFolderOnSend
@@ -230,6 +235,8 @@ async function loadSettings() {
     automation.value = {
       webhookAutoSend: data.automation?.webhookAutoSend ?? true,
       webhookAutoLabels: data.automation?.webhookAutoLabels ?? 'Simposter',
+      labelToAdd: data.automation?.labelToAdd ?? '',
+      kometaCompatibility: data.automation?.kometaCompatibility ?? false,
       webhookAlwaysRegenerateSeason: data.automation?.webhookAlwaysRegenerateSeason ?? false,
       webhookSecret: data.automation?.webhookSecret ?? '',
       existingContentMode: data.automation?.existingContentMode ?? 'regenerate',
@@ -277,6 +284,7 @@ async function saveSettings() {
       saveLocation: saveLocation.value,
       movieSaveLocation: movieSaveLocation.value,
       tvShowSaveLocation: tvShowSaveLocation.value,
+      collectionSaveLocation: collectionSaveLocation.value,
       tvShowSaveMode: tvShowSaveMode.value,
       saveBatchInSubfolder: saveBatchInSubfolder.value,
       saveToAssetFolderOnSend: saveToAssetFolderOnSend.value,
@@ -336,6 +344,7 @@ export function useSettingsStore() {
     saveLocation,
     movieSaveLocation,
     tvShowSaveLocation,
+    collectionSaveLocation,
     tvShowSaveMode,
     saveBatchInSubfolder,
     saveToAssetFolderOnSend,

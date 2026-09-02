@@ -1,9 +1,9 @@
-# backend/api/save.py
 from fastapi import APIRouter, HTTPException
-from typing import Optional
+from typing import Optional, Tuple
+from io import BytesIO
 from PIL import Image, PngImagePlugin
 
-from ..config import logger
+from ..config import logger, get_media_folder_name
 from ..rendering import render_poster_image
 from ..schemas import SaveRequest
 from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, PathTraversalError
@@ -39,6 +39,89 @@ def get_output_format_settings() -> dict:
         return {"format": "webp", "ext": ".webp", "pil_format": "WEBP", "quality": webp_quality}
     else:
         return {"format": "jpg", "ext": ".jpg", "pil_format": "JPEG", "quality": jpg_quality}
+
+
+# Plex's /posters upload endpoint rejects payloads over roughly 10MB (returns a
+# 500, not a helpful "too large" error). Leave headroom under the real cap.
+_PLEX_UPLOAD_SIZE_LIMIT = 9_500_000
+
+
+def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
+    """Encode a freshly-rendered poster for upload to Plex's /posters endpoint.
+
+    PNG (lossless) by default, regardless of the user's local save format
+    setting — a Plex upload is a one-time transfer, not a disk-space-constrained
+    archive copy, so there's no reason to introduce JPEG generation loss when we
+    don't have to. Always flattened to RGB first (the render pipeline returns
+    RGBA — every pixel ends up fully opaque, but the file would otherwise carry
+    a real, functionally meaningless alpha channel).
+
+    Tiered PNG compression effort, not a tiered quality — every level from 0-9
+    decodes to byte-for-byte identical pixels, `compress_level` only trades CPU
+    time for a smaller file. Grain/matte effects compress poorly (and slowly)
+    under PNG at this canvas size, so a max-effort level-9 encode on every single
+    send was measured taking several seconds even though the overwhelming
+    majority of posters land well under Plex's size cap either way. Try the fast,
+    default level first; only pay for the slow max-effort pass on the rare poster
+    where the fast attempt doesn't already fit. If even level 9 doesn't fit,
+    falls back to a high-quality JPEG, which reliably stays well under the limit
+    (this is the one genuinely lossy step, unchanged from before, and unaffected
+    by any of this — it's Plex's ~10MB upload cap that forces it, not the PNG
+    encode being fast or slow)."""
+    from .. import database as db
+
+    jpg_quality = 95
+    try:
+        settings_data = db.get_ui_settings()
+        if settings_data and "imageQuality" in settings_data:
+            jpg_quality = settings_data["imageQuality"].get("jpgQuality", 95)
+    except Exception:
+        pass
+
+    rgb = img.convert("RGB")
+
+    buf = BytesIO()
+    rgb.save(buf, "PNG", compress_level=6)
+    png_bytes = buf.getvalue()
+    if len(png_bytes) <= _PLEX_UPLOAD_SIZE_LIMIT:
+        return png_bytes, "image/png"
+
+    # Fast pass didn't fit — worth paying for max compression before giving up on PNG.
+    buf_slow = BytesIO()
+    rgb.save(buf_slow, "PNG", compress_level=9)
+    png_bytes_slow = buf_slow.getvalue()
+    if len(png_bytes_slow) <= _PLEX_UPLOAD_SIZE_LIMIT:
+        return png_bytes_slow, "image/png"
+
+    logger.warning(
+        "[PLEX] Rendered PNG (%.1fMB even at max compression) exceeds Plex's upload size limit, falling back to JPEG",
+        len(png_bytes_slow) / 1_000_000,
+    )
+    buf2 = BytesIO()
+    rgb.save(buf2, "JPEG", quality=max(jpg_quality, 98), subsampling=0)
+    return buf2.getvalue(), "image/jpeg"
+
+
+def normalize_logo_for_plex(logo_bytes: bytes, fallback_content_type: str = "image/png") -> Tuple[bytes, str]:
+    """Normalize logo bytes through PIL before upload to Plex's clearLogos endpoint,
+    rather than forwarding raw bytes from an arbitrary source (TMDb/Fanart/upload)
+    untouched. Rules out source format quirks (indexed color, ICC profiles,
+    interlacing, unusual bit depth) that have caused logos to appear cropped once
+    in Plex despite looking correct everywhere in Simposter, without touching
+    dimensions/aspect ratio. Falls back to the original bytes/content-type if the
+    image can't be parsed, rather than failing the upload outright.
+
+    Every code path that uploads a logo to Plex — the standalone "Send Logo"
+    button, and logo uploads during batch/webhook/retry/auto-generate sends —
+    must go through this rather than posting fetched bytes directly."""
+    try:
+        img = Image.open(BytesIO(logo_bytes)).convert("RGBA")
+        buf = BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue(), "image/png"
+    except Exception as e:
+        logger.warning("[PLEX] Failed to normalize logo image, uploading raw bytes instead: %s", e)
+        return logo_bytes, fallback_content_type
 
 
 def embed_library_metadata(
@@ -153,14 +236,25 @@ def api_save(req: SaveRequest):
 
     fmt_settings = get_output_format_settings()
 
+    # {folder} template variable: resolve the real on-disk folder name from Plex.
+    # get_media_folder_name() routes to the movie or show-level resolver based on
+    # is_tv (see backend/config.py) -- collections have no single <Part>/episode
+    # file to derive one from, so they're excluded here and
+    # apply_save_location_variables() falls back to {title} automatically.
+    folder_name = None
+    if req.rating_key and not req.is_collection:
+        folder_name = get_media_folder_name(req.rating_key, req.is_tv)
+
+    media_type = "collection" if req.is_collection else ("tv-show" if req.is_tv else "movie")
     ctx = SaveContext(
-        media_type="tv-show" if req.is_tv else "movie",
+        media_type=media_type,
         title=req.movie_title,
         year=req.movie_year,
         rating_key=req.rating_key,
         library_label=library_label,
         season=req.season_index if req.is_tv else None,
         filename_override=req.filename,
+        folder_name=folder_name,
     )
     try:
         out_path = resolve_save_path(ctx, fmt_settings["ext"])
@@ -212,7 +306,7 @@ def api_save(req: SaveRequest):
         })
         exif[0x9286] = metadata_json.encode('utf-8')  # UserComment field
         exif_bytes = exif.tobytes()
-        img_rgb.save(out_path, "JPEG", quality=fmt_settings["quality"], exif=exif_bytes)
+        img_rgb.save(out_path, "JPEG", quality=fmt_settings["quality"], exif=exif_bytes, subsampling=0)
 
     logger.info("Saved poster to %s (library: %s)", out_path, library_label)
     return {"status": "ok", "saved_path": out_path}

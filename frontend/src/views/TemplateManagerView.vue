@@ -3,6 +3,7 @@ import { onMounted, ref, computed } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useSettingsStore } from '@/stores/settings'
+import { copyToClipboard } from '@/services/clipboard'
 
 type Preset = {
   id: string
@@ -23,13 +24,14 @@ type PresetFallback = {
 
 const apiBase = getApiBase()
 const settings = useSettingsStore()
-const { error: showError } = useNotification()
+const { error: showError, success: showSuccess } = useNotification()
 
 const presets = ref<TemplatePresets>({})
 const loading = ref(false)
 const exporting = ref(false)
 const importing = ref(false)
 const importText = ref('')
+const importingDefaults = ref(false)
 const fallbackPosterFilter = ref('all')
 const fallbackLogoFilter = ref('all')
 const fallbackLogoMode = ref('first')
@@ -158,8 +160,11 @@ const hasSeasonOptions = (preset: Preset) => {
 
 const getActiveOpts = (key: string, preset: Preset): Record<string, unknown> => {
   const tab = getPresetTab(key)
+  // season_options may be a sparse diff (only the fields that differ from options) rather
+  // than a full copy — merge it on top of options so the season tab always displays a
+  // complete, correct set of values instead of one missing anything not in the diff.
   return (tab === 'season' && hasSeasonOptions(preset))
-    ? preset.season_options as Record<string, unknown>
+    ? { ...preset.options, ...(preset.season_options as Record<string, unknown>) }
     : preset.options
 }
 
@@ -319,7 +324,8 @@ const handleCopyCompact = async () => {
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     const text = JSON.stringify(data)
-    await navigator.clipboard.writeText(text)
+    const ok = await copyToClipboard(text)
+    if (!ok) throw new Error('Clipboard access is unavailable in this browser context')
   } catch (e) {
     showError(e instanceof Error ? e.message : 'Copy failed')
   } finally {
@@ -391,6 +397,33 @@ const handleImport = async () => {
     showError(e instanceof Error ? e.message : 'Invalid JSON')
   } finally {
     importing.value = false
+  }
+}
+
+// Same starter-preset bundle onboarding imports on first run (backend/api/presets.py's
+// _DEFAULT_PRESETS_TEMPLATE) — offered here too so an existing install can pull them in
+// on demand, e.g. after they were skipped/failed during onboarding, or just to get them
+// back after deleting one. Merges (db.merge_presets) rather than replacing, so it's safe
+// to click more than once — re-importing overwrites same-name-derived IDs with the same
+// content rather than duplicating.
+const handleImportDefaults = async () => {
+  importingDefaults.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/presets/default-template`)
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    const importRes = await fetch(`${apiBase}/api/presets/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    if (!importRes.ok) throw new Error(`API error ${importRes.status}`)
+    await fetchPresets()
+    showSuccess('Imported Simposter defaults!')
+  } catch (e) {
+    showError(e instanceof Error ? e.message : 'Import failed')
+  } finally {
+    importingDefaults.value = false
   }
 }
 
@@ -814,6 +847,9 @@ onMounted(async () => {
               <button class="secondary" @click="importText = ''" :disabled="!importText.trim()">Clear</button>
               <button class="secondary" @click="handleCopyCompact" :disabled="copyingCompact" title="Strip defaults and copy minified JSON to clipboard for sharing">
                 {{ copyingCompact ? 'Copying…' : 'Copy compact' }}
+              </button>
+              <button class="secondary" @click="handleImportDefaults" :disabled="importingDefaults" title="Pull in Simposter's built-in starter presets (same ones offered during onboarding)">
+                {{ importingDefaults ? 'Importing…' : 'Import Simposter defaults' }}
               </button>
             </div>
           </div>

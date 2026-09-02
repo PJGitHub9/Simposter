@@ -15,6 +15,17 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
     canvas = build_base_poster(bg, options)
     W, H = canvas.size
 
+    # ---- Overlay configs, "below logo+text" bucket ----
+    from .universal import apply_overlay_config
+    metadata = options.get("metadata", {})
+    preset_id = options.get("preset_id")
+    overlay_config_ids = options.get("overlay_config_ids") or []
+    overlay_config_ids_below = [
+        cid for cid in (options.get("overlay_config_ids_below") or []) if cid in overlay_config_ids
+    ]
+    if overlay_config_ids_below:
+        canvas = apply_overlay_config(canvas, None, "uniformlogo", metadata, overlay_config_ids_below)
+
     # Handle logo rendering if logo is provided
     if logo is not None:
         # Normalize SVG to raster if needed
@@ -93,7 +104,19 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
         else:  # center
             y = cy - new_h // 2
 
-        canvas.paste(logo_res, (x, y), logo_res)
+        if options.get("uniform_logo_shadow_enabled", False):
+            from ..drop_shadow import add_drop_shadow
+            shadowed, pad = add_drop_shadow(
+                logo_res,
+                opacity_pct=float(options.get("uniform_logo_shadow_opacity", 60)),
+                angle_deg=float(options.get("uniform_logo_shadow_angle", -45)),
+                distance_px=float(options.get("uniform_logo_shadow_distance", 8)),
+                size_px=float(options.get("uniform_logo_shadow_size", 15)),
+                shadow_color=_hex_to_rgb(str(options.get("uniform_logo_shadow_color", "#000000"))),
+            )
+            canvas.paste(shadowed, (x - pad, y - pad), shadowed)
+        else:
+            canvas.paste(logo_res, (x, y), logo_res)
 
     # ------------- TEXT OVERLAY (outside logo check) -------------
     text_overlay_enabled = bool(options.get("text_overlay_enabled", False))
@@ -110,12 +133,9 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
             from PIL import ImageOps
             canvas = ImageOps.expand(canvas, border=px, fill=border_color)
 
-    # Apply overlay configurations
-    from .universal import apply_overlay_config
-    metadata = options.get("metadata", {})
-    preset_id = options.get("preset_id")
-    overlay_config_ids = options.get("overlay_config_ids")
-    if preset_id or overlay_config_ids:
-        canvas = apply_overlay_config(canvas, preset_id, "uniformlogo", metadata, overlay_config_ids)
+    # Apply overlay configurations, "above logo+text" bucket (unchanged position)
+    overlay_config_ids_above = [cid for cid in overlay_config_ids if cid not in overlay_config_ids_below]
+    if preset_id or overlay_config_ids_above:
+        canvas = apply_overlay_config(canvas, preset_id, "uniformlogo", metadata, overlay_config_ids_above)
 
     return canvas

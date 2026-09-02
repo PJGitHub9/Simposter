@@ -72,6 +72,14 @@ def api_save_overlay_config(req: OverlayConfigSaveRequest):
         raise HTTPException(500, "Failed to save overlay configuration")
 
 
+@router.get("/overlay-configs/{config_id}/usage")
+def api_get_overlay_config_usage(config_id: str):
+    """List presets that currently reference this overlay config, for the
+    delete-confirmation warning."""
+    presets = db.get_presets_using_overlay_config(config_id)
+    return {"presets": presets, "count": len(presets)}
+
+
 @router.delete("/overlay-configs/{config_id}")
 def api_delete_overlay_config(config_id: str):
     """Delete an overlay configuration."""
@@ -276,13 +284,20 @@ def api_rescan_overlay_assets():
 
 @router.get("/fonts")
 def api_list_fonts():
-    """List available font files from config and bundled font directories."""
+    """List available font files from config/bundled directories, already-cached
+    Kometa Creator default fonts, and the full set of Kometa default font names
+    (fetched-and-cached on first actual use — see universal.py's
+    _load_remote_kometa_font() — so they're listed as selectable immediately
+    even before that first fetch happens)."""
+    from ..templates.universal import _KOMETA_REMOTE_FONTS, _kometa_fonts_cache_dir
+
     font_extensions = {'.ttf', '.otf', '.ttc'}
     font_names: set[str] = set()
 
     search_dirs = [
         Path(settings.CONFIG_DIR) / "fonts",   # User-uploaded fonts
-        BASE_DIR / "config" / "fonts",          # Bundled fonts
+        BASE_DIR / "config" / "fonts",          # Bundled fonts (Docker-seeded from system packages)
+        _kometa_fonts_cache_dir(),               # Already-fetched Kometa Creator default fonts
     ]
 
     for font_dir in search_dirs:
@@ -291,6 +306,9 @@ def api_list_fonts():
         for font_file in font_dir.iterdir():
             if font_file.suffix.lower() in font_extensions and font_file.is_file():
                 font_names.add(font_file.stem)
+
+    # Known Kometa default font names, listed even before first use fetches them
+    font_names.update(Path(fname).stem for fname in _KOMETA_REMOTE_FONTS.values())
 
     return {"fonts": sorted(font_names, key=str.lower)}
 

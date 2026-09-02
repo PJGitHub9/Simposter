@@ -43,6 +43,7 @@ class PreviewRequest(BaseModel):
     logoSource: Optional[str] = None
     disableOverlayCache: Optional[bool] = None
     skip_fallback: Optional[bool] = None  # When True, never apply poster/logo fallback (for manual editor preview)
+    is_collection: Optional[bool] = False  # True for Plex collection posters (Kometa Creator or Simposter Creator on a collection)
 
 
 class SaveRequest(PreviewRequest):
@@ -119,12 +120,18 @@ class AutomationSettings(BaseModel):
     """Settings for automatic poster generation via webhooks"""
     webhookAutoSend: bool = True
     webhookAutoLabels: str = "Simposter"
+    labelToAdd: str = ""  # Optional label applied to a Plex item after a poster is sent
+                           # successfully — the opposite direction from webhookAutoLabels
+                           # (which strips a pre-existing label), see plex_add_label().
     webhookAlwaysRegenerateSeason: bool = False
     webhookSecret: str = ""
     existingContentMode: str = "regenerate"  # "regenerate" or "resend"
     retryUntilTemplateMet: bool = False
     retryIntervalHours: int = 24
     retryMaxAttempts: int = 0
+    kometaCompatibility: bool = False  # When true, any newly-added library automatically
+                                        # gets "Overlay" added to its Default Labels to
+                                        # Remove — see SettingsView.vue's saveSettings()
 
 
 class NotificationSettings(BaseModel):
@@ -154,6 +161,7 @@ class UISettings(BaseModel):
     saveLocation: str = "/config/output/{library}/{title}.jpg"  # Legacy field for backwards compatibility
     movieSaveLocation: str = "/config/output/{library}/{title}.jpg"
     tvShowSaveLocation: str = "/config/output/{library}/{title} ({year}).jpg"
+    collectionSaveLocation: str = "/config/output/{library}/Collections/{title}.jpg"
     saveBatchInSubfolder: bool = False
     tvShowSaveMode: str = "flat"  # "flat" (all in one folder with prefixes) or "nested" (each show in its own folder)
     saveToAssetFolderOnSend: bool = False  # When true, "Send to Plex" also writes the render to the
@@ -185,12 +193,13 @@ class PlexSendRequest(BaseModel):
     template_id: str
     preset_id: str  # ADD THIS
     rating_key: str
-    background_url: str  # Keep for extracting tmdb_id
+    background_url: Optional[str] = None  # Keep for extracting tmdb_id; empty for collections (no photo background)
     logo_url: Optional[str] = None  # Can be removed
     options: Optional[Dict[str, Any]] = None  # Can be removed
     labels: Optional[List[str]] = None
     library_id: Optional[str] = None  # For history tracking
     is_tv: bool = False  # Needed for the "save to asset folder on send" template resolution
+    is_collection: bool = False  # True when sending a Plex collection poster (uses /library/collections/ instead of /library/metadata/)
     season_index: Optional[int] = None  # Set when sending a specific season's poster
 
 
@@ -263,7 +272,7 @@ class BatchRequest(BaseModel):
 
 # Overlay Configuration schemas
 class OverlayElement(BaseModel):
-    type: str  # "video_badge" | "audio_badge" | "edition_badge" | "streaming_platform_badge" | "studio_badge" | "custom_image" | "text_label"
+    type: str  # "video_badge" | "audio_badge" | "edition_badge" | "streaming_platform_badge" | "studio_badge" | "custom_image" | "full_cover_image" | "text_label"
                # Legacy aliases (still render, hidden from UI): "resolution_badge" | "codec_badge" | "label_badge"
     position_x: float = 0.5  # 0.0 to 1.0 (left to right)
     position_y: float = 0.5  # 0.0 to 1.0 (top to bottom)
@@ -273,7 +282,7 @@ class OverlayElement(BaseModel):
     max_height: Optional[int] = None  # Max height in pixels
     scale: Optional[float] = None  # Scale multiplier for images (0.1 to 2.0), applied before width/height
     anchor: Optional[str] = None  # Image anchor: "top-left"|"top-center"|"top-right"|"center-left"|"center"|"center-right"|"bottom-left"|"bottom-center"|"bottom-right" (default: "center")
-    asset_id: Optional[str] = None  # For custom_image: reference to overlay_assets
+    asset_id: Optional[str] = None  # For custom_image/full_cover_image: reference to overlay_assets. full_cover_image ignores position/width/height/scale/anchor — always stretches to the full canvas.
     text: Optional[str] = None  # For text_label: the text to display
     font_family: Optional[str] = None  # For text_label
     font_size: Optional[int] = None  # For text_label

@@ -267,7 +267,7 @@ const timezones = computed(() => {
           <span v-if="apiKeyTestResults?.fanart" :class="['api-test-result', apiKeyTestResults.fanart.includes('error') || apiKeyTestResults.fanart.includes('Error') ? 'error' : 'success']">
             {{ apiKeyTestResults.fanart }}
           </span>
-          <span class="help-text">Optional. Provides high-quality clearlogos and artwork. Get one at <a href="https://fanart.tv/api/" target="_blank">fanart.tv</a></span>
+          <span class="help-text">Optional, but recommended. Provides high-quality clearlogos and artwork — and it's the <strong>only</strong> source of franchise/collection logos, since TMDb doesn't offer any artwork for Collections at all. Without a Fanart key, Collection posters won't be able to auto-find a logo. Get one at <a href="https://fanart.tv/api/" target="_blank">fanart.tv</a></span>
         </label>
       </div>
 

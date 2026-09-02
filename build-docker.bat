@@ -9,12 +9,18 @@ REM Allow an optional tag argument (default: local)
 set DOCKER_TAG=%~1
 if "%DOCKER_TAG%"=="" set DOCKER_TAG=local
 
+REM Detect current git branch (falls back to "unknown" if not in a git repo)
+for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set GIT_BRANCH=%%b
+if "%GIT_BRANCH%"=="" set GIT_BRANCH=unknown
+
 echo Building Simposter Docker image...
 echo Docker tag: %DOCKER_TAG%
+echo Git branch: %GIT_BRANCH%
 
-REM Build Docker image — DOCKER_TAG is baked into build-info.json for runtime branch/tag detection
+REM Build Docker image — DOCKER_TAG/GIT_BRANCH are baked into build-info.json for runtime branch/tag detection
 docker build ^
   --build-arg DOCKER_TAG=%DOCKER_TAG% ^
+  --build-arg GIT_BRANCH=%GIT_BRANCH% ^
   --pull ^
   --rm ^
   -f Dockerfile ^

@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 const props = defineProps<{
   movieSaveLocation: string
   tvShowSaveLocation: string
+  collectionSaveLocation: string
   tvShowSaveMode: string
   saveBatchInSubfolder: boolean
   saveToAssetFolderOnSend: boolean
@@ -18,6 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:movieSaveLocation': [value: string]
   'update:tvShowSaveLocation': [value: string]
+  'update:collectionSaveLocation': [value: string]
   'update:tvShowSaveMode': [value: string]
   'update:saveBatchInSubfolder': [value: boolean]
   'update:saveToAssetFolderOnSend': [value: boolean]
@@ -36,6 +38,11 @@ const localMovieSaveLocation = computed({
 const localTvShowSaveLocation = computed({
   get: () => props.tvShowSaveLocation,
   set: (val) => emit('update:tvShowSaveLocation', val)
+})
+
+const localCollectionSaveLocation = computed({
+  get: () => props.collectionSaveLocation,
+  set: (val) => emit('update:collectionSaveLocation', val)
 })
 
 const localTvShowSaveMode = computed({
@@ -82,9 +89,12 @@ interface SavePreset {
 }
 
 // The {filename} token resolves to "poster" (movies, TV series poster) or "SeasonNN"
-// (TV season poster) at save time — see backend/save_paths.py. Kometa has no flat-file
-// convention for season posters, so Flat and Asset folders necessarily produce the
-// same TV layout; they only differ for movies.
+// (TV season poster) at save time — see backend/save_paths.py. Flat and Asset folders
+// both use {filename} for per-item naming (poster vs SeasonNN) so movie and season
+// posters never collide on disk — they differ only in whether that filename sits
+// directly in the library folder (Flat) or inside a per-title subfolder (Asset
+// folders, Kometa's own on-disk convention). "Flat" here is Simposter's own take,
+// not a Kometa convention — Kometa itself has no flat-file layout for season posters.
 const PRESETS: SavePreset[] = [
   {
     key: 'default',
@@ -95,10 +105,10 @@ const PRESETS: SavePreset[] = [
   },
   {
     key: 'flat',
-    label: 'Flat (Kometa)',
-    description: 'Movies as flat "Title (Year).ext" files. TV shows use per-item folders — Kometa has no flat season-poster naming.',
+    label: 'Flat',
+    description: 'Everything as flat "Title (Year) filename.ext" files in one folder per library — no per-title subfolders.',
     movie: '/config/output/{library}/{title} ({year}).jpg',
-    tv: '/config/output/{library}/{title} ({year})/{filename}.jpg',
+    tv: '/config/output/{library}/{title} ({year}) {filename}.jpg',
   },
   {
     key: 'assetFolders',
@@ -145,7 +155,10 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
     <div class="section" :class="{ 'unsaved-changes': imageQualityChanged }">
       <h3>Image Quality</h3>
       <p class="section-description">
-        Configure output format and compression settings
+        Configure output format and compression settings. <strong>This only affects the live Preview and "Save to Disk"</strong> — it does not control the quality of a fresh "Send to Plex".
+      </p>
+      <p class="section-description">
+        Sending to Plex always uses the best quality that fits (PNG when it's under Plex's upload size limit, otherwise a high-quality JPEG), regardless of what's configured here. The one exception: <em>resending</em> an already-saved file (e.g. bulk resend from Local Assets) reuses that file's original bytes as-is — so if you saved it at a lower quality here, a later resend of that same file will still be that lower quality.
       </p>
 
       <label>
@@ -242,7 +255,12 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
           :readonly="!isCustomActive"
         />
         <span class="help-text">
-          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{year}</code>, <code>{key}</code>, <code>{filename}</code>
+          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{folder}</code>, <code>{year}</code>, <code>{key}</code>, <code>{filename}</code>
+        </span>
+        <span class="help-text extra-note">
+          <code>{folder}</code> resolves to the real on-disk folder name Plex knows for this movie or TV show (show-level only, not individual seasons)
+          (independent of Plex's display-language title) — falls back to <code>{title}</code> if it
+          can't be resolved.
         </span>
       </label>
 
@@ -255,12 +273,29 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
           :readonly="!isCustomActive"
         />
         <span class="help-text">
-          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{year}</code>, <code>{season}</code>, <code>{filename}</code>
+          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{folder}</code>, <code>{year}</code>, <code>{season}</code>, <code>{filename}</code>
         </span>
         <span class="help-text extra-note">
           <code>{filename}</code> resolves to <code>poster</code> (movie or show poster) or <code>SeasonNN</code> (a season
           poster) — Kometa's exact asset-naming convention. Templates without <code>{filename}</code> fall back to the
           "TV Show File Structure" setting below instead.
+        </span>
+      </label>
+
+      <label>
+        <span class="label-text">Collection Save Location</span>
+        <input
+          v-model="localCollectionSaveLocation"
+          type="text"
+          placeholder="/config/output/{library}/Collections/{title}.jpg"
+          :readonly="!isCustomActive"
+        />
+        <span class="help-text">
+          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{key}</code>, <code>{filename}</code>
+        </span>
+        <span class="help-text extra-note">
+          Used when saving or sending a Plex collection poster (Simposter Creator or Kometa Creator).
+          <code>{title}</code> is the collection's name — collections have no year or season.
         </span>
       </label>
 
@@ -315,9 +350,16 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
         </div>
 
         <div class="example-item">
-          <div class="example-label">Flat (Kometa) — movie:</div>
+          <div class="example-label">Flat — movie:</div>
           <code>/config/output/{library}/{title} ({year}).jpg</code>
           <div class="example-result">→ /config/output/Movies/Inception (2010).jpg</div>
+        </div>
+
+        <div class="example-item">
+          <div class="example-label">Flat — TV show:</div>
+          <code>/config/output/{library}/{title} ({year}) {filename}.jpg</code>
+          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008) poster.jpg</div>
+          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008) Season01.jpg</div>
         </div>
 
         <div class="example-item">
@@ -332,6 +374,12 @@ const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includ
           <div class="example-label">Organized by year folder (Custom):</div>
           <code>/config/output/{library}/{year}/{title}.jpg</code>
           <div class="example-result">→ /config/output/Movies/2024/Dune Part Two.jpg</div>
+        </div>
+
+        <div class="example-item">
+          <div class="example-label">Using the real on-disk folder name (Custom):</div>
+          <code>/config/output/{library}/{folder}/poster.jpg</code>
+          <div class="example-result">→ /config/output/Films/Before Sunrise (1995)/poster.jpg</div>
         </div>
       </div>
     </div>

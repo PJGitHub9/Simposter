@@ -6,6 +6,7 @@ from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger
 from ..schemas import PresetDeleteRequest, PresetSaveRequest
 from .. import database as db
 from .template_manager import _get_fallback_settings
+from ..middleware.validation import validate_preset_id
 
 router = APIRouter()
 
@@ -80,118 +81,357 @@ def api_presets():
         return load_presets()
 
 
+def _slugify_preset_name(name: str) -> str:
+    """Turn a display name into a preset id — same charset validate_preset_id() allows."""
+    import re as _re
+    slug = _re.sub(r"\s+", "-", name.strip())
+    slug = _re.sub(r"[^a-zA-Z0-9_-]", "", slug)
+    return slug.lower() or "preset"
+
+
+# Built-in starter presets offered during onboarding (fire-and-forget import on the
+# wizard's finish step — see OnboardingModal.vue's importDefaultPreset()). Never applied
+# to an existing install automatically outside of onboarding; a returning user who already
+# has presets never sees this endpoint called.
+#
+# "simposter-main" (uniformlogo) is this project's own reference preset (previously named
+# "pj" during development) — the one shown as "Default" in the onboarding preview card.
+# "budget-daps", "textless-border", and "stock-poster" are alternate uniformlogo looks;
+# "Plex-Requests" and "LEAVING-SOON" are Kometa Creator presets for the two most common
+# Overlay-style collection use cases. All six ship together so a new user's Template
+# Manager isn't empty on first run.
+_DEFAULT_PRESETS_TEMPLATE: dict = {
+    "kometa": {
+        "presets": [
+            {
+                "name": "Plex-Requests",
+                "options": {
+                    "kometa_base_color": "#26497f",
+                    "kometa_white_wash": False,
+                    "kometa_logo_width": 1500,
+                    "kometa_logo_offset_y": -500,
+                    "kometa_texture_url": "",
+                    "matte_height_ratio": 0,
+                    "fade_height_ratio": 0,
+                    "top_matte_height_ratio": 0,
+                    "top_fade_height_ratio": 0,
+                    "kometa_center_fade_strength": 0.85,
+                    "grain_amount": 0,
+                    "border_enabled": False,
+                    "border_px": 0,
+                    "border_color": "#ffffff",
+                    "text_overlay_enabled": True,
+                    "custom_text": "Collection Name",
+                    "font_family": "Comfortaa-Medium",
+                    "font_size": 195,
+                    "text_color": "#ffffff",
+                    "position_y": 0.7833333333333333,
+                    "letter_spacing": 0,
+                    "poster_filter": "all",
+                    "logo_mode": "first",
+                    "logoSource": "tmdb_fanart",
+                    "kometa_logo_url": "https://raw.githubusercontent.com/Kometa-Team/Defaults-Image-Creation/main/create_defaults/logos_chart/Plex.png",
+                },
+                "season_options": {
+                    "custom_text": "{season}",
+                    "font_family": "Arial",
+                    "font_size": 150,
+                    "position_y": 0.85,
+                    "letter_spacing": 1,
+                    "logo_mode": "none",
+                    "shadow_enabled": False,
+                    "shadow_blur": 0,
+                },
+            },
+            {
+                "name": "LEAVING-SOON",
+                "options": {
+                    "kometa_base_color": "#CD1A20",
+                    "kometa_white_wash": False,
+                    "kometa_logo_width": 1500,
+                    "kometa_logo_offset_y": -500,
+                    "kometa_texture_url": "",
+                    "matte_height_ratio": 0,
+                    "fade_height_ratio": 0,
+                    "top_matte_height_ratio": 0,
+                    "top_fade_height_ratio": 0,
+                    "kometa_center_fade_strength": 0.85,
+                    "grain_amount": 0,
+                    "border_enabled": False,
+                    "border_px": 0,
+                    "border_color": "#ffffff",
+                    "text_overlay_enabled": True,
+                    "custom_text": "MOVIES LEAVING SOON",
+                    "font_family": "Comfortaa-Medium",
+                    "font_size": 250,
+                    "text_color": "#ffffff",
+                    "position_y": 0.7833333333333333,
+                    "letter_spacing": 0,
+                    "poster_filter": "all",
+                    "logo_mode": "first",
+                    "logoSource": "tmdb_fanart",
+                    "kometa_logo_url": "https://raw.githubusercontent.com/Kometa-Team/Defaults-Image-Creation/main/create_defaults/logos_chart/Plex.png",
+                },
+                "season_options": {
+                    "custom_text": "{season}",
+                    "font_family": "Arial",
+                    "font_size": 150,
+                    "position_y": 0.85,
+                    "letter_spacing": 1,
+                    "logo_mode": "none",
+                    "shadow_enabled": False,
+                    "shadow_blur": 0,
+                },
+            },
+        ]
+    },
+    "uniformlogo": {
+        "presets": [
+            {
+                "name": "simposter-main",
+                "options": {
+                    "poster_zoom": 1,
+                    "poster_shift_y": -0.04,
+                    "matte_height_ratio": 0.22,
+                    "fade_height_ratio": 0.21,
+                    "vignette_strength": 0.03,
+                    "grain_amount": 0.22,
+                    "logo_scale": 0.45,
+                    "logo_offset": 0.88,
+                    "uniform_logo_max_w": 1282,
+                    "uniform_logo_max_h": 352,
+                    "uniform_logo_offset_x": 0.5,
+                    "uniform_logo_offset_y": 0.83,
+                    "uniform_logo_h_align": "center",
+                    "uniform_logo_v_align": "center",
+                    "border_enabled": False,
+                    "border_px": 14,
+                    "border_color": "#ffffff",
+                    "overlay_file": "",
+                    "overlay_opacity": 0.4,
+                    "overlay_mode": "screen",
+                    "poster_filter": "textless",
+                    "logo_preference": "white",
+                    "logo_mode": "original",
+                    "logo_hex": "#4b5efc",
+                    "text_overlay_enabled": False,
+                    "custom_text": "",
+                    "font_family": "Arial",
+                    "font_size": 120,
+                    "font_weight": "700",
+                    "text_color": "#ffffff",
+                    "text_align": "center",
+                    "text_transform": "uppercase",
+                    "letter_spacing": 2,
+                    "line_height": 1.2,
+                    "position_y": 0.75,
+                    "shadow_enabled": True,
+                    "shadow_blur": 10,
+                    "shadow_offset_x": 0,
+                    "shadow_offset_y": 4,
+                    "shadow_color": "#000000",
+                    "shadow_opacity": 0.8,
+                    "stroke_enabled": False,
+                    "stroke_width": 4,
+                    "stroke_color": "#000000",
+                    "logoSource": "tmdb_fanart",
+                    "fallbackPosterAction": "template",
+                    "fallbackPosterTemplate": "uniformlogo",
+                    "fallbackPosterPreset": "stock-poster",
+                    "fallbackLogoAction": "template",
+                    "fallbackLogoTemplate": "uniformlogo",
+                    "fallbackLogoPreset": "stock-poster",
+                },
+                "season_options": {
+                    "logo_mode": "none",
+                    "text_overlay_enabled": True,
+                    "custom_text": "{season}",
+                    "font_size": 150,
+                    "letter_spacing": 1,
+                    "position_y": 0.85,
+                    "shadow_enabled": False,
+                    "shadow_blur": 0,
+                },
+            },
+            {
+                "name": "budget-daps",
+                "options": {
+                    "poster_zoom": 1,
+                    "poster_shift_y": 0,
+                    "matte_height_ratio": 0.09,
+                    "fade_height_ratio": 0.1,
+                    "vignette_strength": 0.1,
+                    "grain_amount": 0,
+                    "logo_scale": 0.45,
+                    "logo_offset": 0.86,
+                    "uniform_logo_max_w": 1523,
+                    "uniform_logo_max_h": 360,
+                    "uniform_logo_offset_x": 0.5,
+                    "uniform_logo_offset_y": 0.91,
+                    "border_enabled": False,
+                    "border_px": 11,
+                    "border_color": "#ffffff",
+                    "overlay_file": "",
+                    "overlay_opacity": 0.4,
+                    "overlay_mode": "screen",
+                    "poster_filter": "textless",
+                    "logo_preference": "white",
+                    "logo_mode": "none",
+                    "logo_hex": "#ffffff",
+                    "text_overlay_enabled": True,
+                    "custom_text": "{title}",
+                    "font_family": "Comfortaa-Medium",
+                    "font_size": 128,
+                    "font_weight": "700",
+                    "text_color": "#ffffff",
+                    "text_align": "center",
+                    "text_transform": "uppercase",
+                    "letter_spacing": 0,
+                    "line_height": 1.1,
+                    "position_y": 0.83,
+                    "shadow_enabled": False,
+                    "shadow_blur": 10,
+                    "shadow_offset_x": 0,
+                    "shadow_offset_y": 4,
+                    "shadow_color": "#000000",
+                    "shadow_opacity": 0.8,
+                    "stroke_enabled": True,
+                    "stroke_width": 7,
+                    "stroke_color": "#000000",
+                    "logoSource": "tmdb_fanart",
+                    "uniform_logo_h_align": "center",
+                    "uniform_logo_v_align": "center",
+                    "top_matte_height_ratio": 0.01,
+                    "top_fade_height_ratio": 0.04,
+                    "uniform_logo_shadow_enabled": False,
+                    "uniform_logo_shadow_opacity": 60,
+                    "uniform_logo_shadow_angle": -45,
+                    "uniform_logo_shadow_distance": 8,
+                    "uniform_logo_shadow_size": 15,
+                    "uniform_logo_shadow_color": "#000000",
+                    "text_bbox_enabled": True,
+                },
+                "season_options": {
+                    "custom_text": "{season}",
+                    "font_family": "Arial",
+                    "font_size": 150,
+                    "letter_spacing": 1,
+                    "position_y": 0.85,
+                    "shadow_blur": 0,
+                },
+            },
+            {
+                "name": "textless-border",
+                "options": {
+                    "poster_zoom": 1,
+                    "poster_shift_y": 0,
+                    "matte_height_ratio": 0,
+                    "fade_height_ratio": 0,
+                    "vignette_strength": 0,
+                    "grain_amount": 0,
+                    "logo_scale": 0.45,
+                    "logo_offset": 0.21,
+                    "uniform_logo_max_w": 500,
+                    "uniform_logo_max_h": 200,
+                    "uniform_logo_offset_x": 0.5,
+                    "uniform_logo_offset_y": 0.78,
+                    "border_enabled": True,
+                    "border_px": 13,
+                    "border_color": "#ffffff",
+                    "overlay_file": "",
+                    "overlay_opacity": 0.4,
+                    "overlay_mode": "screen",
+                    "poster_filter": "textless",
+                    "logo_preference": "first",
+                    "logo_mode": "none",
+                    "logo_hex": "#ffffff",
+                },
+                "season_options": {
+                    "text_overlay_enabled": True,
+                    "custom_text": "{season}",
+                    "font_family": "Arial",
+                    "font_size": 150,
+                    "shadow_enabled": False,
+                    "shadow_blur": 0,
+                    "letter_spacing": 1,
+                    "position_y": 0.85,
+                },
+            },
+            {
+                "name": "stock-poster",
+                "options": {
+                    "poster_zoom": 1,
+                    "poster_shift_y": 0,
+                    "matte_height_ratio": 0,
+                    "fade_height_ratio": 0,
+                    "vignette_strength": 0,
+                    "grain_amount": 0,
+                    "logo_scale": 0.2,
+                    "logo_offset": 0.75,
+                    "uniform_logo_max_w": 500,
+                    "uniform_logo_max_h": 200,
+                    "uniform_logo_offset_x": 0.5,
+                    "uniform_logo_offset_y": 0.78,
+                    "border_enabled": False,
+                    "border_px": 12,
+                    "border_color": "#ffffff",
+                    "overlay_file": "",
+                    "overlay_opacity": 0.4,
+                    "overlay_mode": "screen",
+                    "poster_filter": "text",
+                    "logo_preference": "first",
+                    "logo_mode": "none",
+                    "logo_hex": "#ffffff",
+                },
+                "season_options": {
+                    "poster_filter": "textless",
+                    "text_overlay_enabled": False,
+                    "custom_text": "{season}",
+                    "font_family": "Arial",
+                    "font_size": 150,
+                    "font_weight": "700",
+                    "text_color": "#ffffff",
+                    "text_align": "center",
+                    "text_transform": "uppercase",
+                    "letter_spacing": 1,
+                    "line_height": 1.2,
+                    "position_y": 0.85,
+                    "shadow_enabled": False,
+                    "shadow_blur": 0,
+                    "shadow_offset_x": 0,
+                    "shadow_offset_y": 4,
+                    "shadow_color": "#000000",
+                    "shadow_opacity": 0.8,
+                    "stroke_enabled": False,
+                    "stroke_width": 4,
+                    "stroke_color": "#000000",
+                },
+            },
+        ]
+    },
+}
+
+
 @router.get("/presets/default-template")
 def api_presets_default_template():
-    """Return the built-in default preset for new-user onboarding (never auto-imported)."""
-    return {
-        "uniformlogo": {
-            "presets": [
-                {
-                    "id": "default",
-                    "name": "Default",
-                    "options": {
-                        "poster_zoom": 1,
-                        "poster_shift_y": -0.04,
-                        "matte_height_ratio": 0.22,
-                        "fade_height_ratio": 0.21,
-                        "vignette_strength": 0.03,
-                        "grain_amount": 0.22,
-                        "logo_scale": 0.45,
-                        "logo_offset": 0.88,
-                        "uniform_logo_max_w": 1282,
-                        "uniform_logo_max_h": 352,
-                        "uniform_logo_offset_x": 0.5,
-                        "uniform_logo_offset_y": 0.83,
-                        "uniform_logo_h_align": "center",
-                        "uniform_logo_v_align": "center",
-                        "border_enabled": False,
-                        "border_px": 14,
-                        "border_color": "#ffffff",
-                        "overlay_file": "",
-                        "overlay_opacity": 0.4,
-                        "overlay_mode": "screen",
-                        "poster_filter": "textless",
-                        "logo_preference": "white",
-                        "logo_mode": "original",
-                        "logo_hex": "#4b5efc",
-                        "text_overlay_enabled": False,
-                        "custom_text": "",
-                        "font_family": "Arial",
-                        "font_size": 120,
-                        "font_weight": "700",
-                        "text_color": "#ffffff",
-                        "text_align": "center",
-                        "text_transform": "uppercase",
-                        "letter_spacing": 2,
-                        "line_height": 1.2,
-                        "position_y": 0.75,
-                        "shadow_enabled": True,
-                        "shadow_blur": 10,
-                        "shadow_offset_x": 0,
-                        "shadow_offset_y": 4,
-                        "shadow_color": "#000000",
-                        "shadow_opacity": 0.8,
-                        "stroke_enabled": False,
-                        "stroke_width": 4,
-                        "stroke_color": "#000000",
-                        "logoSource": "tmdb_fanart",
-                        "fallbackPosterAction": "template",
-                        "fallbackPosterTemplate": "uniformlogo",
-                        "fallbackPosterPreset": "stock-poster",
-                        "fallbackLogoAction": "template",
-                        "fallbackLogoTemplate": "uniformlogo",
-                        "fallbackLogoPreset": "stock-poster",
-                    },
-                    "season_options": {
-                        "poster_zoom": 1,
-                        "poster_shift_y": -0.04,
-                        "matte_height_ratio": 0.22,
-                        "fade_height_ratio": 0.21,
-                        "vignette_strength": 0.03,
-                        "grain_amount": 0.22,
-                        "logo_scale": 0.45,
-                        "logo_offset": 0.88,
-                        "uniform_logo_max_w": 1282,
-                        "uniform_logo_max_h": 352,
-                        "uniform_logo_offset_x": 0.5,
-                        "uniform_logo_offset_y": 0.83,
-                        "uniform_logo_h_align": "center",
-                        "uniform_logo_v_align": "center",
-                        "border_enabled": False,
-                        "border_px": 14,
-                        "border_color": "#ffffff",
-                        "overlay_file": "",
-                        "overlay_opacity": 0.4,
-                        "overlay_mode": "screen",
-                        "poster_filter": "textless",
-                        "logo_preference": "white",
-                        "logo_mode": "none",
-                        "logo_hex": "#4b5efc",
-                        "text_overlay_enabled": True,
-                        "custom_text": "{season}",
-                        "font_family": "Arial",
-                        "font_size": 150,
-                        "font_weight": "700",
-                        "text_color": "#ffffff",
-                        "text_align": "center",
-                        "text_transform": "uppercase",
-                        "letter_spacing": 1,
-                        "line_height": 1.2,
-                        "position_y": 0.85,
-                        "shadow_enabled": False,
-                        "shadow_blur": 0,
-                        "shadow_offset_x": 0,
-                        "shadow_offset_y": 4,
-                        "shadow_color": "#000000",
-                        "shadow_opacity": 0.8,
-                        "stroke_enabled": False,
-                        "stroke_width": 4,
-                        "stroke_color": "#000000",
-                    },
-                }
-            ]
-        }
-    }
+    """Return the built-in starter presets for new-user onboarding (never auto-applied to
+    an existing install — only fetched by OnboardingModal.vue's fire-and-forget import on
+    first run). IDs are generated from each preset's name here rather than hardcoded, so
+    the source-of-truth data above only needs a display name."""
+    result: dict = {}
+    for template_id, tdata in _DEFAULT_PRESETS_TEMPLATE.items():
+        presets = []
+        for preset in tdata["presets"]:
+            entry = {
+                "id": _slugify_preset_name(preset["name"]),
+                "name": preset["name"],
+                "options": preset["options"],
+            }
+            if preset.get("season_options"):
+                entry["season_options"] = preset["season_options"]
+            presets.append(entry)
+        result[template_id] = {"presets": presets}
+    return result
 
 
 @router.get("/presets/export")
@@ -212,10 +452,14 @@ def api_presets_export():
 # Default values that are stripped from compact exports to keep shared presets small
 _PRESET_DEFAULTS = {
     "poster_zoom": 1, "poster_shift_y": -0.04, "matte_height_ratio": 0.22,
-    "fade_height_ratio": 0.21, "vignette_strength": 0.03, "grain_amount": 0.22,
+    "fade_height_ratio": 0.21, "top_matte_height_ratio": 0.0, "top_fade_height_ratio": 0.0,
+    "vignette_strength": 0.03, "grain_amount": 0.22,
     "logo_scale": 0.45, "logo_offset": 0.88, "uniform_logo_max_w": 1282,
     "uniform_logo_max_h": 352, "uniform_logo_offset_x": 0.5, "uniform_logo_offset_y": 0.83,
     "uniform_logo_h_align": "center", "uniform_logo_v_align": "center",
+    "uniform_logo_shadow_enabled": False, "uniform_logo_shadow_opacity": 60,
+    "uniform_logo_shadow_angle": -45, "uniform_logo_shadow_distance": 8,
+    "uniform_logo_shadow_size": 15, "uniform_logo_shadow_color": "#000000",
     "border_enabled": False, "border_px": 14, "border_color": "#ffffff",
     "overlay_file": "", "overlay_opacity": 0.4, "overlay_mode": "screen",
     "poster_filter": "textless", "logo_preference": "white", "logo_mode": "original",
@@ -237,20 +481,25 @@ def _compact_options(opts: dict) -> dict:
 
 @router.get("/presets/export-compact")
 def api_presets_export_compact():
-    """Export presets for sharing — defaults stripped, internal IDs omitted, season_options omitted when identical to options."""
+    """Export presets for sharing — defaults stripped from options, internal IDs omitted,
+    season_options reduced to only the fields that differ from options."""
     try:
         data = db.get_all_presets()
         compact: dict = {}
         for template_id, tdata in data.items():
             compact_presets = []
             for preset in tdata.get("presets", []):
-                opts = _compact_options(preset.get("options", {}))
-                season = preset.get("season_options") or {}
-                season_compact = _compact_options(season)
+                raw_options = preset.get("options", {})
+                opts = _compact_options(raw_options)
+                # Diff against the raw (uncompacted) options, not the global defaults — a
+                # season field's fallback is "inherit from this preset's options" via
+                # resolve_season_options(), not "fall back to the factory default," so it
+                # must not be stripped just because it happens to equal _PRESET_DEFAULTS.
+                season_diff = db.diff_season_options(raw_options, preset.get("season_options") or {})
                 # id is intentionally omitted — import will generate a fresh one to avoid conflicts
                 entry: dict = {"name": preset["name"], "options": opts}
-                if season and season != preset.get("options", {}):
-                    entry["season_options"] = season_compact
+                if season_diff:
+                    entry["season_options"] = season_diff
                 compact_presets.append(entry)
             compact[template_id] = {"presets": compact_presets}
         return compact
@@ -286,7 +535,7 @@ def api_save_preset(req: PresetSaveRequest):
     from ..config import settings
 
     template_id = req.template_id or "uniformlogo"
-    preset_id = req.preset_id
+    preset_id = validate_preset_id(req.preset_id)
     # Keep season_options as None when not provided — db.save_preset will preserve the existing value
     season_options = req.season_options
 
@@ -345,13 +594,18 @@ def api_save_season_options(req: dict = Body(...)):
         current = db.get_preset(template_id, preset_id)
         if not current:
             raise HTTPException(status_code=404, detail="Preset not found")
-        
+
+        # Store only what differs from the base options — the editor sends a complete
+        # options blob here, but persisting it verbatim would duplicate ~45 fields that
+        # are almost always identical to the series preset.
+        season_diff = db.diff_season_options(current["options"], season_options)
+
         # Update only season_options_json in the database
         with db.get_db() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE presets SET season_options_json = ?, updated_at = CURRENT_TIMESTAMP WHERE template_id = ? AND id = ?",
-                (json.dumps(season_options), template_id, preset_id)
+                (json.dumps(season_diff), template_id, preset_id)
             )
         
         logger.info(f"[PRESETS] Saved season options for preset {preset_id}")

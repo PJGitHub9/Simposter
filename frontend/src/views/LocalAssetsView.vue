@@ -27,6 +27,12 @@ type ResendResult = {
   reason?: string
 }
 
+type DeleteResult = {
+  path: string
+  status: 'ok' | 'error'
+  reason?: string
+}
+
 const localAssets = ref<LocalAsset[]>([])
 const localAssetsLoading = ref(false)
 const localAssetsError = ref<string | null>(null)
@@ -37,10 +43,12 @@ const showModal = ref(false)
 const deletingAsset = ref(false)
 const showMovieTitles = ref(false)
 
-// Multi-select + bulk resend
+// Multi-select + bulk resend/delete
 const selectedPaths = ref<Set<string>>(new Set())
 const resending = ref(false)
 const resendSummary = ref<string | null>(null)
+const bulkDeleting = ref(false)
+const bulkDeleteSummary = ref<string | null>(null)
 
 const route = useRoute()
 const apiBase = getApiBase()
@@ -150,25 +158,24 @@ const filteredAssets = computed(() => {
   return result
 })
 
-// --- Multi-select + bulk resend ---
-// Only assets saved with a Plex rating key (added when this feature shipped) can be
+// --- Multi-select + bulk resend/delete ---
+// Selection itself applies to any asset (delete doesn't need a Plex rating key), but
+// only assets saved with one (added when the resend feature shipped) can actually be
 // resent — older files predate that metadata and have no reliable way to know which
-// Plex item they belong to.
+// Plex item they belong to. The resend endpoint already reports those as "skipped"
+// individually, so a mixed selection just resends what it can.
 const canResend = (asset: LocalAsset) => !!asset.rating_key
-
-const resendableVisibleAssets = computed(() => filteredAssets.value.filter(canResend))
 
 const selectedCount = computed(() => selectedPaths.value.size)
 
 const allVisibleSelected = computed(() =>
-  resendableVisibleAssets.value.length > 0 &&
-  resendableVisibleAssets.value.every(a => selectedPaths.value.has(a.path))
+  filteredAssets.value.length > 0 &&
+  filteredAssets.value.every(a => selectedPaths.value.has(a.path))
 )
 
 const isSelected = (asset: LocalAsset) => selectedPaths.value.has(asset.path)
 
 const toggleSelect = (asset: LocalAsset) => {
-  if (!canResend(asset)) return
   const next = new Set(selectedPaths.value)
   if (next.has(asset.path)) next.delete(asset.path)
   else next.add(asset.path)
@@ -178,11 +185,11 @@ const toggleSelect = (asset: LocalAsset) => {
 const toggleSelectAllVisible = () => {
   if (allVisibleSelected.value) {
     const next = new Set(selectedPaths.value)
-    resendableVisibleAssets.value.forEach(a => next.delete(a.path))
+    filteredAssets.value.forEach(a => next.delete(a.path))
     selectedPaths.value = next
   } else {
     const next = new Set(selectedPaths.value)
-    resendableVisibleAssets.value.forEach(a => next.add(a.path))
+    filteredAssets.value.forEach(a => next.add(a.path))
     selectedPaths.value = next
   }
 }
@@ -219,6 +226,38 @@ const bulkResend = async () => {
   } finally {
     resending.value = false
     setTimeout(() => { resendSummary.value = null }, 6000)
+  }
+}
+
+const bulkDelete = async () => {
+  if (selectedPaths.value.size === 0) return
+  if (!window.confirm(`Delete ${selectedPaths.value.size} poster(s)? This cannot be undone.`)) return
+
+  const paths = Array.from(selectedPaths.value)
+  bulkDeleting.value = true
+  bulkDeleteSummary.value = null
+  try {
+    const res = await fetch(`${apiBase}/api/local-assets/delete-bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths })
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json()
+    const results: DeleteResult[] = data.results || []
+    const deletedPaths = new Set(results.filter(r => r.status === 'ok').map(r => r.path))
+    const failed = results.filter(r => r.status === 'error').length
+
+    localAssets.value = localAssets.value.filter(a => !deletedPaths.has(a.path))
+    if (selectedAsset.value && deletedPaths.has(selectedAsset.value.path)) closeModal()
+
+    bulkDeleteSummary.value = failed ? `${deletedPaths.size} deleted, ${failed} failed` : `${deletedPaths.size} deleted`
+    clearSelection()
+  } catch (err: unknown) {
+    bulkDeleteSummary.value = `Failed: ${err instanceof Error ? err.message : 'Unknown error'}`
+  } finally {
+    bulkDeleting.value = false
+    setTimeout(() => { bulkDeleteSummary.value = null }, 6000)
   }
 }
 
@@ -318,21 +357,25 @@ onMounted(() => {
       <div class="asset-count">
         {{ filteredAssets.length }} {{ filteredAssets.length === 1 ? 'asset' : 'assets' }}
       </div>
-      <label v-if="resendableVisibleAssets.length > 0" class="select-all-label">
+      <label v-if="filteredAssets.length > 0" class="select-all-label">
         <input type="checkbox" :checked="allVisibleSelected" @change="toggleSelectAllVisible" />
-        Select all resendable
+        Select all
       </label>
     </div>
 
     <!-- Bulk selection action bar -->
     <div v-if="selectedCount > 0" class="selection-bar">
       <span>{{ selectedCount }} selected</span>
-      <button class="btn-resend-bulk" @click="bulkResend" :disabled="resending">
+      <button class="btn-resend-bulk" @click="bulkResend" :disabled="resending || bulkDeleting">
         {{ resending ? 'Resending...' : `Resend ${selectedCount} to Plex` }}
       </button>
-      <button class="btn-clear-selection" @click="clearSelection" :disabled="resending">Clear</button>
+      <button class="btn-delete-bulk" @click="bulkDelete" :disabled="resending || bulkDeleting">
+        {{ bulkDeleting ? 'Deleting...' : `Delete ${selectedCount}` }}
+      </button>
+      <button class="btn-clear-selection" @click="clearSelection" :disabled="resending || bulkDeleting">Clear</button>
     </div>
     <div v-if="resendSummary" class="resend-summary">{{ resendSummary }}</div>
+    <div v-if="bulkDeleteSummary" class="resend-summary">{{ bulkDeleteSummary }}</div>
 
     <!-- Assets Grid -->
     <div v-if="localAssetsLoading" class="loading">
@@ -373,20 +416,12 @@ onMounted(() => {
             </svg>
           </div>
           <input
-            v-if="canResend(asset)"
             type="checkbox"
             class="asset-select"
             :checked="isSelected(asset)"
-            title="Select for bulk resend"
+            :title="canResend(asset) ? 'Select for bulk resend/delete' : 'Select for bulk delete (no Plex rating key saved — can\'t be resent, saved before that feature was added)'"
             @click.stop="toggleSelect(asset)"
           />
-          <span v-else class="asset-select-disabled" title="No Plex rating key saved with this file — can't be resent (saved before this feature was added)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="8" x2="12" y2="12"/>
-              <line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-          </span>
           <button class="btn-delete" @click.stop="deleteAsset(asset)" :disabled="deletingAsset">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18"/>
@@ -633,6 +668,27 @@ onMounted(() => {
   cursor: not-allowed;
 }
 
+.btn-delete-bulk {
+  padding: 0.5rem 1rem;
+  background: rgba(255, 107, 107, 0.25);
+  border: 1px solid rgba(255, 107, 107, 0.6);
+  border-radius: 6px;
+  color: #ff8a8a;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-delete-bulk:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.4);
+}
+
+.btn-delete-bulk:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .btn-clear-selection {
   padding: 0.5rem 1rem;
   background: transparent;
@@ -773,21 +829,6 @@ onMounted(() => {
   z-index: 10;
   cursor: pointer;
   accent-color: var(--accent, #3dd6b7);
-}
-
-.asset-select-disabled {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  width: 20px;
-  height: 20px;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(255, 255, 255, 0.35);
-  background: rgba(0, 0, 0, 0.4);
-  border-radius: 4px;
 }
 
 .asset-image {

@@ -1,12 +1,12 @@
-# backend/config.py
 from dotenv import load_dotenv
 import os
 import json
+import re
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import xml.etree.ElementTree as ET
 import requests
 from requests.adapters import HTTPAdapter
@@ -804,6 +804,149 @@ def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     return tmdb_id
 
 
+# ==========================================================================
+# {folder} template variable support
+# ==========================================================================
+# Resolves the REAL on-disk folder name for a movie, straight from Plex's own
+# knowledge of the media file path -- independent of whichever metadata
+# language/title Plex happens to be displaying. Works regardless of which tool
+# (Radarr, manual import, etc.) originally created the folder, since Plex
+# always reflects the true filesystem structure.
+def extract_folder_name_from_metadata(xml_text: str) -> Optional[str]:
+    """Extract the parent folder name of the video file from Plex metadata XML
+    (real on-disk path, e.g. 'Before Sunrise (1995)')."""
+    if not xml_text or xml_text.startswith("<html"):
+        return None
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+
+    part = root.find(".//Part")
+    if part is None:
+        return None
+    file_path = part.get("file")
+    if not file_path:
+        return None
+
+    clean_path = file_path.replace("\\", "/").rstrip("/")
+    segments = clean_path.split("/")
+    # Require the file to sit inside its own per-title subfolder, i.e. at least two
+    # directory levels above the filename (.../<library-root>/<title-folder>/<file>).
+    # Flat libraries (.../<library-root>/<file>.mkv, no per-movie subfolder) would
+    # otherwise resolve segments[-2] to the shared library-root folder name (e.g.
+    # "movies") for every item, silently colliding every movie's {folder} onto the
+    # same save path instead of falling back to {title} as intended.
+    if len(segments) >= 4:
+        return segments[-2]
+    return None
+
+
+def get_movie_folder_name(rating_key: str) -> Optional[str]:
+    """Fetch the real on-disk folder name for this rating_key.
+
+    Returns None for TV shows/seasons (no <Part> at that metadata level) or on
+    any lookup failure -- callers should fall back to {title} in that case,
+    which apply_save_location_variables() in save_paths.py already does."""
+    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+    try:
+        r = plex_session.get(url, headers=plex_headers(), timeout=6)
+        r.raise_for_status()
+    except Exception as e:
+        logger.debug("[PLEX] Failed to fetch metadata for folder name %s: %s", rating_key, e)
+        return None
+    return extract_folder_name_from_metadata(r.text)
+
+
+def extract_show_folder_name_from_episode_metadata(xml_text: str) -> Optional[str]:
+    """Extract the show-level parent folder name from an EPISODE's Plex metadata
+    XML. Handles TWO structures: Show/Season NN/episode.ext (most shows, goes
+    up 3 levels), or Show/episode.ext (no season subfolder, goes up 2 levels)
+    -- detected by checking if the immediate parent looks like a season folder."""
+    if not xml_text or xml_text.startswith("<html"):
+        return None
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return None
+
+    part = root.find(".//Part")
+    if part is None:
+        return None
+    file_path = part.get("file")
+    if not file_path:
+        return None
+
+    clean_path = file_path.replace("\\", "/").rstrip("/")
+    segments = [s for s in clean_path.split("/") if s]
+
+    if len(segments) < 2:
+        return None
+
+    parent = segments[-2]
+    is_season_folder = bool(re.match(r'^(season\s*\d+|specials?)$', parent, re.IGNORECASE))
+
+    if is_season_folder:
+        if len(segments) < 3:
+            return None
+        return segments[-3]
+    else:
+        return parent
+
+
+def get_show_folder_name(rating_key: str) -> Optional[str]:
+    """Fetch the real on-disk folder name for a TV show's rating_key.
+
+    Unlike movies, a show's own metadata has no <Part> element (only episodes
+    do), so this first fetches the show's episode list and uses the first
+    episode found to derive the parent show folder.
+
+    Returns None if the show has no episodes yet, or on any lookup failure --
+    callers should fall back to {title} in that case, same as movies."""
+    episodes_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/allLeaves"
+    try:
+        r = plex_session.get(episodes_url, headers=plex_headers(), timeout=6)
+        r.raise_for_status()
+    except Exception as e:
+        logger.debug("[PLEX] Failed to fetch episode list for show folder name %s: %s", rating_key, e)
+        return None
+
+    try:
+        root = ET.fromstring(r.text)
+    except ET.ParseError:
+        return None
+
+    first_episode = root.find(".//Video")
+    if first_episode is None:
+        return None
+    episode_rating_key = first_episode.get("ratingKey")
+    if not episode_rating_key:
+        return None
+
+    episode_url = f"{settings.PLEX_URL}/library/metadata/{episode_rating_key}"
+    try:
+        r2 = plex_session.get(episode_url, headers=plex_headers(), timeout=6)
+        r2.raise_for_status()
+    except Exception as e:
+        logger.debug("[PLEX] Failed to fetch episode metadata for show folder name %s: %s", rating_key, e)
+        return None
+
+    return extract_show_folder_name_from_episode_metadata(r2.text)
+
+
+def get_media_folder_name(rating_key: str, is_tv: bool = False) -> Optional[str]:
+    """Single entry point for {folder} resolution -- routes to get_show_folder_name()
+    for TV shows or get_movie_folder_name() for movies. Callers should use this
+    instead of calling get_movie_folder_name() directly, so TV shows also get
+    a resolved {folder} instead of always falling back to {title}.
+
+    Behavior for movies is byte-identical to calling get_movie_folder_name()
+    directly (this just forwards to it) -- no change to existing behavior."""
+    if is_tv:
+        return get_show_folder_name(rating_key)
+    return get_movie_folder_name(rating_key)
+
+
 def get_library_section_id(rating_key: str) -> Optional[str]:
     """
     Fetch metadata for a rating_key and return the librarySectionID if present.
@@ -840,8 +983,14 @@ def find_rating_key_by_title_year(title: str, year: Optional[int], library_ids: 
     return None
 
 
-def plex_remove_label(rating_key: str, label: str):
-    """Attempts 3 different Plex label removal methods. Works for movies, TV shows, and seasons."""
+def plex_remove_label(rating_key: str, label: str, content_type: Optional[str] = None):
+    """Attempts 3 different Plex label removal methods. Works for movies, TV shows, and seasons.
+
+    content_type (1=movie, 2=show, 3=season, 4=episode): pass this when the caller has
+    already fetched this item's metadata moments earlier (e.g. api_plex_send() parses it
+    for {title}/{year} substitution first) so this function doesn't re-fetch the exact
+    same metadata a second time just to re-derive a value the caller already has.
+    """
 
     if not label:
         return
@@ -849,24 +998,25 @@ def plex_remove_label(rating_key: str, label: str):
     # Resolve library for this item (fallback to default)
     lib_id = get_library_section_id(rating_key) or PLEX_DEFAULT_MOVIE_LIB_ID
 
-    # Detect content type (1=movie, 2=show, 3=season, 4=episode)
-    # Try to determine from metadata
-    content_type = "1"  # Default to movie
-    try:
-        metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-        r = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
-        if r.status_code == 200:
-            root = ET.fromstring(r.text)
-            # Check for Directory (TV show/season) vs Video (movie/episode)
-            if root.find(".//Directory[@type='show']") is not None:
-                content_type = "2"  # TV show
-            elif root.find(".//Directory[@type='season']") is not None:
-                content_type = "3"  # Season
-            elif root.find(".//Video[@type='episode']") is not None:
-                content_type = "4"  # Episode
-            # Otherwise stays as "1" for movie
-    except Exception:
-        pass  # Use default type if detection fails
+    if content_type is None:
+        # Detect content type (1=movie, 2=show, 3=season, 4=episode)
+        # Try to determine from metadata
+        content_type = "1"  # Default to movie
+        try:
+            metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+            r = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
+            if r.status_code == 200:
+                root = ET.fromstring(r.text)
+                # Check for Directory (TV show/season) vs Video (movie/episode)
+                if root.find(".//Directory[@type='show']") is not None:
+                    content_type = "2"  # TV show
+                elif root.find(".//Directory[@type='season']") is not None:
+                    content_type = "3"  # Season
+                elif root.find(".//Video[@type='episode']") is not None:
+                    content_type = "4"  # Episode
+                # Otherwise stays as "1" for movie
+        except Exception:
+            pass  # Use default type if detection fails
 
     # Method 1: Use library sections endpoint with detected type
     try:
@@ -898,6 +1048,111 @@ def plex_remove_label(rating_key: str, label: str):
         logger.debug("[PLEX] Attempted label removal via metadata PUT rating_key=%s label=%s type=%s status=%s", rating_key, label, content_type, r.status_code)
     except (requests.RequestException, requests.Timeout) as e:
         logger.debug("[PLEX] Method 3 failed: %s", e)
+
+
+def get_label_to_add() -> str:
+    """Reads Settings → Automation's "Label to add after sending" fresh from the DB (not
+    the pydantic `settings` object — that one is only kept in sync for a handful of fields
+    by `_apply_runtime_settings()`, and `labelToAdd` isn't among them, matching how
+    plexsend.py/scheduler.py already read `webhookAutoLabels` fresh from
+    db.get_ui_settings() rather than trusting a possibly-stale `settings.*` attribute)."""
+    try:
+        from . import database as db
+        ui = db.get_ui_settings() or {}
+        return (ui.get("automation", {}) or {}).get("labelToAdd", "") or ""
+    except Exception:
+        return ""
+
+
+def plex_add_label(rating_key: str, label: str, content_type: Optional[str] = None):
+    """Adds a label to a Plex item after a poster is sent.
+
+    This is NOT symmetric with plex_remove_label() above, despite looking like it should
+    be — found the hard way, via a live-tested v1.6.77 attempt that used the same
+    `label[].tag.tag+`/`tag.tag-` diff-syntax pattern for both directions. Real-world
+    logs showed the `+` variant returning a clean 200/204 on every attempt while never
+    actually attaching the label (confirmed by re-fetching and checking), and the
+    `/library/metadata/{id}/labels` sub-endpoint (which supports DELETE for removal)
+    404s on PUT — it has no add equivalent. Plex's tag-diff query syntax only supports
+    *removing* a value from a multi-value field this way; there's no matching "append one
+    value" operator despite `-` implying `+` should exist too.
+
+    The actual correct approach (matching what python-plexapi's `_edit_tags()` does for
+    non-remove edits) is to send the *complete* desired label list as indexed params —
+    `label[0].tag.tag=A&label[1].tag.tag=B&...` — which replaces the field outright, plus
+    `label.locked=1` so Plex doesn't let its metadata agent silently overwrite the edit on
+    a future refresh. So this fetches the item's current labels first and PUTs back
+    (existing + new), not just the new one — a partial list would silently wipe out any
+    labels that aren't part of this workflow (e.g. `4k`, a personal rating tag, etc.).
+
+    This is a distinct feature from `defaultLabelsToRemove`/`webhookAutoLabels` — those
+    exist to strip a label an external tool (Kometa, a Radarr/Sonarr custom format) applies
+    *before* Simposter runs, so Simposter doesn't keep reprocessing an already-handled item.
+    `labelToAdd` (Settings → Automation) is the opposite direction: an optional label
+    Simposter applies *after* successfully sending, purely so a user can see at a glance
+    (or filter/smart-collection on) which Plex items got a Simposter-generated poster.
+    """
+    if not label:
+        return
+
+    existing_labels: List[str] = []
+    try:
+        metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        r = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
+        if r.status_code == 200:
+            root = ET.fromstring(r.text)
+            if content_type is None:
+                content_type = "1"
+                if root.find(".//Directory[@type='show']") is not None:
+                    content_type = "2"
+                elif root.find(".//Directory[@type='season']") is not None:
+                    content_type = "3"
+                elif root.find(".//Video[@type='episode']") is not None:
+                    content_type = "4"
+            for lbl_el in root.findall(".//Label"):
+                tag = (lbl_el.get("tag") or "").strip()
+                if tag:
+                    existing_labels.append(tag)
+    except Exception as e:
+        logger.warning("[PLEX] Could not fetch existing labels for rating_key=%s before adding '%s': %s", rating_key, label, e)
+
+    if content_type is None:
+        content_type = "1"
+
+    if label.strip().lower() in (t.lower() for t in existing_labels):
+        logger.debug("[PLEX] Label '%s' already present on rating_key=%s, nothing to add", label, rating_key)
+        return
+
+    full_labels = existing_labels + [label]
+    params: Dict[str, Any] = {"type": content_type, "label.locked": 1}
+    for i, tag in enumerate(full_labels):
+        params[f"label[{i}].tag.tag"] = tag
+
+    try:
+        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        r = plex_session.put(url, headers=plex_headers(), params=params, timeout=8)
+        logger.info("[PLEX] Add-label rating_key=%s label=%s (kept %d existing) status=%s", rating_key, label, len(existing_labels), r.status_code)
+    except (requests.RequestException, requests.Timeout) as e:
+        logger.warning("[PLEX] Add-label request failed for rating_key=%s label=%s: %s", rating_key, label, e)
+        return
+
+    if r.status_code not in (200, 204):
+        logger.warning("[PLEX] Add-label for rating_key=%s label=%s got unexpected status=%s", rating_key, label, r.status_code)
+        return
+
+    # Verify — a bare success status isn't proof enough for an add (unlike removal, where
+    # it's harmless either way), see this function's docstring for why that bit us before.
+    try:
+        r2 = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
+        if r2.status_code == 200:
+            root2 = ET.fromstring(r2.text)
+            now_present = any((el.get("tag") or "").strip().lower() == label.strip().lower() for el in root2.findall(".//Label"))
+            if now_present:
+                logger.info("[PLEX] Confirmed label '%s' now present on rating_key=%s", label, rating_key)
+            else:
+                logger.warning("[PLEX] Add-label PUT for rating_key=%s returned %s but label '%s' still isn't present afterward", rating_key, r.status_code, label)
+    except Exception as e:
+        logger.debug("[PLEX] Could not re-verify label add for rating_key=%s: %s", rating_key, e)
 
 
 # ==============================================================================

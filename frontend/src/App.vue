@@ -5,6 +5,7 @@ import Sidebar, { type MenuItem } from './components/layout/Sidebar.vue'
 import TopNav from './components/layout/TopNav.vue'
 import EditorPane from './components/editor/EditorPane.vue'
 import TvShowEditorPane from './components/editor/TvShowEditorPane.vue'
+import KometaCreatorPane from './components/editor/KometaCreatorPane.vue'
 import NotificationContainer from './components/NotificationContainer.vue'
 import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
@@ -17,6 +18,7 @@ import { useSettingsStore } from './stores/settings'
 import { useScanStore } from './stores/scan'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
+import { onboardingLaunchRequested } from '@/composables/useOnboardingLauncher'
 
 const tabs = computed<MenuItem[]>(() => {
   // Check if Plex is configured
@@ -38,7 +40,7 @@ const tabs = computed<MenuItem[]>(() => {
     label: `\u{1F3AC} ${lib.displayName || lib.title || `Library ${idx + 1}`}`,
     submenu: [
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
-      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
+      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections (NEW)' },
       { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
@@ -80,6 +82,13 @@ const sidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true'
 const showChangelog = ref(false)
 const showOnboarding = ref(false)
 const showQuickGuide = ref(false)
+
+// Settings → Advanced's "Run Startup Wizard" button lives in a routed view, well outside
+// where OnboardingModal is mounted here — see useOnboardingLauncher.ts for why this is a
+// counter rather than a boolean re-triggering `showOnboarding`.
+watch(onboardingLaunchRequested, (val) => {
+  if (val > 0) showOnboarding.value = true
+})
 
 const handleQuickGuideDone = () => {
   showQuickGuide.value = false
@@ -353,13 +362,15 @@ const activeSubmenu = computed<string>(() => {
 })
 const showBackButton = computed(() => !!ui.selectedMovie.value)
 
-const handleSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null; tmdb_id?: string | number; tvdb_id?: string | number }) => {
+const handleSelect = (movie: { key: string; title: string; year?: number | string; poster?: string | null; tmdb_id?: string | number; tvdb_id?: string | number; mediaType?: 'movie' | 'tv-show' | 'collection'; creatorMode?: 'simposter' | 'kometa' }) => {
   // Guard against native DOM events being passed instead of movie objects
   if (!movie || typeof movie !== 'object' || !movie.key || !movie.title) {
     return
   }
-  // Detect media type based on current route
-  const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
+  // Trust an explicitly emitted mediaType (e.g. collections, which carry their own
+  // creatorMode too) — only fall back to route-based inference for the plain
+  // movie/TV grids, which don't emit one.
+  const mediaType = movie.mediaType || (route.name === 'tv-shows' ? 'tv-show' : 'movie')
   ui.setSelectedMovie({ ...movie, mediaType })
 
   // Push a new history entry so the browser back button returns to the exact page/sort state
@@ -620,14 +631,15 @@ const stopBackupPolling = () => {
 
 ;(window as any).startBackupPolling = startBackupPolling
 
-const handleSearchSelect = (item: { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show' }) => {
+const handleSearchSelect = (item: { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show'; tmdb_id?: string | number; tvdb_id?: string | number }) => {
   const mediaType = item.mediaType || 'movie'
-  if (mediaType === 'tv-show') {
-    router.push({ name: 'tv-shows' })
-  } else {
-    router.push({ name: 'movies' })
-  }
+  const routeName = mediaType === 'tv-show' ? 'tv-shows' : 'movies'
+  const itemId = mediaType === 'tv-show' ? (item.tvdb_id || item.key) : (item.tmdb_id || item.key)
   ui.setSelectedMovie({ ...item, mediaType })
+  // Must carry the same `edit` query param handleSelect() sets — the route.query.edit
+  // watcher below treats a missing edit param as "user closed the editor" and clears
+  // the selection, which is what caused search-select to bounce back to the library grid.
+  router.push({ name: routeName, query: { ...route.query, edit: String(itemId) } })
 }
 
 const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
@@ -669,7 +681,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <NotificationContainer />
     <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true" />
     <QuickStartGuide v-if="showQuickGuide" @done="handleQuickGuideDone" />
-    <UpdateAnnouncementModal />
+    <UpdateAnnouncementModal @view-full-changelog="showChangelog = true" />
 
     <!-- Mobile sidebar overlay -->
     <div v-if="sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>
@@ -787,6 +799,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       <section class="main-pane glass">
         <TvShowEditorPane
           v-if="ui.selectedMovie.value.mediaType === 'tv-show'"
+          :movie="ui.selectedMovie.value"
+          @close="ui.setSelectedMovie(null)"
+        />
+        <KometaCreatorPane
+          v-else-if="ui.selectedMovie.value.mediaType === 'collection' && ui.selectedMovie.value.creatorMode === 'kometa'"
           :movie="ui.selectedMovie.value"
           @close="ui.setSelectedMovie(null)"
         />

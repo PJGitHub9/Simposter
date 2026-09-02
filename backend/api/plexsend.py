@@ -1,4 +1,5 @@
 import base64
+import time
 import requests
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
@@ -8,27 +9,37 @@ from PIL import Image
 from pydantic import BaseModel
 from typing import List, Optional
 
-from ..config import settings, plex_headers, plex_session, plex_remove_label, logger
+from ..config import settings, plex_headers, plex_session, plex_remove_label, plex_add_label, get_label_to_add, logger, get_media_folder_name
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest
-from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render
+from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render, save_to_asset_folder_on_send_enabled
+from .save import encode_poster_for_plex, normalize_logo_for_plex, _PLEX_UPLOAD_SIZE_LIMIT
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url, _read_image_metadata, _find_asset_under_roots
 from .notifications import send_discord_notification, send_apprise_notification
 
 router = APIRouter()
 
 
+def _plex_media_segment(is_collection: bool) -> str:
+    """Plex's poster/logo upload path segment: /library/collections/ for a
+    collection, /library/metadata/ for everything else (movies, shows, seasons)."""
+    return "collections" if is_collection else "metadata"
+
+
 @router.post("/plex/send")
 def api_plex_send(req: PlexSendRequest):
+    _send_start = time.time()
+
     # Validate Plex settings
     if not settings.PLEX_URL or not settings.PLEX_TOKEN:
         raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
 
-    # Allow ANY URL (TMDB, uploaded, custom)
-    if not (
+    # Allow ANY URL (TMDB, uploaded, custom) — collections have no photo background
+    # (kometa synthesizes one), so background_url is legitimately empty there.
+    if req.background_url and not (
         req.background_url.startswith("http://")
         or req.background_url.startswith("https://")
-        or req.background_url.startswith("/uploads/")
+        or req.background_url.startswith("/api/uploaded/")
     ):
         raise HTTPException(400, "Invalid background_url")
 
@@ -55,7 +66,7 @@ def api_plex_send(req: PlexSendRequest):
     is_tv = False
     try:
         metadata_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}"
-        resp = requests.get(metadata_url, headers=plex_headers(), timeout=5)
+        resp = plex_session.get(metadata_url, headers=plex_headers(), timeout=5)
         if resp.ok:
             plex_xml_text = resp.text
             root = ET.fromstring(resp.text)
@@ -88,6 +99,12 @@ def api_plex_send(req: PlexSendRequest):
         except Exception as cache_err:
             logger.debug("[PLEX] Failed to get details from cache: %s", cache_err)
 
+    # Collections aren't movies or shows — Plex's metadata XML represents a
+    # collection as a <Directory> too (same as shows/seasons), which would
+    # otherwise misdetect it as a TV show above.
+    if req.is_collection:
+        is_tv = False
+
     # Add movie details to options for template variable substitution
     options["movie_title"] = movie_details.get("title", "")
     options["movie_year"] = movie_details.get("year", "")
@@ -96,29 +113,31 @@ def api_plex_send(req: PlexSendRequest):
     if req.preset_id:
         options["preset_id"] = req.preset_id
 
-    # Inject Plex media metadata for overlay badge rendering
-    try:
-        from ..config import get_plex_media_info
-        plex_media = get_plex_media_info(req.rating_key)
-        if plex_media:
-            existing_meta = options.get("metadata") or {}
-            options["metadata"] = {**existing_meta, **plex_media}
-            logger.info("[PLEX] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
-    except Exception as e:
-        logger.debug("[PLEX] Failed to inject media info: %s", e)
-
-    # Inject tmdb_id and media_type so studio/streaming platform badges can resolve
-    if plex_xml_text:
+    # Inject Plex media metadata / tmdb_id for overlay badge rendering — collections
+    # have no resolution/codec/edition metadata and no TMDb entry, so skip entirely.
+    if not req.is_collection:
         try:
-            tmdb_id = extract_tmdb_id_from_metadata(plex_xml_text)
-            if tmdb_id:
-                is_tv = bool(movie_details) and root.find('.//Directory') is not None
-                options.setdefault("metadata", {})
-                options["metadata"]["tmdb_id"] = tmdb_id
-                options["metadata"]["media_type"] = "tv" if is_tv else "movie"
-                logger.info("[PLEX] Injected tmdb_id=%s media_type=%s for studio/streaming badge resolution", tmdb_id, options["metadata"]["media_type"])
+            from ..config import get_plex_media_info
+            plex_media = get_plex_media_info(req.rating_key)
+            if plex_media:
+                existing_meta = options.get("metadata") or {}
+                options["metadata"] = {**existing_meta, **plex_media}
+                logger.info("[PLEX] Injected media info for rating_key=%s [%s]: %s", req.rating_key, movie_details.get("title") or "?", plex_media)
         except Exception as e:
-            logger.debug("[PLEX] Failed to inject tmdb_id: %s", e)
+            logger.debug("[PLEX] Failed to inject media info: %s", e)
+
+        # Inject tmdb_id and media_type so studio/streaming platform badges can resolve
+        if plex_xml_text:
+            try:
+                tmdb_id = extract_tmdb_id_from_metadata(plex_xml_text)
+                if tmdb_id:
+                    is_tv = bool(movie_details) and root.find('.//Directory') is not None
+                    options.setdefault("metadata", {})
+                    options["metadata"]["tmdb_id"] = tmdb_id
+                    options["metadata"]["media_type"] = "tv" if is_tv else "movie"
+                    logger.info("[PLEX] Injected tmdb_id=%s media_type=%s for studio/streaming badge resolution", tmdb_id, options["metadata"]["media_type"])
+            except Exception as e:
+                logger.debug("[PLEX] Failed to inject tmdb_id: %s", e)
 
     # Render poster using template + preset options
     img = render_poster_image(
@@ -128,43 +147,46 @@ def api_plex_send(req: PlexSendRequest):
         options,
     )
 
-    # Encode for Plex
-    buf = BytesIO()
-    # Get JPEG quality from settings
-    quality = 95
-    try:
-        from .. import database as db
-        ui_settings_data = db.get_ui_settings()
-        if ui_settings_data and "imageQuality" in ui_settings_data:
-            quality = ui_settings_data["imageQuality"].get("jpgQuality", 95)
-    except Exception:
-        pass
-    img.convert("RGB").save(buf, "JPEG", quality=quality)
-    payload = buf.getvalue()
+    # Encode for Plex — PNG when the user's output format is PNG (lossless, matches a
+    # manual Plex upload of their saved file), otherwise a high-quality JPEG.
+    payload, content_type = encode_poster_for_plex(img)
 
-    plex_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}/posters"
+    plex_url = f"{settings.PLEX_URL}/library/{_plex_media_segment(req.is_collection)}/{req.rating_key}/posters"
     headers = {
         "X-Plex-Token": settings.PLEX_TOKEN,
-        "Content-Type": "image/jpeg",
+        "Content-Type": content_type,
     }
 
-    logger.info("[PLEX] Uploading poster rating_key=%s template=%s preset=%s", req.rating_key, req.template_id, req.preset_id)
+    logger.info("[PLEX] Uploading poster rating_key=%s [%s] template=%s preset=%s", req.rating_key, movie_details.get("title") or "?", req.template_id, req.preset_id)
     try:
-        r = requests.post(plex_url, headers=headers, data=payload, timeout=20)
+        r = plex_session.post(plex_url, headers=headers, data=payload, timeout=20)
         r.raise_for_status()
     except Exception as e:
-        logger.error("[PLEX] Upload failed rating_key=%s err=%s", req.rating_key, e)
+        logger.error("[PLEX] Upload failed rating_key=%s [%s] err=%s", req.rating_key, movie_details.get("title") or "?", e)
         raise
 
     try:
         library_label = resolve_library_label(req.library_id or movie_details.get("library_id"))
+        # {folder} template variable: resolve the real on-disk folder name from Plex
+        # (movies only — TV shows/seasons have no single <Part> file to derive it from,
+        # apply_save_location_variables() falls back to {title} automatically). This was
+        # previously never resolved on the send-to-Plex path at all (only save-to-disk
+        # had it), so {folder} silently fell back to the plain — possibly Plex-localized —
+        # title with no year whenever "save to asset folder on send" was enabled. Only
+        # worth the extra Plex metadata fetch when that setting is actually on — it's off
+        # by default, and save_or_cache_render() ignores folder_name entirely otherwise.
+        folder_name = None
+        if not req.is_collection and save_to_asset_folder_on_send_enabled():
+            folder_name = get_media_folder_name(req.rating_key, is_tv)
+        media_type = "collection" if req.is_collection else ("tv-show" if is_tv else "movie")
         cache_ctx = SaveContext(
-            media_type="tv-show" if is_tv else "movie",
+            media_type=media_type,
             title=movie_details.get("title") or "",
             year=movie_details.get("year"),
             rating_key=req.rating_key,
             library_label=library_label,
             season=req.season_index if is_tv else None,
+            folder_name=folder_name,
         )
     except Exception:
         cache_ctx = None
@@ -177,9 +199,36 @@ def api_plex_send(req: PlexSendRequest):
     except Exception:
         pass
 
-    # Remove labels if requested
+    # Remove labels if requested. content_type is derived here from the metadata XML
+    # already fetched above (for {title}/{year} substitution) when available, using the
+    # identical detection plex_remove_label() would otherwise do itself — skips it
+    # re-fetching the exact same /library/metadata/{rating_key} a second time per label.
+    # Falls back to None (plex_remove_label's own detection) if that fetch failed/is unavailable.
+    label_content_type = None
+    try:
+        if plex_xml_text and 'root' in locals():
+            if root.find(".//Directory[@type='show']") is not None:
+                label_content_type = "2"
+            elif root.find(".//Directory[@type='season']") is not None:
+                label_content_type = "3"
+            elif root.find(".//Video[@type='episode']") is not None:
+                label_content_type = "4"
+            else:
+                label_content_type = "1"
+    except Exception:
+        label_content_type = None
+
     for label in req.labels or []:
-        plex_remove_label(req.rating_key, label)
+        plex_remove_label(req.rating_key, label, content_type=label_content_type)
+
+    # Add tracking label if configured (opposite direction from the removal above — see
+    # get_label_to_add()'s docstring)
+    try:
+        label_to_add = get_label_to_add()
+        if label_to_add:
+            plex_add_label(req.rating_key, label_to_add, content_type=label_content_type)
+    except Exception as e:
+        logger.warning("[PLEX] Label add failed for %s: %s", req.rating_key, e)
 
     # Refresh cached poster so future calls use the updated image
     try:
@@ -224,7 +273,9 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as notif_err:
         logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
 
-    logger.info(f"Sent poster to Plex for ratingKey={req.rating_key}")
+    elapsed = time.time() - _send_start
+    display_title = movie_details.get("title") or f"rating key {req.rating_key}"
+    logger.info("[PLEX] Poster for '%s' sent in %.1fs (rating_key=%s)", display_title, elapsed, req.rating_key)
     return {"status": "ok"}
 
 
@@ -232,6 +283,17 @@ def api_plex_send(req: PlexSendRequest):
 def api_plex_send_logo(req: PlexLogoSendRequest):
     if not settings.PLEX_URL or not settings.PLEX_TOKEN:
         raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
+
+    # Best-effort display title for log readability — cheap local DB cache lookup,
+    # never a network call (this endpoint doesn't otherwise fetch movie/show details).
+    _logo_title = "?"
+    try:
+        from .. import database as _db_title
+        _t, _y = _db_title.get_title_for_rating_key(req.rating_key)
+        if _t:
+            _logo_title = f"{_t} ({_y})" if _y else _t
+    except Exception:
+        pass
 
     # Resolve logo bytes
     logo_bytes = None
@@ -258,18 +320,20 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
     else:
         raise HTTPException(400, "Either logo_url or logo_data must be provided.")
 
+    logo_bytes, content_type = normalize_logo_for_plex(logo_bytes, content_type)
+
     # Upload to Plex clearLogos endpoint
     plex_url = f"{settings.PLEX_URL}/library/metadata/{req.rating_key}/clearLogos"
     upload_headers = {
         "X-Plex-Token": settings.PLEX_TOKEN,
         "Content-Type": content_type,
     }
-    logger.info("[PLEX] Uploading clearlogo rating_key=%s is_tv=%s", req.rating_key, req.is_tv)
+    logger.info("[PLEX] Uploading clearlogo rating_key=%s [%s] is_tv=%s", req.rating_key, _logo_title, req.is_tv)
     try:
-        r = requests.post(plex_url, headers=upload_headers, data=logo_bytes, timeout=20)
+        r = plex_session.post(plex_url, headers=upload_headers, data=logo_bytes, timeout=20)
         r.raise_for_status()
     except Exception as e:
-        logger.error("[PLEX] Logo upload failed rating_key=%s err=%s", req.rating_key, e)
+        logger.error("[PLEX] Logo upload failed rating_key=%s [%s] err=%s", req.rating_key, _logo_title, e)
         raise HTTPException(500, f"Failed to upload logo to Plex: {e}")
 
     # Save uploaded bytes directly to cache — no need to re-fetch from Plex
@@ -288,7 +352,7 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
     except Exception as e:
         logger.debug("[PLEX] Failed to update logo cache after upload: %s", e)
 
-    logger.info("[PLEX] Clearlogo sent for ratingKey=%s", req.rating_key)
+    logger.info("[PLEX] Clearlogo sent for ratingKey=%s [%s]", req.rating_key, _logo_title)
     return {"status": "ok", "logo_url": new_logo_url}
 
 
@@ -304,7 +368,7 @@ class ResendCachedRequest(BaseModel):
 @router.get("/render-cache/cached-keys")
 def api_render_cache_cached_keys():
     """Return the set of rating_keys that have a saved poster available to resend."""
-    from ..save_paths import save_to_asset_folder_on_send_enabled, resolve_save_path
+    from ..save_paths import save_to_asset_folder_on_send_enabled, resolve_save_path, get_save_template
 
     if not save_to_asset_folder_on_send_enabled():
         cache_dir = Path(settings.CONFIG_DIR) / "cache" / "poster_renders"
@@ -315,6 +379,12 @@ def api_render_cache_cached_keys():
     # Asset-folder mode: no single hidden directory to list, so check the resolved
     # path for every known movie/show (top-level posters only — matches what the
     # library grid's resend button checks).
+    #
+    # Only resolve {folder} (one live Plex metadata fetch per movie) if the movie
+    # save template actually uses it — checked once, not per item, so libraries that
+    # don't use {folder} don't pay for a Plex round-trip per movie in this loop.
+    movie_template_uses_folder = "{folder}" in get_save_template("movie")
+
     from .. import database as db
     keys = []
     for m in db.get_cached_movies():
@@ -325,11 +395,13 @@ def api_render_cache_cached_keys():
                 year=m.get("year"),
                 rating_key=m.get("rating_key"),
                 library_label=resolve_library_label(m.get("library_id")),
+                folder_name=get_media_folder_name(m.get("rating_key"), False) if movie_template_uses_folder else None,
             )
             if resolve_save_path(ctx, ".jpg").exists():
                 keys.append(m["rating_key"])
         except Exception:
             continue
+    tv_template_uses_folder = "{folder}" in get_save_template("tv-show")
     for s in db.get_cached_tv_shows():
         try:
             ctx = SaveContext(
@@ -338,6 +410,7 @@ def api_render_cache_cached_keys():
                 year=s.get("year"),
                 rating_key=s.get("rating_key"),
                 library_label=resolve_library_label(s.get("library_id")),
+                folder_name=get_media_folder_name(s.get("rating_key"), True) if tv_template_uses_folder else None,
             )
             if resolve_save_path(ctx, ".jpg").exists():
                 keys.append(s["rating_key"])
@@ -366,6 +439,9 @@ def api_render_cache_preview(
 
     title, year = db.get_title_for_rating_key(rating_key)
     try:
+        folder_name = None
+        if save_to_asset_folder_on_send_enabled():
+            folder_name = get_media_folder_name(rating_key, is_tv)
         ctx = SaveContext(
             media_type="tv-show" if is_tv else "movie",
             title=title or "",
@@ -373,6 +449,7 @@ def api_render_cache_preview(
             rating_key=rating_key,
             library_label=resolve_library_label(library_id),
             season=season_index if is_tv else None,
+            folder_name=folder_name,
         )
     except Exception:
         ctx = None
@@ -417,6 +494,27 @@ def _remove_labels_for_key(rating_key: str, is_tv: bool, library_id: Optional[st
         logger.warning("[PLEXSEND] Label removal failed for %s: %s", rating_key, e)
 
 
+def _add_label_for_key(rating_key: str, is_tv: bool, library_id: Optional[str], db) -> None:
+    """Add the configured tracking label to Plex and sync the label cache — the opposite
+    direction from _remove_labels_for_key() above, see get_label_to_add()'s docstring."""
+    try:
+        label_to_add = get_label_to_add()
+        if not label_to_add:
+            return
+        plex_add_label(rating_key, label_to_add)
+        logger.info("[PLEXSEND] Added label '%s' to %s (resend)", label_to_add, rating_key)
+        if is_tv:
+            current = db.get_tv_labels(rating_key)
+            if label_to_add.lower() not in [l.lower() for l in current]:
+                db.update_tv_labels(rating_key, current + [label_to_add], library_id=library_id or "default")
+        else:
+            current = db.get_movie_labels(rating_key)
+            if label_to_add.lower() not in [l.lower() for l in current]:
+                db.update_movie_labels(rating_key, current + [label_to_add])
+    except Exception as e:
+        logger.warning("[PLEXSEND] Label add failed for %s: %s", rating_key, e)
+
+
 @router.post("/render-cache/{rating_key}/resend")
 def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
     """Resend a previously cached rendered poster to Plex (no re-render)."""
@@ -436,12 +534,16 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
 
     _title_for_ctx, _year_for_ctx = db.get_title_for_rating_key(rating_key)
     try:
+        _folder_name_for_ctx = None
+        if save_to_asset_folder_on_send_enabled():
+            _folder_name_for_ctx = get_media_folder_name(rating_key, req.is_tv)
         top_ctx = SaveContext(
             media_type="tv-show" if req.is_tv else "movie",
             title=_title_for_ctx or "",
             year=_year_for_ctx,
             rating_key=rating_key,
             library_label=resolve_library_label(library_id),
+            folder_name=_folder_name_for_ctx,
         )
     except Exception:
         top_ctx = None
@@ -463,6 +565,7 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
     logger.info("[PLEXSEND] Resent cached poster for %s (%s)", rating_key, _title_for_ctx)
 
     _remove_labels_for_key(rating_key, req.is_tv, library_id, db)
+    _add_label_for_key(rating_key, req.is_tv, library_id, db)
 
     resent_seasons = 0
     if req.include_seasons:
@@ -495,6 +598,7 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                     resent_seasons += 1
                     logger.info("[PLEXSEND] Resent cached season poster for %s", season_key)
                     _remove_labels_for_key(season_key, True, library_id, db)
+                    _add_label_for_key(season_key, True, library_id, db)
                 except Exception as se:
                     logger.warning("[PLEXSEND] Failed to resend season %s: %s", season_key, se)
 
@@ -541,17 +645,29 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
         is_tv = bool(metadata.get("is_tv"))
 
         try:
-            # Posters are always uploaded as JPEG regardless of the on-disk save
-            # format, matching every other send-to-Plex path in the app.
-            img = Image.open(file_path).convert("RGB")
-            buf = BytesIO()
-            img.save(buf, "JPEG", quality=95)
-            payload = buf.getvalue()
+            # Resending an already-saved file: upload it as-is (PNG stays PNG, JPEG
+            # stays JPEG) rather than re-encoding, so there's zero extra generation
+            # loss beyond what was already baked in when it was saved. WEBP has no
+            # native Plex poster support, so that one case still gets converted.
+            #
+            # Plex's /posters endpoint rejects payloads over ~10MB (a 500, not a
+            # helpful error) — a saved PNG that's too large falls back to a
+            # high-quality JPEG re-encode instead of failing the resend outright.
+            ext = file_path.suffix.lower()
+            if ext == ".png" and file_path.stat().st_size <= _PLEX_UPLOAD_SIZE_LIMIT:
+                payload, content_type = file_path.read_bytes(), "image/png"
+            elif ext in (".jpg", ".jpeg"):
+                payload, content_type = file_path.read_bytes(), "image/jpeg"
+            else:
+                img = Image.open(file_path).convert("RGB")
+                buf = BytesIO()
+                img.save(buf, "JPEG", quality=98, subsampling=0)
+                payload, content_type = buf.getvalue(), "image/jpeg"
 
             plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
             plex_session.post(
                 plex_url,
-                headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                headers={**plex_headers(), "Content-Type": content_type},
                 data=payload,
                 timeout=20,
             ).raise_for_status()
@@ -562,6 +678,7 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
 
         logger.info("[LOCAL_ASSETS] Resent %s (rating_key=%s) to Plex", rel_path, rating_key)
         _remove_labels_for_key(rating_key, is_tv, metadata.get("library_id"), db)
+        _add_label_for_key(rating_key, is_tv, metadata.get("library_id"), db)
         entry["status"] = "ok"
         results.append(entry)
 

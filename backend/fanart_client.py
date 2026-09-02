@@ -1,5 +1,7 @@
 # backend/fanart_client.py
-from typing import Dict, Any, List, Optional
+import threading
+import time
+from typing import Dict, Any, List, Optional, Tuple
 
 import requests
 
@@ -13,6 +15,16 @@ class FanartError(Exception):
     pass
 
 
+# Short-TTL response cache -- see the identical rationale in tmdb_client.py's
+# _cached_tmdb_get(): live preview re-fetches on every slider debounce, and
+# Fanart.tv's own latency (observed spiking to several seconds per call in
+# production) makes redundant calls here an even bigger contributor to slow
+# renders than the equivalent TMDb calls.
+_response_cache_lock = threading.Lock()
+_response_cache: Dict[Tuple[str, int], Tuple[float, Dict[str, Any]]] = {}
+_RESPONSE_CACHE_TTL = 300  # seconds
+
+
 def _fanart_get(base_url: str, lookup_id: int) -> Dict[str, Any]:
     """
     Fetch media data from Fanart.tv API.
@@ -21,6 +33,13 @@ def _fanart_get(base_url: str, lookup_id: int) -> Dict[str, Any]:
     if not settings.FANART_API_KEY:
         logger.warning("[FANART] FANART_API_KEY not set - please save your API key in Settings")
         return {}
+
+    cache_key = (base_url, lookup_id)
+    now = time.time()
+    with _response_cache_lock:
+        cached = _response_cache.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
 
     url = f"{base_url}/{lookup_id}"
     # Redact API key in logs
@@ -55,14 +74,24 @@ def _fanart_get(base_url: str, lookup_id: int) -> Dict[str, Any]:
                 first_logo = data["clearlogo"][0].get("url")
                 logger.debug("[FANART] First clear logo: %s", first_logo)
 
+        with _response_cache_lock:
+            _response_cache[cache_key] = (now + _RESPONSE_CACHE_TTL, data)
         return data
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 404:
             logger.info("[FANART] No artwork found for id=%s (404)", lookup_id)
+            # A genuine "this item has no artwork" is worth caching too -- it's
+            # one of the most common outcomes and otherwise gets re-fetched on
+            # every slider debounce just like a hit would.
+            with _response_cache_lock:
+                _response_cache[cache_key] = (now + _RESPONSE_CACHE_TTL, {})
             return {}
         logger.warning("[FANART] HTTP %s error for id=%s: %s", e.response.status_code, lookup_id, e)
         return {}
     except Exception as e:
+        # Transient failures (timeout, connection error, etc.) are deliberately
+        # NOT cached, so the next request gets a real retry instead of being
+        # locked into an empty result for the TTL window.
         logger.warning("[FANART] Request failed for id=%s: %s", lookup_id, e)
         return {}
 

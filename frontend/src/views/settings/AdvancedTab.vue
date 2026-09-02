@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { launchOnboarding } from '@/composables/useOnboardingLauncher'
 
 interface APISource {
   id: string
@@ -104,6 +105,26 @@ const moveApiDown = (api: string) => {
 <template>
   <div class="tab-content">
     <h2>Advanced Settings</h2>
+
+    <!-- Setup Wizard -->
+    <div class="section">
+      <h3>Setup Wizard</h3>
+      <p class="section-description">
+        Re-run the first-time setup wizard — useful if you skipped it, or want to redo Plex/library setup or re-import the starter presets.
+      </p>
+
+      <div class="preset-actions">
+        <div class="preset-action-item">
+          <div class="preset-info">
+            <strong>Run Startup Wizard</strong>
+            <p>Walks through Plex connection, library selection, API keys, and starter presets again. Your existing settings aren't cleared — you'll just be stepping through the same screens.</p>
+          </div>
+          <button @click="launchOnboarding" class="secondary">
+            Run Startup Wizard
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- API Source Priority -->
     <div class="section">

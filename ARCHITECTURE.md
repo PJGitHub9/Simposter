@@ -30,13 +30,15 @@ This document explains how Simposter starts, how the backend and frontend intera
 
 **Tables created:**
 - `settings` — Key/value pairs + category for UI settings and app version
-- `presets` — Template/preset storage with options JSON
-- `history` — Poster generation history tracking
-- `movie_cache`, `poster_cache`, `label_cache` — Cached Plex/TMDb movie data
-- `tv_cache`, `tv_poster_cache`, `tv_label_cache` — Cached Plex/TVDB TV show data
+- `presets` — Template/preset storage with options JSON (`options_json`/`season_options_json`)
+- `poster_history` — Poster generation history tracking
+- `movie_cache` — Cached Plex/TMDb movie data; also holds poster/logo URLs and Plex media metadata (resolution, codec, audio, edition) as columns, not separate tables
+- `tv_cache` — Cached Plex/TVDB TV show data (same shape as `movie_cache`, plus seasons)
+- `collection_cache` — Cached Plex Collections
+- `label_cache` / `tv_label_cache` — Plex labels per item
 - `overlay_configs`, `overlay_assets` — Overlay configuration and badge assets
-- `media_metadata_cache` — Plex media metadata (resolution, codec, audio)
 - `streaming_provider_cache` — TMDb watch provider results per `(tmdb_id, media_type, region)`, 7-day TTL
+- `poster_retry_queue` — Items whose render didn't meet ideal template conditions, pending re-attempt
 
 ### 3. Scheduler Initialization (`backend/scheduler.py`)
 - `init_scheduler()` creates background scheduler daemon
@@ -109,9 +111,10 @@ This document explains how Simposter starts, how the backend and frontend intera
 - Uses JPEG quality from settings
 
 #### `batch.py`
-- `api_batch_render` — Process multiple movies with template/preset
-- Supports concurrent rendering via ThreadPoolExecutor
-- Logo/poster fallback logic matching preview behavior
+- `/api/batch-movies` / `/api/batch-tv-shows` — Process multiple movies/TV shows with template/preset (a legacy combined `/api/batch` endpoint still exists for backward compatibility)
+- `_process_single_movie()` / `_render_and_save_poster()` — the shared per-item render functions batch, webhook, auto-generate, and the retry queue all funnel through
+- Supports concurrent rendering via `ThreadPoolExecutor` (`concurrentRenders`, up to 10)
+- Logo/poster fallback logic matching preview behavior, plus overlay-cache reuse for a 3-5x speedup over the manual editor's uncached render
 
 #### `overlay_config.py`
 - `api_list_overlay_configs` — List all overlay configurations
@@ -131,9 +134,10 @@ This document explains how Simposter starts, how the backend and frontend intera
 - Settings persist to database
 
 #### `webhooks.py`
-- `/webhook/tautulli` — Tautulli event handler (added/watched/updated events)
-- `/webhook/radarr` — Radarr movie webhook (deprecated, use Tautulli)
-- `/webhook/sonarr` — Sonarr TV webhook (deprecated, use Tautulli)
+- `/webhook/radarr/{template_id}/{preset_id}` — Radarr movie webhook (matches Plex by exact TMDb GUID)
+- `/webhook/sonarr/{template_id}/{preset_id}` — Sonarr TV webhook (matches by exact TVDb GUID; `include_seasons` query param)
+- `/webhook/tautulli` — Tautulli event handler (`added`/`updated`/`watched` events, fully custom JSON payload)
+- All three: shared webhook secret support, `?test=true` dry-run mode, ignore-label filtering — see [docs/WEBHOOKS.md](docs/WEBHOOKS.md) for setup and payload details
 
 #### `presets.py` / `template_manager.py`
 - CRUD for presets; import/export (merge mode)
@@ -167,23 +171,27 @@ User selects movie → Frontend calls /api/preview
 
 ### 2. Save to Disk / Upload to Plex
 ```
-User clicks "Save" or "Send to Plex" → Frontend calls /api/save
-→ Backend renders poster (same pipeline as preview)
-→ Save to disk at configured output path (supports {library}, {title}, {year}, {season} variables)
+User clicks "Save" → Frontend calls /api/save
+User clicks "Send to Plex" → Frontend calls /api/plex/send
+→ Backend renders poster (same pipeline as preview, no fallback — skip_fallback=true)
+→ Save to disk at configured output path (supports {library}, {title}, {year}, {season},
+  {folder} — real Plex on-disk folder name — and {filename} — Kometa-compatible naming)
 → (Optional) Upload to Plex via `/library/metadata/{rating_key}/posters`
-→ (Optional) Remove configured Plex labels
+  (or `/library/collections/{id}/posters` for a collection)
+→ (Optional) Remove configured Plex labels, and add "Label to Add After Sending" if set
 → Record history entry with action='sent_to_plex' or 'saved'
 ```
 
 ### 3. Batch Rendering
 ```
-User selects movies + template/preset → Frontend calls /api/batch/render
-→ Backend creates ThreadPoolExecutor (concurrentRenders workers)
-→ For each movie:
-  → Render poster (with overlay badges if configured)
+User selects movies/TV shows + template/preset → Frontend calls /api/batch-movies or /api/batch-tv-shows
+(legacy combined /api/batch endpoint still exists for backward compatibility)
+→ Backend creates ThreadPoolExecutor (concurrentRenders workers, up to 10)
+→ For each item:
+  → Render poster (with overlay badges if configured; fallback IS active here, unlike preview)
   → Save locally and/or upload to Plex
   → Record history entry with source='batch'
-→ Return progress updates to frontend
+→ Return progress updates to frontend (polled via /api/batch-progress)
 ```
 
 ### 4. Overlay Badge Rendering
@@ -215,9 +223,12 @@ Backend receives render request with preset_id
 - `studio_badge` — Production studio / network (auto-detected from TMDb)
 - `streaming_platform_badge` — Streaming platform (auto-detected from TMDb watch providers)
 - `custom_image` — User-uploaded badge asset
+- `full_cover_image` — Image stretched to fill the whole canvas, placed below or above the logo/text
 - `text_label` — Custom text overlay
 
-**Legacy aliases (backwards compatibility):** `resolution_badge` → `video_badge`, `codec_badge` → `audio_badge`
+Every element can also be placed **below** the logo/text instead of the default above, via `overlay_config_ids_below` on the preset.
+
+**Legacy aliases (still render for old configs, hidden from the UI):** `resolution_badge` → `video_badge`, `codec_badge` → `audio_badge`, `label_badge` → removed from the UI entirely
 
 ---
 
@@ -241,9 +252,14 @@ Backend receives render request with preset_id
 - Progress tracking during batch operations
 
 #### `TemplateManagerView.vue`
-- Preset CRUD (create, update, delete, import, export)
+- Preset CRUD (create, update, delete, import, export, "Copy compact" for sharing)
+- "Import Simposter defaults" — pulls in the same starter preset bundle onboarding offers
 - Fallback configuration (poster/logo missing → switch template/preset)
 - Preview rendering with movie search
+
+#### `CollectionsView.vue` / `KometaCreatorPane.vue`
+- Plex Collections have no TMDb/TVDB entry — selecting one opens a picker between the Simposter Creator (`EditorPane.vue`, made collection-aware) and the Kometa Creator (`KometaCreatorPane.vue`), a dedicated smaller editor for the separate `kometa` template
+- Kometa Creator pulls background textures and a categorized logo library live from the `Kometa-Team/Defaults-Image-Creation` GitHub repo — no vendoring, updates there show up automatically
 
 #### `OverlayConfigManagerView.vue`
 - Visual overlay editor with drag-and-drop positioning
@@ -254,8 +270,10 @@ Backend receives render request with preset_id
 #### `SettingsView.vue`
 - Plex/TMDb/TVDB/Fanart API key configuration
 - Performance settings (concurrent rendering, JPEG quality, overlay cache)
-- Library management (output paths, ignore labels, auto-generate)
+- Library management — output paths, per-library ignore/remove labels, auto-generate, add/remove libraries, "Kometa Compatibility" (auto-checks "Overlay" removal for newly-added libraries)
+- Automation — webhook auto-send, retry queue, "Label to Add After Sending"
 - Scheduled scans configuration
+- Advanced tab — API source priority, database backup/restore, "Run Startup Wizard" (re-opens the onboarding wizard)
 
 #### `HistoryView.vue`
 - Poster generation history table
@@ -302,7 +320,7 @@ Backend receives render request with preset_id
 - **Overlay configs**: `api/overlay_config.py` for badge/asset management
 - **Presets/fallbacks**: `api/presets.py` CRUD with merge import; `api/template_manager.py` fallback preferences
 - **Cache control**: `api/cache.py`, `cache.py` module, helpers in `config.py`/`movies.py`
-- **Webhooks**: `api/webhooks.py` with endpoints for Tautulli integration
+- **Webhooks**: `api/webhooks.py` — Radarr, Sonarr, and Tautulli endpoints
 - **History tracking**: `api/history.py` provides poster history with source filtering
 
 ---
@@ -325,10 +343,13 @@ CONFIG_DIR=/config               # Config directory path (Docker)
 ```
 
 ### Docker Deployment
+
+Images are published to `ghcr.io/pjgithub9/simposter` (branch-tagged, plus `latest` tracking `main`) by `.github/workflows/publish-ghcr.yml` on every push — pull one directly instead of building, or build from source with `docker-compose up -d --build` / `build-docker.bat`/`.sh`. See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md#docker-compose-recommended) for both paths in full.
+
 ```yaml
 services:
   simposter:
-    image: simposter:latest
+    image: ghcr.io/pjgithub9/simposter:latest   # or build: . to build from source
     ports:
       - "8003:8003"
     volumes:
@@ -337,15 +358,16 @@ services:
       - PLEX_URL=http://plex:32400
       - PLEX_TOKEN=xxxxxxxxxxxx
       - TMDB_API_KEY=xxxxxxxxxxxx
-      # Optional: override Docker tag shown in UI (default read from build-info.json)
-      - DOCKER_TAG=latest
 ```
 
-**Build with tag injection** (use `build-docker.bat` on Windows or):
+**If building locally**, two build-args get baked into `/app/build-info.json` (read at runtime for the version-info endpoint and update-available check):
 ```bash
-docker build --build-arg DOCKER_TAG=latest -t simposter:latest .
+docker build --build-arg GIT_BRANCH=main --build-arg DOCKER_TAG=latest -t simposter:latest .
 ```
-The `DOCKER_TAG` arg is baked into `/app/build-info.json` at build time alongside `git_branch` and `app_version`. This allows the UI to warn users if they are running an unsupported/unmaintained image tag.
+- `GIT_BRANCH` — which branch this image was built from (`build-docker.bat`/`.sh` and the GHCR workflow both detect/pass this automatically; a build path that doesn't pass it explicitly falls back to `unknown`, which silently disables the update-available check)
+- `DOCKER_TAG` — overrides the tag shown in the UI, and lets it warn about an unsupported/unmaintained tag
+
+No `.git` directory needs to be present in the build context — branch detection moved off `git rev-parse` and onto this explicit build-arg specifically so the image can be built from a plain source archive, not just a full git checkout.
 
 ### File Paths
 - **Config/settings**: `config/` (or `/config`) holds `settings/` and `ui_settings.json` fallback

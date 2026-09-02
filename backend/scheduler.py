@@ -3,6 +3,7 @@ Background task scheduler for periodic operations like library scans.
 Uses APScheduler for cron-style scheduling.
 """
 import logging
+import time
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime
@@ -337,6 +338,30 @@ def cancel_poster_retry():
         return False
 
 
+def _plex_item_exists(rating_key: str) -> Optional[bool]:
+    """Check whether a rating_key still exists in Plex at all.
+
+    Returns True/False on a definitive answer, or None if the check itself
+    failed (network blip, timeout, etc.) — callers must treat None as "unknown,
+    don't act on it" rather than "gone", so a transient error never gets
+    mistaken for a deleted item.
+    """
+    try:
+        from .config import settings, plex_headers, plex_session
+        r = plex_session.get(
+            f"{settings.PLEX_URL}/library/metadata/{rating_key}",
+            headers=plex_headers(),
+            timeout=6,
+        )
+        if r.status_code == 404:
+            return False
+        if r.status_code == 200:
+            return True
+        return None
+    except Exception:
+        return None
+
+
 def _run_poster_retry():
     """Retry pending items from the poster retry queue."""
     try:
@@ -365,6 +390,7 @@ def _run_poster_retry():
             return
 
         logger.info("[RETRY] Running retry job — %d pending items (max_attempts=%s)", len(pending), max_attempts or "unlimited")
+        _job_start = time.time()
 
         for item in pending:
             rating_key = item["rating_key"]
@@ -383,6 +409,7 @@ def _run_poster_retry():
 
             logger.info("[RETRY] Retrying %s (%s) attempt #%d", title, media_type, retry_count + 1)
             db.update_retry_attempt(rating_key)
+            _retry_item_start = time.time()
 
             # Merge global auto_labels with per-library default labels for this item
             remove_labels = list(auto_labels)
@@ -405,8 +432,13 @@ def _run_poster_retry():
                         send_logos_to_plex=send_logos,
                         send_only_if_ideal=True,
                     )
-                    sub_results = result.get("results", []) if isinstance(result, dict) else []
-                    still_needs_retry = any(r.get("needs_retry") for r in sub_results)
+                    # A dict without a populated "results" list means the render errored out
+                    # before producing per-season results (e.g. a transient TMDb/network failure) —
+                    # treat that as "still needs retry", not "nothing left to retry".
+                    if isinstance(result, dict) and result.get("results"):
+                        still_needs_retry = any(r.get("needs_retry", True) for r in result["results"])
+                    else:
+                        still_needs_retry = True
                 else:
                     result = process_single_movie_poster(
                         rating_key=rating_key,
@@ -419,18 +451,54 @@ def _run_poster_retry():
                         send_logos_to_plex=send_logos,
                         send_only_if_ideal=True,
                     )
-                    still_needs_retry = result.get("needs_retry", False) if isinstance(result, dict) else True
+                    # Default True: an error dict (e.g. TMDb request failure) has no "needs_retry"
+                    # key, and must NOT be read as "ideal conditions met" — that silently drops the
+                    # item from the queue on a transient failure instead of leaving it pending.
+                    still_needs_retry = result.get("needs_retry", True) if isinstance(result, dict) else True
 
+                _retry_elapsed = time.time() - _retry_item_start
                 if not still_needs_retry:
                     db.resolve_retry_queue_item(rating_key, "resolved")
-                    logger.info("[RETRY] Successfully resolved %s — ideal template conditions met", title)
+                    logger.info("[RETRY] Successfully resolved %s in %.1fs — ideal template conditions met", title, _retry_elapsed)
+                    continue
+
+                # _process_single_movie()/_process_single_tv_show() already caught their own
+                # exception internally (e.g. "No TMDb ID found" from a deleted/reorganized Plex
+                # item) and returned a normal-looking error dict instead of raising -- so a hard
+                # failure like this never reaches the `except Exception as retry_err` block below,
+                # and the existence check there never runs. Checking here too closes that gap:
+                # without it, an item whose Plex entry is genuinely gone retries forever, exactly
+                # like the except block's own comment already warns about, just via a path it can't
+                # see. Confirmed live: a deleted movie retried 72 times over ~18 days, a fresh
+                # "failed" History row every cycle, before this branch existed.
+                is_hard_error = isinstance(result, dict) and result.get("status") == "error"
+                if is_hard_error and _plex_item_exists(rating_key) is False:
+                    db.resolve_retry_queue_item(rating_key, "abandoned")
+                    logger.info(
+                        "[RETRY] %s (rating_key=%s) no longer exists in Plex — removed from retry queue",
+                        title, rating_key
+                    )
                 else:
-                    logger.info("[RETRY] %s still pending (attempt #%d) — will retry again", title, retry_count + 1)
+                    logger.info("[RETRY] %s still pending in %.1fs (attempt #%d) — will retry again", title, _retry_elapsed, retry_count + 1)
 
             except Exception as retry_err:
-                logger.warning("[RETRY] Error retrying %s: %s", title, retry_err)
+                logger.warning("[RETRY] Error retrying %s after %.1fs: %s", title, time.time() - _retry_item_start, retry_err)
+                # A render error here (as opposed to a clean "needs_retry" result
+                # above) most often means the Plex fetch itself failed -- and if
+                # that's because the item was deleted/reorganized in Plex (a
+                # definitive 404, not a transient network error), it will NEVER
+                # succeed no matter how many times this job retries it. Without
+                # this check such an item retries forever whenever
+                # retryMaxAttempts is 0 (unlimited), silently filling History
+                # with a fresh "failed" entry every retry cycle.
+                if _plex_item_exists(rating_key) is False:
+                    db.resolve_retry_queue_item(rating_key, "abandoned")
+                    logger.info(
+                        "[RETRY] %s (rating_key=%s) no longer exists in Plex — removed from retry queue",
+                        title, rating_key
+                    )
 
-        logger.info("[RETRY] Retry job complete")
+        logger.info("[RETRY] Retry job complete — %d items in %.1fs", len(pending), time.time() - _job_start)
 
     except Exception as e:
         logger.error("[RETRY] Unexpected error in retry job: %s", e, exc_info=True)

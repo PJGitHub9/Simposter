@@ -4,6 +4,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from pathlib import Path
 import os
+import time
 
 from .. import database as db
 from ..config import settings, logger
@@ -151,8 +152,11 @@ def api_retry_now(rating_key: str):
     ui = db.get_ui_settings() or {}
     send_logos = bool(ui.get("plex", {}).get("sendLogosToPlex", False))
     media_type = item.get("media_type", "movie")
+    title = item.get("title", rating_key)
 
     db.update_retry_attempt(rating_key)
+    _retry_start = time.time()
+    logger.info("[RETRY] Manual retry-now for %s [%s] (%s)", rating_key, title, media_type)
     try:
         if media_type == "tv":
             result = process_single_tv_show_poster(
@@ -165,6 +169,7 @@ def api_retry_now(rating_key: str):
                 include_seasons=True,
                 source="auto_generate",
                 send_logos_to_plex=send_logos,
+                send_only_if_ideal=True,
             )
             sub_results = result.get("results", []) if isinstance(result, dict) else []
             still_needs_retry = any(r.get("needs_retry") for r in sub_results)
@@ -178,14 +183,21 @@ def api_retry_now(rating_key: str):
                 labels=[],
                 source="auto_generate",
                 send_logos_to_plex=send_logos,
+                send_only_if_ideal=True,
             )
             still_needs_retry = result.get("needs_retry", True) if isinstance(result, dict) else True
 
         if not still_needs_retry:
             db.resolve_retry_queue_item(rating_key, "resolved")
 
+        _elapsed = time.time() - _retry_start
+        logger.info(
+            "[RETRY] Manual retry-now for %s [%s] done in %.1fs — %s",
+            rating_key, title, _elapsed, "resolved" if not still_needs_retry else "still pending"
+        )
         return {"status": "ok", "resolved": not still_needs_retry}
     except Exception as e:
+        logger.warning("[RETRY] Manual retry-now for %s [%s] failed after %.1fs: %s", rating_key, title, time.time() - _retry_start, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

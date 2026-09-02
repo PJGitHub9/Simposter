@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import type { MovieInput } from '../../services/types'
@@ -107,6 +107,48 @@ const clearUploadedPoster = () => {
   uploadedPosterUrl.value = null
   if (wasSelected) selectedPoster.value = posters.value[0]?.url || null
 }
+
+// Custom uploaded logo
+const uploadedLogoUrl = ref<string | null>(null)
+const logoUploading = ref(false)
+const logoDropActive = ref(false)
+
+const uploadLogoFile = async (file: File) => {
+  if (!file.type.startsWith('image/')) return
+  logoUploading.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('kind', 'logo')
+    const res = await fetch(`${apiBase}/api/upload/background`, { method: 'POST', body: fd })
+    if (!res.ok) throw new Error('Upload failed')
+    const data = await res.json()
+    uploadedLogoUrl.value = `${apiBase}${data.url}`
+    selectedLogo.value = uploadedLogoUrl.value
+  } catch (e) {
+    console.error('[TvShowEditorPane] Logo upload failed:', e)
+  } finally {
+    logoUploading.value = false
+  }
+}
+
+const onLogoFileInput = (e: Event) => {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  if (file) uploadLogoFile(file)
+  ;(e.target as HTMLInputElement).value = ''
+}
+
+const onLogoDrop = (e: DragEvent) => {
+  logoDropActive.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (file) uploadLogoFile(file)
+}
+
+const clearUploadedLogo = () => {
+  const wasSelected = selectedLogo.value === uploadedLogoUrl.value
+  uploadedLogoUrl.value = null
+  if (wasSelected) selectedLogo.value = filteredLogos.value[0]?.url || null
+}
 // Cache full settings per season/series to prevent cross-contamination
 const settingsCache = ref<Record<string, any>>({})
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
@@ -139,20 +181,29 @@ const currentSeason = computed(() => {
   return seasons.value.find(s => s.key === seasonKey) || null
 })
 
-// Track which poster type (series or season) is being edited
+// Track which poster type (series or season) is being edited — derived directly from
+// currentSeason (a computed, evaluated synchronously on every read) rather than a ref kept
+// in sync by a separate watcher. The watcher version had a window where it could still read
+// as the previous season/series right after currentSeason changed but before the watcher had
+// fired, and this value gates which option blob "Save Preset" writes into (options vs
+// season_options) — a stale read there could save a season edit into the series' shared base
+// options instead, corrupting the series poster too. See v1.6.34 changelog.
 type PosterType = 'series' | 'season'
-const selectedPosterType = ref<PosterType>('series')
-
-// Watch currentSeason and auto-switch editor type
-watch(currentSeason, (newSeason) => {
-  if (newSeason) {
-    selectedPosterType.value = newSeason.isSeries ? 'series' : 'season'
-  }
-}, { immediate: true })
+const selectedPosterType = computed<PosterType>(() => {
+  const season = currentSeason.value
+  return season && !season.isSeries ? 'season' : 'series'
+})
 
 // Rendered preview carousel
 const renderedPreviews = ref<RenderedPreview[]>([])
 const activePreviewIndex = ref(0)
+
+// Monotonic counter guarding against out-of-order preview responses for the *same*
+// season: dragging a slider can fire several overlapping preview requests before the
+// first resolves (render/network time varies), and the season-identity check alone
+// doesn't protect against an older, slower response for that same season landing
+// after a newer one and stomping the preview with stale slider values.
+let previewRequestSeq = 0
 
 // Sorted rendered previews by season order (series first, then seasons 0, 1, 2, etc.)
 const sortedRenderedPreviews = computed(() => {
@@ -243,6 +294,8 @@ const options = ref({
   posterShiftY: 0,
   matteHeight: 0,
   fadeHeight: 0,
+  topMatteHeight: 0,
+  topFadeHeight: 0,
   vignette: 0,
   grain: 0,
   logoScale: 50,
@@ -253,6 +306,12 @@ const options = ref({
   uniformLogoOffsetY: 78,
   uniformLogoHAlign: 'center' as 'left' | 'center' | 'right',
   uniformLogoVAlign: 'center' as 'top' | 'center' | 'bottom',
+  uniformLogoShadowEnabled: false,
+  uniformLogoShadowOpacity: 60,
+  uniformLogoShadowAngle: -45,
+  uniformLogoShadowDistance: 8,
+  uniformLogoShadowSize: 15,
+  uniformLogoShadowColor: '#000000',
   borderEnabled: false,
   borderThickness: 0,
   borderColor: '#ffffff',
@@ -260,7 +319,9 @@ const options = ref({
   overlayOpacity: 40,
   overlayMode: 'screen',
   overlayConfigIds: [] as string[],
-  season_text: undefined as string | undefined
+  overlayConfigIdsBelow: [] as string[],
+  season_text: undefined as string | undefined,
+  season_number: undefined as string | undefined
 })
 
 // Text overlay settings
@@ -284,6 +345,7 @@ const shadowOpacity = ref(80)
 const strokeEnabled = ref(false)
 const strokeWidth = ref(4)
 const strokeColor = ref('#000000')
+const textBboxEnabled = ref(false)
 const availableFonts = ref<string[]>([])
 
 // Overlay configs
@@ -332,6 +394,7 @@ const getCurrentSettings = () => ({
   strokeEnabled: strokeEnabled.value,
   strokeWidth: strokeWidth.value,
   strokeColor: strokeColor.value,
+  textBboxEnabled: textBboxEnabled.value,
 })
 
 const applySettings = (s: any) => {
@@ -372,6 +435,7 @@ const applySettings = (s: any) => {
   if (s.strokeEnabled !== undefined) strokeEnabled.value = s.strokeEnabled
   if (s.strokeWidth !== undefined) strokeWidth.value = s.strokeWidth
   if (s.strokeColor !== undefined) strokeColor.value = s.strokeColor
+  if (s.textBboxEnabled !== undefined) textBboxEnabled.value = s.textBboxEnabled
 }
 
 const currentTargetKey = computed(() => currentSeason.value?.key || props.movie.key)
@@ -388,7 +452,10 @@ const saveCurrentSettings = () => {
     const presetFields = [
       'logoMode', 'textOverlayEnabled', 'customText', 'fontFamily', 'fontSize',
       'shadowEnabled', 'letterSpacing', 'positionY', 'posterZoom', 'posterShiftY',
-      'matteHeight', 'fadeHeight', 'vignette', 'grain', 'logoScale', 'logoOffset'
+      'matteHeight', 'fadeHeight', 'topMatteHeight', 'topFadeHeight', 'vignette', 'grain', 'logoScale', 'logoOffset',
+      'textBboxEnabled', 'textColor',
+      'uniformLogoShadowEnabled', 'uniformLogoShadowOpacity', 'uniformLogoShadowAngle',
+      'uniformLogoShadowDistance', 'uniformLogoShadowSize', 'uniformLogoShadowColor'
     ]
 
     // Remove preset fields that user hasn't modified
@@ -402,14 +469,67 @@ const saveCurrentSettings = () => {
       }
     })
   } else {
-    // For series, ensure season_text is never saved
+    // For series, ensure season_text/season_number are never saved
     if (settings.options && settings.options.season_text) {
       delete settings.options.season_text
+    }
+    if (settings.options && settings.options.season_number) {
+      delete settings.options.season_number
     }
   }
 
   settingsCache.value[key] = settings
   if (selectedPoster.value) selectedPosterCache.value[key] = selectedPoster.value
+}
+
+// Applies every season-customizable field -- the exact same set saveCurrentSettings()'s
+// presetFields list treats as season-specific (and what the backend's own season_options
+// diffing tracks, see CLAUDE.md Quirk #13/v1.6.32) -- from a cached settings object onto a
+// snake_case render-options object.
+//
+// This exists because doSave()'s and renderAllSelectedSeasons()'s season loops both build
+// seasonOptions by starting from a full copy of the CURRENTLY-FOCUSED item's live options
+// (matte/vignette/grain/border/etc. -- fields genuinely meant to be shared across a whole
+// show, so inheriting them is correct) and only patching a handful of season-specific fields
+// on top. That handful used to be just logo_mode/text_overlay_enabled/custom_text/font_size/
+// font_family -- every OTHER season-customizable field (poster position, matte/fade/vignette/
+// grain *if the user overrode them for this season specifically*, text color/spacing/position,
+// logo drop shadow) silently leaked through from whatever the currently-focused item showed
+// instead of this season's own value. Editing Series's Logo Mode could appear to also change
+// a season's rendered poster in other ways, purely because the season's own override for one
+// of these un-patched fields never got applied. Route every season-specific override through
+// this one function instead of hand-picking fields piecemeal, so the two can't drift apart again.
+const applyCachedPresetFields = (target: Record<string, any>, cached: any) => {
+  if (!cached) return
+  if (cached.logoMode) target.logo_mode = cached.logoMode
+  if (cached.textOverlayEnabled !== undefined) target.text_overlay_enabled = cached.textOverlayEnabled
+  if (cached.customText !== undefined) target.custom_text = cached.customText
+  if (cached.fontFamily) target.font_family = cached.fontFamily
+  if (cached.fontSize) target.font_size = cached.fontSize
+  if (cached.shadowEnabled !== undefined) target.shadow_enabled = cached.shadowEnabled
+  if (cached.letterSpacing !== undefined) target.letter_spacing = cached.letterSpacing
+  if (cached.positionY !== undefined) target.position_y = cached.positionY / 100
+  if (cached.textBboxEnabled !== undefined) target.text_bbox_enabled = cached.textBboxEnabled
+  if (cached.textColor) target.text_color = cached.textColor
+  const o = cached.options
+  if (o) {
+    if (o.posterZoom !== undefined) target.poster_zoom = o.posterZoom / 100
+    if (o.posterShiftY !== undefined) target.poster_shift_y = o.posterShiftY / 100
+    if (o.matteHeight !== undefined) target.matte_height_ratio = o.matteHeight / 100
+    if (o.fadeHeight !== undefined) target.fade_height_ratio = o.fadeHeight / 100
+    if (o.topMatteHeight !== undefined) target.top_matte_height_ratio = o.topMatteHeight / 100
+    if (o.topFadeHeight !== undefined) target.top_fade_height_ratio = o.topFadeHeight / 100
+    if (o.vignette !== undefined) target.vignette_strength = o.vignette / 100
+    if (o.grain !== undefined) target.grain_amount = o.grain / 100
+    if (o.logoScale !== undefined) target.logo_scale = o.logoScale / 100
+    if (o.logoOffset !== undefined) target.logo_offset = o.logoOffset / 100
+    if (o.uniformLogoShadowEnabled !== undefined) target.uniform_logo_shadow_enabled = o.uniformLogoShadowEnabled
+    if (o.uniformLogoShadowOpacity !== undefined) target.uniform_logo_shadow_opacity = o.uniformLogoShadowOpacity
+    if (o.uniformLogoShadowAngle !== undefined) target.uniform_logo_shadow_angle = o.uniformLogoShadowAngle
+    if (o.uniformLogoShadowDistance !== undefined) target.uniform_logo_shadow_distance = o.uniformLogoShadowDistance
+    if (o.uniformLogoShadowSize !== undefined) target.uniform_logo_shadow_size = o.uniformLogoShadowSize
+    if (o.uniformLogoShadowColor) target.uniform_logo_shadow_color = o.uniformLogoShadowColor
+  }
 }
 
 const restoreSettingsForCurrent = () => {
@@ -424,16 +544,22 @@ const restoreSettingsForCurrent = () => {
       applySettings(cached)
     }
   } else {
-    // This is a series poster - explicitly clear season_text
+    // This is a series poster - explicitly clear season_text/season_number
     if (options.value.season_text) {
       delete options.value.season_text
+    }
+    if (options.value.season_number) {
+      delete options.value.season_number
     }
 
     if (cached) {
       applySettings(cached)
-      // Ensure season_text is not in cached settings for series
+      // Ensure season_text/season_number are not in cached settings for series
       if (options.value.season_text) {
         delete options.value.season_text
+      }
+      if (options.value.season_number) {
+        delete options.value.season_number
       }
     } else {
       applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false })
@@ -471,7 +597,7 @@ const ensurePosterSelected = () => {
   }
 }
 
-const { success, error: notifyError } = useNotification()
+const { success, error: notifyError, info: notifyInfo } = useNotification()
 
 // Watch for preview changes and store them in carousel
 watch(lastPreview, (newPreview) => {
@@ -499,43 +625,6 @@ watch(lastPreview, (newPreview) => {
   }
 })
 
-// Switch to a rendered preview
-async function switchToRenderedPreview(index: number) {
-  if (index < 0 || index >= renderedPreviews.value.length) return
-  activePreviewIndex.value = index
-
-  saveCurrentSettings()
-
-  const preview = renderedPreviews.value[index]
-  if (preview) {
-    lastPreview.value = preview.imageUrl
-    const seasonIndex = Array.from(selectedSeasons.value).findIndex(key => key === preview.seasonKey)
-    if (seasonIndex >= 0) {
-      // Suppress auto-preview watcher during preview switching
-      suppressAutoPreview = true
-
-      try {
-        currentSeasonIndex.value = seasonIndex
-
-        // Restore cached poster BEFORE fetching images to prevent applyPosterFilter from changing it
-        const cachedPoster = selectedPosterCache.value[preview.seasonKey]
-        if (cachedPoster) {
-          selectedPoster.value = cachedPoster
-        }
-
-        // Load season-specific assets when switching to this preview
-        // Skip restore in fetchImagesForCurrentSeason since we call restoreSettingsForCurrent explicitly below
-        await fetchImagesForCurrentSeason(true)
-        restoreSettingsForCurrent()
-      } finally {
-        // Always re-enable auto-preview, even if there's an error
-        await nextTick()
-        suppressAutoPreview = false
-      }
-    }
-  }
-}
-
 function syncRenderedPlaceholders() {
   const selectedKeys = new Set(selectedSeasons.value)
   // Drop previews for deselected seasons
@@ -557,20 +646,6 @@ function syncRenderedPlaceholders() {
   }
 }
 
-function cycleRenderedPreviews(direction: 1 | -1) {
-  const total = renderedPreviews.value.length
-  if (!total) return
-  const nextIndex = (activePreviewIndex.value + direction + total) % total
-  switchToRenderedPreview(nextIndex)
-}
-
-function onPreviewWheel(event: WheelEvent) {
-  if (!renderedPreviews.value.length) return
-  event.preventDefault()
-  const direction: 1 | -1 = event.deltaY > 0 ? 1 : -1
-  cycleRenderedPreviews(direction)
-}
-
 const presetService = usePresetService()
 const templates = presetService.templates
 const presets = presetService.presets
@@ -583,10 +658,11 @@ const isUniformLogo = computed(() => selectedTemplate.value === 'uniformlogo')
 
 // Accordion section open/close state
 const sectionOpen = ref({
-  template: true,
+  template: false,
   poster: true,
   logo: true,
   text: false,
+  boundingBox: false,
   overlay: false,
 })
 const toggleSection = (key: keyof typeof sectionOpen.value) => {
@@ -636,7 +712,8 @@ const saveEditorStateImmediate = () => {
         shadowOpacity: shadowOpacity.value,
         strokeEnabled: strokeEnabled.value,
         strokeWidth: strokeWidth.value,
-        strokeColor: strokeColor.value
+        strokeColor: strokeColor.value,
+        bboxEnabled: textBboxEnabled.value
       }
     }
     localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(state))
@@ -718,6 +795,7 @@ const loadEditorState = () => {
       strokeEnabled.value = state.textOverlay.strokeEnabled ?? false
       strokeWidth.value = state.textOverlay.strokeWidth ?? 4
       strokeColor.value = state.textOverlay.strokeColor ?? '#000000'
+      textBboxEnabled.value = state.textOverlay.bboxEnabled ?? false
     }
   } catch (e) {
     console.warn('Failed to load editor state:', e)
@@ -813,6 +891,18 @@ const logoCounts = computed(() => {
   return { tmdb, fanart, tvdb, total: logos.value.length }
 })
 
+// TMDb serves `thumb` as a resized w300 PNG and `url` as the original file -- for
+// SVG-sourced or newly-added logos, the resized thumbnail variant can 404 (a known
+// TMDb CDN propagation quirk) even though the original loads fine. Track which thumbs
+// have failed so the <img> can fall back to the full-size url instead of staying blank.
+const failedLogoThumbs = ref(new Set<string>())
+const logoThumbSrc = (l: { url: string; thumb?: string }) => (failedLogoThumbs.value.has(l.url) ? l.url : (l.thumb || l.url))
+const onLogoThumbError = (l: { url: string; thumb?: string }) => {
+  if (l.thumb && l.thumb !== l.url && !failedLogoThumbs.value.has(l.url)) {
+    failedLogoThumbs.value = new Set(failedLogoThumbs.value).add(l.url)
+  }
+}
+
 const filteredLogos = computed(() => {
   let items = logos.value
   // Only apply language filter if there's a language tag (logos without language tags are universal)
@@ -851,22 +941,26 @@ const filteredLogos = computed(() => {
 const optionsPayload = computed(() => {
   // Generate season text (e.g., "Season 1" or "Specials") - only for actual seasons, not series
   let seasonText = ""
+  let seasonNumber = ""
   if (currentSeason.value && !currentSeason.value.isSeries) {
     if (currentSeason.value.index === 0) {
       seasonText = "Specials"
     } else {
       seasonText = `Season ${currentSeason.value.index}`
     }
+    seasonNumber = String(currentSeason.value.index)
   }
 
-  // Replace {season} placeholder in custom text
-  const processedCustomText = customText.value.replace('{season}', seasonText)
+  // Replace {season} and {season number} placeholders in custom text
+  const processedCustomText = customText.value.replace('{season}', seasonText).replace('{season number}', seasonNumber)
 
   const payload: Record<string, any> = {
     poster_zoom: options.value.posterZoom / 100,
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -877,6 +971,12 @@ const optionsPayload = computed(() => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+    uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+    uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+    uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -907,12 +1007,15 @@ const optionsPayload = computed(() => {
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
+    text_bbox_enabled: textBboxEnabled.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
-  // Only include season_text if it's not empty (for seasons, not series)
+  // Only include season_text/season_number if they're not empty (for seasons, not series)
   if (seasonText) {
     payload.season_text = seasonText
+    payload.season_number = seasonNumber
   }
 
   return payload
@@ -943,6 +1046,8 @@ const saveCurrentPreset = async () => {
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -953,6 +1058,12 @@ const saveCurrentPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+    uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+    uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+    uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -983,7 +1094,9 @@ const saveCurrentPreset = async () => {
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
+    text_bbox_enabled: textBboxEnabled.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
   // When editing season options, we need to save to season_options_json
@@ -1027,11 +1140,25 @@ const saveAsNewPreset = async () => {
     return
   }
 
+  // Preset IDs are used as filenames/DB keys and only allow letters, numbers, hyphens,
+  // and underscores server-side — slugify here so a natural-language name like "top overlay"
+  // doesn't silently succeed on save but then fail every subsequent preview/render.
+  const slugified = newPresetId.value.trim().replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '')
+  if (!slugified) {
+    notifyError('Preset id must contain letters, numbers, hyphens, or underscores')
+    return
+  }
+  if (slugified !== newPresetId.value.trim()) {
+    notifyInfo(`Preset id can't contain spaces or special characters — saving as "${slugified}"`)
+  }
+
   const backendOptions = {
     poster_zoom: options.value.posterZoom / 100,
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -1042,6 +1169,12 @@ const saveAsNewPreset = async () => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+    uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+    uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+    uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -1072,21 +1205,30 @@ const saveAsNewPreset = async () => {
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
+    text_bbox_enabled: textBboxEnabled.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
-  const newId = newPresetId.value.trim()
-  if (selectedPosterType.value === 'season') {
-    notifyError('Cannot save season options as new preset - use regular options only')
+  // "Save As" always creates a brand-new preset from the currently-effective options —
+  // whether that's the series' own options or a season's resolved (options + season_options
+  // diff) view. A new preset has no season_options of its own yet, so when saving from a
+  // season tab, this season's effective settings become the new preset's base `options`
+  // (not a season-specific override) — there's nothing to diff against for a preset that
+  // doesn't exist yet. See Quirk #13's `resolve_season_options()` pattern for why season
+  // views always show fully-resolved values, which is exactly what makes this safe to reuse
+  // as a new preset's base.
+  await presetService.savePresetAs(slugified, backendOptions)
+  if (!presetService.error.value) {
+    selectedPreset.value = slugified
+    success(
+      selectedPosterType.value === 'season'
+        ? 'Preset saved as new! (using this season\'s settings as the base template)'
+        : 'Preset saved as new!'
+    )
+    newPresetId.value = ''
   } else {
-    await presetService.savePresetAs(newId, backendOptions)
-    if (!presetService.error.value) {
-      selectedPreset.value = newId
-      success('Preset saved as new!')
-      newPresetId.value = ''
-    } else {
-      notifyError(`Failed to save: ${presetService.error.value}`)
-    }
+    notifyError(`Failed to save: ${presetService.error.value}`)
   }
 }
 
@@ -1382,22 +1524,26 @@ const doPreview = async (skipBackgroundRender = false) => {
 
   // Capture season text at the start to prevent wrong text appearing
   let capturedSeasonText = ""
+  let capturedSeasonNumber = ""
   if (season && !season.isSeries) {
     if (season.index === 0) {
       capturedSeasonText = "Specials"
     } else {
       capturedSeasonText = `Season ${season.index}`
     }
+    capturedSeasonNumber = String(season.index)
   }
 
   // Build options payload with captured season text
-  const processedCustomText = customText.value.replace('{season}', capturedSeasonText)
+  const processedCustomText = customText.value.replace('{season}', capturedSeasonText).replace('{season number}', capturedSeasonNumber)
 
   const capturedOptionsPayload: Record<string, any> = {
     poster_zoom: options.value.posterZoom / 100,
     poster_shift_y: options.value.posterShiftY / 100,
     matte_height_ratio: options.value.matteHeight / 100,
     fade_height_ratio: options.value.fadeHeight / 100,
+    top_matte_height_ratio: options.value.topMatteHeight / 100,
+    top_fade_height_ratio: options.value.topFadeHeight / 100,
     vignette_strength: options.value.vignette / 100,
     grain_amount: options.value.grain / 100,
     logo_scale: options.value.logoScale / 100,
@@ -1408,6 +1554,12 @@ const doPreview = async (skipBackgroundRender = false) => {
     uniform_logo_offset_y: options.value.uniformLogoOffsetY / 100,
     uniform_logo_h_align: options.value.uniformLogoHAlign,
     uniform_logo_v_align: options.value.uniformLogoVAlign,
+    uniform_logo_shadow_enabled: options.value.uniformLogoShadowEnabled,
+    uniform_logo_shadow_opacity: options.value.uniformLogoShadowOpacity,
+    uniform_logo_shadow_angle: options.value.uniformLogoShadowAngle,
+    uniform_logo_shadow_distance: options.value.uniformLogoShadowDistance,
+    uniform_logo_shadow_size: options.value.uniformLogoShadowSize,
+    uniform_logo_shadow_color: options.value.uniformLogoShadowColor,
     border_enabled: options.value.borderEnabled,
     border_px: options.value.borderThickness,
     border_color: options.value.borderColor,
@@ -1438,12 +1590,15 @@ const doPreview = async (skipBackgroundRender = false) => {
     stroke_enabled: strokeEnabled.value,
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined
+    text_bbox_enabled: textBboxEnabled.value,
+    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
+    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
 
-  // Only include season_text if it's not empty (for seasons, not series)
+  // Only include season_text/season_number if they're not empty (for seasons, not series)
   if (capturedSeasonText) {
     capturedOptionsPayload.season_text = capturedSeasonText
+    capturedOptionsPayload.season_number = capturedSeasonNumber
   }
 
   // Generate cache key based on captured settings
@@ -1455,12 +1610,42 @@ const doPreview = async (skipBackgroundRender = false) => {
     return
   }
 
-  // Render and cache the result using captured values
-  await render.preview(props.movie, capturedBgUrl, capturedLogoUrl, capturedOptionsPayload, capturedTemplate, capturedPreset)
+  // Render using captured values. Skip the shared lastPreview update here (skipLastPreviewUpdate=true) —
+  // if the user switches seasons while this request is in flight, a stale response landing on the
+  // globally-watched lastPreview ref would get attributed to whichever season is current by the time
+  // it resolves, not the season it was actually rendered for. Instead, attribute the result to the
+  // captured season explicitly below, and only update the visible preview if that season is still current.
+  const requestSeq = ++previewRequestSeq
+  const result = await render.preview(props.movie, capturedBgUrl, capturedLogoUrl, capturedOptionsPayload, capturedTemplate, capturedPreset, false, true)
 
-  // Store in cache if we have a season key
-  if (cacheKey && lastPreview.value) {
-    renderedPreviewCache.value[cacheKey] = lastPreview.value
+  if (result?.image_base64) {
+    const imageUrl = `data:image/jpeg;base64,${result.image_base64}`
+
+    // Store in cache if we have a season key
+    if (cacheKey) {
+      renderedPreviewCache.value[cacheKey] = imageUrl
+    }
+
+    if (season) {
+      const existingIndex = renderedPreviews.value.findIndex(p => p.seasonKey === season.key)
+      if (existingIndex >= 0) {
+        const existing = renderedPreviews.value[existingIndex]
+        if (existing) existing.imageUrl = imageUrl
+      } else {
+        renderedPreviews.value.push({ seasonKey: season.key, seasonTitle: season.title, imageUrl })
+      }
+
+      // Only touch the visible preview if the user hasn't switched to a different season
+      // while this render was in flight (otherwise this stale response would overwrite
+      // whatever season is now being viewed), and if no newer preview request for this
+      // same season has since superseded it (otherwise a slow response to an old slider
+      // value could stomp a newer, already-applied one).
+      if (currentSeason.value?.key === season.key && requestSeq === previewRequestSeq) {
+        const idx = renderedPreviews.value.findIndex(p => p.seasonKey === season.key)
+        activePreviewIndex.value = idx >= 0 ? idx : renderedPreviews.value.length - 1
+        lastPreview.value = imageUrl
+      }
+    }
   }
 
   // After rendering current season, render all other selected seasons in background
@@ -1486,6 +1671,7 @@ const renderAllSelectedSeasons = async () => {
   // Keep text_overlay_enabled and logo_mode - they'll be handled per-season below
   delete (baseOptions as any).custom_text
   delete (baseOptions as any).season_text
+  delete (baseOptions as any).season_number
 
   // Build array of seasons to render (excluding current which is already rendered)
   const seasonsToRender = selectedKeys
@@ -1554,17 +1740,25 @@ const renderAllSelectedSeasons = async () => {
     // Build options using preset defaults + any cached customizations
     let seasonOptions = { ...baseOptions }
 
-    // Add season_text for season-specific rendering
+    // Add season_text/season_number for season-specific rendering
     let thisSeasonText = ''
+    let thisSeasonNumber = ''
     if (!seasonIsSeries) {
       thisSeasonText = seasonTitle.includes('Special') ? 'Specials' : `Season ${seasonIndex}`
+      thisSeasonNumber = String(seasonIndex)
       seasonOptions.season_text = thisSeasonText
+      seasonOptions.season_number = thisSeasonNumber
     }
 
     // For background renders, don't send text overlay, logo mode, or custom text
     // Let the backend preset's season_options define these per-season
     // Only send season_text so backend can use it for {season} placeholder replacement
-    const hasUserModifications = cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
+    // markFieldModified() only ever tracks changes for actual seasons, never the series
+    // (see its own isSeason check) -- userModifiedFields is deliberately empty for a
+    // series key. saveCurrentSettings() caches the series' full live state unconditionally
+    // (no preset-field stripping, unlike seasons), so for the series what matters is simply
+    // whether cached data exists at all, not whether a specific field was flagged modified.
+    const hasUserModifications = seasonIsSeries ? !!cachedSettings : cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
 
     if (!hasUserModifications) {
       // No user modifications - let backend preset season_options handle everything
@@ -1573,7 +1767,8 @@ const renderAllSelectedSeasons = async () => {
         'text_overlay_enabled', 'custom_text', 'logo_mode', 'font_size', 'font_family',
         'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
         'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
-        'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color'
+        'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color',
+        'text_bbox_enabled'
       ]
       seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
         if (!fieldsToRemove.includes(key)) {
@@ -1581,22 +1776,15 @@ const renderAllSelectedSeasons = async () => {
         }
         return acc
       }, {} as any)
-      // Keep season_text for backend placeholder replacement (only if not empty)
+      // Keep season_text/season_number for backend placeholder replacement (only if not empty)
       if (thisSeasonText) {
         seasonOptions.season_text = thisSeasonText
+        seasonOptions.season_number = thisSeasonNumber
       }
     } else {
-      // User has modified this season - apply their customizations
-      if (cachedSettings.logoMode) seasonOptions.logo_mode = cachedSettings.logoMode
-      if (cachedSettings.textOverlayEnabled !== undefined) {
-        seasonOptions.text_overlay_enabled = cachedSettings.textOverlayEnabled
-        // Send custom_text as-is (with {season} template) - let backend replace it
-        if (cachedSettings.customText !== undefined) {
-          seasonOptions.custom_text = cachedSettings.customText
-        }
-      }
-      if (cachedSettings.fontSize) seasonOptions.font_size = cachedSettings.fontSize
-      if (cachedSettings.fontFamily) seasonOptions.font_family = cachedSettings.fontFamily
+      // User has modified this season - apply all of their season-specific customizations,
+      // not just a hand-picked subset (see applyCachedPresetFields()'s own comment for why).
+      applyCachedPresetFields(seasonOptions, cachedSettings)
     }
 
     const seasonLogoUrl = cachedSettings?.selectedLogo || currentLogoUrl
@@ -1604,9 +1792,20 @@ const renderAllSelectedSeasons = async () => {
     // Generate cache key
     const cacheKey = `${seasonKey}_${seasonBgUrl}_${seasonLogoUrl}_${JSON.stringify(seasonOptions)}`
 
-    // Check if already in preview cache
-    const existingPreview = renderedPreviews.value.find(p => p.seasonKey === seasonKey)
-    if (existingPreview?.imageUrl) {
+    // Skip only if THIS exact combination of poster/logo/options was already rendered --
+    // checking renderedPreviews by seasonKey alone (the old check) meant a season with
+    // ANY prior render, however stale, was skipped forever on every subsequent call,
+    // so a settings change (e.g. switching a season to "No Logo") never showed up in
+    // the "Rendered Posters" strip until you manually clicked into that season and
+    // triggered a real render through the normal (non-background) preview flow.
+    const cachedImage = renderedPreviewCache.value[cacheKey]
+    if (cachedImage) {
+      const existingIndex = renderedPreviews.value.findIndex(p => p.seasonKey === seasonKey)
+      if (existingIndex >= 0) {
+        renderedPreviews.value[existingIndex]!.imageUrl = cachedImage
+      } else {
+        renderedPreviews.value.push({ seasonKey, seasonTitle, imageUrl: cachedImage })
+      }
       return
     }
 
@@ -1658,6 +1857,15 @@ const renderAllSelectedSeasons = async () => {
 const doSave = async () => {
   if (!bgUrl.value) return
 
+  // Flush the currently-focused season/series' live UI state into settingsCache
+  // before reading from it below -- without this, if you're saving the season
+  // you're currently looking at, settingsCache still holds whatever it was last
+  // synced to (e.g. before you just changed Logo Mode to "None"), not what's
+  // actually on screen. Every other switch/save path in this file already does
+  // this (see doSend() and the season-navigation handlers) -- this was the one
+  // gap, matching the general pattern documented in CLAUDE.md Quirk #13.
+  saveCurrentSettings()
+
   // Get selected seasons or use the movie itself if no seasons
   const selectedSeasonKeys = Array.from(selectedSeasons.value)
 
@@ -1677,6 +1885,7 @@ const doSave = async () => {
   const baseOptions = { ...optionsPayload.value }
   delete (baseOptions as any).custom_text
   delete (baseOptions as any).season_text
+  delete (baseOptions as any).season_number
 
   // Save for each selected season
   for (const seasonKey of selectedSeasonKeys) {
@@ -1720,32 +1929,38 @@ const doSave = async () => {
     // Build season-specific options
     let seasonOptions = { ...baseOptions }
 
-    // Add season_text for season-specific rendering
+    // Add season_text/season_number for season-specific rendering
     let thisSeasonText = ''
+    let thisSeasonNumber = ''
     if (!season.isSeries) {
       thisSeasonText = season.title.includes('Special') ? 'Specials' : `Season ${season.index}`
+      thisSeasonNumber = String(season.index)
       seasonOptions.season_text = thisSeasonText
+      seasonOptions.season_number = thisSeasonNumber
     }
 
-    // Apply cached settings if user modified this season
-    const hasUserModifications = cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
+    // Apply cached settings if user modified this season. markFieldModified() only ever
+    // tracks changes for actual seasons, never the series (see its own isSeason check) --
+    // userModifiedFields is deliberately empty for a series key. saveCurrentSettings()
+    // caches the series' full live state unconditionally (no preset-field stripping,
+    // unlike seasons), so for the series what matters is simply whether cached data
+    // exists at all, not whether a specific field was flagged modified -- without this,
+    // the series always fell into the "no modifications" branch below regardless of what
+    // was actually changed (e.g. Logo Mode), silently deferring to the preset's saved
+    // defaults instead of what's on screen.
+    const hasUserModifications = season.isSeries ? !!cachedSettings : cachedSettings && (userModifiedFields.value[seasonKey]?.size ?? 0) > 0
     if (hasUserModifications) {
-      if (cachedSettings.logoMode) seasonOptions.logo_mode = cachedSettings.logoMode
-      if (cachedSettings.textOverlayEnabled !== undefined) {
-        seasonOptions.text_overlay_enabled = cachedSettings.textOverlayEnabled
-        if (cachedSettings.customText !== undefined) {
-          seasonOptions.custom_text = cachedSettings.customText
-        }
-      }
-      if (cachedSettings.fontSize) seasonOptions.font_size = cachedSettings.fontSize
-      if (cachedSettings.fontFamily) seasonOptions.font_family = cachedSettings.fontFamily
+      // Apply all of this season/series's own season-specific customizations, not just a
+      // hand-picked subset (see applyCachedPresetFields()'s own comment for why).
+      applyCachedPresetFields(seasonOptions, cachedSettings)
     } else {
       // No user modifications - let backend preset season_options handle text overlay
       const fieldsToRemove = [
         'text_overlay_enabled', 'custom_text', 'logo_mode', 'font_size', 'font_family',
         'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
         'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
-        'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color'
+        'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color',
+        'text_bbox_enabled'
       ]
       seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
         if (!fieldsToRemove.includes(key)) {
@@ -1753,23 +1968,35 @@ const doSave = async () => {
         }
         return acc
       }, {} as any)
-      // Keep season_text for backend placeholder replacement
+      // Keep season_text/season_number for backend placeholder replacement
       if (thisSeasonText) {
         seasonOptions.season_text = thisSeasonText
+        seasonOptions.season_number = thisSeasonNumber
       }
     }
 
     // Get logo for this season
     // If no user modifications, check if preset uses logo_mode=none
-    let seasonLogoUrl = cachedSettings?.selectedLogo || logoUrl.value
+    let seasonLogoUrl: string | null = cachedSettings?.selectedLogo || logoUrl.value
     if (!hasUserModifications) {
       // When relying on preset season_options, let the backend decide logo mode
       // Only pass logo URL if user explicitly selected one for this season
       seasonLogoUrl = cachedSettings?.selectedLogo || null
+    } else if (cachedSettings?.logoMode === 'none') {
+      // User explicitly set this season's Logo Mode to "No Logo". Without this,
+      // falling back to logoUrl.value below sends whatever logo the *currently
+      // focused* season/series happens to have loaded -- not this season's -- since
+      // this save loop never switches the live editing context per season the way
+      // doSend()/restoreSettingsForKey() does.
+      seasonLogoUrl = null
     }
 
-    // Create a temporary movie object for this season with proper media type
-    const seasonMovie = { ...props.movie, key: seasonKey, title: season.title, mediaType: 'tv-show' as const }
+    // Create a temporary movie object for this season with proper media type. title is
+    // always the real show name (props.movie.title), never season.title (a display label
+    // like "Season 1") -- the season itself is conveyed separately via seasonIndex below.
+    // Using season.title here was why Asset-folder/Flat saves put season posters in a
+    // folder/filename literally named "Season 1 (Year)" instead of the show's own name.
+    const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title, mediaType: 'tv-show' as const }
 
     // Pass season index (null for series poster)
     const seasonIndex = season.isSeries ? null : season.index
@@ -1858,8 +2085,9 @@ const doSend = async () => {
         await fetchImagesForCurrentSeason()
         await restoreSettingsForKey(seasonKey)
 
-        // Create a temporary movie object for this season
-        const seasonMovie = { ...props.movie, key: seasonKey, title: season.title }
+        // Create a temporary movie object for this season. title is always the real show
+        // name -- see the identical fix/comment in doSave()'s equivalent line.
+        const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title }
         const seasonIndex = season.isSeries ? null : season.index
         await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex)
 
@@ -1890,9 +2118,12 @@ const doSend = async () => {
       notifyError(`Failed to send ${failed.length} poster(s): ${seasonList}`)
     }
 
-    // Wait 600ms for Plex to process, then refresh poster and labels
+    // Wait 600ms for Plex to process, then refresh poster and labels. The backend's
+    // /api/plex/send already force-refreshes its own poster cache as part of each send
+    // itself, so this doesn't need force_refresh=true again — that would just trigger
+    // a second, redundant Plex round-trip for a cache entry that's already fresh.
     await new Promise(resolve => setTimeout(resolve, 600))
-    await fetchExistingPoster(true)
+    await fetchExistingPoster()
     await fetchExistingLogo()
     await fetchLabels()
   } catch (err: unknown) {
@@ -1976,42 +2207,30 @@ function toggleSelectionOnly(seasonKey: string) {
   renderAllSelectedSeasons()
 }
 
-async function toggleSeasonSelection(seasonKey: string) {
-  // Persist current target settings before switching to avoid bleed-over
-  saveCurrentSettings()
-
+async function focusSeason(seasonKey: string) {
   const season = seasons.value.find(s => s.key === seasonKey)
   if (!season) return
 
   const wasSelected = selectedSeasons.value.has(seasonKey)
   const isCurrentlyFocused = currentSeason.value?.key === seasonKey
 
-  // If clicking an already-selected season that's currently focused, deselect it
-  // Otherwise, if it's selected but not focused, just switch to it
-  // If it's not selected, add it and switch to it
+  // Clicking the season you're already viewing is a no-op — it used to silently
+  // deselect it, which was confusing (re-clicking the focused row felt like it should
+  // just re-confirm focus, not drop it from the batch). Deselecting a focused season is
+  // now only possible via its checkbox (toggleSelectionOnly), which keeps that as an
+  // explicit, separate action from focus-switching.
+  if (wasSelected && isCurrentlyFocused) {
+    return
+  }
+
+  // Persist current target settings before switching to avoid bleed-over
+  saveCurrentSettings()
+
+  // If it's selected but not focused, just switch to it. If it's not selected, add it
+  // and switch to it.
   const newSelection = new Set(selectedSeasons.value)
 
-  if (wasSelected && isCurrentlyFocused) {
-    // Deselect the focused season
-    newSelection.delete(seasonKey)
-    selectedSeasons.value = newSelection
-
-    // If no seasons left, force select the series
-    if (newSelection.size === 0) {
-      const seriesKey = seasons.value.find(s => s.isSeries)?.key || props.movie.key
-      selectedSeasons.value = new Set([seriesKey])
-      currentSeasonIndex.value = 0
-      await nextTick()
-      await fetchImagesForCurrentSeason()
-      restoreSettingsForCurrent()
-      await fetchExistingPoster()
-      syncRenderedPlaceholders()
-      await doPreview()
-    } else {
-      // Just removed a season, sync the rendered previews
-      syncRenderedPlaceholders()
-    }
-  } else if (wasSelected && !isCurrentlyFocused) {
+  if (wasSelected && !isCurrentlyFocused) {
     // Season already selected, just switch focus to it (use cached render if available)
     const selected = Array.from(newSelection)
     const idx = selected.findIndex(k => k === seasonKey)
@@ -2022,10 +2241,16 @@ async function toggleSeasonSelection(seasonKey: string) {
     await fetchExistingPoster()
 
     // Check if we already have a rendered preview for this season
-    const existingPreview = renderedPreviews.value.find(p => p.seasonKey === seasonKey)
-    if (existingPreview && existingPreview.imageUrl) {
-      // Use the cached preview
-      lastPreview.value = existingPreview.imageUrl
+    const existingIndex = renderedPreviews.value.findIndex(p => p.seasonKey === seasonKey)
+    if (existingIndex >= 0) {
+      const existingPreview = renderedPreviews.value[existingIndex]
+      if (existingPreview?.imageUrl) {
+        // Use the cached preview, and keep the rendered-posters strip's highlight in sync
+        // with what's actually being displayed — this was previously left pointing at
+        // whichever season was rendered last, not the one now in focus.
+        lastPreview.value = existingPreview.imageUrl
+        activePreviewIndex.value = existingIndex
+      }
     }
   } else {
     // Add new season and switch to it
@@ -2109,6 +2334,9 @@ watch(seriesPosterUrl, (url) => {
 function nextSeason() {
   const selectedCount = selectedSeasons.value.size
   if (selectedCount === 0) return
+  // Flush the outgoing target's edits before switching — currentTargetKey still points at it
+  // here, before currentSeasonIndex changes below (see saveCurrentSettings()).
+  saveCurrentSettings()
   currentSeasonIndex.value = (currentSeasonIndex.value + 1) % selectedCount
 }
 
@@ -2116,6 +2344,7 @@ function nextSeason() {
 function prevSeason() {
   const selectedCount = selectedSeasons.value.size
   if (selectedCount === 0) return
+  saveCurrentSettings()
   currentSeasonIndex.value = currentSeasonIndex.value === 0 ? selectedCount - 1 : currentSeasonIndex.value - 1
 }
 
@@ -2136,8 +2365,19 @@ const toggleOverlayConfig = (configId: string) => {
   const idx = options.value.overlayConfigIds.indexOf(configId)
   if (idx >= 0) {
     options.value.overlayConfigIds.splice(idx, 1)
+    const belowIdx = options.value.overlayConfigIdsBelow.indexOf(configId)
+    if (belowIdx >= 0) options.value.overlayConfigIdsBelow.splice(belowIdx, 1)
   } else {
     options.value.overlayConfigIds.push(configId)
+  }
+}
+
+const toggleOverlayConfigBelow = (configId: string) => {
+  const idx = options.value.overlayConfigIdsBelow.indexOf(configId)
+  if (idx >= 0) {
+    options.value.overlayConfigIdsBelow.splice(idx, 1)
+  } else {
+    options.value.overlayConfigIdsBelow.push(configId)
   }
 }
 
@@ -2188,7 +2428,8 @@ watch([
   shadowOpacity,
   strokeEnabled,
   strokeWidth,
-  strokeColor
+  strokeColor,
+  textBboxEnabled
 ], () => {
   saveEditorState()
 }, { deep: true })
@@ -2226,9 +2467,14 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   const p = presets.value.find((x) => x.id === id)
   if (!p) return
 
-  // Use selectedPosterType to determine which options to load
+  // Use selectedPosterType to determine which options to load. season_options may be a
+  // sparse diff (only the fields that differ from p.options) rather than a full copy, so it
+  // must be merged on top of p.options here — reading it wholesale would silently fall back
+  // to this function's own hardcoded JS defaults (below) for any field missing from the diff,
+  // rather than inheriting the series' actual value.
   const isSeason = selectedPosterType.value === 'season'
-  const baseOptions = isSeason && (p as any).season_options ? (p as any).season_options : p.options
+  const hasSeasonOverrides = isSeason && (p as any).season_options && Object.keys((p as any).season_options).length > 0
+  const baseOptions = hasSeasonOverrides ? { ...p.options, ...(p as any).season_options } : p.options
   if (!baseOptions) return
 
   const o = baseOptions
@@ -2256,11 +2502,14 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   strokeEnabled.value = false
   strokeWidth.value = 4
   strokeColor.value = '#000000'
+  textBboxEnabled.value = false
 
   options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
   options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
   options.value.fadeHeight = Math.round((Number(o.fade_height_ratio) || 0) * 100)
+  options.value.topMatteHeight = Math.round((Number(o.top_matte_height_ratio) || 0) * 100)
+  options.value.topFadeHeight = Math.round((Number(o.top_fade_height_ratio) || 0) * 100)
   options.value.vignette = Math.round((Number(o.vignette_strength) || 0) * 100)
   options.value.grain = Math.round((Number(o.grain_amount) || 0) * 100)
   options.value.logoScale = Math.round((Number(o.logo_scale) || 0.5) * 100)
@@ -2271,6 +2520,12 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (typeof o.uniform_logo_offset_y === 'number') options.value.uniformLogoOffsetY = Math.round(o.uniform_logo_offset_y * 100)
   if (typeof o.uniform_logo_h_align === 'string') options.value.uniformLogoHAlign = o.uniform_logo_h_align as 'left' | 'center' | 'right'
   if (typeof o.uniform_logo_v_align === 'string') options.value.uniformLogoVAlign = o.uniform_logo_v_align as 'top' | 'center' | 'bottom'
+  options.value.uniformLogoShadowEnabled = !!o.uniform_logo_shadow_enabled
+  if (typeof o.uniform_logo_shadow_opacity === 'number') options.value.uniformLogoShadowOpacity = o.uniform_logo_shadow_opacity
+  if (typeof o.uniform_logo_shadow_angle === 'number') options.value.uniformLogoShadowAngle = o.uniform_logo_shadow_angle
+  if (typeof o.uniform_logo_shadow_distance === 'number') options.value.uniformLogoShadowDistance = o.uniform_logo_shadow_distance
+  if (typeof o.uniform_logo_shadow_size === 'number') options.value.uniformLogoShadowSize = o.uniform_logo_shadow_size
+  if (o.uniform_logo_shadow_color) options.value.uniformLogoShadowColor = String(o.uniform_logo_shadow_color)
   options.value.borderEnabled = !!o.border_enabled
   options.value.borderThickness = Number(o.border_px) || 0
   if (o.border_color) options.value.borderColor = String(o.border_color)
@@ -2278,6 +2533,7 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
   if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
+  if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }
@@ -2310,11 +2566,12 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
   if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
   if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
+  textBboxEnabled.value = !!o.text_bbox_enabled
 
   // Season-specific overrides: apply AFTER loading from baseOptions
   // Only needed if season_options don't exist in the preset (legacy presets)
   // or if forceSeasonOverrides is explicitly requested
-  if (isSeason && !((p as any).season_options) && (opts.forceSeasonOverrides || !cached)) {
+  if (isSeason && !hasSeasonOverrides && (opts.forceSeasonOverrides || !cached)) {
     logoMode.value = 'none'
     textOverlayEnabled.value = true
     customText.value = '{season}'
@@ -2334,10 +2591,20 @@ watch(selectedPreset, (id) => {
   // When preset changes, check if we're on a season and force season overrides
   const isSeason = !!(currentSeason.value && !currentSeason.value.isSeries)
   applyPresetOptions(id, { forceSeasonOverrides: isSeason })
-  // Clear modification tracking when preset changes
-  if (isSeason && currentSeason.value) {
-    delete userModifiedFields.value[currentSeason.value.key]
-  }
+
+  // Every other season/series's cached settings and rendered preview were derived from
+  // the preset that just got replaced — all of it is stale now. Clear it and re-render
+  // everything else in the background so switching to another poster reflects the new
+  // preset immediately, instead of silently showing settings from the old one until
+  // something else happens to trigger a fresh render for it.
+  settingsCache.value = {}
+  userModifiedFields.value = {}
+  const currentKey = currentTargetKey.value
+  renderedPreviews.value = renderedPreviews.value.map(p =>
+    p.seasonKey === currentKey ? p : { ...p, imageUrl: '' }
+  )
+  renderedPreviewCache.value = {}
+  renderAllSelectedSeasons()
 })
 
 // Track manual modifications to season preset fields
@@ -2360,12 +2627,22 @@ watch(fontSize, () => markFieldModified('fontSize'))
 watch(shadowEnabled, () => markFieldModified('shadowEnabled'))
 watch(letterSpacing, () => markFieldModified('letterSpacing'))
 watch(positionY, () => markFieldModified('positionY'))
+watch(textBboxEnabled, () => markFieldModified('textBboxEnabled'))
+watch(textColor, () => markFieldModified('textColor'))
 
 // Track modifications to options fields
 watch(() => options.value.posterZoom, () => markFieldModified('posterZoom'))
 watch(() => options.value.posterShiftY, () => markFieldModified('posterShiftY'))
 watch(() => options.value.matteHeight, () => markFieldModified('matteHeight'))
 watch(() => options.value.fadeHeight, () => markFieldModified('fadeHeight'))
+watch(() => options.value.topMatteHeight, () => markFieldModified('topMatteHeight'))
+watch(() => options.value.topFadeHeight, () => markFieldModified('topFadeHeight'))
+watch(() => options.value.uniformLogoShadowEnabled, () => markFieldModified('uniformLogoShadowEnabled'))
+watch(() => options.value.uniformLogoShadowOpacity, () => markFieldModified('uniformLogoShadowOpacity'))
+watch(() => options.value.uniformLogoShadowAngle, () => markFieldModified('uniformLogoShadowAngle'))
+watch(() => options.value.uniformLogoShadowDistance, () => markFieldModified('uniformLogoShadowDistance'))
+watch(() => options.value.uniformLogoShadowSize, () => markFieldModified('uniformLogoShadowSize'))
+watch(() => options.value.uniformLogoShadowColor, () => markFieldModified('uniformLogoShadowColor'))
 watch(() => options.value.vignette, () => markFieldModified('vignette'))
 watch(() => options.value.grain, () => markFieldModified('grain'))
 watch(() => options.value.logoScale, () => markFieldModified('logoScale'))
@@ -2404,6 +2681,7 @@ watch(
     strokeEnabled,
     strokeWidth,
     strokeColor,
+    textBboxEnabled,
     currentSeason
   ],
   () => {
@@ -2425,6 +2703,13 @@ watch(currentSeason, async () => {
     previewTimer = null
   }
   await fetchImagesForCurrentSeason()
+  // Central safety net: load the now-current target's cached settings (or preset defaults)
+  // regardless of which code path changed currentSeasonIndex. Some switch paths (e.g.
+  // focusSeason) already call this explicitly too — reapplying is a harmless no-op,
+  // but this is what makes season-navigation via the </> arrows (nextSeason/prevSeason, which
+  // have no restore logic of their own) actually load the right settings instead of leaving
+  // whichever poster was previously in focus's values on screen.
+  restoreSettingsForCurrent()
   syncRenderedPlaceholders()
   // Explicitly trigger preview after season data + settings are loaded
   // to avoid race condition where auto-preview fires before season settings apply
@@ -2456,7 +2741,7 @@ watch(tmdbId, () => {
           <span class="mobile-season-strip-label">Seasons</span>
           <div class="mobile-season-strip-actions">
             <button class="mobile-season-ctrl-btn" @click="selectAllSeasons">All</button>
-            <button class="mobile-season-ctrl-btn" @click="deselectAllSeasons">None</button>
+            <button class="mobile-season-ctrl-btn" @click="deselectAllSeasons">Series Only</button>
           </div>
         </div>
         <div class="mobile-season-pills">
@@ -2468,7 +2753,7 @@ watch(tmdbId, () => {
               active: currentSeason && currentSeason.key === season.key,
               selected: selectedSeasons.has(season.key)
             }"
-            @click="toggleSeasonSelection(season.key)"
+            @click="focusSeason(season.key)"
           >
             <span v-if="season.isSeries">Series</span>
             <span v-else>S{{ season.index }}</span>
@@ -2527,6 +2812,7 @@ watch(tmdbId, () => {
             </svg>
           </button>
           <div v-show="sectionOpen.poster" class="acc-body">
+            <div class="sub-section-title" style="margin-top: 0">Source</div>
             <label class="field-label">
               Filter
               <select v-model="posterFilter">
@@ -2551,13 +2837,14 @@ watch(tmdbId, () => {
                 <input type="checkbox" v-model="showFanartPosters" />
                 <span>Fanart</span>
               </label>
-              <label class="inline-field checkbox">
+              <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
                 <input type="checkbox" v-model="showTvdbPosters" />
                 <span>TVDB</span>
               </label>
             </div>
             <div class="poster-counts">TMDb: {{ posterCounts.tmdb }} · Fanart: {{ posterCounts.fanart }} · TVDB: {{ posterCounts.tvdb }}</div>
 
+            <div class="sub-section-title">Upload &amp; Selection</div>
             <!-- Custom upload -->
             <div
               class="poster-upload-zone"
@@ -2597,7 +2884,7 @@ watch(tmdbId, () => {
               </div>
             </div>
 
-            <div class="sub-section-title">Adjustments</div>
+            <div class="sub-section-title">Position</div>
             <div class="slider">
               <label>Poster Shift Y %</label>
               <div class="slider-row">
@@ -2605,20 +2892,40 @@ watch(tmdbId, () => {
                 <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
               </div>
             </div>
+
+            <div class="sub-section-title">Top Fade</div>
             <div class="slider">
-              <label>Matte Height %</label>
+              <label>Top Matte Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.topMatteHeight" type="range" min="0" max="50" />
+                <input v-model.number="options.topMatteHeight" type="number" min="0" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Top Fade Height %</label>
+              <div class="slider-row">
+                <input v-model.number="options.topFadeHeight" type="range" min="0" max="100" />
+                <input v-model.number="options.topFadeHeight" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+
+            <div class="sub-section-title">Bottom Fade</div>
+            <div class="slider">
+              <label>Bottom Matte Height %</label>
               <div class="slider-row">
                 <input v-model.number="options.matteHeight" type="range" min="0" max="50" />
                 <input v-model.number="options.matteHeight" type="number" min="0" max="50" class="slider-num" />
               </div>
             </div>
             <div class="slider">
-              <label>Fade Height %</label>
+              <label>Bottom Fade Height %</label>
               <div class="slider-row">
                 <input v-model.number="options.fadeHeight" type="range" min="0" max="100" />
                 <input v-model.number="options.fadeHeight" type="number" min="0" max="100" class="slider-num" />
               </div>
             </div>
+
+            <div class="sub-section-title">Effects</div>
             <div class="slider">
               <label>Vignette</label>
               <div class="slider-row">
@@ -2645,10 +2952,6 @@ watch(tmdbId, () => {
             </svg>
           </button>
           <div v-show="sectionOpen.logo" class="acc-body">
-            <label v-if="isUniformLogo && !isLogoNone" class="inline-field checkbox" style="margin-bottom: 4px;">
-              <input type="checkbox" v-model="showBoundingBox" />
-              <span>Show bounding box</span>
-            </label>
             <div class="sub-section-title" style="margin-top: 0">Preset / Batch / Webhook</div>
             <label class="field-label">
               Logo Mode
@@ -2664,10 +2967,10 @@ watch(tmdbId, () => {
               <input v-model="logoHex" type="color" />
             </label>
 
-            <div class="sub-section-title">Manual Selection</div>
+            <div class="sub-section-title">Preview Logo (Manual Selection)</div>
             <template v-if="!isLogoNone">
               <label class="field-label">
-                Preference
+                Logo Style
                 <select v-model="logoPreference">
                   <option value="first">First Available</option>
                   <option value="white">White Logos</option>
@@ -2694,12 +2997,39 @@ watch(tmdbId, () => {
                   <input type="checkbox" v-model="showFanartLogos" />
                   <span>Fanart</span>
                 </label>
-                <label class="inline-field checkbox">
+                <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
                   <input type="checkbox" v-model="showTvdbLogos" />
                   <span>TVDB</span>
                 </label>
               </div>
               <div class="poster-counts">TMDb: {{ logoCounts.tmdb }} · Fanart: {{ logoCounts.fanart }} · TVDB: {{ logoCounts.tvdb }}</div>
+
+              <!-- Custom upload -->
+              <div
+                class="logo-upload-zone"
+                :class="{ 'drag-over': logoDropActive, 'has-upload': !!uploadedLogoUrl }"
+                @dragover.prevent="logoDropActive = true"
+                @dragleave="logoDropActive = false"
+                @drop.prevent="onLogoDrop"
+                @click="!uploadedLogoUrl && ($refs.logoFileInput as HTMLInputElement)?.click()"
+              >
+                <template v-if="uploadedLogoUrl">
+                  <img :src="uploadedLogoUrl" class="upload-preview" alt="Uploaded logo" />
+                  <div class="upload-overlay">
+                    <button class="upload-reselect" @click.stop="selectedLogo = uploadedLogoUrl" :class="{ active: selectedLogo === uploadedLogoUrl }">Use this</button>
+                    <button class="upload-replace" @click.stop="($refs.logoFileInput as HTMLInputElement)?.click()">Replace</button>
+                    <button class="upload-remove" @click.stop="clearUploadedLogo">✕</button>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="upload-prompt">
+                    <span v-if="logoUploading">Uploading…</span>
+                    <span v-else>&#8679; Drop image or click to upload</span>
+                  </div>
+                </template>
+              </div>
+              <input ref="logoFileInput" type="file" accept="image/*" style="display:none" @change="onLogoFileInput" />
+
               <div class="thumb-strip logo-strip">
                 <div
                   v-for="l in filteredLogos"
@@ -2708,7 +3038,7 @@ watch(tmdbId, () => {
                   :class="{ active: selectedLogo === l.url }"
                   @click="selectedLogo = l.url"
                 >
-                  <img :src="l.thumb || l.url" alt="" />
+                  <img :src="logoThumbSrc(l)" alt="" @error="onLogoThumbError(l)" />
                   <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
                   <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
                 </div>
@@ -2720,9 +3050,58 @@ watch(tmdbId, () => {
                   <span>No Logo</span>
                 </button>
               </div>
+            </template>
 
-              <div class="sub-section-title">Position &amp; Size</div>
+            <!-- Drop Shadow: Uniform Logo templates only — box geometry for the logo itself
+                 lives in the separate "Bounding Box" section (shared with Custom Text), but the
+                 shadow effect only ever applies to the logo, so it lives here instead. -->
+            <template v-if="isUniformLogo">
+              <div class="sub-section-title">Drop Shadow</div>
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
+                <span>Drop shadow</span>
+              </label>
+              <template v-if="options.uniformLogoShadowEnabled">
+                <div class="slider">
+                  <label>Shadow Color</label>
+                  <input v-model="options.uniformLogoShadowColor" type="color" />
+                </div>
+                <div class="slider">
+                  <label>Opacity (%)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
+                    <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Angle (°)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowAngle" type="range" min="-180" max="180" />
+                    <input v-model.number="options.uniformLogoShadowAngle" type="number" min="-180" max="180" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Distance (px)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowDistance" type="range" min="0" max="100" />
+                    <input v-model.number="options.uniformLogoShadowDistance" type="number" min="0" max="100" class="slider-num" />
+                  </div>
+                </div>
+                <div class="slider">
+                  <label>Size / Blur (px)</label>
+                  <div class="slider-row">
+                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
+                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
+                  </div>
+                </div>
+              </template>
+            </template>
+
+            <!-- Position & Size only applies to non-Uniform-Logo templates now — Uniform Logo
+                 geometry moved to its own "Bounding Box" section, since that box is shared
+                 between Logo and Custom Text, not a Logo-only concept. -->
               <template v-if="!isUniformLogo">
+                <div class="sub-section-title">Position &amp; Size</div>
                 <div class="slider">
                   <label>Logo Scale %</label>
                   <div class="slider-row">
@@ -2738,59 +3117,6 @@ watch(tmdbId, () => {
                   </div>
                 </div>
               </template>
-              <template v-if="isUniformLogo">
-                <div class="slider">
-                  <label>Max Width (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoMaxW" type="range" min="50" max="1800" />
-                    <input v-model.number="options.uniformLogoMaxW" type="number" min="50" max="1800" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Max Height (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
-                    <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Logo Box X %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoOffsetX" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoOffsetX" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Logo Box Y %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Horizontal Align</label>
-                  <div class="align-btn-group">
-                    <button
-                      v-for="opt in (['left', 'center', 'right'] as const)"
-                      :key="opt"
-                      :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
-                      @click="options.uniformLogoHAlign = opt"
-                    >{{ opt }}</button>
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Vertical Align</label>
-                  <div class="align-btn-group">
-                    <button
-                      v-for="opt in (['top', 'center', 'bottom'] as const)"
-                      :key="opt"
-                      :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
-                      @click="options.uniformLogoVAlign = opt"
-                    >{{ opt }}</button>
-                  </div>
-                </div>
-              </template>
-            </template>
           </div>
         </div>
 
@@ -2829,7 +3155,82 @@ watch(tmdbId, () => {
           </div>
         </div>
 
-        <!-- 5. Overlay & Border -->
+        <!-- 5. Bounding Box (Uniform Logo templates only) -->
+        <div v-if="isUniformLogo" class="acc-section">
+          <button class="acc-header" @click="toggleSection('boundingBox')">
+            <span>Bounding Box</span>
+            <svg class="acc-chevron" :class="{ open: sectionOpen.boundingBox }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <div v-show="sectionOpen.boundingBox" class="acc-body">
+            <div class="field-hint" style="margin-bottom: 12px;">
+              This box defines where the logo sits. Custom Text can optionally fit itself inside
+              the same box instead of overflowing — handy for a season poster with Logo Mode set
+              to "No Logo" where text takes its place.
+            </div>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="showBoundingBox" />
+              <span>Show bounding box on preview</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="textBboxEnabled" />
+              <span>Restrict Custom Text to this box</span>
+            </label>
+            <div class="slider">
+              <label>Max Width (px)</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoMaxW" type="range" min="50" max="1800" />
+                <input v-model.number="options.uniformLogoMaxW" type="number" min="50" max="1800" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Max Height (px)</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoMaxH" type="range" min="50" max="2800" />
+                <input v-model.number="options.uniformLogoMaxH" type="number" min="50" max="2800" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Box X %</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoOffsetX" type="range" min="0" max="100" />
+                <input v-model.number="options.uniformLogoOffsetX" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Box Y %</label>
+              <div class="slider-row">
+                <input v-model.number="options.uniformLogoOffsetY" type="range" min="0" max="100" />
+                <input v-model.number="options.uniformLogoOffsetY" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Horizontal Align</label>
+              <div class="align-btn-group">
+                <button
+                  v-for="opt in (['left', 'center', 'right'] as const)"
+                  :key="opt"
+                  :class="['align-btn', { active: options.uniformLogoHAlign === opt }]"
+                  @click="options.uniformLogoHAlign = opt"
+                >{{ opt }}</button>
+              </div>
+            </div>
+            <div class="slider">
+              <label>Vertical Align</label>
+              <div class="align-btn-group">
+                <button
+                  v-for="opt in (['top', 'center', 'bottom'] as const)"
+                  :key="opt"
+                  :class="['align-btn', { active: options.uniformLogoVAlign === opt }]"
+                  @click="options.uniformLogoVAlign = opt"
+                >{{ opt }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6. Overlay & Border -->
         <div class="acc-section">
           <button class="acc-header" @click="toggleSection('overlay')">
             <span>Overlay &amp; Border</span>
@@ -2858,14 +3259,24 @@ watch(tmdbId, () => {
             <div v-if="overlayConfigs.length > 0" class="slider">
               <label>Overlay Configs</label>
               <div class="overlay-config-checkboxes">
-                <label v-for="cfg in overlayConfigs" :key="cfg.id" class="checkbox-label overlay-config-item">
-                  <input
-                    type="checkbox"
-                    :checked="options.overlayConfigIds.includes(cfg.id)"
-                    @change="toggleOverlayConfig(cfg.id)"
-                  />
-                  {{ cfg.name }}
-                </label>
+                <div v-for="cfg in overlayConfigs" :key="cfg.id" class="overlay-config-item">
+                  <label class="checkbox-label">
+                    <input
+                      type="checkbox"
+                      :checked="options.overlayConfigIds.includes(cfg.id)"
+                      @change="toggleOverlayConfig(cfg.id)"
+                    />
+                    {{ cfg.name }}
+                  </label>
+                  <label v-if="options.overlayConfigIds.includes(cfg.id)" class="checkbox-label overlay-config-below-row">
+                    <input
+                      type="checkbox"
+                      :checked="options.overlayConfigIdsBelow.includes(cfg.id)"
+                      @change="toggleOverlayConfigBelow(cfg.id)"
+                    />
+                    Place below logo &amp; text
+                  </label>
+                </div>
               </div>
             </div>
             <div class="sub-section-title" style="margin-top: 12px">Labels to Remove</div>
@@ -2894,7 +3305,7 @@ watch(tmdbId, () => {
         <div class="season-title">Seasons</div>
         <div class="season-controls">
           <button @click="selectAllSeasons" class="season-ctrl-btn" title="Select All">All</button>
-          <button @click="deselectAllSeasons" class="season-ctrl-btn" title="Deselect All">None</button>
+          <button @click="deselectAllSeasons" class="season-ctrl-btn" title="Deselect all except the series poster">Series Only</button>
         </div>
       </div>
 
@@ -2911,12 +3322,12 @@ watch(tmdbId, () => {
           <div class="banner-title">{{ currentSeason.title }}</div>
         </div>
         <div class="banner-nav">
-          <button @click="prevSeason" class="nav-btn" title="Previous Season">
+          <button @click="prevSeason" class="nav-btn" title="Previous selected season">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="15 18 9 12 15 6" />
             </svg>
           </button>
-          <button @click="nextSeason" class="nav-btn" title="Next Season">
+          <button @click="nextSeason" class="nav-btn" title="Next selected season">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="9 18 15 12 9 6" />
             </svg>
@@ -2933,7 +3344,7 @@ watch(tmdbId, () => {
             selected: selectedSeasons.has(season.key),
             active: currentSeason && currentSeason.key === season.key
           }"
-          @click="toggleSeasonSelection(season.key)"
+          @click="focusSeason(season.key)"
         >
           <div class="season-thumb-wrap">
             <img
@@ -3056,7 +3467,7 @@ watch(tmdbId, () => {
               <p>Rendering...</p>
             </div>
 
-            <!-- Bounding Box for Uniform Logo -->
+            <!-- Bounding Box (Uniform Logo template) — same box for logo placement and text-bbox mode -->
             <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
           </div>
 
@@ -3066,7 +3477,6 @@ watch(tmdbId, () => {
           <div v-if="renderedPreviews.length" class="rendered-previews-section">
           <div class="carousel-label">
             Rendered Posters ({{ renderedPreviews.filter(p => p.imageUrl).length }})
-            <span class="carousel-hint">Click to load • Scroll to cycle</span>
           </div>
           <div class="carousel-scroll">
             <div
@@ -3074,7 +3484,6 @@ watch(tmdbId, () => {
               :key="preview.seasonKey"
               class="carousel-item"
               :class="{ active: index === activePreviewIndex }"
-              @click="switchToRenderedPreview(index)"
               :title="preview.seasonTitle"
             >
               <template v-if="preview.imageUrl">
@@ -3328,8 +3737,8 @@ watch(tmdbId, () => {
   text-transform: uppercase;
 }
 
-/* Custom poster upload zone */
-.poster-upload-zone {
+/* Custom poster/logo upload zone */
+.poster-upload-zone, .logo-upload-zone {
   position: relative;
   border: 1.5px dashed var(--border, #2a2f3e);
   border-radius: 8px;
@@ -3342,11 +3751,12 @@ watch(tmdbId, () => {
   overflow: hidden;
   margin-bottom: 6px;
 }
-.poster-upload-zone:hover, .poster-upload-zone.drag-over {
+.poster-upload-zone:hover, .poster-upload-zone.drag-over,
+.logo-upload-zone:hover, .logo-upload-zone.drag-over {
   border-color: rgba(61, 214, 183, 0.6);
   background: rgba(61, 214, 183, 0.05);
 }
-.poster-upload-zone.has-upload {
+.poster-upload-zone.has-upload, .logo-upload-zone.has-upload {
   height: 130px;
   cursor: default;
 }
@@ -3367,7 +3777,8 @@ watch(tmdbId, () => {
   opacity: 0;
   transition: opacity 0.15s;
 }
-.poster-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
+.poster-upload-zone.has-upload:hover .upload-overlay,
+.logo-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
 .upload-reselect, .upload-replace, .upload-remove {
   border: 1px solid rgba(255,255,255,0.3);
   background: rgba(255,255,255,0.15);
@@ -3556,6 +3967,43 @@ watch(tmdbId, () => {
 
 .checkbox-label input[type='checkbox'] {
   cursor: pointer;
+}
+
+.overlay-config-below-row {
+  margin-left: 22px;
+  opacity: 0.85;
+  font-size: 0.9em;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: rgba(61, 214, 183, 0.7);
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.align-btn-group {
+  display: flex;
+  gap: 6px;
+}
+
+.align-btn {
+  flex: 1;
+  padding: 5px 0;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-transform: capitalize;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.align-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 .label-chips {
@@ -3898,6 +4346,11 @@ button:disabled {
 
 .season-item.active:hover {
   background: rgba(61, 214, 183, 0.25);
+}
+
+.season-item.active:not(.selected) {
+  opacity: 0.7;
+  border-style: dashed;
 }
 
 .season-item.disabled {
@@ -4532,18 +4985,11 @@ button:disabled {
 .carousel-item {
   flex-shrink: 0;
   width: 100px;
-  cursor: pointer;
   border-radius: 6px;
   overflow: hidden;
   border: 2px solid transparent;
   transition: all 0.2s ease;
   background: rgba(255, 255, 255, 0.02);
-}
-
-.carousel-item:hover {
-  border-color: rgba(99, 102, 241, 0.4);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 .carousel-item.active {

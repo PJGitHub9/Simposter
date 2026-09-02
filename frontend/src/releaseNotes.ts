@@ -10,6 +10,983 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.87',
+    date: '2026-09-02',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Added proper PNG app icons (192px, 512px, and an Apple touch icon) alongside the SVG favicon, for browsers/devices that don\'t render SVG favicons and for "Add to Home Screen" on mobile.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.86',
+    date: '2026-09-02',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed webhook-triggered TV season renders showing "FAILED" in History even when the season poster was already up to date and nothing needed to change — Simposter was crashing on its own logging after correctly determining there was nothing to do.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.85',
+    date: '2026-09-01',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a movie or show removed from Plex retrying forever in the background, generating a new failed entry in History every retry cycle instead of being removed from the retry queue once it was confirmed gone.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.84',
+    date: '2026-09-01',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the browser tab icon (and any other file dropped in the app\'s public assets folder) not showing up when running Simposter in Docker, even though it worked fine in a local dev environment — the built-in web server was serving the wrong content for it.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.83',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the browser tab icon showing up blank — an embedded stylesheet in the favicon (added for light/dark theme support) wasn\'t reliably handled by some browsers\' favicon renderer. Removed it in favor of a simpler, always-visible design.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.82',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the new logo mark looking off in light theme — dropped the dark background square from the sidebar/top bar icon, and the sparkle accent now tracks the current theme\'s text color instead of a fixed near-white that was invisible against a light background.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.81',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a real logo mark next to the Simposter wordmark in the top bar and the sidebar, instead of just text.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.80',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Test Connection" (Settings and the setup wizard) failing with a Plex URL that has a trailing slash — it built a double-slash path that Plex rejects. The URL is also cleaned up automatically when saved, so this can\'t linger even if it was already saved with a trailing slash.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.79',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Docs: Getting Started now covers pulling the pre-built Docker image from GHCR, not just building from source — the old docs incorrectly said no registry image existed.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.78',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          '"Label to Add After Sending" now actually applies the label. The previous fix only added better detection that it wasn\'t working — this release fixes the actual cause: Plex doesn\'t support the "append one label" API call this used, so it now fetches an item\'s existing labels and writes the full set back (existing + new) the way Plex\'s API actually expects.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.77',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'The new "Label to Add After Sending" feature could report success without the label actually landing on the Plex item — it now verifies the label actually stuck (re-checking the item) before considering it done, and tries every fallback method until one genuinely works.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Removed the redundant "Labels to Remove After Sending" field from Settings → Automation — Settings → Libraries\' per-library "Default Labels to Remove" is the one that actually matters and was already covering this.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.76',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added "Kometa Compatibility" (Settings → Libraries) — when enabled, any library you add from now on automatically gets "Overlay" checked in Default Labels to Remove, matching what the startup wizard\'s "Using Kometa?" step already does for libraries selected during onboarding.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Refreshed the "budget-daps" starter preset\'s look (repositioned/resized logo box, lower vignette).',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.75',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a new "textless-border" starter preset and refreshed "budget-daps" with an updated look — now 4 Uniform Logo presets + 2 Kometa presets ship as starter presets (onboarding and Template Manager\'s "Import Simposter defaults").',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.74',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Simposter can now actually tag Plex items with a label after sending a poster (Settings → Automation → "Label to Add After Sending"). Works across every send path — manual, batch, webhook, auto-generate, and resend.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the onboarding wizard\'s "Apply a label after sending a poster?" toggle silently doing nothing — it was wired to the (unrelated) label-removal setting instead of actually adding a label.',
+          'Relabeled Settings → Automation\'s "Default Labels for Webhook Posters" to "Labels to Remove After Sending" and clarified its description — it strips labels, it never added them, despite the old name suggesting otherwise.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.73',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a "Run Startup Wizard" button to Settings → Advanced, so the first-time setup wizard can be re-run any time (e.g. if it was skipped) instead of only appearing on first launch.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.72',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added an "Import Simposter defaults" button to Template Manager\'s Import/Export section — pulls in the same 5 starter presets onboarding offers, any time, not just on first run.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.71',
+    date: '2026-08-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Onboarding now imports a full set of 5 starter presets (3 Uniform Logo looks + 2 Kometa collection presets) instead of just one.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          '"Copy Compact" (Template Manager) and the webhook URL copy button in Settings → Automation no longer fail with "navigator.clipboard is undefined" when the app is reached over plain HTTP.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.70',
+    date: '2026-08-28',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Save As" in the TV editor always failing with "Cannot save season options as new preset" when creating a new preset while viewing a season poster.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.69',
+    date: '2026-08-28',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the TV editor\'s "Save to Disk" sometimes saving a poster with a logo even when Logo Mode was set to "No Logo", and sometimes not applying a season\'s own text color or other custom settings.',
+          'Fixed editing one show or season\'s settings occasionally bleeding into a different season\'s or the series\' saved poster.',
+          'Fixed the "Rendered Posters" thumbnail strip not updating after a settings change until you clicked into that season.',
+          'Fixed adding or removing a Plex library in Settings silently not saving — picking a library from the dropdown could look like it worked but never actually persisted.',
+          'Fixed the "Flat" TV save layout creating a subfolder per show instead of truly flat files, and season posters sometimes saving with the season\'s own label (e.g. "Season 1") instead of the show\'s name.',
+        ]
+      },
+      {
+        title: 'New Features',
+        items: [
+          'Removing a library in Settings now works properly, with a confirmation and full cleanup of its cached posters/labels once you save.',
+          'Adding a new library now automatically scans it as soon as you save, instead of leaving it empty until the next scheduled scan.',
+          'Settings sections now only show "unsaved changes" for the specific section you actually changed.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.68',
+    date: '2026-08-27',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed logo thumbnails sometimes showing up as a blank tile in the logo picker — a resized preview image occasionally failed to load even though the logo itself was fine; it now automatically falls back to the full-size image.',
+          'Fixed logo tiles in the Logos tab sometimes showing up blank after a batch or webhook send — the cached logo was pointing at an external image link instead of a local copy, so it depended on that external source staying available.',
+          'Fixed the "Current Logo" preview at the top of the logo editor popup showing a broken image icon instead of a clean "No logo cached yet" message when its logo failed to load.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.67',
+    date: '2026-08-27',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "No Logo" mode being ignored when using Save to Disk for TV show posters — a logo could still get added even with Logo Mode set to "No Logo". Only affected the manual TV editor\'s Save to Disk button; Send to Plex was never affected.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.66',
+    date: '2026-08-27',
+    sections: [
+      {
+        title: 'Performance',
+        items: [
+          'Sending a poster to Plex (manual or batch) is noticeably faster — the PNG encode now tries a quick pass first and only falls back to the slower, maximum-effort one on the rare poster that actually needs it, with no change in image quality either way.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Backend logs now show the actual movie/show name and how long each step took, instead of just an internal ID — makes it much easier to see what\'s happening during a batch run or troubleshoot a slow send.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.65',
+    date: '2026-08-27',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a Plex status indicator in the top bar so you know right away if your Plex server goes down, instead of finding out when something silently stops working.',
+          'Settings and the setup wizard now note that a Fanart.tv API key is needed for Collection posters to auto-find a logo — TMDb has no artwork for Collections at all.',
+        ]
+      },
+      {
+        title: 'Performance',
+        items: [
+          "Sending a poster to Plex (manual or batch) now reuses an existing connection instead of opening a new one for every upload, and label removal no longer re-fetches metadata it just fetched moments earlier.",
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.64',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the manual "Retry Now" button (History → Retry Queue) always re-sending a poster to Plex even when it still didn\'t meet the template (missing logo, fallback poster/logo used) — it now checks first and only sends when the render actually meets spec, matching how the automatic background retry already worked.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.63',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed posters getting stuck failing to load when quickly cycling through several library pages — the poster/logo endpoints had a rate limit too low for large "Poster Density" page sizes and were getting tripped by normal browsing.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.62',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Performance',
+        items: [
+          'Live preview and rendering could take several seconds to over 10 seconds in some cases — TMDb and Fanart.tv lookups were being re-fetched from scratch on every slider change instead of being reused. These are now cached briefly, which should make editing noticeably snappier.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.61',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the movie/collection editor preview sometimes showing a different movie\'s poster after switching items, or "jumping" back to an older slider value while dragging — a slower, stale render could land after a newer one and overwrite it.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.60',
+    date: '2026-08-24',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a webhook bug that could reprocess the wrong movie or TV show when one TMDb/TVDb ID happened to be a numeric prefix of another (e.g. ID 58 vs ID 5825) — the item matching logic was doing a substring check instead of an exact match.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.59',
+    date: '2026-08-23',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the Kometa Creator not showing a "Preset saved!" confirmation when saving a preset.',
+          'Fixed the Kometa Creator not saving the selected logo with a preset — reloading or reselecting the preset now correctly restores the logo you had set.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.58',
+    date: '2026-08-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'The {folder} save-path variable now works for TV shows, not just movies — resolves to the real on-disk show folder name instead of falling back to the title. Thank you romquenin for the contribution!',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed TV series poster filenames including a stray "(Series)" when using {title} in a save path. Thank you romquenin for the contribution!',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.57',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed items that were deleted or reorganized in Plex getting stuck in the retry queue forever, silently adding a new "failed" entry to History every retry cycle. These are now automatically detected and removed from the queue.',
+          'Failed History entries now show the actual movie/show title when available, instead of just "(rating key 12345)".',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.56',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Kometa Creator now has full logo parity with the Simposter Creator: a "Current Plex Logo" preview, a "Send logo" toggle, and a standalone "Send Logo" button.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the "Choose your creator" popup on the Collections page sometimes appearing off-screen (requiring a scroll to find it) if you\'d scrolled down a long collections list before clicking one.',
+          'Fixed API rate-limiting returning a generic server error instead of a proper "please slow down" response when a client sent too many requests too quickly.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.55',
+    date: '2026-08-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Plex Collections now have two dedicated poster creators, alongside Movies and TV Shows: the Simposter Creator (the familiar manual editor, now genuinely collection-aware — pulls real posters from TMDb) and the new Kometa Creator, a from-scratch poster style with flat/textured backgrounds, gradient fades, a centered logo, text, and a border — modeled on the Kometa community\'s own poster conventions.',
+          'Collection logos: if Fanart.tv has franchise-wide art for a collection (e.g. a shared "The Lord of the Rings" logo), it now loads automatically in both creators. If not, you can manually import a logo from any movie in the collection instead.',
+          'Collections gained their own Save Location setting (Settings → Output), a "Refresh Cache" button, and a working per-card refresh button.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed collections occasionally showing duplicate or blank poster cards after a library scan.',
+          'Fixed some collections resolving to the wrong TMDb collection (e.g. a documentary about a franchise instead of the actual trilogy).',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.54',
+    date: '2026-08-20',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the onboarding wizard\'s TMDb and TVDB "Test" buttons failing with a generic error instead of actually validating the key — they were still using an old request format that pre-dated a security change to those endpoints. Testing keys from Settings was not affected.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.53',
+    date: '2026-08-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a new {season number} template variable for Custom Text — just the season number (e.g. "3"), separate from {season} which always spells out "Season 3" in English. Great for other languages or a custom format.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Raised the logo drop shadow\'s Size/Blur slider max from 150px to 250px.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.52',
+    date: '2026-08-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Moved the logo Drop Shadow controls from the Bounding Box section into the Logo section, since the shadow only ever applies to the logo.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.51',
+    date: '2026-08-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the movie editor not saving overlay config selections into presets — enabling an overlay and saving a preset now actually sticks, so it loads (and applies during batch/webhook renders) next time.',
+        ]
+      },
+      {
+        title: 'New Features',
+        items: [
+          'Deleting an overlay config now tells you which presets use it by name before you confirm, instead of a generic warning — and actually removes it from those presets once deleted.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.50',
+    date: '2026-08-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a "Full Cover" overlay image type that stretches an uploaded gradient/vignette image to fill the whole poster — no positioning needed. Thank you romquenin for the contribution!',
+          'Overlay configs can now be placed below the logo and custom text instead of above, per config, in the Overlay & Border section. Thank you romquenin for the contribution!',
+          'Added a logo drop shadow (color, opacity, angle, distance, size) in the Logo section of both editors. Thank you romquenin for the contribution!',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.49',
+    date: '2026-08-18',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Manual editor decluttering pass: renamed the Logo "Preference" dropdown to "Logo Style" (it sat too close to a similarly-worded but unrelated Logo Mode option), the Preset section starts collapsed to reduce initial clutter, and the Poster section\'s controls are now grouped into Source / Upload & Selection alongside the existing sliders.',
+          'TV editor: fixed a bug where clicking the season you were already viewing would silently remove it from the render batch — it now just does nothing, as expected. Also renamed the "None" season button to "Series Only" (it never actually cleared the selection), added clarifying tooltips around season navigation, and made the "Rendered Posters" strip read-only since its highlight could point at a different season than the one actually in focus.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.48',
+    date: '2026-08-18',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Save As" letting you save a preset name with spaces, which then silently failed to preview or render afterward. Spaces/special characters are now converted automatically (e.g. "Top Overlay" → "Top-Overlay") with a heads-up when that happens.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.47',
+    date: '2026-08-18',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added an independent Top Matte + Fade effect — mirrors the existing bottom matte/fade, but fully separate. Use one, both, or neither.',
+          'The Poster section in the manual editor is now organized into labeled groups (Position, Top Fade, Bottom Fade, Effects) instead of one long list, making room for the new sliders without adding clutter.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.46',
+    date: '2026-08-18',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the {folder} save-path variable never working when sending to Plex (only Save to Disk had it) — it silently fell back to the plain title with no year, or the Plex-localized title for non-English libraries, instead of the real on-disk folder name.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.45',
+    date: '2026-08-17',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Local Assets now supports bulk delete, alongside the existing bulk resend — select multiple posters and delete them all at once.',
+        ]
+      },
+      {
+        title: 'Performance',
+        items: [
+          'Faster preview loading when opening a movie or TV show in the editor for the first time — the poster and logo now download at the same time instead of one after the other. No change to how posters look or render.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.44',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Security',
+        items: [
+          'Routine dependency security updates (backend and frontend). No user-facing changes.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.43',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a {folder} save-path variable (Settings → Output) that resolves to the real on-disk folder name Plex knows for a movie, independent of its display-language title — useful when your save-location template needs to match folder names created by Radarr/Sonarr/Kometa rather than Plex\'s metadata title. Falls back to {title} for TV shows/seasons or when it can\'t be resolved. (Thank you romquenin!)',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the filename sanitizer stripping valid punctuation (commas, apostrophes, ampersands, etc.) from saved poster filenames, causing them to drift from the real on-disk names Radarr/Sonarr/Kometa use (e.g. "Widow\'s Bay" became "Widows Bay").',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.42',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Changing the preset in the TV show editor now re-renders every other selected season/series in the background, not just the one you\'re currently viewing — switching to another poster now shows the new preset right away instead of stale settings from the old one.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.41',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Restrict Custom Text to this box" sometimes not applying a season\'s saved preset value — it was missing from the internal tracking that lets other season-specific settings correctly fall back to what\'s actually saved instead of getting stuck on whatever was last displayed.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.40',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed text overflowing past the bounding box when top or bottom aligned — a small measurement/draw mismatch that barely showed with center alignment became visible once flush top/bottom alignment (added in v1.6.39) had no slack left to absorb it.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.39',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the Bounding Box section\'s Horizontal/Vertical Align buttons having no effect on Custom Text — they only ever moved the logo. Text now honors them too, positioning itself within the box instead of always sitting dead-center.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.38',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          '"Show bounding box" moved from the preview toolbar into the Bounding Box section, next to the other box-related controls.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.37',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the TV show editor\'s ‹ › season-navigation arrows not loading that season\'s settings (bounding box and everything else) — they moved focus but skipped the save/restore step every other way of switching seasons already did.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.36',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          '"Bounding Box" is now its own section in the manual editor (between Custom Text and Overlay & Border) instead of being tucked inside Logo — it holds the box size/position controls plus the "Restrict Custom Text to this box" toggle, since the box is shared between Logo and Custom Text rather than belonging to either one.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.35',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Restrict to Logo Bounding Box" (Custom Text) leaving you with no way to adjust the box — the Position & Size sliders were hidden whenever Logo Mode was set to "No Logo," which is exactly the setup this feature is meant for. They now stay visible regardless of Logo Mode.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.34',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a bug where editing a season poster\'s settings (like the logo bounding box) could, under the right timing, get saved into the series poster\'s settings too instead of staying season-specific — a stale internal flag could momentarily point at the wrong poster type right after switching between series and season.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.33',
+    date: '2026-08-13',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the TV show editor\'s "Rendered Posters" strip sometimes highlighting the wrong thumbnail after switching between already-rendered seasons — the big preview was always correct, just the highlight lagged behind.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.32',
+    date: '2026-08-12',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'TV presets are much smaller now. Season poster settings were always saved as a full duplicate of every field, even though only a handful usually differ from the series settings — they are now stored as just the differences, roughly halving preset size. Existing presets are shrunk automatically the first time the app starts on this version, with no change to how they render.',
+          '"Copy Compact" exports of TV presets are correspondingly smaller too.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.31',
+    date: '2026-08-07',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a TV show editor bug where switching seasons while a preview was still rendering could cause that render to land on the wrong season once it finished, making it look like the preview was stuck or showing the wrong poster.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.30',
+    date: '2026-08-07',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Simposter Asset" studio/streaming badges failing to load in the Overlay Manager preview (502 error, "Private/internal network URLs are not allowed" in the logs). Actual poster generation was never affected — this was preview-only.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.29',
+    date: '2026-08-07',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the retry queue silently emptying itself when a retry attempt hit a transient failure (e.g. a brief network blip) — it was being misread as "fixed" instead of "still needs another try," so a single bad retry pass could wipe out the whole queue at once.',
+          'Fixed "Unknown"-titled FAILED entries in History being impossible to identify — they now show the Plex rating key instead of just "Unknown" when a render fails before the title could be fetched.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.28',
+    date: '2026-08-05',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'The previous logo-cropping fix only covered the standalone "Send Logo" button. Batch renders, webhooks, the retry queue, and auto-generate (i.e. the "Also send logos to Plex" option) were sending logos through a separate, still-unfixed code path — now fixed the same way.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.27',
+    date: '2026-08-04',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Text overlays can now be restricted to a bounding box — turn on "Restrict to Logo Bounding Box" in the Custom Text section and the font size automatically shrinks to fit the same box your logo uses (Logo section → Max Width/Height/Position), instead of overflowing. Handy for season posters or any preset where text takes the place of a logo. The "Show bounding box" preview toggle moved from the Logo section to the preview toolbar, since it is now useful for both.',
+        ]
+      },
+      {
+        title: 'Documentation',
+        items: [
+          'Clarified in Settings → Output that Image Quality settings only affect Preview and Save to Disk — sending to Plex always uses the best quality that fits, regardless of what\'s configured there. (Resending an already-saved file is the one exception — it reuses that file\'s original quality.)',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.26',
+    date: '2026-08-04',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the standalone "Send Logo to Plex" button sometimes producing a cropped-looking logo once uploaded, even though it looked correct everywhere in Simposter. The logo is now cleaned up through the same image pipeline as everything else before sending.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.25',
+    date: '2026-08-04',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the search bar sometimes bouncing you back to the library grid instead of opening the item you selected, when used while already editing something.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.24',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Found the real cause of the "500 Internal Server Error" some users hit sending to Plex: Plex rejects poster uploads over ~10MB, and a high-detail or heavy-grain poster saved as PNG can cross that line. Sending to Plex still uses PNG (full quality, no compression artifacts) whenever it fits, and now automatically falls back to a high-quality JPEG only for the rare poster that would otherwise be too large — so sends can no longer fail this way.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.23',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Security',
+        items: [
+          'Routine dependency security patching — updated several backend and frontend libraries to their latest secure versions. No user-facing behavior changes.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.22',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Sending to Plex now always uploads a lossless, uncompressed version of the poster, regardless of your Output format setting — no more guessing at the "right" quality level. This should fully resolve the lingering artifacts some users saw even after the last release\'s fix.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.21',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Sending to Plex could still show visible JPEG artifacts on some setups, even after last release\'s fix. If your Output format is set to PNG, sending to Plex now uploads PNG (lossless) instead of always converting to JPEG, matching what you\'d get manually re-uploading a saved file. Still-JPEG users get a quality bump on the Plex-bound copy specifically. (This one is a best-effort fix — let us know if it doesn\'t fully resolve it for you.)',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.20',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a Docker build failure ("Unable to connect to deb.debian.org", missing font packages) caused by the build hitting Debian\'s package servers twice instead of once — a transient network blip on the second pass could fail the whole build. Combined into one pass with automatic retries.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.19',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed visible artifacts (color bleeding/blockiness, especially around colored logos) that only showed up on the poster after sending to Plex, never in preview or a local save. Root cause: posters sent to Plex are always converted to JPEG, and the JPEG encoder was using a lower-quality default color setting that\'s more noticeable on that conversion than elsewhere. Fixed for all previews, saves, and sends going forward.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.18',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'You can now upload your own logo in the editor, the same way you could already upload a custom poster — drag and drop or click to upload, in the Logo section for both movies and TV shows. (Thanks Spyro!)',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.17',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed uploading a custom poster or background failing with "Private/internal network URLs are not allowed for this host" — the security check protecting against malicious URLs didn\'t recognize the app\'s own upload endpoint as safe. Uploaded posters/backgrounds now preview, save, and send to Plex normally.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.16',
+    date: '2026-07-31',
+    sections: [
+      {
+        title: 'Documentation',
+        items: [
+          'README\'s setup instructions rewritten — Simposter has never been published to a container registry, so "docker pull"-style examples were misleading. Now leads with the actual supported flow (docker-compose build + run) and explains updating is just "pull the code, rebuild."',
+          'Fixed the Mac/Linux build script (build-docker.sh) so it tags images the same way the Windows one does — previously it never set the Docker tag, so Mac/Linux-built images silently lost the "unmaintained tag" warning banner in the UI.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.15',
     date: '2026-07-27',
     sections: [

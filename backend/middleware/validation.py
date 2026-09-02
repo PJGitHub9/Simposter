@@ -30,7 +30,7 @@ _ALWAYS_BLOCKED_NETWORKS = [
 # Paths that are always served from local disk / this app's own known endpoints, so a
 # private-network host is safe to reach here regardless of which private host it is.
 _SAFE_INTERNAL_PATH_PREFIXES = (
-    "/uploads/",
+    "/api/uploaded/",  # served by backend/api/uploads.py — user-uploaded posters/logos
     "/api/movie/",
     "/api/tv-show/",
     "/api/local-assets/",

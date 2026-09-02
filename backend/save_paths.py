@@ -1,4 +1,3 @@
-# backend/save_paths.py
 """
 Single source of truth for turning a save-location template + render context into a
 final, sanitized, traversal-checked filesystem path.
@@ -25,6 +24,7 @@ from .config import settings
 
 DEFAULT_MOVIE_SAVE_LOCATION = "/config/output/{library}/{title}.jpg"
 DEFAULT_TV_SAVE_LOCATION = "/config/output/{library}/{title} ({year}).jpg"
+DEFAULT_COLLECTION_SAVE_LOCATION = "/config/output/{library}/Collections/{title}.jpg"
 
 # Kept only as the legacy field's default value (for the one-time migration in
 # ui_settings.py) and as a last-resort fallback; no longer exposed in the UI.
@@ -37,13 +37,14 @@ class PathTraversalError(ValueError):
 
 @dataclass
 class SaveContext:
-    media_type: str                     # "movie" | "tv-show"
+    media_type: str                     # "movie" | "tv-show" | "collection"
     title: str
     year: Optional[int] = None
     rating_key: Optional[str] = None
     library_label: Optional[str] = None
     season: Optional[int] = None        # None => movie, or TV series-level poster
     filename_override: Optional[str] = None  # used only when the template has no file suffix
+    folder_name: Optional[str] = None   # real on-disk folder name (from Plex), movies only
 
     @property
     def is_tv(self) -> bool:
@@ -99,8 +100,12 @@ def resolve_library_label(library_id: Optional[str]) -> str:
 def get_save_template(media_type: str = "movie") -> str:
     """Read the save-location template for a media type from UI settings, with a
     DB -> settings.json -> legacy config.json -> hardcoded-default fallback chain."""
-    field = "tvShowSaveLocation" if media_type == "tv-show" else "movieSaveLocation"
-    default = DEFAULT_TV_SAVE_LOCATION if media_type == "tv-show" else DEFAULT_MOVIE_SAVE_LOCATION
+    if media_type == "tv-show":
+        field, default = "tvShowSaveLocation", DEFAULT_TV_SAVE_LOCATION
+    elif media_type == "collection":
+        field, default = "collectionSaveLocation", DEFAULT_COLLECTION_SAVE_LOCATION
+    else:
+        field, default = "movieSaveLocation", DEFAULT_MOVIE_SAVE_LOCATION
 
     try:
         from . import database as db  # local import to avoid circular
@@ -145,8 +150,13 @@ def _resolve_filename_token(ctx: SaveContext) -> str:
 
 def apply_save_location_variables(template: str, ctx: SaveContext) -> str:
     """
-    Substitute {library}/{title}/{year}/{key}/{season}/{filename} in a save-location
-    template.
+    Substitute {library}/{title}/{folder}/{year}/{key}/{season}/{filename} in a
+    save-location template.
+
+    {folder} resolves to the real on-disk folder name Plex knows for this movie
+    (independent of Plex's display-language title) -- falls back to {title} when
+    unavailable (TV shows/seasons, or if Plex lookup failed). See
+    config.get_movie_folder_name().
 
     Two modes, chosen purely by whether the template contains the literal "{filename}"
     (no stored/migrated flag needed — this is recomputed from the template string
@@ -166,6 +176,7 @@ def apply_save_location_variables(template: str, ctx: SaveContext) -> str:
     result = template.replace("{library}", ctx.library_label or "")
     result = result.replace("{year}", str(ctx.year) if ctx.year else "")
     result = result.replace("{key}", ctx.rating_key or "")
+    result = result.replace("{folder}", ctx.folder_name or ctx.title)
 
     if "{filename}" in result:
         result = result.replace("{filename}", _resolve_filename_token(ctx))
@@ -197,7 +208,13 @@ def apply_save_location_variables(template: str, ctx: SaveContext) -> str:
 
 
 def _sanitize(save_path: str) -> str:
-    safe = "".join(c for c in save_path if c.isalnum() or c in " _-/().")
+    """Remove only characters that are genuinely illegal in Windows/Linux filenames.
+    Keeps everything else (including punctuation like , ' & ! that commonly appear
+    in real movie/show titles) -- the previous whitelist silently stripped these,
+    causing generated folder names to drift from the real on-disk names Radarr/
+    Sonarr/Kometa use (e.g. "Widow's Bay" became "Widows Bay")."""
+    illegal = '<>:"\\|?*\0'
+    safe = "".join(c for c in save_path if c not in illegal and ord(c) >= 32)
     return safe.strip()
 
 

@@ -269,7 +269,15 @@ def init_database():
         if "season_options_json" not in cols:
             cursor.execute("ALTER TABLE presets ADD COLUMN season_options_json TEXT NOT NULL DEFAULT '{}' ")
 
-        # Backfill/update season_options_json to ensure all season fields are present
+        # Backfill/normalize season_options_json:
+        # - Empty (newly created column, or a preset with no season customization yet) →
+        #   seed it with the standard season-default overrides, stored as a sparse diff
+        #   against options_json (not a full clone) — see resolve_season_options()/
+        #   diff_season_options() above, which every consumer merges through.
+        # - Already populated → normalize to a diff against options_json. This is a one-time
+        #   bloat cleanup for presets saved before v1.6.32, which stored a full duplicate of
+        #   every field (~45 keys) instead of just the ~8 that actually differ. Diffing an
+        #   already-sparse value is a no-op, so this is safe to run on every startup.
         cursor.execute("""
             SELECT id, options_json, season_options_json
             FROM presets
@@ -277,19 +285,12 @@ def init_database():
         rows = cursor.fetchall()
         for row in rows:
             try:
-                # Load existing season options or create from base
                 season_raw = row["season_options_json"] if "season_options_json" in row.keys() else None
                 base_opts = json.loads(row["options_json"]) if row["options_json"] else {}
 
-                # Check if season_options is empty (newly created column defaults to '{}')
-                # or if it's a non-empty user-customized value
                 is_empty = not season_raw or season_raw.strip() in ("", "{}", "null", "NULL")
 
                 if is_empty:
-                    # Empty season options - initialize from base with season-specific defaults
-                    season_opts = dict(base_opts or {})
-
-                    # Apply season-specific overrides for initial setup
                     season_defaults = {
                         "logo_mode": "none",
                         "poster_filter": "textless",
@@ -302,17 +303,22 @@ def init_database():
                         "letter_spacing": 1,
                         "position_y": 0.85,
                     }
-                    season_opts.update(season_defaults)
-
+                    season_diff = diff_season_options(base_opts, season_defaults)
                     cursor.execute(
                         "UPDATE presets SET season_options_json = ? WHERE id = ?",
-                        (json.dumps(season_opts), row["id"]),
+                        (json.dumps(season_diff), row["id"]),
                     )
                 else:
-                    # User has custom season options - DO NOT overwrite them
-                    # Just ensure it's valid JSON by loading and re-saving
+                    # User has custom season options — normalize storage to a diff against the
+                    # base options without changing effective behavior (resolve_season_options()
+                    # reconstructs the same values from a diff or a full copy identically).
                     season_opts = json.loads(season_raw)
-                    # No changes - preserve user settings exactly as they are
+                    season_diff = diff_season_options(base_opts, season_opts)
+                    if season_diff != season_opts:
+                        cursor.execute(
+                            "UPDATE presets SET season_options_json = ? WHERE id = ?",
+                            (json.dumps(season_diff), row["id"]),
+                        )
             except Exception as backfill_err:
                 logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row["id"], backfill_err)
 
@@ -464,6 +470,12 @@ def init_database():
         coll_cols = [row["name"] for row in cursor.fetchall()]
         if "library_id" not in coll_cols:
             cursor.execute("ALTER TABLE collection_cache ADD COLUMN library_id TEXT DEFAULT 'default'")
+        if "tmdb_collection_id" not in coll_cols:
+            # Resolved once via a title search against TMDb's /search/collection
+            # (Plex collections carry no TMDb ID of their own) and cached here so
+            # opening the Simposter Creator for the same collection again doesn't
+            # repeat that search — see get_collection_tmdb_id()/set_collection_tmdb_id().
+            cursor.execute("ALTER TABLE collection_cache ADD COLUMN tmdb_collection_id INTEGER")
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_collection_cache_updated
             ON collection_cache(updated_at)
@@ -919,6 +931,7 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "fanart.apiKey",
     "automation.webhookSecret",
     "automation.webhookAutoLabels",
+    "automation.labelToAdd",
     "notifications.discordWebhookUrl",
 }
 
@@ -1076,6 +1089,31 @@ def save_log_config(config: Dict[str, Any]) -> None:
 #  Presets Operations
 # ============================================
 
+def resolve_season_options(options: Dict[str, Any], season_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge season-specific overrides on top of the base preset options.
+
+    season_options_json may hold either a sparse diff (only the fields that differ from
+    options — the format used since v1.6.32) or a full legacy copy of every field — both
+    resolve identically here, since a value equal to the base is a harmless no-op overwrite.
+    Every consumer that needs the effective season option set must go through this function
+    rather than treating season_options as already-complete on its own.
+    """
+    return {**(options or {}), **(season_options or {})}
+
+
+def diff_season_options(options: Dict[str, Any], season_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Reduce season_options to only the fields that actually differ from options.
+
+    This is what keeps season_options_json small instead of duplicating the ~45-field base
+    preset. Idempotent — diffing an already-sparse dict returns it unchanged — so it's safe
+    to run on both new saves and legacy full-copy data (the startup migration in
+    init_database() uses this to shrink existing presets in place).
+    """
+    options = options or {}
+    season_options = season_options or {}
+    return {k: v for k, v in season_options.items() if k not in options or options[k] != v}
+
+
 def get_all_presets() -> Dict[str, Dict[str, Any]]:
     """
     Get all presets organized by template_id.
@@ -1149,8 +1187,9 @@ def save_preset(template_id: str, preset_id: str, name: str, options: Dict[str, 
         options_json = json.dumps(options)
 
         if season_options is not None:
-            # Caller explicitly provided season_options — write them.
-            season_json = json.dumps(season_options)
+            # Caller explicitly provided season_options — store only what differs from
+            # options, regardless of whether the caller sent a full copy or a diff already.
+            season_json = json.dumps(diff_season_options(options, season_options))
             cursor.execute("""
                 INSERT INTO presets (id, template_id, name, options_json, season_options_json, updated_at)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -1259,12 +1298,33 @@ def delete_overlay_config(config_id: str) -> bool:
     """Delete an overlay configuration. Returns True if deleted, False if not found."""
     with get_db() as conn:
         cursor = conn.cursor()
-        # First, unlink any presets using this overlay config
+
+        # Unlink the legacy singular column (kept for old data; no live write path today)
         cursor.execute("""
             UPDATE presets
             SET overlay_config_id = NULL
             WHERE overlay_config_id = ?
         """, (config_id,))
+
+        # Strip this id out of every preset's live overlay_config_ids / overlay_config_ids_below
+        # arrays — without this, a deleted config's id lingers forever inside options_json
+        # (harmless at render time, since _apply_overlay_element already skips missing configs,
+        # but confusing/stale saved state otherwise).
+        cursor.execute("SELECT id, template_id, options_json FROM presets")
+        for row in cursor.fetchall():
+            opts = json.loads(row["options_json"])
+            changed = False
+            for key in ("overlay_config_ids", "overlay_config_ids_below"):
+                ids = opts.get(key)
+                if ids and config_id in ids:
+                    opts[key] = [cid for cid in ids if cid != config_id]
+                    changed = True
+            if changed:
+                cursor.execute(
+                    "UPDATE presets SET options_json = ?, updated_at = CURRENT_TIMESTAMP WHERE template_id = ? AND id = ?",
+                    (json.dumps(opts), row["template_id"], row["id"])
+                )
+
         # Then delete the config
         cursor.execute("""
             DELETE FROM overlay_configs WHERE id = ?
@@ -1274,6 +1334,31 @@ def delete_overlay_config(config_id: str) -> bool:
     if deleted:
         logger.info(f"[DB] Deleted overlay config {config_id}")
     return deleted
+
+
+def get_presets_using_overlay_config(config_id: str) -> List[Dict[str, str]]:
+    """Find every preset whose saved options reference this overlay config, via the
+    live overlay_config_ids / overlay_config_ids_below arrays (the only mechanism
+    actually reachable from the UI today — the legacy singular presets.overlay_config_id
+    column has no live write path, checked separately below for completeness on older data).
+    Used to warn the user, by preset name, before they delete a config that's in use."""
+    results = []
+    all_presets = get_all_presets()
+    for template_id, template_data in all_presets.items():
+        for preset in template_data.get("presets", []):
+            opts = preset.get("options") or {}
+            ids = set(opts.get("overlay_config_ids") or []) | set(opts.get("overlay_config_ids_below") or [])
+            if config_id in ids:
+                results.append({"template_id": template_id, "preset_id": preset["id"], "name": preset.get("name") or preset["id"]})
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT template_id, id, name FROM presets WHERE overlay_config_id = ?", (config_id,))
+        for row in cursor.fetchall():
+            if not any(r["template_id"] == row["template_id"] and r["preset_id"] == row["id"] for r in results):
+                results.append({"template_id": row["template_id"], "preset_id": row["id"], "name": row["name"] or row["id"]})
+
+    return results
 
 
 def get_all_overlay_assets() -> List[Dict[str, Any]]:
@@ -1386,7 +1471,7 @@ def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
                 if not pid:
                     continue
                 options_json = json.dumps(options)
-                season_options_json = json.dumps(preset.get("season_options") or {})
+                season_options_json = json.dumps(diff_season_options(options, preset.get("season_options") or {}))
                 cursor.execute("""
                     INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -1428,7 +1513,7 @@ def merge_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
                         suffix += 1
 
                 options_json = json.dumps(options)
-                season_options_json = json.dumps(preset.get("season_options") or {})
+                season_options_json = json.dumps(diff_season_options(options, preset.get("season_options") or {}))
                 cursor.execute("""
                     INSERT INTO presets (id, template_id, name, options_json, season_options_json, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -2115,15 +2200,24 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
     Replace cache entries to match the provided collections list.
     Also removes orphaned poster files.
     """
+    # Defensively skip any entry with no rating_key — a prior bug (fixed) briefly
+    # let a shape-mismatched caller write rows with rating_key=NULL here. Since
+    # SQL's `NULL NOT IN (...)` is neither true nor false, the orphan-cleanup
+    # query below silently could never match/delete those rows once written —
+    # they'd sit as permanent duplicate "blank poster" entries. Guarding the
+    # insert here stops new ones; the `IS NULL OR` below cleans up existing ones.
+    collections = [c for c in collections if c.get("rating_key")]
     keys = [c["rating_key"] for c in collections]
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # Get rating_keys that will be deleted (orphaned entries)
+        # Get rating_keys that will be deleted (orphaned entries) — `rating_key IS
+        # NULL OR rating_key NOT IN (...)` so any already-corrupted NULL-keyed
+        # rows are finally caught too (plain `NOT IN` never matches NULL).
         if keys:
             cursor.execute(f"""
                 SELECT rating_key FROM collection_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+                WHERE (rating_key IS NULL OR rating_key NOT IN ({",".join("?" for _ in keys)})) AND library_id = ?
             """, keys + [library_id])
             orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
         else:
@@ -2150,11 +2244,15 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
                 library_id,
             ))
 
-        # Drop database entries that are no longer present
+        # Drop database entries that are no longer present (including any
+        # NULL-keyed rows — see the IS NULL note above). Deliberately left as
+        # the original `if keys:` guard — an empty incoming list intentionally
+        # leaves existing rows alone rather than wiping the cache, in case
+        # that's a transient/failed fetch rather than a genuinely empty library.
         if keys:
             cursor.execute(f"""
                 DELETE FROM collection_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+                WHERE (rating_key IS NULL OR rating_key NOT IN ({",".join("?" for _ in keys)})) AND library_id = ?
             """, keys + [library_id])
 
     # Clean up orphaned poster files on disk
@@ -2193,6 +2291,28 @@ def get_cached_collections(library_id: Optional[str] = None) -> List[Dict[str, A
             "library_id": row["library_id"],
         })
     return out
+
+
+def get_collection_tmdb_id(rating_key: str) -> Optional[int]:
+    """Previously-resolved TMDb collection ID for a Plex collection, if any.
+    None means "never looked up yet" — distinct from a stored 0/negative
+    sentinel, which callers may use for "looked up, no match found"."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT tmdb_collection_id FROM collection_cache WHERE rating_key = ?", (rating_key,))
+        row = cursor.fetchone()
+    if row is None or row["tmdb_collection_id"] is None:
+        return None
+    return int(row["tmdb_collection_id"])
+
+
+def set_collection_tmdb_id(rating_key: str, tmdb_collection_id: Optional[int]) -> None:
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE collection_cache SET tmdb_collection_id = ? WHERE rating_key = ?",
+            (tmdb_collection_id, rating_key),
+        )
 
 
 def get_collection_cache_stats(library_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2619,6 +2739,18 @@ def remove_from_retry_queue(rating_key: str) -> None:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM poster_retry_queue WHERE rating_key = ?", (rating_key,))
     logger.debug("[RETRY] Removed %s from retry queue (manual override)", rating_key)
+
+
+def clear_retry_queue_for_library(library_id: str) -> int:
+    """Remove every retry queue entry for a library (used when a library is removed
+    from Settings — there's no point retrying posters for a library Simposter no
+    longer tracks). Returns the number of rows removed."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM poster_retry_queue WHERE library_id = ?", (library_id,))
+        removed = cursor.rowcount
+    logger.info("[RETRY] Cleared %d retry queue entries for library %s", removed, library_id)
+    return removed
 
 
 def get_pending_retry_items(max_attempts: int = 0) -> List[Dict[str, Any]]:

@@ -62,7 +62,9 @@ const watchersEnabled = ref(false)
 const sectionsWithChanges = ref({
   appearance: false,
   output: false,
-  connections: false,
+  plexConnection: false,
+  movieLibraries: false,
+  tvLibraries: false,
   apiKeys: false,
   imageQuality: false,
   performance: false,
@@ -86,6 +88,7 @@ const localTimezone = ref('UTC')
 const localSaveLocation = ref('')  // Legacy, kept for backwards compatibility
 const localMovieSaveLocation = ref('/config/output/{library}/{title}.jpg')
 const localTvShowSaveLocation = ref('/config/output/{library}/{title}.jpg')
+const localCollectionSaveLocation = ref('/config/output/{library}/Collections/{title}.jpg')
 const localTvShowSaveMode = ref('flat')
 const localSaveBatch = ref(false)
 const localSaveToAssetFolderOnSend = ref(false)
@@ -99,6 +102,11 @@ const localLibraries = ref<LibraryMapping[]>([])
 const savedLibraryIds = ref<Set<string>>(new Set())
 const localTvShowLibraries = ref<LibraryMapping[]>([])
 const savedTvShowLibraryIds = ref<Set<string>>(new Set())
+// Library IDs confirmed-removed via LibrariesTab's Remove button (see its own confirm()
+// dialog) -- cache cleanup for these is deferred until the settings save actually
+// succeeds, rather than firing immediately on Remove, so a removal isn't "final" until
+// you save, consistent with every other change on this page.
+const pendingLibraryCacheCleanup = ref<Set<string>>(new Set())
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 const localFanartApiKey = ref('')
@@ -121,6 +129,8 @@ let scanPoller: number | null = null
 // Automation settings
 const localWebhookAutoSend = ref(true)
 const localWebhookAutoLabels = ref('Overlay')
+const localLabelToAdd = ref('')
+const localKometaCompatibility = ref(false)
 const localWebhookAlwaysRegenerateSeason = ref(false)
 const localWebhookSecret = ref('')
 const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
@@ -195,6 +205,7 @@ const loadLocalSettings = async () => {
   localSaveLocation.value = settings.saveLocation.value
   localMovieSaveLocation.value = settings.movieSaveLocation.value
   localTvShowSaveLocation.value = settings.tvShowSaveLocation.value
+  localCollectionSaveLocation.value = settings.collectionSaveLocation.value
   localTvShowSaveMode.value = settings.tvShowSaveMode.value || 'flat'
   localSaveBatch.value = settings.saveBatchInSubfolder.value
   localSaveToAssetFolderOnSend.value = settings.saveToAssetFolderOnSend.value
@@ -268,6 +279,8 @@ const loadLocalSettings = async () => {
   localSchedulerLibraryIds.value = settings.scheduler.value.libraryIds || []
   localWebhookAutoSend.value = settings.automation?.value?.webhookAutoSend ?? true
   localWebhookAutoLabels.value = settings.automation?.value?.webhookAutoLabels ?? 'Overlay'
+  localLabelToAdd.value = settings.automation?.value?.labelToAdd ?? ''
+  localKometaCompatibility.value = settings.automation?.value?.kometaCompatibility ?? false
   localWebhookAlwaysRegenerateSeason.value = settings.automation?.value?.webhookAlwaysRegenerateSeason ?? false
   localWebhookSecret.value = settings.automation?.value?.webhookSecret ?? ''
   localExistingContentMode.value = (settings.automation?.value?.existingContentMode as 'resend' | 'regenerate') ?? 'regenerate'
@@ -304,6 +317,7 @@ const captureSettingsSnapshot = () => {
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
     tvShowSaveLocation: localTvShowSaveLocation.value,
+    collectionSaveLocation: localCollectionSaveLocation.value,
     tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
     saveToAssetFolderOnSend: localSaveToAssetFolderOnSend.value,
@@ -331,6 +345,8 @@ const captureSettingsSnapshot = () => {
     schedulerLibraryIds: localSchedulerLibraryIds.value,
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
+    labelToAdd: localLabelToAdd.value,
+    kometaCompatibility: localKometaCompatibility.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
     webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
@@ -356,7 +372,9 @@ const captureSettingsSnapshot = () => {
 
   sectionsWithChanges.value.appearance = false
   sectionsWithChanges.value.output = false
-  sectionsWithChanges.value.connections = false
+  sectionsWithChanges.value.plexConnection = false
+  sectionsWithChanges.value.movieLibraries = false
+  sectionsWithChanges.value.tvLibraries = false
   sectionsWithChanges.value.apiKeys = false
   sectionsWithChanges.value.imageQuality = false
   sectionsWithChanges.value.performance = false
@@ -378,6 +396,7 @@ const checkForChanges = () => {
     saveLocation: localSaveLocation.value,
     movieSaveLocation: localMovieSaveLocation.value,
     tvShowSaveLocation: localTvShowSaveLocation.value,
+    collectionSaveLocation: localCollectionSaveLocation.value,
     tvShowSaveMode: localTvShowSaveMode.value,
     saveBatch: localSaveBatch.value,
     saveToAssetFolderOnSend: localSaveToAssetFolderOnSend.value,
@@ -405,6 +424,8 @@ const checkForChanges = () => {
     schedulerLibraryIds: localSchedulerLibraryIds.value,
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
+    labelToAdd: localLabelToAdd.value,
+    kometaCompatibility: localKometaCompatibility.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
     webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
@@ -441,14 +462,17 @@ const checkForChanges = () => {
     localSaveLocation.value !== initial.saveLocation ||
     localMovieSaveLocation.value !== initial.movieSaveLocation ||
     localTvShowSaveLocation.value !== initial.tvShowSaveLocation ||
+    localCollectionSaveLocation.value !== initial.collectionSaveLocation ||
     localTvShowSaveMode.value !== initial.tvShowSaveMode ||
     localSaveBatch.value !== initial.saveBatch ||
     localSaveToAssetFolderOnSend.value !== initial.saveToAssetFolderOnSend
 
-  sectionsWithChanges.value.connections =
+  sectionsWithChanges.value.plexConnection =
     localPlexUrl.value !== initial.plexUrl ||
-    localPlexToken.value !== initial.plexToken ||
-    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries) ||
+    localPlexToken.value !== initial.plexToken
+  sectionsWithChanges.value.movieLibraries =
+    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries)
+  sectionsWithChanges.value.tvLibraries =
     JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries)
 
   sectionsWithChanges.value.performance =
@@ -472,6 +496,7 @@ const saveSettings = async () => {
   settings.saveLocation.value = localSaveLocation.value
   settings.movieSaveLocation.value = localMovieSaveLocation.value
   settings.tvShowSaveLocation.value = localTvShowSaveLocation.value
+  settings.collectionSaveLocation.value = localCollectionSaveLocation.value
   settings.tvShowSaveMode.value = localTvShowSaveMode.value
   settings.saveBatchInSubfolder.value = localSaveBatch.value
   settings.saveToAssetFolderOnSend.value = localSaveToAssetFolderOnSend.value
@@ -531,6 +556,8 @@ const saveSettings = async () => {
   settings.automation.value = {
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
+    labelToAdd: localLabelToAdd.value,
+    kometaCompatibility: localKometaCompatibility.value,
     webhookAlwaysRegenerateSeason: localWebhookAlwaysRegenerateSeason.value,
     webhookSecret: localWebhookSecret.value,
     existingContentMode: localExistingContentMode.value,
@@ -555,16 +582,68 @@ const saveSettings = async () => {
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
   }
 
+  // Capture which libraries are newly-added (present now, weren't in the last-saved set)
+  // before savedLibraryIds/savedTvShowLibraryIds get overwritten below, so we know which
+  // ones to auto-scan once the save actually succeeds.
+  const newlyAddedMovieLibraryIds = localLibraries.value.filter(l => l.id && !savedLibraryIds.value.has(String(l.id))).map(l => String(l.id))
+  const newlyAddedTvLibraryIds = localTvShowLibraries.value.filter(l => l.id && !savedTvShowLibraryIds.value.has(String(l.id))).map(l => String(l.id))
+  const newlyAddedLibraryIds = [...newlyAddedMovieLibraryIds, ...newlyAddedTvLibraryIds]
+
+  // Kometa Compatibility: auto-check "Overlay" for any library added since the last save
+  // (settings.defaultLabelsToRemove/defaultTvLabelsToRemove.value already hold what's about
+  // to be saved, assigned above from localDefaultLabelsToRemove/localDefaultTvLabelsToRemove).
+  // Mirrors what the startup wizard's "Using Kometa?" toggle does for libraries selected
+  // during onboarding — this covers the same thing for libraries added afterward.
+  if (localKometaCompatibility.value) {
+    for (const id of newlyAddedMovieLibraryIds) {
+      const current = settings.defaultLabelsToRemove.value[id] || []
+      if (!current.includes('Overlay')) {
+        settings.defaultLabelsToRemove.value = { ...settings.defaultLabelsToRemove.value, [id]: [...current, 'Overlay'] }
+      }
+    }
+    for (const id of newlyAddedTvLibraryIds) {
+      const current = settings.defaultTvLabelsToRemove.value[id] || []
+      if (!current.includes('Overlay')) {
+        settings.defaultTvLabelsToRemove.value = { ...settings.defaultTvLabelsToRemove.value, [id]: [...current, 'Overlay'] }
+      }
+    }
+  }
+
   await settings.save()
 
   if (!settings.error.value) {
     await updateScheduler()
   }
 
+  // Now that the settings save itself succeeded, purge cache/DB references for any
+  // library removed (with confirmation) since the last save. Deferred to this point
+  // rather than firing at Remove-click time so a removal isn't "final" until saved.
+  if (!settings.error.value && pendingLibraryCacheCleanup.value.size > 0) {
+    const apiBase = getApiBase()
+    for (const libraryId of pendingLibraryCacheCleanup.value) {
+      try {
+        await fetch(`${apiBase}/api/library/${libraryId}`, { method: 'DELETE' })
+      } catch (e) {
+        console.error('[SETTINGS] Failed to clean up cache for removed library', libraryId, e)
+      }
+    }
+    pendingLibraryCacheCleanup.value = new Set()
+  }
+
   saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
   savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
   savedTvShowLibraryIds.value = new Set(localTvShowLibraries.value.filter(l => l.id).map(l => String(l.id)))
+
+  // Auto-scan any newly-added library now that it's actually saved -- otherwise it'd sit
+  // there empty until the next scheduled scan or a manual click, which isn't obvious for
+  // a library you just added. Sequential (not Promise.all) since scanLibrary() guards
+  // against overlapping scans and would just reject a concurrent second call.
+  if (!settings.error.value && newlyAddedLibraryIds.length > 0) {
+    for (const libraryId of newlyAddedLibraryIds) {
+      await scanLibrary(libraryId)
+    }
+  }
 
   watchersEnabled.value = false
   await nextTick()
@@ -1072,6 +1151,7 @@ watch([
   localSaveLocation,
   localMovieSaveLocation,
   localTvShowSaveLocation,
+  localCollectionSaveLocation,
   localSaveBatch,
   localSaveToAssetFolderOnSend,
   localDefaultLabelsToRemove,
@@ -1271,9 +1351,13 @@ onMounted(() => {
         :defaultTvLabelsToRemove="localDefaultTvLabelsToRemove"
         :unsavedChanges="hasUnsavedChanges"
         :schedulerChanged="sectionsWithChanges.scheduler"
-        :connectionsChanged="sectionsWithChanges.connections"
+        :plexConnectionChanged="sectionsWithChanges.plexConnection"
+        :movieLibrariesChanged="sectionsWithChanges.movieLibraries"
+        :tvLibrariesChanged="sectionsWithChanges.tvLibraries"
         :sendLogosToPlex="localSendLogosToPlex"
+        :kometaCompatibility="localKometaCompatibility"
         @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
+        @update:kometaCompatibility="localKometaCompatibility = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
         @update:libraries="localLibraries = $event; hasUnsavedChanges = true"
@@ -1286,6 +1370,7 @@ onMounted(() => {
         @test-connection="testPlexConnection"
         @scan-library="scanLibrary"
         @save="saveSettings"
+        @library-removed="pendingLibraryCacheCleanup.add($event)"
       />
 
       <!-- Integrations content removed -->
@@ -1294,6 +1379,7 @@ onMounted(() => {
         v-if="activeTab === 'output'"
         :movieSaveLocation="localMovieSaveLocation"
         :tvShowSaveLocation="localTvShowSaveLocation"
+        :collectionSaveLocation="localCollectionSaveLocation"
         :tvShowSaveMode="localTvShowSaveMode"
         :saveBatchInSubfolder="localSaveBatch"
         :saveToAssetFolderOnSend="localSaveToAssetFolderOnSend"
@@ -1305,6 +1391,7 @@ onMounted(() => {
         :unsavedChanges="hasUnsavedChanges"
         @update:movieSaveLocation="localMovieSaveLocation = $event"
         @update:tvShowSaveLocation="localTvShowSaveLocation = $event"
+        @update:collectionSaveLocation="localCollectionSaveLocation = $event"
         @update:tvShowSaveMode="localTvShowSaveMode = $event"
         @update:saveBatchInSubfolder="localSaveBatch = $event"
         @update:saveToAssetFolderOnSend="localSaveToAssetFolderOnSend = $event"
@@ -1339,6 +1426,7 @@ onMounted(() => {
         v-if="activeTab === 'automation'"
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
+        :labelToAdd="localLabelToAdd"
         :webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason"
         :webhookSecret="localWebhookSecret"
         :existingContentMode="localExistingContentMode"
@@ -1349,6 +1437,7 @@ onMounted(() => {
         :unsavedChanges="hasUnsavedChanges"
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAutoLabels="localWebhookAutoLabels = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:labelToAdd="localLabelToAdd = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookAlwaysRegenerateSeason="localWebhookAlwaysRegenerateSeason = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:webhookSecret="localWebhookSecret = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:existingContentMode="localExistingContentMode = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
