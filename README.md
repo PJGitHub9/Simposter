@@ -1,6 +1,4 @@
-<img src=".github/icon-512.png" alt="Simposter logo" width="96" height="96">
-
-# Simposter
+# <img src=".github/icon-512.png" alt="Simposter logo" width="50" height="50"> Simposter
 
 > **Template-based poster generation for Plex** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
 
