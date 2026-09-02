@@ -5,7 +5,7 @@ python-dotenv==1.2.2
 pydantic-settings==2.15.0
 python-multipart==0.0.32
 pillow==12.3.0
-numpy==2.2.6
+numpy==2.5.2
 cairosvg==2.9.0
 apscheduler==3.11.3
 apprise==1.9.3

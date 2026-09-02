@@ -17,7 +17,7 @@ ENV VITE_API_URL=${VITE_API_URL}
 RUN npm ci && npm run build
 
 # ---------- Backend/runtime stage ----------
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
