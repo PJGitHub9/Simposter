@@ -57,7 +57,8 @@ Prefer not to build locally? Pre-built images are published to [ghcr.io/pjgithub
 A few related projects solve overlapping problems — no affiliation with any of them, just worth knowing which fits:
 
 - **[Kometa](https://kometa.wiki/)** manages your whole Plex metadata/collection setup, including posters pulled from its own defaults repo. Simposter is poster-generation-only, with a live in-app editor and per-item control — the two pair well together (Simposter's Kometa Creator for Collections is directly modeled on Kometa's own poster conventions).
-- **[Posterizarr](https://github.com/fscorrupt/Posterizarr)** is a similar automation-first poster tool. Simposter leans more toward interactive editing (live preview, manual per-item tuning) alongside its automation, rather than automation-only.
+- **[Posterizarr](https://github.com/fscorrupt/Posterizarr)** is best for mass library operations — a similar automation-first poster tool, but it misses out on manual per-item customization. Simposter leans more toward interactive editing (live preview, manual per-item tuning) alongside its automation, rather than automation-only.
+- **[PosterTools](https://postertools.org/square-lab/)** is best for non-selfhosters — a hosted poster/title-card creation tool, no server to run yourself.
 - **[TitleCardMaker](https://github.com/CollinHeist/TitleCardMaker)** focuses specifically on TV episode title cards, a different artifact than posters.
 - **[UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Shows-for-Kometa)** generates "coming soon" overlays, a narrower and complementary use case.
 
