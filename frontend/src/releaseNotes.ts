@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.100',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Logos, Backdrops, and Square Art now paginate like Movies/TV Shows do, using the same "Poster Density" setting for page size — previously every item in the library loaded and rendered at once on these three pages, which is what was triggering the rate-limit errors below on larger libraries.',
+          'Logos, Backdrops, and Square Art now load instantly on repeat visits, same as Movies/TV Shows — previously every visit paid a full network round-trip even though the underlying data was often already cached from viewing Movies/TV Shows moments earlier.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Rate limit exceeded" (429) errors when browsing Backdrops or Square Art on a larger library — those two endpoints had no dedicated rate limit and fell through to a low default meant for infrequently-called endpoints, unlike Movies/TV Shows/Logos which already had a higher limit.',
+          'Fixed the "Current Backdrop"/"Current Logo" preview in their respective editor modals not updating right after a successful Send to Plex — it kept showing the old image until the modal was closed and reopened.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.99',
     date: '2026-09-19',
     sections: [

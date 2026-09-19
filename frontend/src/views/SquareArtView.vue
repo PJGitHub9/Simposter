@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import SquareArtModal from '@/components/SquareArtModal.vue'
 import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
+import { usePagedItems } from '@/composables/usePagedItems'
 
 type SquareArtItem = {
   key: string
@@ -47,6 +48,9 @@ const displayItems = computed(() => {
   })
   return list
 })
+
+const { page, totalPages, pagedItems, nextPage, prevPage, resetPage } = usePagedItems(displayItems)
+watch([filter, search, sortBy], resetPage)
 
 function refresh() {
   failedImages.value = new Set()
@@ -129,7 +133,7 @@ onMounted(refresh)
 
     <div v-else class="art-grid">
       <div
-        v-for="item in displayItems"
+        v-for="item in pagedItems"
         :key="item.key"
         class="art-card"
         :class="{ 'has-art': !!item.square_art_url && !failedImages.has(item.key) }"
@@ -154,6 +158,12 @@ onMounted(refresh)
           <span v-if="item.year" class="art-year">{{ item.year }}</span>
         </div>
       </div>
+    </div>
+
+    <div v-if="!loading && displayItems.length > 0" class="pagination-bar">
+      <button class="page-btn" @click="prevPage" :disabled="page === 1">Prev</button>
+      <span class="page-indicator">{{ page }} / {{ totalPages }}</span>
+      <button class="page-btn" @click="nextPage" :disabled="page === totalPages">Next</button>
     </div>
   </div>
 
@@ -303,6 +313,43 @@ onMounted(refresh)
   text-align: center;
   color: #a8b3cf;
   font-size: 14px;
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 10px 12px;
+}
+
+.page-btn {
+  padding: 5px 14px;
+  font-size: 13px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9d1e0;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(61, 214, 183, 0.35);
+  color: #eef2ff;
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.page-indicator {
+  font-size: 13px;
+  color: #a8b3cf;
+  min-width: 60px;
+  text-align: center;
 }
 
 /* Grid — square (1:1) thumbnails, mirroring what square art itself will look like */

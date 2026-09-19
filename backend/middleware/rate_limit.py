@@ -74,6 +74,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/movie": 2000,
             "/api/tv-show": 2000,
             "/api/logo": 1500,
+            # Backdrops/Square Art are the same trust class as Logo above (cheap
+            # per-item disk-cache reads, not live external API calls in the common
+            # case) but were never added here -- they fell through to the low
+            # default_limit (300/60s), which the Backdrops/Logos/Square Art library
+            # views' own pagination (added alongside this fix) still exceeds on a
+            # single page at max Poster Density before this.
+            "/api/backdrop": 1500,
+            "/api/square-art": 1500,
 
             # Moderate operations
             "/api/tmdb": 40,  # Match TMDB's own limit
