@@ -12,7 +12,7 @@ from ..config import settings, plex_headers, plex_session, logger
 
 
 def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, direct_endpoint: Optional[str] = None):
-    """Returns (cache_path, cache_url, save_cache, fetch_and_cache) for one asset type.
+    """Returns (cache_path, cache_url, save_cache, fetch_and_cache, get_or_create_thumbnail) for one asset type.
 
     cache_dir: on-disk directory (e.g. LOGO_CACHE_DIR, ART_CACHE_DIR)
     route_prefix: the serving route's path segment (e.g. "logo", "backdrop") -- used
@@ -115,4 +115,31 @@ def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, dire
             logger.debug("[ART_CACHE:%s] Failed to fetch Plex asset for %s: %s", plex_image_type, rating_key, e)
             return None
 
-    return cache_path, cache_url, save_cache, fetch_and_cache
+    def get_or_create_thumbnail(rating_key: str, source: Path, max_dim: int = 480, quality: int = 80) -> Optional[Path]:
+        """Downscaled JPEG derivative of an already-cached full-size asset, purely
+        for fast grid browsing -- the source file itself is untouched and is still
+        what the editor modal's "Current X" preview and any Plex re-send actually
+        use. Backdrops (photographic) and especially Square Art (a freshly
+        Simposter-rendered 2000x2000 PNG once an item has been sent) can be several
+        MB; Poster grid tiles don't have this problem because Plex's own /thumb
+        convenience path (which posters fetch through) already serves a
+        pre-downscaled preview -- there's no equivalent for /art or /squareArt, so
+        without this every grid tile downloaded the full original.
+        Regenerated automatically whenever the source is newer than the last
+        thumbnail (e.g. after a fresh send overwrites the cached file)."""
+        thumb_dir = _cache_dir / "thumbs"
+        thumb_path = thumb_dir / f"{rating_key}.jpg"
+        try:
+            if thumb_path.exists() and thumb_path.stat().st_mtime >= source.stat().st_mtime:
+                return thumb_path
+            from PIL import Image
+            thumb_dir.mkdir(parents=True, exist_ok=True)
+            img = Image.open(source).convert("RGB")
+            img.thumbnail((max_dim, max_dim))
+            img.save(thumb_path, "JPEG", quality=quality)
+            return thumb_path
+        except Exception as e:
+            logger.debug("[ART_CACHE:%s] Failed to generate thumbnail for %s: %s", plex_image_type, rating_key, e)
+            return None
+
+    return cache_path, cache_url, save_cache, fetch_and_cache, get_or_create_thumbnail

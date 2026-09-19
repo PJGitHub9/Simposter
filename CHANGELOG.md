@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.6.102 (2026-09-19)
+### Improvements
+- **Logos, Backdrops, and Square Art now genuinely match Movies/TV Shows on caching and load speed**, in response to a direct comparison question ("how is the poster frontend so snappy vs logo/squareart/backdrops") plus a real production log confirming the caching *logic* was already correct (nothing was actually re-fetching from Plex per-item) — the gap was entirely in image size and HTTP caching:
+  - `Cache-Control` on `/api/logo/{id}`, `/api/backdrop/{id}`, and `/api/square-art/{id}` changed from `no-cache` (forces the browser to revalidate with the server on *every* load, even for an unchanged image) to `public, max-age=31536000, immutable` — the same header posters already use. Safe because every URL is already versioned with `?v=<mtime>` (a content change always produces a new URL), so once the browser has an image it now never asks again.
+  - Backdrops and Square Art grid tiles now load a small generated thumbnail (480px, JPEG) instead of the full-resolution cached file — posters get this for free from Plex's own `/thumb` endpoint, but `/art`/`/squareArt` have no equivalent, so Simposter previously cached (and every grid tile downloaded) the original asset in full. For Square Art this was especially costly once an item had been sent even once, since the cache then holds the full 2000×2000 Simposter render itself.
+  - Those thumbnails are now pre-generated during a library scan and immediately after a Send to Plex — piggybacking on a fetch/upload that's already happening, so the marginal cost is small — rather than only being generated lazily on first request. This closes the last real gap versus Posters: previously, the *very first* view of a new page of Backdrops/Square Art still paid a one-time thumbnail-generation delay Movies/TV Shows never have.
+  - Logo was deliberately left without the thumbnail step: converting a transparent clearlogo to JPEG would drop its alpha channel (a visibly broken black box instead of transparency), and logos don't have the same size problem to begin with — mostly-transparent, low-complexity PNGs compress well regardless of resolution. Logo already matches on every other axis (cache-first list, pagination, `immutable` headers).
+
+See the CLAUDE.md Quirk #49 follow-ups for the full investigation, including what was ruled out along the way.
+
 ## v1.6.101 (2026-09-19)
 ### Improvements
 - **Added a per-card "refresh from Plex" button to the Backdrops grid**, matching the one Movies/TV Shows posters already have (`MovieCard.vue`'s `.refresh-btn`) — user-requested parity ("each backdrop should have a refresh (similar to posters - to update based on whats in plex)"). Re-checks just that one item against Plex instead of requiring a full page-level re-fetch. New `meta=1` JSON mode on `GET /api/backdrop/{rating_key}` (mirroring `/api/movie/{id}/poster`'s existing `meta`/`raw` pattern) returns `{"url": ...}` so the frontend can refresh a single grid tile without downloading-then-discarding the actual image bytes.

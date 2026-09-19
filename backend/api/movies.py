@@ -215,17 +215,17 @@ _LOGO_CACHE_DIR = Path(LOGO_CACHE_DIR)
 
 # Logo and backdrop ("art") are both single-image-per-item Plex assets synced via
 # the same metadata Image[] array shape -- see art_cache.py's make_art_cache().
-_logo_cache_path, _logo_cache_url, _save_logo_cache, fetch_and_cache_logo = make_art_cache(
+_logo_cache_path, _logo_cache_url, _save_logo_cache, fetch_and_cache_logo, _logo_thumbnail = make_art_cache(
     LOGO_CACHE_DIR, "logo", "clearLogo"
 )
-_art_cache_path, _art_cache_url, _save_art_cache, fetch_and_cache_backdrop = make_art_cache(
+_art_cache_path, _art_cache_url, _save_art_cache, fetch_and_cache_backdrop, _art_thumbnail = make_art_cache(
     ART_CACHE_DIR, "backdrop", "art", direct_endpoint="art"
 )
 # type="backgroundSquare" confirmed against python-plexapi's SquareArtUrlMixin source
 # (self.images filtered by that type) -- direct_endpoint="squareArt" is tried first,
 # matching the pattern that already proved necessary for backdrops (the Image[]
 # lookup alone wasn't reliable there).
-_square_art_cache_path, _square_art_cache_url, _save_square_art_cache, fetch_and_cache_square_art = make_art_cache(
+_square_art_cache_path, _square_art_cache_url, _save_square_art_cache, fetch_and_cache_square_art, _square_art_thumbnail = make_art_cache(
     SQUARE_ART_CACHE_DIR, "square-art", "backgroundSquare", direct_endpoint="squareArt"
 )
 
@@ -1028,17 +1028,27 @@ def api_logo(rating_key: str, force_refresh: bool = False):
     cached = _logo_cache_path(rating_key)
     if cached:
         resp = FileResponse(cached)
-        resp.headers["Cache-Control"] = "no-cache"
+        # Safe to cache forever, same as posters (_return_file() above): every
+        # caller builds this URL via _logo_cache_url()/etc with a `v=<mtime>`
+        # cache-buster, so content changing always means a new URL -- this exact
+        # URL's bytes genuinely never change. `no-cache` (forced revalidation on
+        # every single load) was the real reason this page felt slower than
+        # Movies/TV Shows even for images already seen this session -- see
+        # CLAUDE.md Quirk #49's follow-up.
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return resp
     raise HTTPException(status_code=404, detail="Logo not found")
 
 
 @router.get("/backdrop/{rating_key}")
-def api_backdrop(rating_key: str, meta: bool = False, force_refresh: bool = False, is_tv: bool = False):
+def api_backdrop(rating_key: str, meta: bool = False, thumb: bool = False, force_refresh: bool = False, is_tv: bool = False):
     """Serve cached backdrop ("art") file. Pass force_refresh=1 to re-fetch from Plex first.
     If `meta=1`, returns {"url": ...} instead of bytes -- lets a single grid card refresh
     itself (mirrors /api/movie/{id}/poster's meta mode) without downloading the image just
-    to discard it.
+    to discard it. If `thumb=1`, serves a small downscaled JPEG derivative instead of the
+    full-resolution cached file -- see get_or_create_thumbnail()'s docstring in art_cache.py
+    for why this exists (backdrops have no Plex-side pre-downscaled equivalent of posters'
+    /thumb, so every grid tile was otherwise downloading the full original).
 
     A successful force_refresh also updates movie_cache/tv_cache.art_url -- without this, a
     per-item refresh would re-cache the file locally but the Backdrops browsing grid (which
@@ -1061,18 +1071,30 @@ def api_backdrop(rating_key: str, meta: bool = False, force_refresh: bool = Fals
     if cached:
         if meta:
             return JSONResponse({"url": new_url or _art_cache_url(rating_key, cached)})
+        if thumb:
+            thumb_path = _art_thumbnail(rating_key, cached)
+            if thumb_path:
+                resp = FileResponse(thumb_path)
+                resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                return resp
         resp = FileResponse(cached)
-        resp.headers["Cache-Control"] = "no-cache"
+        # Same reasoning as api_logo() above -- the URL is already mtime-versioned,
+        # so it's safe (and, per real testing, meaningfully faster) to let the
+        # browser cache this forever instead of revalidating on every single load.
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return resp
     raise HTTPException(status_code=404, detail="Backdrop not found")
 
 
 @router.get("/square-art/{rating_key}")
-def api_square_art(rating_key: str, force_refresh: bool = False, is_tv: bool = False):
+def api_square_art(rating_key: str, thumb: bool = False, force_refresh: bool = False, is_tv: bool = False):
     """Serve cached square art ("backgroundSquare") file. Pass force_refresh=1 to
     re-fetch from Plex first -- lets the manual editor show what's genuinely
     currently active in Plex's squareArts slot instead of a stale/never-fetched
-    local copy.
+    local copy. If `thumb=1`, serves a small downscaled JPEG derivative instead of
+    the full-resolution cached file -- particularly important here since, once an
+    item has been sent, the cached file is the full 2000x2000 Simposter render
+    itself (see get_or_create_thumbnail() in art_cache.py).
 
     A successful force_refresh also updates movie_cache/tv_cache.square_art_url --
     without this, a check here would locally cache the file but never make it
@@ -1093,8 +1115,15 @@ def api_square_art(rating_key: str, force_refresh: bool = False, is_tv: bool = F
                 logger.debug("[SQUARE_ART] Failed to update cache after refresh for %s: %s", rating_key, e)
     cached = _square_art_cache_path(rating_key)
     if cached:
+        if thumb:
+            thumb_path = _square_art_thumbnail(rating_key, cached)
+            if thumb_path:
+                resp = FileResponse(thumb_path)
+                resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                return resp
         resp = FileResponse(cached)
-        resp.headers["Cache-Control"] = "no-cache"
+        # Same reasoning as api_logo()/api_backdrop() above.
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return resp
     raise HTTPException(status_code=404, detail="Square art not found")
 
@@ -1252,6 +1281,13 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             try:
                 art_path = fetch_and_cache_backdrop(movie_key, force_refresh=force_poster_refresh)
                 if art_path:
+                    # Pre-warm the grid thumbnail here too, not just lazily on first
+                    # view -- the network round-trip above is the expensive part, so
+                    # generating it now (from bytes already on disk, no extra fetch)
+                    # is nearly free, and means Backdrops never has posters' one
+                    # advantage that this page previously lacked: a genuinely
+                    # zero-cold-start first view. See CLAUDE.md Quirk #49.
+                    _art_thumbnail(movie_key, art_path)
                     return movie_key, _art_cache_url(movie_key, art_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch backdrop for movie {movie_key}: {e}")
@@ -1261,6 +1297,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             try:
                 sq_path = fetch_and_cache_square_art(movie_key, force_refresh=force_poster_refresh)
                 if sq_path:
+                    _square_art_thumbnail(movie_key, sq_path)
                     return movie_key, _square_art_cache_url(movie_key, sq_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch square art for movie {movie_key}: {e}")
@@ -1427,6 +1464,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             try:
                 art_path = fetch_and_cache_backdrop(show.get("key"), force_refresh=force_poster_refresh)
                 if art_path:
+                    # Pre-warm the grid thumbnail now, from bytes already on disk --
+                    # see the matching movie-scan comment above / CLAUDE.md Quirk #49.
+                    _art_thumbnail(show.get("key"), art_path)
                     art_url = _art_cache_url(show.get("key"), art_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch backdrop for TV show {show.get('key')}: {e}")
@@ -1436,6 +1476,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             try:
                 sq_path = fetch_and_cache_square_art(show.get("key"), force_refresh=force_poster_refresh)
                 if sq_path:
+                    _square_art_thumbnail(show.get("key"), sq_path)
                     square_art_url = _square_art_cache_url(show.get("key"), sq_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch square art for TV show {show.get('key')}: {e}")

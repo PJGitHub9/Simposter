@@ -423,9 +423,12 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
     new_art_url = None
     try:
         from .. import database as db_mod
-        from .movies import _save_art_cache, _art_cache_url
+        from .movies import _save_art_cache, _art_cache_url, _art_thumbnail
         art_path = _save_art_cache(req.rating_key, art_bytes, content_type)
         if art_path:
+            # Pre-warm the grid thumbnail immediately, same as scan does -- without
+            # this, the grid's next paint would regenerate it cold on first view.
+            _art_thumbnail(req.rating_key, art_path)
             new_art_url = _art_cache_url(req.rating_key, art_path)
             if req.is_tv:
                 db_mod.update_tv_art_url(req.rating_key, new_art_url)
@@ -508,9 +511,12 @@ def api_plex_send_square_art(req: PlexSquareArtSendRequest):
     new_square_art_url = None
     try:
         from .. import database as db_mod
-        from .movies import _save_square_art_cache, _square_art_cache_url
+        from .movies import _save_square_art_cache, _square_art_cache_url, _square_art_thumbnail
         sq_path = _save_square_art_cache(req.rating_key, art_bytes, content_type)
         if sq_path:
+            # Pre-warm the grid thumbnail immediately -- especially worth it here,
+            # since the cached file is the full 2000x2000 render (see Quirk #49).
+            _square_art_thumbnail(req.rating_key, sq_path)
             new_square_art_url = _square_art_cache_url(req.rating_key, sq_path)
             if req.is_tv:
                 db_mod.update_tv_square_art_url(req.rating_key, new_square_art_url)

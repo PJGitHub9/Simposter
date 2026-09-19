@@ -74,6 +74,14 @@ function onImgError(key: string) {
   failedImages.value = new Set([...failedImages.value, key])
 }
 
+// Grid tiles use a small server-generated thumbnail instead of the full-res
+// cached file -- once an item has been sent, the cache holds the full
+// 2000x2000 Simposter render itself, which is what made this page feel
+// sluggish next to Movies/TV Shows. See CLAUDE.md Quirk #49.
+function thumbUrl(url: string): string {
+  return url.includes('?') ? `${url}&thumb=1` : `${url}?thumb=1`
+}
+
 function onSquareArtUpdated(newSquareArtUrl: string | null) {
   if (selectedItem.value && newSquareArtUrl) {
     const key = selectedItem.value.key
@@ -151,7 +159,7 @@ onMounted(refresh)
         <div class="art-area">
           <img
             v-if="item.square_art_url && !failedImages.has(item.key)"
-            :src="item.square_art_url"
+            :src="thumbUrl(item.square_art_url)"
             :alt="item.title"
             class="art-img"
             @error="onImgError(item.key)"

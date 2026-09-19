@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.102',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Logos, Backdrops, and Square Art now load and browse as fast as Movies/TV Shows — grid images are cached by the browser forever (same as posters) instead of being re-checked with the server on every single view, and Backdrops/Square Art get a small generated thumbnail for grid display instead of downloading the full-resolution original for every tile.',
+          'Those thumbnails are now pre-generated during a library scan and right after a Send to Plex, so the very first time you open the grid there\'s no one-time delay generating them — same as how Movies/TV Shows never have a "first view" slowdown.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.101',
     date: '2026-09-19',
     sections: [

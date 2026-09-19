@@ -81,6 +81,15 @@ function onImgError(key: string) {
   failedImages.value = new Set([...failedImages.value, key])
 }
 
+// Grid tiles use a small server-generated thumbnail instead of the full-res
+// cached file -- backdrops have no Plex-side pre-downscaled equivalent of
+// posters' /thumb, so without this every visible tile downloaded the full
+// original (often several MB), which is what made this page feel sluggish
+// next to Movies/TV Shows. See CLAUDE.md Quirk #49.
+function thumbUrl(url: string): string {
+  return url.includes('?') ? `${url}&thumb=1` : `${url}?thumb=1`
+}
+
 function onBackdropUpdated(newArtUrl: string | null) {
   if (selectedItem.value && newArtUrl) {
     const key = selectedItem.value.key
@@ -184,7 +193,7 @@ onMounted(refresh)
         <div class="backdrop-area">
           <img
             v-if="item.art_url && !failedImages.has(item.key)"
-            :src="item.art_url"
+            :src="thumbUrl(item.art_url)"
             :alt="item.title"
             class="backdrop-img"
             @error="onImgError(item.key)"
