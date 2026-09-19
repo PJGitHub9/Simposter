@@ -132,6 +132,16 @@ class AutomationSettings(BaseModel):
     kometaCompatibility: bool = False  # When true, any newly-added library automatically
                                         # gets "Overlay" added to its Default Labels to
                                         # Remove — see SettingsView.vue's saveSettings()
+    reuseCachedPosterDays: float = 0  # 0 = disabled. When > 0, an item that looks "new" to
+                                       # Simposter (never-before-seen rating_key) but has a
+                                       # recently-sent poster on file for the same TMDb ID
+                                       # gets that cached poster resent instead of a fresh
+                                       # render/send — protects against a Radarr/Sonarr
+                                       # re-grab (or e.g. UMTK re-downloading a trailer)
+                                       # causing Plex to re-match an item under a new
+                                       # rating_key, which otherwise looks identical to a
+                                       # genuinely new library addition. See
+                                       # get_reuse_cached_poster_days() in config.py.
 
 
 class NotificationSettings(BaseModel):

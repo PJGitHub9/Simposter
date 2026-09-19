@@ -137,6 +137,7 @@ const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
 const localRetryUntilTemplateMet = ref(false)
 const localRetryIntervalHours = ref(24)
 const localRetryMaxAttempts = ref(0)
+const localReuseCachedPosterDays = ref(0)
 
 // Notification settings
 const localDiscordEnabled = ref(false)
@@ -287,6 +288,7 @@ const loadLocalSettings = async () => {
   localRetryUntilTemplateMet.value = settings.automation?.value?.retryUntilTemplateMet ?? false
   localRetryIntervalHours.value = settings.automation?.value?.retryIntervalHours ?? 24
   localRetryMaxAttempts.value = settings.automation?.value?.retryMaxAttempts ?? 0
+  localReuseCachedPosterDays.value = settings.automation?.value?.reuseCachedPosterDays ?? 0
 
   // Notification settings
   localDiscordEnabled.value = settings.notifications?.value?.discordEnabled ?? false
@@ -353,6 +355,7 @@ const captureSettingsSnapshot = () => {
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
+    reuseCachedPosterDays: localReuseCachedPosterDays.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -432,6 +435,7 @@ const checkForChanges = () => {
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
+    reuseCachedPosterDays: localReuseCachedPosterDays.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -564,6 +568,7 @@ const saveSettings = async () => {
     retryUntilTemplateMet: localRetryUntilTemplateMet.value,
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
+    reuseCachedPosterDays: localReuseCachedPosterDays.value,
   }
   settings.notifications.value = {
     discordEnabled: localDiscordEnabled.value,
@@ -1433,6 +1438,7 @@ onMounted(() => {
         :retryUntilTemplateMet="localRetryUntilTemplateMet"
         :retryIntervalHours="localRetryIntervalHours"
         :retryMaxAttempts="localRetryMaxAttempts"
+        :reuseCachedPosterDays="localReuseCachedPosterDays"
         :automationChanged="sectionsWithChanges.automation"
         :unsavedChanges="hasUnsavedChanges"
         @update:webhookAutoSend="localWebhookAutoSend = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
@@ -1444,6 +1450,7 @@ onMounted(() => {
         @update:retryUntilTemplateMet="localRetryUntilTemplateMet = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryIntervalHours="localRetryIntervalHours = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @update:retryMaxAttempts="localRetryMaxAttempts = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
+        @update:reuseCachedPosterDays="localReuseCachedPosterDays = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
         @save="saveSettings"
       />
 

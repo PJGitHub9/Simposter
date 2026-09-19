@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.89',
+    date: '2026-09-04',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          '"Reuse Cached Poster For (days)" (added last release) now measures its grace period correctly — from when a title was last confirmed present in your library during a scan, not from when its poster was last (re)generated. A movie that hasn\'t needed a fresh render in months could previously "expire" out of reuse eligibility just from disuse, even though it never left the library.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.88',
+    date: '2026-09-04',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added "Reuse Cached Poster For (days)" (Settings → Automation) — protects against a Radarr/Sonarr re-grab (or a tool like UMTK re-downloading a trailer) causing Plex to re-match a movie/show under a new internal ID, which previously looked identical to a genuinely new library addition and could silently overwrite a poster you already tuned. When enabled, a webhook or scheduled scan resends the recent poster instead of regenerating from scratch. Off by default.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.87',
     date: '2026-09-02',
     sections: [

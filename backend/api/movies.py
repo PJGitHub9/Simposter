@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 import requests
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb
 from .. import cache, database as db
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, search_collection, get_collection_images, TMDBError
@@ -1305,6 +1305,19 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             cache.refresh_from_list(cached_movies)
             logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id} ({len(new_movies)} new)")
 
+            # Mark every currently-present movie with a known tmdb_id as "still here" --
+            # this is what reuseCachedPosterDays' grace period actually measures (see
+            # config.py's Poster Render Cache — keyed by TMDb ID section). Read back from
+            # the DB rather than cached_movies directly since tmdb_id may have been
+            # resolved/preserved via COALESCE during the refresh above, not necessarily
+            # present on the dicts we built during this scan.
+            try:
+                for m in db.get_cached_movies(lib_id):
+                    if m.get("tmdb_id"):
+                        db.touch_tmdb_last_seen("movie", m["tmdb_id"])
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to update tmdb_last_seen for library {lib_id}: {e}")
+
             # Trigger auto-generation for new movies
             if new_movies:
                 try:
@@ -1393,6 +1406,17 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             cache.refresh_tv_from_list(cached_shows)
             logger.info(f"[SCAN] Cached {len(cached_shows)} TV shows for library {lib_id} ({len(new_shows)} new)")
 
+            # Mark every currently-present show as "still here" (series-level only --
+            # see the comment on the movie equivalent above for why). Season-level reuse
+            # falls back to a fresh render if we've never recorded that specific season
+            # as seen, which is the safe default (see load_render_cache_by_tmdb).
+            try:
+                for s in db.get_cached_tv_shows(lib_id):
+                    if s.get("tmdb_id"):
+                        db.touch_tmdb_last_seen("tv-show", s["tmdb_id"])
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to update tmdb_last_seen for TV library {lib_id}: {e}")
+
             # Trigger auto-generation for new TV shows
             if new_shows:
                 try:
@@ -1464,6 +1488,14 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         for lib_id, cached_colls in coll_cache_by_lib.items():
             db.bulk_refresh_collection_cache(cached_colls, library_id=lib_id)
             logger.info(f"[SCAN] Cached {len(cached_colls)} collections for library {lib_id}")
+
+        # Sweep out any by-tmdb cached poster whose title has been absent longer than the
+        # configured grace period -- "obviously that item has been removed for good." Runs
+        # once per scan, after everything currently present has just been re-touched above.
+        try:
+            purge_stale_render_cache_by_tmdb(get_reuse_cached_poster_days())
+        except Exception as e:
+            logger.debug(f"[SCAN] Failed to purge stale by-tmdb render cache: {e}")
 
         logger.info(f"[SCAN] Completed full library sync")
         scan_status.update({

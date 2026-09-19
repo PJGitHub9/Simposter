@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 import os
 import json
 import re
+import time
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import shutil
@@ -1184,3 +1185,109 @@ def load_render_cache(rating_key: str) -> Optional[bytes]:
     except Exception as e:
         logger.debug("[RENDER_CACHE] Failed to load for %s: %s", rating_key, e)
     return None
+
+
+# ==============================================================================
+# Poster Render Cache — keyed by TMDb ID, not rating_key
+#
+# The cache above is keyed by Plex rating_key, which is exactly the thing that
+# changes when Radarr/Sonarr (or a tool like UMTK re-grabbing a trailer/file)
+# causes Plex to re-match an item as a "new" library entry — same movie, new
+# rating_key. Simposter's own movie_cache is also keyed by rating_key, so a
+# rotated rating_key looks indistinguishable from "never processed before,"
+# and a poster the user carefully hand-tuned gets silently regenerated from
+# scratch. This second cache tracks the most recently sent poster per
+# (media_type, tmdb_id, season_index) instead, so a rotated rating_key can
+# still find and reuse it.
+#
+# Age is NOT tracked via file mtime. The grace period is meant to answer
+# "how long has it actually been since this title disappeared from the
+# library," not "how long since we last rendered its poster" — a movie that's
+# sat untouched (and un-re-rendered) for a year shouldn't lose its reuse
+# eligibility just because nobody's regenerated its poster recently. That's
+# what db.tmdb_last_seen tracks: it's touched on every scan for every
+# currently-present item with a known tmdb_id (see movies.py/tv_shows.py scan
+# loops), independent of rendering/sending. Staleness here is computed from
+# db.get_tmdb_days_since_last_seen(), not Path.stat().st_mtime.
+# ==============================================================================
+
+def _render_cache_path_by_tmdb(media_type: str, tmdb_id: int, season_index: Optional[int] = None) -> Path:
+    season_part = f"_s{season_index}" if season_index is not None else ""
+    return Path(settings.CONFIG_DIR) / "cache" / "poster_renders_by_tmdb" / f"{media_type}_{tmdb_id}{season_part}.jpg"
+
+
+def save_render_cache_by_tmdb(media_type: str, tmdb_id: Optional[int], img_bytes: bytes, season_index: Optional[int] = None) -> None:
+    """Persist rendered poster bytes under the TMDb ID, so a future rating_key
+    rotation for the same title can still find and reuse it. Called alongside
+    (not instead of) save_render_cache() at every successful send -- this is
+    additive, not a replacement for the existing rating_key-keyed cache."""
+    if not tmdb_id:
+        return
+    try:
+        p = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(img_bytes)
+    except Exception as e:
+        logger.debug("[RENDER_CACHE] Failed to save by-tmdb cache for %s tmdb_id=%s: %s", media_type, tmdb_id, e)
+
+
+def load_render_cache_by_tmdb(media_type: str, tmdb_id: Optional[int], max_age_days: float, season_index: Optional[int] = None) -> Optional[bytes]:
+    """Return previously saved poster bytes for this TMDb ID if one exists and
+    the title has been absent no longer than max_age_days (per tmdb_last_seen),
+    else None. max_age_days <= 0 always returns None (feature off). If we have
+    no last-seen record at all for this key (e.g. cached before this table
+    existed), we can't vouch for it being recent, so we don't reuse it --
+    err toward a fresh render rather than trusting an unknown-age file."""
+    if not tmdb_id or not max_age_days or max_age_days <= 0:
+        return None
+    try:
+        from . import database as db
+        p = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
+        if not p.exists():
+            return None
+        days_absent = db.get_tmdb_days_since_last_seen(media_type, tmdb_id, season_index)
+        if days_absent is None or days_absent > max_age_days:
+            return None
+        return p.read_bytes()
+    except Exception as e:
+        logger.debug("[RENDER_CACHE] Failed to load by-tmdb cache for %s tmdb_id=%s: %s", media_type, tmdb_id, e)
+        return None
+
+
+def purge_stale_render_cache_by_tmdb(max_age_days: float) -> None:
+    """Delete both the DB last-seen row and the on-disk cached poster file for
+    any (media_type, tmdb_id, season_index) that's been absent from the
+    library longer than max_age_days -- "obviously that item has been removed
+    for good" territory. Call this once per scan (after tmdb_last_seen has
+    been freshly touched for everything still present) rather than on every
+    cache read, so a single long scan doesn't repeatedly re-scan the table."""
+    if not max_age_days or max_age_days <= 0:
+        return
+    try:
+        from . import database as db
+        stale = db.purge_stale_tmdb_last_seen(max_age_days)
+        for row in stale:
+            try:
+                p = _render_cache_path_by_tmdb(row["media_type"], row["tmdb_id"], row["season_index"])
+                if p.exists():
+                    p.unlink()
+            except Exception as e:
+                logger.debug("[RENDER_CACHE] Failed to purge by-tmdb cache file for %s: %s", row, e)
+        if stale:
+            logger.info("[RENDER_CACHE] Purged %d stale by-tmdb cache entr%s (absent > %s days)",
+                        len(stale), "y" if len(stale) == 1 else "ies", max_age_days)
+    except Exception as e:
+        logger.debug("[RENDER_CACHE] Failed to purge stale by-tmdb cache: %s", e)
+
+
+def get_reuse_cached_poster_days() -> float:
+    """Reads Settings → Automation's "Reuse Cached Poster For (days)" fresh from
+    the DB. 0 (default) disables the feature entirely -- every item is always
+    freshly rendered, matching pre-existing behavior."""
+    try:
+        from . import database as db
+        ui = db.get_ui_settings() or {}
+        val = (ui.get("automation", {}) or {}).get("reuseCachedPosterDays", 0)
+        return float(val or 0)
+    except Exception:
+        return 0.0

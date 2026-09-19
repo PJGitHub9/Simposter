@@ -18,6 +18,7 @@ const props = defineProps<{
   retryUntilTemplateMet: boolean
   retryIntervalHours: number
   retryMaxAttempts: number
+  reuseCachedPosterDays: number
   unsavedChanges: boolean
   automationChanged?: boolean
 }>()
@@ -32,6 +33,7 @@ const emit = defineEmits<{
   'update:retryUntilTemplateMet': [value: boolean]
   'update:retryIntervalHours': [value: number]
   'update:retryMaxAttempts': [value: number]
+  'update:reuseCachedPosterDays': [value: number]
   'save': []
 }>()
 
@@ -48,6 +50,11 @@ const localWebhookAutoLabels = computed({
 const localLabelToAdd = computed({
   get: () => props.labelToAdd,
   set: (val) => emit('update:labelToAdd', val)
+})
+
+const localReuseCachedPosterDays = computed({
+  get: () => props.reuseCachedPosterDays,
+  set: (val) => emit('update:reuseCachedPosterDays', val)
 })
 
 const localWebhookAlwaysRegenerateSeason = computed({
@@ -226,6 +233,14 @@ const webhookInstructions = computed(() => {
           <span class="help-text">Stop retrying after this many attempts. Set to 0 to retry indefinitely.</span>
         </label>
       </template>
+
+      <label>
+        <span class="label-text">Reuse Cached Poster For (days, 0 = disabled)</span>
+        <input type="number" v-model.number="localReuseCachedPosterDays" min="0" max="365" step="1" style="width:100px" />
+        <span class="help-text">
+          If a webhook or scheduled scan discovers what looks like a brand-new item, but a poster was already sent for the same TMDb title within this many days, Simposter resends that cached poster instead of generating a fresh one. Protects against a tool like Radarr/Sonarr (or something re-grabbing a trailer file) causing Plex to re-match an item under a new internal ID — which otherwise looks identical to a genuinely new library addition, and would silently overwrite a poster you already tuned. Only applies to webhook/auto-generate — manual batch, save, and send always render fresh.
+        </span>
+      </label>
 
       <!-- The global "Labels to Remove After Sending" field (webhookAutoLabels) was removed
            from this UI — it duplicated Settings → Libraries' per-library "Default Labels to

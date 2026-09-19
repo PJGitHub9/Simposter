@@ -809,6 +809,29 @@ def init_database():
             ON poster_retry_queue(status)
         """)
 
+        # Tracks the last time each TMDb ID was confirmed present in the Plex library,
+        # independent of Plex's own rating_key (which changes on a Radarr/Sonarr re-grab
+        # or similar). Upserted on every scan for every currently-present item with a
+        # known tmdb_id -- deliberately NOT touched when a poster is sent (that's a
+        # separate concern, see save_render_cache_by_tmdb() in config.py). This is what
+        # lets the "reuseCachedPosterDays" grace period mean "days since this title
+        # actually disappeared from the library," not "days since we last rendered its
+        # poster" -- a movie that's sat untouched for a year shouldn't lose its reuse
+        # eligibility just because nobody's regenerated its poster recently.
+        # season_index defaults to -1 (not NULL) for a movie or a TV series-level poster --
+        # SQLite's PRIMARY KEY/UNIQUE constraints treat every NULL as distinct from every
+        # other NULL, so a nullable PK column here would silently let duplicate "no season"
+        # rows pile up per tmdb_id instead of the upsert correctly updating one row.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tmdb_last_seen (
+                media_type TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                season_index INTEGER NOT NULL DEFAULT -1,
+                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (media_type, tmdb_id, season_index)
+            )
+        """)
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
 
@@ -1650,6 +1673,73 @@ def update_movie_logo_url(rating_key: str, logo_url: Optional[str]) -> None:
             "UPDATE movie_cache SET logo_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
             (logo_url, rating_key)
         )
+
+
+def touch_tmdb_last_seen(media_type: str, tmdb_id: Optional[int], season_index: Optional[int] = None) -> None:
+    """Mark a TMDb-identified title as confirmed present in the library right now.
+
+    Called during a scan for every currently-present item that has a resolved tmdb_id.
+    Deliberately separate from anything poster-render/send related -- this is purely
+    "is this title still here," which is what the reuseCachedPosterDays grace period
+    actually needs to measure. See tmdb_last_seen's table comment in init_database().
+    """
+    if not tmdb_id:
+        return
+    season_key = season_index if season_index is not None else -1
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO tmdb_last_seen (media_type, tmdb_id, season_index, last_seen_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(media_type, tmdb_id, season_index) DO UPDATE SET
+                last_seen_at = CURRENT_TIMESTAMP
+        """, (media_type, tmdb_id, season_key))
+
+
+def get_tmdb_days_since_last_seen(media_type: str, tmdb_id: Optional[int], season_index: Optional[int] = None) -> Optional[float]:
+    """Days since a TMDb-identified title was last confirmed present in the library.
+
+    Returns None if we have no record at all (e.g. it was cached before this table
+    existed, or has never been seen) -- callers should treat None as "unknown, don't
+    trust the cache" rather than "just seen."
+    """
+    if not tmdb_id:
+        return None
+    season_key = season_index if season_index is not None else -1
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT (julianday('now') - julianday(last_seen_at)) AS days_since
+            FROM tmdb_last_seen
+            WHERE media_type = ? AND tmdb_id = ? AND season_index = ?
+        """, (media_type, tmdb_id, season_key))
+        row = cursor.fetchone()
+        if not row or row[0] is None:
+            return None
+        return float(row[0])
+
+
+def purge_stale_tmdb_last_seen(max_age_days: float) -> List[Dict[str, Any]]:
+    """Delete tmdb_last_seen rows that have been absent longer than max_age_days.
+
+    Returns the deleted rows (media_type/tmdb_id/season_index) so the caller can also
+    remove the matching on-disk cached-poster file for each -- this function only owns
+    the DB row, not the file (that lives under CONFIG_DIR, config.py's job).
+    """
+    if max_age_days <= 0:
+        return []
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT media_type, tmdb_id, season_index FROM tmdb_last_seen
+            WHERE (julianday('now') - julianday(last_seen_at)) > ?
+        """, (max_age_days,))
+        rows = [{"media_type": r[0], "tmdb_id": r[1], "season_index": (r[2] if r[2] != -1 else None)} for r in cursor.fetchall()]
+        if rows:
+            cursor.execute("""
+                DELETE FROM tmdb_last_seen
+                WHERE (julianday('now') - julianday(last_seen_at)) > ?
+            """, (max_age_days,))
+        return rows
 
 
 def update_movie_media_info(rating_key: str, video_resolution: Optional[str] = None,

@@ -72,6 +72,7 @@ export type AutomationSettings = {
   retryIntervalHours?: number
   retryMaxAttempts?: number
   kometaCompatibility?: boolean
+  reuseCachedPosterDays?: number
 }
 
 export type NotificationSettings = {
@@ -145,7 +146,7 @@ const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
 const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', labelToAdd: '', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0, kometaCompatibility: false })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', labelToAdd: '', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0, kometaCompatibility: false, reuseCachedPosterDays: 0 })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
   discordWebhookUrl: '',
@@ -243,6 +244,7 @@ async function loadSettings() {
       retryUntilTemplateMet: data.automation?.retryUntilTemplateMet ?? false,
       retryIntervalHours: data.automation?.retryIntervalHours ?? 24,
       retryMaxAttempts: data.automation?.retryMaxAttempts ?? 0,
+      reuseCachedPosterDays: data.automation?.reuseCachedPosterDays ?? 0,
     }
     notifications.value = {
       discordEnabled: data.notifications?.discordEnabled ?? false,
