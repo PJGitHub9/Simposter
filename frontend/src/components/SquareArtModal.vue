@@ -94,7 +94,7 @@ async function loadPresets() {
       templatesData.value = await res.json()
       const tplKeys = templateKeys.value
       if (tplKeys.length && !tplKeys.includes(selectedTemplate.value)) {
-        selectedTemplate.value = tplKeys[0]
+        selectedTemplate.value = tplKeys[0] ?? selectedTemplate.value
       }
       const presets = templatesData.value[selectedTemplate.value]?.presets || []
       if (!presets.find((p) => p.id === selectedPreset.value)) {
@@ -213,7 +213,8 @@ async function loadCandidates() {
     // no baked-in title text to fight with the template's own text/logo), else
     // just the first candidate.
     const textless = availablePosters.value.find((p) => p.has_text === false)
-    selectedPosterUrl.value = (textless || availablePosters.value[0]).url
+    const defaultPoster = textless || availablePosters.value[0]
+    if (defaultPoster) selectedPosterUrl.value = defaultPoster.url
     selectedLogoUrl.value = availableLogos.value[0]?.url || null
   } catch (e: unknown) {
     candidatesError.value = e instanceof Error ? e.message : 'Failed to load poster/logo candidates.'
