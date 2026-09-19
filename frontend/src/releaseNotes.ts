@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.101',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Each backdrop in the Backdrops grid now has its own "refresh from Plex" button, matching the one Movies/TV Shows posters already have — re-checks just that one item instead of only re-reading whatever was already cached.',
+          'The "Refresh" button on Logos/Backdrops/Square Art now shows a busy state for the whole operation, even when instant-loading from cache — previously it gave no feedback while quietly re-fetching in the background, which could look stuck and invite repeated clicks.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed Square Art\'s grid never updating after a successful Send to Plex, in any session — the modal never actually notified the grid at all, so only the modal\'s own "Current Square Art" display ever reflected a send.',
+          'Fixed Logos/Backdrops/Square Art showing a stale image again after navigating back within the same session, even right after a successful send — the instant-load cache added last version wasn\'t being updated when an item changed, only when the whole list was re-fetched.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.100',
     date: '2026-09-19',
     sections: [

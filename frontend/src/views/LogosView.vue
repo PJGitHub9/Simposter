@@ -15,7 +15,7 @@ type LogoItem = {
 }
 
 const route = useRoute()
-const { items, loading, fetchItems } = useArtLibraryCache<LogoItem>('logos')
+const { items, loading, fetchItems, updateItem } = useArtLibraryCache<LogoItem>('logos')
 const filter = ref<'all' | 'has_logo' | 'missing'>('all')
 const sortBy = ref<'title_asc' | 'title_desc' | 'year_desc' | 'year_asc'>('title_asc')
 const search = ref('')
@@ -70,11 +70,9 @@ function onImgError(key: string) {
 
 function onLogoUpdated(newLogoUrl: string | null) {
   if (selectedItem.value && newLogoUrl) {
-    const target = items.value.find(i => i.key === selectedItem.value!.key)
-    if (target) {
-      target.logo_url = newLogoUrl
-      failedImages.value = new Set([...failedImages.value].filter(k => k !== target.key))
-    }
+    const key = selectedItem.value.key
+    updateItem(key, { logo_url: newLogoUrl } as Partial<LogoItem>)
+    failedImages.value = new Set([...failedImages.value].filter(k => k !== key))
   }
 }
 

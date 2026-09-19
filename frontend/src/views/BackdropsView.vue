@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { getApiBase } from '@/services/apiBase'
 import BackdropEditorModal from '@/components/BackdropEditorModal.vue'
 import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
 import { usePagedItems } from '@/composables/usePagedItems'
@@ -15,7 +16,8 @@ type BackdropItem = {
 }
 
 const route = useRoute()
-const { items, loading, fetchItems } = useArtLibraryCache<BackdropItem>('backdrops')
+const { items, loading, fetchItems, updateItem } = useArtLibraryCache<BackdropItem>('backdrops')
+const refreshingKeys = ref<Set<string>>(new Set())
 const filter = ref<'all' | 'has_backdrop' | 'missing'>('all')
 const sortBy = ref<'title_asc' | 'title_desc' | 'year_desc' | 'year_asc'>('title_asc')
 const search = ref('')
@@ -55,9 +57,20 @@ const displayItems = computed(() => {
 const { page, totalPages, pagedItems, nextPage, prevPage, resetPage } = usePagedItems(displayItems)
 watch([filter, search, sortBy], resetPage)
 
-function refresh() {
+// Separate from `loading` (which useArtLibraryCache only sets on a cache miss) --
+// without this, clicking "Refresh" when a cache already exists gave zero visual
+// feedback while the background revalidation fetch was in flight, which invited
+// repeated clicks (and repeated overlapping GET /api/movies|tv-shows requests).
+const refreshingList = ref(false)
+async function refresh() {
+  if (refreshingList.value) return
+  refreshingList.value = true
   failedImages.value = new Set()
-  fetchItems(isTV.value, libraryId.value)
+  try {
+    await fetchItems(isTV.value, libraryId.value)
+  } finally {
+    refreshingList.value = false
+  }
 }
 
 function openEditor(item: BackdropItem) {
@@ -70,11 +83,36 @@ function onImgError(key: string) {
 
 function onBackdropUpdated(newArtUrl: string | null) {
   if (selectedItem.value && newArtUrl) {
-    const target = items.value.find(i => i.key === selectedItem.value!.key)
-    if (target) {
-      target.art_url = newArtUrl
-      failedImages.value = new Set([...failedImages.value].filter(k => k !== target.key))
+    const key = selectedItem.value.key
+    updateItem(key, { art_url: newArtUrl } as Partial<BackdropItem>)
+    failedImages.value = new Set([...failedImages.value].filter(k => k !== key))
+  }
+}
+
+// Per-card refresh, matching Movies' "refresh poster" icon -- re-checks Plex for
+// just this one item instead of only re-reading whatever's already in the DB
+// cache (which is all the page-level "Refresh" button above does).
+async function handleRefreshBackdrop(item: BackdropItem) {
+  if (refreshingKeys.value.has(item.key)) return
+  refreshingKeys.value = new Set(refreshingKeys.value).add(item.key)
+  try {
+    const apiBase = getApiBase()
+    const params = new URLSearchParams({ meta: '1', force_refresh: '1' })
+    if (isTV.value) params.set('is_tv', '1')
+    const res = await fetch(`${apiBase}/api/backdrop/${item.key}?${params.toString()}`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data.url) {
+        updateItem(item.key, { art_url: `${apiBase}${data.url}` } as Partial<BackdropItem>)
+        failedImages.value = new Set([...failedImages.value].filter(k => k !== item.key))
+      }
     }
+  } catch {
+    /* non-critical -- card just keeps showing whatever it already had */
+  } finally {
+    const next = new Set(refreshingKeys.value)
+    next.delete(item.key)
+    refreshingKeys.value = next
   }
 }
 
@@ -112,10 +150,10 @@ onMounted(refresh)
           <option value="year_desc">Year (Newest)</option>
           <option value="year_asc">Year (Oldest)</option>
         </select>
-        <button class="btn-refresh" @click="refresh" :disabled="loading">
-          <svg v-if="loading" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+        <button class="btn-refresh" @click="refresh" :disabled="loading || refreshingList">
+          <svg v-if="loading || refreshingList" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-          {{ loading ? 'Loading...' : 'Refresh' }}
+          {{ (loading || refreshingList) ? 'Loading...' : 'Refresh' }}
         </button>
       </div>
     </div>
@@ -155,6 +193,18 @@ onMounted(refresh)
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-4 4 4"/><circle cx="8.5" cy="14.5" r="1.5"/></svg>
             <span>No backdrop cached</span>
           </div>
+          <button
+            class="refresh-btn"
+            title="Refresh from Plex"
+            :class="{ spinning: refreshingKeys.has(item.key) }"
+            @click.stop="handleRefreshBackdrop(item)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+          </button>
         </div>
         <div class="backdrop-meta">
           <span class="backdrop-title">{{ item.title }}</span>
@@ -393,6 +443,42 @@ onMounted(refresh)
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.refresh-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  color: #d7e6ff;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: all 0.18s ease;
+  cursor: pointer;
+  display: flex;
+}
+
+.backdrop-card:hover .refresh-btn {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.refresh-btn:hover {
+  background: rgba(61, 214, 183, 0.18);
+  color: #3dd6b7;
+  border-color: rgba(61, 214, 183, 0.5);
+}
+
+.refresh-btn.spinning {
+  opacity: 1;
+}
+
+.refresh-btn.spinning svg {
+  animation: spin 0.9s linear infinite;
 }
 
 .no-backdrop-placeholder {

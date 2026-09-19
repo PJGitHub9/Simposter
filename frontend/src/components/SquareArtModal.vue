@@ -20,7 +20,7 @@ type PresetRecord = { id: string; name?: string; options?: PresetOptions }
 type ImageSource = { url: string; thumb?: string; source?: string; has_text?: boolean }
 
 const props = defineProps<{ item: SquareArtItem }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; updated: [squareArtUrl: string | null] }>()
 
 const apiBase = getApiBase()
 const render = useRenderService()
@@ -331,6 +331,11 @@ async function doSendToPlex() {
     if (typeof data.square_art_url === 'string') {
       sentSquareArtUrl.value = data.square_art_url
       currentSquareArtFailed.value = false
+      // Update the grid's own copy too -- this modal's `item` is a snapshot
+      // taken when it opened, distinct from the object the grid holds in its
+      // own list (see CLAUDE.md Quirk #45), so without this emit the grid tile
+      // stays on the pre-send square art until a full page refresh.
+      emit('updated', data.square_art_url)
     }
     saveMessage.value = 'Sent to Plex (square art slot).'
   } catch (e: unknown) {

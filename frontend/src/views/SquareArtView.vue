@@ -17,7 +17,7 @@ type SquareArtItem = {
 }
 
 const route = useRoute()
-const { items, loading, fetchItems } = useArtLibraryCache<SquareArtItem>('square-art')
+const { items, loading, fetchItems, updateItem } = useArtLibraryCache<SquareArtItem>('square-art')
 const filter = ref<'all' | 'has_square_art' | 'missing'>('all')
 const search = ref('')
 const sortBy = ref<'title_asc' | 'title_desc' | 'year_desc' | 'year_asc'>('title_asc')
@@ -72,6 +72,14 @@ function openModal(item: SquareArtItem) {
 
 function onImgError(key: string) {
   failedImages.value = new Set([...failedImages.value, key])
+}
+
+function onSquareArtUpdated(newSquareArtUrl: string | null) {
+  if (selectedItem.value && newSquareArtUrl) {
+    const key = selectedItem.value.key
+    updateItem(key, { square_art_url: newSquareArtUrl } as Partial<SquareArtItem>)
+    failedImages.value = new Set([...failedImages.value].filter(k => k !== key))
+  }
 }
 
 watch(libraryId, refresh)
@@ -171,6 +179,7 @@ onMounted(refresh)
     v-if="selectedItem"
     :item="selectedItem"
     @close="selectedItem = null"
+    @updated="onSquareArtUpdated"
   />
 </template>
 

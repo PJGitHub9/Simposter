@@ -1034,12 +1034,33 @@ def api_logo(rating_key: str, force_refresh: bool = False):
 
 
 @router.get("/backdrop/{rating_key}")
-def api_backdrop(rating_key: str, force_refresh: bool = False):
-    """Serve cached backdrop ("art") file. Pass force_refresh=1 to re-fetch from Plex first."""
+def api_backdrop(rating_key: str, meta: bool = False, force_refresh: bool = False, is_tv: bool = False):
+    """Serve cached backdrop ("art") file. Pass force_refresh=1 to re-fetch from Plex first.
+    If `meta=1`, returns {"url": ...} instead of bytes -- lets a single grid card refresh
+    itself (mirrors /api/movie/{id}/poster's meta mode) without downloading the image just
+    to discard it.
+
+    A successful force_refresh also updates movie_cache/tv_cache.art_url -- without this, a
+    per-item refresh would re-cache the file locally but the Backdrops browsing grid (which
+    reads art_url from the DB via GET /api/movies|tv-shows) would never find out, the same
+    gap already fixed for Square Art's equivalent endpoint (see CLAUDE.md Quirk #44)."""
+    new_url = None
     if force_refresh:
-        fetch_and_cache_backdrop(rating_key, force_refresh=True)
+        art_path = fetch_and_cache_backdrop(rating_key, force_refresh=True)
+        if art_path:
+            new_url = _art_cache_url(rating_key, art_path)
+            try:
+                from .. import database as db_mod
+                if is_tv:
+                    db_mod.update_tv_art_url(rating_key, new_url)
+                else:
+                    db_mod.update_movie_art_url(rating_key, new_url)
+            except Exception as e:
+                logger.debug("[BACKDROP] Failed to update cache after refresh for %s: %s", rating_key, e)
     cached = _art_cache_path(rating_key)
     if cached:
+        if meta:
+            return JSONResponse({"url": new_url or _art_cache_url(rating_key, cached)})
         resp = FileResponse(cached)
         resp.headers["Cache-Control"] = "no-cache"
         return resp
