@@ -38,6 +38,7 @@ import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 
 from .universal import build_base_poster, _hex_to_rgb, _solid_color_logo, _render_text_overlay
+from .canvas import scale_options_for_canvas
 
 
 def _add_center_fade(canvas: Image.Image, strength: float) -> Image.Image:
@@ -85,6 +86,11 @@ def render_kometa(bg: Image.Image, logo: Image.Image, options: dict) -> Image.Im
     # render instead. (Its own vignette_strength option is deliberately left at
     # 0 here — Kometa's "Center-Out" style uses kometa_center_fade_strength /
     # _add_center_fade() above instead, for the reasons in that function's docstring.)
+    # Rescale height-anchored absolute-px options (kometa_logo_offset_y) for a
+    # non-default canvas -- a no-op for the default canvas. kometa_logo_width is
+    # width-anchored and needs no scaling since canvas width never changes (see
+    # canvas.py's module docstring).
+    options = scale_options_for_canvas(options)
     canvas = build_base_poster(bg, options)
     W, H = canvas.size
 

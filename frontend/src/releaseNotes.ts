@@ -10,6 +10,123 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.99',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Square Art now shows "Current Square Art (in Plex)" when you open a title — so you can see what\'s actually active in Plex before generating a new one, with a refresh button to double-check against Plex live. Sending updates this immediately using the just-uploaded image, instead of racing a fresh Plex fetch that might not have processed the upload yet.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.98',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Square Art can now Send to Plex — it uses Plex\'s own dedicated "square art" slot (confirmed via python-plexapi), which is completely separate from the regular poster and background/art, so sending it never overwrites either.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the "Poster Position (Up/Down)" slider not actually revealing more of the source image — the poster was being cropped to the exact canvas size before the shift was applied, so shifting just clipped the poster\'s own edge and showed empty canvas instead of more content. This also affected the normal editor\'s "Poster Shift Y %" slider, just less visibly there.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.97',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Added a "Poster Position (Up/Down)" slider to Square Art — a square crop throws away much more of a poster\'s height than the normal canvas, so being able to recenter which part of the source image survives the crop matters more here. Reuses the same poster_shift_y option the normal editor already has.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.96',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Square Art now lets you pick the source poster and logo from TMDb/Fanart candidates, instead of silently reusing the item\'s current Plex poster. That reuse was a real bug, not just a missing feature — a Simposter-managed library\'s "current poster" is usually already a Simposter render (background + logo baked together), so squashing that into a square canvas and compositing another logo on top produced a broken double-composited result. Defaults to a textless candidate when one exists.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.95',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Moved "Add to Retry Queue" below Current Plex Logo (separated from Save/Send) and restricted its template picker to Uniform Logo — Kometa is collections-only and should never have been selectable there.',
+          'Backdrop uploads to Plex now try both possible upload paths (/arts and /art) — the singular /art path that only the read side actually uses was consistently dropping the connection.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.94',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          '"Add to Retry Queue" now lets you pick which template/preset to retry with, instead of silently reusing whatever\'s currently selected in the editor — the whole point of the feature is switching to a different (e.g. textless+logo) template once one becomes usable.',
+          'Fixed newly-scanned Backdrops never actually caching — the scan was looking for a background-art entry inside Plex\'s metadata Image[] array, which doesn\'t reliably include one; now fetches Plex\'s direct /art endpoint first (the same approach already used for posters), falling back to the old lookup.',
+          'Fixed Square Art\'s preview failing with "Private/internal network URLs are not allowed for this host" whenever Simposter is reached via a LAN IP — the SSRF allowlist covered /api/movie/ and /api/tv-show/ but not the sibling /api/logo/ and /api/backdrop/ cache routes, which Square Art is the first feature to feed back into the render pipeline.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.93',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a new "🔳 Square Art" library section (movies and TV shows) — generate square (1:1) art from a title\'s current poster/logo using your existing template/preset, rendered against a square canvas instead of a new template. Save-to-disk only (no Plex upload — Plex has no square-art slot).',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.92',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a new "🎞️ Backdrops" library section (movies and TV shows) — mirrors the existing Logos tab. Browse, preview, and send Plex background art (fanart) per item, sourced from TMDb/Fanart/TVDB, with drag-and-drop upload support.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.91',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added "Add to Retry Queue" to the manual editor (movies and TV shows) — pick a non-textless poster now to get something live immediately, and queue the item so Simposter automatically re-renders and resends with your current template/preset once a genuinely textless poster becomes available on TMDb/Fanart.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.90',
     date: '2026-09-19',
     sections: [

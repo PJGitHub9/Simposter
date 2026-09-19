@@ -42,6 +42,8 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
       { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections (NEW)' },
       { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
+      { key: `backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
+      { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -57,6 +59,8 @@ const tabs = computed<MenuItem[]>(() => {
     submenu: [
       { key: `tv-batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
       { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
+      { key: `tv-backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
+      { key: `tv-square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
       { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -330,13 +334,13 @@ const activeTab = computed<TabKey>(() => {
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
     return `tv-shows-${firstTvLib?.id || 'default'}`
   }
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -352,6 +356,10 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
   if (route.name === 'logos') return `logos-${libQuery || 'default'}`
   if (route.name === 'tv-logos') return `tv-logos-${libQuery || 'default'}`
+  if (route.name === 'backdrops') return `backdrops-${libQuery || 'default'}`
+  if (route.name === 'tv-backdrops') return `tv-backdrops-${libQuery || 'default'}`
+  if (route.name === 'square-art') return `square-art-${libQuery || 'default'}`
+  if (route.name === 'tv-square-art') return `tv-square-art-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
   if (route.name === 'backup') {
@@ -656,6 +664,10 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'collections', query: { library: libId } })
     } else if (submenuKey.startsWith('logos-')) {
       router.push({ name: 'logos', query: { library: libId } })
+    } else if (submenuKey.startsWith('backdrops-')) {
+      router.push({ name: 'backdrops', query: { library: libId } })
+    } else if (submenuKey.startsWith('square-art-')) {
+      router.push({ name: 'square-art', query: { library: libId } })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: { library: libId } })
     } else if (submenuKey.startsWith('backup-')) {
@@ -667,6 +679,10 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'tv-batch-edit', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-logos-')) {
       router.push({ name: 'tv-logos', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-backdrops-')) {
+      router.push({ name: 'tv-backdrops', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-square-art-')) {
+      router.push({ name: 'tv-square-art', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-assets-')) {
       router.push({ name: 'tv-local-assets', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-backup-')) {

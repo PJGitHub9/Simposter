@@ -420,6 +420,8 @@ def _run_poster_retry():
                 if lib_default_labels:
                     remove_labels = list({*remove_labels, *lib_default_labels})
 
+            require_textless_poster = item.get("reason") == db.RETRY_REASON_MANUAL_TEXTLESS
+
             try:
                 if media_type == "tv":
                     result = process_single_tv_show_poster(
@@ -433,6 +435,7 @@ def _run_poster_retry():
                         source="auto_generate",
                         send_logos_to_plex=send_logos,
                         send_only_if_ideal=True,
+                        require_textless_poster=require_textless_poster,
                     )
                     # A dict without a populated "results" list means the render errored out
                     # before producing per-season results (e.g. a transient TMDb/network failure) —
@@ -452,6 +455,7 @@ def _run_poster_retry():
                         source="auto_generate",
                         send_logos_to_plex=send_logos,
                         send_only_if_ideal=True,
+                        require_textless_poster=require_textless_poster,
                     )
                     # Default True: an error dict (e.g. TMDb request failure) has no "needs_retry"
                     # key, and must NOT be read as "ideal conditions met" — that silently drops the

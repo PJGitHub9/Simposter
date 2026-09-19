@@ -138,6 +138,35 @@ def api_remove_retry_item(rating_key: str):
     return {"status": "ok"}
 
 
+class AddRetryQueueRequest(BaseModel):
+    rating_key: str
+    media_type: str = "movie"  # "movie" | "tv"
+    library_id: Optional[str] = None
+    template_id: str
+    preset_id: str
+    title: Optional[str] = None
+    reason: str = db.RETRY_REASON_MANUAL_TEXTLESS
+
+
+@router.post("/retry-queue")
+def api_add_retry_item(payload: AddRetryQueueRequest):
+    """Manually queue an item for retry (e.g. from the manual editor, when no textless
+    poster exists yet) — reuses the same upsert every automatic path uses. `reason` stays
+    open rather than hardcoded so a future manual trigger can reuse this endpoint without
+    a schema change; only the manual-textless case is wired to a real resolution check
+    today (see require_textless_poster in schemas.py)."""
+    db.add_to_retry_queue(
+        rating_key=payload.rating_key,
+        media_type=payload.media_type,
+        library_id=payload.library_id,
+        template_id=payload.template_id,
+        preset_id=payload.preset_id,
+        title=payload.title,
+        reason=payload.reason,
+    )
+    return {"status": "ok"}
+
+
 @router.post("/retry-queue/{rating_key}/retry-now")
 def api_retry_now(rating_key: str):
     """Immediately retry a single queued item."""
@@ -156,6 +185,7 @@ def api_retry_now(rating_key: str):
 
     db.update_retry_attempt(rating_key)
     _retry_start = time.time()
+    require_textless_poster = item.get("reason") == db.RETRY_REASON_MANUAL_TEXTLESS
     logger.info("[RETRY] Manual retry-now for %s [%s] (%s)", rating_key, title, media_type)
     try:
         if media_type == "tv":
@@ -170,6 +200,7 @@ def api_retry_now(rating_key: str):
                 source="auto_generate",
                 send_logos_to_plex=send_logos,
                 send_only_if_ideal=True,
+                require_textless_poster=require_textless_poster,
             )
             sub_results = result.get("results", []) if isinstance(result, dict) else []
             still_needs_retry = any(r.get("needs_retry") for r in sub_results)
@@ -184,6 +215,7 @@ def api_retry_now(rating_key: str):
                 source="auto_generate",
                 send_logos_to_plex=send_logos,
                 send_only_if_ideal=True,
+                require_textless_poster=require_textless_poster,
             )
             still_needs_retry = result.get("needs_retry", True) if isinstance(result, dict) else True
 

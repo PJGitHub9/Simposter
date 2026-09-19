@@ -10,8 +10,9 @@ from pydantic import BaseModel
 from PIL import Image
 
 import requests
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb
 from .. import cache, database as db
+from .art_cache import make_art_cache
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, search_collection, get_collection_images, TMDBError
 from ..fanart_client import get_images_for_movie as get_fanart_images, get_logos_for_movie as get_fanart_logos
@@ -212,84 +213,21 @@ def _remove_poster_cache(rating_key: str):
 
 _LOGO_CACHE_DIR = Path(LOGO_CACHE_DIR)
 
-
-def _logo_cache_path(rating_key: str) -> Optional[Path]:
-    for ext in ("png", "jpg", "jpeg", "webp"):
-        candidate = _LOGO_CACHE_DIR / f"{rating_key}.{ext}"
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _logo_cache_url(rating_key: str, cached: Path) -> str:
-    ts = int(cached.stat().st_mtime)
-    return f"/api/logo/{rating_key}?raw=1&v={ts}"
-
-
-def _save_logo_cache(rating_key: str, content: bytes, content_type: str) -> Optional[Path]:
-    ext = (content_type.split("/")[-1] if "/" in content_type else "png").lower()
-    if ext not in ("jpg", "jpeg", "png", "webp"):
-        ext = "png"
-    target = _LOGO_CACHE_DIR / f"{rating_key}.{ext}"
-    try:
-        target.write_bytes(content)
-        return target
-    except Exception as e:
-        logger.debug("[LOGO] Failed to write logo cache for %s: %s", rating_key, e)
-        return None
-
-
-def fetch_and_cache_logo(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
-    """Fetch Plex clearlogo and cache locally. Returns cached file path or None."""
-    if not force_refresh:
-        cached = _logo_cache_path(rating_key)
-        if cached:
-            return cached
-    try:
-        # Plex returns image metadata as JSON with an Image[] array
-        metadata_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-        json_headers = {**plex_headers(), "Accept": "application/json"}
-        r = plex_session.get(metadata_url, headers=json_headers, timeout=5)
-        if r.status_code != 200:
-            return None
-
-        logo_url = None
-        try:
-            data = r.json()
-            container = data.get("MediaContainer", {})
-            # Image array may be at the top level or inside each Metadata item
-            images = container.get("Image", [])
-            if not images:
-                for item in container.get("Metadata", []):
-                    images = item.get("Image", [])
-                    if images:
-                        break
-            for img in images:
-                if img.get("type") == "clearLogo":
-                    logo_url = img.get("url")
-                    break
-        except Exception:
-            pass
-
-        if not logo_url:
-            return None
-
-        # Plex returns a relative path (/library/metadata/.../clearLogo/...).
-        # Prepend the Plex base URL and use the authenticated session.
-        if logo_url.startswith("/"):
-            logo_url = f"{settings.PLEX_URL}{logo_url}"
-            logo_r = plex_session.get(logo_url, headers=plex_headers(), timeout=10)
-        else:
-            # Absolute external URL (rare) — no auth needed
-            logo_r = requests.get(logo_url, timeout=10)
-        if logo_r.status_code != 200:
-            logger.debug("[LOGO] Failed to download clearlogo for %s: HTTP %s", rating_key, logo_r.status_code)
-            return None
-        content_type = logo_r.headers.get("content-type", "image/png")
-        return _save_logo_cache(rating_key, logo_r.content, content_type)
-    except Exception as e:
-        logger.debug("[LOGO] Failed to fetch Plex clearlogo for %s: %s", rating_key, e)
-        return None
+# Logo and backdrop ("art") are both single-image-per-item Plex assets synced via
+# the same metadata Image[] array shape -- see art_cache.py's make_art_cache().
+_logo_cache_path, _logo_cache_url, _save_logo_cache, fetch_and_cache_logo = make_art_cache(
+    LOGO_CACHE_DIR, "logo", "clearLogo"
+)
+_art_cache_path, _art_cache_url, _save_art_cache, fetch_and_cache_backdrop = make_art_cache(
+    ART_CACHE_DIR, "backdrop", "art", direct_endpoint="art"
+)
+# type="backgroundSquare" confirmed against python-plexapi's SquareArtUrlMixin source
+# (self.images filtered by that type) -- direct_endpoint="squareArt" is tried first,
+# matching the pattern that already proved necessary for backdrops (the Image[]
+# lookup alone wasn't reliable there).
+_square_art_cache_path, _square_art_cache_url, _save_square_art_cache, fetch_and_cache_square_art = make_art_cache(
+    SQUARE_ART_CACHE_DIR, "square-art", "backgroundSquare", direct_endpoint="squareArt"
+)
 
 
 def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
@@ -556,6 +494,8 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
             "addedAt": m["addedAt"],
             "poster": m.get("poster_url"),
             "logo_url": m.get("logo_url"),
+            "art_url": m.get("art_url"),
+            "square_art_url": m.get("square_art_url"),
             "tmdb_id": m.get("tmdb_id"),
             "labels": m.get("labels") or [],
             "updated_at": m.get("updated_at"),
@@ -1093,6 +1033,51 @@ def api_logo(rating_key: str, force_refresh: bool = False):
     raise HTTPException(status_code=404, detail="Logo not found")
 
 
+@router.get("/backdrop/{rating_key}")
+def api_backdrop(rating_key: str, force_refresh: bool = False):
+    """Serve cached backdrop ("art") file. Pass force_refresh=1 to re-fetch from Plex first."""
+    if force_refresh:
+        fetch_and_cache_backdrop(rating_key, force_refresh=True)
+    cached = _art_cache_path(rating_key)
+    if cached:
+        resp = FileResponse(cached)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    raise HTTPException(status_code=404, detail="Backdrop not found")
+
+
+@router.get("/square-art/{rating_key}")
+def api_square_art(rating_key: str, force_refresh: bool = False, is_tv: bool = False):
+    """Serve cached square art ("backgroundSquare") file. Pass force_refresh=1 to
+    re-fetch from Plex first -- lets the manual editor show what's genuinely
+    currently active in Plex's squareArts slot instead of a stale/never-fetched
+    local copy.
+
+    A successful force_refresh also updates movie_cache/tv_cache.square_art_url --
+    without this, a check here would locally cache the file but never make it
+    into the Square Art browsing grid (which reads from the DB via GET
+    /api/movies|tv-shows), so "refresh shows it in the modal but not in the grid"
+    would recur every time, not just on the first scan after this was added."""
+    if force_refresh:
+        sq_path = fetch_and_cache_square_art(rating_key, force_refresh=True)
+        if sq_path:
+            try:
+                from .. import database as db_mod
+                new_url = _square_art_cache_url(rating_key, sq_path)
+                if is_tv:
+                    db_mod.update_tv_square_art_url(rating_key, new_url)
+                else:
+                    db_mod.update_movie_square_art_url(rating_key, new_url)
+            except Exception as e:
+                logger.debug("[SQUARE_ART] Failed to update cache after refresh for %s: %s", rating_key, e)
+    cached = _square_art_cache_path(rating_key)
+    if cached:
+        resp = FileResponse(cached)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    raise HTTPException(status_code=404, detail="Square art not found")
+
+
 @router.get("/movies/tmdb")
 def api_movies_tmdb():
     movies = get_plex_movies()
@@ -1217,10 +1202,12 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             except Exception as e:
                 logger.warning(f"[SCAN] Bulk label fetch failed, will skip labels: {e}")
 
-        # Parallelize poster + logo fetching using ThreadPoolExecutor
+        # Parallelize poster + logo + backdrop + square art fetching using ThreadPoolExecutor
         from concurrent.futures import ThreadPoolExecutor, as_completed
         poster_results = {}
         logo_results = {}
+        art_results = {}
+        square_art_results = {}
 
         def fetch_poster_for_movie(movie_key):
             try:
@@ -1240,24 +1227,45 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 logger.debug(f"[SCAN] Failed to fetch logo for movie {movie_key}: {e}")
             return movie_key, None
 
+        def fetch_backdrop_for_movie(movie_key):
+            try:
+                art_path = fetch_and_cache_backdrop(movie_key, force_refresh=force_poster_refresh)
+                if art_path:
+                    return movie_key, _art_cache_url(movie_key, art_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch backdrop for movie {movie_key}: {e}")
+            return movie_key, None
+
+        def fetch_square_art_for_movie(movie_key):
+            try:
+                sq_path = fetch_and_cache_square_art(movie_key, force_refresh=force_poster_refresh)
+                if sq_path:
+                    return movie_key, _square_art_cache_url(movie_key, sq_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch square art for movie {movie_key}: {e}")
+            return movie_key, None
+
         if movie_keys:
-            logger.info(f"[SCAN] Parallel fetching posters + logos for {len(movie_keys)} movies")
+            logger.info(f"[SCAN] Parallel fetching posters + logos + backdrops + square art for {len(movie_keys)} movies")
             # This is typically the slowest phase of a scan (an image download per movie,
-            # doubled for logos, especially with force_poster_refresh — the default). Track
-            # completions as they land so scan_status.processed climbs smoothly through it
-            # instead of sitting at 0 for the whole phase and then jumping at the very end.
+            # 4x'd for logos/backdrops/square art, especially with force_poster_refresh —
+            # the default). Track completions as they land so scan_status.processed climbs
+            # smoothly through it instead of sitting at 0 for the whole phase and then
+            # jumping at the very end.
             poster_logo_done = 0
-            poster_logo_total = len(movie_keys) * 2
+            poster_logo_total = len(movie_keys) * 4
             with ThreadPoolExecutor(max_workers=10) as executor:
                 poster_futures = {executor.submit(fetch_poster_for_movie, key): key for key in movie_keys}
                 logo_futures = {executor.submit(fetch_logo_for_movie, key): key for key in movie_keys}
+                art_futures = {executor.submit(fetch_backdrop_for_movie, key): key for key in movie_keys}
+                square_art_futures = {executor.submit(fetch_square_art_for_movie, key): key for key in movie_keys}
                 for future in as_completed(poster_futures):
                     movie_key, poster_url = future.result()
                     poster_results[movie_key] = poster_url
                     poster_logo_done += 1
                     scan_status.update({
                         "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
-                        "current": f"Fetching posters/logos ({poster_logo_done}/{poster_logo_total})",
+                        "current": f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})",
                     })
                 for future in as_completed(logo_futures):
                     movie_key, logo_url_result = future.result()
@@ -1265,10 +1273,28 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     poster_logo_done += 1
                     scan_status.update({
                         "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
-                        "current": f"Fetching posters/logos ({poster_logo_done}/{poster_logo_total})",
+                        "current": f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})",
+                    })
+                for future in as_completed(art_futures):
+                    movie_key, art_url_result = future.result()
+                    art_results[movie_key] = art_url_result
+                    poster_logo_done += 1
+                    scan_status.update({
+                        "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
+                        "current": f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})",
+                    })
+                for future in as_completed(square_art_futures):
+                    movie_key, square_art_url_result = future.result()
+                    square_art_results[movie_key] = square_art_url_result
+                    poster_logo_done += 1
+                    scan_status.update({
+                        "processed": min(len(movies), round(len(movies) * poster_logo_done / poster_logo_total)),
+                        "current": f"Fetching posters/logos/backdrops/square art ({poster_logo_done}/{poster_logo_total})",
                     })
             logo_count = sum(1 for v in logo_results.values() if v)
-            logger.info(f"[SCAN] Completed poster + logo fetching for {len(poster_results)} movies ({logo_count} logos found)")
+            art_count = sum(1 for v in art_results.values() if v)
+            square_art_count = sum(1 for v in square_art_results.values() if v)
+            logger.info(f"[SCAN] Completed poster + logo + backdrop + square art fetching for {len(poster_results)} movies ({logo_count} logos, {art_count} backdrops, {square_art_count} square art found)")
 
         # Now assemble the movie cache using pre-fetched data. This loop is fast (no I/O —
         # posters/logos/labels were already fetched above), so it doesn't report progress
@@ -1285,6 +1311,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "added_at": movie.addedAt,
                 "poster_url": poster_results.get(movie.key),
                 "logo_url": logo_results.get(movie.key),
+                "art_url": art_results.get(movie.key),
+                "square_art_url": square_art_results.get(movie.key),
                 "labels": bulk_labels.get(movie.key, []),
                 "library_id": lib_id,
             })
@@ -1373,6 +1401,24 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch logo for TV show {show.get('key')}: {e}")
 
+            # Fetch backdrop ("art") from Plex
+            art_url = None
+            try:
+                art_path = fetch_and_cache_backdrop(show.get("key"), force_refresh=force_poster_refresh)
+                if art_path:
+                    art_url = _art_cache_url(show.get("key"), art_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch backdrop for TV show {show.get('key')}: {e}")
+
+            # Fetch square art from Plex
+            square_art_url = None
+            try:
+                sq_path = fetch_and_cache_square_art(show.get("key"), force_refresh=force_poster_refresh)
+                if sq_path:
+                    square_art_url = _square_art_cache_url(show.get("key"), sq_path)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch square art for TV show {show.get('key')}: {e}")
+
             # Fetch labels
             labels = []
             try:
@@ -1388,6 +1434,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "added_at": show.get("addedAt"),
                 "poster_url": poster_url,
                 "logo_url": logo_url,
+                "art_url": art_url,
+                "square_art_url": square_art_url,
                 "labels": labels,
                 "library_id": lib_id,
             })

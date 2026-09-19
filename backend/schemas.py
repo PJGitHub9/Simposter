@@ -12,6 +12,8 @@ class Movie(BaseModel):
     library_id: Optional[str] = None
     poster: Optional[str] = None
     logo_url: Optional[str] = None
+    art_url: Optional[str] = None
+    square_art_url: Optional[str] = None
     tmdb_id: Optional[int] = None
     labels: Optional[List[str]] = None
     updated_at: Optional[str] = None
@@ -199,6 +201,27 @@ class PlexLogoSendRequest(BaseModel):
     library_id: Optional[str] = None
 
 
+class PlexBackdropSendRequest(BaseModel):
+    rating_key: str
+    art_url: Optional[str] = None   # external URL to download
+    art_data: Optional[str] = None  # base64 data URL (for uploads)
+    is_tv: bool = False
+    is_collection: bool = False
+    library_id: Optional[str] = None
+
+
+class PlexSquareArtSendRequest(BaseModel):
+    # Plex's squareArts endpoint is a genuinely separate slot from posters/arts,
+    # confirmed against python-plexapi's SquareArtMixin source (not a guess) --
+    # POST /library/metadata/{ratingKey}/squareArts, image type "backgroundSquare".
+    rating_key: str
+    art_url: Optional[str] = None   # external URL to download
+    art_data: Optional[str] = None  # base64 data URL (for uploads)
+    is_tv: bool = False
+    is_collection: bool = False
+    library_id: Optional[str] = None
+
+
 class PlexSendRequest(BaseModel):
     template_id: str
     preset_id: str  # ADD THIS
@@ -240,6 +263,10 @@ class MovieBatchRequest(BaseModel):
     fallbackLogoPreset: Optional[str] = None
     send_logos_to_plex: bool = False
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
+    require_textless_poster: bool = False  # Forces needs_retry=True until the selected poster is genuinely
+    # textless, regardless of fallbackPosterAction -- set only when resolving a manually-queued
+    # RETRY_REASON_MANUAL_TEXTLESS retry item (database.py), since the ordinary needs_retry check
+    # doesn't catch a missing textless poster when fallbackPosterAction is "continue" (the default).
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
 
 
@@ -261,6 +288,7 @@ class TVShowBatchRequest(BaseModel):
     fallbackPosterPreset: Optional[str] = None
     send_logos_to_plex: bool = False
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
+    require_textless_poster: bool = False  # See MovieBatchRequest's field of the same name.
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
 
 

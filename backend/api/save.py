@@ -124,6 +124,22 @@ def normalize_logo_for_plex(logo_bytes: bytes, fallback_content_type: str = "ima
         return logo_bytes, fallback_content_type
 
 
+def normalize_backdrop_for_plex(backdrop_bytes: bytes, fallback_content_type: str = "image/jpeg") -> Tuple[bytes, str]:
+    """Normalize backdrop bytes through PIL before upload to Plex's /art endpoint.
+
+    Unlike a logo (small, transparent), a backdrop is an opaque photographic image
+    that can be multi-MB at full TMDb/Fanart resolution — reuses
+    encode_poster_for_plex()'s RGB-flatten + tiered-PNG-then-JPEG-fallback logic
+    (same Plex upload size cap applies) rather than normalize_logo_for_plex()'s
+    always-PNG approach, which would be the wrong tradeoff here."""
+    try:
+        img = Image.open(BytesIO(backdrop_bytes)).convert("RGB")
+        return encode_poster_for_plex(img)
+    except Exception as e:
+        logger.warning("[PLEX] Failed to normalize backdrop image, uploading raw bytes instead: %s", e)
+        return backdrop_bytes, fallback_content_type
+
+
 def embed_library_metadata(
     img: Image.Image,
     library_id: Optional[str],

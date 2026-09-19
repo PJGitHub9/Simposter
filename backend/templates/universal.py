@@ -21,10 +21,25 @@ def _resize_cover(
     target_w: int,
     target_h: int,
     zoom: float = 1.0,
+    shift_y: float = 0.0,
 ) -> Image.Image:
     """
     Resize to fully cover the target canvas (like CSS background-size: cover),
-    then apply an extra zoom factor (poster_zoom) and center-crop.
+    then apply an extra zoom factor (poster_zoom) and crop.
+
+    shift_y (-0.5..0.5, matching poster_shift_y's own range) moves the crop
+    window within whatever vertical slack the cover-resize left over, instead of
+    always center-cropping. This must happen HERE, during the crop, not by
+    cropping to the exact target size first and pasting the result at an offset
+    afterward (the previous approach) -- once cropped to target_h there is zero
+    slack left over, so a post-hoc offset just clips the poster's own edge and
+    reveals empty canvas on the opposite side instead of actually showing more
+    of the source image. The available slack is `new_h - target_h`; for a source
+    aspect ratio much narrower than the target canvas (e.g. a 2:3 poster on a 1:1
+    square canvas) that slack is large and a shift genuinely reveals previously-
+    hidden content. For a source that already closely matches the target aspect
+    (e.g. a 2:3 poster on the default 2:3 canvas) the slack is small, so this bug
+    was far less noticeable there -- but the same fix applies to both.
     """
     w, h = img.size
     if w == 0 or h == 0:
@@ -38,7 +53,14 @@ def _resize_cover(
     resized = img.resize((new_w, new_h), Image.LANCZOS)
 
     x = max(0, (new_w - target_w) // 2)
-    y = max(0, (new_h - target_h) // 2)
+
+    max_y_offset = max(0, new_h - target_h)
+    center_y = max_y_offset // 2
+    # Positive shift_y means the poster visually moves DOWN in the frame (matching
+    # the original paste-offset convention) -- i.e. the crop window moves UP
+    # toward the source's top edge, revealing more of what was above it.
+    y = center_y - int(shift_y * max_y_offset)
+    y = max(0, min(y, max_y_offset))
     return resized.crop((x, y, x + target_w, y + target_h))
 
 
@@ -764,9 +786,10 @@ def build_base_poster(
     if options is None:
         options = {}
 
-    # fixed 2:3 canvas (TPDB friendly, vertical)
-    canvas_w = 2000
-    canvas_h = 3000
+    # 2:3 canvas by default (TPDB friendly, vertical); options["canvas_mode"] can
+    # select a different size (e.g. "square" for Square Art) -- see canvas.py.
+    from .canvas import resolve_canvas_size
+    canvas_w, canvas_h = resolve_canvas_size(options)
 
     # ------------- OPTIONS -------------
     poster_zoom = float(options.get("poster_zoom", 1.0))          # 1.0 = normal
@@ -800,9 +823,8 @@ def build_base_poster(
     # ------------- BASE POSTER -------------
     base = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
 
-    poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom)
-    shift_px = int(poster_shift_y * canvas_h)
-    base.paste(poster, (0, shift_px))
+    poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
+    base.paste(poster, (0, 0))
 
     # ------------- MATTE + FADE (bottom + top) -------------
     matte_h = int(canvas_h * matte_height_ratio)

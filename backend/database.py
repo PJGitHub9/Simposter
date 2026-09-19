@@ -339,6 +339,8 @@ def init_database():
                 tvdb_id INTEGER,
                 poster_url TEXT,
                 logo_url TEXT,
+                art_url TEXT,
+                square_art_url TEXT,
                 labels_json TEXT DEFAULT '[]',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 library_id TEXT DEFAULT 'default'
@@ -366,6 +368,12 @@ def init_database():
         if "logo_url" not in cols:
             cursor.execute("ALTER TABLE movie_cache ADD COLUMN logo_url TEXT")
             logger.info("[DB] Added 'logo_url' column to movie_cache")
+        if "art_url" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN art_url TEXT")
+            logger.info("[DB] Added 'art_url' column to movie_cache")
+        if "square_art_url" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN square_art_url TEXT")
+            logger.info("[DB] Added 'square_art_url' column to movie_cache")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_movie_cache_updated
@@ -399,6 +407,8 @@ def init_database():
                 tvdb_id INTEGER,
                 poster_url TEXT,
                 logo_url TEXT,
+                art_url TEXT,
+                square_art_url TEXT,
                 labels_json TEXT DEFAULT '[]',
                 seasons_json TEXT DEFAULT '[]',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -428,6 +438,12 @@ def init_database():
         if "logo_url" not in tv_cols:
             cursor.execute("ALTER TABLE tv_cache ADD COLUMN logo_url TEXT")
             logger.info("[DB] Added 'logo_url' column to tv_cache")
+        if "art_url" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN art_url TEXT")
+            logger.info("[DB] Added 'art_url' column to tv_cache")
+        if "square_art_url" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN square_art_url TEXT")
+            logger.info("[DB] Added 'square_art_url' column to tv_cache")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_tv_cache_updated
@@ -1594,14 +1610,16 @@ def upsert_movie_cache(
     library_id: str = "default",
     edition: Optional[str] = None,
     logo_url: Optional[str] = None,
+    art_url: Optional[str] = None,
+    square_art_url: Optional[str] = None,
 ) -> None:
     """Insert or update cached movie metadata."""
     labels_json = json.dumps(labels or [])
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, updated_at, library_id, edition)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
             ON CONFLICT(rating_key) DO UPDATE SET
                 title = excluded.title,
                 year = excluded.year,
@@ -1609,6 +1627,8 @@ def upsert_movie_cache(
                 tmdb_id = COALESCE(excluded.tmdb_id, movie_cache.tmdb_id),
                 poster_url = COALESCE(excluded.poster_url, movie_cache.poster_url),
                 logo_url = COALESCE(excluded.logo_url, movie_cache.logo_url),
+                art_url = COALESCE(excluded.art_url, movie_cache.art_url),
+                square_art_url = COALESCE(excluded.square_art_url, movie_cache.square_art_url),
                 labels_json = CASE
                     WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                     ELSE movie_cache.labels_json
@@ -1616,7 +1636,7 @@ def upsert_movie_cache(
                 library_id = COALESCE(excluded.library_id, movie_cache.library_id),
                 edition = COALESCE(excluded.edition, movie_cache.edition),
                 updated_at = CURRENT_TIMESTAMP
-        """, (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, library_id, edition))
+        """, (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, library_id, edition))
 
 
 def get_movie_labels(rating_key: str) -> List[str]:
@@ -1680,6 +1700,22 @@ def update_movie_logo_url(rating_key: str, logo_url: Optional[str]) -> None:
         conn.execute(
             "UPDATE movie_cache SET logo_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
             (logo_url, rating_key)
+        )
+
+
+def update_movie_art_url(rating_key: str, art_url: Optional[str]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE movie_cache SET art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
+            (art_url, rating_key)
+        )
+
+
+def update_movie_square_art_url(rating_key: str, square_art_url: Optional[str]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE movie_cache SET square_art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
+            (square_art_url, rating_key)
         )
 
 
@@ -1845,8 +1881,8 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
         for m in movies:
             labels_json = json.dumps(m.get("labels") or [])
             cursor.execute("""
-                INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, updated_at, library_id, edition)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+                INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
                 ON CONFLICT(rating_key) DO UPDATE SET
                     title = excluded.title,
                     year = excluded.year,
@@ -1854,6 +1890,8 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
                     tmdb_id = COALESCE(excluded.tmdb_id, movie_cache.tmdb_id),
                     poster_url = COALESCE(excluded.poster_url, movie_cache.poster_url),
                     logo_url = COALESCE(excluded.logo_url, movie_cache.logo_url),
+                    art_url = COALESCE(excluded.art_url, movie_cache.art_url),
+                    square_art_url = COALESCE(excluded.square_art_url, movie_cache.square_art_url),
                     labels_json = CASE
                         WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                         ELSE movie_cache.labels_json
@@ -1869,6 +1907,8 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
                 m.get("tmdb_id"),
                 m.get("poster_url"),
                 m.get("logo_url"),
+                m.get("art_url"),
+                m.get("square_art_url"),
                 labels_json,
                 library_id,
                 m.get("edition"),
@@ -1900,14 +1940,14 @@ def get_cached_movies(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
         cursor = conn.cursor()
         if library_id:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, updated_at, library_id, edition
+                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition
                 FROM movie_cache
                 WHERE library_id = ?
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """, (library_id,))
         else:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, updated_at, library_id, edition
+                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition
                 FROM movie_cache
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """)
@@ -1927,6 +1967,8 @@ def get_cached_movies(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
             "tmdb_id": row["tmdb_id"],
             "poster_url": row["poster_url"],
             "logo_url": row["logo_url"] if "logo_url" in row.keys() else None,
+            "art_url": row["art_url"] if "art_url" in row.keys() else None,
+            "square_art_url": row["square_art_url"] if "square_art_url" in row.keys() else None,
             "labels": labels,
             "updated_at": row["updated_at"],
             "library_id": row["library_id"] if "library_id" in row.keys() else None,
@@ -1976,6 +2018,8 @@ def upsert_tv_cache(
     library_id: str = "default",
     edition: Optional[str] = None,
     logo_url: Optional[str] = None,
+    art_url: Optional[str] = None,
+    square_art_url: Optional[str] = None,
 ) -> None:
     """Insert or update cached TV show metadata."""
     labels_json = json.dumps(labels or [])
@@ -1983,8 +2027,8 @@ def upsert_tv_cache(
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO tv_cache (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, updated_at, library_id, edition)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            INSERT INTO tv_cache (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
             ON CONFLICT(rating_key) DO UPDATE SET
                 title = excluded.title,
                 year = excluded.year,
@@ -1993,6 +2037,8 @@ def upsert_tv_cache(
                 tvdb_id = COALESCE(excluded.tvdb_id, tv_cache.tvdb_id),
                 poster_url = COALESCE(excluded.poster_url, tv_cache.poster_url),
                 logo_url = COALESCE(excluded.logo_url, tv_cache.logo_url),
+                art_url = COALESCE(excluded.art_url, tv_cache.art_url),
+                square_art_url = COALESCE(excluded.square_art_url, tv_cache.square_art_url),
                 labels_json = CASE
                     WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                     ELSE tv_cache.labels_json
@@ -2004,7 +2050,7 @@ def upsert_tv_cache(
                 library_id = COALESCE(excluded.library_id, tv_cache.library_id),
                 edition = COALESCE(excluded.edition, tv_cache.edition),
                 updated_at = CURRENT_TIMESTAMP
-        """, (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, library_id, edition))
+        """, (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, library_id, edition))
 
 
 def update_tv_labels(rating_key: str, labels: List[str], library_id: str = "default") -> None:
@@ -2053,6 +2099,22 @@ def update_tv_logo_url(rating_key: str, logo_url: Optional[str]) -> None:
         conn.execute(
             "UPDATE tv_cache SET logo_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
             (logo_url, rating_key)
+        )
+
+
+def update_tv_art_url(rating_key: str, art_url: Optional[str]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE tv_cache SET art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
+            (art_url, rating_key)
+        )
+
+
+def update_tv_square_art_url(rating_key: str, square_art_url: Optional[str]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE tv_cache SET square_art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
+            (square_art_url, rating_key)
         )
 
 
@@ -2107,8 +2169,8 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
             labels_json = json.dumps(m.get("labels") or [])
             seasons_json = json.dumps(m.get("seasons") or [])
             cursor.execute("""
-                INSERT INTO tv_cache (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, updated_at, library_id, edition)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+                INSERT INTO tv_cache (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
                 ON CONFLICT(rating_key) DO UPDATE SET
                     title = excluded.title,
                     year = excluded.year,
@@ -2117,6 +2179,8 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
                     tvdb_id = COALESCE(excluded.tvdb_id, tv_cache.tvdb_id),
                     poster_url = COALESCE(excluded.poster_url, tv_cache.poster_url),
                     logo_url = COALESCE(excluded.logo_url, tv_cache.logo_url),
+                    art_url = COALESCE(excluded.art_url, tv_cache.art_url),
+                    square_art_url = COALESCE(excluded.square_art_url, tv_cache.square_art_url),
                     labels_json = CASE
                         WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                         ELSE tv_cache.labels_json
@@ -2137,6 +2201,8 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
                 m.get("tvdb_id"),
                 m.get("poster_url"),
                 m.get("logo_url"),
+                m.get("art_url"),
+                m.get("square_art_url"),
                 labels_json,
                 seasons_json,
                 library_id,
@@ -2168,14 +2234,14 @@ def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict[str, Any]
         cursor = conn.cursor()
         if library_id:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, updated_at, library_id, edition
+                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition
                 FROM tv_cache
                 WHERE library_id = ?
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """, (library_id,))
         else:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, updated_at, library_id, edition
+                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition
                 FROM tv_cache
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """)
@@ -2200,6 +2266,8 @@ def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict[str, Any]
             "tvdb_id": row["tvdb_id"] if "tvdb_id" in row.keys() else None,
             "poster_url": row["poster_url"],
             "logo_url": row["logo_url"] if "logo_url" in row.keys() else None,
+            "art_url": row["art_url"] if "art_url" in row.keys() else None,
+            "square_art_url": row["square_art_url"] if "square_art_url" in row.keys() else None,
             "labels": labels,
             "seasons": seasons,
             "updated_at": row["updated_at"],
@@ -2781,6 +2849,16 @@ def get_poster_status(
 # ============================================
 #  Poster Retry Queue Operations
 # ============================================
+
+# Reason used when a user manually queues an item from the editor because the
+# poster they picked right now isn't textless yet -- distinct from the reasons
+# batch.py generates automatically (no_logo, poster_fallback, etc.). Checked by
+# batch.py/scheduler.py/history.py to require a genuinely textless poster before
+# resolving the item, since the ordinary needs_retry check alone doesn't catch
+# this case when fallbackPosterAction is "continue" (the default) -- see
+# require_textless_poster in schemas.py.
+RETRY_REASON_MANUAL_TEXTLESS = "manual_textless_pending"
+
 
 def add_to_retry_queue(
     rating_key: str,

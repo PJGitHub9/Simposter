@@ -11,9 +11,9 @@ from typing import List, Optional
 
 from ..config import settings, plex_headers, plex_session, plex_remove_label, plex_add_label, get_label_to_add, logger, get_media_folder_name
 from ..rendering import render_poster_image
-from ..schemas import PlexSendRequest, PlexLogoSendRequest
+from ..schemas import PlexSendRequest, PlexLogoSendRequest, PlexBackdropSendRequest, PlexSquareArtSendRequest
 from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render, save_to_asset_folder_on_send_enabled
-from .save import encode_poster_for_plex, normalize_logo_for_plex, _PLEX_UPLOAD_SIZE_LIMIT
+from .save import encode_poster_for_plex, normalize_logo_for_plex, normalize_backdrop_for_plex, _PLEX_UPLOAD_SIZE_LIMIT
 from .movies import fetch_and_cache_poster, fetch_and_cache_logo, _logo_cache_url, _read_image_metadata, _find_asset_under_roots
 from .notifications import send_discord_notification, send_apprise_notification
 
@@ -354,6 +354,173 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
 
     logger.info("[PLEX] Clearlogo sent for ratingKey=%s [%s]", req.rating_key, _logo_title)
     return {"status": "ok", "logo_url": new_logo_url}
+
+
+@router.post("/plex/send-backdrop")
+def api_plex_send_backdrop(req: PlexBackdropSendRequest):
+    if not settings.PLEX_URL or not settings.PLEX_TOKEN:
+        raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
+
+    _art_title = "?"
+    try:
+        from .. import database as _db_title
+        _t, _y = _db_title.get_title_for_rating_key(req.rating_key)
+        if _t:
+            _art_title = f"{_t} ({_y})" if _y else _t
+    except Exception:
+        pass
+
+    # Resolve backdrop bytes
+    art_bytes = None
+    content_type = "image/jpeg"
+
+    if req.art_data:
+        try:
+            header, data = req.art_data.split(",", 1)
+            if "png" in header:
+                content_type = "image/png"
+            art_bytes = base64.b64decode(data)
+        except Exception as e:
+            raise HTTPException(400, f"Invalid art_data: {e}")
+    elif req.art_url:
+        from ..middleware.validation import validate_url
+        req.art_url = validate_url(req.art_url)
+        try:
+            r = requests.get(req.art_url, timeout=15)
+            r.raise_for_status()
+            content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+            art_bytes = r.content
+        except Exception as e:
+            raise HTTPException(500, f"Failed to download backdrop: {e}")
+    else:
+        raise HTTPException(400, "Either art_url or art_data must be provided.")
+
+    art_bytes, content_type = normalize_backdrop_for_plex(art_bytes, content_type)
+
+    # Upload to Plex's /arts endpoint (plural) -- confirmed against python-plexapi's
+    # actual ArtMixin.uploadArt() source (not a guess): it only ever POSTs to
+    # /library/metadata/{ratingKey}/arts, there is no singular /art write path. An
+    # earlier version of this endpoint tried a singular /art fallback based on an
+    # incorrect assumption (mirroring the read-side GET convenience path, which IS
+    # singular) -- that was the actual cause of a dropped-SSL-connection failure in
+    # production, now removed. See CLAUDE.md Quirk #44.
+    segment = _plex_media_segment(req.is_collection)
+    upload_headers = {
+        "X-Plex-Token": settings.PLEX_TOKEN,
+        "Content-Type": content_type,
+    }
+    plex_url = f"{settings.PLEX_URL}/library/{segment}/{req.rating_key}/arts"
+    logger.info("[PLEX] Uploading backdrop rating_key=%s [%s] is_tv=%s is_collection=%s", req.rating_key, _art_title, req.is_tv, req.is_collection)
+    try:
+        r = plex_session.post(plex_url, headers=upload_headers, data=art_bytes, timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        logger.error("[PLEX] Backdrop upload failed rating_key=%s [%s] err=%s", req.rating_key, _art_title, e)
+        raise HTTPException(500, f"Failed to upload backdrop to Plex: {e}")
+
+    # Save uploaded bytes directly to cache — no need to re-fetch from Plex
+    # (Plex may not have processed the upload yet, so re-fetching would return the old art)
+    new_art_url = None
+    try:
+        from .. import database as db_mod
+        from .movies import _save_art_cache, _art_cache_url
+        art_path = _save_art_cache(req.rating_key, art_bytes, content_type)
+        if art_path:
+            new_art_url = _art_cache_url(req.rating_key, art_path)
+            if req.is_tv:
+                db_mod.update_tv_art_url(req.rating_key, new_art_url)
+            else:
+                db_mod.update_movie_art_url(req.rating_key, new_art_url)
+    except Exception as e:
+        logger.debug("[PLEX] Failed to update backdrop cache after upload: %s", e)
+
+    logger.info("[PLEX] Backdrop sent for ratingKey=%s [%s]", req.rating_key, _art_title)
+    return {"status": "ok", "art_url": new_art_url}
+
+
+@router.post("/plex/send-square-art")
+def api_plex_send_square_art(req: PlexSquareArtSendRequest):
+    """Upload square (1:1) art to Plex's dedicated squareArts slot -- a genuinely
+    separate slot from posters/arts, confirmed against python-plexapi's
+    SquareArtMixin source: POST /library/metadata/{ratingKey}/squareArts, image
+    type "backgroundSquare". No overwrite risk to the item's regular poster or
+    background art, unlike sending through either of those existing slots."""
+    if not settings.PLEX_URL or not settings.PLEX_TOKEN:
+        raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
+
+    _sq_title = "?"
+    try:
+        from .. import database as _db_title
+        _t, _y = _db_title.get_title_for_rating_key(req.rating_key)
+        if _t:
+            _sq_title = f"{_t} ({_y})" if _y else _t
+    except Exception:
+        pass
+
+    art_bytes = None
+    content_type = "image/jpeg"
+
+    if req.art_data:
+        try:
+            header, data = req.art_data.split(",", 1)
+            if "png" in header:
+                content_type = "image/png"
+            art_bytes = base64.b64decode(data)
+        except Exception as e:
+            raise HTTPException(400, f"Invalid art_data: {e}")
+    elif req.art_url:
+        from ..middleware.validation import validate_url
+        req.art_url = validate_url(req.art_url)
+        try:
+            r = requests.get(req.art_url, timeout=15)
+            r.raise_for_status()
+            content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+            art_bytes = r.content
+        except Exception as e:
+            raise HTTPException(500, f"Failed to download square art: {e}")
+    else:
+        raise HTTPException(400, "Either art_url or art_data must be provided.")
+
+    # Square art is the same kind of large photographic image as a backdrop --
+    # reuse the identical RGB-flatten + tiered-PNG-then-JPEG-fallback normalize.
+    art_bytes, content_type = normalize_backdrop_for_plex(art_bytes, content_type)
+
+    segment = _plex_media_segment(req.is_collection)
+    upload_headers = {
+        "X-Plex-Token": settings.PLEX_TOKEN,
+        "Content-Type": content_type,
+    }
+    plex_url = f"{settings.PLEX_URL}/library/{segment}/{req.rating_key}/squareArts"
+    logger.info("[PLEX] Uploading square art rating_key=%s [%s] is_tv=%s is_collection=%s", req.rating_key, _sq_title, req.is_tv, req.is_collection)
+    try:
+        r = plex_session.post(plex_url, headers=upload_headers, data=art_bytes, timeout=20)
+        r.raise_for_status()
+    except Exception as e:
+        logger.error("[PLEX] Square art upload failed rating_key=%s [%s] err=%s", req.rating_key, _sq_title, e)
+        raise HTTPException(500, f"Failed to upload square art to Plex: {e}")
+
+    # Save uploaded bytes directly to cache — no need to re-fetch from Plex (same
+    # reasoning as backdrop's post-upload caching: Plex may not have processed the
+    # upload yet). This is what lets the manual editor immediately show "Current
+    # Square Art" matching what was just sent, instead of nothing at all -- there's
+    # no scan-time population for this niche, manually-triggered asset type, so the
+    # send action itself is the primary way this cache ever gets populated.
+    new_square_art_url = None
+    try:
+        from .. import database as db_mod
+        from .movies import _save_square_art_cache, _square_art_cache_url
+        sq_path = _save_square_art_cache(req.rating_key, art_bytes, content_type)
+        if sq_path:
+            new_square_art_url = _square_art_cache_url(req.rating_key, sq_path)
+            if req.is_tv:
+                db_mod.update_tv_square_art_url(req.rating_key, new_square_art_url)
+            else:
+                db_mod.update_movie_square_art_url(req.rating_key, new_square_art_url)
+    except Exception as e:
+        logger.debug("[PLEX] Failed to update square art cache after upload: %s", e)
+
+    logger.info("[PLEX] Square art sent for ratingKey=%s [%s]", req.rating_key, _sq_title)
+    return {"status": "ok", "square_art_url": new_square_art_url}
 
 
 # ---------------------------------------------------------------------------

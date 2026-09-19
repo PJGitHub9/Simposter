@@ -366,6 +366,14 @@ def _process_single_movie(
         # logo_mode becomes "none", which would otherwise make logo_was_expected False.
         logo_was_expected = str(logo_mode).lower() != "none"
         needs_retry = (logo_was_expected and logo_url is None) or (poster_fallback_action_used == "template") or logo_fallback_used
+        # A manually-queued "waiting for a textless poster" retry item (see
+        # RETRY_REASON_MANUAL_TEXTLESS in database.py) needs a stronger check than the above --
+        # the ordinary needs_retry logic only flags a missing textless poster when
+        # fallbackPosterAction is "template", so it silently misses the far more common
+        # "continue" case (the default). require_textless_poster forces needs_retry True until
+        # the poster actually selected is genuinely textless, independent of fallback config.
+        if getattr(req, 'require_textless_poster', False) and not (poster and not poster.get("has_text")):
+            needs_retry = True
         # Retry-queue runs only want to upload once the render actually meets the template spec
         skip_send_not_ideal = getattr(req, 'send_only_if_ideal', False) and needs_retry
 
@@ -1009,6 +1017,7 @@ def _render_tv_series_poster(
         poster_fallback_used=poster_fallback_used,
         poster_fallback_template=poster_fallback_template_used,
         poster_fallback_preset=poster_fallback_preset_used,
+        poster_is_textless=bool(poster and not poster.get("has_text")),
         source=source,
         tmdb_id=tmdb_id,
         logo_was_expected=str(logo_mode).lower() != "none",
@@ -1176,6 +1185,7 @@ def _render_all_tv_seasons(
                     poster_fallback_used=series_poster_fallback_used,
                     poster_fallback_template=series_poster_fallback_template,
                     poster_fallback_preset=series_poster_fallback_preset,
+                    poster_is_textless=bool(series_poster and not series_poster.get("has_text")),
                     source=source,
                     tmdb_id=tmdb_id,
                     logo_was_expected=str(logo_mode).lower() != "none",
@@ -1342,6 +1352,7 @@ def _render_all_tv_seasons(
             poster_fallback_used=season_poster_fallback_used,
             poster_fallback_template=season_poster_fallback_template,
             poster_fallback_preset=season_poster_fallback_preset,
+            poster_is_textless=bool(poster and not poster.get("has_text")),
             source=source,
             tmdb_id=tmdb_id,
             logo_was_expected=str(season_logo_mode).lower() != "none",
@@ -1456,6 +1467,7 @@ def _render_and_save_poster(
     source: str = "batch",
     tmdb_id: Optional[int] = None,
     logo_was_expected: bool = True,
+    poster_is_textless: Optional[bool] = None,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     _render_start = time.time()
@@ -1481,6 +1493,10 @@ def _render_and_save_poster(
         return _folder_name_cache[0]
 
     needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used
+    # See the matching movie-path comment in _process_single_movie for why this check exists
+    # independent of the ordinary needs_retry logic (RETRY_REASON_MANUAL_TEXTLESS, database.py).
+    if getattr(req, 'require_textless_poster', False) and not poster_is_textless:
+        needs_retry = True
     # Retry-queue runs only want to upload once the render actually meets the template spec
     skip_send_not_ideal = getattr(req, 'send_only_if_ideal', False) and needs_retry
 
@@ -2165,6 +2181,7 @@ def process_single_movie_poster(
     source: str = "webhook",
     send_logos_to_plex: bool = False,
     send_only_if_ideal: bool = False,
+    require_textless_poster: bool = False,
 ) -> bool:
     """
     Process a single movie poster programmatically.
@@ -2181,6 +2198,9 @@ def process_single_movie_poster(
         send_only_if_ideal: If True, skip the Plex upload when the render still needs_retry
             (i.e. no logo found / a fallback was used). Used by the retry queue so it doesn't
             keep re-sending the same fallback poster on every retry pass.
+        require_textless_poster: If True, needs_retry stays True until the selected poster is
+            genuinely textless, regardless of fallbackPosterAction. Pass True when resolving a
+            RETRY_REASON_MANUAL_TEXTLESS retry-queue item (database.py).
 
     Returns:
         True if successful, False otherwise
@@ -2197,6 +2217,7 @@ def process_single_movie_poster(
             library_id=library_id,
             send_logos_to_plex=send_logos_to_plex,
             send_only_if_ideal=send_only_if_ideal,
+            require_textless_poster=require_textless_poster,
         )
 
         # Load presets for options
@@ -2255,6 +2276,7 @@ def process_single_tv_show_poster(
     source: str = "webhook",
     send_logos_to_plex: bool = False,
     send_only_if_ideal: bool = False,
+    require_textless_poster: bool = False,
 ) -> bool:
     """
     Process a single TV show poster programmatically.
@@ -2272,6 +2294,7 @@ def process_single_tv_show_poster(
         send_only_if_ideal: If True, skip the Plex upload for any series/season poster that
             still needs_retry. Used by the retry queue so it doesn't keep re-sending the same
             fallback poster on every retry pass.
+        require_textless_poster: See process_single_movie_poster's parameter of the same name.
 
     Returns:
         True if successful, False otherwise
@@ -2289,6 +2312,7 @@ def process_single_tv_show_poster(
             library_id=library_id,
             send_logos_to_plex=send_logos_to_plex,
             send_only_if_ideal=send_only_if_ideal,
+            require_textless_poster=require_textless_poster,
         )
 
         # Load presets for options

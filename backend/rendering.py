@@ -248,8 +248,9 @@ def render_poster_image(
                 texture_url = None
         if not texture_url:
             from .templates.universal import _hex_to_rgb
+            from .templates.canvas import resolve_canvas_size
             base_color = _hex_to_rgb(str(options.get("kometa_base_color", "#202020")))
-            bg = Image.new("RGB", (2000, 3000), base_color)
+            bg = Image.new("RGB", resolve_canvas_size(options), base_color)
 
         if logo_url:
             try:
@@ -346,15 +347,15 @@ def render_with_overlay_cache(
                     logo_img = logo_future.result()
 
             # Base canvas with poster zoom/shift
-            canvas_w, canvas_h = 2000, 3000
+            from .templates.canvas import resolve_canvas_size
+            canvas_w, canvas_h = resolve_canvas_size(render_options)
             poster_zoom = float(render_options.get("poster_zoom", 1.0))
             poster_shift_y = float(render_options.get("poster_shift_y", 0.0))
 
-            base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom)
-            shift_px = int(poster_shift_y * canvas_h)
+            base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
 
             canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
-            canvas.paste(base, (0, shift_px))
+            canvas.paste(base, (0, 0))
 
             # Composite cached overlay
             overlay = Image.open(overlay_path).convert("RGBA")
