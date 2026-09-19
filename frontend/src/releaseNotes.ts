@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.90',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'History → Retry Queue: an item whose retries were abandoned (max attempts reached, or the Plex item confirmed gone) is now removed from the queue entirely instead of lingering as an "ABANDONED" row. Previously, if that title was later re-added to Plex — which arrives under a brand-new internal ID — it would show up as a second, separate PENDING row, making the same movie/show appear twice in the list.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.89',
     date: '2026-09-04',
     sections: [

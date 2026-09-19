@@ -401,10 +401,12 @@ def _run_poster_retry():
             title = item.get("title", rating_key)
             retry_count = item.get("retry_count", 0)
 
-            # Abandon if max_attempts exceeded
+            # Abandon if max_attempts exceeded -- removed outright, not just marked, so a
+            # later delete-then-re-add of the same title (which arrives under a brand-new
+            # rating_key, see CLAUDE.md Quirk #41) can't show up as two rows in the queue.
             if max_attempts > 0 and retry_count >= max_attempts:
-                db.resolve_retry_queue_item(rating_key, "abandoned")
-                logger.info("[RETRY] Abandoned %s after %d attempts", title, retry_count)
+                db.remove_from_retry_queue(rating_key)
+                logger.info("[RETRY] Abandoned %s after %d attempts — removed from retry queue", title, retry_count)
                 continue
 
             logger.info("[RETRY] Retrying %s (%s) attempt #%d", title, media_type, retry_count + 1)
@@ -473,7 +475,7 @@ def _run_poster_retry():
                 # "failed" History row every cycle, before this branch existed.
                 is_hard_error = isinstance(result, dict) and result.get("status") == "error"
                 if is_hard_error and _plex_item_exists(rating_key) is False:
-                    db.resolve_retry_queue_item(rating_key, "abandoned")
+                    db.remove_from_retry_queue(rating_key)
                     logger.info(
                         "[RETRY] %s (rating_key=%s) no longer exists in Plex — removed from retry queue",
                         title, rating_key
@@ -492,7 +494,7 @@ def _run_poster_retry():
                 # retryMaxAttempts is 0 (unlimited), silently filling History
                 # with a fresh "failed" entry every retry cycle.
                 if _plex_item_exists(rating_key) is False:
-                    db.resolve_retry_queue_item(rating_key, "abandoned")
+                    db.remove_from_retry_queue(rating_key)
                     logger.info(
                         "[RETRY] %s (rating_key=%s) no longer exists in Plex — removed from retry queue",
                         title, rating_key

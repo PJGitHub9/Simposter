@@ -809,6 +809,14 @@ def init_database():
             ON poster_retry_queue(status)
         """)
 
+        # One-time cleanup for DBs created before "abandoned" retry items were deleted
+        # outright instead of just marked -- see scheduler.py's _run_poster_retry(). A
+        # stale abandoned row's title commonly reappears under a brand-new rating_key
+        # (delete-then-re-add in Plex, see CLAUDE.md Quirk #41), which made the History
+        # → Retry Queue view show what looked like the same item twice. Idempotent (a
+        # no-op once these rows are gone), safe to run every startup.
+        cursor.execute("DELETE FROM poster_retry_queue WHERE status = 'abandoned'")
+
         # Tracks the last time each TMDb ID was confirmed present in the Plex library,
         # independent of Plex's own rating_key (which changes on a Radarr/Sonarr re-grab
         # or similar). Upserted on every scan for every currently-present item with a
@@ -2875,9 +2883,15 @@ def get_retry_queue(include_resolved: bool = False) -> List[Dict[str, Any]]:
                 SELECT * FROM poster_retry_queue ORDER BY first_queued_at DESC LIMIT 500
             """)
         else:
+            # "abandoned" items are deleted outright when detected (see scheduler.py) rather
+            # than kept and filtered here -- an abandoned item's title commonly reappears
+            # under a brand-new rating_key (delete-then-re-add, see Quirk #41), and leaving
+            # the old abandoned row around made that look like a duplicate queue entry for
+            # the same title. This clause only still matters for a legacy DB with rows from
+            # before that change (also swept once on startup, see init_database()).
             cursor.execute("""
                 SELECT * FROM poster_retry_queue
-                WHERE status = 'pending' OR status = 'abandoned'
+                WHERE status = 'pending'
                 ORDER BY first_queued_at DESC LIMIT 500
             """)
         rows = cursor.fetchall()
