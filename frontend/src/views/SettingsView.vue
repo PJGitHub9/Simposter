@@ -17,6 +17,7 @@ import PerformanceTab from './settings/PerformanceTab.vue'
 import AutomationTab from './settings/AutomationTab.vue'
 import AdvancedTab from './settings/AdvancedTab.vue'
 import NotificationsTab from './settings/NotificationsTab.vue'
+import CleanupTab from './settings/CleanupTab.vue'
 
 interface LibraryMapping {
   id: string
@@ -49,7 +50,7 @@ const route = useRoute()
 const router = useRouter()
 
 // Active tab state - initialize from URL or default to 'general'
-const activeTab = ref<'general' | 'libraries' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced'>(
+const activeTab = ref<'general' | 'libraries' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
   (route.query.tab as any) || 'general'
 )
 
@@ -136,6 +137,13 @@ const localWebhookSecret = ref('')
 const localExistingContentMode = ref<'resend' | 'regenerate'>('regenerate')
 const localRetryUntilTemplateMet = ref(false)
 const localRetryIntervalHours = ref(24)
+const localCleanupScheduleEnabled = ref(false)
+const localCleanupScheduleCronExpression = ref('0 3 * * 0')
+const localCleanupScheduleCategories = ref<string[]>([
+  'poster_cache', 'logo_cache', 'backdrop_cache', 'square_art_cache',
+  'overlay_effect_cache', 'uploaded_files', 'overlay_assets', 'poster_history',
+])
+const localCleanupScheduleHistoryDays = ref(180)
 const localRetryMaxAttempts = ref(0)
 const localReuseCachedPosterDays = ref(0)
 
@@ -287,6 +295,13 @@ const loadLocalSettings = async () => {
   localExistingContentMode.value = (settings.automation?.value?.existingContentMode as 'resend' | 'regenerate') ?? 'regenerate'
   localRetryUntilTemplateMet.value = settings.automation?.value?.retryUntilTemplateMet ?? false
   localRetryIntervalHours.value = settings.automation?.value?.retryIntervalHours ?? 24
+  localCleanupScheduleEnabled.value = settings.scheduler?.value?.cleanupEnabled ?? false
+  localCleanupScheduleCronExpression.value = settings.scheduler?.value?.cleanupCronExpression ?? '0 3 * * 0'
+  localCleanupScheduleCategories.value = settings.scheduler?.value?.cleanupCategories ?? [
+    'poster_cache', 'logo_cache', 'backdrop_cache', 'square_art_cache',
+    'overlay_effect_cache', 'uploaded_files', 'overlay_assets', 'poster_history',
+  ]
+  localCleanupScheduleHistoryDays.value = settings.scheduler?.value?.cleanupHistoryDays ?? 180
   localRetryMaxAttempts.value = settings.automation?.value?.retryMaxAttempts ?? 0
   localReuseCachedPosterDays.value = settings.automation?.value?.reuseCachedPosterDays ?? 0
 
@@ -345,6 +360,10 @@ const captureSettingsSnapshot = () => {
     schedulerEnabled: localSchedulerEnabled.value,
     schedulerCronExpression: localSchedulerCronExpression.value,
     schedulerLibraryIds: localSchedulerLibraryIds.value,
+    cleanupScheduleEnabled: localCleanupScheduleEnabled.value,
+    cleanupScheduleCronExpression: localCleanupScheduleCronExpression.value,
+    cleanupScheduleCategories: localCleanupScheduleCategories.value,
+    cleanupScheduleHistoryDays: localCleanupScheduleHistoryDays.value,
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     labelToAdd: localLabelToAdd.value,
@@ -425,6 +444,10 @@ const checkForChanges = () => {
     schedulerEnabled: localSchedulerEnabled.value,
     schedulerCronExpression: localSchedulerCronExpression.value,
     schedulerLibraryIds: localSchedulerLibraryIds.value,
+    cleanupScheduleEnabled: localCleanupScheduleEnabled.value,
+    cleanupScheduleCronExpression: localCleanupScheduleCronExpression.value,
+    cleanupScheduleCategories: localCleanupScheduleCategories.value,
+    cleanupScheduleHistoryDays: localCleanupScheduleHistoryDays.value,
     webhookAutoSend: localWebhookAutoSend.value,
     webhookAutoLabels: localWebhookAutoLabels.value,
     labelToAdd: localLabelToAdd.value,
@@ -486,7 +509,11 @@ const checkForChanges = () => {
   sectionsWithChanges.value.scheduler =
     localSchedulerEnabled.value !== initial.schedulerEnabled ||
     localSchedulerCronExpression.value !== initial.schedulerCronExpression ||
-    JSON.stringify(localSchedulerLibraryIds.value) !== JSON.stringify(initial.schedulerLibraryIds)
+    JSON.stringify(localSchedulerLibraryIds.value) !== JSON.stringify(initial.schedulerLibraryIds) ||
+    localCleanupScheduleEnabled.value !== initial.cleanupScheduleEnabled ||
+    localCleanupScheduleCronExpression.value !== initial.cleanupScheduleCronExpression ||
+    JSON.stringify(localCleanupScheduleCategories.value) !== JSON.stringify(initial.cleanupScheduleCategories) ||
+    localCleanupScheduleHistoryDays.value !== initial.cleanupScheduleHistoryDays
 
 
 }
@@ -555,7 +582,11 @@ const saveSettings = async () => {
   settings.scheduler.value = {
     enabled: localSchedulerEnabled.value,
     cronExpression: localSchedulerCronExpression.value,
-    libraryIds: localSchedulerLibraryIds.value
+    libraryIds: localSchedulerLibraryIds.value,
+    cleanupEnabled: localCleanupScheduleEnabled.value,
+    cleanupCronExpression: localCleanupScheduleCronExpression.value,
+    cleanupCategories: localCleanupScheduleCategories.value,
+    cleanupHistoryDays: localCleanupScheduleHistoryDays.value
   }
   settings.automation.value = {
     webhookAutoSend: localWebhookAutoSend.value,
@@ -1181,6 +1212,10 @@ watch([
   localSchedulerEnabled,
   localSchedulerCronExpression,
   localSchedulerLibraryIds,
+  localCleanupScheduleEnabled,
+  localCleanupScheduleCronExpression,
+  localCleanupScheduleCategories,
+  localCleanupScheduleHistoryDays,
   localDiscordEnabled,
   localDiscordWebhookUrl,
   localDiscordNotifyLibraries,
@@ -1304,6 +1339,12 @@ onMounted(() => {
           @click="activeTab = 'advanced'"
         >
           Advanced
+        </button>
+        <button
+          :class="['tab', { active: activeTab === 'cleanup' }]"
+          @click="activeTab = 'cleanup'"
+        >
+          Cleanup
         </button>
       </div>
     </div>
@@ -1505,6 +1546,19 @@ onMounted(() => {
         @update:dbExportIncludeSecrets="dbExportIncludeSecrets = $event"
         @export-db="handleDbExport"
         @import-db="handleDbImport"
+        @save="saveSettings"
+      />
+      <CleanupTab
+        v-if="activeTab === 'cleanup'"
+        :scheduleEnabled="localCleanupScheduleEnabled"
+        :scheduleCronExpression="localCleanupScheduleCronExpression"
+        :scheduleCategories="localCleanupScheduleCategories"
+        :scheduleHistoryDays="localCleanupScheduleHistoryDays"
+        :unsavedChanges="hasUnsavedChanges"
+        @update:scheduleEnabled="localCleanupScheduleEnabled = $event; sectionsWithChanges.scheduler = true; hasUnsavedChanges = true"
+        @update:scheduleCronExpression="localCleanupScheduleCronExpression = $event; sectionsWithChanges.scheduler = true; hasUnsavedChanges = true"
+        @update:scheduleCategories="localCleanupScheduleCategories = $event; sectionsWithChanges.scheduler = true; hasUnsavedChanges = true"
+        @update:scheduleHistoryDays="localCleanupScheduleHistoryDays = $event; sectionsWithChanges.scheduler = true; hasUnsavedChanges = true"
         @save="saveSettings"
       />
     </div>

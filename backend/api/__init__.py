@@ -23,6 +23,7 @@ from . import (
     backup,
     overlay_config,
     version_info,
+    cleanup,
 )
 
 router = APIRouter()
@@ -49,3 +50,4 @@ router.include_router(notifications.router)
 router.include_router(backup.router)
 router.include_router(overlay_config.router)
 router.include_router(version_info.router)
+router.include_router(cleanup.router)

@@ -11,6 +11,10 @@ import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
 import OnboardingModal from './components/OnboardingModal.vue'
 import QuickStartGuide from './components/QuickStartGuide.vue'
+import SearchEditChoiceModal, { type SearchEditChoice } from './components/SearchEditChoiceModal.vue'
+import LogoEditorModal from './components/LogoEditorModal.vue'
+import BackdropEditorModal from './components/BackdropEditorModal.vue'
+import SquareArtModal from './components/SquareArtModal.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
@@ -639,7 +643,33 @@ const stopBackupPolling = () => {
 
 ;(window as any).startBackupPolling = startBackupPolling
 
-const handleSearchSelect = (item: { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show'; tmdb_id?: string | number; tvdb_id?: string | number }) => {
+type SearchResultItem = {
+  key: string
+  title: string
+  year?: number | string
+  poster?: string | null
+  logo_url?: string | null
+  art_url?: string | null
+  square_art_url?: string | null
+  mediaType?: 'movie' | 'tv-show'
+  tmdb_id?: string | number
+  tvdb_id?: string | number
+  library_id?: string | number | null
+}
+
+// Search results already carry logo_url/art_url/square_art_url (GET /api/movies|tv-shows
+// already returns all four asset URLs for every item — see backend/api/movies.py's
+// api_movies()), so no extra fetch is needed to open any of the four choice modals below.
+const pendingSearchItem = ref<SearchResultItem | null>(null)
+// Loosely typed -- each modal declares its own item shape (LogoItem/BackdropItem/
+// SquareArtItem) and the object built below is structurally compatible with all
+// three, same as the existing `as any` bridging pattern SquareArtView.vue's own
+// openModal() already uses for this identical kind of "adapt a list item" step.
+const activeSearchLogoItem = ref<any>(null)
+const activeSearchBackdropItem = ref<any>(null)
+const activeSearchSquareArtItem = ref<any>(null)
+
+const openPosterEditorFor = (item: SearchResultItem) => {
   const mediaType = item.mediaType || 'movie'
   const routeName = mediaType === 'tv-show' ? 'tv-shows' : 'movies'
   const itemId = mediaType === 'tv-show' ? (item.tvdb_id || item.key) : (item.tmdb_id || item.key)
@@ -648,6 +678,29 @@ const handleSearchSelect = (item: { key: string; title: string; year?: number | 
   // watcher below treats a missing edit param as "user closed the editor" and clears
   // the selection, which is what caused search-select to bounce back to the library grid.
   router.push({ name: routeName, query: { ...route.query, edit: String(itemId) } })
+}
+
+// Search used to jump straight to the poster editor -- now it asks what to edit first
+// (Poster/Logo/Backdrop/Square Art), so a search result can open any of the same
+// per-item editors Logos/Backdrops/Square Art's own grids already offer.
+const handleSearchSelect = (item: SearchResultItem) => {
+  pendingSearchItem.value = item
+}
+
+const handleSearchChoice = (choice: SearchEditChoice) => {
+  const item = pendingSearchItem.value
+  pendingSearchItem.value = null
+  if (!item) return
+  const isTv = item.mediaType === 'tv-show'
+  if (choice === 'poster') {
+    openPosterEditorFor(item)
+  } else if (choice === 'logo') {
+    activeSearchLogoItem.value = { ...item, is_tv: isTv }
+  } else if (choice === 'backdrop') {
+    activeSearchBackdropItem.value = { ...item, is_tv: isTv }
+  } else if (choice === 'square-art') {
+    activeSearchSquareArtItem.value = { ...item, mediaType: item.mediaType || 'movie' }
+  }
 }
 
 const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
@@ -703,6 +756,28 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <div v-if="sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>
 
     <ChangelogModal :visible="showChangelog" @close="showChangelog = false" />
+
+    <SearchEditChoiceModal
+      v-if="pendingSearchItem"
+      :item="pendingSearchItem"
+      @close="pendingSearchItem = null"
+      @choose="handleSearchChoice"
+    />
+    <LogoEditorModal
+      v-if="activeSearchLogoItem"
+      :item="activeSearchLogoItem"
+      @close="activeSearchLogoItem = null"
+    />
+    <BackdropEditorModal
+      v-if="activeSearchBackdropItem"
+      :item="activeSearchBackdropItem"
+      @close="activeSearchBackdropItem = null"
+    />
+    <SquareArtModal
+      v-if="activeSearchSquareArtItem"
+      :item="activeSearchSquareArtItem"
+      @close="activeSearchSquareArtItem = null"
+    />
 
     <TopNav
       :search="searchQuery"

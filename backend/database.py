@@ -890,6 +890,46 @@ def init_database():
                 logger.info(f"[DB] Seeded onboarding_completed={flag_value}")
         except Exception as onboard_err:
             logger.warning(f"[DB] Could not seed onboarding_completed: {onboard_err}")
+
+        # Default scheduled cleanup ON for existing installs upgrading into this
+        # feature, OFF for genuinely fresh installs -- every other automation
+        # setting in this app defaults off (see CLAUDE.md's "no auth gate" and
+        # retry/reuse-cache quirks), but an existing user's cache has already had
+        # time to accumulate real orphaned bloat by the time they upgrade, while a
+        # fresh install has nothing to clean yet. Runs at most once per DB (the
+        # key's mere presence, regardless of value, means this already ran or the
+        # user has already touched this setting themselves -- either way, never
+        # overwrite it). Reuses the exact same "already configured" signal the
+        # onboarding_completed seed above already established as the right way to
+        # distinguish an existing install from a fresh one in this codebase.
+        try:
+            existing_cleanup_setting = cursor.execute(
+                "SELECT value FROM settings WHERE key = 'scheduler.cleanupEnabled' LIMIT 1"
+            ).fetchone()
+            if existing_cleanup_setting is None:
+                plex_url_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'plex.url' OR key = 'url' AND category = 'plex' LIMIT 1"
+                ).fetchone()
+                already_configured = bool(plex_url_row and plex_url_row["value"] and plex_url_row["value"].strip())
+                if already_configured:
+                    for key, value in (
+                        ("scheduler.cleanupEnabled", "true"),
+                        ("scheduler.cleanupCronExpression", "0 3 * * 0"),
+                        ("scheduler.cleanupCategories", json.dumps([
+                            "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
+                            "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+                        ])),
+                        ("scheduler.cleanupHistoryDays", "180"),
+                    ):
+                        cursor.execute("""
+                            INSERT INTO settings (key, value, category)
+                            VALUES (?, ?, 'scheduler')
+                            ON CONFLICT(key) DO NOTHING
+                        """, (key, value))
+                    conn.commit()
+                    logger.info("[DB] Existing install detected -- defaulted scheduled cleanup to enabled (weekly)")
+        except Exception as cleanup_default_err:
+            logger.warning(f"[DB] Could not default scheduled cleanup for existing install: {cleanup_default_err}")
     except Exception as e:
         logger.error(f"[DB] Initialization/migration failed: {e}")
         conn.rollback()
@@ -3026,6 +3066,114 @@ def upsert_cached_providers(tmdb_id, media_type: str, region: str, providers: li
             "INSERT OR REPLACE INTO streaming_provider_cache (tmdb_id, media_type, region, providers_json, fetched_at) VALUES (?,?,?,?,?)",
             (str(tmdb_id), media_type, region, _json.dumps(providers), int(_time.time())),
         )
+
+
+# ---------------------------------------------------------------------------
+# Cleanup tool (backend/api/cleanup.py) -- reference-set lookups used to decide
+# whether a cached file/row is still "known good" (referenced by something
+# real) or an orphan candidate. See CLAUDE.md's Cleanup Tool quirk.
+# ---------------------------------------------------------------------------
+
+def get_all_known_rating_keys() -> set:
+    """Every rating_key Simposter currently has a movie_cache/tv_cache row for --
+    the reference set disk-cache orphan detection is diffed against. Reflects
+    the state as of the last successful library scan, not a live Plex check."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT rating_key FROM movie_cache")
+        keys = {row["rating_key"] for row in cursor.fetchall()}
+        cursor.execute("SELECT rating_key FROM tv_cache")
+        keys.update(row["rating_key"] for row in cursor.fetchall())
+    return keys
+
+
+def get_all_preset_reference_blob() -> str:
+    """Every preset's options_json + season_options_json, concatenated into one
+    string. Used for a cheap `needle in blob` substring check (e.g. "is this
+    uploaded file's URL referenced by any saved preset") instead of one query
+    per candidate file -- fine here since presets are small and few, and this
+    only needs to answer "does this string appear anywhere," not parse JSON."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT options_json, season_options_json FROM presets")
+        rows = cursor.fetchall()
+    return "\n".join(f"{r['options_json']}\n{r['season_options_json']}" for r in rows)
+
+
+def get_all_overlay_elements_blob() -> str:
+    """Every overlay_configs.elements_json, concatenated -- same substring-check
+    approach as get_all_preset_reference_blob(), used to find overlay_assets
+    rows no longer referenced by any overlay config's badge/image elements."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT elements_json FROM overlay_configs")
+        rows = cursor.fetchall()
+    return "\n".join(r["elements_json"] or "" for r in rows)
+
+
+def get_all_preset_template_pairs() -> set:
+    """Every (template_id, preset_id) pair with a saved preset -- the reference
+    set the overlay effect cache (config/overlays/{template_id}/{preset_id}.png)
+    is diffed against. A file whose pair isn't in this set means the preset it
+    was rendered for has since been deleted or renamed."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT template_id, id FROM presets")
+        return {(row["template_id"], row["id"]) for row in cursor.fetchall()}
+
+
+def get_poster_history_count_older_than(days: int) -> int:
+    """Row count for the 'old History entries' cleanup category preview -- kept
+    separate from the export+delete function below so the scan/report step
+    never mutates anything."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) as c FROM poster_history WHERE created_at < datetime('now', ?)",
+            (f"-{int(days)} days",),
+        )
+        row = cursor.fetchone()
+        return int(row["c"]) if row else 0
+
+
+def export_and_delete_poster_history_older_than(days: int) -> list:
+    """Used only by the actual 'Clean Selected' step (never by the dry-run scan)
+    -- selects every poster_history row older than `days`, returns them as plain
+    dicts (the caller writes these to the trash batch's JSON snapshot before
+    this function deletes the rows), all inside one transaction so a crash
+    between select and delete can't lose or duplicate rows."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM poster_history WHERE created_at < datetime('now', ?)",
+            (f"-{int(days)} days",),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+        if rows:
+            ids = [r["id"] for r in rows]
+            placeholders = ",".join("?" * len(ids))
+            cursor.execute(f"DELETE FROM poster_history WHERE id IN ({placeholders})", ids)
+    logger.info("[CLEANUP] Exported and deleted %d old poster_history rows (older than %d days)", len(rows), days)
+    return rows
+
+
+def restore_poster_history_rows(rows: list) -> None:
+    """Re-inserts poster_history rows previously removed by
+    export_and_delete_poster_history_older_than() -- used by the trash
+    'Restore' action. Uses INSERT OR IGNORE on the original id so restoring
+    the same batch twice is a harmless no-op rather than a duplicate/error."""
+    if not rows:
+        return
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for r in rows:
+            cols = list(r.keys())
+            placeholders = ",".join("?" * len(cols))
+            cursor.execute(
+                f"INSERT OR IGNORE INTO poster_history ({','.join(cols)}) VALUES ({placeholders})",
+                [r[c] for c in cols],
+            )
+    logger.info("[CLEANUP] Restored %d poster_history rows", len(rows))
 
 
 # Initialize database on module import

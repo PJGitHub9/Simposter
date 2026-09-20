@@ -60,6 +60,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/movies": 100,
             "/api/tv-shows": 100,
 
+            # Cleanup tool -- manual, infrequent Settings-page action, but a scan
+            # walks every cache dir on disk so it's not "cheap" the way a poster
+            # read is; sized like the other library-maintenance operations above.
+            "/api/cleanup": 20,
+
             # Per-item library endpoints (poster/logo/labels/tmdb for one rating_key)
             # were falling through to the low default_limit (300/60s) meant for
             # unlisted, mostly-expensive endpoints. Browsing the grid fires two

@@ -10,6 +10,27 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.103',
+    date: '2026-09-20',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a Cleanup tool (Settings → Cleanup) — scans for orphaned poster/logo/backdrop/square art cache, stale overlay effect renders, unused uploaded images, unused overlay badge assets, and old History entries, and shows exactly how much disk space each would reclaim. Nothing is ever deleted directly — everything moves to a reversible trash first, which you empty yourself whenever you\'re ready.',
+          'Added one-click buttons for Plex\'s own maintenance operations (Empty Trash, Clean Bundles, Optimize Database) right next to the cleanup tool, so you don\'t have to wait for Plex\'s own weekly schedule.',
+          'Cleanup can now run automatically on a schedule (Settings → Cleanup → Scheduled Cleanup) — off by default for new installs, weekly by default if enabled, fully customizable (cron expression, which categories, history age), and never auto-empties the trash on its own. Existing installs upgrading to this version get it turned on automatically (new installs don\'t) — see this version\'s note below.',
+          'Global search now asks what you want to edit — Poster, Logo, Backdrop, or Square Art — instead of always jumping straight to the poster editor. Works the same from any page.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'If you\'re upgrading from an earlier version with Plex already configured, Scheduled Cleanup is turned on for you automatically (weekly, all categories) — your cache has likely accumulated real orphaned files by now. Brand new installs start with it off, same as every other automation feature in Simposter. You can change or disable this anytime in Settings → Cleanup.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.102',
     date: '2026-09-19',
     sections: [

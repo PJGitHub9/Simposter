@@ -410,6 +410,24 @@ def save_ui_settings_endpoint(payload: UISettings):
         except Exception as retry_sched_err:
             logger.debug("[UI_SETTINGS] Failed to apply retry scheduler: %s", retry_sched_err)
 
+        # Apply cleanup scheduler setting
+        try:
+            from ..scheduler import schedule_cleanup, cancel_cleanup
+            scheduler_settings = merged.get("scheduler", {})
+            if scheduler_settings.get("cleanupEnabled", False):
+                schedule_cleanup(
+                    scheduler_settings.get("cleanupCronExpression", "0 3 * * 0"),
+                    scheduler_settings.get("cleanupCategories") or [
+                        "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
+                        "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+                    ],
+                    int(scheduler_settings.get("cleanupHistoryDays", 180)),
+                )
+            else:
+                cancel_cleanup()
+        except Exception as cleanup_sched_err:
+            logger.debug("[UI_SETTINGS] Failed to apply cleanup scheduler: %s", cleanup_sched_err)
+
         # Delete JSON files after successful migration
         for json_file in [_settings_file, _legacy_settings_file]:
             if json_file.exists():

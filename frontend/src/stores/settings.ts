@@ -59,6 +59,10 @@ export type SchedulerSettings = {
   cronExpression: string
   libraryId?: string | null  // Legacy - kept for backwards compatibility
   libraryIds?: string[]      // New multi-select field
+  cleanupEnabled?: boolean
+  cleanupCronExpression?: string
+  cleanupCategories?: string[]
+  cleanupHistoryDays?: number
 }
 
 export type AutomationSettings = {
@@ -145,7 +149,14 @@ const fanart = ref<FanartSettings>({ apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
-const scheduler = ref<SchedulerSettings>({ enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [] })
+export const DEFAULT_CLEANUP_CATEGORIES = [
+  'poster_cache', 'logo_cache', 'backdrop_cache', 'square_art_cache',
+  'overlay_effect_cache', 'uploaded_files', 'overlay_assets', 'poster_history',
+]
+const scheduler = ref<SchedulerSettings>({
+  enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [],
+  cleanupEnabled: false, cleanupCronExpression: '0 3 * * 0', cleanupCategories: [...DEFAULT_CLEANUP_CATEGORIES], cleanupHistoryDays: 180,
+})
 const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', labelToAdd: '', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0, kometaCompatibility: false, reuseCachedPosterDays: 0 })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
@@ -231,7 +242,11 @@ async function loadSettings() {
       enabled: data.scheduler?.enabled ?? false,
       cronExpression: data.scheduler?.cronExpression ?? '0 1 * * *',
       libraryId: data.scheduler?.libraryId ?? null,
-      libraryIds: data.scheduler?.libraryIds ?? []
+      libraryIds: data.scheduler?.libraryIds ?? [],
+      cleanupEnabled: data.scheduler?.cleanupEnabled ?? false,
+      cleanupCronExpression: data.scheduler?.cleanupCronExpression ?? '0 3 * * 0',
+      cleanupCategories: data.scheduler?.cleanupCategories ?? [...DEFAULT_CLEANUP_CATEGORIES],
+      cleanupHistoryDays: data.scheduler?.cleanupHistoryDays ?? 180
     }
     automation.value = {
       webhookAutoSend: data.automation?.webhookAutoSend ?? true,

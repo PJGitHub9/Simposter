@@ -111,11 +111,25 @@ class PerformanceSettings(BaseModel):
     useOverlayCache: bool = True  # Pre-generate overlay effects for faster batch rendering
 
 
+_DEFAULT_CLEANUP_CATEGORIES = [
+    "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
+    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+]
+
+
 class SchedulerSettings(BaseModel):
     enabled: bool = False
     cronExpression: str = "0 1 * * *"
     libraryId: Optional[Union[str, int]] = None
     libraryIds: List[str] = Field(default_factory=list)
+    # Scheduled cleanup (backend/api/cleanup.py) -- off by default like every other
+    # automated/destructive-adjacent feature in this app, even though it's fully
+    # reversible via the cleanup trash. Cron rather than a simple interval to match
+    # the existing library-scan schedule's own UX/mechanism above.
+    cleanupEnabled: bool = False
+    cleanupCronExpression: str = "0 3 * * 0"  # weekly, Sunday 3 AM
+    cleanupCategories: List[str] = Field(default_factory=lambda: list(_DEFAULT_CLEANUP_CATEGORIES))
+    cleanupHistoryDays: int = 180
 
 
 class AutomationSettings(BaseModel):
