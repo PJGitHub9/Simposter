@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.105',
+    date: '2026-09-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'The movie/TV/collection editor now shows quick links to TMDb, TVDB, Fanart.tv, and MediUX under the title, so you can jump straight to the source page for that item.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.104',
     date: '2026-09-21',
     sections: [

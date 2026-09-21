@@ -8,6 +8,7 @@ import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
+import ExternalLinksRow from './ExternalLinksRow.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import { getApiBase } from '../../services/apiBase'
 
@@ -2743,6 +2744,7 @@ watch(tmdbId, () => {
             <span v-if="selectedPosterType === 'season'" class="poster-type-badge season-badge">Season Poster</span>
             <span v-else class="poster-type-badge series-badge">Series Poster</span>
           </h2>
+          <ExternalLinksRow media-type="tv" :tmdb-id="tmdbId" :tvdb-id="tvdbId" />
         </div>
       </div>
 

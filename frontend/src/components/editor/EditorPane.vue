@@ -8,6 +8,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
+import ExternalLinksRow from './ExternalLinksRow.vue'
 import { getApiBase } from '../../services/apiBase'
 
 // Simple debounce helper
@@ -1367,6 +1368,7 @@ watch(
         <div>
           <p class="kicker">Editing</p>
           <h2>{{ movie.title }} <span v-if="movie.year">({{ movie.year }})</span></h2>
+          <ExternalLinksRow :media-type="movie.mediaType === 'collection' ? 'collection' : 'movie'" :tmdb-id="tmdbId" />
         </div>
       </div>
 
