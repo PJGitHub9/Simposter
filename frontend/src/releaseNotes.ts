@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.104',
+    date: '2026-09-21',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          "An unreleased movie/show with no poster art on TMDb/Fanart.tv yet no longer shows up as a \"failed\" entry in History every retry cycle — it's not really a failure, just nothing to render with yet, so it now stays quietly pending until art becomes available.",
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.103',
     date: '2026-09-20',
     sections: [

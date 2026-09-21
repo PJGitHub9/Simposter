@@ -25,6 +25,15 @@ from typing import Optional, List, Dict, Any, Union
 
 router = APIRouter()
 
+
+class NoPosterAvailableError(Exception):
+    """Raised when no poster exists anywhere (TMDb/Fanart), even after fallback --
+    e.g. an unreleased movie/show TMDb has a page for but hasn't gotten poster art
+    yet. Distinct from a genuine failure: the item may still succeed on a later
+    retry once source art appears, so this is logged plainly and left pending
+    rather than recorded as a "failed" History entry."""
+
+
 batch_status = {
     "state": "idle",
     "total": 0,
@@ -289,7 +298,7 @@ def _process_single_movie(
                 poster = posters[0] if posters else None
 
         if not poster:
-            raise Exception("No valid poster found (even after fallback).")
+            raise NoPosterAvailableError("No valid poster found (even after fallback).")
 
         poster_url = poster.get("url")
         # Initialize logo_url for fallback logic
@@ -699,6 +708,24 @@ def _process_single_movie(
 
         return result
 
+    except NoPosterAvailableError as e:
+        # Not a failure -- TMDb/Fanart simply have no poster art yet for this item
+        # (e.g. an unreleased movie TMDb has a page for but no key art uploaded for).
+        # No History "failed" entry; just a plain log line, and this stays pending
+        # for the retry queue's next pass in case art shows up before then.
+        display_title = title_hint
+        if display_title == rating_key:
+            cached_title, _ = db.get_title_for_rating_key(rating_key)
+            display_title = cached_title or rating_key
+        logger.info("[BATCH] No poster found for %s (%s) — will retry at next interval", display_title, rating_key)
+        return {
+            "rating_key": rating_key,
+            "title": display_title if display_title != rating_key else "",
+            "status": "no_poster_available",
+            "poster_fallback": False,
+            "logo_fallback": False,
+        }
+
     except Exception as e:
         logger.error("[BATCH] Error for %s (%s): %s", title_hint, rating_key, e)
         # A failure this early (e.g. "No TMDb ID found") means title_hint never
@@ -869,6 +896,22 @@ def _process_single_tv_show(
                 include_series=include_series,
             )
 
+    except NoPosterAvailableError as e:
+        # Not a failure -- see the matching comment in _process_single_movie's
+        # equivalent except clause. Stays pending for the retry queue's next pass.
+        display_title = title_hint
+        if display_title == rating_key:
+            cached_title, _ = db.get_title_for_rating_key(rating_key)
+            display_title = cached_title or rating_key
+        logger.info("[BATCH TV] No poster found for %s (%s) — will retry at next interval", display_title, rating_key)
+        return {
+            "rating_key": rating_key,
+            "show_title": display_title if display_title != rating_key else "",
+            "status": "no_poster_available",
+            "poster_fallback": False,
+            "logo_fallback": False,
+        }
+
     except Exception as e:
         logger.error("[BATCH TV] Error for %s (%s): %s", title_hint, rating_key, e)
         # See the matching comment in _process_single_movie's except block: fall
@@ -1002,7 +1045,7 @@ def _render_tv_series_poster(
             poster = pick_poster(posters, "all")
 
     if not poster:
-        raise Exception("No poster found for series")
+        raise NoPosterAvailableError("No poster found for series")
 
     logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
 

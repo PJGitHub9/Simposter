@@ -202,8 +202,16 @@ def api_retry_now(rating_key: str):
                 send_only_if_ideal=True,
                 require_textless_poster=require_textless_poster,
             )
-            sub_results = result.get("results", []) if isinstance(result, dict) else []
-            still_needs_retry = any(r.get("needs_retry") for r in sub_results)
+            # A dict without a populated "results" list means the render errored out
+            # before producing per-season results (e.g. no poster art available at
+            # all yet, or a transient failure) -- treat that as "still needs retry,"
+            # matching scheduler.py's automatic retry job. Without this fallback,
+            # any(...) over an empty list is False, which would incorrectly mark a
+            # show that never even got to season-level processing as "resolved."
+            if isinstance(result, dict) and result.get("results"):
+                still_needs_retry = any(r.get("needs_retry", True) for r in result["results"])
+            else:
+                still_needs_retry = True
         else:
             result = process_single_movie_poster(
                 rating_key=rating_key,
