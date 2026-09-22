@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.106',
+    date: '2026-09-22',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the "Poster Shift Y" slider silently doing nothing for most posters — a recent change meant to help Square Art had accidentally removed its ability to shift the poster off-frame and reveal a black border at larger values, which is how it always worked. That behavior is restored for regular posters; Square Art keeps its own separate behavior unchanged.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.105',
     date: '2026-09-21',
     sections: [

@@ -29,17 +29,20 @@ def _resize_cover(
 
     shift_y (-0.5..0.5, matching poster_shift_y's own range) moves the crop
     window within whatever vertical slack the cover-resize left over, instead of
-    always center-cropping. This must happen HERE, during the crop, not by
-    cropping to the exact target size first and pasting the result at an offset
-    afterward (the previous approach) -- once cropped to target_h there is zero
-    slack left over, so a post-hoc offset just clips the poster's own edge and
-    reveals empty canvas on the opposite side instead of actually showing more
-    of the source image. The available slack is `new_h - target_h`; for a source
-    aspect ratio much narrower than the target canvas (e.g. a 2:3 poster on a 1:1
-    square canvas) that slack is large and a shift genuinely reveals previously-
-    hidden content. For a source that already closely matches the target aspect
-    (e.g. a 2:3 poster on the default 2:3 canvas) the slack is small, so this bug
-    was far less noticeable there -- but the same fix applies to both.
+    always center-cropping. The available slack is `new_h - target_h` -- for a
+    source aspect ratio much narrower than the target canvas (e.g. a 2:3 poster
+    on a 1:1 square canvas, i.e. Square Art) that slack is large and a shift
+    genuinely reveals previously-hidden content. For a source that already
+    closely matches the target aspect (e.g. a 2:3 poster on the default 2:3
+    canvas) the slack is at or near zero, so this function's shift_y is a no-op
+    there by construction -- callers on the default (non-square) canvas do NOT
+    pass shift_y here; they call this with shift_y=0.0 for a plain center-crop,
+    then apply the shift themselves as a raw pixel paste-offset afterward, which
+    intentionally CAN move the poster off-frame and reveal a black border at the
+    edge -- that letterbox look is a deliberate, user-wanted effect for the
+    normal poster editor, not a bug (see Quirk #53's follow-up correction: an
+    earlier version of this function tried to eliminate that black-border
+    behavior everywhere, which undid something the user explicitly relied on).
     """
     w, h = img.size
     if w == 0 or h == 0:
@@ -823,8 +826,21 @@ def build_base_poster(
     # ------------- BASE POSTER -------------
     base = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
 
-    poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
-    base.paste(poster, (0, 0))
+    if options.get("canvas_mode") == "square":
+        # Square Art: shift moves the crop window within the cover-resize's
+        # slack, revealing more real source content -- there's genuinely more
+        # slack to work with on a square canvas (a 2:3 poster covering a 1:1
+        # canvas), and no black-border look is wanted here (Quirk #43/#44).
+        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
+        base.paste(poster, (0, 0))
+    else:
+        # Default 2:3 canvas: shift is a raw pixel paste-offset onto the black
+        # base canvas, not a crop-window move -- at larger values this can move
+        # the poster off-frame and let the black canvas show through as a
+        # border, which is the intended, user-relied-on look here (Quirk #53).
+        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom)
+        shift_px = int(poster_shift_y * canvas_h)
+        base.paste(poster, (0, shift_px))
 
     # ------------- MATTE + FADE (bottom + top) -------------
     matte_h = int(canvas_h * matte_height_ratio)

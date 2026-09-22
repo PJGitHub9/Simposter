@@ -352,10 +352,20 @@ def render_with_overlay_cache(
             poster_zoom = float(render_options.get("poster_zoom", 1.0))
             poster_shift_y = float(render_options.get("poster_shift_y", 0.0))
 
-            base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
-
             canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
-            canvas.paste(base, (0, 0))
+
+            # Must mirror build_base_poster()'s canvas_mode branch (universal.py) --
+            # square canvas moves the crop window within cover-resize slack (real
+            # content revealed); default canvas pastes at a raw pixel offset,
+            # intentionally letting the black base canvas show through as a
+            # border at larger shift values (Quirk #53).
+            if render_options.get("canvas_mode") == "square":
+                base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
+                canvas.paste(base, (0, 0))
+            else:
+                base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom)
+                shift_px = int(poster_shift_y * canvas_h)
+                canvas.paste(base, (0, shift_px))
 
             # Composite cached overlay
             overlay = Image.open(overlay_path).convert("RGBA")
