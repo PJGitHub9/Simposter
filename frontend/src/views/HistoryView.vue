@@ -262,6 +262,7 @@ const getRetryReasonLabel = (reason: string | null): string => {
     case 'logo_fallback': return 'Logo fallback used'
     case 'poster_fallback': return 'No textless poster'
     case 'no_logo_and_poster_fallback': return 'No logo + textless'
+    case 'manual_textless_pending': return 'Waiting for textless poster (manual)'
     default: return reason || 'Unknown'
   }
 }
@@ -272,6 +273,7 @@ const getRetryReasonClass = (reason: string | null): string => {
     case 'logo_fallback': return 'reason-logo'
     case 'poster_fallback': return 'reason-poster'
     case 'no_logo_and_poster_fallback': return 'reason-both'
+    case 'manual_textless_pending': return 'reason-poster'
     default: return 'reason-unknown'
   }
 }

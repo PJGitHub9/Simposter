@@ -33,6 +33,8 @@ _SAFE_INTERNAL_PATH_PREFIXES = (
     "/api/uploaded/",  # served by backend/api/uploads.py — user-uploaded posters/logos
     "/api/movie/",
     "/api/tv-show/",
+    "/api/logo/",       # served by movies.py's logo cache — a sibling of /api/movie/, not nested under it
+    "/api/backdrop/",   # served by movies.py's backdrop cache (art_cache.py) — same trust class as /api/logo/
     "/api/local-assets/",
     "/library/metadata/",  # Plex's own API — reached only via the resolved-host check below
 )

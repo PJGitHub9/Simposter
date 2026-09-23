@@ -3,6 +3,7 @@
 from PIL import Image
 from ..config import settings, logger
 from .universal import build_base_poster, _hex_to_rgb, _solid_color_logo, _render_text_overlay
+from .canvas import scale_options_for_canvas
 
 
 def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Image.Image:
@@ -10,6 +11,10 @@ def render_uniform_logo(bg: Image.Image, logo: Image.Image, options: dict) -> Im
     Template that fits any logo into a fixed bounding box.
     Allows override mode for manual scaling & Y offset.
     """
+    # Rescale height-anchored absolute-px options (e.g. uniform_logo_max_h) for a
+    # non-default canvas (options["canvas_mode"], see canvas.py) -- a no-op for the
+    # default canvas, so this doesn't change behavior for a normal 2000x3000 render.
+    options = scale_options_for_canvas(options)
 
     # Build base (zoom, matte, fade, grain, etc.)
     canvas = build_base_poster(bg, options)

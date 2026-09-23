@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
-from ..config import settings, plex_remove_label, plex_add_label, get_label_to_add, logger, get_movie_tmdb_id, get_movie_folder_name, get_media_folder_name
+from ..config import settings, plex_remove_label, plex_add_label, get_label_to_add, logger, get_movie_tmdb_id, get_movie_folder_name, get_media_folder_name, save_render_cache_by_tmdb, load_render_cache_by_tmdb, get_reuse_cached_poster_days
 from ..config import load_presets
 from .notifications import send_batch_notification, send_apprise_notification, start_batch_progress_notification, update_batch_progress_notification, complete_batch_progress_notification
 import time
@@ -24,6 +24,15 @@ import threading
 from typing import Optional, List, Dict, Any, Union
 
 router = APIRouter()
+
+
+class NoPosterAvailableError(Exception):
+    """Raised when no poster exists anywhere (TMDb/Fanart), even after fallback --
+    e.g. an unreleased movie/show TMDb has a page for but hasn't gotten poster art
+    yet. Distinct from a genuine failure: the item may still succeed on a later
+    retry once source art appears, so this is logged plainly and left pending
+    rather than recorded as a "failed" History entry."""
+
 
 batch_status = {
     "state": "idle",
@@ -49,6 +58,79 @@ def api_batch_progress():
     """Return current batch operation progress."""
     with batch_status_lock:
         return dict(batch_status)
+
+
+def _resend_cached_bytes_for_movie(rating_key: str, title_hint: str, cached_bytes: bytes, req, source: str) -> dict:
+    """Upload previously-rendered poster bytes to a movie's (possibly brand-new)
+    rating_key instead of rendering fresh — the "reuseCachedPosterDays" path, see the
+    call site in _process_single_movie(). Deliberately mirrors the shape of the
+    existing resend-fast-paths in auto_generate.py/webhooks.py (upload, cache,
+    labels, history) rather than routing through the full render pipeline, since
+    there's nothing to render — the bytes already exist."""
+    try:
+        content_type = "image/png" if cached_bytes[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+        plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+        headers = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": content_type}
+        r = plex_session.post(plex_url, headers=headers, data=cached_bytes, timeout=20)
+        r.raise_for_status()
+
+        try:
+            cache_ctx = SaveContext(media_type="movie", title=title_hint, rating_key=rating_key,
+                                     library_label=resolve_library_label(req.library_id))
+        except Exception:
+            cache_ctx = None
+        save_or_cache_render(rating_key, cached_bytes, cache_ctx)
+
+        if req.labels:
+            removed_labels = []
+            for label in req.labels:
+                try:
+                    plex_remove_label(rating_key, label, content_type="1")
+                    removed_labels.append(label.lower())
+                except Exception as label_err:
+                    logger.warning("[BATCH] Label removal failed for %s [%s]: %s", rating_key, title_hint, label_err)
+            if removed_labels:
+                current = db.get_movie_labels(rating_key)
+                db.update_movie_labels(rating_key, [l for l in current if l.lower() not in removed_labels])
+
+        label_to_add = get_label_to_add()
+        if label_to_add:
+            try:
+                plex_add_label(rating_key, label_to_add, content_type="1")
+                current = db.get_movie_labels(rating_key)
+                if label_to_add.lower() not in [l.lower() for l in current]:
+                    db.update_movie_labels(rating_key, current + [label_to_add])
+            except Exception as label_err:
+                logger.warning("[BATCH] Label add failed for %s [%s]: %s", rating_key, title_hint, label_err)
+
+        try:
+            db.record_poster_history(
+                rating_key=rating_key, library_id=str(req.library_id or ""), title=title_hint,
+                year=None, template_id=req.template_id, preset_id=req.preset_id,
+                action="resent_to_plex", source=source, poster_data=cached_bytes,
+            )
+        except Exception as history_err:
+            logger.debug("[BATCH] Failed to record history for cached-poster reuse: %s", history_err)
+
+        try:
+            fetch_and_cache_poster(rating_key, force_refresh=True)
+        except Exception:
+            pass
+
+        logger.info("[BATCH] Reused cached poster sent to Plex for %s [%s]", rating_key, title_hint)
+        result = {
+            "rating_key": rating_key, "title": title_hint, "status": "ok",
+            "poster_fallback": False, "logo_fallback": False, "needs_retry": False, "retry_reason": None,
+        }
+        if source in ("webhook", "auto_generate"):
+            result["poster_data"] = cached_bytes
+        return result
+    except Exception as e:
+        logger.error("[BATCH] Reused-cached-poster send failed for %s [%s]: %s", rating_key, title_hint, e)
+        return {
+            "rating_key": rating_key, "title": title_hint, "status": "error", "error": str(e),
+            "poster_fallback": False, "logo_fallback": False,
+        }
 
 
 def _process_single_movie(
@@ -110,6 +192,29 @@ def _process_single_movie(
         if not tmdb_id:
             raise Exception("No TMDb ID found.")
         logger.debug("[BATCH] rating_key=%s [%s] tmdb_id=%s", rating_key, title_hint, tmdb_id)
+
+        # Reuse a recently-sent poster for this TMDb ID instead of regenerating, if
+        # configured. Scoped to source in (webhook, auto_generate) deliberately -- these
+        # are the two paths that discover items passively (a scheduled scan noticing a
+        # "new" rating_key, or a Radarr/Sonarr import webhook) rather than a user
+        # explicitly choosing to (re)generate something via manual batch/save/send, which
+        # should always produce a fresh render regardless of this setting. The scenario
+        # this protects against: a tool like Radarr/UMTK re-grabs or replaces a file,
+        # Plex re-matches the item under a brand-new rating_key, and Simposter's own
+        # rating_key-keyed cache has never seen that new key before -- indistinguishable
+        # from a genuinely new library addition without this check.
+        if source in ("webhook", "auto_generate") and req.send_to_plex:
+            reuse_days = get_reuse_cached_poster_days()
+            if reuse_days > 0:
+                cached_bytes = load_render_cache_by_tmdb("movie", tmdb_id, reuse_days)
+                if cached_bytes:
+                    logger.info(
+                        "[BATCH] Reusing cached poster for tmdb_id=%s instead of regenerating "
+                        "(rating_key=%s [%s] looked new, but a poster for this TMDb ID was sent "
+                        "within the last %.0f day(s))",
+                        tmdb_id, rating_key, title_hint, reuse_days,
+                    )
+                    return _resend_cached_bytes_for_movie(rating_key, title_hint, cached_bytes, req, source)
 
         # Fetch movie details for template variables
         movie_details = get_movie_details(tmdb_id)
@@ -193,7 +298,7 @@ def _process_single_movie(
                 poster = posters[0] if posters else None
 
         if not poster:
-            raise Exception("No valid poster found (even after fallback).")
+            raise NoPosterAvailableError("No valid poster found (even after fallback).")
 
         poster_url = poster.get("url")
         # Initialize logo_url for fallback logic
@@ -270,6 +375,14 @@ def _process_single_movie(
         # logo_mode becomes "none", which would otherwise make logo_was_expected False.
         logo_was_expected = str(logo_mode).lower() != "none"
         needs_retry = (logo_was_expected and logo_url is None) or (poster_fallback_action_used == "template") or logo_fallback_used
+        # A manually-queued "waiting for a textless poster" retry item (see
+        # RETRY_REASON_MANUAL_TEXTLESS in database.py) needs a stronger check than the above --
+        # the ordinary needs_retry logic only flags a missing textless poster when
+        # fallbackPosterAction is "template", so it silently misses the far more common
+        # "continue" case (the default). require_textless_poster forces needs_retry True until
+        # the poster actually selected is genuinely textless, independent of fallback config.
+        if getattr(req, 'require_textless_poster', False) and not (poster and not poster.get("has_text")):
+            needs_retry = True
         # Retry-queue runs only want to upload once the render actually meets the template spec
         skip_send_not_ideal = getattr(req, 'send_only_if_ideal', False) and needs_retry
 
@@ -452,6 +565,12 @@ def _process_single_movie(
             except Exception:
                 cache_ctx = None
             save_or_cache_render(rating_key, payload, cache_ctx)
+            # Also save under the TMDb ID (not just rating_key) so a future rating_key
+            # rotation for this same movie (Radarr re-grab, etc.) can still find and
+            # reuse this poster — see reuseCachedPosterDays / config.py's by-tmdb cache.
+            # Populated on every successful send, not just auto-generate ones, so a
+            # manually-tuned poster is exactly as reusable as an auto-generated one.
+            save_render_cache_by_tmdb("movie", tmdb_id, payload)
 
             # Manual batch send resolves any pending retry for this item
             if source == "batch":
@@ -588,6 +707,24 @@ def _process_single_movie(
         })
 
         return result
+
+    except NoPosterAvailableError as e:
+        # Not a failure -- TMDb/Fanart simply have no poster art yet for this item
+        # (e.g. an unreleased movie TMDb has a page for but no key art uploaded for).
+        # No History "failed" entry; just a plain log line, and this stays pending
+        # for the retry queue's next pass in case art shows up before then.
+        display_title = title_hint
+        if display_title == rating_key:
+            cached_title, _ = db.get_title_for_rating_key(rating_key)
+            display_title = cached_title or rating_key
+        logger.info("[BATCH] No poster found for %s (%s) — will retry at next interval", display_title, rating_key)
+        return {
+            "rating_key": rating_key,
+            "title": display_title if display_title != rating_key else "",
+            "status": "no_poster_available",
+            "poster_fallback": False,
+            "logo_fallback": False,
+        }
 
     except Exception as e:
         logger.error("[BATCH] Error for %s (%s): %s", title_hint, rating_key, e)
@@ -759,6 +896,22 @@ def _process_single_tv_show(
                 include_series=include_series,
             )
 
+    except NoPosterAvailableError as e:
+        # Not a failure -- see the matching comment in _process_single_movie's
+        # equivalent except clause. Stays pending for the retry queue's next pass.
+        display_title = title_hint
+        if display_title == rating_key:
+            cached_title, _ = db.get_title_for_rating_key(rating_key)
+            display_title = cached_title or rating_key
+        logger.info("[BATCH TV] No poster found for %s (%s) — will retry at next interval", display_title, rating_key)
+        return {
+            "rating_key": rating_key,
+            "show_title": display_title if display_title != rating_key else "",
+            "status": "no_poster_available",
+            "poster_fallback": False,
+            "logo_fallback": False,
+        }
+
     except Exception as e:
         logger.error("[BATCH TV] Error for %s (%s): %s", title_hint, rating_key, e)
         # See the matching comment in _process_single_movie's except block: fall
@@ -892,7 +1045,7 @@ def _render_tv_series_poster(
             poster = pick_poster(posters, "all")
 
     if not poster:
-        raise Exception("No poster found for series")
+        raise NoPosterAvailableError("No poster found for series")
 
     logo = None if str(logo_mode).lower() == "none" else pick_logo(logos, logo_preference, white_logo_fallback, language_pref)
 
@@ -907,6 +1060,7 @@ def _render_tv_series_poster(
         poster_fallback_used=poster_fallback_used,
         poster_fallback_template=poster_fallback_template_used,
         poster_fallback_preset=poster_fallback_preset_used,
+        poster_is_textless=bool(poster and not poster.get("has_text")),
         source=source,
         tmdb_id=tmdb_id,
         logo_was_expected=str(logo_mode).lower() != "none",
@@ -1074,6 +1228,7 @@ def _render_all_tv_seasons(
                     poster_fallback_used=series_poster_fallback_used,
                     poster_fallback_template=series_poster_fallback_template,
                     poster_fallback_preset=series_poster_fallback_preset,
+                    poster_is_textless=bool(series_poster and not series_poster.get("has_text")),
                     source=source,
                     tmdb_id=tmdb_id,
                     logo_was_expected=str(logo_mode).lower() != "none",
@@ -1240,6 +1395,7 @@ def _render_all_tv_seasons(
             poster_fallback_used=season_poster_fallback_used,
             poster_fallback_template=season_poster_fallback_template,
             poster_fallback_preset=season_poster_fallback_preset,
+            poster_is_textless=bool(poster and not poster.get("has_text")),
             source=source,
             tmdb_id=tmdb_id,
             logo_was_expected=str(season_logo_mode).lower() != "none",
@@ -1256,6 +1412,80 @@ def _render_all_tv_seasons(
         "seasons_processed": len(results),
         "results": results
     }
+
+
+def _resend_cached_bytes_for_tv(rating_key: str, display_title: str, title: str, cached_bytes: bytes, req, source: str, is_tv: bool, season_index: Optional[int]) -> dict:
+    """TV/season counterpart to _resend_cached_bytes_for_movie() — see that function's
+    docstring for the rationale. Uploads previously-rendered bytes to a (possibly
+    brand-new) rating_key instead of rendering fresh."""
+    try:
+        content_type = "image/png" if cached_bytes[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+        upload_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+        headers = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": content_type}
+        r = plex_session.post(upload_url, headers=headers, data=cached_bytes, timeout=20)
+        r.raise_for_status()
+
+        try:
+            cache_ctx = SaveContext(media_type="tv-show" if is_tv else "movie", title=title, rating_key=rating_key,
+                                     library_label=resolve_library_label(req.library_id) if req.library_id else "",
+                                     season=season_index if is_tv else None)
+        except Exception:
+            cache_ctx = None
+        save_or_cache_render(rating_key, cached_bytes, cache_ctx)
+
+        if req.labels:
+            removed_labels = []
+            for label in req.labels:
+                try:
+                    plex_remove_label(rating_key, label)
+                    removed_labels.append(label.lower())
+                except Exception as label_err:
+                    logger.warning("[BATCH] Label removal failed for %s [%s]: %s", rating_key, display_title, label_err)
+            if removed_labels:
+                current = db.get_tv_labels(rating_key)
+                db.update_tv_labels(rating_key, [l for l in current if l.lower() not in removed_labels], library_id=req.library_id or "default")
+
+        label_to_add = get_label_to_add()
+        if label_to_add:
+            try:
+                plex_add_label(rating_key, label_to_add)
+                current = db.get_tv_labels(rating_key)
+                if label_to_add.lower() not in [l.lower() for l in current]:
+                    db.update_tv_labels(rating_key, current + [label_to_add], library_id=req.library_id or "default")
+            except Exception as label_err:
+                logger.warning("[BATCH] Label add failed for %s [%s]: %s", rating_key, display_title, label_err)
+
+        try:
+            db.record_poster_history(
+                rating_key=rating_key, library_id=str(req.library_id or ""), title=display_title,
+                year=None, template_id=req.template_id, preset_id=req.preset_id,
+                action="resent_to_plex", source=source, poster_data=cached_bytes,
+            )
+        except Exception as history_err:
+            logger.debug("[BATCH] Failed to record history for cached-poster reuse: %s", history_err)
+
+        try:
+            if is_tv:
+                from .tv_shows import _remove_poster_cache as _remove_tv_poster_cache
+                _remove_tv_poster_cache(rating_key, "tv")
+            else:
+                from .movies import _remove_poster_cache as _remove_movie_poster_cache
+                _remove_movie_poster_cache(rating_key)
+        except Exception:
+            pass
+
+        logger.info("[BATCH] Reused cached poster sent to Plex for %s [%s]", rating_key, display_title)
+        return {
+            "rating_key": rating_key, "season": title if season_index is None else f"Season {season_index}",
+            "title": display_title, "status": "ok",
+            "poster_fallback": False, "logo_fallback": False, "needs_retry": False,
+        }
+    except Exception as e:
+        logger.error("[BATCH] Reused-cached-poster send failed for %s [%s]: %s", rating_key, display_title, e)
+        return {
+            "rating_key": rating_key, "title": display_title, "status": "error", "error": str(e),
+            "poster_fallback": False, "logo_fallback": False,
+        }
 
 
 def _render_and_save_poster(
@@ -1280,6 +1510,7 @@ def _render_and_save_poster(
     source: str = "batch",
     tmdb_id: Optional[int] = None,
     logo_was_expected: bool = True,
+    poster_is_textless: Optional[bool] = None,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     _render_start = time.time()
@@ -1305,8 +1536,32 @@ def _render_and_save_poster(
         return _folder_name_cache[0]
 
     needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used
+    # See the matching movie-path comment in _process_single_movie for why this check exists
+    # independent of the ordinary needs_retry logic (RETRY_REASON_MANUAL_TEXTLESS, database.py).
+    if getattr(req, 'require_textless_poster', False) and not poster_is_textless:
+        needs_retry = True
     # Retry-queue runs only want to upload once the render actually meets the template spec
     skip_send_not_ideal = getattr(req, 'send_only_if_ideal', False) and needs_retry
+
+    # Reuse a recently-sent poster for this TMDb ID (+season) instead of rendering fresh,
+    # if configured — same rationale/scoping as the equivalent check in
+    # _process_single_movie(): only for passively-discovered items (webhook/auto_generate),
+    # never for an explicit manual batch/save/send. Note this only skips the render+upload
+    # below, not the TMDb/Fanart fetch — that already happened in the caller
+    # (_render_tv_series_poster()/_render_all_tv_seasons()) before this function was
+    # invoked, so the savings here are the CPU-heavy render + the Plex upload, not the
+    # network calls.
+    if source in ("webhook", "auto_generate") and req.send_to_plex and not skip_send_not_ideal:
+        reuse_days = get_reuse_cached_poster_days()
+        if reuse_days > 0:
+            cached_bytes = load_render_cache_by_tmdb("tv-show" if is_tv else "movie", tmdb_id, reuse_days, season_index if is_tv else None)
+            if cached_bytes:
+                logger.info(
+                    "[BATCH] Reusing cached poster for tmdb_id=%s%s instead of regenerating "
+                    "(rating_key=%s [%s] looked new, but a poster was sent within the last %.0f day(s))",
+                    tmdb_id, f" season={season_index}" if season_index is not None else "", rating_key, display_title, reuse_days,
+                )
+                return _resend_cached_bytes_for_tv(rating_key, display_title, title, cached_bytes, req, source, is_tv, season_index)
 
     # Inject Plex media metadata for overlay badges
     from ..config import get_plex_media_info
@@ -1486,6 +1741,12 @@ def _render_and_save_poster(
             except Exception:
                 cache_ctx = None
             save_or_cache_render(rating_key, payload, cache_ctx)
+            # Also save under the TMDb ID (+ season, for a season poster) so a future
+            # rating_key rotation for this same title (Radarr/Sonarr re-grab, etc.) can
+            # still find and reuse this poster — see reuseCachedPosterDays / config.py's
+            # by-tmdb cache. Populated on every successful send, not just auto-generate
+            # ones, so a manually-tuned poster is exactly as reusable as an auto-generated one.
+            save_render_cache_by_tmdb("tv-show" if is_tv else "movie", tmdb_id, payload, season_index if is_tv else None)
 
             # Manual batch send resolves any pending retry for this item
             if source == "batch":
@@ -1963,6 +2224,7 @@ def process_single_movie_poster(
     source: str = "webhook",
     send_logos_to_plex: bool = False,
     send_only_if_ideal: bool = False,
+    require_textless_poster: bool = False,
 ) -> bool:
     """
     Process a single movie poster programmatically.
@@ -1979,6 +2241,9 @@ def process_single_movie_poster(
         send_only_if_ideal: If True, skip the Plex upload when the render still needs_retry
             (i.e. no logo found / a fallback was used). Used by the retry queue so it doesn't
             keep re-sending the same fallback poster on every retry pass.
+        require_textless_poster: If True, needs_retry stays True until the selected poster is
+            genuinely textless, regardless of fallbackPosterAction. Pass True when resolving a
+            RETRY_REASON_MANUAL_TEXTLESS retry-queue item (database.py).
 
     Returns:
         True if successful, False otherwise
@@ -1995,6 +2260,7 @@ def process_single_movie_poster(
             library_id=library_id,
             send_logos_to_plex=send_logos_to_plex,
             send_only_if_ideal=send_only_if_ideal,
+            require_textless_poster=require_textless_poster,
         )
 
         # Load presets for options
@@ -2053,6 +2319,7 @@ def process_single_tv_show_poster(
     source: str = "webhook",
     send_logos_to_plex: bool = False,
     send_only_if_ideal: bool = False,
+    require_textless_poster: bool = False,
 ) -> bool:
     """
     Process a single TV show poster programmatically.
@@ -2070,6 +2337,7 @@ def process_single_tv_show_poster(
         send_only_if_ideal: If True, skip the Plex upload for any series/season poster that
             still needs_retry. Used by the retry queue so it doesn't keep re-sending the same
             fallback poster on every retry pass.
+        require_textless_poster: See process_single_movie_poster's parameter of the same name.
 
     Returns:
         True if successful, False otherwise
@@ -2087,6 +2355,7 @@ def process_single_tv_show_poster(
             library_id=library_id,
             send_logos_to_plex=send_logos_to_plex,
             send_only_if_ideal=send_only_if_ideal,
+            require_textless_poster=require_textless_poster,
         )
 
         # Load presets for options

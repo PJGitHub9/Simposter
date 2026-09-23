@@ -61,6 +61,8 @@ def refresh_from_list(movies):
                     "added_at": m.get("added_at") or m.get("addedAt"),
                     "poster_url": m.get("poster_url"),
                     "logo_url": m.get("logo_url"),
+                    "art_url": m.get("art_url"),
+                    "square_art_url": m.get("square_art_url"),
                     "labels": m.get("labels") or [],
                     "library_id": m.get("library_id") or "default",
                 })
@@ -162,6 +164,8 @@ def refresh_tv_from_list(shows: List[Dict]):
                 "tvdb_id": s.get("tvdb_id"),
                 "poster_url": poster_url,
                 "logo_url": s.get("logo_url"),
+                "art_url": s.get("art_url"),
+                "square_art_url": s.get("square_art_url"),
                 "labels": s.get("labels"),
                 "seasons": s.get("seasons"),
                 "library_id": s.get("library_id") or "default",

@@ -21,10 +21,28 @@ def _resize_cover(
     target_w: int,
     target_h: int,
     zoom: float = 1.0,
+    shift_y: float = 0.0,
 ) -> Image.Image:
     """
     Resize to fully cover the target canvas (like CSS background-size: cover),
-    then apply an extra zoom factor (poster_zoom) and center-crop.
+    then apply an extra zoom factor (poster_zoom) and crop.
+
+    shift_y (-0.5..0.5, matching poster_shift_y's own range) moves the crop
+    window within whatever vertical slack the cover-resize left over, instead of
+    always center-cropping. The available slack is `new_h - target_h` -- for a
+    source aspect ratio much narrower than the target canvas (e.g. a 2:3 poster
+    on a 1:1 square canvas, i.e. Square Art) that slack is large and a shift
+    genuinely reveals previously-hidden content. For a source that already
+    closely matches the target aspect (e.g. a 2:3 poster on the default 2:3
+    canvas) the slack is at or near zero, so this function's shift_y is a no-op
+    there by construction -- callers on the default (non-square) canvas do NOT
+    pass shift_y here; they call this with shift_y=0.0 for a plain center-crop,
+    then apply the shift themselves as a raw pixel paste-offset afterward, which
+    intentionally CAN move the poster off-frame and reveal a black border at the
+    edge -- that letterbox look is a deliberate, user-wanted effect for the
+    normal poster editor, not a bug (see Quirk #53's follow-up correction: an
+    earlier version of this function tried to eliminate that black-border
+    behavior everywhere, which undid something the user explicitly relied on).
     """
     w, h = img.size
     if w == 0 or h == 0:
@@ -38,7 +56,14 @@ def _resize_cover(
     resized = img.resize((new_w, new_h), Image.LANCZOS)
 
     x = max(0, (new_w - target_w) // 2)
-    y = max(0, (new_h - target_h) // 2)
+
+    max_y_offset = max(0, new_h - target_h)
+    center_y = max_y_offset // 2
+    # Positive shift_y means the poster visually moves DOWN in the frame (matching
+    # the original paste-offset convention) -- i.e. the crop window moves UP
+    # toward the source's top edge, revealing more of what was above it.
+    y = center_y - int(shift_y * max_y_offset)
+    y = max(0, min(y, max_y_offset))
     return resized.crop((x, y, x + target_w, y + target_h))
 
 
@@ -764,9 +789,10 @@ def build_base_poster(
     if options is None:
         options = {}
 
-    # fixed 2:3 canvas (TPDB friendly, vertical)
-    canvas_w = 2000
-    canvas_h = 3000
+    # 2:3 canvas by default (TPDB friendly, vertical); options["canvas_mode"] can
+    # select a different size (e.g. "square" for Square Art) -- see canvas.py.
+    from .canvas import resolve_canvas_size
+    canvas_w, canvas_h = resolve_canvas_size(options)
 
     # ------------- OPTIONS -------------
     poster_zoom = float(options.get("poster_zoom", 1.0))          # 1.0 = normal
@@ -800,9 +826,21 @@ def build_base_poster(
     # ------------- BASE POSTER -------------
     base = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
 
-    poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom)
-    shift_px = int(poster_shift_y * canvas_h)
-    base.paste(poster, (0, shift_px))
+    if options.get("canvas_mode") == "square":
+        # Square Art: shift moves the crop window within the cover-resize's
+        # slack, revealing more real source content -- there's genuinely more
+        # slack to work with on a square canvas (a 2:3 poster covering a 1:1
+        # canvas), and no black-border look is wanted here (Quirk #43/#44).
+        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
+        base.paste(poster, (0, 0))
+    else:
+        # Default 2:3 canvas: shift is a raw pixel paste-offset onto the black
+        # base canvas, not a crop-window move -- at larger values this can move
+        # the poster off-frame and let the black canvas show through as a
+        # border, which is the intended, user-relied-on look here (Quirk #53).
+        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom)
+        shift_px = int(poster_shift_y * canvas_h)
+        base.paste(poster, (0, shift_px))
 
     # ------------- MATTE + FADE (bottom + top) -------------
     matte_h = int(canvas_h * matte_height_ratio)

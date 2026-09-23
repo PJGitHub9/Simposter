@@ -58,6 +58,21 @@ def init_scheduler(restore_from_settings: bool = True):
             else:
                 logger.info("[SCHEDULER] Scheduled scans are disabled in settings")
 
+            # Restore scheduled cleanup job if enabled
+            if scheduler_settings.get("cleanupEnabled", False):
+                cleanup_cron = scheduler_settings.get("cleanupCronExpression", "0 3 * * 0")
+                cleanup_categories = scheduler_settings.get("cleanupCategories") or [
+                    "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
+                    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+                ]
+                cleanup_history_days = int(scheduler_settings.get("cleanupHistoryDays", 180))
+                if schedule_cleanup(cleanup_cron, cleanup_categories, cleanup_history_days):
+                    logger.info("[SCHEDULER] Restored cleanup schedule: cron=%s, categories=%s", cleanup_cron, cleanup_categories)
+                else:
+                    logger.error("[SCHEDULER] Failed to restore cleanup schedule")
+            else:
+                logger.info("[SCHEDULER] Scheduled cleanup is disabled in settings")
+
             # Restore poster retry job if enabled
             automation = settings_dict.get("automation", {})
             if automation.get("retryUntilTemplateMet", False):
@@ -77,13 +92,12 @@ def get_scheduler() -> Optional[BackgroundScheduler]:
     return _scheduler
 
 
-def schedule_library_scan(cron_expression: str, library_ids: Optional[List[str]] = None):
-    """
-    Schedule a library scan using a cron expression.
-
-    Args:
-        cron_expression: Cron expression (e.g., "0 2 * * *" for 2 AM daily)
-        library_ids: Optional list of library IDs to scan (None or empty = all libraries)
+def _build_cron_trigger(cron_expression: str) -> Optional[CronTrigger]:
+    """Parses and validates a 5-field cron expression, returning a CronTrigger
+    (local timezone) or None if invalid -- logs the specific problem itself, so
+    every caller can just check for None. Shared by schedule_library_scan() and
+    schedule_cleanup() so the same validation rules apply to both schedulable
+    jobs in this app rather than drifting between two copies.
 
     Cron format: minute hour day month day_of_week
     Examples:
@@ -92,95 +106,107 @@ def schedule_library_scan(cron_expression: str, library_ids: Optional[List[str]]
         "0 0 * * 0"     - Every Sunday at midnight
         "30 3 * * 1-5"  - Weekdays at 3:30 AM
     """
+    parts = cron_expression.strip().split()
+    if len(parts) != 5:
+        logger.error("[SCHEDULER] Invalid cron expression: %s (must be 5 fields)", cron_expression)
+        return None
+
+    minute, hour, day, month, day_of_week = parts
+
+    # Validate cron field ranges
+    def validate_cron_field(value: str, min_val: int, max_val: int, field_name: str) -> bool:
+        """Validate a single cron field (handles *, ranges, steps, lists)"""
+        if value == '*':
+            return True
+
+        # Handle ranges (e.g., 1-5)
+        if '-' in value:
+            try:
+                start, end = value.split('-')
+                return (min_val <= int(start) <= max_val and
+                       min_val <= int(end) <= max_val)
+            except (ValueError, AttributeError):
+                return False
+
+        # Handle steps (e.g., */5)
+        if '/' in value:
+            base, step = value.split('/')
+            if base != '*':
+                try:
+                    if not (min_val <= int(base) <= max_val):
+                        return False
+                except ValueError:
+                    return False
+            try:
+                return int(step) > 0
+            except ValueError:
+                return False
+
+        # Handle lists (e.g., 1,3,5)
+        if ',' in value:
+            try:
+                values = [int(v) for v in value.split(',')]
+                return all(min_val <= v <= max_val for v in values)
+            except ValueError:
+                return False
+
+        # Handle single value
+        try:
+            return min_val <= int(value) <= max_val
+        except ValueError:
+            return False
+
+    # Validate each field
+    if not validate_cron_field(minute, 0, 59, 'minute'):
+        logger.error("[SCHEDULER] Invalid minute value: %s (must be 0-59)", minute)
+        return None
+
+    if not validate_cron_field(hour, 0, 23, 'hour'):
+        logger.error("[SCHEDULER] Invalid hour value: %s (must be 0-23)", hour)
+        return None
+
+    if not validate_cron_field(day, 1, 31, 'day'):
+        logger.error("[SCHEDULER] Invalid day value: %s (must be 1-31)", day)
+        return None
+
+    if not validate_cron_field(month, 1, 12, 'month'):
+        logger.error("[SCHEDULER] Invalid month value: %s (must be 1-12)", month)
+        return None
+
+    if not validate_cron_field(day_of_week, 0, 6, 'day_of_week'):
+        logger.error("[SCHEDULER] Invalid day_of_week value: %s (must be 0-6)", day_of_week)
+        return None
+
+    # Create trigger using local timezone
+    import tzlocal
+    local_tz = tzlocal.get_localzone()
+
+    return CronTrigger(
+        minute=minute,
+        hour=hour,
+        day=day,
+        month=month,
+        day_of_week=day_of_week,
+        timezone=local_tz
+    )
+
+
+def schedule_library_scan(cron_expression: str, library_ids: Optional[List[str]] = None):
+    """
+    Schedule a library scan using a cron expression.
+
+    Args:
+        cron_expression: Cron expression (e.g., "0 2 * * *" for 2 AM daily)
+        library_ids: Optional list of library IDs to scan (None or empty = all libraries)
+    """
     if _scheduler is None:
         logger.error("[SCHEDULER] Scheduler not initialized, call init_scheduler() first")
         return False
 
     try:
-        # Parse cron expression
-        parts = cron_expression.strip().split()
-        if len(parts) != 5:
-            logger.error("[SCHEDULER] Invalid cron expression: %s (must be 5 fields)", cron_expression)
+        trigger = _build_cron_trigger(cron_expression)
+        if trigger is None:
             return False
-
-        minute, hour, day, month, day_of_week = parts
-
-        # Validate cron field ranges
-        def validate_cron_field(value: str, min_val: int, max_val: int, field_name: str) -> bool:
-            """Validate a single cron field (handles *, ranges, steps, lists)"""
-            if value == '*':
-                return True
-
-            # Handle ranges (e.g., 1-5)
-            if '-' in value:
-                try:
-                    start, end = value.split('-')
-                    return (min_val <= int(start) <= max_val and
-                           min_val <= int(end) <= max_val)
-                except (ValueError, AttributeError):
-                    return False
-
-            # Handle steps (e.g., */5)
-            if '/' in value:
-                base, step = value.split('/')
-                if base != '*':
-                    try:
-                        if not (min_val <= int(base) <= max_val):
-                            return False
-                    except ValueError:
-                        return False
-                try:
-                    return int(step) > 0
-                except ValueError:
-                    return False
-
-            # Handle lists (e.g., 1,3,5)
-            if ',' in value:
-                try:
-                    values = [int(v) for v in value.split(',')]
-                    return all(min_val <= v <= max_val for v in values)
-                except ValueError:
-                    return False
-
-            # Handle single value
-            try:
-                return min_val <= int(value) <= max_val
-            except ValueError:
-                return False
-
-        # Validate each field
-        if not validate_cron_field(minute, 0, 59, 'minute'):
-            logger.error("[SCHEDULER] Invalid minute value: %s (must be 0-59)", minute)
-            return False
-
-        if not validate_cron_field(hour, 0, 23, 'hour'):
-            logger.error("[SCHEDULER] Invalid hour value: %s (must be 0-23)", hour)
-            return False
-
-        if not validate_cron_field(day, 1, 31, 'day'):
-            logger.error("[SCHEDULER] Invalid day value: %s (must be 1-31)", day)
-            return False
-
-        if not validate_cron_field(month, 1, 12, 'month'):
-            logger.error("[SCHEDULER] Invalid month value: %s (must be 1-12)", month)
-            return False
-
-        if not validate_cron_field(day_of_week, 0, 6, 'day_of_week'):
-            logger.error("[SCHEDULER] Invalid day_of_week value: %s (must be 0-6)", day_of_week)
-            return False
-
-        # Create trigger using local timezone
-        import tzlocal
-        local_tz = tzlocal.get_localzone()
-
-        trigger = CronTrigger(
-            minute=minute,
-            hour=hour,
-            day=day,
-            month=month,
-            day_of_week=day_of_week,
-            timezone=local_tz
-        )
 
         # Remove existing job if present
         if _scheduler.get_job(_scan_job_id):
@@ -242,6 +268,102 @@ def get_scan_schedule() -> Optional[dict]:
         "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
         "trigger": str(job.trigger)
     }
+
+
+_cleanup_job_id = "cleanup_job"
+
+
+def schedule_cleanup(cron_expression: str, categories: List[str], history_days: int = 180):
+    """Schedule the Simposter cache cleanup tool (backend/api/cleanup.py) using a
+    cron expression -- mirrors schedule_library_scan() above, including using the
+    same _build_cron_trigger() validation. Runs scan-then-clean for `categories`
+    on the given schedule; never empties the cleanup trash automatically (see
+    _run_cleanup() below)."""
+    if _scheduler is None:
+        logger.error("[SCHEDULER] Scheduler not initialized, call init_scheduler() first")
+        return False
+
+    try:
+        trigger = _build_cron_trigger(cron_expression)
+        if trigger is None:
+            return False
+
+        if _scheduler.get_job(_cleanup_job_id):
+            _scheduler.remove_job(_cleanup_job_id)
+            logger.info("[SCHEDULER] Removed existing cleanup job")
+
+        _scheduler.add_job(
+            func=_run_cleanup,
+            trigger=trigger,
+            id=_cleanup_job_id,
+            name="Cleanup",
+            args=[categories, history_days],
+            replace_existing=True
+        )
+
+        logger.info("[SCHEDULER] Scheduled cleanup with cron: %s (categories=%s)", cron_expression, categories)
+        next_run = _scheduler.get_job(_cleanup_job_id).next_run_time
+        logger.info("[SCHEDULER] Next cleanup scheduled for: %s", next_run)
+        return True
+
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to schedule cleanup: %s", e)
+        return False
+
+
+def cancel_cleanup():
+    """Cancel the scheduled cleanup job."""
+    if _scheduler is None:
+        return False
+
+    try:
+        if _scheduler.get_job(_cleanup_job_id):
+            _scheduler.remove_job(_cleanup_job_id)
+            logger.info("[SCHEDULER] Cancelled cleanup job")
+            return True
+        return False
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to cancel cleanup: %s", e)
+        return False
+
+
+def get_cleanup_schedule() -> Optional[dict]:
+    """Get information about the current cleanup schedule."""
+    if _scheduler is None:
+        return None
+
+    job = _scheduler.get_job(_cleanup_job_id)
+    if job is None:
+        return None
+
+    return {
+        "job_id": job.id,
+        "name": job.name,
+        "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+        "trigger": str(job.trigger)
+    }
+
+
+def _run_cleanup(categories: List[str], history_days: int = 180):
+    """Internal function the scheduler calls -- scans, then moves every matched
+    candidate in `categories` to the cleanup trash (never permanently deletes;
+    see backend/api/cleanup.py's module docstring on why nothing here skips the
+    reversible trash step just because it's unattended). A failure here is
+    logged and swallowed, not raised -- a bad run must never crash the
+    scheduler thread or take down any other scheduled job."""
+    try:
+        from .api import cleanup as cleanup_api
+
+        logger.info("[SCHEDULER] ========== SCHEDULED CLEANUP TRIGGERED ==========")
+        scan = cleanup_api.api_cleanup_scan(history_days=history_days)
+        logger.info("[SCHEDULER] Cleanup scan found %s across %d categories", scan.get("total_bytes_human"), len(scan.get("categories", [])))
+
+        result = cleanup_api.api_cleanup_clean(cleanup_api.CleanRequest(categories=categories, history_days=history_days))
+        logger.info("[SCHEDULER] Cleanup moved %d file(s) and removed %d row(s) to trash (batch %s)",
+                    result.get("moved_files", 0), result.get("deleted_rows", 0), result.get("batch_id"))
+        logger.info("[SCHEDULER] ========== SCHEDULED CLEANUP FINISHED ==========")
+    except Exception as e:
+        logger.error("[SCHEDULER] Scheduled cleanup failed: %s", e, exc_info=True)
 
 
 def _run_library_scan(library_ids: Optional[List[str]] = None):
@@ -401,10 +523,12 @@ def _run_poster_retry():
             title = item.get("title", rating_key)
             retry_count = item.get("retry_count", 0)
 
-            # Abandon if max_attempts exceeded
+            # Abandon if max_attempts exceeded -- removed outright, not just marked, so a
+            # later delete-then-re-add of the same title (which arrives under a brand-new
+            # rating_key, see CLAUDE.md Quirk #41) can't show up as two rows in the queue.
             if max_attempts > 0 and retry_count >= max_attempts:
-                db.resolve_retry_queue_item(rating_key, "abandoned")
-                logger.info("[RETRY] Abandoned %s after %d attempts", title, retry_count)
+                db.remove_from_retry_queue(rating_key)
+                logger.info("[RETRY] Abandoned %s after %d attempts — removed from retry queue", title, retry_count)
                 continue
 
             logger.info("[RETRY] Retrying %s (%s) attempt #%d", title, media_type, retry_count + 1)
@@ -417,6 +541,8 @@ def _run_poster_retry():
                 lib_default_labels = _get_default_remove_labels(library_id)
                 if lib_default_labels:
                     remove_labels = list({*remove_labels, *lib_default_labels})
+
+            require_textless_poster = item.get("reason") == db.RETRY_REASON_MANUAL_TEXTLESS
 
             try:
                 if media_type == "tv":
@@ -431,6 +557,7 @@ def _run_poster_retry():
                         source="auto_generate",
                         send_logos_to_plex=send_logos,
                         send_only_if_ideal=True,
+                        require_textless_poster=require_textless_poster,
                     )
                     # A dict without a populated "results" list means the render errored out
                     # before producing per-season results (e.g. a transient TMDb/network failure) —
@@ -450,6 +577,7 @@ def _run_poster_retry():
                         source="auto_generate",
                         send_logos_to_plex=send_logos,
                         send_only_if_ideal=True,
+                        require_textless_poster=require_textless_poster,
                     )
                     # Default True: an error dict (e.g. TMDb request failure) has no "needs_retry"
                     # key, and must NOT be read as "ideal conditions met" — that silently drops the
@@ -473,7 +601,7 @@ def _run_poster_retry():
                 # "failed" History row every cycle, before this branch existed.
                 is_hard_error = isinstance(result, dict) and result.get("status") == "error"
                 if is_hard_error and _plex_item_exists(rating_key) is False:
-                    db.resolve_retry_queue_item(rating_key, "abandoned")
+                    db.remove_from_retry_queue(rating_key)
                     logger.info(
                         "[RETRY] %s (rating_key=%s) no longer exists in Plex — removed from retry queue",
                         title, rating_key
@@ -492,7 +620,7 @@ def _run_poster_retry():
                 # retryMaxAttempts is 0 (unlimited), silently filling History
                 # with a fresh "failed" entry every retry cycle.
                 if _plex_item_exists(rating_key) is False:
-                    db.resolve_retry_queue_item(rating_key, "abandoned")
+                    db.remove_from_retry_queue(rating_key)
                     logger.info(
                         "[RETRY] %s (rating_key=%s) no longer exists in Plex — removed from retry queue",
                         title, rating_key

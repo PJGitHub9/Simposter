@@ -339,6 +339,8 @@ def init_database():
                 tvdb_id INTEGER,
                 poster_url TEXT,
                 logo_url TEXT,
+                art_url TEXT,
+                square_art_url TEXT,
                 labels_json TEXT DEFAULT '[]',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 library_id TEXT DEFAULT 'default'
@@ -366,6 +368,12 @@ def init_database():
         if "logo_url" not in cols:
             cursor.execute("ALTER TABLE movie_cache ADD COLUMN logo_url TEXT")
             logger.info("[DB] Added 'logo_url' column to movie_cache")
+        if "art_url" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN art_url TEXT")
+            logger.info("[DB] Added 'art_url' column to movie_cache")
+        if "square_art_url" not in cols:
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN square_art_url TEXT")
+            logger.info("[DB] Added 'square_art_url' column to movie_cache")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_movie_cache_updated
@@ -399,6 +407,8 @@ def init_database():
                 tvdb_id INTEGER,
                 poster_url TEXT,
                 logo_url TEXT,
+                art_url TEXT,
+                square_art_url TEXT,
                 labels_json TEXT DEFAULT '[]',
                 seasons_json TEXT DEFAULT '[]',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -428,6 +438,12 @@ def init_database():
         if "logo_url" not in tv_cols:
             cursor.execute("ALTER TABLE tv_cache ADD COLUMN logo_url TEXT")
             logger.info("[DB] Added 'logo_url' column to tv_cache")
+        if "art_url" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN art_url TEXT")
+            logger.info("[DB] Added 'art_url' column to tv_cache")
+        if "square_art_url" not in tv_cols:
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN square_art_url TEXT")
+            logger.info("[DB] Added 'square_art_url' column to tv_cache")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_tv_cache_updated
@@ -809,6 +825,37 @@ def init_database():
             ON poster_retry_queue(status)
         """)
 
+        # One-time cleanup for DBs created before "abandoned" retry items were deleted
+        # outright instead of just marked -- see scheduler.py's _run_poster_retry(). A
+        # stale abandoned row's title commonly reappears under a brand-new rating_key
+        # (delete-then-re-add in Plex, see CLAUDE.md Quirk #41), which made the History
+        # → Retry Queue view show what looked like the same item twice. Idempotent (a
+        # no-op once these rows are gone), safe to run every startup.
+        cursor.execute("DELETE FROM poster_retry_queue WHERE status = 'abandoned'")
+
+        # Tracks the last time each TMDb ID was confirmed present in the Plex library,
+        # independent of Plex's own rating_key (which changes on a Radarr/Sonarr re-grab
+        # or similar). Upserted on every scan for every currently-present item with a
+        # known tmdb_id -- deliberately NOT touched when a poster is sent (that's a
+        # separate concern, see save_render_cache_by_tmdb() in config.py). This is what
+        # lets the "reuseCachedPosterDays" grace period mean "days since this title
+        # actually disappeared from the library," not "days since we last rendered its
+        # poster" -- a movie that's sat untouched for a year shouldn't lose its reuse
+        # eligibility just because nobody's regenerated its poster recently.
+        # season_index defaults to -1 (not NULL) for a movie or a TV series-level poster --
+        # SQLite's PRIMARY KEY/UNIQUE constraints treat every NULL as distinct from every
+        # other NULL, so a nullable PK column here would silently let duplicate "no season"
+        # rows pile up per tmdb_id instead of the upsert correctly updating one row.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tmdb_last_seen (
+                media_type TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                season_index INTEGER NOT NULL DEFAULT -1,
+                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (media_type, tmdb_id, season_index)
+            )
+        """)
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
 
@@ -843,6 +890,46 @@ def init_database():
                 logger.info(f"[DB] Seeded onboarding_completed={flag_value}")
         except Exception as onboard_err:
             logger.warning(f"[DB] Could not seed onboarding_completed: {onboard_err}")
+
+        # Default scheduled cleanup ON for existing installs upgrading into this
+        # feature, OFF for genuinely fresh installs -- every other automation
+        # setting in this app defaults off (see CLAUDE.md's "no auth gate" and
+        # retry/reuse-cache quirks), but an existing user's cache has already had
+        # time to accumulate real orphaned bloat by the time they upgrade, while a
+        # fresh install has nothing to clean yet. Runs at most once per DB (the
+        # key's mere presence, regardless of value, means this already ran or the
+        # user has already touched this setting themselves -- either way, never
+        # overwrite it). Reuses the exact same "already configured" signal the
+        # onboarding_completed seed above already established as the right way to
+        # distinguish an existing install from a fresh one in this codebase.
+        try:
+            existing_cleanup_setting = cursor.execute(
+                "SELECT value FROM settings WHERE key = 'scheduler.cleanupEnabled' LIMIT 1"
+            ).fetchone()
+            if existing_cleanup_setting is None:
+                plex_url_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'plex.url' OR key = 'url' AND category = 'plex' LIMIT 1"
+                ).fetchone()
+                already_configured = bool(plex_url_row and plex_url_row["value"] and plex_url_row["value"].strip())
+                if already_configured:
+                    for key, value in (
+                        ("scheduler.cleanupEnabled", "true"),
+                        ("scheduler.cleanupCronExpression", "0 3 * * 0"),
+                        ("scheduler.cleanupCategories", json.dumps([
+                            "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
+                            "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+                        ])),
+                        ("scheduler.cleanupHistoryDays", "180"),
+                    ):
+                        cursor.execute("""
+                            INSERT INTO settings (key, value, category)
+                            VALUES (?, ?, 'scheduler')
+                            ON CONFLICT(key) DO NOTHING
+                        """, (key, value))
+                    conn.commit()
+                    logger.info("[DB] Existing install detected -- defaulted scheduled cleanup to enabled (weekly)")
+        except Exception as cleanup_default_err:
+            logger.warning(f"[DB] Could not default scheduled cleanup for existing install: {cleanup_default_err}")
     except Exception as e:
         logger.error(f"[DB] Initialization/migration failed: {e}")
         conn.rollback()
@@ -1563,14 +1650,16 @@ def upsert_movie_cache(
     library_id: str = "default",
     edition: Optional[str] = None,
     logo_url: Optional[str] = None,
+    art_url: Optional[str] = None,
+    square_art_url: Optional[str] = None,
 ) -> None:
     """Insert or update cached movie metadata."""
     labels_json = json.dumps(labels or [])
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, updated_at, library_id, edition)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
             ON CONFLICT(rating_key) DO UPDATE SET
                 title = excluded.title,
                 year = excluded.year,
@@ -1578,6 +1667,8 @@ def upsert_movie_cache(
                 tmdb_id = COALESCE(excluded.tmdb_id, movie_cache.tmdb_id),
                 poster_url = COALESCE(excluded.poster_url, movie_cache.poster_url),
                 logo_url = COALESCE(excluded.logo_url, movie_cache.logo_url),
+                art_url = COALESCE(excluded.art_url, movie_cache.art_url),
+                square_art_url = COALESCE(excluded.square_art_url, movie_cache.square_art_url),
                 labels_json = CASE
                     WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                     ELSE movie_cache.labels_json
@@ -1585,7 +1676,7 @@ def upsert_movie_cache(
                 library_id = COALESCE(excluded.library_id, movie_cache.library_id),
                 edition = COALESCE(excluded.edition, movie_cache.edition),
                 updated_at = CURRENT_TIMESTAMP
-        """, (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, library_id, edition))
+        """, (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, library_id, edition))
 
 
 def get_movie_labels(rating_key: str) -> List[str]:
@@ -1650,6 +1741,89 @@ def update_movie_logo_url(rating_key: str, logo_url: Optional[str]) -> None:
             "UPDATE movie_cache SET logo_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
             (logo_url, rating_key)
         )
+
+
+def update_movie_art_url(rating_key: str, art_url: Optional[str]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE movie_cache SET art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
+            (art_url, rating_key)
+        )
+
+
+def update_movie_square_art_url(rating_key: str, square_art_url: Optional[str]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE movie_cache SET square_art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
+            (square_art_url, rating_key)
+        )
+
+
+def touch_tmdb_last_seen(media_type: str, tmdb_id: Optional[int], season_index: Optional[int] = None) -> None:
+    """Mark a TMDb-identified title as confirmed present in the library right now.
+
+    Called during a scan for every currently-present item that has a resolved tmdb_id.
+    Deliberately separate from anything poster-render/send related -- this is purely
+    "is this title still here," which is what the reuseCachedPosterDays grace period
+    actually needs to measure. See tmdb_last_seen's table comment in init_database().
+    """
+    if not tmdb_id:
+        return
+    season_key = season_index if season_index is not None else -1
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO tmdb_last_seen (media_type, tmdb_id, season_index, last_seen_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(media_type, tmdb_id, season_index) DO UPDATE SET
+                last_seen_at = CURRENT_TIMESTAMP
+        """, (media_type, tmdb_id, season_key))
+
+
+def get_tmdb_days_since_last_seen(media_type: str, tmdb_id: Optional[int], season_index: Optional[int] = None) -> Optional[float]:
+    """Days since a TMDb-identified title was last confirmed present in the library.
+
+    Returns None if we have no record at all (e.g. it was cached before this table
+    existed, or has never been seen) -- callers should treat None as "unknown, don't
+    trust the cache" rather than "just seen."
+    """
+    if not tmdb_id:
+        return None
+    season_key = season_index if season_index is not None else -1
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT (julianday('now') - julianday(last_seen_at)) AS days_since
+            FROM tmdb_last_seen
+            WHERE media_type = ? AND tmdb_id = ? AND season_index = ?
+        """, (media_type, tmdb_id, season_key))
+        row = cursor.fetchone()
+        if not row or row[0] is None:
+            return None
+        return float(row[0])
+
+
+def purge_stale_tmdb_last_seen(max_age_days: float) -> List[Dict[str, Any]]:
+    """Delete tmdb_last_seen rows that have been absent longer than max_age_days.
+
+    Returns the deleted rows (media_type/tmdb_id/season_index) so the caller can also
+    remove the matching on-disk cached-poster file for each -- this function only owns
+    the DB row, not the file (that lives under CONFIG_DIR, config.py's job).
+    """
+    if max_age_days <= 0:
+        return []
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT media_type, tmdb_id, season_index FROM tmdb_last_seen
+            WHERE (julianday('now') - julianday(last_seen_at)) > ?
+        """, (max_age_days,))
+        rows = [{"media_type": r[0], "tmdb_id": r[1], "season_index": (r[2] if r[2] != -1 else None)} for r in cursor.fetchall()]
+        if rows:
+            cursor.execute("""
+                DELETE FROM tmdb_last_seen
+                WHERE (julianday('now') - julianday(last_seen_at)) > ?
+            """, (max_age_days,))
+        return rows
 
 
 def update_movie_media_info(rating_key: str, video_resolution: Optional[str] = None,
@@ -1747,8 +1921,8 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
         for m in movies:
             labels_json = json.dumps(m.get("labels") or [])
             cursor.execute("""
-                INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, updated_at, library_id, edition)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+                INSERT INTO movie_cache (rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
                 ON CONFLICT(rating_key) DO UPDATE SET
                     title = excluded.title,
                     year = excluded.year,
@@ -1756,6 +1930,8 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
                     tmdb_id = COALESCE(excluded.tmdb_id, movie_cache.tmdb_id),
                     poster_url = COALESCE(excluded.poster_url, movie_cache.poster_url),
                     logo_url = COALESCE(excluded.logo_url, movie_cache.logo_url),
+                    art_url = COALESCE(excluded.art_url, movie_cache.art_url),
+                    square_art_url = COALESCE(excluded.square_art_url, movie_cache.square_art_url),
                     labels_json = CASE
                         WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                         ELSE movie_cache.labels_json
@@ -1771,6 +1947,8 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
                 m.get("tmdb_id"),
                 m.get("poster_url"),
                 m.get("logo_url"),
+                m.get("art_url"),
+                m.get("square_art_url"),
                 labels_json,
                 library_id,
                 m.get("edition"),
@@ -1802,14 +1980,14 @@ def get_cached_movies(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
         cursor = conn.cursor()
         if library_id:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, updated_at, library_id, edition
+                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition
                 FROM movie_cache
                 WHERE library_id = ?
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """, (library_id,))
         else:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, labels_json, updated_at, library_id, edition
+                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition
                 FROM movie_cache
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """)
@@ -1829,6 +2007,8 @@ def get_cached_movies(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
             "tmdb_id": row["tmdb_id"],
             "poster_url": row["poster_url"],
             "logo_url": row["logo_url"] if "logo_url" in row.keys() else None,
+            "art_url": row["art_url"] if "art_url" in row.keys() else None,
+            "square_art_url": row["square_art_url"] if "square_art_url" in row.keys() else None,
             "labels": labels,
             "updated_at": row["updated_at"],
             "library_id": row["library_id"] if "library_id" in row.keys() else None,
@@ -1878,6 +2058,8 @@ def upsert_tv_cache(
     library_id: str = "default",
     edition: Optional[str] = None,
     logo_url: Optional[str] = None,
+    art_url: Optional[str] = None,
+    square_art_url: Optional[str] = None,
 ) -> None:
     """Insert or update cached TV show metadata."""
     labels_json = json.dumps(labels or [])
@@ -1885,8 +2067,8 @@ def upsert_tv_cache(
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO tv_cache (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, updated_at, library_id, edition)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+            INSERT INTO tv_cache (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
             ON CONFLICT(rating_key) DO UPDATE SET
                 title = excluded.title,
                 year = excluded.year,
@@ -1895,6 +2077,8 @@ def upsert_tv_cache(
                 tvdb_id = COALESCE(excluded.tvdb_id, tv_cache.tvdb_id),
                 poster_url = COALESCE(excluded.poster_url, tv_cache.poster_url),
                 logo_url = COALESCE(excluded.logo_url, tv_cache.logo_url),
+                art_url = COALESCE(excluded.art_url, tv_cache.art_url),
+                square_art_url = COALESCE(excluded.square_art_url, tv_cache.square_art_url),
                 labels_json = CASE
                     WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                     ELSE tv_cache.labels_json
@@ -1906,7 +2090,7 @@ def upsert_tv_cache(
                 library_id = COALESCE(excluded.library_id, tv_cache.library_id),
                 edition = COALESCE(excluded.edition, tv_cache.edition),
                 updated_at = CURRENT_TIMESTAMP
-        """, (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, library_id, edition))
+        """, (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, library_id, edition))
 
 
 def update_tv_labels(rating_key: str, labels: List[str], library_id: str = "default") -> None:
@@ -1955,6 +2139,22 @@ def update_tv_logo_url(rating_key: str, logo_url: Optional[str]) -> None:
         conn.execute(
             "UPDATE tv_cache SET logo_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
             (logo_url, rating_key)
+        )
+
+
+def update_tv_art_url(rating_key: str, art_url: Optional[str]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE tv_cache SET art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
+            (art_url, rating_key)
+        )
+
+
+def update_tv_square_art_url(rating_key: str, square_art_url: Optional[str]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE tv_cache SET square_art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
+            (square_art_url, rating_key)
         )
 
 
@@ -2009,8 +2209,8 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
             labels_json = json.dumps(m.get("labels") or [])
             seasons_json = json.dumps(m.get("seasons") or [])
             cursor.execute("""
-                INSERT INTO tv_cache (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, updated_at, library_id, edition)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+                INSERT INTO tv_cache (rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
                 ON CONFLICT(rating_key) DO UPDATE SET
                     title = excluded.title,
                     year = excluded.year,
@@ -2019,6 +2219,8 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
                     tvdb_id = COALESCE(excluded.tvdb_id, tv_cache.tvdb_id),
                     poster_url = COALESCE(excluded.poster_url, tv_cache.poster_url),
                     logo_url = COALESCE(excluded.logo_url, tv_cache.logo_url),
+                    art_url = COALESCE(excluded.art_url, tv_cache.art_url),
+                    square_art_url = COALESCE(excluded.square_art_url, tv_cache.square_art_url),
                     labels_json = CASE
                         WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json
                         ELSE tv_cache.labels_json
@@ -2039,6 +2241,8 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
                 m.get("tvdb_id"),
                 m.get("poster_url"),
                 m.get("logo_url"),
+                m.get("art_url"),
+                m.get("square_art_url"),
                 labels_json,
                 seasons_json,
                 library_id,
@@ -2070,14 +2274,14 @@ def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict[str, Any]
         cursor = conn.cursor()
         if library_id:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, updated_at, library_id, edition
+                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition
                 FROM tv_cache
                 WHERE library_id = ?
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """, (library_id,))
         else:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, labels_json, seasons_json, updated_at, library_id, edition
+                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition
                 FROM tv_cache
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """)
@@ -2102,6 +2306,8 @@ def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict[str, Any]
             "tvdb_id": row["tvdb_id"] if "tvdb_id" in row.keys() else None,
             "poster_url": row["poster_url"],
             "logo_url": row["logo_url"] if "logo_url" in row.keys() else None,
+            "art_url": row["art_url"] if "art_url" in row.keys() else None,
+            "square_art_url": row["square_art_url"] if "square_art_url" in row.keys() else None,
             "labels": labels,
             "seasons": seasons,
             "updated_at": row["updated_at"],
@@ -2684,6 +2890,16 @@ def get_poster_status(
 #  Poster Retry Queue Operations
 # ============================================
 
+# Reason used when a user manually queues an item from the editor because the
+# poster they picked right now isn't textless yet -- distinct from the reasons
+# batch.py generates automatically (no_logo, poster_fallback, etc.). Checked by
+# batch.py/scheduler.py/history.py to require a genuinely textless poster before
+# resolving the item, since the ordinary needs_retry check alone doesn't catch
+# this case when fallbackPosterAction is "continue" (the default) -- see
+# require_textless_poster in schemas.py.
+RETRY_REASON_MANUAL_TEXTLESS = "manual_textless_pending"
+
+
 def add_to_retry_queue(
     rating_key: str,
     media_type: str,
@@ -2785,9 +3001,15 @@ def get_retry_queue(include_resolved: bool = False) -> List[Dict[str, Any]]:
                 SELECT * FROM poster_retry_queue ORDER BY first_queued_at DESC LIMIT 500
             """)
         else:
+            # "abandoned" items are deleted outright when detected (see scheduler.py) rather
+            # than kept and filtered here -- an abandoned item's title commonly reappears
+            # under a brand-new rating_key (delete-then-re-add, see Quirk #41), and leaving
+            # the old abandoned row around made that look like a duplicate queue entry for
+            # the same title. This clause only still matters for a legacy DB with rows from
+            # before that change (also swept once on startup, see init_database()).
             cursor.execute("""
                 SELECT * FROM poster_retry_queue
-                WHERE status = 'pending' OR status = 'abandoned'
+                WHERE status = 'pending'
                 ORDER BY first_queued_at DESC LIMIT 500
             """)
         rows = cursor.fetchall()
@@ -2844,6 +3066,114 @@ def upsert_cached_providers(tmdb_id, media_type: str, region: str, providers: li
             "INSERT OR REPLACE INTO streaming_provider_cache (tmdb_id, media_type, region, providers_json, fetched_at) VALUES (?,?,?,?,?)",
             (str(tmdb_id), media_type, region, _json.dumps(providers), int(_time.time())),
         )
+
+
+# ---------------------------------------------------------------------------
+# Cleanup tool (backend/api/cleanup.py) -- reference-set lookups used to decide
+# whether a cached file/row is still "known good" (referenced by something
+# real) or an orphan candidate. See CLAUDE.md's Cleanup Tool quirk.
+# ---------------------------------------------------------------------------
+
+def get_all_known_rating_keys() -> set:
+    """Every rating_key Simposter currently has a movie_cache/tv_cache row for --
+    the reference set disk-cache orphan detection is diffed against. Reflects
+    the state as of the last successful library scan, not a live Plex check."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT rating_key FROM movie_cache")
+        keys = {row["rating_key"] for row in cursor.fetchall()}
+        cursor.execute("SELECT rating_key FROM tv_cache")
+        keys.update(row["rating_key"] for row in cursor.fetchall())
+    return keys
+
+
+def get_all_preset_reference_blob() -> str:
+    """Every preset's options_json + season_options_json, concatenated into one
+    string. Used for a cheap `needle in blob` substring check (e.g. "is this
+    uploaded file's URL referenced by any saved preset") instead of one query
+    per candidate file -- fine here since presets are small and few, and this
+    only needs to answer "does this string appear anywhere," not parse JSON."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT options_json, season_options_json FROM presets")
+        rows = cursor.fetchall()
+    return "\n".join(f"{r['options_json']}\n{r['season_options_json']}" for r in rows)
+
+
+def get_all_overlay_elements_blob() -> str:
+    """Every overlay_configs.elements_json, concatenated -- same substring-check
+    approach as get_all_preset_reference_blob(), used to find overlay_assets
+    rows no longer referenced by any overlay config's badge/image elements."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT elements_json FROM overlay_configs")
+        rows = cursor.fetchall()
+    return "\n".join(r["elements_json"] or "" for r in rows)
+
+
+def get_all_preset_template_pairs() -> set:
+    """Every (template_id, preset_id) pair with a saved preset -- the reference
+    set the overlay effect cache (config/overlays/{template_id}/{preset_id}.png)
+    is diffed against. A file whose pair isn't in this set means the preset it
+    was rendered for has since been deleted or renamed."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT template_id, id FROM presets")
+        return {(row["template_id"], row["id"]) for row in cursor.fetchall()}
+
+
+def get_poster_history_count_older_than(days: int) -> int:
+    """Row count for the 'old History entries' cleanup category preview -- kept
+    separate from the export+delete function below so the scan/report step
+    never mutates anything."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) as c FROM poster_history WHERE created_at < datetime('now', ?)",
+            (f"-{int(days)} days",),
+        )
+        row = cursor.fetchone()
+        return int(row["c"]) if row else 0
+
+
+def export_and_delete_poster_history_older_than(days: int) -> list:
+    """Used only by the actual 'Clean Selected' step (never by the dry-run scan)
+    -- selects every poster_history row older than `days`, returns them as plain
+    dicts (the caller writes these to the trash batch's JSON snapshot before
+    this function deletes the rows), all inside one transaction so a crash
+    between select and delete can't lose or duplicate rows."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM poster_history WHERE created_at < datetime('now', ?)",
+            (f"-{int(days)} days",),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+        if rows:
+            ids = [r["id"] for r in rows]
+            placeholders = ",".join("?" * len(ids))
+            cursor.execute(f"DELETE FROM poster_history WHERE id IN ({placeholders})", ids)
+    logger.info("[CLEANUP] Exported and deleted %d old poster_history rows (older than %d days)", len(rows), days)
+    return rows
+
+
+def restore_poster_history_rows(rows: list) -> None:
+    """Re-inserts poster_history rows previously removed by
+    export_and_delete_poster_history_older_than() -- used by the trash
+    'Restore' action. Uses INSERT OR IGNORE on the original id so restoring
+    the same batch twice is a harmless no-op rather than a duplicate/error."""
+    if not rows:
+        return
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for r in rows:
+            cols = list(r.keys())
+            placeholders = ",".join("?" * len(cols))
+            cursor.execute(
+                f"INSERT OR IGNORE INTO poster_history ({','.join(cols)}) VALUES ({placeholders})",
+                [r[c] for c in cols],
+            )
+    logger.info("[CLEANUP] Restored %d poster_history rows", len(rows))
 
 
 # Initialize database on module import

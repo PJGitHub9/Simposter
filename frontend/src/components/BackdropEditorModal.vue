@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 
-type LogoSource = {
+type BackdropSource = {
   url: string
   thumb?: string
   source?: string
@@ -11,48 +11,45 @@ type LogoSource = {
   type?: string
 }
 
-type LogoItem = {
+type BackdropItem = {
   key: string
   title: string
   year?: number | string
-  logo_url?: string | null
+  art_url?: string | null
   tmdb_id?: number | null
   is_tv?: boolean
 }
 
-const props = defineProps<{ item: LogoItem }>()
+const props = defineProps<{ item: BackdropItem }>()
 const emit = defineEmits<{
   close: []
-  updated: [logoUrl: string | null]
+  updated: [artUrl: string | null]
 }>()
 
 const apiBase = getApiBase()
-const availableLogos = ref<LogoSource[]>([])
-// TMDb serves `thumb` as a resized w300 PNG and `url` as the original file -- for
-// SVG-sourced or newly-added logos, the resized thumbnail variant can 404 (a known
-// TMDb CDN propagation quirk) even though the original loads fine. Track which thumbs
-// have failed so the <img> can fall back to the full-size url instead of staying blank.
-const failedLogoThumbs = ref(new Set<string>())
-const logoThumbSrc = (l: LogoSource) => (failedLogoThumbs.value.has(l.url) ? l.url : (l.thumb || l.url))
-const onLogoThumbError = (l: LogoSource) => {
-  if (l.thumb && l.thumb !== l.url && !failedLogoThumbs.value.has(l.url)) {
-    failedLogoThumbs.value = new Set(failedLogoThumbs.value).add(l.url)
+const availableBackdrops = ref<BackdropSource[]>([])
+// Same fallback pattern used by the logo picker (LogoEditorModal.vue) -- TMDb's
+// resized w300 thumbnail variant can 404 even when the original loads fine.
+const failedThumbs = ref(new Set<string>())
+const thumbSrc = (b: BackdropSource) => (failedThumbs.value.has(b.url) ? b.url : (b.thumb || b.url))
+const onThumbError = (b: BackdropSource) => {
+  if (b.thumb && b.thumb !== b.url && !failedThumbs.value.has(b.url)) {
+    failedThumbs.value = new Set(failedThumbs.value).add(b.url)
   }
 }
-// Same class of failure as failedLogoThumbs above, but for the single fixed "Current
-// Logo" preview -- no thumb/original pair to fall back between, so on failure this
-// just swaps to the "No logo cached yet" placeholder instead of a broken image icon.
-const currentLogoFailed = ref(false)
-// `item` is a prop snapshot from when the modal opened, not the same object
-// instance the parent grid holds -- a successful send only updated the GRID's
-// copy (via the `updated` emit below), never this modal's own display, so
-// "Current Logo" kept showing the pre-send image until closed and reopened.
-const sentLogoUrl = ref<string | null>(null)
-const currentLogoSrc = computed(() => sentLogoUrl.value || props.item.logo_url)
+const currentBackdropFailed = ref(false)
+// `item` is a prop -- a snapshot taken when the modal opened, not the same object
+// instance the parent grid holds in its own `items` array. A successful send only
+// ever updates the GRID's copy (via the `updated` emit below), never this modal's
+// own `props.item`, so without this override the "Current Backdrop" section kept
+// showing the pre-send image until the modal was closed and reopened. Same fix
+// shape as SquareArtModal.vue's `sentSquareArtUrl`.
+const sentArtUrl = ref<string | null>(null)
+const currentBackdropSrc = computed(() => sentArtUrl.value || props.item.art_url)
 const selectedUrl = ref<string | null>(null)
 const uploadedData = ref<string | null>(null)
 const uploadedName = ref<string | null>(null)
-const loadingLogos = ref(false)
+const loadingBackdrops = ref(false)
 const sending = ref(false)
 const error = ref<string | null>(null)
 const success = ref(false)
@@ -61,8 +58,8 @@ const dragOver = ref(false)
 
 const hasSelection = computed(() => !!(selectedUrl.value || uploadedData.value))
 
-async function fetchAvailableLogos() {
-  loadingLogos.value = true
+async function fetchAvailableBackdrops() {
+  loadingBackdrops.value = true
   try {
     // Always resolve tmdb_id live — the list cache may not have it populated
     let tmdbId = props.item.tmdb_id
@@ -84,19 +81,16 @@ async function fetchAvailableLogos() {
     const res = await fetch(endpoint)
     if (res.ok) {
       const data = await res.json()
-      availableLogos.value = (data.logos || []).filter((l: LogoSource) => {
-        const url = (l.url || '').toLowerCase()
-        return !url.endsWith('.svg') && !url.includes('.svg?')
-      })
+      availableBackdrops.value = data.backdrops || []
     }
   } catch {
     // silent
   } finally {
-    loadingLogos.value = false
+    loadingBackdrops.value = false
   }
 }
 
-function selectLogo(url: string) {
+function selectBackdrop(url: string) {
   selectedUrl.value = url
   uploadedData.value = null
   uploadedName.value = null
@@ -133,7 +127,7 @@ function loadFile(file: File) {
   reader.readAsDataURL(file)
 }
 
-async function sendToPlexLogo() {
+async function sendToPlexBackdrop() {
   if (!hasSelection.value) return
   sending.value = true
   error.value = null
@@ -144,11 +138,11 @@ async function sendToPlexLogo() {
       is_tv: props.item.is_tv ?? false,
     }
     if (uploadedData.value) {
-      body.logo_data = uploadedData.value
+      body.art_data = uploadedData.value
     } else {
-      body.logo_url = selectedUrl.value
+      body.art_url = selectedUrl.value
     }
-    const res = await fetch(`${apiBase}/api/plex/send-logo`, {
+    const res = await fetch(`${apiBase}/api/plex/send-backdrop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -159,21 +153,22 @@ async function sendToPlexLogo() {
     }
     const data = await res.json().catch(() => ({}))
     success.value = true
-    const newLogoUrl = data.logo_url || selectedUrl.value
-    // Update this modal's own "Current Logo" display too, not just the grid --
+    const newArtUrl = data.art_url || selectedUrl.value
+    // Update this modal's own "Current Backdrop" display, not just the grid --
     // emitting alone only ever reaches the grid's separate copy of the item.
-    sentLogoUrl.value = newLogoUrl
-    currentLogoFailed.value = false
-    emit('updated', newLogoUrl)
+    sentArtUrl.value = newArtUrl
+    currentBackdropFailed.value = false
+    // Pass back the new cached art_url so the grid card updates too
+    emit('updated', newArtUrl)
     setTimeout(() => emit('close'), 1200)
   } catch (e: any) {
-    error.value = e.message || 'Failed to send logo to Plex.'
+    error.value = e.message || 'Failed to send backdrop to Plex.'
   } finally {
     sending.value = false
   }
 }
 
-onMounted(fetchAvailableLogos)
+onMounted(fetchAvailableBackdrops)
 </script>
 
 <template>
@@ -194,49 +189,49 @@ onMounted(fetchAvailableLogos)
       </div>
 
       <div class="modal-body">
-        <!-- Current logo -->
+        <!-- Current backdrop -->
         <div class="section">
-          <div class="section-label">Current Logo</div>
-          <div class="current-logo-area">
-            <img v-if="currentLogoSrc && !currentLogoFailed" :src="currentLogoSrc" :alt="item.title" class="current-logo-img" @error="currentLogoFailed = true" />
+          <div class="section-label">Current Backdrop</div>
+          <div class="current-backdrop-area">
+            <img v-if="currentBackdropSrc && !currentBackdropFailed" :src="currentBackdropSrc" :alt="item.title" class="current-backdrop-img" @error="currentBackdropFailed = true" />
             <div v-else class="no-current">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
                 <rect x="3" y="3" width="18" height="18" rx="2"/>
                 <path d="M3 9l4-4 4 4 4-4 4 4"/>
               </svg>
-              <span>No logo cached yet</span>
+              <span>No backdrop cached yet</span>
             </div>
           </div>
         </div>
 
-        <!-- Available logos from TMDb / Fanart -->
+        <!-- Available backdrops from TMDb / Fanart -->
         <div class="section">
           <div class="section-label">
-            Select Logo
+            Select Backdrop
             <span v-if="!item.tmdb_id" class="section-note">(no TMDb ID — upload only)</span>
           </div>
 
-          <div v-if="loadingLogos" class="logo-loading">Loading logos…</div>
+          <div v-if="loadingBackdrops" class="backdrop-loading">Loading backdrops…</div>
 
-          <div v-else-if="availableLogos.length" class="logo-grid">
+          <div v-else-if="availableBackdrops.length" class="backdrop-grid">
             <div
-              v-for="logo in availableLogos"
-              :key="logo.url"
-              class="logo-thumb"
-              :class="{ active: selectedUrl === logo.url }"
-              @click="selectLogo(logo.url)"
+              v-for="backdrop in availableBackdrops"
+              :key="backdrop.url"
+              class="backdrop-thumb"
+              :class="{ active: selectedUrl === backdrop.url }"
+              @click="selectBackdrop(backdrop.url)"
             >
-              <img :src="logoThumbSrc(logo)" :alt="logo.source" @error="onLogoThumbError(logo)" />
-              <div class="source-badge">{{ (logo.source || 'tmdb').toUpperCase() }}</div>
+              <img :src="thumbSrc(backdrop)" :alt="backdrop.source" @error="onThumbError(backdrop)" />
+              <div class="source-badge">{{ (backdrop.source || 'tmdb').toUpperCase() }}</div>
             </div>
           </div>
 
-          <div v-else-if="item.tmdb_id" class="section-empty">No logos found from external sources.</div>
+          <div v-else-if="item.tmdb_id" class="section-empty">No backdrops found from external sources.</div>
         </div>
 
         <!-- Upload -->
         <div class="section">
-          <div class="section-label">Upload Custom Logo</div>
+          <div class="section-label">Upload Custom Backdrop</div>
           <div
             class="upload-area"
             :class="{ 'drag-over': dragOver, 'has-file': !!uploadedData }"
@@ -255,7 +250,7 @@ onMounted(fetchAvailableLogos)
                 <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
                 <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
               </svg>
-              <span>Drop PNG here or <u>click to browse</u></span>
+              <span>Drop an image here or <u>click to browse</u></span>
             </template>
             <input ref="fileInput" type="file" accept="image/*" style="display:none" @change="handleFileSelect" />
           </div>
@@ -263,7 +258,7 @@ onMounted(fetchAvailableLogos)
 
         <!-- Error / Success -->
         <div v-if="error" class="feedback error">{{ error }}</div>
-        <div v-if="success" class="feedback success">Logo sent to Plex successfully!</div>
+        <div v-if="success" class="feedback success">Backdrop sent to Plex successfully!</div>
       </div>
 
       <!-- Footer -->
@@ -272,7 +267,7 @@ onMounted(fetchAvailableLogos)
         <button
           class="btn-send"
           :disabled="!hasSelection || sending"
-          @click="sendToPlexLogo"
+          @click="sendToPlexBackdrop"
         >
           <svg v-if="sending" class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M21 12a9 9 0 11-6.219-8.56"/>
@@ -376,21 +371,21 @@ onMounted(fetchAvailableLogos)
   color: #4a5568;
 }
 
-.current-logo-area {
+.current-backdrop-area {
   background: #0a0b12;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.07);
-  padding: 20px;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 90px;
+  aspect-ratio: 16 / 9;
 }
 
-.current-logo-img {
-  max-height: 80px;
-  max-width: 100%;
-  object-fit: contain;
+.current-backdrop-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .no-current {
@@ -402,46 +397,48 @@ onMounted(fetchAvailableLogos)
   font-size: 12px;
 }
 
-.logo-loading {
+.backdrop-loading {
   color: #6b7a99;
   font-size: 13px;
   padding: 8px 0;
 }
 
-.logo-grid {
+.backdrop-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.logo-thumb {
+.backdrop-thumb {
   position: relative;
   background: #0a0b12;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
-  padding: 10px 14px;
+  padding: 4px;
   cursor: pointer;
   transition: border-color 0.15s, transform 0.1s;
-  min-width: 120px;
+  width: 140px;
+  aspect-ratio: 16 / 9;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
-.logo-thumb:hover {
+.backdrop-thumb:hover {
   border-color: rgba(61, 214, 183, 0.35);
   transform: translateY(-1px);
 }
 
-.logo-thumb.active {
+.backdrop-thumb.active {
   border-color: var(--accent, #3dd6b7);
   box-shadow: 0 0 0 1px var(--accent, #3dd6b7);
 }
 
-.logo-thumb img {
-  max-height: 40px;
-  max-width: 160px;
-  object-fit: contain;
+.backdrop-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
 
@@ -451,8 +448,11 @@ onMounted(fetchAvailableLogos)
   right: 5px;
   font-size: 8px;
   font-weight: 700;
-  color: #4a5568;
+  color: rgba(255, 255, 255, 0.85);
   letter-spacing: 0.05em;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 1px 4px;
+  border-radius: 3px;
 }
 
 .section-empty {

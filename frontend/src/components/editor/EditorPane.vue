@@ -7,6 +7,8 @@ import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
+import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
+import ExternalLinksRow from './ExternalLinksRow.vue'
 import { getApiBase } from '../../services/apiBase'
 
 // Simple debounce helper
@@ -1108,6 +1110,13 @@ const doSend = async () => {
   }
 }
 
+const showRetryQueueModal = ref(false)
+
+const onRetryQueued = () => {
+  showRetryQueueModal.value = false
+  success('Queued — will retry automatically once a textless poster is found.')
+}
+
 // Load overlay configs for the selector
 const loadOverlayConfigs = async () => {
   try {
@@ -1359,6 +1368,7 @@ watch(
         <div>
           <p class="kicker">Editing</p>
           <h2>{{ movie.title }} <span v-if="movie.year">({{ movie.year }})</span></h2>
+          <ExternalLinksRow :media-type="movie.mediaType === 'collection' ? 'collection' : 'movie'" :tmdb-id="tmdbId" />
         </div>
       </div>
 
@@ -1947,6 +1957,13 @@ watch(
             <img v-if="existingLogo" :key="logoRefreshKey" :src="existingLogo" alt="Existing logo" class="existing-logo-img" />
             <div v-else class="empty-preview small">No logo</div>
           </div>
+
+          <button
+            v-if="props.movie.mediaType !== 'collection'"
+            title="Queue this item to automatically retry with a template/preset of your choice once a textless poster is available"
+            class="btn-inline btn-retry-queue"
+            @click="showRetryQueueModal = true"
+          >⏳ <span class="btn-label">Add to Retry Queue</span></button>
         </div>
 
         <div class="preview-main">
@@ -2001,6 +2018,18 @@ watch(
       </div>
     </div>
   </div>
+
+  <AddToRetryQueueModal
+    v-if="showRetryQueueModal"
+    :rating-key="props.movie.key"
+    media-type="movie"
+    :library-id="props.movie.library_id"
+    :title="props.movie.title"
+    :current-template="selectedTemplate"
+    :current-preset="selectedPreset"
+    @close="showRetryQueueModal = false"
+    @queued="onRetryQueued"
+  />
 </template>
 
 <style scoped>
@@ -2722,6 +2751,20 @@ button:disabled {
   justify-content: center;
   min-height: 48px;
   box-sizing: border-box;
+}
+
+.btn-retry-queue {
+  margin-top: 14px;
+  width: 160px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9d1e0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.btn-retry-queue:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(61, 214, 183, 0.35);
+  color: #eef2ff;
 }
 
 .existing-logo-img {

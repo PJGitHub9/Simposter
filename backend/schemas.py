@@ -12,6 +12,8 @@ class Movie(BaseModel):
     library_id: Optional[str] = None
     poster: Optional[str] = None
     logo_url: Optional[str] = None
+    art_url: Optional[str] = None
+    square_art_url: Optional[str] = None
     tmdb_id: Optional[int] = None
     labels: Optional[List[str]] = None
     updated_at: Optional[str] = None
@@ -109,11 +111,25 @@ class PerformanceSettings(BaseModel):
     useOverlayCache: bool = True  # Pre-generate overlay effects for faster batch rendering
 
 
+_DEFAULT_CLEANUP_CATEGORIES = [
+    "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
+    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+]
+
+
 class SchedulerSettings(BaseModel):
     enabled: bool = False
     cronExpression: str = "0 1 * * *"
     libraryId: Optional[Union[str, int]] = None
     libraryIds: List[str] = Field(default_factory=list)
+    # Scheduled cleanup (backend/api/cleanup.py) -- off by default like every other
+    # automated/destructive-adjacent feature in this app, even though it's fully
+    # reversible via the cleanup trash. Cron rather than a simple interval to match
+    # the existing library-scan schedule's own UX/mechanism above.
+    cleanupEnabled: bool = False
+    cleanupCronExpression: str = "0 3 * * 0"  # weekly, Sunday 3 AM
+    cleanupCategories: List[str] = Field(default_factory=lambda: list(_DEFAULT_CLEANUP_CATEGORIES))
+    cleanupHistoryDays: int = 180
 
 
 class AutomationSettings(BaseModel):
@@ -132,6 +148,16 @@ class AutomationSettings(BaseModel):
     kometaCompatibility: bool = False  # When true, any newly-added library automatically
                                         # gets "Overlay" added to its Default Labels to
                                         # Remove — see SettingsView.vue's saveSettings()
+    reuseCachedPosterDays: float = 0  # 0 = disabled. When > 0, an item that looks "new" to
+                                       # Simposter (never-before-seen rating_key) but has a
+                                       # recently-sent poster on file for the same TMDb ID
+                                       # gets that cached poster resent instead of a fresh
+                                       # render/send — protects against a Radarr/Sonarr
+                                       # re-grab (or e.g. UMTK re-downloading a trailer)
+                                       # causing Plex to re-match an item under a new
+                                       # rating_key, which otherwise looks identical to a
+                                       # genuinely new library addition. See
+                                       # get_reuse_cached_poster_days() in config.py.
 
 
 class NotificationSettings(BaseModel):
@@ -189,6 +215,27 @@ class PlexLogoSendRequest(BaseModel):
     library_id: Optional[str] = None
 
 
+class PlexBackdropSendRequest(BaseModel):
+    rating_key: str
+    art_url: Optional[str] = None   # external URL to download
+    art_data: Optional[str] = None  # base64 data URL (for uploads)
+    is_tv: bool = False
+    is_collection: bool = False
+    library_id: Optional[str] = None
+
+
+class PlexSquareArtSendRequest(BaseModel):
+    # Plex's squareArts endpoint is a genuinely separate slot from posters/arts,
+    # confirmed against python-plexapi's SquareArtMixin source (not a guess) --
+    # POST /library/metadata/{ratingKey}/squareArts, image type "backgroundSquare".
+    rating_key: str
+    art_url: Optional[str] = None   # external URL to download
+    art_data: Optional[str] = None  # base64 data URL (for uploads)
+    is_tv: bool = False
+    is_collection: bool = False
+    library_id: Optional[str] = None
+
+
 class PlexSendRequest(BaseModel):
     template_id: str
     preset_id: str  # ADD THIS
@@ -230,6 +277,10 @@ class MovieBatchRequest(BaseModel):
     fallbackLogoPreset: Optional[str] = None
     send_logos_to_plex: bool = False
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
+    require_textless_poster: bool = False  # Forces needs_retry=True until the selected poster is genuinely
+    # textless, regardless of fallbackPosterAction -- set only when resolving a manually-queued
+    # RETRY_REASON_MANUAL_TEXTLESS retry item (database.py), since the ordinary needs_retry check
+    # doesn't catch a missing textless poster when fallbackPosterAction is "continue" (the default).
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
 
 
@@ -251,6 +302,7 @@ class TVShowBatchRequest(BaseModel):
     fallbackPosterPreset: Optional[str] = None
     send_logos_to_plex: bool = False
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
+    require_textless_poster: bool = False  # See MovieBatchRequest's field of the same name.
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
 
 

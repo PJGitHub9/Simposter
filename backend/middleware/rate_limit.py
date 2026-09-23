@@ -60,6 +60,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/movies": 100,
             "/api/tv-shows": 100,
 
+            # Cleanup tool -- manual, infrequent Settings-page action, but a scan
+            # walks every cache dir on disk so it's not "cheap" the way a poster
+            # read is; sized like the other library-maintenance operations above.
+            "/api/cleanup": 20,
+
             # Per-item library endpoints (poster/logo/labels/tmdb for one rating_key)
             # were falling through to the low default_limit (300/60s) meant for
             # unlisted, mostly-expensive endpoints. Browsing the grid fires two
@@ -74,6 +79,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/movie": 2000,
             "/api/tv-show": 2000,
             "/api/logo": 1500,
+            # Backdrops/Square Art are the same trust class as Logo above (cheap
+            # per-item disk-cache reads, not live external API calls in the common
+            # case) but were never added here -- they fell through to the low
+            # default_limit (300/60s), which the Backdrops/Logos/Square Art library
+            # views' own pagination (added alongside this fix) still exceeds on a
+            # single page at max Poster Density before this.
+            "/api/backdrop": 1500,
+            "/api/square-art": 1500,
 
             # Moderate operations
             "/api/tmdb": 40,  # Match TMDB's own limit

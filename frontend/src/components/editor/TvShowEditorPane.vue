@@ -8,6 +8,8 @@ import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
+import ExternalLinksRow from './ExternalLinksRow.vue'
+import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import { getApiBase } from '../../services/apiBase'
 
 // Simple debounce helper
@@ -2133,6 +2135,16 @@ const doSend = async () => {
   }
 }
 
+const showRetryQueueModal = ref(false)
+// Show-level only, matching the retry queue's existing scope (one row per show
+// rating_key, not per season) -- always queues props.movie.key, never a season key.
+const retryQueueLibraryId = computed(() => (route.query.library as string) || (props.movie as any).library_id || null)
+
+const onRetryQueued = () => {
+  showRetryQueueModal.value = false
+  success('Queued — will retry automatically once a textless poster is found.')
+}
+
 // Fetch TV show seasons
 async function fetchSeasons() {
   if (!props.movie?.key) return
@@ -2732,6 +2744,7 @@ watch(tmdbId, () => {
             <span v-if="selectedPosterType === 'season'" class="poster-type-badge season-badge">Season Poster</span>
             <span v-else class="poster-type-badge series-badge">Series Poster</span>
           </h2>
+          <ExternalLinksRow media-type="tv" :tmdb-id="tmdbId" :tvdb-id="tvdbId" />
         </div>
       </div>
 
@@ -3416,6 +3429,12 @@ watch(tmdbId, () => {
             <img v-if="existingLogo" :key="logoRefreshKey" :src="existingLogo" alt="Existing logo" class="existing-logo-img" />
             <div v-else class="empty-preview small">No logo</div>
           </div>
+
+          <button
+            title="Queue this show to automatically retry with a template/preset of your choice once a textless poster is available (applies to the whole show, not just this season)"
+            class="btn-inline btn-retry-queue"
+            @click="showRetryQueueModal = true"
+          >⏳ <span class="btn-label">Add to Retry Queue</span></button>
         </div>
 
         <div class="preview-content-wrapper">
@@ -3502,6 +3521,18 @@ watch(tmdbId, () => {
       </div>
     </div>
   </div>
+
+  <AddToRetryQueueModal
+    v-if="showRetryQueueModal"
+    :rating-key="props.movie.key"
+    media-type="tv"
+    :library-id="retryQueueLibraryId"
+    :title="props.movie.title"
+    :current-template="selectedTemplate"
+    :current-preset="selectedPreset"
+    @close="showRetryQueueModal = false"
+    @queued="onRetryQueued"
+  />
 </template>
 
 <style scoped>
@@ -4607,6 +4638,20 @@ button:disabled {
   justify-content: center;
   min-height: 48px;
   box-sizing: border-box;
+}
+
+.btn-retry-queue {
+  margin-top: 14px;
+  width: 160px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9d1e0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.btn-retry-queue:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(61, 214, 183, 0.35);
+  color: #eef2ff;
 }
 
 .existing-logo-img {

@@ -10,6 +10,306 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.109',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Added a new "big update" highlight reel (majorReleases.ts) covering everything since the last main-branch merge point (v1.6.87) — Square Art, Backdrops, the Cleanup tool, the expanded Backup/Restore, and Retry Queue improvements — shown automatically to anyone crossing that gap.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.108',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Backup / Restore now supports Logos, Backdrops, and Square Art, not just Posters — choose what to back up with a checklist, and restore each type independently.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.107',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Logos, Backdrops, and Square Art can now sort by Date Added and filter by label, matching what Movies/TV Shows already offer.',
+          'Discord/Apprise notifications now say when a logo, backdrop, or square art was sent — not just posters.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.106',
+    date: '2026-09-22',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the "Poster Shift Y" slider silently doing nothing for most posters — a recent change meant to help Square Art had accidentally removed its ability to shift the poster off-frame and reveal a black border at larger values, which is how it always worked. That behavior is restored for regular posters; Square Art keeps its own separate behavior unchanged.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.105',
+    date: '2026-09-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'The movie/TV/collection editor now shows quick links to TMDb, TVDB, Fanart.tv, and MediUX under the title, so you can jump straight to the source page for that item.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.104',
+    date: '2026-09-21',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          "An unreleased movie/show with no poster art on TMDb/Fanart.tv yet no longer shows up as a \"failed\" entry in History every retry cycle — it's not really a failure, just nothing to render with yet, so it now stays quietly pending until art becomes available.",
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.103',
+    date: '2026-09-20',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a Cleanup tool (Settings → Cleanup) — scans for orphaned poster/logo/backdrop/square art cache, stale overlay effect renders, unused uploaded images, unused overlay badge assets, and old History entries, and shows exactly how much disk space each would reclaim. Nothing is ever deleted directly — everything moves to a reversible trash first, which you empty yourself whenever you\'re ready.',
+          'Added one-click buttons for Plex\'s own maintenance operations (Empty Trash, Clean Bundles, Optimize Database) right next to the cleanup tool, so you don\'t have to wait for Plex\'s own weekly schedule.',
+          'Cleanup can now run automatically on a schedule (Settings → Cleanup → Scheduled Cleanup) — off by default for new installs, weekly by default if enabled, fully customizable (cron expression, which categories, history age), and never auto-empties the trash on its own. Existing installs upgrading to this version get it turned on automatically (new installs don\'t) — see this version\'s note below.',
+          'Global search now asks what you want to edit — Poster, Logo, Backdrop, or Square Art — instead of always jumping straight to the poster editor. Works the same from any page.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'If you\'re upgrading from an earlier version with Plex already configured, Scheduled Cleanup is turned on for you automatically (weekly, all categories) — your cache has likely accumulated real orphaned files by now. Brand new installs start with it off, same as every other automation feature in Simposter. You can change or disable this anytime in Settings → Cleanup.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.102',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Logos, Backdrops, and Square Art now load and browse as fast as Movies/TV Shows — grid images are cached by the browser forever (same as posters) instead of being re-checked with the server on every single view, and Backdrops/Square Art get a small generated thumbnail for grid display instead of downloading the full-resolution original for every tile.',
+          'Those thumbnails are now pre-generated during a library scan and right after a Send to Plex, so the very first time you open the grid there\'s no one-time delay generating them — same as how Movies/TV Shows never have a "first view" slowdown.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.101',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Each backdrop in the Backdrops grid now has its own "refresh from Plex" button, matching the one Movies/TV Shows posters already have — re-checks just that one item instead of only re-reading whatever was already cached.',
+          'The "Refresh" button on Logos/Backdrops/Square Art now shows a busy state for the whole operation, even when instant-loading from cache — previously it gave no feedback while quietly re-fetching in the background, which could look stuck and invite repeated clicks.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed Square Art\'s grid never updating after a successful Send to Plex, in any session — the modal never actually notified the grid at all, so only the modal\'s own "Current Square Art" display ever reflected a send.',
+          'Fixed Logos/Backdrops/Square Art showing a stale image again after navigating back within the same session, even right after a successful send — the instant-load cache added last version wasn\'t being updated when an item changed, only when the whole list was re-fetched.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.100',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Logos, Backdrops, and Square Art now paginate like Movies/TV Shows do, using the same "Poster Density" setting for page size — previously every item in the library loaded and rendered at once on these three pages, which is what was triggering the rate-limit errors below on larger libraries.',
+          'Logos, Backdrops, and Square Art now load instantly on repeat visits, same as Movies/TV Shows — previously every visit paid a full network round-trip even though the underlying data was often already cached from viewing Movies/TV Shows moments earlier.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed "Rate limit exceeded" (429) errors when browsing Backdrops or Square Art on a larger library — those two endpoints had no dedicated rate limit and fell through to a low default meant for infrequently-called endpoints, unlike Movies/TV Shows/Logos which already had a higher limit.',
+          'Fixed the "Current Backdrop"/"Current Logo" preview in their respective editor modals not updating right after a successful Send to Plex — it kept showing the old image until the modal was closed and reopened.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.99',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Square Art now shows "Current Square Art (in Plex)" when you open a title — so you can see what\'s actually active in Plex before generating a new one, with a refresh button to double-check against Plex live. Sending updates this immediately using the just-uploaded image, instead of racing a fresh Plex fetch that might not have processed the upload yet.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.98',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Square Art can now Send to Plex — it uses Plex\'s own dedicated "square art" slot (confirmed via python-plexapi), which is completely separate from the regular poster and background/art, so sending it never overwrites either.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed the "Poster Position (Up/Down)" slider not actually revealing more of the source image — the poster was being cropped to the exact canvas size before the shift was applied, so shifting just clipped the poster\'s own edge and showed empty canvas instead of more content. This also affected the normal editor\'s "Poster Shift Y %" slider, just less visibly there.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.97',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Added a "Poster Position (Up/Down)" slider to Square Art — a square crop throws away much more of a poster\'s height than the normal canvas, so being able to recenter which part of the source image survives the crop matters more here. Reuses the same poster_shift_y option the normal editor already has.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.96',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Square Art now lets you pick the source poster and logo from TMDb/Fanart candidates, instead of silently reusing the item\'s current Plex poster. That reuse was a real bug, not just a missing feature — a Simposter-managed library\'s "current poster" is usually already a Simposter render (background + logo baked together), so squashing that into a square canvas and compositing another logo on top produced a broken double-composited result. Defaults to a textless candidate when one exists.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.95',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Moved "Add to Retry Queue" below Current Plex Logo (separated from Save/Send) and restricted its template picker to Uniform Logo — Kometa is collections-only and should never have been selectable there.',
+          'Backdrop uploads to Plex now try both possible upload paths (/arts and /art) — the singular /art path that only the read side actually uses was consistently dropping the connection.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.94',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          '"Add to Retry Queue" now lets you pick which template/preset to retry with, instead of silently reusing whatever\'s currently selected in the editor — the whole point of the feature is switching to a different (e.g. textless+logo) template once one becomes usable.',
+          'Fixed newly-scanned Backdrops never actually caching — the scan was looking for a background-art entry inside Plex\'s metadata Image[] array, which doesn\'t reliably include one; now fetches Plex\'s direct /art endpoint first (the same approach already used for posters), falling back to the old lookup.',
+          'Fixed Square Art\'s preview failing with "Private/internal network URLs are not allowed for this host" whenever Simposter is reached via a LAN IP — the SSRF allowlist covered /api/movie/ and /api/tv-show/ but not the sibling /api/logo/ and /api/backdrop/ cache routes, which Square Art is the first feature to feed back into the render pipeline.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.93',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a new "🔳 Square Art" library section (movies and TV shows) — generate square (1:1) art from a title\'s current poster/logo using your existing template/preset, rendered against a square canvas instead of a new template. Save-to-disk only (no Plex upload — Plex has no square-art slot).',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.92',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added a new "🎞️ Backdrops" library section (movies and TV shows) — mirrors the existing Logos tab. Browse, preview, and send Plex background art (fanart) per item, sourced from TMDb/Fanart/TVDB, with drag-and-drop upload support.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.91',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added "Add to Retry Queue" to the manual editor (movies and TV shows) — pick a non-textless poster now to get something live immediately, and queue the item so Simposter automatically re-renders and resends with your current template/preset once a genuinely textless poster becomes available on TMDb/Fanart.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.90',
+    date: '2026-09-19',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'History → Retry Queue: an item whose retries were abandoned (max attempts reached, or the Plex item confirmed gone) is now removed from the queue entirely instead of lingering as an "ABANDONED" row. Previously, if that title was later re-added to Plex — which arrives under a brand-new internal ID — it would show up as a second, separate PENDING row, making the same movie/show appear twice in the list.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.89',
+    date: '2026-09-04',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          '"Reuse Cached Poster For (days)" (added last release) now measures its grace period correctly — from when a title was last confirmed present in your library during a scan, not from when its poster was last (re)generated. A movie that hasn\'t needed a fresh render in months could previously "expire" out of reuse eligibility just from disuse, even though it never left the library.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.88',
+    date: '2026-09-04',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Added "Reuse Cached Poster For (days)" (Settings → Automation) — protects against a Radarr/Sonarr re-grab (or a tool like UMTK re-downloading a trailer) causing Plex to re-match a movie/show under a new internal ID, which previously looked identical to a genuinely new library addition and could silently overwrite a poster you already tuned. When enabled, a webhook or scheduled scan resends the recent poster instead of regenerating from scratch. Off by default.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.87',
     date: '2026-09-02',
     sections: [

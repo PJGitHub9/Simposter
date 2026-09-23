@@ -6,16 +6,35 @@ import { getApiBase } from '@/services/apiBase'
 const route = useRoute()
 const apiBase = getApiBase()
 
+type AssetType = 'poster' | 'logo' | 'backdrop' | 'square_art'
+const ASSET_TYPES: { value: AssetType; label: string; icon: string }[] = [
+  { value: 'poster', label: 'Posters', icon: '' },
+  { value: 'logo', label: 'Logos', icon: '\u{1F5BC}️' },
+  { value: 'backdrop', label: 'Backdrops', icon: '\u{1F39E}️' },
+  { value: 'square_art', label: 'Square Art', icon: '\u{1F533}' },
+]
+
+type BackupStatus = { count: number; last_date: string | null; total_size: number; path: string }
+const emptyStatus = (): BackupStatus => ({ count: 0, last_date: null, total_size: 0, path: '' })
+
 const libraryId = ref('')
 const mediaType = ref('movie')
 const loading = ref(false)
-const backupCount = ref(0)
-const backupDate = ref<string | null>(null)
-const backupSize = ref(0)
-const backupPath = ref('')
+// Backup: a checklist -- "poster" is checked by default so an existing user's
+// familiar single-click "Backup Posters" flow is unchanged; the three new
+// asset types default unchecked, matching this app's convention of never
+// silently expanding what an existing action does without opting in.
+const backupSelected = ref<Set<AssetType>>(new Set(['poster']))
+const statusByType = ref<Record<AssetType, BackupStatus>>({
+  poster: emptyStatus(), logo: emptyStatus(), backdrop: emptyStatus(), square_art: emptyStatus(),
+})
+// Restore is inherently per-type (the preview/match flow scans one folder at
+// a time), so it gets a single-select rather than the backup checklist.
+const restoreAssetType = ref<AssetType>('poster')
 const includeSeasons = ref(true)
 const actionInProgress = ref(false)
 const showConfirmDelete = ref(false)
+const deleteTarget = ref<AssetType>('poster')
 
 // Restore preview state
 const showRestorePreview = ref(false)
@@ -68,19 +87,18 @@ const formatDate = (iso: string | null) => {
 }
 
 const thumbUrl = (filename: string) => {
-  return `${apiBase}/api/backup/file/${libraryId.value}/${encodeURIComponent(filename)}?media_type=${mediaType.value}`
+  return `${apiBase}/api/backup/file/${libraryId.value}/${encodeURIComponent(filename)}?media_type=${mediaType.value}&asset_type=${restoreAssetType.value}`
 }
 
 const fetchStatus = async () => {
   loading.value = true
   try {
-    const res = await fetch(`${apiBase}/api/backup/status/${libraryId.value}?media_type=${mediaType.value}`)
+    const res = await fetch(`${apiBase}/api/backup/status-all/${libraryId.value}?media_type=${mediaType.value}`)
     if (res.ok) {
       const data = await res.json()
-      backupCount.value = data.count || 0
-      backupDate.value = data.last_date || null
-      backupSize.value = data.total_size || 0
-      backupPath.value = data.path || ''
+      for (const { value } of ASSET_TYPES) {
+        statusByType.value[value] = data[value] || emptyStatus()
+      }
     }
   } catch {
     /* ignore */
@@ -88,6 +106,15 @@ const fetchStatus = async () => {
     loading.value = false
   }
 }
+
+const toggleBackupType = (t: AssetType) => {
+  const next = new Set(backupSelected.value)
+  if (next.has(t)) next.delete(t)
+  else next.add(t)
+  backupSelected.value = next
+}
+
+const restoreStatus = computed(() => statusByType.value[restoreAssetType.value])
 
 const fetchLibraryItems = async () => {
   if (libraryItemsLoaded.value) return
@@ -121,12 +148,18 @@ const assignMatch = (plexItem: any) => {
 }
 
 const startBackup = async () => {
+  if (backupSelected.value.size === 0) return
   actionInProgress.value = true
   try {
     const res = await fetch(`${apiBase}/api/backup/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_id: libraryId.value, media_type: mediaType.value, include_seasons: includeSeasons.value })
+      body: JSON.stringify({
+        library_id: libraryId.value,
+        media_type: mediaType.value,
+        include_seasons: includeSeasons.value,
+        asset_types: Array.from(backupSelected.value),
+      })
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
@@ -154,7 +187,7 @@ const loadRestorePreview = async () => {
     const res = await fetch(`${apiBase}/api/backup/restore/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_id: libraryId.value, media_type: mediaType.value })
+      body: JSON.stringify({ library_id: libraryId.value, media_type: mediaType.value, asset_type: restoreAssetType.value })
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Unknown error' }))
@@ -189,7 +222,8 @@ const executeRestore = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         library_id: libraryId.value,
-        items: selected.map(i => ({ filename: i.filename, rating_key: i.rating_key }))
+        items: selected.map(i => ({ filename: i.filename, rating_key: i.rating_key })),
+        asset_type: restoreAssetType.value,
       })
     })
     if (!res.ok) {
@@ -208,11 +242,16 @@ const executeRestore = async () => {
   }
 }
 
+const confirmDelete = (t: AssetType) => {
+  deleteTarget.value = t
+  showConfirmDelete.value = true
+}
+
 const deleteBackup = async () => {
   showConfirmDelete.value = false
   actionInProgress.value = true
   try {
-    const res = await fetch(`${apiBase}/api/backup/delete/${libraryId.value}?media_type=${mediaType.value}`, { method: 'DELETE' })
+    const res = await fetch(`${apiBase}/api/backup/delete/${libraryId.value}?media_type=${mediaType.value}&asset_type=${deleteTarget.value}`, { method: 'DELETE' })
     if (!res.ok) {
       alert('Failed to delete backup')
     }
@@ -258,7 +297,7 @@ onMounted(() => {
     <div class="page-header">
       <div>
         <h1>&#x1F4E6; Backup / Restore</h1>
-        <p class="page-subtitle">Back up original Plex posters and restore them later</p>
+        <p class="page-subtitle">Back up your current Plex posters, logos, backdrops, and square art, and restore them later</p>
       </div>
       <button class="btn-refresh" @click="fetchStatus" :disabled="loading || actionInProgress">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -283,30 +322,45 @@ onMounted(() => {
           <h2>Backup</h2>
         </div>
 
-        <!-- Status -->
+        <p class="section-desc">Choose what to back up. Each type is stored, restored, and deleted independently.</p>
+
+        <!-- Per-type checklist + status -->
         <div v-if="loading" class="status-row muted">Loading...</div>
-        <div v-else-if="backupCount > 0" class="status-block">
-          <div class="status-row">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-ok">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
-            </svg>
-            <span><strong>{{ backupCount }}</strong> {{ backupCount === 1 ? 'poster' : 'posters' }} backed up</span>
+        <div v-else class="asset-type-list">
+          <div v-for="t in ASSET_TYPES" :key="t.value" class="asset-type-row">
+            <label class="asset-type-check">
+              <input type="checkbox" :checked="backupSelected.has(t.value)" @change="toggleBackupType(t.value)" />
+              <span class="asset-type-label">
+                <span v-if="t.icon" class="asset-type-icon">{{ t.icon }}</span>
+                {{ t.label }}
+              </span>
+            </label>
+            <div class="asset-type-status">
+              <template v-if="statusByType[t.value].count > 0">
+                <span class="status-count">{{ statusByType[t.value].count }} backed up</span>
+                <span class="status-sep">&middot;</span>
+                <span class="status-size">{{ formatSize(statusByType[t.value].total_size) }}</span>
+                <button class="btn-icon-danger" title="Delete this backup" @click="confirmDelete(t.value)" :disabled="actionInProgress">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
+              </template>
+              <span v-else class="muted">No backup yet</span>
+            </div>
           </div>
-          <div v-if="backupDate" class="status-row muted small">Last: {{ formatDate(backupDate) }}</div>
-          <div class="status-row muted small">Size: {{ formatSize(backupSize) }}</div>
         </div>
-        <div v-else class="status-row muted">No backup yet</div>
 
         <!-- Folder path -->
-        <div v-if="backupPath" class="folder-path">
+        <div v-if="statusByType.poster.path" class="folder-path">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
           </svg>
-          <span>{{ backupPath }}</span>
+          <span>{{ statusByType.poster.path }}</span>
         </div>
 
-        <!-- TV: include seasons toggle -->
-        <label v-if="isTv" class="toggle-option">
+        <!-- TV: include seasons toggle (posters only -- logos/backdrops/square art have no season variant) -->
+        <label v-if="isTv && backupSelected.has('poster')" class="toggle-option">
           <input type="checkbox" v-model="includeSeasons" />
           <span class="toggle-slider"></span>
           <span class="toggle-text">Include season posters</span>
@@ -314,19 +368,13 @@ onMounted(() => {
 
         <!-- Buttons -->
         <div class="section-actions">
-          <button class="btn-primary" @click="startBackup" :disabled="actionInProgress">
+          <button class="btn-primary" @click="startBackup" :disabled="actionInProgress || backupSelected.size === 0">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
               <polyline points="7 10 12 15 17 10"/>
               <line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
-            {{ backupCount > 0 ? 'Re-backup' : 'Backup Posters' }}
-          </button>
-          <button v-if="backupCount > 0" class="btn-danger-outline" @click="showConfirmDelete = true" :disabled="actionInProgress">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            </svg>
-            Delete
+            Backup Selected ({{ backupSelected.size }})
           </button>
         </div>
       </div>
@@ -343,40 +391,59 @@ onMounted(() => {
         </div>
 
         <p class="section-desc">
-          Place poster files in the backup folder below. Restore will auto-match filenames to your Plex library, or you can manually assign them.
+          Choose what to restore, then place files in the backup folder below. Restore will auto-match filenames to your Plex library, or you can manually assign them.
         </p>
 
+        <!-- Asset type selector -->
+        <div class="type-tabs">
+          <button
+            v-for="t in ASSET_TYPES"
+            :key="t.value"
+            class="type-tab"
+            :class="{ active: restoreAssetType === t.value }"
+            @click="restoreAssetType = t.value"
+          >
+            <span v-if="t.icon" class="asset-type-icon">{{ t.icon }}</span>
+            {{ t.label }}
+          </button>
+        </div>
+
         <!-- Folder path -->
-        <div v-if="backupPath" class="folder-path">
+        <div v-if="restoreStatus.path" class="folder-path">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
           </svg>
-          <span>{{ backupPath }}</span>
+          <span>{{ restoreStatus.path }}</span>
         </div>
 
         <!-- Filename format guide -->
         <div class="format-guide">
           <div class="format-label">Expected filename format</div>
           <div class="format-examples">
-            <code v-if="!isTv">Title (Year).jpg</code>
-            <code v-if="!isTv" class="example">The Matrix (1999).jpg</code>
-            <template v-if="isTv">
+            <template v-if="restoreAssetType !== 'poster' || !isTv">
+              <code>Title (Year).jpg</code>
+              <code class="example">The Matrix (1999).jpg</code>
+            </template>
+            <template v-else>
               <code>Show Name (Year).jpg</code>
               <code>Show Name (Year) - Season 01.jpg</code>
               <code class="example">Breaking Bad (2008).jpg</code>
               <code class="example">Breaking Bad (2008) - Season 01.jpg</code>
             </template>
           </div>
-          <div class="format-note">Files that don't match this pattern can still be manually assigned</div>
+          <div class="format-note">
+            Files that don't match this pattern can still be manually assigned
+            <template v-if="restoreAssetType !== 'poster'">&mdash; logos, backdrops, and square art have no per-season backup, only one file per title</template>
+          </div>
         </div>
 
         <!-- Restore button -->
         <div class="section-actions">
-          <button class="btn-primary" @click="loadRestorePreview" :disabled="actionInProgress || backupCount === 0">
+          <button class="btn-primary" @click="loadRestorePreview" :disabled="actionInProgress || restoreStatus.count === 0">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
-            Restore Posters
+            Restore {{ ASSET_TYPES.find(t => t.value === restoreAssetType)?.label }}
           </button>
         </div>
       </div>
@@ -467,7 +534,7 @@ onMounted(() => {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
-              Restore {{ selectedCount }} {{ selectedCount === 1 ? 'poster' : 'posters' }}
+              Restore {{ selectedCount }} {{ selectedCount === 1 ? 'item' : 'items' }}
             </button>
           </div>
         </template>
@@ -522,8 +589,8 @@ onMounted(() => {
     <!-- ═══ CONFIRM DELETE DIALOG ═══ -->
     <div v-if="showConfirmDelete" class="modal-overlay" @click.self="showConfirmDelete = false">
       <div class="confirm-dialog">
-        <h3>Delete Backup?</h3>
-        <p>This will permanently delete all {{ backupCount }} backed-up poster files. This cannot be undone.</p>
+        <h3>Delete {{ ASSET_TYPES.find(t => t.value === deleteTarget)?.label }} Backup?</h3>
+        <p>This will permanently delete all {{ statusByType[deleteTarget].count }} backed-up files. This cannot be undone.</p>
         <div class="confirm-actions">
           <button class="btn-cancel" @click="showConfirmDelete = false">Cancel</button>
           <button class="btn-confirm danger" @click="deleteBackup">Delete</button>
@@ -619,6 +686,108 @@ onMounted(() => {
   color: var(--text-secondary, #aaa);
   font-size: 0.88rem;
   line-height: 1.5;
+}
+
+/* ── Per-asset-type checklist (Backup section) ── */
+.asset-type-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.asset-type-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.7rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 8px;
+}
+
+.asset-type-check {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.asset-type-check input[type="checkbox"] {
+  accent-color: var(--accent, #3dd6b7);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.asset-type-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-primary, #fff);
+  font-size: 0.88rem;
+}
+
+.asset-type-icon { font-size: 0.95rem; }
+
+.asset-type-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #aaa);
+}
+
+.asset-type-status .muted { color: var(--text-secondary, #777); }
+.status-count { color: var(--accent, #3dd6b7); font-weight: 500; }
+.status-sep { color: var(--text-secondary, #555); }
+
+.btn-icon-danger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 5px;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-icon-danger:hover:not(:disabled) { border-color: #f87171; color: #f87171; background: rgba(248, 113, 113, 0.08); }
+.btn-icon-danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Asset type tabs (Restore section) ── */
+.type-tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.type-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 20px;
+  color: var(--text-secondary, #aaa);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.type-tab:hover { border-color: rgba(61, 214, 183, 0.35); color: var(--text-primary, #fff); }
+
+.type-tab.active {
+  background: rgba(61, 214, 183, 0.12);
+  border-color: var(--accent, #3dd6b7);
+  color: var(--accent, #3dd6b7);
+  font-weight: 500;
 }
 
 /* ── Status block ── */

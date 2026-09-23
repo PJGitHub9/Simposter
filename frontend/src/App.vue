@@ -11,6 +11,10 @@ import UpdateAnnouncementModal from './components/UpdateAnnouncementModal.vue'
 import ChangelogModal from './components/ChangelogModal.vue'
 import OnboardingModal from './components/OnboardingModal.vue'
 import QuickStartGuide from './components/QuickStartGuide.vue'
+import SearchEditChoiceModal, { type SearchEditChoice } from './components/SearchEditChoiceModal.vue'
+import LogoEditorModal from './components/LogoEditorModal.vue'
+import BackdropEditorModal from './components/BackdropEditorModal.vue'
+import SquareArtModal from './components/SquareArtModal.vue'
 import { useUiStore, type TabKey } from './stores/ui'
 import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
@@ -42,6 +46,8 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
       { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections (NEW)' },
       { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
+      { key: `backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
+      { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -57,6 +63,8 @@ const tabs = computed<MenuItem[]>(() => {
     submenu: [
       { key: `tv-batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
       { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
+      { key: `tv-backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
+      { key: `tv-square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
       { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -330,13 +338,13 @@ const activeTab = computed<TabKey>(() => {
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
     return `tv-shows-${firstTvLib?.id || 'default'}`
   }
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -352,6 +360,10 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
   if (route.name === 'logos') return `logos-${libQuery || 'default'}`
   if (route.name === 'tv-logos') return `tv-logos-${libQuery || 'default'}`
+  if (route.name === 'backdrops') return `backdrops-${libQuery || 'default'}`
+  if (route.name === 'tv-backdrops') return `tv-backdrops-${libQuery || 'default'}`
+  if (route.name === 'square-art') return `square-art-${libQuery || 'default'}`
+  if (route.name === 'tv-square-art') return `tv-square-art-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
   if (route.name === 'backup') {
@@ -631,7 +643,33 @@ const stopBackupPolling = () => {
 
 ;(window as any).startBackupPolling = startBackupPolling
 
-const handleSearchSelect = (item: { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show'; tmdb_id?: string | number; tvdb_id?: string | number }) => {
+type SearchResultItem = {
+  key: string
+  title: string
+  year?: number | string
+  poster?: string | null
+  logo_url?: string | null
+  art_url?: string | null
+  square_art_url?: string | null
+  mediaType?: 'movie' | 'tv-show'
+  tmdb_id?: string | number
+  tvdb_id?: string | number
+  library_id?: string | number | null
+}
+
+// Search results already carry logo_url/art_url/square_art_url (GET /api/movies|tv-shows
+// already returns all four asset URLs for every item — see backend/api/movies.py's
+// api_movies()), so no extra fetch is needed to open any of the four choice modals below.
+const pendingSearchItem = ref<SearchResultItem | null>(null)
+// Loosely typed -- each modal declares its own item shape (LogoItem/BackdropItem/
+// SquareArtItem) and the object built below is structurally compatible with all
+// three, same as the existing `as any` bridging pattern SquareArtView.vue's own
+// openModal() already uses for this identical kind of "adapt a list item" step.
+const activeSearchLogoItem = ref<any>(null)
+const activeSearchBackdropItem = ref<any>(null)
+const activeSearchSquareArtItem = ref<any>(null)
+
+const openPosterEditorFor = (item: SearchResultItem) => {
   const mediaType = item.mediaType || 'movie'
   const routeName = mediaType === 'tv-show' ? 'tv-shows' : 'movies'
   const itemId = mediaType === 'tv-show' ? (item.tvdb_id || item.key) : (item.tmdb_id || item.key)
@@ -640,6 +678,29 @@ const handleSearchSelect = (item: { key: string; title: string; year?: number | 
   // watcher below treats a missing edit param as "user closed the editor" and clears
   // the selection, which is what caused search-select to bounce back to the library grid.
   router.push({ name: routeName, query: { ...route.query, edit: String(itemId) } })
+}
+
+// Search used to jump straight to the poster editor -- now it asks what to edit first
+// (Poster/Logo/Backdrop/Square Art), so a search result can open any of the same
+// per-item editors Logos/Backdrops/Square Art's own grids already offer.
+const handleSearchSelect = (item: SearchResultItem) => {
+  pendingSearchItem.value = item
+}
+
+const handleSearchChoice = (choice: SearchEditChoice) => {
+  const item = pendingSearchItem.value
+  pendingSearchItem.value = null
+  if (!item) return
+  const isTv = item.mediaType === 'tv-show'
+  if (choice === 'poster') {
+    openPosterEditorFor(item)
+  } else if (choice === 'logo') {
+    activeSearchLogoItem.value = { ...item, is_tv: isTv }
+  } else if (choice === 'backdrop') {
+    activeSearchBackdropItem.value = { ...item, is_tv: isTv }
+  } else if (choice === 'square-art') {
+    activeSearchSquareArtItem.value = { ...item, mediaType: item.mediaType || 'movie' }
+  }
 }
 
 const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
@@ -656,6 +717,10 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'collections', query: { library: libId } })
     } else if (submenuKey.startsWith('logos-')) {
       router.push({ name: 'logos', query: { library: libId } })
+    } else if (submenuKey.startsWith('backdrops-')) {
+      router.push({ name: 'backdrops', query: { library: libId } })
+    } else if (submenuKey.startsWith('square-art-')) {
+      router.push({ name: 'square-art', query: { library: libId } })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: { library: libId } })
     } else if (submenuKey.startsWith('backup-')) {
@@ -667,6 +732,10 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'tv-batch-edit', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-logos-')) {
       router.push({ name: 'tv-logos', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-backdrops-')) {
+      router.push({ name: 'tv-backdrops', query: { library: libId } })
+    } else if (submenuKey.startsWith('tv-square-art-')) {
+      router.push({ name: 'tv-square-art', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-assets-')) {
       router.push({ name: 'tv-local-assets', query: { library: libId } })
     } else if (submenuKey.startsWith('tv-backup-')) {
@@ -687,6 +756,28 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
     <div v-if="sidebarOpen" class="sidebar-overlay" @click="closeSidebar"></div>
 
     <ChangelogModal :visible="showChangelog" @close="showChangelog = false" />
+
+    <SearchEditChoiceModal
+      v-if="pendingSearchItem"
+      :item="pendingSearchItem"
+      @close="pendingSearchItem = null"
+      @choose="handleSearchChoice"
+    />
+    <LogoEditorModal
+      v-if="activeSearchLogoItem"
+      :item="activeSearchLogoItem"
+      @close="activeSearchLogoItem = null"
+    />
+    <BackdropEditorModal
+      v-if="activeSearchBackdropItem"
+      :item="activeSearchBackdropItem"
+      @close="activeSearchBackdropItem = null"
+    />
+    <SquareArtModal
+      v-if="activeSearchSquareArtItem"
+      :item="activeSearchSquareArtItem"
+      @close="activeSearchSquareArtItem = null"
+    />
 
     <TopNav
       :search="searchQuery"

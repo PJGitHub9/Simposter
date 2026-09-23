@@ -71,4 +71,51 @@ export const majorReleases: MajorRelease[] = [
       },
     ],
   },
+  {
+    version: 'v1.6.109',
+    title: 'New Asset Types & Housekeeping',
+    intro: "Another batch of updates while you were away — square art, backdrop browsing, a real cleanup tool, and a much smarter backup/restore. Here's the highlight reel; the full changelog is still one click away below.",
+    highlights: [
+      {
+        icon: '🔳',
+        title: 'Square Art library section',
+        description: 'Generate square (1:1) art from your existing templates and presets for movies and TV shows — browse, save, and send straight to Plex.',
+      },
+      {
+        icon: '🎞️',
+        title: 'Backdrops library section',
+        description: 'Browse, preview, and send Plex background art per item, mirroring the existing Logos tab — plus a per-card refresh button to re-check what Plex currently has.',
+      },
+      {
+        icon: '🧹',
+        title: 'A real Cleanup tool',
+        description: 'A dry-run scan finds orphaned cache files, stale overlay renders, and old History entries, then moves them to a reversible trash instead of deleting outright — plus one-click Plex maintenance (Empty Trash, Clean Bundles, Optimize Database) and an optional weekly schedule.',
+      },
+      {
+        icon: '📦',
+        title: 'Backup/Restore now covers everything',
+        description: 'Previously posters-only — now back up and restore Logos, Backdrops, and Square Art too, with a per-type checklist so you choose exactly what to protect.',
+      },
+      {
+        icon: '🔁',
+        title: 'A smarter Retry Queue',
+        description: 'Manually queue an item to auto-retry once a textless poster becomes available, and items whose Plex source is genuinely gone are removed outright instead of lingering as duplicate "abandoned" entries.',
+      },
+      {
+        icon: '⚡',
+        title: 'Logos/Backdrops/Square Art feel instant now',
+        description: 'Caching, pagination, and generated thumbnails bring these three tabs up to the same snappy, cache-first loading Movies and TV Shows already had.',
+      },
+      {
+        icon: '🔗',
+        title: 'Quick jumps to TMDb, TVDB, Fanart.tv & MediUX',
+        description: 'A row of external links under the title in the manual editor, so you can pop open the source pages for a movie, show, or collection in one click.',
+      },
+      {
+        icon: '🔔',
+        title: 'Notifications know what got sent',
+        description: 'Discord/Apprise notifications now say whether a poster, logo, backdrop, or square art was sent — and Logos/Backdrops/Square Art gained date-added sorting and label filtering to match the Movies/TV grids.',
+      },
+    ],
+  },
 ]

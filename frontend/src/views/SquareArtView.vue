@@ -1,35 +1,37 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import LogoEditorModal from '@/components/LogoEditorModal.vue'
+import SquareArtModal from '@/components/SquareArtModal.vue'
 import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
 import { usePagedItems } from '@/composables/usePagedItems'
 
-type LogoItem = {
+type SquareArtItem = {
   key: string
   title: string
   year?: number | string
+  poster?: string | null
   logo_url?: string | null
+  square_art_url?: string | null
   tmdb_id?: number | null
-  is_tv?: boolean
+  library_id?: string | number | null
   addedAt?: number | null
   labels?: string[]
 }
 
 const route = useRoute()
-const { items, loading, fetchItems, updateItem } = useArtLibraryCache<LogoItem>('logos')
-const filter = ref<'all' | 'has_logo' | 'missing'>('all')
+const { items, loading, fetchItems, updateItem } = useArtLibraryCache<SquareArtItem>('square-art')
+const filter = ref<'all' | 'has_square_art' | 'missing'>('all')
+const search = ref('')
 const sortBy = ref<'title_asc' | 'title_desc' | 'year_desc' | 'year_asc' | 'added_desc' | 'added_asc'>('title_asc')
 const filterLabel = ref('')
-const search = ref('')
 const failedImages = ref<Set<string>>(new Set())
-const selectedItem = ref<LogoItem | null>(null)
+const selectedItem = ref<SquareArtItem | null>(null)
 
-const isTV = computed(() => route.name === 'tv-logos')
+const isTV = computed(() => route.name === 'tv-square-art')
 const libraryId = computed(() => (route.query.library as string) || '')
 
-const withLogo = computed(() => items.value.filter(m => m.logo_url))
-const withoutLogo = computed(() => items.value.filter(m => !m.logo_url))
+const withSquareArt = computed(() => items.value.filter((m) => m.square_art_url))
+const withoutSquareArt = computed(() => items.value.filter((m) => !m.square_art_url))
 
 // Labels already come back on every item from GET /api/movies|/api/tv-shows
 // (same bulk response Movies/TV Shows themselves use) -- no extra fetch needed.
@@ -42,18 +44,13 @@ const allLabels = computed(() => {
 const displayItems = computed(() => {
   let list = items.value
 
-  // Filter
-  if (filter.value === 'has_logo') list = list.filter(m => m.logo_url && !failedImages.value.has(m.key))
-  else if (filter.value === 'missing') list = list.filter(m => !m.logo_url || failedImages.value.has(m.key))
+  if (filter.value === 'has_square_art') list = list.filter((m) => m.square_art_url && !failedImages.value.has(m.key))
+  else if (filter.value === 'missing') list = list.filter((m) => !m.square_art_url || failedImages.value.has(m.key))
 
-  // Filter by label
-  if (filterLabel.value) list = list.filter(m => (m.labels || []).includes(filterLabel.value))
+  if (filterLabel.value) list = list.filter((m) => (m.labels || []).includes(filterLabel.value))
 
-  // Search
   const q = search.value.trim().toLowerCase()
-  if (q) list = list.filter(m => m.title.toLowerCase().includes(q))
-
-  // Sort
+  if (q) list = list.filter((m) => m.title.toLowerCase().includes(q))
   list = [...list].sort((a, b) => {
     if (sortBy.value === 'title_asc') return a.title.localeCompare(b.title)
     if (sortBy.value === 'title_desc') return b.title.localeCompare(a.title)
@@ -64,7 +61,6 @@ const displayItems = computed(() => {
     if (sortBy.value === 'year_desc') return by_ - ay
     return ay - by_
   })
-
   return list
 })
 
@@ -73,21 +69,40 @@ watch([filter, search, sortBy, filterLabel], resetPage)
 
 function refresh() {
   failedImages.value = new Set()
-  fetchItems(isTV.value, libraryId.value)
+  fetchItems(isTV.value, libraryId.value, (m: any) => ({
+    key: m.key,
+    title: m.title,
+    year: m.year,
+    poster: m.poster,
+    logo_url: m.logo_url,
+    square_art_url: m.square_art_url,
+    tmdb_id: m.tmdb_id,
+    library_id: m.library_id,
+    addedAt: m.addedAt,
+    labels: m.labels || [],
+  }))
 }
 
-function openEditor(item: LogoItem) {
-  selectedItem.value = { ...item, is_tv: isTV.value }
+function openModal(item: SquareArtItem) {
+  selectedItem.value = { ...item, ...(isTV.value ? { mediaType: 'tv-show' } : { mediaType: 'movie' }) } as any
 }
 
 function onImgError(key: string) {
   failedImages.value = new Set([...failedImages.value, key])
 }
 
-function onLogoUpdated(newLogoUrl: string | null) {
-  if (selectedItem.value && newLogoUrl) {
+// Grid tiles use a small server-generated thumbnail instead of the full-res
+// cached file -- once an item has been sent, the cache holds the full
+// 2000x2000 Simposter render itself, which is what made this page feel
+// sluggish next to Movies/TV Shows. See CLAUDE.md Quirk #49.
+function thumbUrl(url: string): string {
+  return url.includes('?') ? `${url}&thumb=1` : `${url}?thumb=1`
+}
+
+function onSquareArtUpdated(newSquareArtUrl: string | null) {
+  if (selectedItem.value && newSquareArtUrl) {
     const key = selectedItem.value.key
-    updateItem(key, { logo_url: newLogoUrl } as Partial<LogoItem>)
+    updateItem(key, { square_art_url: newSquareArtUrl } as Partial<SquareArtItem>)
     failedImages.value = new Set([...failedImages.value].filter(k => k !== key))
   }
 }
@@ -97,16 +112,16 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="logos-view">
+  <div class="square-art-view">
     <div class="page-header">
-      <h2>🖼️ Logos</h2>
+      <h2>🔳 Square Art</h2>
       <div class="header-actions">
         <div class="stats">
-          <span class="stat-cached">{{ withLogo.length }} cached</span>
+          <span class="stat-cached">{{ withSquareArt.length }} in Plex</span>
           <span class="stat-sep">/</span>
           <span class="stat-total">{{ items.length }} total</span>
-          <span v-if="withoutLogo.length > 0" class="stat-missing">
-            ({{ withoutLogo.length }} missing)
+          <span v-if="withoutSquareArt.length > 0" class="stat-missing">
+            ({{ withoutSquareArt.length }} missing)
           </span>
         </div>
         <input
@@ -117,8 +132,8 @@ onMounted(refresh)
         />
         <select v-model="filter" class="toolbar-select">
           <option value="all">All</option>
-          <option value="has_logo">Has logo</option>
-          <option value="missing">Missing logo</option>
+          <option value="has_square_art">In Plex</option>
+          <option value="missing">Missing</option>
         </select>
         <select v-model="filterLabel" class="toolbar-select">
           <option value="">All Labels</option>
@@ -140,45 +155,46 @@ onMounted(refresh)
       </div>
     </div>
 
-    <div v-if="loading" class="state-msg">Loading logos...</div>
+    <div class="section-note">
+      Titles with square art already in Plex show it below (populated by library scans, same as
+      Logos/Backdrops). Click a title to generate/replace it from your existing template/preset —
+      send to Plex's dedicated square art slot, or save a copy to disk.
+    </div>
+
+    <div v-if="loading" class="state-msg">Loading...</div>
 
     <div v-else-if="displayItems.length === 0" class="state-msg">
       <template v-if="search">No results for "{{ search }}".</template>
-      <template v-else-if="filter === 'missing'">No items are missing a logo.</template>
-      <template v-else-if="filter === 'has_logo'">No logos cached yet. Run a library scan.</template>
-      <template v-else-if="withLogo.length === 0">
-        No clearlogos found in Plex for this library. Run a library scan to check for clearlogos.
-      </template>
+      <template v-else-if="filter === 'missing'">Every item already has square art in Plex.</template>
+      <template v-else-if="filter === 'has_square_art'">No square art found yet. Run a library scan, or generate one below.</template>
+      <template v-else>No items found. Run a library scan.</template>
     </div>
 
-    <div v-else class="logo-grid">
+    <div v-else class="art-grid">
       <div
         v-for="item in pagedItems"
         :key="item.key"
-        class="logo-card"
-        :class="{
-          'has-logo': !!item.logo_url && !failedImages.has(item.key),
-          'no-logo': !item.logo_url || failedImages.has(item.key),
-        }"
-        title="Click to edit logo"
-        @click="openEditor(item)"
+        class="art-card"
+        :class="{ 'has-art': !!item.square_art_url && !failedImages.has(item.key) }"
+        title="Click to create/replace square art"
+        @click="openModal(item)"
       >
-        <div class="logo-area">
+        <div class="art-area">
           <img
-            v-if="item.logo_url && !failedImages.has(item.key)"
-            :src="item.logo_url"
+            v-if="item.square_art_url && !failedImages.has(item.key)"
+            :src="thumbUrl(item.square_art_url)"
             :alt="item.title"
-            class="logo-img"
+            class="art-img"
             @error="onImgError(item.key)"
           />
-          <div v-else class="no-logo-placeholder">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-4 4 4"/><circle cx="8.5" cy="14.5" r="1.5"/></svg>
-            <span>No logo cached</span>
+          <div v-else class="no-art-placeholder">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <span>No square art in Plex</span>
           </div>
         </div>
-        <div class="logo-meta">
-          <span class="logo-title">{{ item.title }}</span>
-          <span v-if="item.year" class="logo-year">{{ item.year }}</span>
+        <div class="art-meta">
+          <span class="art-title">{{ item.title }}</span>
+          <span v-if="item.year" class="art-year">{{ item.year }}</span>
         </div>
       </div>
     </div>
@@ -190,19 +206,19 @@ onMounted(refresh)
     </div>
   </div>
 
-  <LogoEditorModal
+  <SquareArtModal
     v-if="selectedItem"
     :item="selectedItem"
     @close="selectedItem = null"
-    @updated="onLogoUpdated"
+    @updated="onSquareArtUpdated"
   />
 </template>
 
 <style scoped>
-.logos-view {
+.square-art-view {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .page-header {
@@ -326,6 +342,12 @@ onMounted(refresh)
   to { transform: rotate(360deg); }
 }
 
+.section-note {
+  font-size: 12px;
+  color: #6b7a99;
+  line-height: 1.5;
+}
+
 .state-msg {
   padding: 40px 20px;
   text-align: center;
@@ -370,14 +392,14 @@ onMounted(refresh)
   text-align: center;
 }
 
-/* Grid — wider cards for landscape logos */
-.logo-grid {
+/* Grid — square (1:1) thumbnails, mirroring what square art itself will look like */
+.art-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 14px;
 }
 
-.logo-card {
+.art-card {
   display: flex;
   flex-direction: column;
   border-radius: 10px;
@@ -388,34 +410,33 @@ onMounted(refresh)
   cursor: pointer;
 }
 
-.logo-card:hover {
+.art-card:hover {
   border-color: rgba(61, 214, 183, 0.4);
   transform: translateY(-2px);
 }
 
-.logo-card.no-logo {
+.art-card:not(.has-art) {
   opacity: 0.7;
 }
 
-/* Logo display area — 3:1 aspect, dark background */
-.logo-area {
-  aspect-ratio: 3 / 1;
+.art-area {
+  aspect-ratio: 1 / 1;
   background: #0a0b12;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 14px;
   position: relative;
+  overflow: hidden;
 }
 
-.logo-img {
+.art-img {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   display: block;
 }
 
-.no-logo-placeholder {
+.no-art-placeholder {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -425,8 +446,7 @@ onMounted(refresh)
   text-align: center;
 }
 
-/* Title/year row below the logo */
-.logo-meta {
+.art-meta {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -435,7 +455,7 @@ onMounted(refresh)
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.logo-title {
+.art-title {
   font-size: 12px;
   font-weight: 500;
   color: #c9d1e0;
@@ -446,7 +466,7 @@ onMounted(refresh)
   min-width: 0;
 }
 
-.logo-year {
+.art-year {
   font-size: 11px;
   color: #6b7a99;
   flex-shrink: 0;
@@ -461,8 +481,8 @@ onMounted(refresh)
     width: 120px;
   }
 
-  .logo-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  .art-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
     gap: 10px;
   }
 }

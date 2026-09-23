@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import LogoEditorModal from '@/components/LogoEditorModal.vue'
+import { getApiBase } from '@/services/apiBase'
+import BackdropEditorModal from '@/components/BackdropEditorModal.vue'
 import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
 import { usePagedItems } from '@/composables/usePagedItems'
 
-type LogoItem = {
+type BackdropItem = {
   key: string
   title: string
   year?: number | string
-  logo_url?: string | null
+  art_url?: string | null
   tmdb_id?: number | null
   is_tv?: boolean
   addedAt?: number | null
@@ -17,19 +18,20 @@ type LogoItem = {
 }
 
 const route = useRoute()
-const { items, loading, fetchItems, updateItem } = useArtLibraryCache<LogoItem>('logos')
-const filter = ref<'all' | 'has_logo' | 'missing'>('all')
+const { items, loading, fetchItems, updateItem } = useArtLibraryCache<BackdropItem>('backdrops')
+const refreshingKeys = ref<Set<string>>(new Set())
+const filter = ref<'all' | 'has_backdrop' | 'missing'>('all')
 const sortBy = ref<'title_asc' | 'title_desc' | 'year_desc' | 'year_asc' | 'added_desc' | 'added_asc'>('title_asc')
 const filterLabel = ref('')
 const search = ref('')
 const failedImages = ref<Set<string>>(new Set())
-const selectedItem = ref<LogoItem | null>(null)
+const selectedItem = ref<BackdropItem | null>(null)
 
-const isTV = computed(() => route.name === 'tv-logos')
+const isTV = computed(() => route.name === 'tv-backdrops')
 const libraryId = computed(() => (route.query.library as string) || '')
 
-const withLogo = computed(() => items.value.filter(m => m.logo_url))
-const withoutLogo = computed(() => items.value.filter(m => !m.logo_url))
+const withBackdrop = computed(() => items.value.filter(m => m.art_url))
+const withoutBackdrop = computed(() => items.value.filter(m => !m.art_url))
 
 // Labels already come back on every item from GET /api/movies|/api/tv-shows
 // (same bulk response Movies/TV Shows themselves use) -- no extra fetch needed.
@@ -43,8 +45,8 @@ const displayItems = computed(() => {
   let list = items.value
 
   // Filter
-  if (filter.value === 'has_logo') list = list.filter(m => m.logo_url && !failedImages.value.has(m.key))
-  else if (filter.value === 'missing') list = list.filter(m => !m.logo_url || failedImages.value.has(m.key))
+  if (filter.value === 'has_backdrop') list = list.filter(m => m.art_url && !failedImages.value.has(m.key))
+  else if (filter.value === 'missing') list = list.filter(m => !m.art_url || failedImages.value.has(m.key))
 
   // Filter by label
   if (filterLabel.value) list = list.filter(m => (m.labels || []).includes(filterLabel.value))
@@ -71,12 +73,23 @@ const displayItems = computed(() => {
 const { page, totalPages, pagedItems, nextPage, prevPage, resetPage } = usePagedItems(displayItems)
 watch([filter, search, sortBy, filterLabel], resetPage)
 
-function refresh() {
+// Separate from `loading` (which useArtLibraryCache only sets on a cache miss) --
+// without this, clicking "Refresh" when a cache already exists gave zero visual
+// feedback while the background revalidation fetch was in flight, which invited
+// repeated clicks (and repeated overlapping GET /api/movies|tv-shows requests).
+const refreshingList = ref(false)
+async function refresh() {
+  if (refreshingList.value) return
+  refreshingList.value = true
   failedImages.value = new Set()
-  fetchItems(isTV.value, libraryId.value)
+  try {
+    await fetchItems(isTV.value, libraryId.value)
+  } finally {
+    refreshingList.value = false
+  }
 }
 
-function openEditor(item: LogoItem) {
+function openEditor(item: BackdropItem) {
   selectedItem.value = { ...item, is_tv: isTV.value }
 }
 
@@ -84,11 +97,47 @@ function onImgError(key: string) {
   failedImages.value = new Set([...failedImages.value, key])
 }
 
-function onLogoUpdated(newLogoUrl: string | null) {
-  if (selectedItem.value && newLogoUrl) {
+// Grid tiles use a small server-generated thumbnail instead of the full-res
+// cached file -- backdrops have no Plex-side pre-downscaled equivalent of
+// posters' /thumb, so without this every visible tile downloaded the full
+// original (often several MB), which is what made this page feel sluggish
+// next to Movies/TV Shows. See CLAUDE.md Quirk #49.
+function thumbUrl(url: string): string {
+  return url.includes('?') ? `${url}&thumb=1` : `${url}?thumb=1`
+}
+
+function onBackdropUpdated(newArtUrl: string | null) {
+  if (selectedItem.value && newArtUrl) {
     const key = selectedItem.value.key
-    updateItem(key, { logo_url: newLogoUrl } as Partial<LogoItem>)
+    updateItem(key, { art_url: newArtUrl } as Partial<BackdropItem>)
     failedImages.value = new Set([...failedImages.value].filter(k => k !== key))
+  }
+}
+
+// Per-card refresh, matching Movies' "refresh poster" icon -- re-checks Plex for
+// just this one item instead of only re-reading whatever's already in the DB
+// cache (which is all the page-level "Refresh" button above does).
+async function handleRefreshBackdrop(item: BackdropItem) {
+  if (refreshingKeys.value.has(item.key)) return
+  refreshingKeys.value = new Set(refreshingKeys.value).add(item.key)
+  try {
+    const apiBase = getApiBase()
+    const params = new URLSearchParams({ meta: '1', force_refresh: '1' })
+    if (isTV.value) params.set('is_tv', '1')
+    const res = await fetch(`${apiBase}/api/backdrop/${item.key}?${params.toString()}`)
+    if (res.ok) {
+      const data = await res.json()
+      if (data.url) {
+        updateItem(item.key, { art_url: `${apiBase}${data.url}` } as Partial<BackdropItem>)
+        failedImages.value = new Set([...failedImages.value].filter(k => k !== item.key))
+      }
+    }
+  } catch {
+    /* non-critical -- card just keeps showing whatever it already had */
+  } finally {
+    const next = new Set(refreshingKeys.value)
+    next.delete(item.key)
+    refreshingKeys.value = next
   }
 }
 
@@ -97,16 +146,16 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="logos-view">
+  <div class="backdrops-view">
     <div class="page-header">
-      <h2>🖼️ Logos</h2>
+      <h2>🎞️ Backdrops</h2>
       <div class="header-actions">
         <div class="stats">
-          <span class="stat-cached">{{ withLogo.length }} cached</span>
+          <span class="stat-cached">{{ withBackdrop.length }} cached</span>
           <span class="stat-sep">/</span>
           <span class="stat-total">{{ items.length }} total</span>
-          <span v-if="withoutLogo.length > 0" class="stat-missing">
-            ({{ withoutLogo.length }} missing)
+          <span v-if="withoutBackdrop.length > 0" class="stat-missing">
+            ({{ withoutBackdrop.length }} missing)
           </span>
         </div>
         <input
@@ -117,8 +166,8 @@ onMounted(refresh)
         />
         <select v-model="filter" class="toolbar-select">
           <option value="all">All</option>
-          <option value="has_logo">Has logo</option>
-          <option value="missing">Missing logo</option>
+          <option value="has_backdrop">Has backdrop</option>
+          <option value="missing">Missing backdrop</option>
         </select>
         <select v-model="filterLabel" class="toolbar-select">
           <option value="">All Labels</option>
@@ -132,53 +181,65 @@ onMounted(refresh)
           <option value="added_desc">Date Added (Newest)</option>
           <option value="added_asc">Date Added (Oldest)</option>
         </select>
-        <button class="btn-refresh" @click="refresh" :disabled="loading">
-          <svg v-if="loading" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+        <button class="btn-refresh" @click="refresh" :disabled="loading || refreshingList">
+          <svg v-if="loading || refreshingList" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-          {{ loading ? 'Loading...' : 'Refresh' }}
+          {{ (loading || refreshingList) ? 'Loading...' : 'Refresh' }}
         </button>
       </div>
     </div>
 
-    <div v-if="loading" class="state-msg">Loading logos...</div>
+    <div v-if="loading" class="state-msg">Loading backdrops...</div>
 
     <div v-else-if="displayItems.length === 0" class="state-msg">
       <template v-if="search">No results for "{{ search }}".</template>
-      <template v-else-if="filter === 'missing'">No items are missing a logo.</template>
-      <template v-else-if="filter === 'has_logo'">No logos cached yet. Run a library scan.</template>
-      <template v-else-if="withLogo.length === 0">
-        No clearlogos found in Plex for this library. Run a library scan to check for clearlogos.
+      <template v-else-if="filter === 'missing'">No items are missing a backdrop.</template>
+      <template v-else-if="filter === 'has_backdrop'">No backdrops cached yet. Run a library scan.</template>
+      <template v-else-if="withBackdrop.length === 0">
+        No backdrops found in Plex for this library. Run a library scan to check for backdrops.
       </template>
     </div>
 
-    <div v-else class="logo-grid">
+    <div v-else class="backdrop-grid">
       <div
         v-for="item in pagedItems"
         :key="item.key"
-        class="logo-card"
+        class="backdrop-card"
         :class="{
-          'has-logo': !!item.logo_url && !failedImages.has(item.key),
-          'no-logo': !item.logo_url || failedImages.has(item.key),
+          'has-backdrop': !!item.art_url && !failedImages.has(item.key),
+          'no-backdrop': !item.art_url || failedImages.has(item.key),
         }"
-        title="Click to edit logo"
+        title="Click to edit backdrop"
         @click="openEditor(item)"
       >
-        <div class="logo-area">
+        <div class="backdrop-area">
           <img
-            v-if="item.logo_url && !failedImages.has(item.key)"
-            :src="item.logo_url"
+            v-if="item.art_url && !failedImages.has(item.key)"
+            :src="thumbUrl(item.art_url)"
             :alt="item.title"
-            class="logo-img"
+            class="backdrop-img"
             @error="onImgError(item.key)"
           />
-          <div v-else class="no-logo-placeholder">
+          <div v-else class="no-backdrop-placeholder">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9l4-4 4 4 4-4 4 4"/><circle cx="8.5" cy="14.5" r="1.5"/></svg>
-            <span>No logo cached</span>
+            <span>No backdrop cached</span>
           </div>
+          <button
+            class="refresh-btn"
+            title="Refresh from Plex"
+            :class="{ spinning: refreshingKeys.has(item.key) }"
+            @click.stop="handleRefreshBackdrop(item)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+          </button>
         </div>
-        <div class="logo-meta">
-          <span class="logo-title">{{ item.title }}</span>
-          <span v-if="item.year" class="logo-year">{{ item.year }}</span>
+        <div class="backdrop-meta">
+          <span class="backdrop-title">{{ item.title }}</span>
+          <span v-if="item.year" class="backdrop-year">{{ item.year }}</span>
         </div>
       </div>
     </div>
@@ -190,16 +251,16 @@ onMounted(refresh)
     </div>
   </div>
 
-  <LogoEditorModal
+  <BackdropEditorModal
     v-if="selectedItem"
     :item="selectedItem"
     @close="selectedItem = null"
-    @updated="onLogoUpdated"
+    @updated="onBackdropUpdated"
   />
 </template>
 
 <style scoped>
-.logos-view {
+.backdrops-view {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -370,14 +431,14 @@ onMounted(refresh)
   text-align: center;
 }
 
-/* Grid — wider cards for landscape logos */
-.logo-grid {
+/* Grid — wide cards for backdrop (16:9) thumbnails */
+.backdrop-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 14px;
 }
 
-.logo-card {
+.backdrop-card {
   display: flex;
   flex-direction: column;
   border-radius: 10px;
@@ -388,34 +449,70 @@ onMounted(refresh)
   cursor: pointer;
 }
 
-.logo-card:hover {
+.backdrop-card:hover {
   border-color: rgba(61, 214, 183, 0.4);
   transform: translateY(-2px);
 }
 
-.logo-card.no-logo {
+.backdrop-card.no-backdrop {
   opacity: 0.7;
 }
 
-/* Logo display area — 3:1 aspect, dark background */
-.logo-area {
-  aspect-ratio: 3 / 1;
+/* Backdrop display area — 16:9 aspect, dark background */
+.backdrop-area {
+  aspect-ratio: 16 / 9;
   background: #0a0b12;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 14px;
   position: relative;
+  overflow: hidden;
 }
 
-.logo-img {
+.backdrop-img {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   display: block;
 }
 
-.no-logo-placeholder {
+.refresh-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  color: #d7e6ff;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: all 0.18s ease;
+  cursor: pointer;
+  display: flex;
+}
+
+.backdrop-card:hover .refresh-btn {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.refresh-btn:hover {
+  background: rgba(61, 214, 183, 0.18);
+  color: #3dd6b7;
+  border-color: rgba(61, 214, 183, 0.5);
+}
+
+.refresh-btn.spinning {
+  opacity: 1;
+}
+
+.refresh-btn.spinning svg {
+  animation: spin 0.9s linear infinite;
+}
+
+.no-backdrop-placeholder {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -425,8 +522,8 @@ onMounted(refresh)
   text-align: center;
 }
 
-/* Title/year row below the logo */
-.logo-meta {
+/* Title/year row below the backdrop */
+.backdrop-meta {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -435,7 +532,7 @@ onMounted(refresh)
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.logo-title {
+.backdrop-title {
   font-size: 12px;
   font-weight: 500;
   color: #c9d1e0;
@@ -446,7 +543,7 @@ onMounted(refresh)
   min-width: 0;
 }
 
-.logo-year {
+.backdrop-year {
   font-size: 11px;
   color: #6b7a99;
   flex-shrink: 0;
@@ -461,8 +558,8 @@ onMounted(refresh)
     width: 120px;
   }
 
-  .logo-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  .backdrop-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 10px;
   }
 }
