@@ -19,8 +19,26 @@ from typing import List, Optional
 from ..config import settings, plex_session, plex_headers, logger
 from .. import database as db
 from ..save_paths import resolve_library_label
+from .movies import fetch_and_cache_logo, fetch_and_cache_backdrop, fetch_and_cache_square_art
+from .save import normalize_logo_for_plex, normalize_backdrop_for_plex
 
 router = APIRouter()
+
+# Logos/Backdrops/Square Art each get their own subfolder within a library's
+# backup dir -- avoids filename collisions with posters (which would otherwise
+# share the exact same "Title (Year).ext" naming) and lets each asset type be
+# backed up/restored/deleted independently, matching the per-type checkbox UI.
+# Posters deliberately stay in the library's own base dir with NO subfolder --
+# that's the original, pre-existing layout, and changing it would silently
+# strand any backup a user already has on disk from before this feature.
+_ASSET_SUBDIRS = {"logo": "logos", "backdrop": "backdrops", "square_art": "square_art"}
+_VALID_ASSET_TYPES = {"poster", "logo", "backdrop", "square_art"}
+
+# Plex upload endpoint (relative to /library/metadata/{rating_key}/) + which
+# save.py normalize function to run bytes through first, per asset type --
+# mirrors plexsend.py's manual per-item send endpoints exactly, since a backup
+# restore should be exactly as safe/correct as a normal manual send.
+_RESTORE_ENDPOINT = {"poster": "posters", "logo": "clearLogos", "backdrop": "arts", "square_art": "squareArts"}
 
 
 def _get_backup_root() -> Path:
@@ -28,19 +46,31 @@ def _get_backup_root() -> Path:
     return Path(settings.CONFIG_DIR) / "backups"
 
 
-def _get_backup_dir(library_id: str) -> Path:
+def _get_backup_dir(library_id: str, asset_type: str = "poster") -> Path:
     """Get backup directory for a library, checking both new (library name) and old (library ID) locations."""
     backup_root = _get_backup_root()
 
     # Try new location (library name)
     library_name = resolve_library_label(library_id)
     new_dir = backup_root / _sanitize_filename(library_name)
+    subdir = _ASSET_SUBDIRS.get(asset_type)
+    if subdir:
+        new_dir = new_dir / subdir
     if new_dir.exists():
         return new_dir
 
-    # Fall back to old location (library ID) for backward compatibility
-    old_dir = backup_root / str(library_id)
-    return old_dir  # Return even if doesn't exist - caller will handle
+    # Fall back to old location (library ID) for backward compatibility --
+    # posters only, since logo/backdrop/square_art never existed under the old
+    # ID-keyed layout in the first place (this whole feature is new). Only
+    # fall back if the old dir actually has a real prior backup in it --
+    # otherwise a library that's never been backed up before would get its
+    # very first backup created under the bare ID folder instead of the
+    # library-name folder every other asset type already uses.
+    if not subdir:
+        old_dir = backup_root / str(library_id)
+        if old_dir.exists():
+            return old_dir
+    return new_dir  # Return even if doesn't exist - caller will handle
 
 
 def _sanitize_filename(name: str) -> str:
@@ -105,11 +135,16 @@ class BackupStartRequest(BaseModel):
     library_id: str
     media_type: str = "movie"
     include_seasons: bool = True
+    # Which asset type(s) to back up in this run -- any of "poster", "logo",
+    # "backdrop", "square_art". Defaults to poster-only so any existing caller
+    # that doesn't know about this field keeps its exact original behavior.
+    asset_types: List[str] = ["poster"]
 
 
 class RestorePreviewRequest(BaseModel):
     library_id: str
     media_type: str = "movie"
+    asset_type: str = "poster"
 
 
 class RestoreExecuteItem(BaseModel):
@@ -120,6 +155,7 @@ class RestoreExecuteItem(BaseModel):
 class RestoreExecuteRequest(BaseModel):
     library_id: str
     items: List[RestoreExecuteItem]
+    asset_type: str = "poster"
 
 
 # ---------------------------------------------------------------------------
@@ -152,11 +188,11 @@ def api_backup_progress():
 
 
 @router.get("/backup/status/{library_id}")
-def api_backup_status(library_id: str, media_type: str = "movie"):
-    """Return backup info derived from the filesystem."""
+def api_backup_status(library_id: str, media_type: str = "movie", asset_type: str = "poster"):
+    """Return backup info derived from the filesystem, for one asset type."""
     library_name = resolve_library_label(library_id)
-    backup_dir = _get_backup_dir(library_id)
-    logger.debug("[BACKUP] Status check for library %s (%s), path: %s", library_id, library_name, backup_dir)
+    backup_dir = _get_backup_dir(library_id, asset_type)
+    logger.debug("[BACKUP] Status check for library %s (%s) asset_type=%s, path: %s", library_id, library_name, asset_type, backup_dir)
     if not backup_dir.exists():
         return {"count": 0, "last_date": None, "total_size": 0, "path": str(backup_dir)}
 
@@ -171,11 +207,21 @@ def api_backup_status(library_id: str, media_type: str = "movie"):
     return {"count": len(files), "last_date": last_date, "total_size": total_size, "path": str(backup_dir)}
 
 
+@router.get("/backup/status-all/{library_id}")
+def api_backup_status_all(library_id: str, media_type: str = "movie"):
+    """Status for all four asset types in one call, so the UI can show all of
+    them without four sequential round-trips."""
+    return {
+        asset_type: api_backup_status(library_id, media_type, asset_type)
+        for asset_type in _VALID_ASSET_TYPES
+    }
+
+
 @router.get("/backup/file/{library_id}/{filename:path}")
-def api_backup_file(library_id: str, filename: str, media_type: str = "movie"):
+def api_backup_file(library_id: str, filename: str, media_type: str = "movie", asset_type: str = "poster"):
     """Serve a backup image file for thumbnails in the restore preview."""
     library_name = resolve_library_label(library_id)
-    backup_dir = _get_backup_dir(library_id)
+    backup_dir = _get_backup_dir(library_id, asset_type)
     file_path = backup_dir / filename
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(404, "File not found")
@@ -188,10 +234,12 @@ def api_backup_file(library_id: str, filename: str, media_type: str = "movie"):
 
 @router.post("/backup/start")
 def api_backup_start(req: BackupStartRequest):
-    """Start backing up all posters for a library."""
+    """Start backing up the selected asset type(s) for a library."""
     with backup_status_lock:
         if backup_status["state"] == "running":
             raise HTTPException(409, "A backup/restore operation is already running")
+
+    asset_types = [a for a in req.asset_types if a in _VALID_ASSET_TYPES] or ["poster"]
 
     if req.media_type == "tv-show":
         items = db.get_cached_tv_shows(library_id=req.library_id)
@@ -201,9 +249,18 @@ def api_backup_start(req: BackupStartRequest):
     if not items:
         raise HTTPException(404, "No items found in cache for this library. Run a library scan first.")
 
+    is_tv = req.media_type == "tv-show"
+    # Seasons only apply to posters -- logos/backdrops/square art have no
+    # per-season variant anywhere else in this app either.
+    est_total = 0
+    for at in asset_types:
+        est_total += len(items)
+        if at == "poster" and is_tv and req.include_seasons:
+            est_total += len(items)  # rough estimate; refined once seasons are actually fetched
+
     _update_backup_status({
         "state": "running",
-        "total": len(items),
+        "total": est_total,
         "processed": 0,
         "current_movie": "",
         "current_step": "Starting backup...",
@@ -212,21 +269,20 @@ def api_backup_start(req: BackupStartRequest):
         "error": None,
     })
 
-    is_tv = req.media_type == "tv-show"
     thread = threading.Thread(
-        target=_backup_library,
-        args=(req.library_id, items, is_tv, req.include_seasons),
+        target=_run_backup,
+        args=(req.library_id, items, is_tv, req.include_seasons, asset_types),
         daemon=True,
     )
     thread.start()
 
-    return {"status": "started", "total": len(items)}
+    return {"status": "started", "total": est_total, "asset_types": asset_types}
 
 
 @router.post("/backup/restore/preview")
 def api_restore_preview(req: RestorePreviewRequest):
     """Scan backup folder and auto-match files to Plex items. Returns a review list."""
-    backup_dir = _get_backup_dir(req.library_id)
+    backup_dir = _get_backup_dir(req.library_id, req.asset_type)
     if not backup_dir.exists():
         raise HTTPException(404, "No backup found for this library")
 
@@ -350,7 +406,8 @@ def api_restore_execute(req: RestoreExecuteRequest):
                     media_type = "tv-show"
                     break
 
-    backup_dir = _get_backup_dir(req.library_id)
+    asset_type = req.asset_type if req.asset_type in _VALID_ASSET_TYPES else "poster"
+    backup_dir = _get_backup_dir(req.library_id, asset_type)
     if not backup_dir.exists():
         raise HTTPException(404, "No backup found for this library")
 
@@ -383,7 +440,7 @@ def api_restore_execute(req: RestoreExecuteRequest):
 
     thread = threading.Thread(
         target=_restore_selected,
-        args=(valid_items,),
+        args=(valid_items, asset_type),
         daemon=True,
     )
     thread.start()
@@ -430,13 +487,13 @@ def api_library_items(library_id: str, media_type: str = "movie"):
 
 
 @router.delete("/backup/delete/{library_id}")
-def api_backup_delete(library_id: str, media_type: str = "movie"):
-    """Delete all backup files for a library."""
+def api_backup_delete(library_id: str, media_type: str = "movie", asset_type: str = "poster"):
+    """Delete all backup files for a library, for one asset type."""
     library_name = resolve_library_label(library_id)
-    backup_dir = _get_backup_dir(library_id)
+    backup_dir = _get_backup_dir(library_id, asset_type)
     if backup_dir.exists():
         shutil.rmtree(backup_dir)
-        logger.info("[BACKUP] Deleted backup folder for library %s", library_id)
+        logger.info("[BACKUP] Deleted %s backup folder for library %s", asset_type, library_id)
     return {"status": "ok"}
 
 
@@ -485,19 +542,21 @@ def _get_show_seasons(show_rating_key: str) -> list:
         return []
 
 
-def _backup_library(library_id: str, items: list, is_tv: bool, include_seasons: bool):
-    """Download all posters for a library from Plex using human-readable filenames."""
-    media_type = "tv-show" if is_tv else "movie"
+def _backup_library(library_id: str, items: list, is_tv: bool, include_seasons: bool, progress_offset: int = 0) -> tuple:
+    """Download all posters for a library from Plex using human-readable filenames.
+    Returns (succeeded, failed). Does NOT set the final "done" status itself --
+    see _run_backup(), which may be running this as one of several selected
+    asset types in the same operation."""
     library_name = resolve_library_label(library_id)
-    backup_dir = _get_backup_dir(library_id)
+    backup_dir = _get_backup_dir(library_id, "poster")
     backup_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("[BACKUP] Saving %d items for library '%s' to: %s (tv=%s, seasons=%s)", len(items), library_name, backup_dir, is_tv, include_seasons)
+    logger.info("[BACKUP] Saving %d posters for library '%s' to: %s (tv=%s, seasons=%s)", len(items), library_name, backup_dir, is_tv, include_seasons)
 
     manifest = {}
     succeeded = 0
     failed = 0
     total_items = len(items)
-    _update_backup_status({"total": total_items})
+    _update_backup_status({"total": progress_offset + total_items})
 
     for idx, item in enumerate(items):
         rating_key = item.get("rating_key") or item.get("key", "")
@@ -512,7 +571,7 @@ def _backup_library(library_id: str, items: list, is_tv: bool, include_seasons: 
         filename = f"{base_name}.jpg"
 
         _update_backup_status({
-            "processed": idx,
+            "processed": progress_offset + idx,
             "current_movie": title,
             "current_step": f"Downloading poster ({idx + 1}/{total_items})",
         })
@@ -533,7 +592,7 @@ def _backup_library(library_id: str, items: list, is_tv: bool, include_seasons: 
             seasons = _get_show_seasons(rating_key)
             if seasons:
                 total_items += len(seasons)
-                _update_backup_status({"total": total_items})
+                _update_backup_status({"total": progress_offset + total_items})
 
                 for season in seasons:
                     season_key = season["key"]
@@ -560,22 +619,111 @@ def _backup_library(library_id: str, items: list, is_tv: bool, include_seasons: 
                         failed += 1
 
     _save_manifest(backup_dir, manifest)
+    logger.info("[BACKUP] Library %s poster backup complete: %d/%d succeeded (path: %s)", library_id, succeeded, succeeded + failed, backup_dir)
+    return succeeded, failed
+
+
+# Which fetch_and_cache_X function (imported from movies.py, backing the same
+# Logo/Backdrop/Square Art disk caches those library-browsing grids use) to
+# call for each non-poster asset type. Reused rather than writing a second,
+# parallel "download this asset from Plex" implementation -- see art_cache.py's
+# make_art_cache() and CLAUDE.md Quirk #42/#49 for why this is the one function
+# that already knows how to fetch each of these correctly.
+_FETCH_AND_CACHE = {
+    "logo": fetch_and_cache_logo,
+    "backdrop": fetch_and_cache_backdrop,
+    "square_art": fetch_and_cache_square_art,
+}
+
+
+def _backup_art_library(library_id: str, items: list, asset_type: str, progress_offset: int = 0) -> tuple:
+    """Back up logo/backdrop/square_art for a library. No season variants for
+    these three (unlike posters) -- one file per movie/show. Returns (succeeded, failed)."""
+    library_name = resolve_library_label(library_id)
+    backup_dir = _get_backup_dir(library_id, asset_type)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    fetch_and_cache = _FETCH_AND_CACHE[asset_type]
+    logger.info("[BACKUP] Saving %d %s files for library '%s' to: %s", len(items), asset_type, library_name, backup_dir)
+
+    manifest = {}
+    succeeded = 0
+    failed = 0
+    total_items = len(items)
+    _update_backup_status({"total": progress_offset + total_items})
+
+    for idx, item in enumerate(items):
+        rating_key = item.get("rating_key") or item.get("key", "")
+        title = item.get("title", "Unknown")
+        year = item.get("year")
+        base_name = f"{_sanitize_filename(title)} ({year})" if year else _sanitize_filename(title)
+
+        _update_backup_status({
+            "processed": progress_offset + idx,
+            "current_movie": title,
+            "current_step": f"Downloading {asset_type.replace('_', ' ')} ({idx + 1}/{total_items})",
+        })
+
+        try:
+            # force_refresh=True: a backup should reflect what's CURRENTLY in
+            # Plex, not whatever this app's own cache happened to have last --
+            # this also has the (desirable, not just tolerated) side effect of
+            # refreshing that live cache to match, same as a fresh scan would.
+            cached_path = fetch_and_cache(rating_key, force_refresh=True)
+        except Exception as e:
+            logger.debug("[BACKUP] %s fetch failed for %s: %s", asset_type, rating_key, e)
+            cached_path = None
+
+        if cached_path:
+            ext = cached_path.suffix  # already includes the leading "."
+            filename = f"{base_name}{ext}"
+            try:
+                shutil.copy2(cached_path, backup_dir / filename)
+                manifest[filename] = {"rating_key": rating_key, "title": title, "year": year}
+                succeeded += 1
+            except Exception as e:
+                logger.debug("[BACKUP] Failed to copy %s backup for %s: %s", asset_type, rating_key, e)
+                failed += 1
+        else:
+            failed += 1
+
+    _save_manifest(backup_dir, manifest)
+    logger.info("[BACKUP] Library %s %s backup complete: %d/%d succeeded (path: %s)", library_id, asset_type, succeeded, succeeded + failed, backup_dir)
+    return succeeded, failed
+
+
+def _run_backup(library_id: str, items: list, is_tv: bool, include_seasons: bool, asset_types: list):
+    """Thread target for /backup/start -- runs each selected asset type in
+    turn (sequentially, within the one "running" operation the status lock
+    already limits to one at a time) and sets the final "done" status once."""
+    total_succeeded = 0
+    total_failed = 0
+    processed_offset = 0
+
+    for asset_type in asset_types:
+        if asset_type == "poster":
+            succeeded, failed = _backup_library(library_id, items, is_tv, include_seasons, processed_offset)
+        else:
+            succeeded, failed = _backup_art_library(library_id, items, asset_type, processed_offset)
+        total_succeeded += succeeded
+        total_failed += failed
+        processed_offset += succeeded + failed
 
     _update_backup_status({
         "state": "done",
-        "processed": total_items,
+        "processed": processed_offset,
+        "total": processed_offset,
         "current_movie": "",
-        "current_step": f"Backup complete: {succeeded} saved, {failed} failed",
+        "current_step": f"Backup complete: {total_succeeded} saved, {total_failed} failed",
         "finished_at": time.time(),
     })
-    logger.info("[BACKUP] Library %s backup complete: %d/%d succeeded (path: %s)", library_id, succeeded, succeeded + failed, backup_dir)
 
 
-def _restore_selected(items: list):
-    """Restore user-confirmed poster files to Plex."""
+def _restore_selected(items: list, asset_type: str = "poster"):
+    """Restore user-confirmed asset files to Plex, for one asset type."""
     succeeded = 0
     failed = 0
     total = len(items)
+    endpoint_segment = _RESTORE_ENDPOINT.get(asset_type, "posters")
 
     for idx, item in enumerate(items):
         file_path = item["file_path"]
@@ -585,15 +733,28 @@ def _restore_selected(items: list):
         _update_backup_status({
             "processed": idx,
             "current_movie": Path(filename).stem,
-            "current_step": f"Restoring poster ({idx + 1}/{total})",
+            "current_step": f"Restoring {asset_type.replace('_', ' ')} ({idx + 1}/{total})",
         })
 
         try:
             payload = file_path.read_bytes()
-            url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+            content_type = {".png": "image/png", ".webp": "image/webp"}.get(file_path.suffix.lower(), "image/jpeg")
+
+            # Posters restore exactly as they always have -- these bytes came
+            # straight from Plex's own /thumb, a byte-for-byte round trip back
+            # to Plex needs no re-encode. Logo/backdrop/square_art go through
+            # the same PIL normalize pass plexsend.py's manual sends already
+            # use (Quirk #26/#28: never forward raw source bytes unnormalized
+            # to a Plex image-upload endpoint).
+            if asset_type == "logo":
+                payload, content_type = normalize_logo_for_plex(payload, content_type)
+            elif asset_type in ("backdrop", "square_art"):
+                payload, content_type = normalize_backdrop_for_plex(payload, content_type)
+
+            url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/{endpoint_segment}"
             headers = {
                 "X-Plex-Token": settings.PLEX_TOKEN,
-                "Content-Type": "image/jpeg",
+                "Content-Type": content_type,
             }
             resp = requests.post(url, headers=headers, data=payload, timeout=20)
             resp.raise_for_status()

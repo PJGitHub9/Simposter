@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.108',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Backup / Restore now supports Logos, Backdrops, and Square Art, not just Posters — choose what to back up with a checklist, and restore each type independently.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.107',
     date: '2026-09-23',
     sections: [
