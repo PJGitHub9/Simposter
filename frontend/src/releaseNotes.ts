@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.109',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Added a new "big update" highlight reel (majorReleases.ts) covering everything since the last main-branch merge point (v1.6.87) — Square Art, Backdrops, the Cleanup tool, the expanded Backup/Restore, and Retry Queue improvements — shown automatically to anyone crossing that gap.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.108',
     date: '2026-09-23',
     sections: [

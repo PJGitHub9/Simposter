@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.6.109 (2026-09-23)
+### Improvements
+- **Added a new "big update" highlight reel** (`frontend/src/majorReleases.ts`) for anyone crossing the gap from `main`'s last merge point (v1.6.87) up through this version — Square Art, Backdrops, the Cleanup tool, the expanded Backup/Restore (Logos/Backdrops/Square Art), Retry Queue improvements, the Logos/Backdrops/Square Art caching/speed parity pass, the TMDb/TVDB/Fanart.tv/MediUX external-link row, and asset-type-aware notifications. Shown automatically instead of a giant per-version bullet dump, per the mechanism CLAUDE.md's Quirk #27 already established (`UpdateAnnouncementModal.vue`'s version-crossing check) — this is the second entry added under that convention, the first being the v1.6.64 milestone.
+- Done ahead of a planned merge of `webui-overhaul-dev` into `main`, so `main` users get an accurate highlight reel the first time they open the app post-merge instead of the modal having nothing curated to show them.
+
 ## v1.6.108 (2026-09-23)
 ### New Features
 - **Backup / Restore now supports Logos, Backdrops, and Square Art, not just Posters.** Previously this tool (`backend/api/backup.py`, `BackupRestoreView.vue`) only ever handled posters — it downloads the item's CURRENT asset directly from Plex (not this app's own render output) into a local folder, then can re-upload it back to Plex later as a safety net. The Backup section is now a checklist (Posters checked by default, matching prior single-click behavior exactly; the three new types default unchecked) — check any combination and one click backs up all of them. Restore is a single-select tab bar (Posters / Logos / Backdrops / Square Art) instead, since the match-and-preview flow only ever makes sense for one folder's contents at a time.
