@@ -164,6 +164,20 @@ def _get_source_label(source: str) -> str:
     }.get(source, source)
 
 
+def _get_asset_type_label(asset_type: str) -> Optional[str]:
+    """Readable label for a non-poster asset type, matching this app's own
+    established emoji convention (see CLAUDE.md's Emoji Usage Convention) so a
+    notification reads consistently with the rest of the UI. Returns None for
+    "poster" (the default) so existing poster notifications are unchanged --
+    no "Asset" field is added to the embed/body unless something OTHER than a
+    poster was sent, which is the whole point of this field existing."""
+    return {
+        "logo": "\U0001F5BC️ Logo",
+        "backdrop": "\U0001F39E️ Backdrop",
+        "square_art": "\U0001F533 Square Art",
+    }.get(asset_type)
+
+
 def send_discord_notification(
     title: str,
     year: Optional[int] = None,
@@ -176,7 +190,8 @@ def send_discord_notification(
     poster_data: Optional[bytes] = None,
     count: int = 1,
     success_count: int = 0,
-    failed_count: int = 0
+    failed_count: int = 0,
+    asset_type: str = "poster",
 ) -> bool:
     """
     Send a Discord webhook notification for poster generation.
@@ -250,6 +265,10 @@ def send_discord_notification(
             },
             "timestamp": datetime.utcnow().isoformat()
         }
+
+        asset_label = _get_asset_type_label(asset_type)
+        if asset_label:
+            embed["fields"].append({"name": "Asset", "value": asset_label, "inline": True})
 
         # Add poster thumbnail - either from attached file or URL
         if poster_data:
@@ -330,6 +349,7 @@ def _build_notification_embed(
     success_count: int,
     failed_count: int,
     poster_data: Optional[bytes] = None,
+    asset_type: str = "poster",
 ) -> dict:
     """Build a Discord embed dict — shared between native Discord and Apprise Discord paths."""
     emoji = _get_source_emoji(source)
@@ -365,6 +385,10 @@ def _build_notification_embed(
         "timestamp": datetime.utcnow().isoformat(),
     }
 
+    asset_label = _get_asset_type_label(asset_type)
+    if asset_label:
+        embed["fields"].append({"name": "Asset", "value": asset_label, "inline": True})
+
     if poster_data:
         embed["thumbnail"] = {"url": "attachment://poster.jpg"}
 
@@ -383,6 +407,7 @@ def send_apprise_notification(
     success_count: int = 0,
     failed_count: int = 0,
     poster_data: Optional[bytes] = None,
+    asset_type: str = "poster",
 ) -> bool:
     """
     Send an Apprise notification for poster generation events.
@@ -423,7 +448,7 @@ def send_apprise_notification(
             title=title, year=year, template_id=template_id,
             library_id=library_id, source=source, action=action,
             count=count, success_count=success_count, failed_count=failed_count,
-            poster_data=poster_data,
+            poster_data=poster_data, asset_type=asset_type,
         )
         for webhook_url in discord_urls:
             try:
@@ -471,6 +496,9 @@ def send_apprise_notification(
                 if template_id:
                     body += f"\nTemplate: {template_id}"
                 body += f"\nAction: {action_text}"
+                asset_label = _get_asset_type_label(asset_type)
+                if asset_label:
+                    body += f"\nAsset: {asset_label}"
 
                 result = ap.notify(title=notify_title, body=body)
                 if result:

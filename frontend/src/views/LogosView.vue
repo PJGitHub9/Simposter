@@ -12,12 +12,15 @@ type LogoItem = {
   logo_url?: string | null
   tmdb_id?: number | null
   is_tv?: boolean
+  addedAt?: number | null
+  labels?: string[]
 }
 
 const route = useRoute()
 const { items, loading, fetchItems, updateItem } = useArtLibraryCache<LogoItem>('logos')
 const filter = ref<'all' | 'has_logo' | 'missing'>('all')
-const sortBy = ref<'title_asc' | 'title_desc' | 'year_desc' | 'year_asc'>('title_asc')
+const sortBy = ref<'title_asc' | 'title_desc' | 'year_desc' | 'year_asc' | 'added_desc' | 'added_asc'>('title_asc')
+const filterLabel = ref('')
 const search = ref('')
 const failedImages = ref<Set<string>>(new Set())
 const selectedItem = ref<LogoItem | null>(null)
@@ -28,12 +31,23 @@ const libraryId = computed(() => (route.query.library as string) || '')
 const withLogo = computed(() => items.value.filter(m => m.logo_url))
 const withoutLogo = computed(() => items.value.filter(m => !m.logo_url))
 
+// Labels already come back on every item from GET /api/movies|/api/tv-shows
+// (same bulk response Movies/TV Shows themselves use) -- no extra fetch needed.
+const allLabels = computed(() => {
+  const labels = new Set<string>()
+  items.value.forEach(m => (m.labels || []).forEach(l => labels.add(l)))
+  return Array.from(labels).sort()
+})
+
 const displayItems = computed(() => {
   let list = items.value
 
   // Filter
   if (filter.value === 'has_logo') list = list.filter(m => m.logo_url && !failedImages.value.has(m.key))
   else if (filter.value === 'missing') list = list.filter(m => !m.logo_url || failedImages.value.has(m.key))
+
+  // Filter by label
+  if (filterLabel.value) list = list.filter(m => (m.labels || []).includes(filterLabel.value))
 
   // Search
   const q = search.value.trim().toLowerCase()
@@ -43,6 +57,8 @@ const displayItems = computed(() => {
   list = [...list].sort((a, b) => {
     if (sortBy.value === 'title_asc') return a.title.localeCompare(b.title)
     if (sortBy.value === 'title_desc') return b.title.localeCompare(a.title)
+    if (sortBy.value === 'added_desc') return (b.addedAt || 0) - (a.addedAt || 0)
+    if (sortBy.value === 'added_asc') return (a.addedAt || 0) - (b.addedAt || 0)
     const ay = Number(a.year) || 0
     const by_ = Number(b.year) || 0
     if (sortBy.value === 'year_desc') return by_ - ay
@@ -53,7 +69,7 @@ const displayItems = computed(() => {
 })
 
 const { page, totalPages, pagedItems, nextPage, prevPage, resetPage } = usePagedItems(displayItems)
-watch([filter, search, sortBy], resetPage)
+watch([filter, search, sortBy, filterLabel], resetPage)
 
 function refresh() {
   failedImages.value = new Set()
@@ -104,11 +120,17 @@ onMounted(refresh)
           <option value="has_logo">Has logo</option>
           <option value="missing">Missing logo</option>
         </select>
+        <select v-model="filterLabel" class="toolbar-select">
+          <option value="">All Labels</option>
+          <option v-for="label in allLabels" :key="label" :value="label">{{ label }}</option>
+        </select>
         <select v-model="sortBy" class="toolbar-select">
           <option value="title_asc">Title (A–Z)</option>
           <option value="title_desc">Title (Z–A)</option>
           <option value="year_desc">Year (Newest)</option>
           <option value="year_asc">Year (Oldest)</option>
+          <option value="added_desc">Date Added (Newest)</option>
+          <option value="added_asc">Date Added (Oldest)</option>
         </select>
         <button class="btn-refresh" @click="refresh" :disabled="loading">
           <svg v-if="loading" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>

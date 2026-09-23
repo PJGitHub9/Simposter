@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.107',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Logos, Backdrops, and Square Art can now sort by Date Added and filter by label, matching what Movies/TV Shows already offer.',
+          'Discord/Apprise notifications now say when a logo, backdrop, or square art was sent — not just posters.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.106',
     date: '2026-09-22',
     sections: [

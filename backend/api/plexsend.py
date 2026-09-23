@@ -286,7 +286,10 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
 
     # Best-effort display title for log readability — cheap local DB cache lookup,
     # never a network call (this endpoint doesn't otherwise fetch movie/show details).
+    # Also feeds the send-notification below, so kept as separate title/year rather
+    # than only the combined display string.
     _logo_title = "?"
+    _t, _y = None, None
     try:
         from .. import database as _db_title
         _t, _y = _db_title.get_title_for_rating_key(req.rating_key)
@@ -353,6 +356,21 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
         logger.debug("[PLEX] Failed to update logo cache after upload: %s", e)
 
     logger.info("[PLEX] Clearlogo sent for ratingKey=%s [%s]", req.rating_key, _logo_title)
+
+    _notif_kwargs = dict(
+        title=_t or "Unknown", year=_y, template_id="", preset_id="",
+        library_id=req.library_id, source="manual", action="sent_to_plex",
+        asset_type="logo",
+    )
+    try:
+        send_discord_notification(**_notif_kwargs, poster_data=logo_bytes)
+    except Exception as notif_err:
+        logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
+    try:
+        send_apprise_notification(**_notif_kwargs, poster_data=logo_bytes)
+    except Exception as notif_err:
+        logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
+
     return {"status": "ok", "logo_url": new_logo_url}
 
 
@@ -362,6 +380,7 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
         raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
 
     _art_title = "?"
+    _t, _y = None, None
     try:
         from .. import database as _db_title
         _t, _y = _db_title.get_title_for_rating_key(req.rating_key)
@@ -438,6 +457,21 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
         logger.debug("[PLEX] Failed to update backdrop cache after upload: %s", e)
 
     logger.info("[PLEX] Backdrop sent for ratingKey=%s [%s]", req.rating_key, _art_title)
+
+    _notif_kwargs = dict(
+        title=_t or "Unknown", year=_y, template_id="", preset_id="",
+        library_id=req.library_id, source="manual", action="sent_to_plex",
+        asset_type="backdrop",
+    )
+    try:
+        send_discord_notification(**_notif_kwargs, poster_data=art_bytes)
+    except Exception as notif_err:
+        logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
+    try:
+        send_apprise_notification(**_notif_kwargs, poster_data=art_bytes)
+    except Exception as notif_err:
+        logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
+
     return {"status": "ok", "art_url": new_art_url}
 
 
@@ -452,6 +486,7 @@ def api_plex_send_square_art(req: PlexSquareArtSendRequest):
         raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
 
     _sq_title = "?"
+    _t, _y = None, None
     try:
         from .. import database as _db_title
         _t, _y = _db_title.get_title_for_rating_key(req.rating_key)
@@ -526,6 +561,21 @@ def api_plex_send_square_art(req: PlexSquareArtSendRequest):
         logger.debug("[PLEX] Failed to update square art cache after upload: %s", e)
 
     logger.info("[PLEX] Square art sent for ratingKey=%s [%s]", req.rating_key, _sq_title)
+
+    _notif_kwargs = dict(
+        title=_t or "Unknown", year=_y, template_id="", preset_id="",
+        library_id=req.library_id, source="manual", action="sent_to_plex",
+        asset_type="square_art",
+    )
+    try:
+        send_discord_notification(**_notif_kwargs, poster_data=art_bytes)
+    except Exception as notif_err:
+        logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
+    try:
+        send_apprise_notification(**_notif_kwargs, poster_data=art_bytes)
+    except Exception as notif_err:
+        logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
+
     return {"status": "ok", "square_art_url": new_square_art_url}
 
 
