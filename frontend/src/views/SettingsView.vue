@@ -18,6 +18,7 @@ import AutomationTab from './settings/AutomationTab.vue'
 import AdvancedTab from './settings/AdvancedTab.vue'
 import NotificationsTab from './settings/NotificationsTab.vue'
 import CleanupTab from './settings/CleanupTab.vue'
+import MediaServersTab from './settings/MediaServersTab.vue'
 
 interface LibraryMapping {
   id: string
@@ -50,7 +51,7 @@ const route = useRoute()
 const router = useRouter()
 
 // Active tab state - initialize from URL or default to 'general'
-const activeTab = ref<'general' | 'libraries' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
+const activeTab = ref<'general' | 'libraries' | 'media-servers' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
   (route.query.tab as any) || 'general'
 )
 
@@ -70,7 +71,15 @@ const sectionsWithChanges = ref({
   imageQuality: false,
   performance: false,
   scheduler: false,
-  automation: false
+  automation: false,
+  mediaServers: false,
+  // Granular, per-server-type flags (mediaServers above stays as the
+  // combined flag used by the "preferred server" picker) so editing just
+  // the Jellyfin section in MediaServersTab.vue doesn't yellow-highlight
+  // the untouched Plex/Emby sections too.
+  mediaServersPlex: false,
+  mediaServersJellyfin: false,
+  mediaServersEmby: false
 })
 
 // Cooldown state to prevent rapid clicking
@@ -388,7 +397,13 @@ const captureSettingsSnapshot = () => {
     appriseNotifyBatch: localAppriseNotifyBatch.value,
     appriseNotifyManual: localAppriseNotifyManual.value,
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
-    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
+    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
+    // mediaServers/preferredPosterServer are bound directly to the store
+    // (no local staging ref, unlike everything else here -- Quirk #79) so
+    // read straight from it rather than from a localXxx ref that doesn't
+    // exist for these two fields.
+    mediaServers: JSON.parse(JSON.stringify(settings.mediaServers.value)),
+    preferredPosterServer: settings.automation.value.preferredPosterServer
   })
   hasUnsavedChanges.value = false
 
@@ -402,6 +417,10 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.performance = false
   sectionsWithChanges.value.scheduler = false
   sectionsWithChanges.value.automation = false
+  sectionsWithChanges.value.mediaServers = false
+  sectionsWithChanges.value.mediaServersPlex = false
+  sectionsWithChanges.value.mediaServersJellyfin = false
+  sectionsWithChanges.value.mediaServersEmby = false
 
   setTimeout(() => {
     watchersEnabled.value = true
@@ -472,7 +491,9 @@ const checkForChanges = () => {
     appriseNotifyBatch: localAppriseNotifyBatch.value,
     appriseNotifyManual: localAppriseNotifyManual.value,
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
-    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
+    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
+    mediaServers: settings.mediaServers.value,
+    preferredPosterServer: settings.automation.value.preferredPosterServer
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -501,6 +522,19 @@ const checkForChanges = () => {
     JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries)
   sectionsWithChanges.value.tvLibraries =
     JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries)
+  sectionsWithChanges.value.mediaServers =
+    JSON.stringify(settings.mediaServers.value) !== JSON.stringify(initial.mediaServers) ||
+    settings.automation.value.preferredPosterServer !== initial.preferredPosterServer
+
+  const initialMediaServers: any[] = initial.mediaServers || []
+  const byType = (list: any[], type: string) => list.filter(s => s && s.type === type)
+  sectionsWithChanges.value.mediaServersPlex =
+    JSON.stringify(byType(settings.mediaServers.value, 'plex')) !== JSON.stringify(byType(initialMediaServers, 'plex')) ||
+    sectionsWithChanges.value.plexConnection
+  sectionsWithChanges.value.mediaServersJellyfin =
+    JSON.stringify(byType(settings.mediaServers.value, 'jellyfin')) !== JSON.stringify(byType(initialMediaServers, 'jellyfin'))
+  sectionsWithChanges.value.mediaServersEmby =
+    JSON.stringify(byType(settings.mediaServers.value, 'emby')) !== JSON.stringify(byType(initialMediaServers, 'emby'))
 
   sectionsWithChanges.value.performance =
     localConcurrentRenders.value !== initial.concurrentRenders ||
@@ -922,6 +956,35 @@ const scanLibrary = async (libraryId?: string) => {
       }
     }
 
+    // If this Plex library is linked to another server's library via a Library
+    // Group (Settings -> Libraries -> "Linked Libraries", see CLAUDE.md's
+    // merged-grid Quirk), scan that linked library too -- a single "Scan" click
+    // on a linked row covers Plex AND Jellyfin/Emby, instead of needing a
+    // separate whole-server import from Media Servers. A silent no-op for any
+    // library that isn't linked to anything (the common case).
+    if (libraryId) {
+      try {
+        const linkedRes = await fetch(`${apiBase}/api/media-server/scan-linked?server_id=plex-1&library_id=${encodeURIComponent(libraryId)}`, { method: 'POST' })
+        if (linkedRes.ok) {
+          const linkedData = await linkedRes.json()
+          // A non-empty errors array (e.g. the linked server_id no longer
+          // resolves to any configured server -- Quirk #70, found live when
+          // re-adding a server issued it a new id and silently orphaned an
+          // existing link) previously had nothing surfacing it at all; the
+          // scan looked like it succeeded while quietly doing nothing for
+          // the linked side. Surface it the same way other scan failures on
+          // this page already are.
+          if (Array.isArray(linkedData.errors) && linkedData.errors.length) {
+            const detail = linkedData.errors.map((e: any) => `${e.server_id}: ${e.error}`).join('; ')
+            saved.value = `Linked library scan had errors: ${detail}`
+            setTimeout(() => (saved.value = ''), 6000)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to scan linked libraries', err)
+      }
+    }
+
     saved.value = `Rescanned ${data.count || 0} items`
     setTimeout(() => (saved.value = ''), 2000)
     scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
@@ -1223,7 +1286,15 @@ watch([
   localDiscordNotifyManual,
   localDiscordNotifyWebhook,
   localDiscordNotifyAutoGenerate,
-  localWebhookAlwaysRegenerateSeason
+  localWebhookAlwaysRegenerateSeason,
+  // mediaServers/preferredPosterServer are bound directly to the store
+  // rather than a localXxx staging ref -- watched straight off the store
+  // itself so an edit made in MediaServersTab.vue's own UI still triggers
+  // the same unsaved-changes/yellow-highlight machinery every other field
+  // already gets (Quirk #79's follow-up -- the user asked for this
+  // explicitly after noticing it was missing).
+  () => settings.mediaServers.value,
+  () => settings.automation.value.preferredPosterServer
 ], () => {
   if (watchersEnabled.value) {
     checkForChanges()
@@ -1311,6 +1382,12 @@ onMounted(() => {
         </button>
         <!-- Integrations tab removed -->
         <button
+          :class="['tab', { active: activeTab === 'media-servers' }]"
+          @click="activeTab = 'media-servers'"
+        >
+          Media Servers
+        </button>
+        <button
           :class="['tab', { active: activeTab === 'output' }]"
           @click="activeTab = 'output'"
         >
@@ -1384,8 +1461,6 @@ onMounted(() => {
         :tvShowLibraries="localTvShowLibraries"
         :savedLibraryIds="savedLibraryIds"
         :savedTvShowLibraryIds="savedTvShowLibraryIds"
-        :testConnection="testConnection"
-        :testConnectionLoading="testConnectionLoading"
         :plexLibraries="plexLibraries"
         :scanCooldown="scanCooldown"
         :scanningLibraryId="scanningLibraryId"
@@ -1397,15 +1472,12 @@ onMounted(() => {
         :defaultTvLabelsToRemove="localDefaultTvLabelsToRemove"
         :unsavedChanges="hasUnsavedChanges"
         :schedulerChanged="sectionsWithChanges.scheduler"
-        :plexConnectionChanged="sectionsWithChanges.plexConnection"
         :movieLibrariesChanged="sectionsWithChanges.movieLibraries"
         :tvLibrariesChanged="sectionsWithChanges.tvLibraries"
         :sendLogosToPlex="localSendLogosToPlex"
         :kometaCompatibility="localKometaCompatibility"
         @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @update:kometaCompatibility="localKometaCompatibility = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
-        @update:plexUrl="localPlexUrl = $event"
-        @update:plexToken="localPlexToken = $event"
         @update:libraries="localLibraries = $event; hasUnsavedChanges = true"
         @update:tvShowLibraries="localTvShowLibraries = $event; hasUnsavedChanges = true"
         @update:schedulerEnabled="localSchedulerEnabled = $event"
@@ -1413,13 +1485,28 @@ onMounted(() => {
         @update:schedulerLibraryIds="localSchedulerLibraryIds = $event"
         @update:defaultLabelsToRemove="localDefaultLabelsToRemove = $event; hasUnsavedChanges = true"
         @update:defaultTvLabelsToRemove="localDefaultTvLabelsToRemove = $event; hasUnsavedChanges = true"
-        @test-connection="testPlexConnection"
         @scan-library="scanLibrary"
         @save="saveSettings"
         @library-removed="pendingLibraryCacheCleanup.add($event)"
       />
 
       <!-- Integrations content removed -->
+
+      <MediaServersTab
+        v-if="activeTab === 'media-servers'"
+        :plexUrl="localPlexUrl"
+        :plexToken="localPlexToken"
+        :testConnection="testConnection"
+        :testConnectionLoading="testConnectionLoading"
+        :plexConnectionChanged="sectionsWithChanges.plexConnection"
+        :plexServersChanged="sectionsWithChanges.mediaServersPlex"
+        :jellyfinServersChanged="sectionsWithChanges.mediaServersJellyfin"
+        :embyServersChanged="sectionsWithChanges.mediaServersEmby"
+        @update:plexUrl="localPlexUrl = $event"
+        @update:plexToken="localPlexToken = $event"
+        @test-connection="testPlexConnection"
+        @save="saveSettings"
+      />
 
       <OutputTab
         v-if="activeTab === 'output'"

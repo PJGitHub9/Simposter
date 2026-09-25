@@ -24,6 +24,8 @@ from . import (
     overlay_config,
     version_info,
     cleanup,
+    media_server,
+    media_server_send,
 )
 
 router = APIRouter()
@@ -51,3 +53,5 @@ router.include_router(backup.router)
 router.include_router(overlay_config.router)
 router.include_router(version_info.router)
 router.include_router(cleanup.router)
+router.include_router(media_server.router)
+router.include_router(media_server_send.router)

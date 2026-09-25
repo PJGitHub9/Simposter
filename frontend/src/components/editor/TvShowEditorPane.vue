@@ -29,6 +29,19 @@ const route = useRoute()
 
 const apiBase = getApiBase()
 
+// See EditorPane.vue's identical computed for the full reasoning -- a
+// Jellyfin/Emby-sourced show (server_id !== 'plex-1') has no real Plex
+// rating_key for /api/plex/send to look up, so Send to Plex is disabled
+// rather than left to fail with a confusing error. Every season shares the
+// show's own server, so gating on the top-level movie/show object is correct
+// regardless of which season tab is currently focused.
+const isNonPlexItem = computed(() => !!props.movie.server_id && props.movie.server_id !== 'plex-1')
+const currentPosterLabel = computed(() => isNonPlexItem.value ? 'Current Poster' : 'Current Plex Poster')
+const currentLogoLabel = computed(() => isNonPlexItem.value ? 'Current Logo' : 'Current Plex Logo')
+const sendDisabledReason = computed(() => isNonPlexItem.value
+  ? 'This item is from a non-Plex server -- sending directly to it is not supported yet'
+  : null)
+
 const tmdbId = ref<number | null>(null)
 const tvdbId = ref<number | null>(null)
 const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
@@ -3403,7 +3416,7 @@ watch(tmdbId, () => {
       <div class="preview-inner">
         <div class="preview-existing">
           <div class="preview-label">
-            Current Plex Poster
+            {{ currentPosterLabel }}
             <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
@@ -3416,8 +3429,8 @@ watch(tmdbId, () => {
           <div v-else class="empty-preview">No poster</div>
 
           <div class="preview-label" style="margin-top: 14px;">
-            Current Plex Logo
-            <button class="refresh-btn" title="Fetch logo from Plex" @click="fetchExistingLogo(true)">
+            {{ currentLogoLabel }}
+            <button class="refresh-btn" title="Fetch logo" @click="fetchExistingLogo(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
@@ -3447,16 +3460,16 @@ watch(tmdbId, () => {
             <span v-if="loading" class="status-badge">Rendering...</span>
             <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
             <div class="preview-actions float-right">
-              <label class="send-logo-toggle" title="Also send the selected logo to Plex">
+              <label v-if="!isNonPlexItem" class="send-logo-toggle" title="Also send the selected logo to Plex">
                 <input type="checkbox" v-model="sendLogo" />
                 <span>Send logo</span>
               </label>
-              <button title="Send Logo to Plex" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+              <button v-if="!isNonPlexItem" title="Send Logo to Plex" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo' }}</span>
               </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
-              <button title="Send to Plex" class="btn-plex btn-inline" :disabled="loading" @click="doSend">📺 <span class="btn-label">Send to Plex</span></button>
+              <button :title="sendDisabledReason || 'Send to Plex'" class="btn-plex btn-inline" :disabled="loading || isNonPlexItem" @click="doSend">📺 <span class="btn-label">Send to Plex</span></button>
             </div>
           </div>
           <div class="preview-container">

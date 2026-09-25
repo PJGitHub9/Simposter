@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { copyToClipboard } from '@/services/clipboard'
+import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 
 interface Preset {
   id: string
@@ -114,6 +116,84 @@ const webhookIncludeSeasons = ref(true)
 const webhookEventTypes = ref('added,watched')
 const copiedWebhook = ref(false)
 
+// Scopes the generated webhook to one specific Plex library, so a title that
+// exists in more than one library (e.g. "Movies" + "4k Movies") resolves
+// unambiguously instead of the webhook handler's own default behavior --
+// search every library of the right type and use whichever has a match
+// first, which can silently pick the wrong copy. '' = "Any library" (the
+// backend's own pre-existing default, and what every already-configured
+// webhook URL still gets since this is a purely additive query param).
+const settingsStore = useSettingsStore()
+const webhookLibraryId = ref('')
+
+// Radarr scopes to a movie library, Sonarr to a TV library -- Tautulli
+// handles both media types in one webhook (media_type comes from its own
+// payload, not the URL), so a single library picker doesn't map cleanly
+// there and isn't offered in this generator; the backend still accepts the
+// same ?library_id= param for Tautulli (aliased internally to avoid a real
+// local-variable name collision in that handler), just not exposed here.
+//
+// Under the hood this is still a raw Plex library id (that's what the
+// backend actually searches on) -- but the picker now surfaces each
+// library's Library Group membership (Quirk #62/#64) in its label, since
+// that's what a user picking "which library" actually needs to know here:
+// as of Quirk #95, the webhook's cross-server poster sync
+// (_sync_poster_to_other_servers()) only reaches Jellyfin/Emby servers that
+// are linked to the RESOLVED library via a Library Group -- a library with
+// no group (or a single-member, Plex-only group) syncs nowhere but Plex,
+// same as before Jellyfin/Emby existed. This picker doesn't need its own
+// separate "group" concept in the URL because a group always anchors to
+// exactly one Plex library (Quirk #62) -- selecting that library already
+// unambiguously selects its group.
+const webhookLibraryOptions = computed(() => {
+  const mappings = webhookType.value === 'sonarr'
+    ? settingsStore.plex.value.tvShowLibraryMappings
+    : settingsStore.plex.value.libraryMappings
+  const mediaType = webhookType.value === 'sonarr' ? 'tv' : 'movie'
+  return (mappings || []).map(lib => {
+    const id = String(lib.id)
+    const baseLabel = lib.displayName || lib.title || id
+    const group = settingsStore.libraryGroups.value.find(g =>
+      g.mediaType === mediaType &&
+      g.members.some(m => m.serverId === 'plex-1' && m.libraryId === id)
+    )
+    const otherMembers = (group?.members || []).filter(m => m.serverId !== 'plex-1')
+    if (otherMembers.length === 0) {
+      return { id, label: baseLabel, linked: false }
+    }
+    const otherNames = otherMembers.map(m => mediaServerLabel(m.serverId, settingsStore.mediaServers.value)).join(', ')
+    return { id, label: `${baseLabel} (also syncs to: ${otherNames})`, linked: true }
+  })
+})
+
+// Read-only summary of which Jellyfin/Emby servers a webhook of the
+// currently-selected type will actually reach (Quirk #95) -- Plex has
+// always been "there" in this generator via the library picker above;
+// Jellyfin/Emby had no presence in this tab at all before this, even
+// though Quirk #71's cross-server sync has existed since Phase 6. There's
+// deliberately no separate enable/disable toggle here: a Library Group
+// link (Settings -> Libraries) IS the control, exactly like the merged
+// browsing grid (Quirk #65) and the manual editor's send picker
+// (Quirk #75) -- adding a second, independent "sync enabled" flag on top
+// of group membership would just be two ways to express the same on/off
+// state and risk them drifting out of sync with each other.
+const webhookCrossServerGroups = computed(() => {
+  const mediaType = webhookType.value === 'sonarr' ? 'tv' : 'movie'
+  return settingsStore.libraryGroups.value
+    .filter(g => g.mediaType === mediaType && g.members.some(m => m.serverId !== 'plex-1'))
+    .map(g => {
+      const plexLib = g.members.find(m => m.serverId === 'plex-1')
+      const others = g.members.filter(m => m.serverId !== 'plex-1')
+      return {
+        id: g.id,
+        plexLabel: plexLib
+          ? (webhookLibraryOptions.value.find(o => o.id === plexLib.libraryId)?.label.split(' (also syncs')[0] || plexLib.libraryId)
+          : g.name,
+        otherLabels: others.map(m => mediaServerLabel(m.serverId, settingsStore.mediaServers.value)),
+      }
+    })
+})
+
 const webhookTemplates = computed(() => {
   return Object.keys(availablePresets.value)
 })
@@ -127,11 +207,17 @@ const webhookPresets = computed((): Preset[] => {
 
 const generatedWebhookUrl = computed(() => {
   const baseUrl = window.location.origin.replace(':5173', ':8003') // Replace frontend port with API port
+  // Empty (the default, "Any library") omits the param entirely -- every
+  // already-configured webhook URL out there keeps working byte-for-byte
+  // the same, since the backend's own default is identical to "not scoped".
+  const libSuffix = webhookLibraryId.value ? `library_id=${encodeURIComponent(webhookLibraryId.value)}` : ''
 
   if (webhookType.value === 'radarr') {
-    return `${baseUrl}/api/webhook/radarr/${webhookTemplate.value}/${webhookPreset.value}`
+    const base = `${baseUrl}/api/webhook/radarr/${webhookTemplate.value}/${webhookPreset.value}`
+    return libSuffix ? `${base}?${libSuffix}` : base
   } else if (webhookType.value === 'sonarr') {
-    return `${baseUrl}/api/webhook/sonarr/${webhookTemplate.value}/${webhookPreset.value}?include_seasons=${webhookIncludeSeasons.value}`
+    const base = `${baseUrl}/api/webhook/sonarr/${webhookTemplate.value}/${webhookPreset.value}?include_seasons=${webhookIncludeSeasons.value}`
+    return libSuffix ? `${base}&${libSuffix}` : base
   } else if (webhookType.value === 'tautulli') {
     return `${baseUrl}/api/webhook/tautulli?template_id=${webhookTemplate.value}&preset_id=${webhookPreset.value}&event_types=${webhookEventTypes.value}`
   }
@@ -314,6 +400,45 @@ const webhookInstructions = computed(() => {
               </option>
             </select>
           </label>
+
+          <!-- Only for Radarr/Sonarr -- Tautulli handles both movie and TV
+               events in one webhook (its own payload says which), so a
+               single library picker here wouldn't map cleanly to it; the
+               backend still accepts the same ?library_id= param for
+               Tautulli, just not exposed as a picker in this generator. -->
+          <label v-if="webhookType === 'radarr' || webhookType === 'sonarr'">
+            <span class="label-text">Library (optional)</span>
+            <select v-model="webhookLibraryId">
+              <option value="">Any library (default)</option>
+              <option v-for="lib in webhookLibraryOptions" :key="lib.id" :value="lib.id">{{ lib.label }}</option>
+            </select>
+            <span class="help-text">
+              Scopes the lookup to one library, for when the same title could exist in more than one
+              (e.g. "Movies" + "4k Movies"). Leave as "Any library" unless you actually have that overlap.
+              A library shown with "also syncs to: ..." is linked to a Jellyfin/Emby server via a
+              Library Group (Settings &rarr; Libraries) -- picking it means the poster this webhook
+              generates also gets pushed to those linked server(s), not just Plex. An unlinked library,
+              or "Any library", only ever reaches Plex.
+            </span>
+          </label>
+
+          <!-- Jellyfin/Emby visibility (Quirk #95) -- Radarr/Sonarr only,
+               matching the library picker above's own scope. No control to
+               toggle here on purpose (see webhookCrossServerGroups' own
+               comment) -- this is confirmation, and a pointer to where the
+               real control (Library Groups) actually lives. -->
+          <div v-if="(webhookType === 'radarr' || webhookType === 'sonarr')" class="webhook-cross-server-note">
+            <template v-if="webhookCrossServerGroups.length > 0">
+              <strong>Also reaches Jellyfin/Emby:</strong>
+              <span v-for="(g, i) in webhookCrossServerGroups" :key="g.id">
+                {{ g.plexLabel }} &rarr; {{ g.otherLabels.join(', ') }}<span v-if="i < webhookCrossServerGroups.length - 1">; </span>
+              </span>
+            </template>
+            <template v-else>
+              No libraries linked to a Jellyfin/Emby server yet -- this webhook will only ever reach Plex.
+              Link one in Settings &rarr; Libraries to also sync generated posters there.
+            </template>
+          </div>
 
           <!-- Sonarr-specific option -->
           <label v-if="webhookType === 'sonarr'" class="checkbox-label">
@@ -498,6 +623,23 @@ input:focus {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
+}
+
+.webhook-cross-server-note {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  line-height: 1.5;
+}
+
+.webhook-cross-server-note strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-right: 6px;
 }
 
 .webhook-url-output {

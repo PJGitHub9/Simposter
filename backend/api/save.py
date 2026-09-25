@@ -210,33 +210,18 @@ def api_save(req: SaveRequest):
     if req.preset_id:
         render_options["preset_id"] = req.preset_id
 
-    # Inject Plex media metadata for overlay badge rendering
+    # Inject Plex media metadata (resolution/codec/audio/edition) plus
+    # tmdb_id/media_type for studio/streaming-platform badges. is_tv is passed
+    # straight from the request (already known) instead of re-fetching and
+    # re-parsing metadata just to re-derive it, which this call site used to do.
     if req.rating_key:
         try:
-            from ..config import get_plex_media_info, extract_tmdb_id_from_metadata
-            import requests as _requests
-            import xml.etree.ElementTree as ET
-            plex_media = get_plex_media_info(req.rating_key)
-            if plex_media:
-                existing_meta = render_options.get("metadata") or {}
-                render_options["metadata"] = {**existing_meta, **plex_media}
-                logger.info("[SAVE] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
-
-            # Also inject tmdb_id + media_type for studio/streaming platform badge resolution
-            from ..config import settings as _cfg, plex_headers
-            meta_resp = _requests.get(
-                f"{_cfg.PLEX_URL}/library/metadata/{req.rating_key}",
-                headers=plex_headers(), timeout=5
+            from ..config import inject_plex_media_metadata
+            inject_plex_media_metadata(
+                render_options, req.rating_key,
+                is_tv=req.is_tv,
+                log_prefix="[SAVE] ",
             )
-            if meta_resp.ok:
-                tmdb_id = extract_tmdb_id_from_metadata(meta_resp.text)
-                if tmdb_id:
-                    root = ET.fromstring(meta_resp.text)
-                    is_tv = root.find('.//Directory') is not None
-                    render_options.setdefault("metadata", {})
-                    render_options["metadata"]["tmdb_id"] = tmdb_id
-                    render_options["metadata"]["media_type"] = "tv" if is_tv else "movie"
-                    logger.info("[SAVE] Injected tmdb_id=%s media_type=%s for studio/streaming badge resolution", tmdb_id, render_options["metadata"]["media_type"])
         except Exception as e:
             logger.debug("[SAVE] Failed to inject media info: %s", e)
 

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
 import { useMovies } from '../composables/useMovies'
+import { useLibraryGroupPreference } from '../composables/useLibraryGroupPreference'
 import { getApiBase } from '@/services/apiBase'
 
 type Movie = {
@@ -15,6 +16,9 @@ type Movie = {
   mediaType?: 'movie' | 'tv-show'
   library_id?: string | number
   edition?: string | null
+  server_id?: string | null
+  also_on?: string[] | null
+  other_servers?: { server_id: string; rating_key: string }[] | null
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
@@ -26,6 +30,12 @@ const labelInFlight = new Set<string>()
 const moviesLoaded = moviesLoadedFlag
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || '')
+const libraryGroupPref = useLibraryGroupPreference('movie')
+async function onPreferredServerChange(serverId: string) {
+  if (!currentLibrary.value) return
+  const ok = await libraryGroupPref.setPreferred(currentLibrary.value, serverId)
+  if (ok) await fetchMovies()
+}
 const POSTER_CACHE_KEY = computed(() => `simposter-poster-cache-${currentLibrary.value || 'all'}`)
 const LABELS_CACHE_KEY = computed(() => `simposter-labels-cache-${currentLibrary.value || 'all'}`)
 const MOVIES_CACHE_KEY = computed(() => `simposter-movies-cache-${currentLibrary.value || 'all'}`)
@@ -202,6 +212,7 @@ watch(currentLibrary, (newLib, oldLib) => {
     fetchPosters(paged.value)
     fetchLabels(paged.value)
   })
+  libraryGroupPref.load(newLib || '')
 })
 
 const props = defineProps<{
@@ -519,6 +530,7 @@ onMounted(async () => {
   await fetchPosters(paged.value)
   await fetchLabels(paged.value)
   fetchCachedKeys()
+  libraryGroupPref.load(currentLibrary.value)
 })
 </script>
 
@@ -552,6 +564,22 @@ onMounted(async () => {
           <input type="checkbox" v-model="filterCached" @change="page = 1" />
           Generated{{ filterCached && cachedKeys.size ? ` (${cachedKeys.size})` : '' }}
         </label>
+        <!-- Only shown for a library actually linked to another server via a
+             Library Group (Quirk #62/#64) -- lets which server's poster wins
+             on a merged item be changed right where you're looking at the
+             posters, instead of buried in Settings (Quirk #85). -->
+        <div v-if="libraryGroupPref.hasChoice.value" class="control-group">
+          <label for="prefer-server-select">Show posters from:</label>
+          <select
+            id="prefer-server-select"
+            :value="libraryGroupPref.preferredServerId.value"
+            class="control-select"
+            :disabled="libraryGroupPref.saving.value"
+            @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+          </select>
+        </div>
         <button @click="refreshData" class="refresh-btn" :disabled="loading">
           {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
         </button>

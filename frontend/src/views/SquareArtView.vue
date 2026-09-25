@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import SquareArtModal from '@/components/SquareArtModal.vue'
 import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
 import { usePagedItems } from '@/composables/usePagedItems'
+import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
 
 type SquareArtItem = {
   key: string
@@ -16,6 +17,7 @@ type SquareArtItem = {
   library_id?: string | number | null
   addedAt?: number | null
   labels?: string[]
+  server_id?: string | null
 }
 
 const route = useRoute()
@@ -29,6 +31,25 @@ const selectedItem = ref<SquareArtItem | null>(null)
 
 const isTV = computed(() => route.name === 'tv-square-art')
 const libraryId = computed(() => (route.query.library as string) || '')
+
+// Same "Show posters from" live-preference control Movies/TV Shows already
+// have (Quirk #85). `mediaType` is fixed at this component's own creation
+// (route.name doesn't change without a full remount between
+// /movies/square-art and /tv-shows/square-art).
+const libraryGroupPref = useLibraryGroupPreference(isTV.value ? 'tv' : 'movie')
+async function onPreferredServerChange(serverId: string) {
+  if (!libraryId.value) return
+  const ok = await libraryGroupPref.setPreferred(libraryId.value, serverId)
+  if (ok) refresh()
+}
+
+// Square Art has no Jellyfin/Emby equivalent at all -- Jellyfin's client
+// never populates square_art_url (Quirk #59/#91, per the user's own
+// confirmation), so every tile would show as permanently "missing" if the
+// preferred server for this library is set to anything but Plex. Rather
+// than render a grid that can never show anything real, hide it entirely
+// and say so plainly.
+const nonPlexSelected = computed(() => libraryGroupPref.hasChoice.value && libraryGroupPref.preferredServerId.value !== 'plex-1')
 
 const withSquareArt = computed(() => items.value.filter((m) => m.square_art_url))
 const withoutSquareArt = computed(() => items.value.filter((m) => !m.square_art_url))
@@ -80,6 +101,7 @@ function refresh() {
     library_id: m.library_id,
     addedAt: m.addedAt,
     labels: m.labels || [],
+    server_id: m.server_id,
   }))
 }
 
@@ -107,8 +129,14 @@ function onSquareArtUpdated(newSquareArtUrl: string | null) {
   }
 }
 
-watch(libraryId, refresh)
-onMounted(refresh)
+watch(libraryId, (newLib) => {
+  refresh()
+  libraryGroupPref.load(newLib || '')
+})
+onMounted(() => {
+  refresh()
+  libraryGroupPref.load(libraryId.value)
+})
 </script>
 
 <template>
@@ -147,6 +175,20 @@ onMounted(refresh)
           <option value="added_desc">Date Added (Newest)</option>
           <option value="added_asc">Date Added (Oldest)</option>
         </select>
+        <!-- Only shown for a library actually linked to another server via a
+             Library Group (Quirk #62/#64) -- same live "prefer" control
+             Movies/TV Shows already have (Quirk #85). -->
+        <div v-if="libraryGroupPref.hasChoice.value" class="prefer-group">
+          <label class="toolbar-label">Show from:</label>
+          <select
+            :value="libraryGroupPref.preferredServerId.value"
+            class="toolbar-select"
+            :disabled="libraryGroupPref.saving.value"
+            @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+          </select>
+        </div>
         <button class="btn-refresh" @click="refresh" :disabled="loading">
           <svg v-if="loading" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
@@ -155,55 +197,61 @@ onMounted(refresh)
       </div>
     </div>
 
-    <div class="section-note">
-      Titles with square art already in Plex show it below (populated by library scans, same as
-      Logos/Backdrops). Click a title to generate/replace it from your existing template/preset —
-      send to Plex's dedicated square art slot, or save a copy to disk.
+    <div v-if="nonPlexSelected" class="state-msg plex-only-note">
+      Square art only available in Plex.
     </div>
 
-    <div v-if="loading" class="state-msg">Loading...</div>
+    <template v-else>
+      <div class="section-note">
+        Titles with square art already in Plex show it below (populated by library scans, same as
+        Logos/Backdrops). Click a title to generate/replace it from your existing template/preset —
+        send to Plex's dedicated square art slot, or save a copy to disk.
+      </div>
 
-    <div v-else-if="displayItems.length === 0" class="state-msg">
-      <template v-if="search">No results for "{{ search }}".</template>
-      <template v-else-if="filter === 'missing'">Every item already has square art in Plex.</template>
-      <template v-else-if="filter === 'has_square_art'">No square art found yet. Run a library scan, or generate one below.</template>
-      <template v-else>No items found. Run a library scan.</template>
-    </div>
+      <div v-if="loading" class="state-msg">Loading...</div>
 
-    <div v-else class="art-grid">
-      <div
-        v-for="item in pagedItems"
-        :key="item.key"
-        class="art-card"
-        :class="{ 'has-art': !!item.square_art_url && !failedImages.has(item.key) }"
-        title="Click to create/replace square art"
-        @click="openModal(item)"
-      >
-        <div class="art-area">
-          <img
-            v-if="item.square_art_url && !failedImages.has(item.key)"
-            :src="thumbUrl(item.square_art_url)"
-            :alt="item.title"
-            class="art-img"
-            @error="onImgError(item.key)"
-          />
-          <div v-else class="no-art-placeholder">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-            <span>No square art in Plex</span>
+      <div v-else-if="displayItems.length === 0" class="state-msg">
+        <template v-if="search">No results for "{{ search }}".</template>
+        <template v-else-if="filter === 'missing'">Every item already has square art in Plex.</template>
+        <template v-else-if="filter === 'has_square_art'">No square art found yet. Run a library scan, or generate one below.</template>
+        <template v-else>No items found. Run a library scan.</template>
+      </div>
+
+      <div v-else class="art-grid">
+        <div
+          v-for="item in pagedItems"
+          :key="item.key"
+          class="art-card"
+          :class="{ 'has-art': !!item.square_art_url && !failedImages.has(item.key) }"
+          title="Click to create/replace square art"
+          @click="openModal(item)"
+        >
+          <div class="art-area">
+            <img
+              v-if="item.square_art_url && !failedImages.has(item.key)"
+              :src="thumbUrl(item.square_art_url)"
+              :alt="item.title"
+              class="art-img"
+              @error="onImgError(item.key)"
+            />
+            <div v-else class="no-art-placeholder">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span>No square art in Plex</span>
+            </div>
+          </div>
+          <div class="art-meta">
+            <span class="art-title">{{ item.title }}</span>
+            <span v-if="item.year" class="art-year">{{ item.year }}</span>
           </div>
         </div>
-        <div class="art-meta">
-          <span class="art-title">{{ item.title }}</span>
-          <span v-if="item.year" class="art-year">{{ item.year }}</span>
-        </div>
       </div>
-    </div>
 
-    <div v-if="!loading && displayItems.length > 0" class="pagination-bar">
-      <button class="page-btn" @click="prevPage" :disabled="page === 1">Prev</button>
-      <span class="page-indicator">{{ page }} / {{ totalPages }}</span>
-      <button class="page-btn" @click="nextPage" :disabled="page === totalPages">Next</button>
-    </div>
+      <div v-if="!loading && displayItems.length > 0" class="pagination-bar">
+        <button class="page-btn" @click="prevPage" :disabled="page === 1">Prev</button>
+        <span class="page-indicator">{{ page }} / {{ totalPages }}</span>
+        <button class="page-btn" @click="nextPage" :disabled="page === totalPages">Next</button>
+      </div>
+    </template>
   </div>
 
   <SquareArtModal
@@ -309,6 +357,18 @@ onMounted(refresh)
   color: #c9d1e0;
 }
 
+.prefer-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-label {
+  font-size: 12px;
+  color: #a8b3cf;
+  white-space: nowrap;
+}
+
 .btn-refresh {
   display: flex;
   align-items: center;
@@ -353,6 +413,13 @@ onMounted(refresh)
   text-align: center;
   color: #a8b3cf;
   font-size: 14px;
+}
+
+.plex-only-note {
+  padding: 60px 20px;
+  font-size: 15px;
+  font-weight: 500;
+  color: #6b7a99;
 }
 
 .pagination-bar {

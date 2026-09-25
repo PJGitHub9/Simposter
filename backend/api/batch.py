@@ -398,18 +398,14 @@ def _process_single_movie(
         render_options["movie_title"] = movie_details.get("title", "")
         render_options["movie_year"] = movie_details.get("year", "")
 
-        # Inject Plex media metadata for overlay badges
-        from ..config import get_plex_media_info
-        plex_media = get_plex_media_info(rating_key)
-        if plex_media:
-            existing_meta = render_options.get("metadata") or {}
-            render_options["metadata"] = {**existing_meta, **plex_media}
-
-        # Inject tmdb_id and media_type for streaming platform badge resolution
-        if tmdb_id:
-            render_options.setdefault("metadata", {})
-            render_options["metadata"]["tmdb_id"] = tmdb_id
-            render_options["metadata"]["media_type"] = "movie"
+        # Inject Plex media metadata (resolution/codec/audio/edition) plus
+        # tmdb_id/media_type for studio/streaming-platform badges
+        from ..config import inject_plex_media_metadata
+        inject_plex_media_metadata(
+            render_options, rating_key,
+            tmdb_id=tmdb_id, is_tv=False,
+            log_prefix="[BATCH] ",
+        )
 
         # Pass preset_id so the template renderer can look up linked overlay configs
         if preset_id:
@@ -1563,18 +1559,14 @@ def _render_and_save_poster(
                 )
                 return _resend_cached_bytes_for_tv(rating_key, display_title, title, cached_bytes, req, source, is_tv, season_index)
 
-    # Inject Plex media metadata for overlay badges
-    from ..config import get_plex_media_info
-    plex_media = get_plex_media_info(rating_key)
-    if plex_media:
-        existing_meta = render_options.get("metadata") or {}
-        render_options["metadata"] = {**existing_meta, **plex_media}
-
-    # Inject tmdb_id and media_type for streaming platform badge resolution
-    if tmdb_id:
-        render_options.setdefault("metadata", {})
-        render_options["metadata"]["tmdb_id"] = tmdb_id
-        render_options["metadata"]["media_type"] = "tv" if is_tv else "movie"
+    # Inject Plex media metadata (resolution/codec/audio/edition) plus
+    # tmdb_id/media_type for studio/streaming-platform badges
+    from ..config import inject_plex_media_metadata
+    inject_plex_media_metadata(
+        render_options, rating_key,
+        tmdb_id=tmdb_id, is_tv=is_tv,
+        log_prefix="[BATCH TV] ",
+    )
 
     # Pass preset_id so the template renderer can look up linked overlay configs
     if preset_id:

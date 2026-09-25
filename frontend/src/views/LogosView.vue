@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import LogoEditorModal from '@/components/LogoEditorModal.vue'
 import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
 import { usePagedItems } from '@/composables/usePagedItems'
+import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
 
 type LogoItem = {
   key: string
@@ -27,6 +28,20 @@ const selectedItem = ref<LogoItem | null>(null)
 
 const isTV = computed(() => route.name === 'tv-logos')
 const libraryId = computed(() => (route.query.library as string) || '')
+
+// Same "Show posters from" live-preference control Movies/TV Shows already
+// have (Quirk #85) -- this page's `logo_url` comes from the exact same
+// merged-grid dedup those two grids use, so which linked server's row wins
+// was already being decided by that same setting; this just lets it be
+// changed from here too, instead of only from Movies/TV Shows. `mediaType`
+// is fixed at this component's own creation (route.name doesn't change
+// without a full remount between /movies/logos and /tv-shows/logos).
+const libraryGroupPref = useLibraryGroupPreference(isTV.value ? 'tv' : 'movie')
+async function onPreferredServerChange(serverId: string) {
+  if (!libraryId.value) return
+  const ok = await libraryGroupPref.setPreferred(libraryId.value, serverId)
+  if (ok) refresh()
+}
 
 const withLogo = computed(() => items.value.filter(m => m.logo_url))
 const withoutLogo = computed(() => items.value.filter(m => !m.logo_url))
@@ -92,8 +107,14 @@ function onLogoUpdated(newLogoUrl: string | null) {
   }
 }
 
-watch(libraryId, refresh)
-onMounted(refresh)
+watch(libraryId, (newLib) => {
+  refresh()
+  libraryGroupPref.load(newLib || '')
+})
+onMounted(() => {
+  refresh()
+  libraryGroupPref.load(libraryId.value)
+})
 </script>
 
 <template>
@@ -132,6 +153,20 @@ onMounted(refresh)
           <option value="added_desc">Date Added (Newest)</option>
           <option value="added_asc">Date Added (Oldest)</option>
         </select>
+        <!-- Only shown for a library actually linked to another server via a
+             Library Group (Quirk #62/#64) -- same live "prefer" control
+             Movies/TV Shows already have (Quirk #85). -->
+        <div v-if="libraryGroupPref.hasChoice.value" class="prefer-group">
+          <label class="toolbar-label">Show from:</label>
+          <select
+            :value="libraryGroupPref.preferredServerId.value"
+            class="toolbar-select"
+            :disabled="libraryGroupPref.saving.value"
+            @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+          </select>
+        </div>
         <button class="btn-refresh" @click="refresh" :disabled="loading">
           <svg v-if="loading" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
@@ -291,6 +326,18 @@ onMounted(refresh)
 .toolbar-select option {
   background: #1a1d2e;
   color: #c9d1e0;
+}
+
+.prefer-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-label {
+  font-size: 12px;
+  color: #a8b3cf;
+  white-space: nowrap;
 }
 
 .btn-refresh {

@@ -2,6 +2,7 @@ import xml.etree.ElementTree as ET
 from typing import List, Optional
 from pathlib import Path
 import os
+import sqlite3
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Body, Query
@@ -10,7 +11,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 import requests
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server
 from .. import cache, database as db
 from .art_cache import make_art_cache
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
@@ -230,6 +231,33 @@ _square_art_cache_path, _square_art_cache_url, _save_square_art_cache, fetch_and
 )
 
 
+def _fetch_and_cache_poster_from_media_server(rating_key: str, server_id: str) -> Optional[Path]:
+    """Poster fetch for a non-Plex item (Jellyfin/Emby) -- routes through
+    MediaServerClient.download_image() instead of the Plex-only logic below.
+    See art_cache.py's near-identical branch for Logo/Backdrop/Square Art;
+    posters have their own separate cache/fetch functions (predating
+    art_cache.py's factory) so this can't just reuse that one."""
+    try:
+        from ..media_server import get_client, ImageType
+        client = get_client(server_id)
+        if not client:
+            return None
+        data = client.download_image(rating_key, ImageType.POSTER)
+        if not data:
+            return None
+        saved = _save_poster_cache(rating_key, data, "image/jpeg")
+        if saved:
+            proxy_url = _poster_cache_url(rating_key, saved)
+            try:
+                cache.update_poster(rating_key, proxy_url)
+            except (sqlite3.Error, AttributeError) as e:
+                logger.debug("[CACHE] update_poster failed for %s: %s", rating_key, e, exc_info=True)
+        return saved
+    except Exception as e:
+        logger.debug("Non-Plex poster fetch failed for %s (server=%s): %s", rating_key, server_id, e)
+        return None
+
+
 def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
     """
     Fetch poster from cache or Plex and store it. Returns cached file path or None.
@@ -241,6 +269,10 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
         cached = _poster_cache_path(rating_key)
         if cached:
             return cached
+
+    server_id = db.get_server_id_for_rating_key(rating_key)
+    if server_id != "plex-1":
+        return _fetch_and_cache_poster_from_media_server(rating_key, server_id)
 
     # Add cache-busting parameter when force refreshing to bypass Plex's cache
     import time
@@ -483,8 +515,19 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
     if library_id in ("default", ""):
         library_id = None
 
-    # Always return from cache (which includes labels populated by scans)
-    cached = cache.get_cached_movies(library_id=library_id)
+    # If this library is linked to another server's library via a Library Group
+    # (Quirk #62/#64 -- Settings -> Libraries -> "Linked Libraries"), union in
+    # every linked member's items instead of just this one library's rows. A
+    # library with no links returns None here and falls through to the normal,
+    # unmodified single-library path -- zero behavior change for every install
+    # that's never linked anything.
+    group_members = get_library_group_members("plex-1", library_id, "movie") if library_id else None
+    if group_members:
+        preferred_server = get_library_group_preferred_server("plex-1", library_id, "movie") or "plex-1"
+        cached = db.get_cached_movies_multi(group_members, preferred_server)
+    else:
+        # Always return from cache (which includes labels populated by scans)
+        cached = cache.get_cached_movies(library_id=library_id)
 
     movies = [
         {
@@ -501,6 +544,9 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
             "updated_at": m.get("updated_at"),
             "library_id": m.get("library_id"),
             "edition": m.get("edition"),
+            "server_id": m.get("server_id"),
+            "also_on": m.get("also_on"),
+            "other_servers": m.get("other_servers"),
         }
         for m in cached
     ]
@@ -681,6 +727,15 @@ def api_scan_progress():
 @router.get("/movie/{rating_key}/tmdb", response_model=MovieTMDbResponse)
 def api_movie_tmdb(rating_key: str):
     rating_key = validate_rating_key(rating_key)
+    from .. import database as db
+    # get_movie_tmdb_id() below is Plex-only (a direct /library/metadata/{rating_key}
+    # fetch against settings.PLEX_URL) -- for a Jellyfin/Emby item id it always fails,
+    # silently starving the manual editor of poster/logo candidates (EditorPane.vue
+    # bails out entirely once tmdb_id comes back null). Already-known from whatever
+    # scan/merge cached this row -- no live fetch needed for a non-Plex item.
+    if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+        tmdb_id, _ = db.get_ids_for_rating_key(rating_key)
+        return MovieTMDbResponse(tmdb_id=tmdb_id)
     tmdb_id = get_movie_tmdb_id(rating_key)
     return MovieTMDbResponse(tmdb_id=tmdb_id)
 

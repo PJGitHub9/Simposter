@@ -60,7 +60,6 @@ def api_plex_send(req: PlexSendRequest):
 
     # Fetch movie details BEFORE rendering so {title} and {year} can be substituted
     import xml.etree.ElementTree as ET
-    from ..config import extract_tmdb_id_from_metadata
     movie_details = {}
     plex_xml_text = None
     is_tv = False
@@ -117,27 +116,14 @@ def api_plex_send(req: PlexSendRequest):
     # have no resolution/codec/edition metadata and no TMDb entry, so skip entirely.
     if not req.is_collection:
         try:
-            from ..config import get_plex_media_info
-            plex_media = get_plex_media_info(req.rating_key)
-            if plex_media:
-                existing_meta = options.get("metadata") or {}
-                options["metadata"] = {**existing_meta, **plex_media}
-                logger.info("[PLEX] Injected media info for rating_key=%s [%s]: %s", req.rating_key, movie_details.get("title") or "?", plex_media)
+            from ..config import inject_plex_media_metadata
+            inject_plex_media_metadata(
+                options, req.rating_key,
+                is_tv=is_tv, plex_xml_text=plex_xml_text,
+                log_prefix="[PLEX] ",
+            )
         except Exception as e:
             logger.debug("[PLEX] Failed to inject media info: %s", e)
-
-        # Inject tmdb_id and media_type so studio/streaming platform badges can resolve
-        if plex_xml_text:
-            try:
-                tmdb_id = extract_tmdb_id_from_metadata(plex_xml_text)
-                if tmdb_id:
-                    is_tv = bool(movie_details) and root.find('.//Directory') is not None
-                    options.setdefault("metadata", {})
-                    options["metadata"]["tmdb_id"] = tmdb_id
-                    options["metadata"]["media_type"] = "tv" if is_tv else "movie"
-                    logger.info("[PLEX] Injected tmdb_id=%s media_type=%s for studio/streaming badge resolution", tmdb_id, options["metadata"]["media_type"])
-            except Exception as e:
-                logger.debug("[PLEX] Failed to inject tmdb_id: %s", e)
 
     # Render poster using template + preset options
     img = render_poster_image(
@@ -583,9 +569,24 @@ def api_plex_send_square_art(req: PlexSquareArtSendRequest):
 # Render-cache resend endpoints
 # ---------------------------------------------------------------------------
 
+class ResendTarget(BaseModel):
+    server_id: str
+    rating_key: str  # this server's OWN rating_key for the same logical item --
+                      # not necessarily equal to the path rating_key (e.g. resending
+                      # a Plex-sourced grid card's cached bytes to a linked Jellyfin
+                      # server needs Jellyfin's own item id, not Plex's)
+
+
 class ResendCachedRequest(BaseModel):
     include_seasons: bool = False
     is_tv: bool = False
+    # Explicit list of servers to resend to, added for the grid's per-card
+    # "send to..." picker (movies only for now -- see CLAUDE.md's Quirk).
+    # None/empty preserves this endpoint's exact original behavior: resend to
+    # whichever single server the path rating_key actually belongs to
+    # (db.get_server_id_for_rating_key(), 'plex-1' for every pre-multi-server
+    # install).
+    targets: Optional[List[ResendTarget]] = None
 
 
 @router.get("/render-cache/cached-keys")
@@ -593,15 +594,29 @@ def api_render_cache_cached_keys():
     """Return the set of rating_keys that have a saved poster available to resend."""
     from ..save_paths import save_to_asset_folder_on_send_enabled, resolve_save_path, get_save_template
 
-    if not save_to_asset_folder_on_send_enabled():
-        cache_dir = Path(settings.CONFIG_DIR) / "cache" / "poster_renders"
-        if not cache_dir.exists():
-            return {"cached_keys": []}
-        return {"cached_keys": [p.stem for p in cache_dir.glob("*.jpg")]}
+    # The hidden internal cache (poster_renders/) is always a valid resend source,
+    # regardless of the "save to asset folder on send" setting -- save_or_cache_render()
+    # falls back to writing here whenever a caller has no SaveContext to resolve an
+    # asset-folder path with (ctx=None). media_server_send.py's Jellyfin/Emby sends
+    # always pass ctx=None (no Plex-metadata-derived {folder}/{title} substitution
+    # exists for a non-Plex item yet -- see CLAUDE.md Quirk #89), so a Jellyfin-sent
+    # poster's bytes only ever land here, never at a resolved asset-folder path. The
+    # asset-folder branch below used to be the ONLY check performed once that setting
+    # was on, silently missing anything that landed in the hidden cache instead --
+    # user-reported directly ("i still dont see the send arrow ... when on jellyfin
+    # view") even after Quirk #89's write-side fix, because this read side never
+    # looked at what that fix actually wrote. Always include this set now, unioned
+    # with whatever the asset-folder check below finds -- a strict no-op for any
+    # existing Plex-only install (nothing else writes a hidden-cache entry while
+    # this setting is on, since every Plex send path passes a real ctx).
+    cache_dir = Path(settings.CONFIG_DIR) / "cache" / "poster_renders"
+    hidden_keys = set(p.stem for p in cache_dir.glob("*.jpg")) if cache_dir.exists() else set()
 
-    # Asset-folder mode: no single hidden directory to list, so check the resolved
-    # path for every known movie/show (top-level posters only — matches what the
-    # library grid's resend button checks).
+    if not save_to_asset_folder_on_send_enabled():
+        return {"cached_keys": sorted(hidden_keys)}
+
+    # Asset-folder mode: also check the resolved path for every known movie/show
+    # (top-level posters only — matches what the library grid's resend button checks).
     #
     # Only resolve {folder} (one live Plex metadata fetch per movie) if the movie
     # save template actually uses it — checked once, not per item, so libraries that
@@ -609,7 +624,7 @@ def api_render_cache_cached_keys():
     movie_template_uses_folder = "{folder}" in get_save_template("movie")
 
     from .. import database as db
-    keys = []
+    keys = set(hidden_keys)
     for m in db.get_cached_movies():
         try:
             ctx = SaveContext(
@@ -621,7 +636,7 @@ def api_render_cache_cached_keys():
                 folder_name=get_media_folder_name(m.get("rating_key"), False) if movie_template_uses_folder else None,
             )
             if resolve_save_path(ctx, ".jpg").exists():
-                keys.append(m["rating_key"])
+                keys.add(m["rating_key"])
         except Exception:
             continue
     tv_template_uses_folder = "{folder}" in get_save_template("tv-show")
@@ -636,10 +651,10 @@ def api_render_cache_cached_keys():
                 folder_name=get_media_folder_name(s.get("rating_key"), True) if tv_template_uses_folder else None,
             )
             if resolve_save_path(ctx, ".jpg").exists():
-                keys.append(s["rating_key"])
+                keys.add(s["rating_key"])
         except Exception:
             continue
-    return {"cached_keys": keys}
+    return {"cached_keys": sorted(keys)}
 
 
 @router.get("/render-cache/{rating_key}/preview")
@@ -740,11 +755,32 @@ def _add_label_for_key(rating_key: str, is_tv: bool, library_id: Optional[str], 
 
 @router.post("/render-cache/{rating_key}/resend")
 def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
-    """Resend a previously cached rendered poster to Plex (no re-render)."""
-    if not settings.PLEX_URL or not settings.PLEX_TOKEN:
-        raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set")
-
+    """Resend a previously cached rendered poster (no re-render) to one or
+    more servers. Defaults to whichever single server the path rating_key
+    actually belongs to (db.get_server_id_for_rating_key()) -- 'plex-1' for
+    every pre-multi-server install, reproducing this endpoint's exact
+    original behavior byte-for-byte. `req.targets` (added for the grid's
+    per-card "send to..." picker, movies only for now) can name any linked
+    server explicitly, including more than one -- every target reuses the
+    SAME already-loaded cached bytes, resent as-is, matching every other
+    multi-server send path in this app that reuses already-rendered bytes
+    rather than re-rendering per destination.
+    """
     from .. import database as db
+
+    if req.targets:
+        targets = req.targets
+    else:
+        default_server = db.get_server_id_for_rating_key(rating_key) or "plex-1"
+        targets = [ResendTarget(server_id=default_server, rating_key=rating_key)]
+
+    has_plex_target = any(t.server_id == "plex-1" for t in targets)
+    # Only require Plex to be configured when a Plex target is actually
+    # involved -- a Jellyfin-only resend (a pure Jellyfin browsing session
+    # with no Plex configured at all) must not be blocked by a Plex-only
+    # precondition that has nothing to do with where this resend is going.
+    if has_plex_target and (not settings.PLEX_URL or not settings.PLEX_TOKEN):
+        raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set")
 
     # Look up library_id from cache
     with db.get_db() as conn:
@@ -770,28 +806,54 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
         )
     except Exception:
         top_ctx = None
+    # The rating_key-keyed cache is looked up against the PATH rating_key
+    # (there's only ever one cached render per item, regardless of how many
+    # servers it then gets resent to) -- every target below reuses these
+    # same bytes rather than each needing its own cached copy.
     cached = load_cached_render(rating_key, top_ctx)
     if not cached:
         raise HTTPException(404, f"No cached poster for {rating_key}")
 
-    plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
-    try:
-        plex_session.post(
-            plex_url,
-            headers={**plex_headers(), "Content-Type": "image/jpeg"},
-            data=cached,
-            timeout=20,
-        ).raise_for_status()
-    except Exception as e:
-        raise HTTPException(502, f"Failed to upload poster to Plex: {e}")
+    sent_to: List[str] = []
+    failed: List[str] = []
+    for target in targets:
+        if target.server_id == "plex-1":
+            try:
+                plex_url = f"{settings.PLEX_URL}/library/metadata/{target.rating_key}/posters"
+                plex_session.post(
+                    plex_url,
+                    headers={**plex_headers(), "Content-Type": "image/jpeg"},
+                    data=cached,
+                    timeout=20,
+                ).raise_for_status()
+                logger.info("[PLEXSEND] Resent cached poster for %s (%s)", target.rating_key, _title_for_ctx)
+                _remove_labels_for_key(target.rating_key, req.is_tv, library_id, db)
+                _add_label_for_key(target.rating_key, req.is_tv, library_id, db)
+                sent_to.append(target.server_id)
+            except Exception as e:
+                logger.warning("[PLEXSEND] Failed to resend cached poster to Plex (%s): %s", target.rating_key, e)
+                failed.append(target.server_id)
+        else:
+            try:
+                import base64
+                from .media_server_send import api_send_poster, MediaServerSendRequest
+                data_url = f"data:image/jpeg;base64,{base64.b64encode(cached).decode()}"
+                api_send_poster(MediaServerSendRequest(rating_key=target.rating_key, image_data=data_url, is_tv=req.is_tv))
+                logger.info("[PLEXSEND] Resent cached poster to %s (%s)", target.server_id, target.rating_key)
+                sent_to.append(target.server_id)
+            except Exception as e:
+                logger.warning("[PLEXSEND] Failed to resend cached poster to %s (%s): %s", target.server_id, target.rating_key, e)
+                failed.append(target.server_id)
 
-    logger.info("[PLEXSEND] Resent cached poster for %s (%s)", rating_key, _title_for_ctx)
-
-    _remove_labels_for_key(rating_key, req.is_tv, library_id, db)
-    _add_label_for_key(rating_key, req.is_tv, library_id, db)
+    if not sent_to:
+        raise HTTPException(502, f"Failed to resend poster to: {', '.join(failed) or 'unknown'}")
 
     resent_seasons = 0
-    if req.include_seasons:
+    # Season resend stays Plex-only -- season rating_keys in the cache below
+    # are always Plex's own (no Jellyfin season-item resolution exists yet,
+    # see Quirk #71's identical TV/season deferral), so this only runs at all
+    # when a Plex target was actually part of this resend.
+    if req.include_seasons and has_plex_target:
         show = db.get_cached_tv_show(rating_key)
         if show:
             library_label = resolve_library_label(library_id)
@@ -825,7 +887,7 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                 except Exception as se:
                     logger.warning("[PLEXSEND] Failed to resend season %s: %s", season_key, se)
 
-    return {"status": "ok", "rating_key": rating_key, "title": _title_for_ctx, "resent_seasons": resent_seasons}
+    return {"status": "ok", "rating_key": rating_key, "title": _title_for_ctx, "resent_seasons": resent_seasons, "sent_to": sent_to, "failed": failed}
 
 
 class LocalAssetResendRequest(BaseModel):

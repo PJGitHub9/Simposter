@@ -18,6 +18,7 @@ type LogoItem = {
   logo_url?: string | null
   tmdb_id?: number | null
   is_tv?: boolean
+  server_id?: string | null
 }
 
 const props = defineProps<{ item: LogoItem }>()
@@ -60,6 +61,11 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
 
 const hasSelection = computed(() => !!(selectedUrl.value || uploadedData.value))
+// See EditorPane.vue's identical computed (Quirk #65/#67/#68) -- a Jellyfin/
+// Emby-sourced item has no real Plex rating_key for /api/plex/send-logo to
+// look up, so Send to Plex is disabled with a clear reason instead of
+// failing confusingly.
+const isNonPlexItem = computed(() => !!props.item.server_id && props.item.server_id !== 'plex-1')
 
 async function fetchAvailableLogos() {
   loadingLogos.value = true
@@ -139,16 +145,23 @@ async function sendToPlexLogo() {
   error.value = null
   success.value = false
   try {
+    // See EditorPane.vue's doSend()/Quirk #69 -- a Jellyfin/Emby item routes
+    // through the generic media-server send endpoint instead, which uses
+    // image_data/image_url rather than plexsend.py's logo_data/logo_url
+    // naming, but is otherwise the same base64-or-external-URL shape.
+    const endpoint = isNonPlexItem.value ? '/api/media-server/send-logo' : '/api/plex/send-logo'
     const body: Record<string, unknown> = {
       rating_key: props.item.key,
       is_tv: props.item.is_tv ?? false,
     }
+    const dataKey = isNonPlexItem.value ? 'image_data' : 'logo_data'
+    const urlKey = isNonPlexItem.value ? 'image_url' : 'logo_url'
     if (uploadedData.value) {
-      body.logo_data = uploadedData.value
+      body[dataKey] = uploadedData.value
     } else {
-      body.logo_url = selectedUrl.value
+      body[urlKey] = selectedUrl.value
     }
-    const res = await fetch(`${apiBase}/api/plex/send-logo`, {
+    const res = await fetch(`${apiBase}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -167,7 +180,7 @@ async function sendToPlexLogo() {
     emit('updated', newLogoUrl)
     setTimeout(() => emit('close'), 1200)
   } catch (e: any) {
-    error.value = e.message || 'Failed to send logo to Plex.'
+    error.value = e.message || 'Failed to send logo.'
   } finally {
     sending.value = false
   }
@@ -263,7 +276,7 @@ onMounted(fetchAvailableLogos)
 
         <!-- Error / Success -->
         <div v-if="error" class="feedback error">{{ error }}</div>
-        <div v-if="success" class="feedback success">Logo sent to Plex successfully!</div>
+        <div v-if="success" class="feedback success">{{ isNonPlexItem ? 'Logo sent successfully!' : 'Logo sent to Plex successfully!' }}</div>
       </div>
 
       <!-- Footer -->
@@ -277,7 +290,7 @@ onMounted(fetchAvailableLogos)
           <svg v-if="sending" class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M21 12a9 9 0 11-6.219-8.56"/>
           </svg>
-          {{ sending ? 'Sending…' : 'Send to Plex' }}
+          {{ sending ? 'Sending…' : (isNonPlexItem ? 'Send' : 'Send to Plex') }}
         </button>
       </div>
     </div>

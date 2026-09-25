@@ -1,5 +1,40 @@
 # Changelog
 
+## v1.6.114 (2026-09-23) — `dev-jellyfin` branch
+### New Features
+- **Settings → Media Servers**: a new tab to add, enable, test-connect, and remove Plex/Jellyfin/Emby entries in the `mediaServers` setting through the actual UI, replacing the direct-SQL workaround the Phase 3 debug endpoints required.
+- **New permanent endpoint `POST /api/media-server/test-connection`** backs the tab's Test Connection buttons — validates a server before it's saved.
+
+### Bug Fixes
+- **Found and fixed a real data-loss bug before it could ship**: `mediaServers` had no corresponding field on the `UISettings` Pydantic model, and the settings save path fully rebuilds the `settings` table from that model on every save — meaning saving *any* unrelated setting (a theme change, anything) would have silently deleted the `mediaServers` entry the first time it happened. Added the missing schema field; verified directly that a seeded `mediaServers` value now survives an unrelated settings save.
+- Plex/Jellyfin/Emby credentials in `mediaServers` now get the same never-leaked-in-GET, never-clobbered-by-the-mask-placeholder-on-save treatment every other secret field already gets, via dedicated masking logic for the list shape.
+
+See CLAUDE.md Quirk #60 for the full detail.
+
+## v1.6.113 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added `JellyfinClient`** (`backend/media_server/jellyfin_client.py`) — Phase 3 of the Jellyfin-integration plan, the first non-Plex `MediaServerClient` implementation. Also serves Emby via an `is_emby` flag rather than a separate class see CLAUDE.md Quirk #59 for exactly what's confirmed vs. still needs real-instance verification.
+- **Added temporary diagnostic endpoints** (`/api/media-server-debug/...`) so `JellyfinClient` can be tested directly against a real Jellyfin server before the rest of the app is wired through it (Phase 4) and before a real Settings UI exists to configure one (Phase 5). Not intended as permanent API surface.
+- `ImageType.SQUARE_ART` and label add/remove are deliberate no-ops for Jellyfin/Emby (no confirmed mechanism exists for either — see plan doc §13/§10), rather than guessed-at implementations.
+
+## v1.6.112 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added a `MediaServerClient` abstraction (`backend/media_server/`)** — Phase 2 of the Jellyfin-integration plan. `PlexClient` is the first real implementation, built as a pure-addition delegation layer over Simposter's existing, already-tested Plex code rather than an extract-and-replace refactor — nothing in the running app calls into it yet, so this carries zero regression risk. Verified against mocked Plex responses to confirm it reproduces the app's exact existing endpoint behavior (collection-aware poster uploads, logo uploads always metadata-routed, exact TMDb-GUID matching).
+- See CLAUDE.md Quirk #58 for the full detail, including a known, deliberate limitation (only correctly represents the single globally-configured Plex server for now) and the plan for `JellyfinClient` next.
+
+## v1.6.111 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added `server_id` (default `'plex-1'`) to `movie_cache`, `tv_cache`, `collection_cache`, `poster_history`, and `poster_retry_queue`** — Phase 1 of the Jellyfin-integration plan, the database groundwork for the multi-server model. Purely additive: every existing row/query on an upgrading install behaves identically, verified directly against real pre-migration databases (including one with actual data in it), not just a clean-schema check.
+- **Seeded a `mediaServers` setting for existing installs** — one auto-migrated entry (`{id: "plex-1", type: "plex", url, token, enabled: true}`) built from the install's existing `plex.url`/`plex.token`, using the same "existing vs. fresh install" seed pattern already established for `onboarding_completed`/`scheduler.cleanupEnabled`. Not yet exposed through Settings — this is DB groundwork only, nothing reads it yet.
+- **Deliberately did not change any table's primary key** to a composite `(server_id, rating_key)`, despite that being the plan doc's original literal design — SQLite has no in-place way to do that short of a full table rebuild, which is real risk for a theoretical benefit (a Plex rating_key and a Jellyfin/Emby item GUID essentially can't collide as strings). See CLAUDE.md Quirk #57 for the full reasoning.
+- See CLAUDE.md Quirk #57 for the complete detail, including every verification scenario tested.
+
+## v1.6.110 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Consolidated 4 duplicated Plex-metadata-injection call sites into one shared function**, `inject_plex_media_metadata()` (`backend/config.py`). `preview.py`, `batch.py` (×2 — movie and TV/season paths), `save.py`, and `plexsend.py` had all independently accumulated the same "fetch Plex media info, merge into `options['metadata']`, also inject `tmdb_id`/`media_type`" logic. No user-facing behavior change — verified directly against 5 mocked scenarios covering every call site's exact prior behavior, not just an import check.
+- **`save.py` no longer does a redundant second Plex metadata fetch just to re-derive `is_tv`** — that value was already available on the request (`SaveRequest.is_tv`) and simply never read; now passed straight through instead.
+- This is Phase 0 of the Jellyfin-integration plan (see `ai_repo/simposter/jellyfin-upgrade-plan.md`) — a prerequisite so a future `MediaServerClient`/`JellyfinClient` abstraction has one seam to generalize instead of several scattered copies. See CLAUDE.md Quirk #56 for the full detail, including one site (`overlay_config.py`) that turned out on closer read *not* to be a real duplicate and was deliberately left alone.
+
 ## v1.6.109 (2026-09-23)
 ### Improvements
 - **Added a new "big update" highlight reel** (`frontend/src/majorReleases.ts`) for anyone crossing the gap from `main`'s last merge point (v1.6.87) up through this version — Square Art, Backdrops, the Cleanup tool, the expanded Backup/Restore (Logos/Backdrops/Square Art), Retry Queue improvements, the Logos/Backdrops/Square Art caching/speed parity pass, the TMDb/TVDB/Fanart.tv/MediUX external-link row, and asset-type-aware notifications. Shown automatically instead of a giant per-version bullet dump, per the mechanism CLAUDE.md's Quirk #27 already established (`UpdateAnnouncementModal.vue`'s version-crossing check) — this is the second entry added under that convention, the first being the v1.6.64 milestone.
@@ -94,7 +129,7 @@ See the new CLAUDE.md Quirk #48 for the full root-cause writeup.
 
 ## v1.6.98 (2026-09-19)
 ### New Features
-- **Square Art can now Send to Plex.** Initially shipped save-to-disk only after concluding Plex had no square-art upload slot — the user pushed back twice, citing real usage in Poster Tools/Posterizarr. First-pass research (Fanart.tv resource types, Plex's local-media-assets docs) still came up short; the actual proof came from `python-plexapi`'s real source (`SquareArtMixin` in `plexapi/mixins/resources.py`, fetched directly from GitHub): Plex has a genuinely separate, dedicated slot — `POST /library/metadata/{ratingKey}/squareArts` (image type `backgroundSquare`), fully distinct from both the regular poster (`/posters`) and background/art (`/arts`). New `POST /api/plex/send-square-art` (`backend/api/plexsend.py`, new `PlexSquareArtSendRequest` schema) mirrors the existing backdrop-send endpoint's shape (resolve bytes from `art_data`/`art_url`, normalize via the same `normalize_backdrop_for_plex()`, upload) targeting this new path. `SquareArtModal.vue` gained a "Send to Plex" button alongside Save to Disk — since the slot is genuinely separate, sending square art can never overwrite the item's actual poster or backdrop, which had been the whole reason it was held back.
+- **Square Art can now Send to Plex.** Initially shipped save-to-disk only after concluding Plex had no square-art upload slot — the user pushed back twice. First-pass research (Fanart.tv resource types, Plex's local-media-assets docs) still came up short; the actual proof came from `python-plexapi`'s real source (`SquareArtMixin` in `plexapi/mixins/resources.py`, fetched directly from GitHub): Plex has a genuinely separate, dedicated slot — `POST /library/metadata/{ratingKey}/squareArts` (image type `backgroundSquare`), fully distinct from both the regular poster (`/posters`) and background/art (`/arts`). New `POST /api/plex/send-square-art` (`backend/api/plexsend.py`, new `PlexSquareArtSendRequest` schema) mirrors the existing backdrop-send endpoint's shape (resolve bytes from `art_data`/`art_url`, normalize via the same `normalize_backdrop_for_plex()`, upload) targeting this new path. `SquareArtModal.vue` gained a "Send to Plex" button alongside Save to Disk — since the slot is genuinely separate, sending square art can never overwrite the item's actual poster or backdrop, which had been the whole reason it was held back.
 - **Backdrop's upload endpoint simplified while confirming the above**: the same `python-plexapi` source confirms `ArtMixin.uploadArt()` only ever POSTs to `/library/metadata/{ratingKey}/arts` (plural) — no singular `/art` write path exists at all. The v1.6.95 dual-attempt fallback (`/arts` then `/art`) was a reasonable hedge without firm evidence at the time; now removed in favor of the single confirmed-correct path. This also fully explains the original dropped-SSL-connection failure: `/art` (singular) was never a real Plex write route to begin with.
 
 ### Bug Fixes

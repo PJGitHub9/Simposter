@@ -35,6 +35,12 @@ _SAFE_INTERNAL_PATH_PREFIXES = (
     "/api/tv-show/",
     "/api/logo/",       # served by movies.py's logo cache — a sibling of /api/movie/, not nested under it
     "/api/backdrop/",   # served by movies.py's backdrop cache (art_cache.py) — same trust class as /api/logo/
+    "/api/square-art/", # same trust class/factory (art_cache.py) as /api/logo//api/backdrop/ -- was
+                         # never added here at all (found auditing this list during Phase 5/Jellyfin
+                         # work, unrelated to Jellyfin itself -- see CLAUDE.md Quirk #72). Not yet a
+                         # live bug (nothing currently feeds a /api/square-art/ URL back into another
+                         # render the way Quirk #42 found for /api/logo/), but the exact same latent
+                         # gap that Quirk explicitly warned future code shouldn't have to rediscover.
     "/api/local-assets/",
     "/library/metadata/",  # Plex's own API — reached only via the resolved-host check below
 )

@@ -500,10 +500,16 @@ def process_radarr_webhook_with_retry(
     template_id: str,
     preset_id: str,
     auto_send: bool,
-    auto_labels: List[str]
+    auto_labels: List[str],
+    library_id: Optional[str] = None,
 ):
     """
     Background task for Radarr webhooks that waits for Plex import, then generates poster.
+
+    `library_id` (from the webhook URL's own optional query param -- see radarr_webhook())
+    scopes find_plex_item_with_retry()'s search to one specific Plex library instead of
+    searching every movie library and using whichever has a match first, which is
+    ambiguous whenever the same title exists in more than one library.
     """
     logger.info(f"[RADARR_WEBHOOK] Starting delayed processing for: {title} ({year}) - TMDb ID: {tmdb_id}")
 
@@ -512,7 +518,7 @@ def process_radarr_webhook_with_retry(
         find_func=find_plex_movie_by_tmdb_id,
         external_id=tmdb_id,
         item_type="movie",
-        library_id=None,
+        library_id=library_id,
         initial_delay=30,
         max_retries=5,
         retry_delay=15
@@ -550,10 +556,16 @@ def process_sonarr_webhook_with_retry(
     auto_send: bool,
     auto_labels: List[str],
     include_seasons: bool,
-    affected_seasons: Optional[List[int]] = None
+    affected_seasons: Optional[List[int]] = None,
+    library_id: Optional[str] = None,
 ):
     """
     Background task for Sonarr webhooks that waits for Plex import, then generates poster.
+
+    `library_id` (from the webhook URL's own optional query param -- see sonarr_webhook())
+    scopes find_plex_item_with_retry()'s search to one specific Plex library instead of
+    searching every TV library and using whichever has a match first, which is ambiguous
+    whenever the same show exists in more than one library.
     """
     logger.info(f"[SONARR_WEBHOOK] Starting delayed processing for: {title} ({year}) - TVDb ID: {tvdb_id}, affected_seasons: {affected_seasons}")
 
@@ -562,7 +574,7 @@ def process_sonarr_webhook_with_retry(
         find_func=find_plex_show_by_tvdb_id,
         external_id=tvdb_id,
         item_type="TV show",
-        library_id=None,
+        library_id=library_id,
         initial_delay=30,
         max_retries=5,
         retry_delay=15
@@ -619,6 +631,92 @@ def process_sonarr_webhook_with_retry(
         include_seasons=include_seasons,
         affected_seasons=affected_seasons
     )
+
+
+def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None) -> None:
+    """Phase 6 (webhooks) -- after a webhook-triggered Plex render+send
+    succeeds, check whether the same title also exists on any OTHER server
+    that's actually linked to this Plex library via a Library Group
+    (Quirk #62/#64) and upload the same just-rendered poster there too.
+    This is the piece of "real, automated content on Jellyfin" that was
+    still missing after Quirks #65-70 (those only covered manually browsing/
+    editing an already-scanned item) -- without this, Jellyfin never got a
+    poster from a Radarr/Sonarr-triggered generation at all.
+
+    Group-scoped, not "every enabled server" (fixed in Quirk #95 -- the
+    original v1.6.116 version of this function looped get_enabled_clients()
+    unconditionally, which meant a webhook could push a poster to a
+    Jellyfin/Emby server that was never linked to this Plex library at all,
+    purely because it happened to also have an item with a matching
+    tmdb_id -- e.g. a user's personal Jellyfin server with an unrelated
+    library. `library_id` (the Plex library the item was ACTUALLY found in
+    by this webhook, resolved by find_plex_movie_by_tmdb_id()/
+    find_plex_show_by_tvdb_id() before this is called -- not necessarily the
+    same as an explicit ?library_id= query param, since that param is only
+    a search-scoping hint) is used to look up that library's own
+    LibraryGroup and restrict the sync to just its other, non-Plex members.
+    A library with no group (or a group with no other members) correctly
+    syncs to nothing -- there's no "linked" server to sync to, and this
+    function must never guess.
+
+    Deliberately runs strictly AFTER the existing Plex webhook path has
+    already fully succeeded, reads the render bytes that path *just* wrote
+    (save_render_cache_by_tmdb(), called unconditionally on every successful
+    send since Quirk #41) directly off disk rather than through
+    load_render_cache_by_tmdb() -- that wrapper is gated by
+    reuseCachedPosterDays and a tmdb_last_seen "recently scan-confirmed"
+    check (Quirk #41's own design, meant for a different problem: reusing an
+    OLD render across a rating_key rotation), which would very often return
+    None here even though the file was written moments ago in this exact
+    request, since a webhook path never touches tmdb_last_seen (only scans
+    do). Best-effort and fully isolated: any failure here is logged and
+    swallowed, never raised -- this must never be able to affect the Plex
+    path's own already-committed success."""
+    if not tmdb_id:
+        return
+    try:
+        from ..config import _render_cache_path_by_tmdb, get_library_group_members
+        from ..media_server import get_enabled_clients, PlexClient, ImageType
+
+        find_media_type = "tv" if media_type == "tv-show" else "movie"
+
+        if not library_id:
+            logger.debug("[WEBHOOK_SYNC] No library_id resolved for tmdb_id=%s [%s] -- cannot determine linked servers, skipping cross-server sync", tmdb_id, title_hint)
+            return
+        members = get_library_group_members("plex-1", str(library_id), find_media_type)
+        allowed_server_ids = {sid for sid, _lid in (members or []) if sid != "plex-1"}
+        if not allowed_server_ids:
+            logger.debug("[WEBHOOK_SYNC] Plex library %s has no linked Library Group members -- skipping cross-server sync for tmdb_id=%s [%s]", library_id, tmdb_id, title_hint)
+            return
+
+        cache_path = _render_cache_path_by_tmdb(media_type, tmdb_id)
+        if not cache_path.exists():
+            return
+        image_bytes = cache_path.read_bytes()
+
+        for client in get_enabled_clients():
+            if isinstance(client, PlexClient) or client.server_id not in allowed_server_ids:
+                continue
+            try:
+                item_id = client.find_item_by_external_id(tmdb_id, None, find_media_type)
+                if not item_id:
+                    continue
+                client.upload_image(item_id, ImageType.POSTER, image_bytes, "image/jpeg")
+                logger.info("[WEBHOOK_SYNC:%s] Synced poster for tmdb_id=%s [%s] -> item_id=%s", client.server_id, tmdb_id, title_hint, item_id)
+                # Keep the local disk cache/DB row in sync too, so the merged
+                # grid (Quirk #65/#67) reflects this without needing a rescan --
+                # mirrors media_server_send.py's identical post-upload pattern.
+                try:
+                    from .movies import _save_poster_cache, _poster_cache_url
+                    saved = _save_poster_cache(item_id, image_bytes, "image/jpeg")
+                    if saved:
+                        cache.update_poster(item_id, _poster_cache_url(item_id, saved))
+                except Exception as cache_err:
+                    logger.debug("[WEBHOOK_SYNC:%s] Failed to update local cache for item_id=%s: %s", client.server_id, item_id, cache_err)
+            except Exception as e:
+                logger.warning("[WEBHOOK_SYNC:%s] Failed to sync poster for tmdb_id=%s [%s]: %s", client.server_id, tmdb_id, title_hint, e)
+    except Exception as e:
+        logger.debug("[WEBHOOK_SYNC] _sync_poster_to_other_servers failed for tmdb_id=%s [%s]: %s", tmdb_id, title_hint, e)
 
 
 def process_webhook_poster_generation(
@@ -936,6 +1034,22 @@ def process_webhook_poster_generation(
                     _update_movie_cache(rating_key, library_id)
                 except Exception as cache_err:
                     logger.warning("[WEBHOOK] Failed to update movie cache for %s [%s]: %s", rating_key, movie_title, cache_err, exc_info=True)
+                # Phase 6 (Quirk #71) -- sync the just-sent poster to any other
+                # enabled server (Jellyfin/Emby) that also has this title.
+                # Fully additive/best-effort, see _sync_poster_to_other_servers()'s
+                # own docstring for why this can never affect the Plex result above.
+                # _process_single_movie()'s result dict has no tmdb_id key, so this
+                # resolves it the same way the notification block just below does
+                # (a fresh cache lookup, now that _update_movie_cache() above has
+                # just populated it) -- a small duplicated query, not worth
+                # restructuring the existing notification code to share.
+                if auto_send:
+                    try:
+                        _sync_cached = db.get_cached_movies()
+                        _sync_info = next((m for m in _sync_cached if m.get("key") == rating_key or m.get("rating_key") == rating_key), None)
+                        _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id)
+                    except Exception as sync_err:
+                        logger.debug("[WEBHOOK] Cross-server poster sync failed for %s [%s]: %s", rating_key, movie_title, sync_err)
                 # Send Discord notification (include poster image)
                 try:
                     # Get movie title from cache if available
@@ -979,7 +1093,15 @@ def radarr_webhook(
     preset_id: str,
     background_tasks: BackgroundTasks,
     payload: Dict[str, Any] = Body(...),
-    test: bool = Query(default=False)
+    test: bool = Query(default=False),
+    library_id: Optional[str] = Query(
+        default=None,
+        description="Optional Plex library section id to scope the TMDb-ID lookup to. "
+                    "Omitted (the default) searches every movie library and uses whichever "
+                    "one has a match first -- ambiguous if the same title exists in more "
+                    "than one library. Generated by the Webhook URL Generator in Settings -> "
+                    "Automation when a specific library is selected there.",
+    ),
 ):
     """
     Handle Radarr webhook events for movie imports/upgrades.
@@ -991,6 +1113,7 @@ def radarr_webhook(
 
     Query params:
     - test: If true, performs a dry run with detailed logging but no poster generation
+    - library_id: Optional -- scope the Plex lookup to one specific movie library
     """
     # Normalize template_id for backward compatibility
     template_id = _normalize_template_id(template_id)
@@ -1029,7 +1152,7 @@ def radarr_webhook(
             logger.info(f"[RADARR_WEBHOOK_TEST] Labels to apply: {auto_labels}")
 
             # Try to find the movie in Plex
-            result = find_plex_movie_by_tmdb_id(tmdb_id)
+            result = find_plex_movie_by_tmdb_id(tmdb_id, library_id)
             if result:
                 rating_key, lib_id = result
                 logger.info(f"[RADARR_WEBHOOK_TEST] Found in Plex with rating_key: {rating_key}, library: {lib_id}")
@@ -1073,7 +1196,8 @@ def radarr_webhook(
             template_id=template_id,
             preset_id=preset_id,
             auto_send=auto_send,
-            auto_labels=auto_labels
+            auto_labels=auto_labels,
+            library_id=library_id,
         )
 
         return {
@@ -1104,6 +1228,14 @@ def sonarr_webhook(
     background_tasks: BackgroundTasks,
     include_seasons: bool = Query(True, description="Generate posters for all seasons"),
     test: bool = Query(default=False),
+    library_id: Optional[str] = Query(
+        default=None,
+        description="Optional Plex library section id to scope the TVDb-ID lookup to. "
+                    "Omitted (the default) searches every TV library and uses whichever "
+                    "one has a match first -- ambiguous if the same show exists in more "
+                    "than one library. Generated by the Webhook URL Generator in Settings -> "
+                    "Automation when a specific library is selected there.",
+    ),
     payload: Dict[str, Any] = Body(...)
 ):
     """
@@ -1117,6 +1249,7 @@ def sonarr_webhook(
     Query params:
     - include_seasons: If True, generate posters for all seasons. If False, only series poster.
     - test: If true, performs a dry run with detailed logging but no poster generation
+    - library_id: Optional -- scope the Plex lookup to one specific TV library
     """
     # Normalize template_id for backward compatibility
     template_id = _normalize_template_id(template_id)
@@ -1167,7 +1300,7 @@ def sonarr_webhook(
             logger.info(f"[SONARR_WEBHOOK_TEST] Labels to apply: {auto_labels}")
 
             # Try to find the show in Plex
-            result = find_plex_show_by_tvdb_id(tvdb_id)
+            result = find_plex_show_by_tvdb_id(tvdb_id, library_id)
             if result:
                 rating_key, lib_id = result
                 logger.info(f"[SONARR_WEBHOOK_TEST] Found in Plex with rating_key: {rating_key}, library: {lib_id}")
@@ -1219,7 +1352,8 @@ def sonarr_webhook(
             auto_send=auto_send,
             auto_labels=auto_labels,
             include_seasons=include_seasons,
-            affected_seasons=list(affected_seasons) if affected_seasons else None
+            affected_seasons=list(affected_seasons) if affected_seasons else None,
+            library_id=library_id,
         )
 
         return {
@@ -1253,6 +1387,25 @@ def tautulli_webhook(
     event_types: str = Query("watched,added", description="Comma-separated list of events to process: watched, added, updated"),
     include_seasons: bool = Query(True, description="For TV shows: generate posters for all seasons"),
     test: bool = Query(default=False),
+    # Named scope_library_id, NOT library_id -- this function already has its own local
+    # `library_id` variable further down (the library the item is ultimately RESOLVED to,
+    # reassigned once the search/rating_key is known and read by the label-skip-check /
+    # poster-generation calls below). Naming this query param the same thing would have
+    # been silently overwritten by that local variable's own `library_id = None`
+    # initialization before ever being used to scope the search -- the param would have
+    # had zero effect while looking like it should. Radarr/Sonarr's webhook functions
+    # don't have this collision (they hand library_id straight to a background task
+    # instead of using it locally), so this rename is Tautulli-specific.
+    scope_library_id: Optional[str] = Query(
+        default=None,
+        alias="library_id",
+        description="Optional Plex library section id to scope the TMDb/TVDb-ID lookup to, "
+                    "used only when Tautulli's payload doesn't already include rating_key "
+                    "directly (the default payload template does, so this rarely matters in "
+                    "practice). Omitted searches every library of the right type and uses "
+                    "whichever has a match first -- ambiguous if the same title exists in "
+                    "more than one library.",
+    ),
     payload: Dict[str, Any] = Body(...)
 ):
     """
@@ -1270,6 +1423,8 @@ def tautulli_webhook(
     - event_types: Comma-separated events to process (watched, added, updated)
     - include_seasons: For TV shows, generate posters for all seasons
     - test: If true, performs a dry run with detailed logging but no poster generation
+    - library_id: Optional -- scope the Plex lookup to one library (only used as a
+      fallback when the payload has no rating_key)
     """
     # Normalize template_id for backward compatibility
     template_id = _normalize_template_id(template_id)
@@ -1341,7 +1496,7 @@ def tautulli_webhook(
                 logger.info(f"[TAUTULLI_WEBHOOK_TEST] TMDb ID: {tmdb_id}")
                 logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from payload: {rating_key}")
                 if not rating_key and tmdb_id:
-                    result = find_plex_movie_by_tmdb_id(int(tmdb_id))
+                    result = find_plex_movie_by_tmdb_id(int(tmdb_id), scope_library_id)
                     if result:
                         rating_key, lib_id = result
                     logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from TMDb lookup: {rating_key}, library: {lib_id}")
@@ -1350,7 +1505,7 @@ def tautulli_webhook(
                 logger.info(f"[TAUTULLI_WEBHOOK_TEST] TVDb ID: {tvdb_id}")
                 logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from payload: {rating_key}")
                 if not rating_key and tvdb_id:
-                    result = find_plex_show_by_tvdb_id(int(tvdb_id))
+                    result = find_plex_show_by_tvdb_id(int(tvdb_id), scope_library_id)
                     if result:
                         rating_key, lib_id = result
                     logger.info(f"[TAUTULLI_WEBHOOK_TEST] Rating key from TVDb lookup: {rating_key}, library: {lib_id}")
@@ -1381,7 +1536,7 @@ def tautulli_webhook(
 
             # If no rating_key but have TMDb ID, search for it
             if not rating_key and tmdb_id:
-                result = find_plex_movie_by_tmdb_id(int(tmdb_id))
+                result = find_plex_movie_by_tmdb_id(int(tmdb_id), scope_library_id)
                 if result:
                     rating_key, library_id = result
 
@@ -1475,7 +1630,7 @@ def tautulli_webhook(
 
             # If still no rating_key but have TVDb ID, search for it
             if not rating_key and tvdb_id:
-                result = find_plex_show_by_tvdb_id(int(tvdb_id))
+                result = find_plex_show_by_tvdb_id(int(tvdb_id), scope_library_id)
                 if result:
                     rating_key, library_id = result
 

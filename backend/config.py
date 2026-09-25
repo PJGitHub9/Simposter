@@ -772,6 +772,77 @@ def get_plex_media_info(rating_key: str) -> Dict[str, str]:
         return {}
 
 
+def inject_plex_media_metadata(
+    render_options: Dict[str, Any],
+    rating_key: Optional[str],
+    *,
+    tmdb_id: Optional[Any] = None,
+    is_tv: Optional[bool] = None,
+    plex_xml_text: Optional[str] = None,
+    log_prefix: str = "",
+) -> Dict[str, Any]:
+    """Fetch Plex media info (resolution/codec/audio/edition) for *rating_key*
+    and merge it into render_options["metadata"], plus inject tmdb_id/media_type
+    for studio/streaming-platform badge resolution.
+
+    This is the single consolidated version of a pattern that used to be
+    duplicated, nearly byte-for-byte, across preview.py, batch.py (x2), save.py,
+    and plexsend.py — see CLAUDE.md Quirk #56. (overlay_config.py's
+    /overlay-preview-metadata endpoint calls get_plex_media_info()/
+    get_movie_tmdb_id() too, but builds a standalone response dict rather than
+    injecting into render options, so it's a different consumer of those two
+    primitives, not a copy of this pattern — deliberately left untouched.)
+
+    Callers that already know tmdb_id/is_tv (batch.py, preview.py always do)
+    should pass them to skip an extra Plex fetch. Callers that already have the
+    raw metadata XML in hand (plexsend.py, from its own title/year lookup)
+    should pass plex_xml_text to derive tmdb_id/is_tv from it instead of
+    re-fetching. If neither is given but rating_key is, this fetches metadata
+    once and derives both from it (save.py's case — this also replaces that
+    call site's own redundant second fetch-and-parse for the same purpose).
+
+    Mutates render_options in place and returns it for convenient chaining.
+    """
+    if not rating_key:
+        return render_options
+
+    plex_media = get_plex_media_info(rating_key)
+    if plex_media:
+        existing_meta = render_options.get("metadata") or {}
+        render_options["metadata"] = {**existing_meta, **plex_media}
+        logger.info("%sInjected Plex media info for rating_key=%s: %s", log_prefix, rating_key, plex_media)
+
+    resolved_tmdb_id = tmdb_id
+    resolved_is_tv = is_tv
+
+    if resolved_tmdb_id is None or resolved_is_tv is None:
+        xml_text = plex_xml_text
+        if xml_text is None:
+            try:
+                r = plex_session.get(f"{settings.PLEX_URL}/library/metadata/{rating_key}", headers=plex_headers(), timeout=5)
+                if r.ok:
+                    xml_text = r.text
+            except Exception as e:
+                logger.debug("%sFailed to fetch metadata for tmdb_id/is_tv: %s", log_prefix, e)
+
+        if xml_text:
+            if resolved_tmdb_id is None:
+                resolved_tmdb_id = extract_tmdb_id_from_metadata(xml_text)
+            if resolved_is_tv is None:
+                try:
+                    resolved_is_tv = ET.fromstring(xml_text).find(".//Directory") is not None
+                except ET.ParseError:
+                    resolved_is_tv = None
+
+    if resolved_tmdb_id:
+        render_options.setdefault("metadata", {})
+        render_options["metadata"]["tmdb_id"] = resolved_tmdb_id
+        render_options["metadata"]["media_type"] = "tv" if resolved_is_tv else "movie"
+        logger.info("%sInjected tmdb_id=%s media_type=%s for studio/streaming badge resolution", log_prefix, resolved_tmdb_id, render_options["metadata"]["media_type"])
+
+    return render_options
+
+
 def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
 
@@ -1295,3 +1366,55 @@ def get_reuse_cached_poster_days() -> float:
         return float(val or 0)
     except Exception:
         return 0.0
+
+
+def get_library_group_for(server_id: str, library_id: str, media_type: str) -> Optional[dict]:
+    """Finds and returns the whole LibraryGroup a (server_id, library_id) pair
+    belongs to (Quirk #62/#64), or None if it's in no group at all. The shared
+    lookup behind get_library_group_members()/get_library_group_preferred_server()
+    below -- both just pick a different field off the same group, so this is
+    the one place that actually reads `libraryGroups`."""
+    try:
+        from . import database as db
+        ui = db.get_ui_settings() or {}
+        groups = ui.get("libraryGroups") or []
+        for group in groups:
+            if group.get("mediaType") != media_type:
+                continue
+            members = group.get("members") or []
+            if any(m.get("serverId") == server_id and m.get("libraryId") == str(library_id) for m in members):
+                return group
+        return None
+    except Exception as e:
+        logger.debug("[LIBRARY_GROUP] Failed to resolve group for %s/%s (%s): %s", server_id, library_id, media_type, e)
+        return None
+
+
+def get_library_group_members(server_id: str, library_id: str, media_type: str) -> Optional[List[tuple]]:
+    """Given a (server_id, library_id) pair (a Plex library_id in every real
+    caller today), returns every member of its LibraryGroup as a
+    (server_id, library_id) tuple list -- including the pair passed in -- IF
+    that group has more than one member (i.e. it's actually linked to
+    another server's library). Returns None when there's no group, or the
+    group only has this one member -- meaning "nothing to merge, use the
+    normal single-library query" -- so every caller's existing single-library
+    code path is unaffected unless a real link exists."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return None
+    members = group.get("members") or []
+    if len(members) <= 1:
+        return None
+    return [(m.get("serverId"), m.get("libraryId")) for m in members]
+
+
+def get_library_group_preferred_server(server_id: str, library_id: str, media_type: str) -> Optional[str]:
+    """The specific group's own preferredServerId (Quirk #82's per-group
+    picker, replacing the old single global automation.preferredPosterServer
+    setting) -- None when the group has none set (or there's no group at
+    all), in which case database.py's _dedupe_by_tmdb_id() falls back to its
+    own default (Plex if present, else most-recently-updated)."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return None
+    return group.get("preferredServerId") or None

@@ -412,10 +412,59 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
                 else:
                     logger.error("[SCHEDULER] Library scan failed: %s", e.detail)
 
+        # Also refresh any linked Jellyfin/Emby libraries -- previously this
+        # scheduled job never touched them at all, even for a library fully
+        # linked via a Library Group (Quirk #62/#64). The manual "Scan" button
+        # already covers this (SettingsView.vue calls scan-linked right after
+        # a Plex scan succeeds, Quirk #66); this mirrors that same call from
+        # the scheduled path instead. Deliberately still ONE global schedule
+        # (per the user's explicit "keep it global for now, but make sure to
+        # include jellyfin/emby libraries") -- not a second per-server cron,
+        # just making the one existing schedule cover what's linked too.
+        try:
+            _scan_linked_libraries_for_scheduled_scan()
+        except Exception as e:
+            logger.error("[SCHEDULER] Failed to scan linked Jellyfin/Emby libraries: %s", e, exc_info=True)
+
         logger.info("[SCHEDULER] ========== SCHEDULED SCAN FINISHED ==========")
 
     except Exception as e:
         logger.error("[SCHEDULER] Unexpected error during scheduled library scan: %s", e, exc_info=True)
+
+
+def _scan_linked_libraries_for_scheduled_scan() -> None:
+    """Scans every Jellyfin/Emby library linked (via a Library Group) to a
+    Plex library, regardless of whether that specific Plex library_id was
+    part of THIS scan's own library_ids scope -- simpler and more robust than
+    threading which Plex libraries were actually just scanned through to
+    here (the "scan all" branch above has no per-library result to key off
+    of), and scan-linked() itself is already a cheap no-op for any group with
+    nothing else to refresh. Reads `libraryGroups` fresh from the DB, the
+    same way every other settings-reading helper in this app does."""
+    from . import database as db
+    from .api.media_server import api_scan_linked_libraries
+
+    ui_settings = db.get_ui_settings() or {}
+    groups = ui_settings.get("libraryGroups") or []
+    plex_library_ids = set()
+    for group in groups:
+        for member in group.get("members") or []:
+            if member.get("serverId") == "plex-1" and member.get("libraryId"):
+                plex_library_ids.add(str(member["libraryId"]))
+
+    if not plex_library_ids:
+        return
+
+    logger.info("[SCHEDULER] Checking %d Plex library group(s) for linked Jellyfin/Emby libraries to scan", len(plex_library_ids))
+    for lib_id in plex_library_ids:
+        try:
+            result = api_scan_linked_libraries(server_id="plex-1", library_id=lib_id)
+            if result.get("scanned"):
+                logger.info("[SCHEDULER] Linked scan for Plex library %s: %s", lib_id, result["scanned"])
+            if result.get("errors"):
+                logger.warning("[SCHEDULER] Linked scan errors for Plex library %s: %s", lib_id, result["errors"])
+        except Exception as e:
+            logger.error("[SCHEDULER] Linked scan failed for Plex library %s: %s", lib_id, e)
 
 
 _retry_job_id = "poster_retry_job"

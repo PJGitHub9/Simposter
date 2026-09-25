@@ -2,6 +2,12 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { APP_VERSION } from '@/version'
 import { getApiBase } from '@/services/apiBase'
+import { useSettingsStore } from '@/stores/settings'
+// Aliased to avoid colliding with this file's own local `mediaServerLabel`
+// function below (a different signature, for the /api/media-server/status
+// per-server badges) -- see CLAUDE.md Quirk #79 on why a same-named local
+// binding silently shadows an import in <script setup>.
+import { mediaServerLabel as sharedMediaServerLabel } from '@/services/mediaServerLabel'
 
 type Movie = { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show' }
 type GroupedMovies = { libraryName: string; mediaType?: string; movies: Movie[] }[]
@@ -58,12 +64,77 @@ const checkPlexStatus = async () => {
   }
 }
 
+const settingsStore = useSettingsStore()
+// Honors a custom name set on the primary Plex entry (Quirk #81's Name field),
+// same as every other place a server gets labeled -- previously hardcoded
+// "Plex" here regardless of what was configured.
+const plexServerLabel = computed(() => sharedMediaServerLabel('plex-1', settingsStore.mediaServers.value))
+
 const plexStatusTitle = computed(() => {
   if (plexStatus.value === 'up') return 'Plex server is online'
   if (plexStatus.value === 'down') return 'Plex server is unreachable — check that it\'s running and PLEX_URL is correct'
   if (plexStatus.value === 'unconfigured') return 'Plex URL not configured yet'
   return 'Checking Plex server status...'
 })
+
+// Per-server badges for any configured Jellyfin/Emby servers, alongside the
+// existing Plex badge above. Stays an empty array (renders nothing) for any
+// install with no non-Plex server configured -- purely additive.
+interface MediaServerStatus {
+  server_id: string
+  type: string
+  name?: string | null
+  status: 'up' | 'down'
+}
+const mediaServerStatuses = ref<MediaServerStatus[]>([])
+
+const checkMediaServerStatus = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/media-server/status`)
+    if (res.ok) {
+      const data = await res.json()
+      mediaServerStatuses.value = data.servers || []
+    }
+  } catch {
+    // Leave the last-known statuses in place on a transient fetch failure,
+    // matching checkPlexStatus's own "down" fallback intent but without
+    // flashing every badge to down on a single missed poll.
+  }
+}
+
+const mediaServerLabel = (s: MediaServerStatus) => {
+  if (s.name && s.name.trim()) return s.name.trim()
+  return s.type === 'jellyfin' ? 'Jellyfin' : s.type === 'emby' ? 'Emby' : s.type
+}
+
+const mediaServerTitle = (s: MediaServerStatus) => {
+  const label = mediaServerLabel(s)
+  return s.status === 'up' ? `${label} server is online` : `${label} server is unreachable`
+}
+
+// One unified list (Plex first, then every other configured server) rendered
+// through a SINGLE template loop below -- previously Plex had its own
+// hand-written <div> and the others came from a separate v-for over
+// mediaServerStatuses, two independently-maintained blocks of markup that
+// could (and did -- user-reported: "the status pills arent the same")
+// silently drift apart from each other over time. One shared shape/loop
+// makes that structurally impossible instead of relying on remembering to
+// keep two copies in sync.
+interface ServerStatusEntry {
+  key: string
+  label: string
+  status: PlexStatus | MediaServerStatus['status']
+  title: string
+}
+const allServerStatuses = computed<ServerStatusEntry[]>(() => [
+  { key: 'plex-1', label: plexServerLabel.value, status: plexStatus.value, title: plexStatusTitle.value },
+  ...mediaServerStatuses.value.map(s => ({
+    key: s.server_id,
+    label: mediaServerLabel(s),
+    status: s.status,
+    title: mediaServerTitle(s),
+  })),
+])
 
 const normalizePoster = (url: string | null | undefined) => {
   if (!url) return null
@@ -183,11 +254,13 @@ const unsupportedTagTitle = computed(() => {
 
 let posterCacheInterval: number | null = null
 let plexStatusInterval: number | null = null
+let mediaServerStatusInterval: number | null = null
 
 onMounted(() => {
   loadPosterCache()
   fetchVersionInfo()
   checkPlexStatus()
+  checkMediaServerStatus()
   // Watch for changes to the poster cache in sessionStorage every 500ms
   posterCacheInterval = window.setInterval(() => {
     loadPosterCache()
@@ -195,6 +268,9 @@ onMounted(() => {
   // Poll Plex reachability every 30s so a downed server shows up quickly
   plexStatusInterval = window.setInterval(() => {
     checkPlexStatus()
+  }, 30000)
+  mediaServerStatusInterval = window.setInterval(() => {
+    checkMediaServerStatus()
   }, 30000)
 })
 
@@ -204,6 +280,9 @@ onUnmounted(() => {
   }
   if (plexStatusInterval !== null) {
     clearInterval(plexStatusInterval)
+  }
+  if (mediaServerStatusInterval !== null) {
+    clearInterval(mediaServerStatusInterval)
   }
 })
 
@@ -274,9 +353,15 @@ onUnmounted(() => {
           {{ displayVersion }}
           <span v-if="versionInfo?.update_available" class="update-dot"></span>
         </button>
-        <div class="plex-status-badge" :class="plexStatus" :title="plexStatusTitle">
+        <div
+          v-for="s in allServerStatuses"
+          :key="s.key"
+          class="plex-status-badge"
+          :class="s.status"
+          :title="s.title"
+        >
           <span class="plex-status-dot"></span>
-          <span class="plex-status-label">Plex</span>
+          <span class="plex-status-label">{{ s.label }}</span>
         </div>
       </div>
     </div>

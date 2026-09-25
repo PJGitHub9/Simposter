@@ -18,6 +18,7 @@ type BackdropItem = {
   art_url?: string | null
   tmdb_id?: number | null
   is_tv?: boolean
+  server_id?: string | null
 }
 
 const props = defineProps<{ item: BackdropItem }>()
@@ -57,6 +58,8 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
 
 const hasSelection = computed(() => !!(selectedUrl.value || uploadedData.value))
+// See EditorPane.vue's identical computed (Quirk #65/#67/#68).
+const isNonPlexItem = computed(() => !!props.item.server_id && props.item.server_id !== 'plex-1')
 
 async function fetchAvailableBackdrops() {
   loadingBackdrops.value = true
@@ -133,16 +136,21 @@ async function sendToPlexBackdrop() {
   error.value = null
   success.value = false
   try {
+    // See EditorPane.vue's doSend()/Quirk #69 -- a Jellyfin/Emby item routes
+    // through the generic media-server send endpoint instead.
+    const endpoint = isNonPlexItem.value ? '/api/media-server/send-backdrop' : '/api/plex/send-backdrop'
     const body: Record<string, unknown> = {
       rating_key: props.item.key,
       is_tv: props.item.is_tv ?? false,
     }
+    const dataKey = isNonPlexItem.value ? 'image_data' : 'art_data'
+    const urlKey = isNonPlexItem.value ? 'image_url' : 'art_url'
     if (uploadedData.value) {
-      body.art_data = uploadedData.value
+      body[dataKey] = uploadedData.value
     } else {
-      body.art_url = selectedUrl.value
+      body[urlKey] = selectedUrl.value
     }
-    const res = await fetch(`${apiBase}/api/plex/send-backdrop`, {
+    const res = await fetch(`${apiBase}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -162,7 +170,7 @@ async function sendToPlexBackdrop() {
     emit('updated', newArtUrl)
     setTimeout(() => emit('close'), 1200)
   } catch (e: any) {
-    error.value = e.message || 'Failed to send backdrop to Plex.'
+    error.value = e.message || 'Failed to send backdrop.'
   } finally {
     sending.value = false
   }
@@ -258,7 +266,7 @@ onMounted(fetchAvailableBackdrops)
 
         <!-- Error / Success -->
         <div v-if="error" class="feedback error">{{ error }}</div>
-        <div v-if="success" class="feedback success">Backdrop sent to Plex successfully!</div>
+        <div v-if="success" class="feedback success">{{ isNonPlexItem ? 'Backdrop sent successfully!' : 'Backdrop sent to Plex successfully!' }}</div>
       </div>
 
       <!-- Footer -->
@@ -272,7 +280,7 @@ onMounted(fetchAvailableBackdrops)
           <svg v-if="sending" class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M21 12a9 9 0 11-6.219-8.56"/>
           </svg>
-          {{ sending ? 'Sending…' : 'Send to Plex' }}
+          {{ sending ? 'Sending…' : (isNonPlexItem ? 'Send' : 'Send to Plex') }}
         </button>
       </div>
     </div>

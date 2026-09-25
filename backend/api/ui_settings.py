@@ -34,6 +34,42 @@ def _restore_unchanged_secrets(incoming: dict, current: dict) -> dict:
             incoming_section[field] = (current.get(section) or {}).get(field, "")
     return incoming
 
+
+# mediaServers is a list of entries, each carrying its own credential (token
+# for Plex, apiKey for Jellyfin/Emby) -- SECRET_FIELD_PATHS above only models
+# a fixed category.field shape, not a list of arbitrary entries, so this gets
+# its own small mask/restore pair rather than forcing that mechanism to
+# handle a shape it wasn't built for. Same security guarantee either way:
+# never return a real credential from GET, never let the mask placeholder
+# clobber a real stored value on save.
+def _mask_media_server_secrets(data: dict) -> dict:
+    servers = data.get("mediaServers")
+    if not isinstance(servers, list):
+        return data
+    masked = dict(data)
+    masked["mediaServers"] = [
+        {**s, "token": SECRET_MASK} if isinstance(s, dict) and s.get("token") else
+        ({**s, "apiKey": SECRET_MASK} if isinstance(s, dict) and s.get("apiKey") else s)
+        for s in servers
+    ]
+    return masked
+
+
+def _restore_unchanged_media_server_secrets(incoming: dict, current: dict) -> dict:
+    incoming_servers = incoming.get("mediaServers")
+    if not isinstance(incoming_servers, list):
+        return incoming
+    current_by_id = {s.get("id"): s for s in (current.get("mediaServers") or []) if isinstance(s, dict)}
+    for entry in incoming_servers:
+        if not isinstance(entry, dict):
+            continue
+        existing = current_by_id.get(entry.get("id")) or {}
+        if entry.get("token") == SECRET_MASK:
+            entry["token"] = existing.get("token", "")
+        if entry.get("apiKey") == SECRET_MASK:
+            entry["apiKey"] = existing.get("apiKey", "")
+    return incoming
+
 # Legacy file paths for migration check
 _settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
 _legacy_settings_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
@@ -349,7 +385,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
 def get_ui_settings():
     settings_obj = _read_settings()
     data = settings_obj.model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False)
-    return JSONResponse(content=_mask_secrets(data))
+    return JSONResponse(content=_mask_media_server_secrets(_mask_secrets(data)))
 
 @router.get("/ping")
 def api_ping():
@@ -375,6 +411,7 @@ def save_ui_settings_endpoint(payload: UISettings):
         # secret field still holds that placeholder, the user didn't change it, so keep
         # the real stored value rather than clobbering it with the literal placeholder.
         incoming = _restore_unchanged_secrets(incoming, current)
+        incoming = _restore_unchanged_media_server_secrets(incoming, current)
         merged = {**defaults, **current, **incoming}
         for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {
@@ -443,7 +480,7 @@ def save_ui_settings_endpoint(payload: UISettings):
         env_overrides = _env_overrides()
         for nested_key, nested_values in env_overrides.items():
             merged_with_env[nested_key] = {**merged_with_env.get(nested_key, {}), **nested_values}
-        return _mask_secrets(merged_with_env)
+        return _mask_media_server_secrets(_mask_secrets(merged_with_env))
     except Exception as e:
         logger.error(f"[UI_SETTINGS] Failed to save settings: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")

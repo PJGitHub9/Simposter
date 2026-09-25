@@ -10,6 +10,66 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.114',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Settings → Media Servers: add, enable, test, and remove Plex/Jellyfin/Emby connections through the UI. Early groundwork for upcoming Jellyfin/Emby support — nothing else in the app uses these servers yet.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.113',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal backend addition (no user-facing change yet): a Jellyfin/Emby implementation of the new media-server abstraction, plus temporary developer endpoints to test it against a real instance. Groundwork for upcoming Jellyfin/Emby support — nothing in the app uses this yet.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.112',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal backend addition (no user-facing change): a new abstraction layer for talking to a media server, with the first implementation wrapping existing Plex code. Nothing in the app uses it yet — groundwork for upcoming Jellyfin/Emby support.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.111',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal database groundwork (no user-facing change): every cache table now tracks which configured media server a row belongs to, preparing for upcoming Jellyfin/Emby support. Existing installs are unaffected — nothing changes until a second server is actually added.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.110',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal refactor (no user-facing change): consolidated 4 duplicated places that fetch Plex metadata for overlay badges into one shared function, plus removed a redundant metadata fetch in Save. Groundwork for upcoming Jellyfin support.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.109',
     date: '2026-09-23',
     sections: [

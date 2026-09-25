@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // Small row of "open on the source site" links for the item currently being edited,
-// shown under the title in EditorPane.vue/TvShowEditorPane.vue -- similar to the
-// external-link row PosterTools shows.
+// shown under the title in EditorPane.vue/TvShowEditorPane.vue
 //
 // URL schemes (verified live, 2026-09-21, against Breaking Bad tmdb_id=1396/
 // tvdb_id=81189 and The Matrix tmdb_id=603 -- Fanart.tv couldn't be verified the

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { getApiBase } from '@/services/apiBase'
-import { useSettingsStore } from '@/stores/settings'
+import { useSettingsStore, type MediaServerEntry } from '@/stores/settings'
+import { mediaServerId } from '@/services/mediaServerId'
 
 const emit = defineEmits<{ (e: 'done'): void }>()
 
@@ -9,7 +10,7 @@ const settings = useSettingsStore()
 const apiBase = getApiBase()
 
 // ── Steps ──────────────────────────────────────────────────────────────────
-const STEPS = ['welcome', 'plex', 'libraries', 'apikeys', 'automation', 'performance', 'notifications', 'finish'] as const
+const STEPS = ['welcome', 'plex', 'libraries', 'mediaservers', 'apikeys', 'automation', 'performance', 'notifications', 'finish'] as const
 type Step = typeof STEPS[number]
 const step = ref<Step>('welcome')
 const stepIndex = computed(() => STEPS.indexOf(step.value))
@@ -66,6 +67,53 @@ const toggleTvLib = (key: string) => {
 const initLibraries = () => {
   selectedMovieLibs.value = new Set(movieLibSections.value.map(s => s.key))
   selectedTvLibs.value = new Set(tvLibSections.value.map(s => s.key))
+}
+
+// ── Media Servers step (optional — Plex is already configured by this point;
+// this step lets a user also add a Jellyfin/Emby server, matching what
+// Settings → Media Servers already offers, so someone running more than one
+// server type doesn't have to know that tab exists to get started) ─────────
+const wantsJellyfin = ref(false)
+const jellyfinType = ref<'jellyfin' | 'emby'>('jellyfin')
+const jellyfinUrl = ref('')
+const jellyfinApiKey = ref('')
+const testingJellyfin = ref(false)
+const jellyfinError = ref('')
+const jellyfinOk = ref(false)
+// The server that got a successful test, so a later re-test with a changed
+// URL doesn't silently keep an earlier, now-stale "ok" result in the finish
+// payload — added_mediaServer is only ever set right after a real pass.
+const addedMediaServer = ref<MediaServerEntry | null>(null)
+
+const testJellyfin = async () => {
+  testingJellyfin.value = true
+  jellyfinError.value = ''
+  jellyfinOk.value = false
+  addedMediaServer.value = null
+  try {
+    const res = await fetch(`${apiBase}/api/media-server/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: jellyfinType.value, url: jellyfinUrl.value.trim(), apiKey: jellyfinApiKey.value.trim() }),
+    })
+    const data = await res.json()
+    if (data.connected) {
+      jellyfinOk.value = true
+      addedMediaServer.value = {
+        id: mediaServerId(jellyfinType.value, jellyfinUrl.value),
+        type: jellyfinType.value,
+        url: jellyfinUrl.value.trim(),
+        apiKey: jellyfinApiKey.value.trim(),
+        enabled: true,
+      }
+    } else {
+      jellyfinError.value = 'Could not connect — check the URL and API key'
+    }
+  } catch (e) {
+    jellyfinError.value = e instanceof Error ? e.message : 'Connection failed'
+  } finally {
+    testingJellyfin.value = false
+  }
 }
 
 // ── API Keys step ──────────────────────────────────────────────────────────
@@ -336,6 +384,18 @@ const goNext = async () => {
     // Fire-and-forget — scan runs in the background while user completes setup
     fetch(`${apiBase}/api/scan-library`, { method: 'POST' }).catch(() => {})
   }
+  if (step.value === 'mediaservers' && wantsJellyfin.value && addedMediaServer.value) {
+    // Save immediately, same reasoning as the Plex early-save above — don't
+    // let a real, successfully-tested server sit only in local component
+    // state until the wizard's much-later final save, in case the user
+    // closes out early. Merge rather than overwrite: mediaServers may
+    // already hold a 'plex-1' entry seeded by the backend (Quirk #57), and
+    // re-testing after editing the URL could add a second entry sharing the
+    // same stable id (Quirk #70) — replace by id, don't just append blindly.
+    const existing = settings.mediaServers.value.filter(s => s.id !== addedMediaServer.value!.id)
+    settings.mediaServers.value = [...existing, addedMediaServer.value]
+    await settings.save()
+  }
   if (step.value === 'performance') await saveSettings()
   if (step.value === 'notifications') {
     // Save notification prefs, then auto-import the default preset in the background
@@ -387,6 +447,18 @@ onMounted(() => {
   if (settings.tmdb.value.apiKey) tmdbApiKey.value = settings.tmdb.value.apiKey
   if (settings.tvdb.value.apiKey) tvdbApiKey.value = settings.tvdb.value.apiKey
   if (settings.fanart.value.apiKey) fanartApiKey.value = settings.fanart.value.apiKey
+  // Re-running the wizard (Settings → Advanced → Run Startup Wizard) with a
+  // Jellyfin/Emby server already configured: prefill type/URL for context,
+  // but deliberately leave the API key blank rather than the masked
+  // placeholder GET /api/ui-settings returns (Quirk #60's secret masking) —
+  // sending that placeholder straight into Test Connection would just fail,
+  // since restore-if-unchanged only applies on save, not on this endpoint.
+  const existingNonPlex = settings.mediaServers.value.find(s => s.type !== 'plex')
+  if (existingNonPlex) {
+    wantsJellyfin.value = true
+    jellyfinType.value = existingNonPlex.type as 'jellyfin' | 'emby'
+    jellyfinUrl.value = existingNonPlex.url
+  }
 })
 </script>
 
@@ -466,6 +538,42 @@ onMounted(() => {
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
             <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
+          </div>
+        </template>
+
+        <!-- ── Media Servers (optional) ── -->
+        <template v-else-if="step === 'mediaservers'">
+          <div class="ob-icon">🖥️</div>
+          <h2 class="ob-title">Also using Jellyfin or Emby?</h2>
+          <p class="ob-sub">Optional — Simposter can send posters to more than one media server. Skip this if Plex is all you use, you can always add one later in Settings → Media Servers.</p>
+          <label class="ob-lib-row" :class="{ selected: wantsJellyfin }" @click="wantsJellyfin = !wantsJellyfin">
+            <span class="ob-checkbox" :class="{ checked: wantsJellyfin }">
+              <svg v-if="wantsJellyfin" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            Add a Jellyfin or Emby server
+          </label>
+          <div v-if="wantsJellyfin" class="ob-form">
+            <label class="ob-label">Server type</label>
+            <div class="ob-actions" style="justify-content: flex-start; margin-bottom: 8px;">
+              <button class="ob-btn-secondary" :class="{ 'ob-btn-active': jellyfinType === 'jellyfin' }" @click="jellyfinType = 'jellyfin'; jellyfinOk = false">Jellyfin</button>
+              <button class="ob-btn-secondary" :class="{ 'ob-btn-active': jellyfinType === 'emby' }" @click="jellyfinType = 'emby'; jellyfinOk = false">Emby</button>
+            </div>
+            <label class="ob-label">Server URL</label>
+            <input v-model="jellyfinUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:8096" @keyup.enter="testJellyfin" @input="jellyfinOk = false" />
+            <label class="ob-label">API Key</label>
+            <input v-model="jellyfinApiKey" class="ob-input" type="password" placeholder="Generated in Dashboard → API Keys" @keyup.enter="testJellyfin" @input="jellyfinOk = false" />
+            <div v-if="jellyfinError" class="ob-error">{{ jellyfinError }}</div>
+            <div v-if="jellyfinOk" class="ob-success">Connected!</div>
+            <div class="ob-actions" style="justify-content: flex-start; margin-top: 8px;">
+              <button class="ob-btn-secondary" :disabled="testingJellyfin || !jellyfinUrl || !jellyfinApiKey" @click="testJellyfin">
+                <span v-if="testingJellyfin" class="ob-spinner" />
+                {{ testingJellyfin ? 'Testing...' : 'Test connection' }}
+              </button>
+            </div>
+          </div>
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" @click="goBack">Back</button>
+            <button class="ob-btn-primary" @click="goNext">{{ wantsJellyfin && jellyfinOk ? 'Next' : 'Skip / Next' }}</button>
           </div>
         </template>
 
@@ -946,6 +1054,9 @@ onMounted(() => {
 }
 .ob-btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
 .ob-btn-secondary:not(:disabled):hover { background: rgba(255, 255, 255, 0.11); }
+.ob-btn-secondary.ob-btn-active {
+  background: var(--accent, #3dd6b7); color: #0b0d14; border-color: transparent;
+}
 .ob-btn-ghost {
   padding: 9px 14px; background: transparent; color: #8892aa;
   border: none; border-radius: 8px; font-size: 14px; cursor: pointer; transition: color 0.15s;

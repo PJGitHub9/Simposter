@@ -1,6 +1,26 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import LinkedServerLibraries from '@/components/settings/LinkedServerLibraries.vue'
+
+interface DiscoveredLibrary {
+  serverId: string
+  serverType: string
+  libraryId: string
+  libraryName: string
+  mediaType: string
+}
+const discoveredLibraries = ref<DiscoveredLibrary[]>([])
+
+async function fetchDiscoveredLibraries() {
+  try {
+    const res = await fetch(`${apiBase}/api/media-server/libraries`)
+    const data = await res.json()
+    discoveredLibraries.value = (data.libraries || []).filter((l: DiscoveredLibrary) => l.serverId !== 'plex-1')
+  } catch (e) {
+    console.error('Failed to fetch discovered libraries:', e)
+  }
+}
 
 interface LibraryMapping {
   id: string
@@ -36,14 +56,16 @@ interface TVShow {
 }
 
 const props = defineProps<{
+  // plexUrl/plexToken are read-only here (gating fetchLibraryLabels() below) --
+  // the actual Plex Connection card (URL/Token/Test Connection) now lives in
+  // Settings -> Media Servers, styled to match what used to be here; see
+  // CLAUDE.md's Settings-cleanup Quirk.
   plexUrl: string
   plexToken: string
   libraries: LibraryMapping[]
   tvShowLibraries: LibraryMapping[]
   savedLibraryIds: Set<string>
   savedTvShowLibraryIds: Set<string>
-  testConnection: string
-  testConnectionLoading: boolean
   plexLibraries: PlexLibrary[]
   scanCooldown: boolean
   scanningLibraryId: string | null
@@ -55,7 +77,6 @@ const props = defineProps<{
   defaultTvLabelsToRemove: Record<string, string[]>
   unsavedChanges: boolean
   schedulerChanged?: boolean
-  plexConnectionChanged?: boolean
   movieLibrariesChanged?: boolean
   tvLibrariesChanged?: boolean
   sendLogosToPlex: boolean
@@ -67,8 +88,6 @@ const availablePresets = ref<Record<string, Preset[]>>({})
 const presetsLoading = ref(false)
 
 const emit = defineEmits<{
-  'update:plexUrl': [value: string]
-  'update:plexToken': [value: string]
   'update:libraries': [value: LibraryMapping[]]
   'update:tvShowLibraries': [value: LibraryMapping[]]
   'update:schedulerEnabled': [value: boolean]
@@ -78,21 +97,10 @@ const emit = defineEmits<{
   'update:defaultTvLabelsToRemove': [value: Record<string, string[]>]
   'update:sendLogosToPlex': [value: boolean]
   'update:kometaCompatibility': [value: boolean]
-  'test-connection': []
   'scan-library': [libraryId?: string]
   'save': []
   'library-removed': [libraryId: string]
 }>()
-
-const localPlexUrl = computed({
-  get: () => props.plexUrl,
-  set: (val) => emit('update:plexUrl', val)
-})
-
-const localPlexToken = computed({
-  get: () => props.plexToken,
-  set: (val) => emit('update:plexToken', val)
-})
 
 const localLibraries = computed({
   get: () => {
@@ -425,6 +433,7 @@ const allPresets = computed(() => {
 
 onMounted(async () => {
   fetchPresets()
+  fetchDiscoveredLibraries()
   // Fetch labels if we have Plex credentials and libraries
   if (props.plexUrl && props.plexToken && (props.libraries.length > 0 || props.tvShowLibraries.length > 0)) {
     await fetchLibraryLabels()
@@ -454,54 +463,9 @@ watch(
   <div class="tab-content">
     <h2>Libraries</h2>
 
-    <!-- Plex Connection -->
-    <div :class="['section', { 'section-unsaved': plexConnectionChanged }]">
-      <h3>Plex Connection</h3>
-
-      <div class="plex-connection-grid">
-        <label>
-          <span class="label-text">Plex URL</span>
-          <input
-            v-model="localPlexUrl"
-            type="text"
-            placeholder="http://localhost:32400"
-          />
-          <span class="help-text">Your Plex server URL</span>
-        </label>
-
-        <label>
-          <span class="label-text">Plex Token</span>
-          <input
-            v-model="localPlexToken"
-            type="password"
-            placeholder="X-Plex-Token"
-          />
-          <span class="help-text">Find your Plex token in Plex settings</span>
-        </label>
-      </div>
-
-      <div class="plex-actions">
-        <button
-          @click="emit('test-connection')"
-          :disabled="testConnectionLoading || !localPlexUrl || !localPlexToken"
-          class="secondary"
-        >
-          {{ testConnectionLoading ? 'Testing...' : 'Test Connection' }}
-        </button>
-
-        <button
-          @click="emit('scan-library')"
-          :disabled="scanCooldown"
-          class="secondary"
-        >
-          {{ scanCooldown ? 'Scanning...' : 'Scan All Libraries' }}
-        </button>
-
-        <div v-if="testConnection" class="status-message">
-          {{ testConnection }}
-        </div>
-      </div>
-    </div>
+    <p class="plex-connection-hint">
+      Manage your Plex connection in <router-link to="/settings?tab=media-servers">Settings → Media Servers</router-link>.
+    </p>
 
     <!-- Global Logo Settings -->
     <div class="section">
@@ -512,9 +476,19 @@ watch(
           :checked="sendLogosToPlex"
           @change="emit('update:sendLogosToPlex', ($event.target as HTMLInputElement).checked)"
         />
-        <span>Send logos to Plex by default</span>
+        <span>Send logos to media servers by default</span>
       </label>
-      <p class="help-text">When enabled, the "Send logo to Plex" option will be pre-checked in the poster editor and batch edit screens.</p>
+      <p class="help-text">When enabled, the "Send logo" option will be pre-checked in the poster editor and batch edit screens. In the manual poster editor this already applies to whichever server(s) an item is linked to (Plex, Jellyfin, or Emby); Batch Edit's logo send is still Plex-only for now.</p>
+    </div>
+
+    <div class="scan-all-row">
+      <button
+        @click="emit('scan-library')"
+        :disabled="scanCooldown"
+        class="secondary"
+      >
+        {{ scanCooldown ? 'Scanning...' : 'Scan All Libraries' }}
+      </button>
     </div>
 
     <!-- Libraries Grid -->
@@ -529,35 +503,22 @@ watch(
         </div>
 
         <div v-for="(lib, idx) in localLibraries" :key="idx" class="library-card">
-        <div class="library-fields">
-          <label>
-            <span class="label-text">Library ID</span>
-            <select
-              v-model="lib.id"
-              :disabled="savedLibraryIds.has(String(lib.id))"
-              @change="updateLibraries"
-            >
-              <option value="">Select a library...</option>
-              <option
-                v-for="plexLib in plexLibraries.filter(l => l.type === 'movie')"
-                :key="plexLib.key"
-                :value="plexLib.key"
-              >
-                {{ plexLib.title }} ({{ plexLib.key }})
-              </option>
-            </select>
-          </label>
 
-          <label>
-            <span class="label-text">Display Name</span>
-            <input
-              v-model="lib.displayName"
-              type="text"
-              placeholder="Custom display name"
-              @input="updateLibraries"
-            />
-          </label>
-        </div>
+        <!-- Linked libraries (Plex + other servers) -- Plex's own picker lives
+             here now too, not as a separate standalone "Library ID" field. -->
+        <LinkedServerLibraries
+          :library-id="String(lib.id)"
+          media-type="movie"
+          :library-name="lib.displayName ?? lib.title ?? String(lib.id)"
+          :auto-generate-enabled="lib.autoGenerateEnabled"
+          :auto-generate-preset-id="lib.autoGeneratePresetId"
+          :auto-generate-template-id="lib.autoGenerateTemplateId"
+          :discovered="discoveredLibraries"
+          :plex-libraries="plexLibraries"
+          :saved-library-ids="savedLibraryIds"
+          @update:library-id="lib.id = $event; updateLibraries()"
+          @update:library-name="lib.displayName = $event; updateLibraries()"
+        />
 
         <!-- Auto-Generation Settings -->
         <div v-if="lib.id" class="auto-gen-section">
@@ -641,35 +602,22 @@ watch(
         </div>
 
         <div v-for="(lib, idx) in localTvShowLibraries" :key="idx" class="library-card">
-        <div class="library-fields">
-          <label>
-            <span class="label-text">Library ID</span>
-            <select
-              v-model="lib.id"
-              :disabled="savedTvShowLibraryIds.has(String(lib.id))"
-              @change="updateTvShowLibraries"
-            >
-              <option value="">Select a library...</option>
-              <option
-                v-for="plexLib in plexLibraries.filter(l => l.type === 'show')"
-                :key="plexLib.key"
-                :value="plexLib.key"
-              >
-                {{ plexLib.title }} ({{ plexLib.key }})
-              </option>
-            </select>
-          </label>
 
-          <label>
-            <span class="label-text">Display Name</span>
-            <input
-              v-model="lib.displayName"
-              type="text"
-              placeholder="Custom display name"
-              @input="updateTvShowLibraries"
-            />
-          </label>
-        </div>
+        <!-- Linked libraries (Plex + other servers) -- Plex's own picker lives
+             here now too, not as a separate standalone "Library ID" field. -->
+        <LinkedServerLibraries
+          :library-id="String(lib.id)"
+          media-type="tv"
+          :library-name="lib.displayName ?? lib.title ?? String(lib.id)"
+          :auto-generate-enabled="lib.autoGenerateEnabled"
+          :auto-generate-preset-id="lib.autoGeneratePresetId"
+          :auto-generate-template-id="lib.autoGenerateTemplateId"
+          :discovered="discoveredLibraries"
+          :plex-libraries="plexLibraries"
+          :saved-library-ids="savedTvShowLibraryIds"
+          @update:library-id="lib.id = $event; updateTvShowLibraries()"
+          @update:library-name="lib.displayName = $event; updateTvShowLibraries()"
+        />
 
         <div v-if="lib.id" class="auto-gen-section">
           <label class="checkbox-label">
@@ -747,16 +695,17 @@ watch(
     <div class="section">
       <div class="section-header-inline">
         <div>
-          <h3 style="margin-bottom: 4px;">Default Labels to Remove</h3>
+          <h3 style="margin-bottom: 4px;">Default Labels to Remove <span class="plex-only-tag">Plex only</span></h3>
           <p class="section-description" style="margin-bottom: 0;">
-            When sending to Plex, these labels will be removed by default for each library
+            When sending to Plex, these labels will be removed by default for each library. Label removal has no
+            Jellyfin/Emby equivalent, so this has no effect on a linked non-Plex library.
           </p>
           <label class="checkbox-label" style="margin-top: 10px;">
             <input type="checkbox" v-model="localKometaCompatibility" />
-            <span>Kometa Compatibility</span>
+            <span>Kometa Compatibility</span> <span class="plex-only-tag">Plex only</span>
           </label>
           <p class="section-description" style="margin: 2px 0 0 0;">
-            When enabled, any library you add from now on automatically gets "Overlay" checked here too — matching what the "Using Kometa?" step in the startup wizard does for libraries selected during onboarding, but for libraries added afterward.
+            When enabled, any library you add from now on automatically gets "Overlay" checked here too — matching what the "Using Kometa?" step in the startup wizard does for libraries selected during onboarding, but for libraries added afterward. Kometa itself only ever runs against Plex, so this doesn't apply to Jellyfin/Emby libraries either.
           </p>
         </div>
         <button @click="fetchLibraryLabels" class="refresh-labels-btn" :disabled="labelsLoading">
@@ -911,18 +860,50 @@ h4 {
   background: rgba(255, 193, 7, 0.05);
 }
 
-.plex-connection-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 16px;
+/* Used by the "Default Labels to Remove" section's descriptive paragraphs but
+   never actually defined here -- borrowed from CleanupTab.vue's own
+   identically-named class, which (being scoped) never applied across the
+   component boundary. Left as plain unstyled <p> text until now. */
+.section-description {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-bottom: 20px;
+  line-height: 1.5;
 }
 
-.plex-actions {
+.section-description:last-child {
+  margin-bottom: 0;
+}
+
+/* Small honest-disclosure tag for settings that genuinely only affect Plex --
+   matches this app's established "state the real limitation plainly" style
+   (see Media Servers' own multi-Plex-send disclosure) rather than a fancier
+   badge component. */
+.plex-only-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: rgba(229, 160, 13, 0.12);
+  color: #e5a00d;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.plex-connection-hint {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: -8px 0 20px 0;
+}
+
+.plex-connection-hint a {
+  color: var(--accent);
+}
+
+.scan-all-row {
   display: flex;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
+  margin-bottom: 16px;
 }
 
 .scheduler-header {
@@ -1101,17 +1082,6 @@ select:disabled {
   color: var(--text-muted);
   font-style: italic;
   margin: 0;
-}
-
-.library-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 0;
-}
-
-.library-fields label {
-  margin-bottom: 0;
 }
 
 .library-actions {

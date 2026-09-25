@@ -18,6 +18,19 @@ class Movie(BaseModel):
     labels: Optional[List[str]] = None
     updated_at: Optional[str] = None
     edition: Optional[str] = None
+    server_id: Optional[str] = None  # which configured media server this item came from
+                                      # (Quirk #57) -- 'plex-1' for every pre-multi-server
+                                      # row, a real value once a scan/Library Group union
+                                      # (Quirk #62/#64) includes non-Plex rows.
+    also_on: Optional[List[str]] = None  # other server_ids this same title (by tmdb_id) was
+                                          # also found on within a merged Library Group,
+                                          # collapsed into this one card by _dedupe_by_tmdb_id()
+                                          # (Quirk #65/#67) -- empty/None for every non-merged item.
+    other_servers: Optional[List[Dict[str, str]]] = None  # {server_id, rating_key} for each
+                                          # dropped duplicate above -- lets the manual editor
+                                          # fetch/send against a linked title's OTHER servers
+                                          # directly, without a second API round-trip to
+                                          # resolve which rating_key belongs to which server.
 
 
 class MovieTMDbResponse(BaseModel):
@@ -69,6 +82,19 @@ class PresetSaveRequest(BaseModel):
 class PresetDeleteRequest(BaseModel):
     template_id: str = "uniformlogo"
     preset_id: str
+
+
+class MediaServerEntry(BaseModel):
+    id: str
+    type: str  # "plex" | "jellyfin" | "emby"
+    name: Optional[str] = None  # user-supplied display label (e.g. "pj-jellyfin") so
+                                 # multiple same-type servers can be told apart in the UI --
+                                 # falls back to a generic type label ("Jellyfin"/"Emby")
+                                 # everywhere it's displayed when unset/blank.
+    url: str = ""
+    token: Optional[str] = None    # Plex
+    apiKey: Optional[str] = None   # Jellyfin/Emby
+    enabled: bool = True
 
 
 class PlexSettings(BaseModel):
@@ -158,6 +184,15 @@ class AutomationSettings(BaseModel):
                                        # rating_key, which otherwise looks identical to a
                                        # genuinely new library addition. See
                                        # get_reuse_cached_poster_days() in config.py.
+    preferredPosterServer: str = "plex-1"  # DEPRECATED, no longer read by anything -- superseded
+                                             # by the per-group LibraryGroup.preferredServerId
+                                             # field (a single global choice applied to every
+                                             # merged group at once wasn't granular enough once
+                                             # a real install had more than one linked group).
+                                             # Field kept only so an existing stored value on an
+                                             # already-upgraded install round-trips harmlessly
+                                             # through GET/POST /api/ui-settings; no UI edits it
+                                             # anymore.
 
 
 class NotificationSettings(BaseModel):
@@ -176,6 +211,45 @@ class NotificationSettings(BaseModel):
     appriseNotifyManual: bool = True
     appriseNotifyWebhook: bool = True
     appriseNotifyAutoGenerate: bool = True
+
+
+class LibraryGroupMember(BaseModel):
+    """One (server, library) pair inside a LibraryGroup -- e.g. Plex's
+    'Movies' library, or Jellyfin's 'Movies-HD' library."""
+    serverId: str
+    libraryId: str
+    libraryName: str = ""  # Display-only snapshot from the last time this member was
+                            # added/refreshed -- never used for matching, only so the
+                            # UI can show a name without a live per-server lookup.
+
+
+class LibraryGroup(BaseModel):
+    """A user-defined set of libraries across different media servers that
+    represent 'the same logical library' -- e.g. Plex 'Movies' + Jellyfin
+    'Movies-HD' both feeding one merged 'Movies' view. Settings (auto-generate,
+    labels) are unified across the whole group, not kept per-member -- the
+    user explicitly chose this over independent per-server-library settings.
+    See CLAUDE.md's Jellyfin-integration Quirks for the full design rationale."""
+    id: str
+    name: str
+    mediaType: str  # "movie" | "tv"
+    members: List[LibraryGroupMember] = Field(default_factory=list)
+    autoGenerateEnabled: bool = False
+    autoGeneratePresetId: Optional[str] = None
+    autoGenerateTemplateId: Optional[str] = None
+    labelsToRemove: List[str] = Field(default_factory=list)
+    preferredServerId: Optional[str] = None  # Which member's row wins when this group's
+                                              # merged grid finds the same tmdb_id on more
+                                              # than one server (database.py's
+                                              # _dedupe_by_tmdb_id()). None = the function's
+                                              # own default ('plex-1' if a Plex member
+                                              # exists, else most-recently-updated) --
+                                              # replaces the old global
+                                              # automation.preferredPosterServer setting,
+                                              # which applied the same choice to every
+                                              # group at once; this is scoped per-group
+                                              # instead, edited from that group's own
+                                              # Linked Libraries section in Settings.
 
 
 class UISettings(BaseModel):
@@ -206,6 +280,8 @@ class UISettings(BaseModel):
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
     onboarding_completed: bool = False
+    mediaServers: List[MediaServerEntry] = Field(default_factory=list)
+    libraryGroups: List[LibraryGroup] = Field(default_factory=list)
 
 class PlexLogoSendRequest(BaseModel):
     rating_key: str

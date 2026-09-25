@@ -611,23 +611,16 @@ def api_preview(req: PreviewRequest):
             raise HTTPException(status_code=400, detail="Could not find a poster image. Check that the item has a valid TMDB/TVDB ID or Plex poster.")
 
         # Inject real Plex media metadata (video_resolution, audio_codec, etc.)
-        # for overlay badge rendering. Always inject when we have a rating_key,
+        # for overlay badge rendering, plus tmdb_id/media_type for studio/
+        # streaming-platform badges. Always inject when we have a rating_key,
         # because overlays can come from preset-linked configs OR explicit IDs.
         if rating_key:
-            from ..config import get_plex_media_info
-            plex_media = get_plex_media_info(rating_key)
-            if plex_media:
-                existing_meta = render_options.get("metadata") or {}
-                render_options["metadata"] = {**existing_meta, **plex_media}
-                logger.info("[PREVIEW] Injected Plex media info for rating_key=%s%s: %s", rating_key, _dt, plex_media)
-            else:
-                logger.info("[PREVIEW] No media info found for rating_key=%s%s", rating_key, _dt)
-
-        # Inject tmdb_id and media_type for streaming platform badge resolution
-        if tmdb_id:
-            render_options.setdefault("metadata", {})
-            render_options["metadata"]["tmdb_id"] = tmdb_id
-            render_options["metadata"]["media_type"] = "tv" if is_tv_show else "movie"
+            from ..config import inject_plex_media_metadata
+            inject_plex_media_metadata(
+                render_options, rating_key,
+                tmdb_id=tmdb_id, is_tv=is_tv_show,
+                log_prefix="[PREVIEW] ",
+            )
 
         # Pass preset_id so the template renderer can look up linked overlay configs
         if req.preset_id:
