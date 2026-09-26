@@ -110,11 +110,43 @@ class MediaServerClient(ABC):
 
     @abstractmethod
     def find_item_by_external_id(self, tmdb_id: Optional[Any], tvdb_id: Optional[Any],
-                                  media_type: str) -> Optional[str]:
+                                  media_type: str, library_id: Optional[str] = None) -> Optional[str]:
         """Resolve an external-tool-supplied TMDb/TVDb ID (from a Radarr/Sonarr
-        webhook) to this server's own item id. Returns None if not found."""
+        webhook, or a cross-server sync) to this server's own item id. Returns
+        None if not found.
+
+        `library_id` is optional but should always be passed when the caller
+        knows which specific library on THIS server the item is expected to
+        be in (e.g. a Library Group's linked member) -- without it, a title
+        present in more than one library on the same server (a duplicate/4K
+        copy, an untracked library sharing the server) can resolve to the
+        WRONG item nondeterministically, since nothing else disambiguates
+        between same-tmdb_id matches. A real, live-reported bug found this
+        exact scenario: Gran Turismo existed in both a linked "4k-Movies"
+        Jellyfin library and an untracked "Movies" library on the same
+        server -- unscoped lookups kept silently updating the untracked
+        copy instead of the one actually linked via the Library Group."""
 
     @abstractmethod
     def get_folder_name(self, item_id: str, is_tv: bool = False) -> Optional[str]:
         """The real on-disk folder name for this item, for {folder} save-path
         resolution (see CLAUDE.md Quirk #14)."""
+
+    @abstractmethod
+    def find_season_by_index(self, series_item_id: str, season_index: int) -> Optional[str]:
+        """Resolve a specific season's own item id, given the series' own
+        already-resolved item id (e.g. from find_item_by_external_id()) and a
+        season index using Simposter's own convention (0 = Specials, matching
+        Plex's numbering and this codebase's existing season_index usage
+        throughout backend/api/batch.py). Returns None if not found.
+
+        This was, until CLAUDE.md Quirk #100, wrongly believed to be
+        impossible for Jellyfin -- every prior TV multi-server Quirk
+        (#69/#71/#75/#96/#99) deferred season-level sync/send on that
+        assumption. It was never actually checked against a real server:
+        Jellyfin's season items are real, individually-addressable Items
+        with their own Id, reachable via the exact same
+        `/Items?ParentId=...&IncludeItemTypes=...` shape list_items() already
+        uses, just scoped to the series' item id with IncludeItemTypes=Season
+        and matched by IndexNumber. See Quirk #100 for the live verification
+        that established this."""

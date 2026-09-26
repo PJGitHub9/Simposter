@@ -59,6 +59,16 @@ class PreviewRequest(BaseModel):
     disableOverlayCache: Optional[bool] = None
     skip_fallback: Optional[bool] = None  # When True, never apply poster/logo fallback (for manual editor preview)
     is_collection: Optional[bool] = False  # True for Plex collection posters (Kometa Creator or Simposter Creator on a collection)
+    # Explicit TV-show flag -- SaveRequest/api_plex_send() already have this
+    # (render.ts's save()/send() both send it), but /api/preview never did,
+    # leaving it to guess via background_url string-pattern-matching
+    # (does it look like "/api/tv-show/{key}/poster"?). That guess silently
+    # fails whenever the background is a raw external TMDb/Fanart/TVDB
+    # candidate URL instead of Simposter's own internal poster-cache URL --
+    # i.e. the common case of picking a specific candidate poster, not just
+    # a Jellyfin-specific issue. None (the default) preserves the exact
+    # original guessing behavior for any caller that doesn't send this.
+    is_tv: Optional[bool] = None
 
 
 class SaveRequest(PreviewRequest):
@@ -358,6 +368,15 @@ class MovieBatchRequest(BaseModel):
     # RETRY_REASON_MANUAL_TEXTLESS retry item (database.py), since the ordinary needs_retry check
     # doesn't catch a missing textless poster when fallbackPosterAction is "continue" (the default).
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
+    targets: List[str] = []  # Non-Plex server_ids to ALSO sync the rendered poster/logo to, in
+    # addition to whatever send_to_plex already does (or doesn't) -- purely additive, does not
+    # replace send_to_plex (unlike ResendTarget/ResendCachedRequest's single-list model, since
+    # send_to_plex already gates a large block of Plex-only side effects -- label add/remove,
+    # retry-queue resolution, "sent_to_plex" history -- that shouldn't change shape here). Each
+    # requested target is further scoped server-side to only the servers actually linked to this
+    # batch's library via a Library Group (see CLAUDE.md Quirk #95's identical webhook-sync fix)
+    # -- a target that isn't linked is silently skipped, never blindly synced to. 'plex-1' in this
+    # list is a no-op (Plex already has its own real send path via send_to_plex).
 
 
 class TVShowBatchRequest(BaseModel):
@@ -380,6 +399,9 @@ class TVShowBatchRequest(BaseModel):
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
     require_textless_poster: bool = False  # See MovieBatchRequest's field of the same name.
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
+    targets: List[str] = []  # See MovieBatchRequest.targets -- series-level poster/logo only, never
+    # season-level (JellyfinClient has no season-level item resolution yet, same reason Quirk #69/#71
+    # deferred TV sends elsewhere).
 
 
 # Legacy batch request - kept for backward compatibility

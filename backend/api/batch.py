@@ -188,7 +188,19 @@ def _process_single_movie(
             "current_step": "Fetching TMDb data",
         })
 
-        tmdb_id = get_movie_tmdb_id(rating_key)
+        # Server-aware: get_movie_tmdb_id() is Plex-only (a direct
+        # /library/metadata/{rating_key} fetch), which always 404s for a
+        # Jellyfin/Emby item id. Same fix as Quirk #90/#97 -- reuse the
+        # tmdb_id already cached from the last scan for a non-Plex item
+        # instead of a doomed live Plex fetch. This is the batch RENDER
+        # pipeline itself (not just the /tmdb lookup endpoint or /api/preview),
+        # so missing this meant every batch render of a Jellyfin-sourced item
+        # failed outright with "No TMDb ID found." rather than degrading to a
+        # wrong-but-working fallback the way preview.py's did before its own fix.
+        if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+            tmdb_id, _ = db.get_ids_for_rating_key(rating_key)
+        else:
+            tmdb_id = get_movie_tmdb_id(rating_key)
         if not tmdb_id:
             raise Exception("No TMDb ID found.")
         logger.debug("[BATCH] rating_key=%s [%s] tmdb_id=%s", rating_key, title_hint, tmdb_id)
@@ -530,17 +542,53 @@ def _process_single_movie(
         # read unconditionally at the bottom of this function, regardless of whether
         # a Plex send even happens this run.
         logo_url_for_cache = logo_url
+        # Non-Plex targets this batch item should ALSO sync to, on top of (or
+        # instead of) send_to_plex -- purely additive, see schemas.py's
+        # MovieBatchRequest.targets docstring for the full design. 'plex-1'
+        # is filtered here defensively even though callers shouldn't send it.
+        other_targets = [t for t in (getattr(req, 'targets', None) or []) if t and t != "plex-1"]
+        do_multiserver_send = bool(other_targets)
         if skip_send_not_ideal:
             logger.info("[BATCH] Skipping Plex upload for %s [%s] — still needs_retry and send_only_if_ideal is set", rating_key, title_hint)
-        elif req.send_to_plex:
-            _update_batch_status({
-                "current_step": "Sending to Plex",
-            })
+        elif req.send_to_plex or do_multiserver_send:
             # PNG when the user's output format is PNG (lossless, matches a manual
-            # Plex upload of the saved file), otherwise a high-quality JPEG.
+            # Plex upload of the saved file), otherwise a high-quality JPEG. Computed
+            # once here regardless of which target(s) triggered this branch, so a
+            # Jellyfin-only batch send (send_to_plex=False, targets=[...]) doesn't
+            # need Plex configured just to encode the bytes it's about to upload
+            # elsewhere.
             from .save import encode_poster_for_plex
             payload, content_type = encode_poster_for_plex(img)
 
+        if do_multiserver_send and not skip_send_not_ideal:
+            try:
+                logo_bytes_for_sync = None
+                logo_ct_for_sync = None
+                if getattr(req, 'send_logos_to_plex', False) and logo_url:
+                    try:
+                        _logo_r = requests.get(logo_url, timeout=10)
+                        if _logo_r.status_code == 200:
+                            _ct = _logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
+                            logo_bytes_for_sync, logo_ct_for_sync = normalize_logo_for_plex(_logo_r.content, _ct)
+                    except Exception as _logo_fetch_err:
+                        logger.debug("[BATCH] Logo fetch for multi-server sync failed for %s [%s]: %s", rating_key, title_hint, _logo_fetch_err)
+                from .media_server_send import sync_render_to_linked_servers
+                synced = sync_render_to_linked_servers(
+                    tmdb_id=tmdb_id, media_type="movie", library_id=req.library_id,
+                    target_ids=other_targets,
+                    poster_bytes=payload, poster_content_type=content_type,
+                    logo_bytes=logo_bytes_for_sync, logo_content_type=logo_ct_for_sync,
+                    title_hint=title_hint,
+                )
+                if synced:
+                    logger.info("[BATCH] Synced to non-Plex server(s) %s for %s [%s]", synced, rating_key, title_hint)
+            except Exception as sync_err:
+                logger.warning("[BATCH] Multi-server sync failed for %s [%s]: %s", rating_key, title_hint, sync_err)
+
+        if not skip_send_not_ideal and req.send_to_plex:
+            _update_batch_status({
+                "current_step": "Sending to Plex",
+            })
             plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
             headers = {
                 "X-Plex-Token": settings.PLEX_TOKEN,
@@ -815,32 +863,44 @@ def _process_single_tv_show(
             "current_step": "Fetching TV show metadata",
         })
 
-        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-        try:
-            r = plex_session.get(url, headers=plex_headers(), timeout=6)
-            r.raise_for_status()
-        except Exception as e:
-            raise Exception(f"Failed to fetch TV show metadata: {e}")
+        # Server-aware: the direct Plex XML fetch below always 404s for a
+        # Jellyfin/Emby item id. Same fix as Quirk #90/#97 (and the movie
+        # branch just above) -- reuse the tmdb_id/tvdb_id already cached from
+        # the last scan for a non-Plex item instead. No Plex XML response to
+        # piggyback the media-info cache-update from in that case either, but
+        # that's not needed -- the Jellyfin/Emby scan already populates
+        # get_cached_media_info() directly (Quirk #91), unlike the Plex path
+        # which relies on this piggyback as its main update mechanism outside
+        # a full library scan.
+        if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+            tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+        else:
+            url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+            try:
+                r = plex_session.get(url, headers=plex_headers(), timeout=6)
+                r.raise_for_status()
+            except Exception as e:
+                raise Exception(f"Failed to fetch TV show metadata: {e}")
 
-        tmdb_id = extract_tmdb_id_from_metadata(r.text)
-        tvdb_id = extract_tvdb_id_from_metadata(r.text)
+            tmdb_id = extract_tmdb_id_from_metadata(r.text)
+            tvdb_id = extract_tvdb_id_from_metadata(r.text)
 
-        # Piggyback: cache media info from the same response
-        try:
-            from ..config import extract_media_info_from_metadata
-            media_info = extract_media_info_from_metadata(r.text)
-            if media_info:
-                db.update_tv_media_info(
-                    rating_key,
-                    media_info.get("video_resolution"),
-                    media_info.get("audio_codec"),
-                    media_info.get("audio_channels"),
-                    video_codec=media_info.get("video_codec"),
-                    audio_language=media_info.get("audio_language"),
-                    edition=media_info.get("edition"),
-                )
-        except Exception:
-            pass  # Non-critical
+            # Piggyback: cache media info from the same response
+            try:
+                from ..config import extract_media_info_from_metadata
+                media_info = extract_media_info_from_metadata(r.text)
+                if media_info:
+                    db.update_tv_media_info(
+                        rating_key,
+                        media_info.get("video_resolution"),
+                        media_info.get("audio_codec"),
+                        media_info.get("audio_channels"),
+                        video_codec=media_info.get("video_codec"),
+                        audio_language=media_info.get("audio_language"),
+                        edition=media_info.get("edition"),
+                    )
+            except Exception:
+                pass  # Non-critical
 
         if tmdb_id and not tvdb_id:
             try:
@@ -1095,6 +1155,19 @@ def _render_all_tv_seasons(
     # Use season-specific options if provided, merged on top of the series options so a
     # season preset stored as a sparse diff (v1.6.32+) still resolves to a complete option set.
     final_season_options = db.resolve_season_options(render_options, season_options)
+
+    # Season enumeration is Plex-only, on purpose, not by oversight -- there is
+    # no MediaServerClient method for "list this show's seasons" yet (Jellyfin
+    # has no season-level item resolution built at all -- see the identical
+    # limitation already documented in Quirk #69/#71/#75/#96). Rather than let
+    # a Jellyfin-sourced rating_key hit a confusing raw 404 against Plex's own
+    # /children endpoint below, fail clearly and specifically here instead.
+    if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+        raise Exception(
+            "Season posters aren't supported yet for a Jellyfin/Emby-sourced show "
+            "(no season-level lookup exists for non-Plex servers yet) -- switch "
+            "\"Show posters from\" back to Plex, or uncheck \"Include Seasons\"."
+        )
 
     # Fetch seasons from Plex
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
@@ -1699,17 +1772,52 @@ def _render_and_save_poster(
     # read unconditionally at the bottom of this function, regardless of whether
     # a Plex send even happens this run.
     logo_url_for_cache = logo_url
+    # Non-Plex targets this poster should ALSO sync to (Quirk #95's follow-up,
+    # see MovieBatchRequest/TVShowBatchRequest.targets in schemas.py). Season
+    # sync is genuinely supported now (Quirk #100) -- sync_render_to_linked_servers()
+    # resolves the season on each linked server itself via find_season_by_index().
+    other_targets = [t for t in (getattr(req, 'targets', None) or []) if t and t != "plex-1"]
+    do_multiserver_send = bool(other_targets)
     if skip_send_not_ideal:
         logger.info("[BATCH] Skipping Plex upload for %s — still needs_retry and send_only_if_ideal is set", display_title)
-    elif req.send_to_plex:
+    elif req.send_to_plex or do_multiserver_send:
+        # PNG when the user's output format is PNG (lossless, matches a manual Plex
+        # upload of the saved file), otherwise a high-quality JPEG. Computed once
+        # regardless of which target(s) triggered this branch (see the identical
+        # movie-path comment in _process_single_movie()).
+        from .save import encode_poster_for_plex
+        payload, content_type = encode_poster_for_plex(rendered)
+
+    if do_multiserver_send and not skip_send_not_ideal:
+        try:
+            logo_bytes_for_sync = None
+            logo_ct_for_sync = None
+            if getattr(req, 'send_logos_to_plex', False) and logo_url:
+                try:
+                    _logo_r = requests.get(logo_url, timeout=10)
+                    if _logo_r.status_code == 200:
+                        _ct = _logo_r.headers.get("content-type", "image/png").split(";")[0].strip()
+                        logo_bytes_for_sync, logo_ct_for_sync = normalize_logo_for_plex(_logo_r.content, _ct)
+                except Exception as _logo_fetch_err:
+                    logger.debug("[BATCH] Logo fetch for multi-server sync failed for %s: %s", display_title, _logo_fetch_err)
+            from .media_server_send import sync_render_to_linked_servers
+            synced = sync_render_to_linked_servers(
+                tmdb_id=tmdb_id, media_type="tv", library_id=req.library_id,
+                target_ids=other_targets,
+                poster_bytes=payload, poster_content_type=content_type,
+                logo_bytes=logo_bytes_for_sync, logo_content_type=logo_ct_for_sync,
+                title_hint=display_title,
+                season_index=season_index,
+            )
+            if synced:
+                logger.info("[BATCH] Synced to non-Plex server(s) %s for %s", synced, display_title)
+        except Exception as sync_err:
+            logger.warning("[BATCH] Multi-server sync failed for %s: %s", display_title, sync_err)
+
+    if not skip_send_not_ideal and req.send_to_plex:
         _update_batch_status({
             "current_step": "Uploading to Plex",
         })
-
-        # PNG when the user's output format is PNG (lossless, matches a manual Plex
-        # upload of the saved file), otherwise a high-quality JPEG.
-        from .save import encode_poster_for_plex
-        payload, content_type = encode_poster_for_plex(rendered)
 
         try:
             upload_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
@@ -1872,6 +1980,13 @@ def _render_and_save_poster(
     }
     if season_title:
         result["season"] = season_title
+    # Needed by webhooks.py's cross-server sync (Phase 6c season-level follow-up)
+    # to know which season (if any) this specific sub-result is for, so it can
+    # resolve/sync the right item on a linked non-Plex server -- None here means
+    # "this is the series-level result", matching every other season_index
+    # convention already used throughout this codebase (0 = Specials).
+    if season_index is not None:
+        result["season_index"] = season_index
     if save_path:
         result["save_path"] = str(save_path)
     # Include poster bytes for single-item notifications (webhook, auto_generate)

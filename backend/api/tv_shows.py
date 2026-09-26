@@ -548,6 +548,22 @@ def api_tv_show_seasons(rating_key: str, force_refresh: bool = False):
         if cached and cached.get("seasons"):
             return {"seasons": cached["seasons"]}
 
+    # Real bug, same class as Quirk #90/#97: this endpoint was unconditionally
+    # Plex-only, with no server_id check at all -- a Jellyfin-sourced show's
+    # rating_key was never a real Plex id, so this always 500'd
+    # ("Failed to fetch seasons"). Season enumeration for Jellyfin wasn't even
+    # buildable until Quirk #100 confirmed it's possible; wired up here the
+    # same session that capability landed.
+    server_id = db.get_server_id_for_rating_key(rating_key)
+    if server_id != "plex-1":
+        from ..media_server import get_client
+        client = get_client(server_id)
+        if not client:
+            raise HTTPException(404, f"No configured/enabled media server for server_id={server_id}")
+        seasons = client.list_seasons(rating_key) if hasattr(client, "list_seasons") else []
+        cache.update_tv_seasons(rating_key, seasons)
+        return {"seasons": seasons}
+
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
 
     try:

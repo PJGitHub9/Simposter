@@ -5,6 +5,7 @@ import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useTvShows } from '../composables/useTvShows'
 import { useSettingsStore } from '@/stores/settings'
+import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
 
 
 type TvShow = {
@@ -185,16 +186,18 @@ watch(currentLibrary, async (newLib, oldLib) => {
   posterStatus.value = {}
   tvShowsLoadedFlag.value = false
   labelsToRemove.value = new Set()
-  
+  selectedTargets.value = new Set()
+
   // Clear any stale data from previous library to prevent contamination
   if (oldLib && typeof sessionStorage !== 'undefined') {
     const oldLabelKey = `simposter-labels-cache-${oldLib}`
     const oldPosterKey = `simposter-poster-cache-${oldLib}`
     // Don't remove from sessionStorage, but clear from memory
   }
-  
+
   // Load caches for new library only if we have a valid library ID
   if (newLib) {
+    libraryGroupPref.load(newLib)
     await fetchMovies()
     // Use efficient bulk cache loading first
     await fetchAllAvailableLabels() // Fetch all labels for library first
@@ -215,6 +218,29 @@ const selectedPreset = ref('')
 const sendToPlex = ref(true)
 const saveLocally = ref(false)
 const sendLogos = ref(false)
+// Multi-server send targets (Quirk #95's follow-up, Batch Edit punch-list item 1) --
+// series-level only, matching every other TV multi-server send in this app
+// (JellyfinClient has no season-level item resolution yet). See BatchEditView.vue's
+// identical block for the full design note.
+const libraryGroupPref = useLibraryGroupPreference('tv')
+const selectedTargets = ref<Set<string>>(new Set())
+const otherServerOptions = computed(() => libraryGroupPref.options.value.filter(o => o.id !== 'plex-1'))
+const hasAnySendTarget = computed(() => sendToPlex.value || selectedTargets.value.size > 0)
+// Which server's poster/identity the grid displays (Quirk #85's exact pattern,
+// reused from MoviesView.vue/BatchEditView.vue) -- re-fetches so merged items
+// resolve under the newly-preferred server's rating_key/poster.
+async function onPreferredServerChange(serverId: string) {
+  if (!currentLibrary.value) return
+  const ok = await libraryGroupPref.setPreferred(currentLibrary.value, serverId)
+  // forceRefresh=true -- see the identical note in BatchEditView.vue's version.
+  if (ok) await fetchMovies(true)
+}
+const toggleTarget = (serverId: string) => {
+  const next = new Set(selectedTargets.value)
+  if (next.has(serverId)) next.delete(serverId)
+  else next.add(serverId)
+  selectedTargets.value = next
+}
 const sentFilter = ref<'all' | 'sent' | 'unsent'>('all')
 const savedFilter = ref<'all' | 'saved' | 'unsaved'>('all')
 const labelsToRemove = ref<Set<string>>(new Set())
@@ -454,11 +480,11 @@ const getSavedTooltip = (movieKey: string) => {
   return saved?.created_at ? `Saved on ${formatDateTime(saved.created_at)}` : 'Not saved'
 }
 
-const fetchMovies = async () => {
+const fetchMovies = async (forceRefresh = false) => {
   loading.value = true
   error.value = null
   try {
-    if (!tvShowsLoadedFlag.value) {
+    if (!tvShowsLoadedFlag.value || forceRefresh) {
       const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = (await res.json()) as TvShow[]
@@ -714,8 +740,8 @@ const processBatch = async () => {
     return
   }
 
-  if (!sendToPlex.value && !saveLocally.value) {
-    showError('Please select at least one action (Send to Plex or Save locally)')
+  if (!sendToPlex.value && !saveLocally.value && selectedTargets.value.size === 0) {
+    showError('Please select at least one action (Send to Plex, save locally, or a linked server)')
     return
   }
 
@@ -755,6 +781,7 @@ const processBatch = async () => {
       send_logos_to_plex: sendToPlex.value && sendLogos.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
       library_id: currentLibrary.value || undefined,
+      targets: Array.from(selectedTargets.value),
       include_series: includeSeries.value,
       include_seasons: includeSeasons.value,
       // Include fallback settings so batch endpoint can handle template fallbacks
@@ -1454,10 +1481,11 @@ onMounted(async () => {
   if (currentLibrary.value) {
     // Load templates/presets first
     await loadTemplatesAndPresets()
-    
+    libraryGroupPref.load(currentLibrary.value)
+
     // Then fetch fresh data
     await fetchMovies()
-    
+
     // Try to load labels from backend cache first (much faster for bulk)
     await fetchLabelsFromCache()
     
@@ -1503,14 +1531,34 @@ onMounted(async () => {
 
       <!-- Actions -->
       <div class="actions-row">
-        <div class="checkboxes">
+        <!-- "Send to:" -- Plex and any linked Jellyfin/Emby server render as peer
+             checkboxes in one row (series poster only -- see the note next to
+             selectedTargets' declaration for why season posters can't sync yet).
+             See BatchEditView.vue's identical block for the full design note. -->
+        <div class="send-targets-group">
+          <span class="targets-label">Send to:</span>
           <label class="checkbox-label">
             <input type="checkbox" v-model="sendToPlex" />
-            Send to Plex
+            Plex
           </label>
-          <label class="checkbox-label" :class="{ 'disabled-label': !sendToPlex }">
-            <input type="checkbox" v-model="sendLogos" :disabled="!sendToPlex" />
-            Send logos to Plex
+          <label
+            v-for="opt in otherServerOptions"
+            :key="opt.id"
+            class="checkbox-label"
+          >
+            <input
+              type="checkbox"
+              :checked="selectedTargets.has(opt.id)"
+              @change="toggleTarget(opt.id)"
+            />
+            {{ opt.label }}
+          </label>
+        </div>
+
+        <div class="checkboxes">
+          <label class="checkbox-label" :class="{ 'disabled-label': !hasAnySendTarget }">
+            <input type="checkbox" v-model="sendLogos" :disabled="!hasAnySendTarget" />
+            Send logos
           </label>
           <label class="checkbox-label">
             <input type="checkbox" v-model="saveLocally" />
@@ -1548,7 +1596,7 @@ onMounted(async () => {
         <button
           class="btn-process"
           @click="processBatch"
-          :disabled="selectedShows.size === 0 || !selectedTemplate || !selectedPreset || (!sendToPlex && !saveLocally) || processing"
+          :disabled="selectedShows.size === 0 || !selectedTemplate || !selectedPreset || (!sendToPlex && !saveLocally && selectedTargets.size === 0) || processing"
         >
           <span v-if="!processing">Process {{ selectedShows.size }} TV Shows</span>
           <span v-else>Processing {{ currentIndex }} / {{ selectedShows.size }}...</span>
@@ -1665,6 +1713,21 @@ onMounted(async () => {
             <option value="saved">Saved</option>
             <option value="unsaved">Not Saved</option>
           </select>
+          <!-- Only shown once this library is actually linked to another
+               server via a Library Group (Quirk #62/#64) -- see the identical
+               control in BatchEditView.vue. -->
+          <div v-if="libraryGroupPref.hasChoice.value" class="server-view-control">
+            <label for="server-view-select">Show posters from:</label>
+            <select
+              id="server-view-select"
+              :value="libraryGroupPref.preferredServerId.value"
+              class="filter-select"
+              :disabled="libraryGroupPref.saving.value"
+              @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+            </select>
+          </div>
         </div>
         <input
           v-model="searchQuery"
@@ -2180,6 +2243,19 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+.server-view-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.server-view-control label {
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .selection-row {
   display: flex;
   justify-content: space-between;
@@ -2591,6 +2667,25 @@ onMounted(async () => {
   border-radius: 6px;
   border: 1px solid var(--border, #2a2f3e);
   flex: 1;
+}
+
+.send-targets-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  row-gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-alt, #242933);
+  border-radius: 6px;
+  border: 1px solid var(--border, #2a2f3e);
+  border-left: 3px solid var(--accent, #3dd6b7);
+}
+
+.targets-label {
+  color: var(--text-primary, #fff);
+  font-weight: 500;
+  font-size: 0.9rem;
 }
 
 .label-selector-title {

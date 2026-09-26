@@ -74,7 +74,14 @@ export function useRenderService() {
       // Only disable when explicitly requested
       disableOverlayCache,
       // Manual editor always renders the selected preset as-is, never falls back to another preset
-      skip_fallback: true
+      skip_fallback: true,
+      // Explicit, matching save()/send()'s existing is_tv -- preview() was the
+      // one function in this file that never sent it, leaving the backend to
+      // guess from bgUrl's shape (works for an internal /api/tv-show/.../poster
+      // cache URL, silently wrong for a raw external TMDb/Fanart/TVDB
+      // candidate URL -- i.e. whenever a specific candidate poster is picked,
+      // not just a Jellyfin-specific case).
+      is_tv: movie.mediaType === 'tv-show'
     })
     if (data?.image_base64 && !skipLastPreviewUpdate) {
       lastPreview.value = `data:image/jpeg;base64,${data.image_base64}`

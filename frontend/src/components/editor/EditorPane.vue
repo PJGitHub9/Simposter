@@ -2130,11 +2130,13 @@ watch(
         </div>
 
         <div class="preview-main">
-          <div class="preview-label">
-            Preview
-            <span v-if="loading" class="status-badge">Rendering...</span>
-            <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
-            <div class="preview-actions float-right">
+          <div class="preview-header-row">
+            <div class="preview-label">
+              Preview
+              <span v-if="loading" class="status-badge">Rendering...</span>
+              <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
+            </div>
+            <div class="preview-actions">
               <select v-if="hasMultipleServers" v-model="sendTarget" class="send-target-select" title="Which server(s) Send/Send Logo target">
                 <option v-for="s in linkedServers" :key="s.server_id" :value="s.server_id">Send to {{ serverTypeLabel(s.server_id) }}</option>
                 <option value="all">Send to All ({{ linkedServers.length }})</option>
@@ -2746,10 +2748,6 @@ watch(
   gap: 10px;
 }
 
-.float-right {
-  margin-left: auto;
-}
-
 .btn-primary,
 .btn-secondary {
   width: 100%;
@@ -2828,12 +2826,32 @@ watch(
   box-shadow: 0 8px 22px rgba(255, 112, 67, 0.18);
 }
 
+/* Wraps .preview-label + .preview-actions as two independently-wrappable
+   flex children, instead of .preview-actions being nested INSIDE
+   .preview-label (the old float-right/margin-left:auto approach) with no
+   flex-wrap anywhere in the chain -- see the identical fix + full
+   explanation in TvShowEditorPane.vue (CLAUDE.md Quirk #100's follow-up),
+   applied here too since this file has the same Quirk #75 send-target
+   select growing this row the same way. */
+.preview-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+}
+
 /* Inline buttons for preview area */
 .preview-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   justify-content: flex-end;
+  min-width: 0;
 }
 .btn-inline {
   padding: 8px 12px;
@@ -2896,10 +2914,16 @@ button:disabled {
   color: #ff6b6b;
 }
 
+/* align-items deliberately flex-start, not center -- see the identical fix
+   + full explanation in TvShowEditorPane.vue. overflow:auto + vertically-
+   centered flex content is a known trap: an oversized child (this pane's
+   content routinely exceeds its own height once a rendered poster is
+   shown) gets its top clipped with no way to scroll up to it, since the
+   browser computes the scrollable range around the centered position. */
 .preview-pane {
   background: rgba(10, 12, 18, 0.6);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 20px;
   overflow: auto;

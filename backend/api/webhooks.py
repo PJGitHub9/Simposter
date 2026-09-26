@@ -633,7 +633,7 @@ def process_sonarr_webhook_with_retry(
     )
 
 
-def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None) -> None:
+def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None) -> None:
     """Phase 6 (webhooks) -- after a webhook-triggered Plex render+send
     succeeds, check whether the same title also exists on any OTHER server
     that's actually linked to this Plex library via a Library Group
@@ -671,7 +671,15 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
     request, since a webhook path never touches tmdb_last_seen (only scans
     do). Best-effort and fully isolated: any failure here is logged and
     swallowed, never raised -- this must never be able to affect the Plex
-    path's own already-committed success."""
+    path's own already-committed success.
+
+    `season_index` (Quirk #100): when given, reads the per-season cache file
+    save_render_cache_by_tmdb() also writes (_render_cache_path_by_tmdb()
+    already supports this) and, on each linked server, resolves the SERIES
+    item first (as always) then that specific season via
+    find_season_by_index() -- a server where the season can't be resolved is
+    skipped for this call, never a hard failure. None (the default) is the
+    original series-only behavior, unchanged."""
     if not tmdb_id:
         return
     try:
@@ -684,25 +692,35 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
             logger.debug("[WEBHOOK_SYNC] No library_id resolved for tmdb_id=%s [%s] -- cannot determine linked servers, skipping cross-server sync", tmdb_id, title_hint)
             return
         members = get_library_group_members("plex-1", str(library_id), find_media_type)
-        allowed_server_ids = {sid for sid, _lid in (members or []) if sid != "plex-1"}
-        if not allowed_server_ids:
+        # Keep each member's own library_id (not just server_id) -- see the
+        # matching fix/comment in media_server_send.py's
+        # sync_render_to_linked_servers() for the real bug this closes
+        # (an unscoped find_item_by_external_id() can resolve to the wrong
+        # same-tmdb_id item when it exists in more than one library on the
+        # same server).
+        allowed_servers = {sid: lid for sid, lid in (members or []) if sid != "plex-1"}
+        if not allowed_servers:
             logger.debug("[WEBHOOK_SYNC] Plex library %s has no linked Library Group members -- skipping cross-server sync for tmdb_id=%s [%s]", library_id, tmdb_id, title_hint)
             return
 
-        cache_path = _render_cache_path_by_tmdb(media_type, tmdb_id)
+        cache_path = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
         if not cache_path.exists():
             return
         image_bytes = cache_path.read_bytes()
 
         for client in get_enabled_clients():
-            if isinstance(client, PlexClient) or client.server_id not in allowed_server_ids:
+            if isinstance(client, PlexClient) or client.server_id not in allowed_servers:
                 continue
             try:
-                item_id = client.find_item_by_external_id(tmdb_id, None, find_media_type)
+                series_item_id = client.find_item_by_external_id(tmdb_id, None, find_media_type, library_id=allowed_servers.get(client.server_id))
+                if not series_item_id:
+                    continue
+                item_id = series_item_id if season_index is None else client.find_season_by_index(series_item_id, season_index)
                 if not item_id:
                     continue
                 client.upload_image(item_id, ImageType.POSTER, image_bytes, "image/jpeg")
-                logger.info("[WEBHOOK_SYNC:%s] Synced poster for tmdb_id=%s [%s] -> item_id=%s", client.server_id, tmdb_id, title_hint, item_id)
+                logger.info("[WEBHOOK_SYNC:%s] Synced poster for tmdb_id=%s [%s]%s -> item_id=%s", client.server_id, tmdb_id, title_hint,
+                            f" season {season_index}" if season_index is not None else "", item_id)
                 # Keep the local disk cache/DB row in sync too, so the merged
                 # grid (Quirk #65/#67) reflects this without needing a rescan --
                 # mirrors media_server_send.py's identical post-upload pattern.
@@ -935,11 +953,39 @@ def process_webhook_poster_generation(
                     _update_tv_cache(rating_key, library_id)
                 except Exception as cache_err:
                     logger.warning("[WEBHOOK] Failed to update TV cache for %s [%s]: %s", rating_key, show_title, cache_err, exc_info=True)
+                sub_results = result.get("results", [])
+                # Phase 6c/Quirk #100 -- sync EVERY successfully-sent sub-result
+                # (the series AND any season) to any other enabled server
+                # (Jellyfin/Emby) that also has this show, closing the deferred
+                # half of Quirk #71 (which was Radarr/movies only). Season-level
+                # sync IS possible now (Quirk #100 -- JellyfinClient genuinely
+                # has season-item resolution, contrary to what every prior
+                # Quirk here assumed without ever checking against a real
+                # server) -- each sub-result's own `season_index` (None for the
+                # series, set explicitly by batch.py's per-season result dict
+                # otherwise) is passed straight through, so a season sync that
+                # fails to resolve on one server is skipped for just that
+                # server/season, never blocking the rest.
+                # Fully additive/best-effort, see _sync_poster_to_other_servers()'s
+                # own docstring for why this can never affect the Plex result above.
+                if auto_send:
+                    try:
+                        _sync_cached = db.get_cached_tv_shows()
+                        _sync_info = next((s for s in _sync_cached if s.get("key") == rating_key or s.get("rating_key") == rating_key), None)
+                        _sync_tmdb_id = _sync_info.get("tmdb_id") if _sync_info else None
+                        for _r in sub_results:
+                            if _r.get("status") != "ok":
+                                continue
+                            _sync_poster_to_other_servers(
+                                _sync_tmdb_id, "tv-show", show_title, library_id=library_id,
+                                season_index=_r.get("season_index"),
+                            )
+                    except Exception as sync_err:
+                        logger.debug("[WEBHOOK] TV cross-server sync failed for %s [%s]: %s", rating_key, show_title, sync_err)
                 # Only notify if at least one poster was actually created/sent.
                 # Sub-results with status != "ok" mean the season was skipped (already had a poster,
                 # no poster found, etc.) — e.g. a Sonarr episode webhook for S01E03 when S01
                 # already has a poster will return "ok" at the show level but all sub-results skipped.
-                sub_results = result.get("results", [])
                 posters_created = [r for r in sub_results if r.get("status") == "ok"]
                 if not posters_created:
                     logger.debug("[WEBHOOK] No new posters created for TV show %s [%s] — skipping notifications", rating_key, show_title)

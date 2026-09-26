@@ -334,7 +334,7 @@ class JellyfinClient(MediaServerClient):
         return False
 
     def find_item_by_external_id(self, tmdb_id: Optional[Any], tvdb_id: Optional[Any],
-                                  media_type: str) -> Optional[str]:
+                                  media_type: str, library_id: Optional[str] = None) -> Optional[str]:
         # Deliberately does NOT use title+year+path matching (a known-fragile
         # approach, per plan doc sec10) or a guessed server-side ProviderIds
         # filter parameter (unconfirmed against Jellyfin's real API). Instead
@@ -357,6 +357,13 @@ class JellyfinClient(MediaServerClient):
                 "IncludeItemTypes": item_type,
                 "Fields": "ProviderIds",
             }
+            if library_id:
+                # Real bug fix, not defensive: without this, a tmdb_id present
+                # in more than one library on the same server (a duplicate/4K
+                # copy, or an untracked library sharing the server) resolves
+                # nondeterministically to whichever match Jellyfin lists
+                # first -- see this method's docstring in base.py.
+                params["ParentId"] = library_id
             r = requests.get(f"{self.url}/Items", headers=self._headers(), params=params, timeout=30)
             r.raise_for_status()
             for item in r.json().get("Items", []):
@@ -386,3 +393,61 @@ class JellyfinClient(MediaServerClient):
         if os.path.splitext(path)[1]:
             return os.path.basename(os.path.dirname(path))
         return os.path.basename(path.rstrip("/\\"))
+
+    def list_seasons(self, series_item_id: str) -> List[dict]:
+        # Same confirmed /Items?ParentId=...&IncludeItemTypes=Season query as
+        # find_season_by_index() (Quirk #100), just returning every season
+        # instead of filtering to one index. Shape matches exactly what
+        # api_tv_show_seasons() already returns for Plex ({key, title, index,
+        # thumb}), so the frontend needed zero changes to consume this.
+        # `thumb` is deliberately left None -- Jellyfin's own thumb path isn't
+        # in the same format the frontend's toPlexPosterUrl() expects, and
+        # nothing in this app currently needs a season-list thumbnail for a
+        # Jellyfin-sourced show badly enough to build that translation yet.
+        try:
+            params = {
+                "ParentId": series_item_id,
+                "IncludeItemTypes": "Season",
+                "Recursive": "true",
+                "Fields": "IndexNumber",
+            }
+            r = requests.get(f"{self.url}/Items", headers=self._headers(), params=params, timeout=15)
+            r.raise_for_status()
+            out: List[dict] = []
+            for item in r.json().get("Items", []):
+                index = item.get("IndexNumber")
+                item_id = item.get("Id")
+                if index is None or not item_id:
+                    continue
+                out.append({"key": item_id, "title": item.get("Name") or f"Season {index}", "index": index, "thumb": None})
+            out.sort(key=lambda s: s["index"])
+            return out
+        except Exception as e:
+            logger.error("[JELLYFIN_CLIENT:%s] list_seasons failed (series=%s): %s", self.server_id, series_item_id, e)
+            return []
+
+    def find_season_by_index(self, series_item_id: str, season_index: int) -> Optional[str]:
+        # Confirmed live against a real server (CLAUDE.md Quirk #100) -- the
+        # same /Items?ParentId=...&IncludeItemTypes=... shape list_items()
+        # already uses, just scoped to a series with IncludeItemTypes=Season.
+        # A real response: {Id: '...', Name: 'Season 2', IndexNumber: 2,
+        # ProviderIds: {Tvdb: '...'}} -- IndexNumber is Jellyfin's own season
+        # number field, matching Simposter's season_index convention
+        # (0 = Specials) directly, no translation needed.
+        try:
+            params = {
+                "ParentId": series_item_id,
+                "IncludeItemTypes": "Season",
+                "Recursive": "true",
+                "Fields": "IndexNumber",
+            }
+            r = requests.get(f"{self.url}/Items", headers=self._headers(), params=params, timeout=15)
+            r.raise_for_status()
+            for item in r.json().get("Items", []):
+                if item.get("IndexNumber") == season_index:
+                    return item.get("Id")
+            return None
+        except Exception as e:
+            logger.error("[JELLYFIN_CLIENT:%s] find_season_by_index failed (series=%s season=%s): %s",
+                         self.server_id, series_item_id, season_index, e)
+            return None

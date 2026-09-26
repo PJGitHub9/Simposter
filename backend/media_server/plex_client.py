@@ -220,24 +220,31 @@ class PlexClient(MediaServerClient):
         return True
 
     def find_item_by_external_id(self, tmdb_id: Optional[Any], tvdb_id: Optional[Any],
-                                  media_type: str) -> Optional[str]:
+                                  media_type: str, library_id: Optional[str] = None) -> Optional[str]:
         try:
             if media_type == "movie" and tmdb_id:
-                sections_r = plex_session.get(f"{settings.PLEX_URL}/library/sections", headers=plex_headers(), timeout=10)
-                sections_r.raise_for_status()
-                sections_root = ET.fromstring(sections_r.content)
-                lib_keys = [sec.get("key") for sec in sections_root.findall(".//Directory[@type='movie']")]
                 guid_target = f"tmdb://{tmdb_id}"
                 item_tag = "Video"
+                section_type = "movie"
             elif media_type == "tv" and tvdb_id:
+                guid_target = f"tvdb://{tvdb_id}"
+                item_tag = "Directory"
+                section_type = "show"
+            else:
+                return None
+
+            if library_id:
+                # Same real bug this method's docstring (base.py) describes --
+                # scope to the known-linked section directly rather than
+                # searching every movie/show library on the server, which
+                # can resolve to the wrong same-tmdb_id item when the title
+                # exists in more than one Plex library.
+                lib_keys = [str(library_id)]
+            else:
                 sections_r = plex_session.get(f"{settings.PLEX_URL}/library/sections", headers=plex_headers(), timeout=10)
                 sections_r.raise_for_status()
                 sections_root = ET.fromstring(sections_r.content)
-                lib_keys = [sec.get("key") for sec in sections_root.findall(".//Directory[@type='show']")]
-                guid_target = f"tvdb://{tvdb_id}"
-                item_tag = "Directory"
-            else:
-                return None
+                lib_keys = [sec.get("key") for sec in sections_root.findall(f".//Directory[@type='{section_type}']")]
 
             for lib_key in lib_keys:
                 url = f"{settings.PLEX_URL}/library/sections/{lib_key}/all?includeGuids=1"
@@ -256,3 +263,27 @@ class PlexClient(MediaServerClient):
 
     def get_folder_name(self, item_id: str, is_tv: bool = False) -> Optional[str]:
         return get_media_folder_name(item_id, is_tv)
+
+    def find_season_by_index(self, series_item_id: str, season_index: int) -> Optional[str]:
+        # Mirrors the exact /children XML-parsing pattern already established
+        # in batch.py's own season-enumeration code (_render_all_tv_seasons())
+        # -- <Directory index="N" ratingKey="..."> per season, index matching
+        # Simposter's own season_index convention already (0 = Specials).
+        # Not currently reachable from any real caller (both real
+        # find_item_by_external_id() callers deliberately exclude Plex as a
+        # sync *target*, since Plex already has its own direct send path) --
+        # added purely for interface parity, matching find_item_by_external_id's
+        # own library_id-parity precedent.
+        try:
+            url = f"{settings.PLEX_URL}/library/metadata/{series_item_id}/children"
+            r = plex_session.get(url, headers=plex_headers(), timeout=10)
+            r.raise_for_status()
+            root = ET.fromstring(r.text)
+            for directory in root.findall(".//Directory"):
+                if int(directory.get("index", -1)) == season_index:
+                    return directory.get("ratingKey")
+            return None
+        except Exception as e:
+            logger.error("[PLEX_CLIENT:%s] find_season_by_index failed (series=%s season=%s): %s",
+                         self.server_id, series_item_id, season_index, e)
+            return None

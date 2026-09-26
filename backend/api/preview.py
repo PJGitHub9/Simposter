@@ -196,7 +196,14 @@ def api_preview(req: PreviewRequest):
 
         # Check if this is a Plex URL or API URL - if so, extract rating key and fetch from TMDB
         rating_key = None
-        is_tv_show = False
+        # Trust an explicit is_tv when the caller sent one (render.ts's
+        # preview() now does, matching save()/send()) -- the background_url
+        # pattern-sniffing below is a real but fragile fallback: it silently
+        # guesses wrong whenever the background is a raw external TMDb/
+        # Fanart/TVDB URL rather than Simposter's own /api/tv-show/.../poster
+        # cache URL, which is exactly what picking a specific candidate
+        # poster looks like. See PreviewRequest.is_tv's own docstring.
+        is_tv_show = bool(req.is_tv) if req.is_tv is not None else False
         tmdb_id = None
         if background_url:
             if "/library/metadata/" in background_url and "/thumb" in background_url:
@@ -241,8 +248,26 @@ def api_preview(req: PreviewRequest):
             try:
                 logger.debug("[PREVIEW] Detected rating_key=%s%s from URL", rating_key, _dt)
 
-                # Get TMDB ID
-                tmdb_id = get_movie_tmdb_id(rating_key)
+                # Get TMDB ID -- server-aware: get_movie_tmdb_id() is Plex-only
+                # (a direct /library/metadata/{rating_key} fetch), which always
+                # 404s for a Jellyfin/Emby item id, since that id was never a
+                # real Plex rating_key to begin with. This endpoint independently
+                # re-derives tmdb_id rather than trusting a client-supplied one,
+                # so it needs the same fix Quirk #90 already applied to
+                # api_movie_tmdb() -- reuse the tmdb_id already cached from the
+                # last scan instead of a doomed live Plex fetch. Without this,
+                # every preview for a Jellyfin-sourced item silently fell all the
+                # way through to the "no tmdb_id found, use whatever poster the
+                # server currently has" fallback below -- which for a
+                # Simposter-managed item is already-composited output, not raw
+                # source art (the exact class of bug Quirk #43 already fixed for
+                # Square Art, recurring here via a different code path).
+                if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+                    tmdb_id, _ = db.get_ids_for_rating_key(rating_key)
+                    if tmdb_id:
+                        logger.debug("[PREVIEW] Resolved tmdb_id=%s for non-Plex rating_key=%s%s from DB cache", tmdb_id, rating_key, _dt)
+                else:
+                    tmdb_id = get_movie_tmdb_id(rating_key)
                 if tmdb_id:
                     logger.debug("[PREVIEW] Found tmdb_id=%s for rating_key=%s%s", tmdb_id, rating_key, _dt)
 
@@ -414,13 +439,22 @@ def api_preview(req: PreviewRequest):
 
                 logger.debug("[PREVIEW] Detected TV show rating_key=%s%s season_index=%s from URL", rating_key, _dt, req.season_index)
 
-                # Fetch TV show metadata from Plex
-                url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
-                r = plex_session.get(url, headers=plex_headers(), timeout=6)
-                r.raise_for_status()
+                # Fetch TV show metadata -- server-aware, matching the identical
+                # movie-branch fix above (and Quirk #90's api_tv_show_tmdb()):
+                # the Plex XML fetch below always 404s for a Jellyfin/Emby item
+                # id, so use the tmdb_id/tvdb_id already cached from the last
+                # scan for a non-Plex item instead.
+                if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+                    tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+                    if tmdb_id or tvdb_id:
+                        logger.debug("[PREVIEW] Resolved tmdb_id=%s tvdb_id=%s for non-Plex TV rating_key=%s%s from DB cache", tmdb_id, tvdb_id, rating_key, _dt)
+                else:
+                    url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
+                    r = plex_session.get(url, headers=plex_headers(), timeout=6)
+                    r.raise_for_status()
 
-                tmdb_id = extract_tmdb_id_from_metadata(r.text)
-                tvdb_id = extract_tvdb_id_from_metadata(r.text)
+                    tmdb_id = extract_tmdb_id_from_metadata(r.text)
+                    tvdb_id = extract_tvdb_id_from_metadata(r.text)
 
                 if tmdb_id and not tvdb_id:
                     try:

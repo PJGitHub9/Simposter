@@ -258,9 +258,19 @@ def _fetch_and_cache_poster_from_media_server(rating_key: str, server_id: str) -
         return None
 
 
-def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
+def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False, server_id_hint: Optional[str] = None) -> Optional[Path]:
     """
     Fetch poster from cache or Plex and store it. Returns cached file path or None.
+
+    server_id_hint: an explicit server_id to use instead of looking one up via
+    db.get_server_id_for_rating_key(). Needed for a TV season's own rating_key --
+    only the SERIES-level item ever gets scanned into a row with a server_id;
+    a season's item id has no row of its own, so the DB lookup silently falls
+    back to its 'plex-1' default and a Jellyfin season's poster fetch would
+    wrongly target Plex (404) instead of the real server. The caller (the
+    manual editor) already knows which server it's viewing and can pass it
+    straight through instead of relying on a lookup that can't succeed for
+    this rating_key shape.
     """
     if force_refresh:
         _remove_poster_cache(rating_key)
@@ -270,7 +280,7 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False) -> Opti
         if cached:
             return cached
 
-    server_id = db.get_server_id_for_rating_key(rating_key)
+    server_id = server_id_hint or db.get_server_id_for_rating_key(rating_key)
     if server_id != "plex-1":
         return _fetch_and_cache_poster_from_media_server(rating_key, server_id)
 
@@ -1043,11 +1053,16 @@ def api_tmdb_images(tmdb_id: int):
 
 
 @router.get("/movie/{rating_key}/poster")
-def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw: bool = False, force_refresh: bool = False):
+def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw: bool = False, force_refresh: bool = False, server_id: Optional[str] = None):
     """
     Return Plex poster, cached on disk. If `meta=1` (or Accept: application/json),
     returns {"url": "<cached endpoint>"} instead of bytes so the UI can show without re-download.
     If force_refresh is true, it will re-fetch from Plex and overwrite cache.
+
+    server_id: optional explicit hint, passed straight to fetch_and_cache_poster()'s
+    server_id_hint -- see that function's docstring for why a caller (e.g. the TV
+    editor previewing a season's own poster) may need to supply this rather than
+    relying on the rating_key-based DB lookup, which can't resolve a season item id.
     """
 
     def _cached_url(candidate: Path) -> str:
@@ -1061,7 +1076,7 @@ def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw:
         return resp
 
     wants_json = meta or "application/json" in (request.headers.get("accept") or "").lower()
-    cached = fetch_and_cache_poster(rating_key, force_refresh=force_refresh)
+    cached = fetch_and_cache_poster(rating_key, force_refresh=force_refresh, server_id_hint=server_id)
     cache_header = "miss" if force_refresh else ("hit" if cached else "miss")
 
     if cached:
