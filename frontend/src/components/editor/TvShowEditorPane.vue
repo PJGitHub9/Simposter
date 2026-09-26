@@ -10,6 +10,7 @@ import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
+import SendToServerModal from './SendToServerModal.vue'
 import { getApiBase } from '../../services/apiBase'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
 
@@ -32,16 +33,15 @@ const apiBase = getApiBase()
 
 // See EditorPane.vue's identical computed for the full reasoning -- a
 // Jellyfin/Emby-sourced show (server_id !== 'plex-1') has no real Plex
-// rating_key for /api/plex/send to look up, so Send to Plex is disabled
-// rather than left to fail with a confusing error, UNLESS the multi-server
-// send path below (Phase 6c) is active for this exact action -- see
-// `sendBlocked`'s own comment for the full breakdown of when each applies.
+// rating_key for /api/plex/send to look up, so a merged item's OTHER
+// linked server(s) are what doSend() actually targets for it instead
+// (getLinkedServersForItem(), see doSend()'s own comment).
 const isNonPlexItem = computed(() => !!props.movie.server_id && props.movie.server_id !== 'plex-1')
-// `showServerPreviewToggle`/`sendBlocked`/`showMultiServerSend` are declared
-// further down (after `selectedPosterType`/`selectedSeasons`, which these
-// depend on) -- safe to reference here since computed() getters are lazy
-// and never actually run until the whole module's top-level script has
-// finished executing (i.e. well after every const below is initialized).
+// `showServerPreviewToggle`/`showMultiServerSend` are declared further down
+// (after `selectedPosterType`/`selectedSeasons`, which these depend on) --
+// safe to reference here since computed() getters are lazy and never
+// actually run until the whole module's top-level script has finished
+// executing (i.e. well after every const below is initialized).
 const currentPosterLabel = computed(() => {
   if (showServerPreviewToggle.value) return `Current Poster (${serverTypeLabel(viewingServerId.value)})`
   return isNonPlexItem.value ? 'Current Poster' : 'Current Plex Poster'
@@ -50,11 +50,6 @@ const currentLogoLabel = computed(() => {
   if (showServerPreviewToggle.value) return `Current Logo (${serverTypeLabel(viewingServerId.value)})`
   return isNonPlexItem.value ? 'Current Logo' : 'Current Plex Logo'
 })
-// sendBlocked is now always false (see its own comment) -- this always
-// resolves to null in practice, kept as a computed for the same
-// least-invasive-template-change reason and as a documented spot to
-// reintroduce a real disabled-tooltip reason if one is ever found again.
-const sendDisabledReason = computed(() => (sendBlocked.value ? 'Sending is currently unavailable for this item' : null))
 
 const tmdbId = ref<number | null>(null)
 const tvdbId = ref<number | null>(null)
@@ -333,26 +328,29 @@ function cycleViewingServer(direction: 1 | -1) {
   const idx = ids.indexOf(viewingServerId.value)
   viewingServerId.value = ids[(idx + direction + ids.length) % ids.length]!
 }
-const sendTarget = ref<string>(props.movie.server_id || 'plex-1')
-watch(() => props.movie.key, () => { sendTarget.value = props.movie.server_id || 'plex-1' })
+// Replaces the old single-string sendTarget ('all' or one specific
+// server_id) with a real multi-select set, driven by SendToServerModal.vue
+// -- the inline dropdown + separate checkbox + button row this used to be
+// felt cluttered (user-reported directly). Defaults to every currently-
+// known linked server, matching the old 'all' default exactly, so a
+// Send Logo Only click (which never opens the modal) still reaches every
+// linked server by default without the user having to pick anything first.
+const sendTargetIds = ref<Set<string>>(new Set())
+watch(linkedServers, (servers) => {
+  const validIds = new Set(servers.map(s => s.server_id))
+  const stillValid = Array.from(sendTargetIds.value).filter(id => validIds.has(id))
+  if (stillValid.length === 0) {
+    sendTargetIds.value = validIds
+  } else {
+    sendTargetIds.value = new Set(stillValid)
+  }
+}, { immediate: true })
+const showSendModal = ref(false)
+const sendModalOptions = computed(() => linkedServers.value.map(s => ({ server_id: s.server_id, label: serverTypeLabel(s.server_id) })))
 const sendButtonLabel = computed(() => {
   if (!showMultiServerSend.value) return isNonPlexItem.value ? 'Send Poster' : 'Send to Plex'
-  return sendTarget.value === 'all' ? 'Send to All' : `Send to ${serverTypeLabel(sendTarget.value)}`
+  return 'Send to Media Server'
 })
-const sendLogoButtonLabel = computed(() => {
-  if (!showMultiServerSend.value) return isNonPlexItem.value ? 'Send Logo' : 'Send Logo to Plex'
-  return sendTarget.value === 'all' ? 'Send Logo to All' : `Send Logo to ${serverTypeLabel(sendTarget.value)}`
-})
-// A non-Plex item is never actually blocked from sending any more -- every
-// season/series always resolves at least its own home server as a valid
-// target (getLinkedServersForItem() always includes it, whether or not any
-// OTHER server happens to be linked), and doSend()/doSendLogoOnly() now
-// loop over however many items are selected instead of requiring exactly
-// one. Kept as its own computed (rather than removed outright) so the
-// template's existing `:disabled`/`v-if="!sendBlocked"` bindings don't all
-// need individual edits, and as a documented, single place to reintroduce a
-// real block condition if one is ever found.
-const sendBlocked = computed(() => false)
 
 // Rendered preview carousel
 const renderedPreviews = ref<RenderedPreview[]>([])
@@ -2274,11 +2272,15 @@ async function sendLogoToServer(serverId: string, ratingKey: string): Promise<bo
   }
 }
 
+// Filters to whichever server_ids the SendToServerModal selection named --
+// falls back to every server this specific item actually resolved when the
+// intersection is empty (e.g. a season that never resolved a server_id the
+// modal's selection, built from the currently-viewed item, happened to
+// include), rather than silently sending to nothing for that item.
 function resolveSendTargetsFor(servers: LinkedServer[]): LinkedServer[] {
   if (servers.length === 0) return []
-  if (sendTarget.value === 'all') return servers
-  const match = servers.find(s => s.server_id === sendTarget.value)
-  return match ? [match] : [servers[0]!]
+  const filtered = servers.filter(s => sendTargetIds.value.has(s.server_id))
+  return filtered.length > 0 ? filtered : servers
 }
 
 function resolveSendTargets(): LinkedServer[] {
@@ -2339,6 +2341,23 @@ const doSendLogoOnly = async () => {
   } finally {
     logoSending.value = false
   }
+}
+
+// Only opens the picker modal when there's an actual choice to make
+// (linkedServers.length > 1) -- the overwhelming common case, a plain Plex
+// item or an unlinked Jellyfin/Emby item, sends immediately with no extra
+// click, same as before this redesign.
+function onSendClick() {
+  if (showMultiServerSend.value) {
+    showSendModal.value = true
+    return
+  }
+  doSend()
+}
+function onSendModalConfirm(serverIds: string[]) {
+  sendTargetIds.value = new Set(serverIds)
+  showSendModal.value = false
+  doSend()
 }
 
 const doSend = async () => {
@@ -3849,26 +3868,24 @@ watch(tmdbId, () => {
               <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
             </div>
             <div class="preview-actions">
-              <select v-if="showMultiServerSend" v-model="sendTarget" class="send-target-select" title="Which server(s) Send/Send Logo target">
-                <option v-for="s in linkedServers" :key="s.server_id" :value="s.server_id">Send to {{ serverTypeLabel(s.server_id) }}</option>
-                <option value="all">Send to All ({{ linkedServers.length }})</option>
-              </select>
-              <label v-if="!sendBlocked" class="send-logo-toggle" :title="showMultiServerSend ? 'Also send the selected logo' : 'Also send the selected logo to Plex'">
-                <input type="checkbox" v-model="sendLogo" />
-                <span>Send logo</span>
-              </label>
-              <button v-if="!sendBlocked" :title="showMultiServerSend ? sendLogoButtonLabel : 'Send Logo to Plex'" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+              <button title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-                <span class="btn-label">{{ logoSending ? 'Sending...' : (showMultiServerSend ? sendLogoButtonLabel : 'Send Logo') }}</span>
+                <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo Only' }}</span>
               </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
-              <button :title="sendDisabledReason || sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || sendBlocked || posterSending" @click="doSend">
+              <button :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending" @click="onSendClick">
                 <svg v-if="posterSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span v-else>📺</span>
                 <span class="btn-label">{{ posterSending ? 'Sending...' : sendButtonLabel }}</span>
               </button>
             </div>
           </div>
+          <SendToServerModal
+            v-if="showSendModal"
+            :options="sendModalOptions"
+            @close="showSendModal = false"
+            @send="onSendModalConfirm"
+          />
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else-if="selectedPoster" class="placeholder-state">
@@ -4526,41 +4543,13 @@ watch(tmdbId, () => {
   border-color: rgba(255, 255, 255, 0.15);
 }
 
-.send-logo-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #a8b3cf;
-  cursor: pointer;
-  user-select: none;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  transition: all 0.15s;
-}
-.send-logo-toggle:has(input:checked) {
-  color: #eef2ff;
-  border-color: rgba(61, 214, 183, 0.35);
-}
-.send-logo-toggle input {
-  margin: 0;
-  accent-color: var(--accent, #3dd6b7);
-}
-
-/* Multi-server preview toggle + send-target picker (Phase 6c) -- Vue's
-   scoped styles don't cross component boundaries, so these need their own
-   copy here rather than relying on EditorPane.vue's identical rules
-   (see CLAUDE.md Quirk #86's "borrowed but never defined" class of bug). */
-.send-target-select {
-  font-size: 12px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  color: #c9d1e0;
-}
+/* Multi-server preview toggle (Phase 6c) -- Vue's scoped styles don't cross
+   component boundaries, so this needs its own copy here rather than
+   relying on EditorPane.vue's identical rule (see CLAUDE.md Quirk #86's
+   "borrowed but never defined" class of bug). The inline send-target
+   <select>/send-logo checkbox this section used to also style were both
+   replaced by SendToServerModal.vue's own picker -- see that component's
+   own <style> block. */
 .server-toggle-row {
   display: flex;
   align-items: center;

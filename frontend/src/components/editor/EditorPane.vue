@@ -8,6 +8,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
+import SendToServerModal from './SendToServerModal.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
 import { getApiBase } from '../../services/apiBase'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
@@ -64,8 +65,8 @@ function serverTypeLabel(serverId: string): string {
 // Which server's "Current Poster/Logo" is being previewed right now --
 // independent of `isNonPlexItem` (which still describes the loaded item's
 // OWN home server, used for preset/render logic elsewhere) and independent
-// of `sendTarget` below (previewing one server doesn't have to mean you're
-// about to send to only that one).
+// of `sendTargetIds` below (previewing one server doesn't have to mean
+// you're about to send to only that one).
 const viewingServerId = ref(props.movie.server_id || 'plex-1')
 watch(() => props.movie.key, () => { viewingServerId.value = props.movie.server_id || 'plex-1' })
 const viewingRatingKey = computed(() =>
@@ -80,20 +81,24 @@ function cycleViewingServer(direction: 1 | -1) {
 const currentPosterLabel = computed(() => `Current Poster (${serverTypeLabel(viewingServerId.value)})`)
 const currentLogoLabel = computed(() => `Current Logo (${serverTypeLabel(viewingServerId.value)})`)
 
-// Which server(s) "Send"/"Send Logo" actually target -- a specific server_id,
-// or 'all' to send to every linked server. Defaults to the loaded item's own
-// server, matching this editor's pre-multi-server behavior exactly for any
-// non-linked item (hasMultipleServers is false, so the picker never even
-// renders and this value is never read as anything but that one server).
-const sendTarget = ref<string>(props.movie.server_id || 'plex-1')
-watch(() => props.movie.key, () => { sendTarget.value = props.movie.server_id || 'plex-1' })
+// Which server(s) "Send"/"Send Logo" actually target -- a real multi-select
+// set (not just "one server or all"), driven by SendToServerModal.vue.
+// Replaces the old inline dropdown + separate checkbox/button row, which
+// user-reported directly as cluttered. Defaults to every currently-known
+// linked server, matching this editor's pre-multi-server behavior exactly
+// for any non-linked item (hasMultipleServers is false there, so the modal
+// never opens and this is never read as anything but that one server).
+const sendTargetIds = ref<Set<string>>(new Set())
+watch(linkedServers, (servers) => {
+  const validIds = new Set(servers.map(s => s.server_id))
+  const stillValid = Array.from(sendTargetIds.value).filter(id => validIds.has(id))
+  sendTargetIds.value = stillValid.length > 0 ? new Set(stillValid) : validIds
+}, { immediate: true })
+const showSendModal = ref(false)
+const sendModalOptions = computed(() => linkedServers.value.map(s => ({ server_id: s.server_id, label: serverTypeLabel(s.server_id) })))
 const sendButtonLabel = computed(() => {
   if (!hasMultipleServers.value) return isNonPlexItem.value ? 'Send Poster' : 'Send to Plex'
-  return sendTarget.value === 'all' ? 'Send to All' : `Send to ${serverTypeLabel(sendTarget.value)}`
-})
-const sendLogoButtonLabel = computed(() => {
-  if (!hasMultipleServers.value) return isNonPlexItem.value ? 'Send Logo' : 'Send Logo to Plex'
-  return sendTarget.value === 'all' ? 'Send Logo to All' : `Send Logo to ${serverTypeLabel(sendTarget.value)}`
+  return 'Send to Media Server'
 })
 
 const tmdbId = ref<number | null>(null)
@@ -1210,14 +1215,14 @@ async function sendLogoToServer(serverId: string, ratingKey: string): Promise<bo
   }
 }
 
-// `sendTarget` resolves to either one linked server or every linked server
-// ('all') -- for a non-merged item (the overwhelming common case), this is
-// always exactly [the item's own server], reproducing the pre-multi-server
-// behavior byte-for-byte.
+// Filters to whichever server_ids SendToServerModal's selection named --
+// for a non-merged item (the overwhelming common case) this is always
+// exactly [the item's own server], reproducing the pre-multi-server
+// behavior byte-for-byte, since sendTargetIds defaults to every known
+// linked server and there's only ever one.
 function resolveSendTargets(): LinkedServer[] {
-  if (sendTarget.value === 'all') return linkedServers.value
-  const match = linkedServers.value.find(s => s.server_id === sendTarget.value)
-  return match ? [match] : [linkedServers.value[0]!]
+  const filtered = linkedServers.value.filter(s => sendTargetIds.value.has(s.server_id))
+  return filtered.length > 0 ? filtered : linkedServers.value
 }
 
 const doSendLogoOnly = async () => {
@@ -1241,9 +1246,32 @@ const doSendLogoOnly = async () => {
   }
 }
 
+// Nothing previously reflected send-in-progress for the poster Send button
+// while sending to a non-Plex target -- `loading` (render.loading) only
+// reacts to render.preview()/save()/send()'s own requests, never the raw
+// fetch() call sendPosterToServer() makes for Jellyfin/Emby. User-reported
+// directly: "the button doesn't indicate when something is being sent."
+const posterSending = ref(false)
+// Only opens the picker modal when there's an actual choice to make
+// (hasMultipleServers) -- a plain Plex item or an unlinked Jellyfin/Emby
+// item sends immediately with no extra click, same as before this redesign.
+function onSendClick() {
+  if (hasMultipleServers.value) {
+    showSendModal.value = true
+    return
+  }
+  doSend()
+}
+function onSendModalConfirm(serverIds: string[]) {
+  sendTargetIds.value = new Set(serverIds)
+  showSendModal.value = false
+  doSend()
+}
+
 const doSend = async () => {
   const targets = resolveSendTargets()
   if (targets.some(t => t.server_id === 'plex-1') && !bgUrl.value) return
+  posterSending.value = true
   try {
     const results = await Promise.all(targets.map(t => sendPosterToServer(t.server_id, t.rating_key)))
     const okCount = results.filter(Boolean).length
@@ -1265,6 +1293,8 @@ const doSend = async () => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to send poster'
     notifyError(message)
+  } finally {
+    posterSending.value = false
   }
 }
 
@@ -2137,22 +2167,24 @@ watch(
               <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
             </div>
             <div class="preview-actions">
-              <select v-if="hasMultipleServers" v-model="sendTarget" class="send-target-select" title="Which server(s) Send/Send Logo target">
-                <option v-for="s in linkedServers" :key="s.server_id" :value="s.server_id">Send to {{ serverTypeLabel(s.server_id) }}</option>
-                <option value="all">Send to All ({{ linkedServers.length }})</option>
-              </select>
-              <label class="send-logo-toggle" :title="isNonPlexItem ? 'Also send the selected logo' : 'Also send the selected logo to Plex'">
-                <input type="checkbox" v-model="sendLogo" />
-                <span>Send logo</span>
-              </label>
-              <button :title="sendLogoButtonLabel" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+              <button title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-                <span class="btn-label">{{ logoSending ? 'Sending...' : sendLogoButtonLabel }}</span>
+                <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo Only' }}</span>
               </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
-              <button :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading" @click="doSend">📺 <span class="btn-label">{{ sendButtonLabel }}</span></button>
+              <button :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending" @click="onSendClick">
+                <svg v-if="posterSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                <span v-else>📺</span>
+                <span class="btn-label">{{ posterSending ? 'Sending...' : sendButtonLabel }}</span>
+              </button>
             </div>
           </div>
+          <SendToServerModal
+            v-if="showSendModal"
+            :options="sendModalOptions"
+            @close="showSendModal = false"
+            @send="onSendModalConfirm"
+          />
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else-if="selectedPoster" class="placeholder-state">
@@ -2782,38 +2814,6 @@ watch(
   border-color: rgba(255, 255, 255, 0.15);
 }
 
-.send-target-select {
-  font-size: 12px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  color: #c9d1e0;
-}
-
-.send-logo-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #a8b3cf;
-  cursor: pointer;
-  user-select: none;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  transition: all 0.15s;
-}
-.send-logo-toggle:has(input:checked) {
-  color: #eef2ff;
-  border-color: rgba(61, 214, 183, 0.35);
-}
-.send-logo-toggle input {
-  margin: 0;
-  accent-color: var(--accent, #3dd6b7);
-}
-
 /* Override to ensure .btn-plex color wins when combined with btn-secondary */
 .btn-secondary.btn-plex {
   background: linear-gradient(120deg, #ff8a65, #ff7043);
@@ -2830,9 +2830,7 @@ watch(
    flex children, instead of .preview-actions being nested INSIDE
    .preview-label (the old float-right/margin-left:auto approach) with no
    flex-wrap anywhere in the chain -- see the identical fix + full
-   explanation in TvShowEditorPane.vue (CLAUDE.md Quirk #100's follow-up),
-   applied here too since this file has the same Quirk #75 send-target
-   select growing this row the same way. */
+   explanation in TvShowEditorPane.vue (CLAUDE.md Quirk #100's follow-up). */
 .preview-header-row {
   display: flex;
   flex-wrap: wrap;
@@ -2880,7 +2878,8 @@ watch(
   opacity: 0.4;
   cursor: not-allowed;
 }
-.btn-send-logo .spin {
+.btn-send-logo .spin,
+.btn-plex .spin {
   animation: spin-inline 0.9s linear infinite;
 }
 @keyframes spin-inline {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { copyToClipboard } from '@/services/clipboard'
 import { useSettingsStore } from '@/stores/settings'
@@ -110,7 +110,16 @@ onMounted(() => {
 })
 
 const webhookType = ref<'radarr' | 'sonarr' | 'tautulli'>('radarr')
-const webhookTemplate = ref('universal')
+// 'universal' was never a real template_id (backend/templates/universal.py
+// is a shared rendering-utility module, not a template -- the two real ids
+// are 'uniformlogo' and 'kometa') -- with no option matching this default,
+// the Template <select> below rendered permanently blank until the user
+// touched it themselves. Defaults to 'uniformlogo' now, the only template
+// that ever makes sense here: Radarr/Sonarr/Tautulli webhooks always
+// generate movie/TV posters, never collections, so 'kometa' (collections-
+// only, per this app's own Testing Checklist precedent for the Retry Queue
+// picker) is excluded from webhookTemplates below rather than offered.
+const webhookTemplate = ref('uniformlogo')
 const webhookPreset = ref('default')
 const webhookIncludeSeasons = ref(true)
 const webhookEventTypes = ref('added,watched')
@@ -195,8 +204,16 @@ const webhookCrossServerGroups = computed(() => {
 })
 
 const webhookTemplates = computed(() => {
-  return Object.keys(availablePresets.value)
+  return Object.keys(availablePresets.value).filter(t => t !== 'kometa')
 })
+// availablePresets loads asynchronously (onMounted fetch) -- once the real
+// list is in, make sure webhookTemplate actually points at something valid
+// rather than staying on its initial default if that default ever drifts.
+watch(webhookTemplates, (templates) => {
+  if (templates.length > 0 && !templates.includes(webhookTemplate.value)) {
+    webhookTemplate.value = templates.includes('uniformlogo') ? 'uniformlogo' : templates[0]!
+  }
+}, { immediate: true })
 
 const webhookPresets = computed((): Preset[] => {
   const templateData = availablePresets.value[webhookTemplate.value]
@@ -385,11 +402,16 @@ const webhookInstructions = computed(() => {
 
           <label>
             <span class="label-text">Template</span>
-            <select v-model="webhookTemplate">
+            <!-- Only ever offered as a real choice once a 2nd non-Kometa
+                 template exists -- today there's exactly one (uniformlogo),
+                 so a one-item dropdown would just be clutter with nothing
+                 to actually choose. -->
+            <select v-if="webhookTemplates.length > 1" v-model="webhookTemplate">
               <option v-for="template in webhookTemplates" :key="template" :value="template">
                 {{ template }}
               </option>
             </select>
+            <div v-else class="webhook-static-field">{{ webhookTemplate }}</div>
           </label>
 
           <label>
@@ -604,6 +626,18 @@ input[type="number"] {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
   font-size: 14px;
+}
+
+.webhook-static-field {
+  width: 100%;
+  max-width: 400px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-muted);
+  font-size: 14px;
+  box-sizing: border-box;
 }
 
 select:focus,
