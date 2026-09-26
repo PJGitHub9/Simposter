@@ -5,6 +5,7 @@ import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
 import { useMovies } from '../composables/useMovies'
 import { getApiBase } from '@/services/apiBase'
+import { compareTitles } from '@/services/sortTitle'
 
 type Movie = {
   key: string
@@ -291,7 +292,7 @@ const sorted = computed(() => {
   const multiplier = sortOrder.value === 'asc' ? 1 : -1
 
   if (sortBy.value === 'title') {
-    list.sort((a, b) => multiplier * a.title.localeCompare(b.title))
+    list.sort((a, b) => multiplier * compareTitles(a.title, b.title))
   } else if (sortBy.value === 'year') {
     list.sort((a, b) => multiplier * ((Number(a.year) || 0) - (Number(b.year) || 0)))
   } else if (sortBy.value === 'addedAt') {

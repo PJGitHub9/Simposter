@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.110',
+    date: '2026-09-26',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Sorting by title now ignores a leading "The"/"A"/"An" — "The Matrix" sorts under M, "A Bug\'s Life" under B — matching how Plex/Kodi/iTunes libraries already sort (GitHub issue #70). Applies everywhere title-sorting exists: Movies, TV Shows, Logos, Backdrops, Square Art, and both Batch Edit pages.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.109',
     date: '2026-09-23',
     sections: [
