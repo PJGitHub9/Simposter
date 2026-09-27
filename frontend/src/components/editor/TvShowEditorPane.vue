@@ -2396,6 +2396,39 @@ const doSend = async () => {
     const originalPoster = selectedPoster.value
 
     try {
+      // Context-switching (fetchImagesForCurrentSeason/restoreSettingsForKey)
+      // has to stay sequential -- it mutates the shared bgUrl/optionsPayload/
+      // logoUrl/lastPreview refs every item's send reads from, so two items
+      // switching at once would corrupt each other (the exact class of bug
+      // this file's own doSend() already fixed once, see the comment above).
+      // But the actual network round trips (render+upload for Plex, upload
+      // for Jellyfin/Emby) don't need to wait on each other AT ALL once an
+      // item's values are captured -- and previously they did, because each
+      // item's sendPosterToServer()/sendLogoToServer() calls were awaited
+      // before the loop moved on to the next item's context switch. That
+      // made a 2-item send take roughly the SUM of each item's send time
+      // (~6s + ~14s = ~20s in a real user-reported log) instead of close to
+      // the slower item's own time alone. User-reported: "i feel like it
+      // takes a long time to render/send."
+      //
+      // Fix: still switch context one item at a time, but INVOKE (not
+      // await) each item's poster/logo send calls the moment its context is
+      // ready, then immediately move on to the next item's context switch.
+      // This is safe specifically because sendPosterToServer()/
+      // sendLogoToServer() both read every live ref they need (bgUrl,
+      // logoUrl, optionsPayload, etc.) SYNCHRONOUSLY at the moment they're
+      // called -- before their own first `await` -- so calling them here,
+      // synchronously, right after this item's context switch and before
+      // the next one's, captures this item's values correctly regardless of
+      // when the resulting promise actually settles. Every item's pending
+      // work is collected into `pendingSends` and awaited together at the
+      // very end, so the actual render/upload time for a multi-item send is
+      // now bounded by the single slowest item, not their sum -- pure I/O
+      // concurrency, nothing about what gets rendered or how it's encoded
+      // changes (see CLAUDE.md Quirk #17's established boundary for this
+      // class of fix).
+      const pendingSends: Promise<{ title: string; ok: boolean }>[] = []
+
       for (const seasonKey of selectedSeasonKeys) {
         const season = seasons.value.find(s => s.key === seasonKey)
         if (!season) continue
@@ -2429,20 +2462,36 @@ const doSend = async () => {
             failed.push(season.title)
             continue
           }
-          const results = await Promise.all(targets.map(t => sendPosterToServer(t.server_id, t.rating_key)))
-          const okCount = results.filter(Boolean).length
-          if (okCount === 0) {
-            failed.push(season.title)
-            continue
-          }
-          succeeded.push(season.title)
-          if (sendLogo.value && logoUrl.value) {
-            await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
-          }
+
+          // Both of these .map() calls invoke sendPosterToServer()/
+          // sendLogoToServer() immediately (synchronously) -- this is the
+          // capture point for this item's bgUrl/logoUrl/optionsPayload/
+          // lastPreview, happening before the loop's next iteration can
+          // switch context again.
+          const posterPromises = targets.map(t => sendPosterToServer(t.server_id, t.rating_key))
+          const logoPromises = (sendLogo.value && logoUrl.value) ? targets.map(t => sendLogoToServer(t.server_id, t.rating_key)) : []
+          const seasonTitle = season.title
+          pendingSends.push((async () => {
+            try {
+              const results = await Promise.all(posterPromises)
+              const okCount = results.filter(Boolean).length
+              if (logoPromises.length > 0) await Promise.all(logoPromises)
+              return { title: seasonTitle, ok: okCount > 0 }
+            } catch (err) {
+              console.error(`[SEND] ${seasonTitle} - Failed:`, err)
+              return { title: seasonTitle, ok: false }
+            }
+          })())
         } catch (err) {
           failed.push(season.title)
           console.error(`[SEND] ${season.title} - Failed:`, err)
         }
+      }
+
+      const settled = await Promise.all(pendingSends)
+      for (const r of settled) {
+        if (r.ok) succeeded.push(r.title)
+        else failed.push(r.title)
       }
 
       // Restore original editing context, matching the Plex-only loop below.

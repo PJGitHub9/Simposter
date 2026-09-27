@@ -494,6 +494,39 @@ def render_with_overlay_cache(
 
     else:
         logger.info(f"[CACHE] Overlay cache {'disabled' if not use_cache else 'missing'} for template={template_id} preset={preset_id}; using full render")
+        # Self-heal a missing cache instead of falling back to a full render forever.
+        # A preset can end up with no cached overlay for reasons that have nothing
+        # to do with this specific render: POST /api/presets/import (used by
+        # onboarding's default-preset import and Template Manager's "Import
+        # Simposter defaults", Quirk #71/#72) writes presets straight into the DB
+        # via db.merge_presets() and never calls generate_overlay() the way
+        # api_save_preset() does -- so every one of this app's own shipped default
+        # presets (simposter-main, budget-daps, ...) permanently took the slow,
+        # full-render path on every single use, forever, until a user happened to
+        # manually re-save that exact preset once through the editor. Generating +
+        # persisting it now, via the same generate_overlay() call api_save_preset()
+        # already uses, means only the *next* render of this template/preset pays
+        # the slow path, not every one from here on.
+        #
+        # Safe to do here specifically because: (1) generate_overlay() only bakes
+        # deterministic, options-only effects (matte/fade/vignette/wash) with zero
+        # per-item content -- no logo/text/poster is ever part of this cached PNG
+        # (Quirk #19) -- so it's correct to reuse across every item that shares
+        # this template+preset; (2) this branch is only reachable when the caller
+        # already explicitly opted into use_cache=True, and the one caller that
+        # must never cache mid-edit state -- the manual single-item editor's live
+        # preview -- always sends disableOverlayCache=true (render.ts, Quirk #17),
+        # so it can never reach here with unsaved slider-drag values baked in.
+        if use_cache and preset_id:
+            try:
+                from .templates.canvas import resolve_canvas_size
+                gen_canvas_w, gen_canvas_h = resolve_canvas_size(render_options)
+                overlay_img = generate_overlay(render_options, gen_canvas_w, gen_canvas_h)
+                overlay_path.parent.mkdir(parents=True, exist_ok=True)
+                overlay_img.save(overlay_path, "PNG")
+                logger.info(f"[CACHE] Self-healed missing overlay cache: {overlay_path}")
+            except Exception as gen_err:
+                logger.warning(f"[CACHE] Failed to self-heal missing overlay cache for template={template_id} preset={preset_id}: {gen_err}")
 
     return render_poster_image(template_id, poster_url, logo_url, render_options)
 

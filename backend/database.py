@@ -3234,6 +3234,7 @@ def record_poster_history(
     poster_data: Optional[bytes] = None,
     status: str = 'success',
     error_message: Optional[str] = None,
+    server_id: str = 'plex-1',
 ) -> None:
     """Record a poster-related action for tracking, including fallback information."""
     from .config import HISTORY_THUMBNAIL_DIR
@@ -3275,8 +3276,8 @@ def record_poster_history(
             (rating_key, library_id, title, year, template_id, preset_id, action, save_path, source,
              poster_fallback_used, poster_fallback_template, poster_fallback_preset,
              logo_fallback_used, logo_fallback_template, logo_fallback_preset, thumbnail_path,
-             status, error_message, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             status, error_message, server_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 rating_key,
@@ -3297,6 +3298,7 @@ def record_poster_history(
                 thumbnail_path,
                 status,
                 error_message,
+                server_id,
             ),
         )
 
@@ -3353,6 +3355,18 @@ def get_poster_history(
             "logo_fallback_used": bool(row["logo_fallback_used"]) if "logo_fallback_used" in row_keys else False,
             "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
             "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
+            # These three are genuine columns (status/error_message have existed
+            # since early on; server_id since Quirk #57) that were written by
+            # record_poster_history() but never actually read back here -- the
+            # frontend's HistoryRecord interface/template already expected
+            # status/error_message (a failed row's error text never showed up
+            # in the list, only if fetched by id individually), and server_id
+            # is needed to tell a Plex-history row apart from a Jellyfin/Emby
+            # one now that multi-server sync can write either (Quirk #96/#110's
+            # "History not showing it" gap).
+            "status": row["status"] if "status" in row_keys else "success",
+            "error_message": row["error_message"] if "error_message" in row_keys else None,
+            "server_id": row["server_id"] if "server_id" in row_keys else "plex-1",
             "created_at": row["created_at"],
         })
     return out
@@ -3387,6 +3401,9 @@ def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
         "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
         "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
         "thumbnail_path": row["thumbnail_path"] if "thumbnail_path" in row_keys else None,
+        "status": row["status"] if "status" in row_keys else "success",
+        "error_message": row["error_message"] if "error_message" in row_keys else None,
+        "server_id": row["server_id"] if "server_id" in row_keys else "plex-1",
         "created_at": row["created_at"],
     }
 
@@ -3411,7 +3428,7 @@ def get_poster_status(
     where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
     query = f"""
-        SELECT rating_key, action, template_id, preset_id, created_at
+        SELECT rating_key, action, template_id, preset_id, created_at, server_id
         FROM poster_history
         {where_clause}
         ORDER BY datetime(created_at) DESC
@@ -3423,12 +3440,14 @@ def get_poster_status(
         cursor.execute(query, params)
         rows = cursor.fetchall()
 
+    row_keys = rows[0].keys() if rows else []
     for row in rows:
         rating_key = row["rating_key"]
         action = row["action"]
         created_at = row["created_at"]
         template_id = row["template_id"]
         preset_id = row["preset_id"]
+        server_id = row["server_id"] if "server_id" in row_keys else "plex-1"
 
         if rating_key not in result:
             result[rating_key] = {
@@ -3436,12 +3455,23 @@ def get_poster_status(
                 "saved": None,
             }
 
-        # Record the first (latest) occurrence for each action
-        if action == "sent_to_plex" and result[rating_key]["sent"] is None:
+        # Record the first (latest) occurrence for each action.
+        # 'resent_to_plex' and 'sent_to_media_server' (Quirk #114) both
+        # genuinely mean "this item's poster was sent somewhere" just as much
+        # as 'sent_to_plex' does -- excluding either left the Batch Edit
+        # grid's "Sent"/"Not sent" pill permanently blind to any item
+        # resent from Local Assets, or delivered via the multi-server sync
+        # path (which 'sent_to_media_server' covers unconditionally,
+        # including a Plex delivery that went through sync rather than the
+        # direct upload, Quirk #110 -- exactly the case that made "Fallout"/
+        # "The Grand Tour" show "Not sent" despite a real, successful,
+        # verified send moments earlier).
+        if action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server") and result[rating_key]["sent"] is None:
             result[rating_key]["sent"] = {
                 "template_id": template_id,
                 "preset_id": preset_id,
                 "created_at": created_at,
+                "server_id": server_id,
             }
         elif action == "saved_local" and result[rating_key]["saved"] is None:
             result[rating_key]["saved"] = {

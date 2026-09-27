@@ -202,7 +202,8 @@ watch(currentLibrary, async (newLib, oldLib) => {
 
   // Load caches for new library only if we have a valid library ID
   if (newLib) {
-    libraryGroupPref.load(newLib)
+    await libraryGroupPref.load(newLib)
+    applySendDefaultsFromPreference()
     await fetchMovies()
     // Use efficient bulk cache loading first
     await fetchAllAvailableLabels() // Fetch all labels for library first
@@ -243,6 +244,21 @@ async function onPreferredServerChange(serverId: string) {
   // call would silently no-op and keep showing the old server's posters until
   // a hard page reload reset the flag.
   if (ok) await fetchMovies(true)
+}
+// The "Send to:" defaults check EVERY available destination (Plex plus every
+// linked server), not just whichever one the "Show posters from" preference
+// happens to display -- see the identical, much longer note in
+// TvBatchEditView.vue for why a first attempt at this (deriving the default from
+// that preference, Quirk #107) was wrong: the preference only controls which row
+// WINS the display when an item exists on both servers, it says nothing about
+// which server(s) the items actually being processed live on (a Jellyfin-only
+// show with no Plex counterpart displays regardless of the preference's value).
+// Checking every destination is safe -- Quirk #106 makes a checked-but-inapplicable
+// "Send to: Plex" a harmless per-item skip, and sync_render_to_linked_servers()
+// already only syncs to a server an item's tmdb_id actually resolves on.
+function applySendDefaultsFromPreference() {
+  sendToPlex.value = true
+  selectedTargets.value = new Set(otherServerOptions.value.map(o => o.id))
 }
 const toggleTarget = (serverId: string) => {
   const next = new Set(selectedTargets.value)
@@ -415,14 +431,6 @@ const filteredPresets = computed(() => {
   return presets.value.filter(p => p.template_id === selectedTemplate.value)
 })
 
-const templateNameMap = computed(() => {
-  const map: Record<string, string> = {}
-  templates.value.forEach(t => {
-    map[t.id] = t.name || t.id
-  })
-  return map
-})
-
 const presetNameMap = computed(() => {
   const map: Record<string, string> = {}
   presets.value.forEach(p => {
@@ -430,11 +438,6 @@ const presetNameMap = computed(() => {
   })
   return map
 })
-
-const getTemplateName = (id?: string | null) => {
-  if (!id) return '—'
-  return templateNameMap.value[id] || id
-}
 
 const getPresetName = (id?: string | null) => {
   if (!id) return '—'
@@ -451,9 +454,7 @@ const formatDate = (value?: string | null) => {
 const getTemplatePresetText = (movieKey: string) => {
   const status = posterStatus.value[movieKey]
   const source = status?.sent || status?.saved
-  const tpl = getTemplateName(source?.template_id)
-  const pre = getPresetName(source?.preset_id)
-  return `${tpl}/${pre}`
+  return getPresetName(source?.preset_id)
 }
 
 const getSentText = (movieKey: string) => {
@@ -521,10 +522,22 @@ const fetchPosters = async () => {
   const results = await Promise.all(
     missing.map(async m => {
       try {
-        const posterUrl = `${apiBase}/api/movie/${m.key}/poster${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
-        const res = await fetch(posterUrl)
+        // meta=1 (matching MoviesView.vue's established pattern, not the bare
+        // unversioned form this file used to call directly) returns
+        // {url: "/api/movie/{key}/poster?raw=1&v={mtime}"} -- a genuinely
+        // new URL string whenever the cached file itself changes, which is
+        // the ONLY thing that makes the response's Cache-Control:
+        // public,max-age=31536000,immutable header safe (Quirk #49). The
+        // bare form used here previously returned the exact same immutable
+        // URL every time regardless of content, so the browser served the
+        // pre-batch poster forever until a hard refresh cleared its own HTTP
+        // cache -- not a backend staleness bug, a client-side URL-reuse one.
+        const metaUrl = `${apiBase}/api/movie/${m.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
+        const res = await fetch(metaUrl)
         if (res.ok) {
-          return { key: m.key, url: posterUrl }
+          const data = await res.json()
+          const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+          return { key: m.key, url }
         }
         return { key: m.key, url: null }
       } catch {
@@ -1049,7 +1062,8 @@ onMounted(async () => {
   if (currentLibrary.value) {
     // Load templates/presets first
     await loadTemplatesAndPresets()
-    libraryGroupPref.load(currentLibrary.value)
+    await libraryGroupPref.load(currentLibrary.value)
+    applySendDefaultsFromPreference()
 
     // Then fetch fresh data
     await fetchMovies()
@@ -1346,7 +1360,7 @@ onMounted(async () => {
               <p class="title">{{ movie.title }}</p>
               <p class="year">{{ movie.year }}</p>
               <div class="status-row">
-                <span class="pill pill-template" :title="`Template/Preset: ${getTemplatePresetText(movie.key)}`">
+                <span class="pill pill-template" :title="`Preset: ${getTemplatePresetText(movie.key)}`">
                   {{ getTemplatePresetText(movie.key) }}
                 </span>
                 <span

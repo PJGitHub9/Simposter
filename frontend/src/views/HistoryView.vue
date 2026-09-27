@@ -3,6 +3,7 @@ import { ref, onMounted, computed, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 
 interface HistoryRecord {
   id: number
@@ -24,6 +25,7 @@ interface HistoryRecord {
   created_at: string
   status: string | null
   error_message: string | null
+  server_id: string | null
 }
 
 interface RetryQueueItem {
@@ -110,6 +112,7 @@ const selectedLibrary = ref<string>('all')
 const selectedTemplate = ref<string>('all')
 const selectedAction = ref<string>('all')
 const selectedSource = ref<string>('all')
+const selectedServer = ref<string>('all')
 const titleSearch = ref<string>('')
 
 // Map library IDs to display names
@@ -147,6 +150,28 @@ const templates = computed(() => {
   return Array.from(tmpls).sort()
 })
 
+// A genuinely separate dimension from the Action filter -- a Plex delivery
+// can now come from either action="sent_to_plex" (the direct upload path)
+// or action="sent_to_media_server" (the multi-server sync path, taken for a
+// merged item displayed under a non-Plex identity, Quirk #110) with
+// server_id='plex-1', so filtering by Action alone can no longer answer
+// "show me everything that went to Plex." Options list every server_id ever
+// seen in the fetched history (always including plex-1 if present, even
+// though mediaServers may not explicitly list it), labeled via the same
+// shared mediaServerLabel() helper used everywhere else a server_id needs
+// a human name (Quirk #79). Only shown when there's more than one distinct
+// server present -- matches this app's established "invisible for any
+// single-server install" convention for every other multi-server control.
+const serverFilterOptions = computed(() => {
+  const ids = new Set<string>()
+  records.value.forEach(r => {
+    if (r.server_id) ids.add(r.server_id)
+  })
+  return Array.from(ids)
+    .sort()
+    .map(id => ({ id, label: mediaServerLabel(id, settings.mediaServers.value) }))
+})
+
 const filteredRecords = computed(() => {
   let filtered = records.value
 
@@ -167,6 +192,10 @@ const filteredRecords = computed(() => {
       if (selectedSource.value === 'auto') return r.source === 'auto' || r.source === 'auto_generate'
       return r.source === selectedSource.value
     })
+  }
+
+  if (selectedServer.value !== 'all') {
+    filtered = filtered.filter(r => (r.server_id || 'plex-1') === selectedServer.value)
   }
 
   if (titleSearch.value.trim()) {
@@ -305,24 +334,35 @@ const formatDate = computed(() => (timestamp: string) => {
   }
 })
 
-const getActionLabel = (action: string) => {
-  switch (action) {
+// 'sent_to_media_server' (Quirk #112) is the multi-server sync path's own
+// action -- distinct from 'sent_to_plex' (the direct upload, with its own
+// label add/remove/retry-queue side effects, Quirk #110) so History can
+// tell the two apart. Its label is derived from the row's own server_id via
+// the shared mediaServerLabel() helper (also used by the editor's send
+// picker, resend modal, TopNav badge -- Quirk #79) rather than a fixed
+// string, so it reads "Sent to Jellyfin"/"Sent to <custom name>"/"Sent to
+// Plex" correctly regardless of which server the row is actually for.
+const getActionLabel = (record: HistoryRecord) => {
+  switch (record.action) {
     case 'sent_to_plex':
       return 'Sent to Plex'
     case 'resent_to_plex':
       return 'Resent to Plex'
+    case 'sent_to_media_server':
+      return `Sent to ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'saved_local':
       return 'Saved Locally'
     case 'failed':
       return 'Failed'
     default:
-      return action
+      return record.action
   }
 }
 
 const getActionClass = (action: string) => {
   switch (action) {
     case 'sent_to_plex':
+    case 'sent_to_media_server':
       return 'action-plex'
     case 'resent_to_plex':
       return 'action-resent'
@@ -392,13 +432,14 @@ const clearFilters = () => {
   selectedTemplate.value = 'all'
   selectedAction.value = 'all'
   selectedSource.value = 'all'
+  selectedServer.value = 'all'
   titleSearch.value = ''
 }
 
 // Check if a record can be previewed
 const canPreview = (record: HistoryRecord): boolean => {
   // Can preview if we have a save_path (local file) or if it was sent to Plex (rating_key)
-  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex') && record.rating_key))
+  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server') && record.rating_key))
 }
 
 // Get the preview image URL for a record
@@ -600,6 +641,7 @@ onMounted(async () => {
             <option value="all">All Actions</option>
             <option value="sent_to_plex">Sent to Plex</option>
             <option value="resent_to_plex">Resent to Plex</option>
+            <option value="sent_to_media_server">Synced to Linked Server</option>
             <option value="saved_local">Saved Locally</option>
             <option value="failed">Failed</option>
           </select>
@@ -613,6 +655,14 @@ onMounted(async () => {
             <option value="batch">Batch</option>
             <option value="webhook">Webhook</option>
             <option value="auto">Auto</option>
+          </select>
+        </label>
+
+        <label v-if="serverFilterOptions.length > 1">
+          <span>Server</span>
+          <select v-model="selectedServer">
+            <option value="all">All Servers</option>
+            <option v-for="opt in serverFilterOptions" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
           </select>
         </label>
 
@@ -705,7 +755,7 @@ onMounted(async () => {
             </td>
             <td class="action-cell">
               <span :class="['action-badge', getActionClass(record.action)]">
-                {{ getActionLabel(record.action) }}
+                {{ getActionLabel(record) }}
               </span>
             </td>
             <td class="fallback-cell">

@@ -520,6 +520,48 @@ async def api_presets_import(payload: dict = Body(...)):
 
         db.merge_presets(payload)
         logger.info("[PRESETS] Imported and merged presets from JSON")
+
+        # Real root cause found while investigating a reported "every render of
+        # the default 'simposter-main' preset takes 10+ seconds" — this import
+        # path never generates the overlay cache the way api_save_preset() does,
+        # so every preset imported here (onboarding's default-preset import,
+        # Template Manager's "Import Simposter defaults", a shared-preset-file
+        # import) permanently fell back to the slow full-render path forever,
+        # until a user happened to manually re-save that exact preset once.
+        # rendering.render_with_overlay_cache() now self-heals a missing cache on
+        # its own (see that function's own comment), but generating it proactively
+        # here as well means the *first* render of a freshly-imported preset is
+        # already fast, not just every one after it. Only covers entries that
+        # already carry an explicit `id` in the payload (the default-template
+        # import always does, via _slugify_preset_name()) -- the id
+        # merge_presets() assigns for an id-less "shared/compact" import isn't
+        # returned from that call, so those still rely purely on self-heal.
+        try:
+            from ..rendering import generate_overlay
+            from ..templates.canvas import resolve_canvas_size
+            from ..config import settings
+            generated = 0
+            for template_id, tpl_data in payload.items():
+                presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
+                for preset in presets_list:
+                    pid = preset.get("id")
+                    options = preset.get("options") or {}
+                    if not pid:
+                        continue
+                    try:
+                        canvas_w, canvas_h = resolve_canvas_size(options)
+                        overlay_img = generate_overlay(options, canvas_w, canvas_h)
+                        overlay_dir = Path(settings.CONFIG_DIR) / "overlays" / template_id
+                        overlay_dir.mkdir(parents=True, exist_ok=True)
+                        overlay_img.save(overlay_dir / f"{pid}.png", "PNG")
+                        generated += 1
+                    except Exception as one_err:
+                        logger.warning(f"[PRESETS] Failed to generate overlay cache for imported preset {template_id}/{pid}: {one_err}")
+            if generated:
+                logger.info(f"[PRESETS] Generated overlay cache for {generated} imported preset(s)")
+        except Exception as overlay_batch_err:
+            logger.warning(f"[PRESETS] Overlay cache generation for imported presets failed: {overlay_batch_err}")
+
         return {"message": "Presets imported and merged"}
     except HTTPException:
         raise

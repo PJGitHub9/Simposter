@@ -17,7 +17,7 @@ sends do) -- a reasonable, explicitly-noted simplification for a first version,
 not an oversight.
 """
 import base64
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import requests
 from fastapi import APIRouter, HTTPException
@@ -310,7 +310,8 @@ def sync_render_to_linked_servers(
     logo_content_type: Optional[str] = None,
     title_hint: str = "?",
     season_index: Optional[int] = None,
-) -> List[str]:
+    tvdb_id: Optional[int] = None,
+) -> List[Dict[str, str]]:
     """Sends already-rendered poster/logo bytes (whichever are given -- both
     are optional and independent) to whichever of `target_ids` are BOTH
     requested AND actually linked to `library_id` via a Library Group
@@ -320,14 +321,27 @@ def sync_render_to_linked_servers(
     idea -- see that function's own docstring), applied here so a caller
     (batch.py's multi-server send, Quirk #95's follow-up) can't reach an
     enabled-but-unlinked server just because a requested target happens to
-    also have a matching tmdb_id. Returns the list of server_ids actually
-    synced to (poster and/or logo -- a partial per-item failure on one
-    asset type doesn't exclude a server that succeeded on the other).
-    Deliberately Plex-agnostic -- callers should exclude 'plex-1' from
-    target_ids themselves (Plex already has its own real send path); any
-    'plex-1' present here is silently ignored rather than erroring, since
-    intersecting against `allowed` (which never includes 'plex-1') already
-    filters it out naturally.
+    also have a matching tmdb_id. Returns a list of {"server_id", "item_id"}
+    dicts, one per server actually synced to (poster and/or logo -- a partial
+    per-item failure on one asset type doesn't exclude a server that
+    succeeded on the other). `item_id` is the resolved item's own id ON THAT
+    SERVER (Plex rating_key, or a Jellyfin/Emby GUID) -- deliberately NOT just
+    a bare list of server_ids (that's all this returned before Quirk #112),
+    since callers need the real id to write a meaningful poster_history row
+    for the sync (rating_key=item_id, server_id=server_id) -- see the
+    "History not showing it" gap Quirk #112 closes.
+    'plex-1' IS a valid target here (as of Quirk #110) -- PlexClient fully
+    implements find_item_by_external_id()/upload_image()/find_season_by_index()
+    (Quirk #58/#100) the same as any other MediaServerClient, so this function
+    genuinely works for Plex too. This matters for a merged item currently
+    displayed under a NON-Plex identity (rating_key is Jellyfin/Emby's, not
+    Plex's) -- batch.py's direct rating_key-based Plex upload can never reach
+    Plex for that item, so it instead asks this function to resolve the item's
+    real Plex-side identity via tmdb_id, exactly as it already does for a
+    Jellyfin/Emby target. Most callers still only ever pass non-Plex ids here
+    -- Plex's own direct upload path (with its full label/retry-queue/history
+    side effects) stays the better path whenever rating_key genuinely already
+    IS the Plex identity; this is purely additive, not a replacement.
 
     `season_index` (Quirk #100): when given, `tmdb_id` still identifies the
     SHOW (tmdb_id has no reliable per-season identity), and each linked
@@ -335,7 +349,22 @@ def sync_render_to_linked_servers(
     before) is then further resolved to that specific season via
     find_season_by_index() -- a server where the season can't be resolved is
     skipped for this sync, same as an unmatched series would be, never a hard
-    failure for the others."""
+    failure for the others.
+
+    `tvdb_id`: REQUIRED (not merely helpful) for `media_type == "tv"` to ever
+    resolve anything at all -- both PlexClient's and JellyfinClient's own
+    find_item_by_external_id() implementations only match a TV show via its
+    tvdb:// GUID (matching this app's pre-existing, Quirk #25-established
+    convention -- Plex webhooks have always matched TV shows by tvdb_id, never
+    tmdb_id), and return None immediately, before any network call is even
+    attempted, whenever tvdb_id is falsy. This function omitted the parameter
+    entirely until Quirk #111 and always passed a hardcoded `None` in its
+    place, meaning it silently could not resolve a single TV show on any
+    target server -- Plex or Jellyfin/Emby -- despite every earlier Quirk in
+    this area (#96/#99/#100/#110) believing it had been verified working,
+    because every one of those tests used a mock configured to return a
+    truthy value unconditionally, which never exercised this real
+    argument-gating check. See Quirk #111 for the full story."""
     if not tmdb_id or not target_ids:
         return []
     from ..config import get_library_group_members
@@ -346,19 +375,19 @@ def sync_render_to_linked_servers(
     # same server) traced to this being discarded here, so
     # find_item_by_external_id() searched the whole server unscoped and
     # could resolve to the wrong same-tmdb_id item nondeterministically.
-    allowed = {sid: lid for sid, lid in (linked or []) if sid != "plex-1"}
-    requested = {t for t in target_ids if t and t != "plex-1"}
+    allowed = {sid: lid for sid, lid in (linked or [])}
+    requested = {t for t in target_ids if t}
     to_sync = requested & allowed.keys()
     if not to_sync:
         return []
 
-    synced: List[str] = []
+    synced: List[Dict[str, str]] = []
     for server_id in to_sync:
         client = get_client(server_id)
         if not client:
             continue
         try:
-            series_item_id = client.find_item_by_external_id(tmdb_id, None, media_type, library_id=allowed.get(server_id))
+            series_item_id = client.find_item_by_external_id(tmdb_id, tvdb_id, media_type, library_id=allowed.get(server_id))
             if not series_item_id:
                 logger.debug("[MEDIA_SERVER_SEND:%s] No matching item for tmdb_id=%s [%s] -- skipping", server_id, tmdb_id, title_hint)
                 continue
@@ -379,7 +408,7 @@ def sync_render_to_linked_servers(
                 _cache_logo_after_upload(item_id, logo_bytes, logo_content_type or "image/png", is_tv=(media_type == "tv"))
                 did_something = True
             if did_something:
-                synced.append(server_id)
+                synced.append({"server_id": server_id, "item_id": item_id})
                 logger.info("[MEDIA_SERVER_SEND:%s] Synced poster/logo for tmdb_id=%s [%s] -> item_id=%s", server_id, tmdb_id, title_hint, item_id)
         except Exception as e:
             logger.warning("[MEDIA_SERVER_SEND:%s] Sync failed for tmdb_id=%s [%s]: %s", server_id, tmdb_id, title_hint, e)

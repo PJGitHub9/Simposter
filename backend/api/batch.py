@@ -53,6 +53,19 @@ def _update_batch_status(updates: dict):
         batch_status.update(updates)
 
 
+def _server_type_label(server_id: str) -> str:
+    """Best-effort display label for a batch-progress step string (e.g.
+    "Sending to Jellyfin") -- derives the type straight from the server_id's
+    own "{type}-{...}" shape, the same convention MovieCard.vue's
+    serverTypeFor() already uses for its grid badges, rather than a DB lookup
+    for a custom name. This is purely cosmetic progress text shown in the
+    global-operation-overlay popup, not something that needs to honor a
+    user-set server name -- generic "Jellyfin"/"Emby" is enough context for
+    "what's currently happening," and avoids a settings read per batch item."""
+    server_type = (server_id or "").split("-")[0]
+    return {"plex": "Plex", "jellyfin": "Jellyfin", "emby": "Emby"}.get(server_type, server_type.capitalize() or "linked server")
+
+
 @router.get("/batch-progress")
 def api_batch_progress():
     """Return current batch operation progress."""
@@ -398,6 +411,16 @@ def _process_single_movie(
         # Retry-queue runs only want to upload once the render actually meets the template spec
         skip_send_not_ideal = getattr(req, 'send_only_if_ideal', False) and needs_retry
 
+        # Whether this rating_key is genuinely a Plex item -- req.send_to_plex being
+        # checked doesn't mean it's *applicable* to this specific batch item. A batch
+        # selection can mix Plex- and Jellyfin/Emby-sourced items (or be entirely
+        # Jellyfin-sourced) when a linked library's "Show posters from" preference
+        # isn't Plex; blindly POSTing a Jellyfin/Emby item id to Plex's own
+        # /library/metadata/{id}/posters produces a real, confusing failure (a
+        # malformed-request connection drop, not a clean 404) that used to abort
+        # the whole batch item. See CLAUDE.md Quirk #106.
+        is_plex_item = db.get_server_id_for_rating_key(rating_key) == "plex-1"
+
         # ---------------------------
         # Render
         # ---------------------------
@@ -545,9 +568,26 @@ def _process_single_movie(
         # Non-Plex targets this batch item should ALSO sync to, on top of (or
         # instead of) send_to_plex -- purely additive, see schemas.py's
         # MovieBatchRequest.targets docstring for the full design. 'plex-1'
-        # is filtered here defensively even though callers shouldn't send it.
+        # is filtered here defensively even though callers shouldn't send it
+        # as an *explicit* target -- it's added back in below, conditionally,
+        # for a real case that needs it (see sync_targets/Quirk #110).
         other_targets = [t for t in (getattr(req, 'targets', None) or []) if t and t != "plex-1"]
-        do_multiserver_send = bool(other_targets)
+        # A merged item currently displayed under a non-Plex identity (e.g.
+        # "Show posters from: Jellyfin" for a title that also exists on Plex)
+        # has a rating_key that ISN'T Plex's own -- the direct-upload block
+        # below can never reach Plex for it, no matter how "Send to: Plex" was
+        # checked. Route that case through the SAME tmdb_id-based resolution
+        # sync_render_to_linked_servers() already uses for Jellyfin/Emby
+        # targets, just with 'plex-1' included -- it resolves the item's real
+        # Plex-side identity via the Library Group and uploads there directly,
+        # rather than silently giving up (Quirk #110). Harmless/no-op when
+        # there's no actual Plex member linked (the same "requested but not
+        # actually linked -> silently skipped" safety net every other target
+        # already gets, Quirk #95/#96).
+        sync_targets = list(other_targets)
+        if req.send_to_plex and not is_plex_item:
+            sync_targets.append("plex-1")
+        do_multiserver_send = bool(sync_targets)
         if skip_send_not_ideal:
             logger.info("[BATCH] Skipping Plex upload for %s [%s] — still needs_retry and send_only_if_ideal is set", rating_key, title_hint)
         elif req.send_to_plex or do_multiserver_send:
@@ -561,6 +601,9 @@ def _process_single_movie(
             payload, content_type = encode_poster_for_plex(img)
 
         if do_multiserver_send and not skip_send_not_ideal:
+            _update_batch_status({
+                "current_step": f"Sending to {', '.join(_server_type_label(t) for t in sync_targets)}",
+            })
             try:
                 logo_bytes_for_sync = None
                 logo_ct_for_sync = None
@@ -575,17 +618,48 @@ def _process_single_movie(
                 from .media_server_send import sync_render_to_linked_servers
                 synced = sync_render_to_linked_servers(
                     tmdb_id=tmdb_id, media_type="movie", library_id=req.library_id,
-                    target_ids=other_targets,
+                    target_ids=sync_targets,
                     poster_bytes=payload, poster_content_type=content_type,
                     logo_bytes=logo_bytes_for_sync, logo_content_type=logo_ct_for_sync,
                     title_hint=title_hint,
                 )
                 if synced:
-                    logger.info("[BATCH] Synced to non-Plex server(s) %s for %s [%s]", synced, rating_key, title_hint)
+                    logger.info("[BATCH] Synced to linked server(s) %s for %s [%s]", [s["server_id"] for s in synced], rating_key, title_hint)
+                    # Quirk #112: neither this sync path nor its webhook
+                    # equivalent ever wrote a poster_history row before this --
+                    # only the direct is_plex_item upload branch further down
+                    # does. Each synced target gets its own row, keyed by that
+                    # server's OWN item_id (not the batch's original
+                    # rating_key, which may belong to a different server
+                    # entirely for a merged item -- Quirk #110), with
+                    # server_id so History can tell a Plex-via-sync send apart
+                    # from a genuine direct send (fewer side effects: no
+                    # label add/remove, no retry-queue resolution -- see
+                    # Quirk #110's own documented asymmetry).
+                    for _s in synced:
+                        try:
+                            db.record_poster_history(
+                                rating_key=_s["item_id"],
+                                library_id=str(req.library_id or ""),
+                                title=movie_details.get("title"),
+                                year=movie_details.get("year"),
+                                template_id=template_id,
+                                preset_id=preset_id,
+                                action="sent_to_media_server",
+                                source=source,
+                                poster_data=payload,
+                                server_id=_s["server_id"],
+                            )
+                        except Exception as sync_history_err:
+                            logger.debug("[BATCH] Failed to record history for sync to %s: %s", _s.get("server_id"), sync_history_err)
             except Exception as sync_err:
                 logger.warning("[BATCH] Multi-server sync failed for %s [%s]: %s", rating_key, title_hint, sync_err)
 
-        if not skip_send_not_ideal and req.send_to_plex:
+        if req.send_to_plex and not is_plex_item:
+            logger.info("[BATCH] Direct Plex upload not applicable for %s [%s] (server_id=%s) — attempted via linked-group resolution instead (see the preceding 'Synced to linked server(s)' line, if any)",
+                        rating_key, title_hint, db.get_server_id_for_rating_key(rating_key))
+
+        if not skip_send_not_ideal and req.send_to_plex and is_plex_item:
             _update_batch_status({
                 "current_step": "Sending to Plex",
             })
@@ -1119,6 +1193,7 @@ def _render_tv_series_poster(
         poster_is_textless=bool(poster and not poster.get("has_text")),
         source=source,
         tmdb_id=tmdb_id,
+        tvdb_id=tvdb_id,
         logo_was_expected=str(logo_mode).lower() != "none",
     )
 
@@ -1156,42 +1231,54 @@ def _render_all_tv_seasons(
     # season preset stored as a sparse diff (v1.6.32+) still resolves to a complete option set.
     final_season_options = db.resolve_season_options(render_options, season_options)
 
-    # Season enumeration is Plex-only, on purpose, not by oversight -- there is
-    # no MediaServerClient method for "list this show's seasons" yet (Jellyfin
-    # has no season-level item resolution built at all -- see the identical
-    # limitation already documented in Quirk #69/#71/#75/#96). Rather than let
-    # a Jellyfin-sourced rating_key hit a confusing raw 404 against Plex's own
-    # /children endpoint below, fail clearly and specifically here instead.
-    if db.get_server_id_for_rating_key(rating_key) != "plex-1":
-        raise Exception(
-            "Season posters aren't supported yet for a Jellyfin/Emby-sourced show "
-            "(no season-level lookup exists for non-Plex servers yet) -- switch "
-            "\"Show posters from\" back to Plex, or uncheck \"Include Seasons\"."
-        )
-
-    # Fetch seasons from Plex
-    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
-    try:
-        r = plex_session.get(url, headers=plex_headers(), timeout=6)
-        r.raise_for_status()
-    except Exception as e:
-        raise Exception(f"Failed to fetch seasons: {e}")
-
-    import xml.etree.ElementTree as ET
-    root = ET.fromstring(r.text)
+    # Season enumeration used to be a hard Plex-only guard here (raising rather than
+    # ever reaching Plex's own /children endpoint with a Jellyfin id). That guard
+    # predated Quirk #100's real season-level Jellyfin/Emby resolution
+    # (MediaServerClient.list_seasons()/find_season_by_index(), confirmed live
+    # against a real Jellyfin server) -- season enumeration for a non-Plex show is
+    # genuinely supported now, via the exact same client method
+    # api_tv_show_seasons() (tv_shows.py) already uses for the season-list endpoint.
+    server_id = db.get_server_id_for_rating_key(rating_key)
     seasons = []
-    for directory in root.findall(".//Directory"):
-        season_index = int(directory.get("index", -1))
-        season_key = directory.get("ratingKey", "")
-        season_title = directory.get("title", f"Season {season_index}")
-        if season_index >= 0:
-            seasons.append({
-                "index": season_index,
-                "key": season_key,
-                "title": season_title
-            })
+    if server_id != "plex-1":
+        from ..media_server import get_client
+        client = get_client(server_id)
+        if not client or not hasattr(client, "list_seasons"):
+            raise Exception(
+                f"No configured/enabled media server for server_id={server_id}, "
+                "or it doesn't support season listing."
+            )
+        for s in client.list_seasons(rating_key):
+            if s.get("index") is not None and s.get("key"):
+                seasons.append({
+                    "index": int(s["index"]),
+                    "key": s["key"],
+                    "title": s.get("title") or f"Season {s['index']}",
+                })
+        seasons.sort(key=lambda s: s["index"])
+    else:
+        # Fetch seasons from Plex
+        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
+        try:
+            r = plex_session.get(url, headers=plex_headers(), timeout=6)
+            r.raise_for_status()
+        except Exception as e:
+            raise Exception(f"Failed to fetch seasons: {e}")
 
-    seasons.sort(key=lambda s: s["index"])
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(r.text)
+        for directory in root.findall(".//Directory"):
+            season_index = int(directory.get("index", -1))
+            season_key = directory.get("ratingKey", "")
+            season_title = directory.get("title", f"Season {season_index}")
+            if season_index >= 0:
+                seasons.append({
+                    "index": season_index,
+                    "key": season_key,
+                    "title": season_title
+                })
+
+        seasons.sort(key=lambda s: s["index"])
     logger.info("[BATCH TV] Found %d seasons for %s", len(seasons), show_title)
 
     # Filter seasons if affected_seasons is provided (webhook mode)
@@ -1300,6 +1387,7 @@ def _render_all_tv_seasons(
                     poster_is_textless=bool(series_poster and not series_poster.get("has_text")),
                     source=source,
                     tmdb_id=tmdb_id,
+                    tvdb_id=tvdb_id,
                     logo_was_expected=str(logo_mode).lower() != "none",
                 )
                 results.append({
@@ -1456,20 +1544,38 @@ def _render_all_tv_seasons(
         season_render_options["season_text"] = season_title
         season_render_options["season_number"] = str(season_index) if season_index is not None else ""
 
-        # Render the poster with potentially updated template/preset from fallback
-        result = _render_and_save_poster(
-            season_key, poster_url, logo_url, season_render_options, season_template_id, season_preset_id,
-            show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
-            req, is_tv=True, season_title=season_title, season_index=season_index,
-            poster_fallback_used=season_poster_fallback_used,
-            poster_fallback_template=season_poster_fallback_template,
-            poster_fallback_preset=season_poster_fallback_preset,
-            poster_is_textless=bool(poster and not poster.get("has_text")),
-            source=source,
-            tmdb_id=tmdb_id,
-            logo_was_expected=str(season_logo_mode).lower() != "none",
-        )
-        results.append(result)
+        # Render the poster with potentially updated template/preset from fallback.
+        # Wrapped in try/except (matching the series-poster block above) so one
+        # season's failure (e.g. an upload error) doesn't abort every other
+        # season/the whole show's batch item -- previously an unhandled exception
+        # here propagated all the way out of this function, marking the entire
+        # show FAILED even when earlier seasons had already rendered/saved fine.
+        try:
+            result = _render_and_save_poster(
+                season_key, poster_url, logo_url, season_render_options, season_template_id, season_preset_id,
+                show_title, show_details.get("first_air_date", "")[:4] if show_details.get("first_air_date") else None,
+                req, is_tv=True, season_title=season_title, season_index=season_index,
+                poster_fallback_used=season_poster_fallback_used,
+                poster_fallback_template=season_poster_fallback_template,
+                poster_fallback_preset=season_poster_fallback_preset,
+                poster_is_textless=bool(poster and not poster.get("has_text")),
+                source=source,
+                tmdb_id=tmdb_id,
+                tvdb_id=tvdb_id,
+                logo_was_expected=str(season_logo_mode).lower() != "none",
+                server_id_hint=server_id,
+            )
+            results.append(result)
+        except Exception as season_err:
+            logger.error("[BATCH TV] Failed to render %s - %s: %s", show_title, season_title, season_err)
+            results.append({
+                "rating_key": season_key,
+                "season": season_title,
+                "status": "error",
+                "error": str(season_err),
+                "poster_fallback": False,
+                "logo_fallback": False,
+            })
 
     logger.info("[BATCH TV] '%s' done in %.1fs (rating_key=%s, %d season(s))",
                 show_title, time.time() - _seasons_start, rating_key, len(results))
@@ -1580,9 +1686,21 @@ def _render_and_save_poster(
     tmdb_id: Optional[int] = None,
     logo_was_expected: bool = True,
     poster_is_textless: Optional[bool] = None,
+    server_id_hint: Optional[str] = None,
+    tvdb_id: Optional[int] = None,
 ):
     """Common rendering and saving logic for both movies and TV shows."""
     _render_start = time.time()
+    # Whether rating_key is genuinely a Plex item -- see the identical is_plex_item
+    # comment in _process_single_movie() (Quirk #106) for the full rationale. A
+    # season's own rating_key is never itself cached in tv_cache (only series-level
+    # rows are), so a live db.get_server_id_for_rating_key() lookup for a season
+    # would silently default to 'plex-1' even for a Jellyfin-sourced season --
+    # callers that already know the real server (season calls from
+    # _render_all_tv_seasons()) pass server_id_hint explicitly instead of relying
+    # on that lookup, matching the established server_id_hint pattern already used
+    # by fetch_and_cache_poster()/_resolve_non_plex_client() (Quirk #90).
+    is_plex_item = (server_id_hint or db.get_server_id_for_rating_key(rating_key)) == "plex-1"
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
     display_title = f"{title} - {season_title}" if season_title else title
 
@@ -1644,6 +1762,24 @@ def _render_and_save_poster(
     # Pass preset_id so the template renderer can look up linked overlay configs
     if preset_id:
         render_options["preset_id"] = preset_id
+
+    # {title}/{year} Custom Text substitution (universal.py's _render_text_overlay())
+    # reads options["movie_title"]/["movie_year"] -- the movie path
+    # (_process_single_movie) has always set these, but this shared TV series/
+    # season render function never did, on either code path that reaches it
+    # (series poster or season poster -- season_text/season_number, the
+    # SEPARATE {season}/{season number} template vars, are already set by the
+    # caller before this function runs, which is what made this gap easy to
+    # miss). Every TV batch/webhook/auto-generate/retry render of a preset
+    # using {title}/{year} in Custom Text has therefore always substituted an
+    # empty string, silently -- {title}.replace("{title}", "") -- since
+    # `if custom_text:` only checks the raw, pre-substitution template string
+    # (still truthy), not the post-substitution result. `title`/`year` here
+    # are this function's own params -- the plain show name/year, same value
+    # for both the series call and every season call (season-specific
+    # decoration is season_title/season_index, kept separate on purpose).
+    render_options["movie_title"] = title or ""
+    render_options["movie_year"] = str(year) if year else ""
 
     _update_batch_status({
         "current_step": "Rendering poster",
@@ -1777,7 +1913,18 @@ def _render_and_save_poster(
     # sync is genuinely supported now (Quirk #100) -- sync_render_to_linked_servers()
     # resolves the season on each linked server itself via find_season_by_index().
     other_targets = [t for t in (getattr(req, 'targets', None) or []) if t and t != "plex-1"]
-    do_multiserver_send = bool(other_targets)
+    # A merged item currently displayed under a non-Plex identity has a
+    # rating_key that isn't Plex's own -- the direct-upload block below can
+    # never reach Plex for it. Route that case through the same tmdb_id-based
+    # resolution used for Jellyfin/Emby targets, with 'plex-1' included --
+    # PlexClient fully implements find_item_by_external_id()/upload_image()/
+    # find_season_by_index() (Quirk #58/#100), so this works identically for
+    # the series and season cases. See the identical, fuller comment in
+    # _process_single_movie() (Quirk #110) for the complete rationale.
+    sync_targets = list(other_targets)
+    if req.send_to_plex and not is_plex_item:
+        sync_targets.append("plex-1")
+    do_multiserver_send = bool(sync_targets)
     if skip_send_not_ideal:
         logger.info("[BATCH] Skipping Plex upload for %s — still needs_retry and send_only_if_ideal is set", display_title)
     elif req.send_to_plex or do_multiserver_send:
@@ -1789,6 +1936,9 @@ def _render_and_save_poster(
         payload, content_type = encode_poster_for_plex(rendered)
 
     if do_multiserver_send and not skip_send_not_ideal:
+        _update_batch_status({
+            "current_step": f"Sending to {', '.join(_server_type_label(t) for t in sync_targets)}",
+        })
         try:
             logo_bytes_for_sync = None
             logo_ct_for_sync = None
@@ -1803,18 +1953,48 @@ def _render_and_save_poster(
             from .media_server_send import sync_render_to_linked_servers
             synced = sync_render_to_linked_servers(
                 tmdb_id=tmdb_id, media_type="tv", library_id=req.library_id,
-                target_ids=other_targets,
+                target_ids=sync_targets,
                 poster_bytes=payload, poster_content_type=content_type,
                 logo_bytes=logo_bytes_for_sync, logo_content_type=logo_ct_for_sync,
                 title_hint=display_title,
                 season_index=season_index,
+                tvdb_id=tvdb_id,
             )
             if synced:
-                logger.info("[BATCH] Synced to non-Plex server(s) %s for %s", synced, display_title)
+                logger.info("[BATCH] Synced to linked server(s) %s for %s", [s["server_id"] for s in synced], display_title)
+                # See the identical, fuller comment on the movie-path call site
+                # in _process_single_movie() (Quirk #112) -- same reasoning,
+                # same shape, just TV's own title/year/season variables.
+                for _s in synced:
+                    try:
+                        db.record_poster_history(
+                            rating_key=_s["item_id"],
+                            library_id=str(req.library_id or ""),
+                            title=display_title,
+                            year=year,
+                            template_id=template_id,
+                            preset_id=preset_id,
+                            action="sent_to_media_server",
+                            source=source,
+                            poster_data=payload,
+                            server_id=_s["server_id"],
+                        )
+                    except Exception as sync_history_err:
+                        logger.debug("[BATCH] Failed to record history for sync to %s: %s", _s.get("server_id"), sync_history_err)
         except Exception as sync_err:
             logger.warning("[BATCH] Multi-server sync failed for %s: %s", display_title, sync_err)
 
-    if not skip_send_not_ideal and req.send_to_plex:
+    if req.send_to_plex and not is_plex_item:
+        # Deliberately not re-querying db.get_server_id_for_rating_key(rating_key)
+        # here -- for a season, rating_key is never itself DB-cached (only
+        # series-level rows are), so a fresh lookup would silently default back
+        # to 'plex-1' and print a wrong/misleading server_id, the exact bug
+        # server_id_hint (Quirk #106) exists to avoid. is_plex_item already
+        # reflects the correct, hint-aware answer.
+        logger.info("[BATCH] Direct Plex upload not applicable for %s — attempted via linked-group resolution instead (see the preceding 'Synced to linked server(s)' line, if any)",
+                    display_title)
+
+    if not skip_send_not_ideal and req.send_to_plex and is_plex_item:
         _update_batch_status({
             "current_step": "Uploading to Plex",
         })

@@ -633,7 +633,7 @@ def process_sonarr_webhook_with_retry(
     )
 
 
-def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None) -> None:
+def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None) -> None:
     """Phase 6 (webhooks) -- after a webhook-triggered Plex render+send
     succeeds, check whether the same title also exists on any OTHER server
     that's actually linked to this Plex library via a Library Group
@@ -679,7 +679,30 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
     item first (as always) then that specific season via
     find_season_by_index() -- a server where the season can't be resolved is
     skipped for this call, never a hard failure. None (the default) is the
-    original series-only behavior, unchanged."""
+    original series-only behavior, unchanged.
+
+    `tvdb_id` (Quirk #111): REQUIRED for a TV item to ever resolve on any
+    target server -- both PlexClient.find_item_by_external_id() and
+    JellyfinClient.find_item_by_external_id() only match media_type == "tv"
+    via a tvdb://<id> (Plex) / ProviderIds.Tvdb (Jellyfin) lookup, never
+    tmdb_id, matching this app's pre-existing Quirk #25 webhook-matching
+    convention. Before this fix, every call site here hardcoded the third
+    positional arg to None, meaning find_item_by_external_id() returned None
+    immediately (no network call at all) for every TV sync attempt, for the
+    entire lifetime of this function -- TV webhook cross-server sync never
+    actually worked. Movies are unaffected (movie matching is tmdb_id-based,
+    tvdb_id is simply unused/None for that branch).
+
+    `template_id`/`preset_id` (Quirk #112): passed through purely so a
+    successful sync can write a poster_history row -- this function's own
+    upload used to be completely invisible in History, the same gap
+    media_server_send.py's sync_render_to_linked_servers() had (that
+    function's callers in batch.py were fixed first). `year` is left `None`
+    for the history row here (this function only ever has `title_hint`, a
+    plain display string, not a split title/year the way batch.py's callers
+    do) -- acceptable, since the row still identifies the right item/server/
+    template/preset, which is what actually matters for "did this sync
+    happen."""
     if not tmdb_id:
         return
     try:
@@ -712,7 +735,7 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
             if isinstance(client, PlexClient) or client.server_id not in allowed_servers:
                 continue
             try:
-                series_item_id = client.find_item_by_external_id(tmdb_id, None, find_media_type, library_id=allowed_servers.get(client.server_id))
+                series_item_id = client.find_item_by_external_id(tmdb_id, tvdb_id, find_media_type, library_id=allowed_servers.get(client.server_id))
                 if not series_item_id:
                     continue
                 item_id = series_item_id if season_index is None else client.find_season_by_index(series_item_id, season_index)
@@ -731,6 +754,21 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                         cache.update_poster(item_id, _poster_cache_url(item_id, saved))
                 except Exception as cache_err:
                     logger.debug("[WEBHOOK_SYNC:%s] Failed to update local cache for item_id=%s: %s", client.server_id, item_id, cache_err)
+                try:
+                    db.record_poster_history(
+                        rating_key=item_id,
+                        library_id=str(library_id or ""),
+                        title=title_hint,
+                        year=None,
+                        template_id=template_id,
+                        preset_id=preset_id,
+                        action="sent_to_media_server",
+                        source="webhook",
+                        poster_data=image_bytes,
+                        server_id=client.server_id,
+                    )
+                except Exception as history_err:
+                    logger.debug("[WEBHOOK_SYNC:%s] Failed to record history for item_id=%s: %s", client.server_id, item_id, history_err)
             except Exception as e:
                 logger.warning("[WEBHOOK_SYNC:%s] Failed to sync poster for tmdb_id=%s [%s]: %s", client.server_id, tmdb_id, title_hint, e)
     except Exception as e:
@@ -973,12 +1011,18 @@ def process_webhook_poster_generation(
                         _sync_cached = db.get_cached_tv_shows()
                         _sync_info = next((s for s in _sync_cached if s.get("key") == rating_key or s.get("rating_key") == rating_key), None)
                         _sync_tmdb_id = _sync_info.get("tmdb_id") if _sync_info else None
+                        # tvdb_id is REQUIRED for find_item_by_external_id() to ever
+                        # resolve a TV item on any target server (Quirk #111) -- this
+                        # call site was missed when that fix landed elsewhere, so
+                        # Sonarr-webhook-triggered TV sync still silently never worked.
+                        _sync_tvdb_id = _sync_info.get("tvdb_id") if _sync_info else None
                         for _r in sub_results:
                             if _r.get("status") != "ok":
                                 continue
                             _sync_poster_to_other_servers(
                                 _sync_tmdb_id, "tv-show", show_title, library_id=library_id,
-                                season_index=_r.get("season_index"),
+                                season_index=_r.get("season_index"), tvdb_id=_sync_tvdb_id,
+                                template_id=template_id, preset_id=preset_id,
                             )
                     except Exception as sync_err:
                         logger.debug("[WEBHOOK] TV cross-server sync failed for %s [%s]: %s", rating_key, show_title, sync_err)
@@ -1093,7 +1137,7 @@ def process_webhook_poster_generation(
                     try:
                         _sync_cached = db.get_cached_movies()
                         _sync_info = next((m for m in _sync_cached if m.get("key") == rating_key or m.get("rating_key") == rating_key), None)
-                        _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id)
+                        _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id, template_id=template_id, preset_id=preset_id)
                     except Exception as sync_err:
                         logger.debug("[WEBHOOK] Cross-server poster sync failed for %s [%s]: %s", rating_key, movie_title, sync_err)
                 # Send Discord notification (include poster image)

@@ -198,7 +198,8 @@ watch(currentLibrary, async (newLib, oldLib) => {
 
   // Load caches for new library only if we have a valid library ID
   if (newLib) {
-    libraryGroupPref.load(newLib)
+    await libraryGroupPref.load(newLib)
+    applySendDefaultsFromPreference()
     await fetchMovies()
     // Use efficient bulk cache loading first
     await fetchAllAvailableLabels() // Fetch all labels for library first
@@ -220,9 +221,10 @@ const sendToPlex = ref(true)
 const saveLocally = ref(false)
 const sendLogos = ref(false)
 // Multi-server send targets (Quirk #95's follow-up, Batch Edit punch-list item 1) --
-// series-level only, matching every other TV multi-server send in this app
-// (JellyfinClient has no season-level item resolution yet). See BatchEditView.vue's
-// identical block for the full design note.
+// covers both series and season posters (Quirk #100 added real season-level
+// Jellyfin/Emby resolution; sync_render_to_linked_servers() resolves each
+// season on every linked server via find_season_by_index()). See
+// BatchEditView.vue's identical block for the full design note.
 const libraryGroupPref = useLibraryGroupPreference('tv')
 const selectedTargets = ref<Set<string>>(new Set())
 const otherServerOptions = computed(() => libraryGroupPref.options.value.filter(o => o.id !== 'plex-1'))
@@ -235,6 +237,32 @@ async function onPreferredServerChange(serverId: string) {
   const ok = await libraryGroupPref.setPreferred(currentLibrary.value, serverId)
   // forceRefresh=true -- see the identical note in BatchEditView.vue's version.
   if (ok) await fetchMovies(true)
+}
+// The "Send to:" defaults were always sendToPlex=true / selectedTargets={} regardless
+// of which server the currently selected/visible items actually live on -- fine for
+// every pre-Jellyfin install, but a real, silent no-op for any batch whose items
+// aren't Plex-sourced. A first pass at this (Quirk #107) tried deriving the default
+// from the "Show posters from" preference (libraryGroupPref.preferredServerId) --
+// wrong, because that preference only controls which row WINS the display when an
+// item exists on BOTH servers; it says nothing about which server(s) the items
+// actually being batch-processed live on. A Jellyfin-only show (no Plex counterpart
+// at all -- the exact, reported, real-world case) still displays regardless of the
+// preference's value, so deriving from it still left the "Plex" checkbox on and
+// nothing else checked -- the identical silent no-op this was meant to fix.
+//
+// The correct default: check EVERY destination that could possibly apply -- Plex
+// plus every linked server -- and let the render pipeline's own already-established
+// per-item safety nets sort out what's actually deliverable: Quirk #106 makes a
+// checked-but-inapplicable "Send to: Plex" a harmless per-item skip (not an error),
+// and sync_render_to_linked_servers() (Quirk #95/#96) already only syncs to a
+// server a given item's tmdb_id actually resolves on, silently skipping the rest.
+// Checking everything by default costs nothing extra for an item that only lives on
+// one server, and is the only way to guarantee a mixed-source batch (some items
+// Plex, some Jellyfin, some both) actually delivers everywhere it can without the
+// user having to know in advance which item lives where.
+function applySendDefaultsFromPreference() {
+  sendToPlex.value = true
+  selectedTargets.value = new Set(otherServerOptions.value.map(o => o.id))
 }
 const toggleTarget = (serverId: string) => {
   const next = new Set(selectedTargets.value)
@@ -407,14 +435,6 @@ const filteredPresets = computed(() => {
   return presets.value.filter(p => p.template_id === selectedTemplate.value)
 })
 
-const templateNameMap = computed(() => {
-  const map: Record<string, string> = {}
-  templates.value.forEach(t => {
-    map[t.id] = t.name || t.id
-  })
-  return map
-})
-
 const presetNameMap = computed(() => {
   const map: Record<string, string> = {}
   presets.value.forEach(p => {
@@ -422,11 +442,6 @@ const presetNameMap = computed(() => {
   })
   return map
 })
-
-const getTemplateName = (id?: string | null) => {
-  if (!id) return '—'
-  return templateNameMap.value[id] || id
-}
 
 const getPresetName = (id?: string | null) => {
   if (!id) return '—'
@@ -443,9 +458,7 @@ const formatDate = (value?: string | null) => {
 const getTemplatePresetText = (movieKey: string) => {
   const status = posterStatus.value[movieKey]
   const source = status?.sent || status?.saved
-  const tpl = getTemplateName(source?.template_id)
-  const pre = getPresetName(source?.preset_id)
-  return `${tpl}/${pre}`
+  return getPresetName(source?.preset_id)
 }
 
 const getSentText = (movieKey: string) => {
@@ -510,10 +523,17 @@ const fetchPosters = async () => {
   const results = await Promise.all(
     missing.map(async m => {
       try {
-        const posterUrl = `${apiBase}/api/tv-show/${m.key}/poster${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
-        const res = await fetch(posterUrl)
+        // meta=1 -- see the identical, fuller comment in BatchEditView.vue's
+        // own fetchPosters() (Quirk #114): the bare unversioned form used
+        // here previously returned the exact same immutable-cached URL
+        // regardless of content, so the browser kept serving the pre-batch
+        // poster until a hard refresh cleared its own HTTP cache.
+        const metaUrl = `${apiBase}/api/tv-show/${m.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
+        const res = await fetch(metaUrl)
         if (res.ok) {
-          return { key: m.key, url: posterUrl }
+          const data = await res.json()
+          const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+          return { key: m.key, url }
         }
         return { key: m.key, url: null }
       } catch {
@@ -1482,7 +1502,8 @@ onMounted(async () => {
   if (currentLibrary.value) {
     // Load templates/presets first
     await loadTemplatesAndPresets()
-    libraryGroupPref.load(currentLibrary.value)
+    await libraryGroupPref.load(currentLibrary.value)
+    applySendDefaultsFromPreference()
 
     // Then fetch fresh data
     await fetchMovies()
@@ -1533,9 +1554,9 @@ onMounted(async () => {
       <!-- Actions -->
       <div class="actions-row">
         <!-- "Send to:" -- Plex and any linked Jellyfin/Emby server render as peer
-             checkboxes in one row (series poster only -- see the note next to
-             selectedTargets' declaration for why season posters can't sync yet).
-             See BatchEditView.vue's identical block for the full design note. -->
+             checkboxes in one row, covering both series and season posters (see
+             the note next to selectedTargets' declaration). See
+             BatchEditView.vue's identical block for the full design note. -->
         <div class="send-targets-group">
           <span class="targets-label">Send to:</span>
           <label class="checkbox-label">
@@ -1785,7 +1806,7 @@ onMounted(async () => {
               <p class="title">{{ movie.title }}</p>
               <p class="year">{{ movie.year }}</p>
               <div class="status-row">
-                <span class="pill pill-template" :title="`Template/Preset: ${getTemplatePresetText(movie.key)}`">
+                <span class="pill pill-template" :title="`Preset: ${getTemplatePresetText(movie.key)}`">
                   {{ getTemplatePresetText(movie.key) }}
                 </span>
                 <span
