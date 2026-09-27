@@ -5,6 +5,7 @@ import SquareArtModal from '@/components/SquareArtModal.vue'
 import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
 import { usePagedItems } from '@/composables/usePagedItems'
 import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
+import { compareTitles } from '@/services/sortTitle'
 
 type SquareArtItem = {
   key: string
@@ -73,8 +74,8 @@ const displayItems = computed(() => {
   const q = search.value.trim().toLowerCase()
   if (q) list = list.filter((m) => m.title.toLowerCase().includes(q))
   list = [...list].sort((a, b) => {
-    if (sortBy.value === 'title_asc') return a.title.localeCompare(b.title)
-    if (sortBy.value === 'title_desc') return b.title.localeCompare(a.title)
+    if (sortBy.value === 'title_asc') return compareTitles(a.title, b.title)
+    if (sortBy.value === 'title_desc') return compareTitles(b.title, a.title)
     if (sortBy.value === 'added_desc') return (b.addedAt || 0) - (a.addedAt || 0)
     if (sortBy.value === 'added_asc') return (a.addedAt || 0) - (b.addedAt || 0)
     const ay = Number(a.year) || 0

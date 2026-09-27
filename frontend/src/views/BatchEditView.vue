@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
+import { compareTitles } from '@/services/sortTitle'
 import { useNotification } from '@/composables/useNotification'
 import { useMovies } from '../composables/useMovies'
 import { useSettingsStore } from '@/stores/settings'
@@ -363,7 +364,7 @@ const sortedMovies = computed(() => {
   const multiplier = sortOrder.value === 'asc' ? 1 : -1
 
   if (sortBy.value === 'title') {
-    list.sort((a, b) => multiplier * a.title.localeCompare(b.title))
+    list.sort((a, b) => multiplier * compareTitles(a.title, b.title))
   } else if (sortBy.value === 'year') {
     list.sort((a, b) => multiplier * ((Number(a.year) || 0) - (Number(b.year) || 0)))
   } else if (sortBy.value === 'addedAt') {
