@@ -31,6 +31,24 @@ export type LibraryGroupMember = {
   libraryName?: string
 }
 
+export type MediaMirrorConfig = {
+  enabled?: boolean
+  sourceServerId?: string | null
+  targetServerIds?: string[]
+  assetTypes?: string[]
+  scheduleEnabled?: boolean
+  scheduleCron?: string | null
+  lastRunAt?: string | null
+  lastRunStats?: {
+    checked?: number
+    updated?: number
+    skipped?: number
+    unmapped?: number
+    failed?: number
+    unmappedSample?: string[]
+  } | null
+}
+
 export type LibraryGroup = {
   id: string
   name: string
@@ -50,6 +68,11 @@ export type LibraryGroup = {
                                       // shows every server's copy as its own separate card
                                       // -- no also_on/other_servers populated either, since
                                       // nothing was collapsed to cross-reference.
+  mirror?: MediaMirrorConfig | null  // Media Mirror (Quirk #123) -- designates one member
+                                      // as "the truth" and copies its posters/logos/etc to
+                                      // one or more other members. Saved independently of
+                                      // this page's own store save cycle -- MediaMirrorView
+                                      // POSTs it directly to /api/media-mirror/config.
 }
 
 export type PlexSettings = {

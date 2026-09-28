@@ -14,6 +14,7 @@ import OverlayConfigManagerView from './views/OverlayConfigManagerView.vue'
 import LogosView from './views/LogosView.vue'
 import BackdropsView from './views/BackdropsView.vue'
 import SquareArtView from './views/SquareArtView.vue'
+import MediaMirrorView from './views/MediaMirrorView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -26,12 +27,14 @@ export const router = createRouter({
     { path: '/movies/logos', name: 'logos', component: LogosView },
     { path: '/movies/backdrops', name: 'backdrops', component: BackdropsView },
     { path: '/movies/square-art', name: 'square-art', component: SquareArtView },
+    { path: '/movies/media-mirror', name: 'media-mirror', component: MediaMirrorView },
     { path: '/tv-shows', name: 'tv-shows', component: TvShowsView },
     { path: '/tv-shows/batch-edit', name: 'tv-batch-edit', component: TvBatchEditView },
     { path: '/tv-shows/local-assets', name: 'tv-local-assets', component: LocalAssetsView },
     { path: '/tv-shows/logos', name: 'tv-logos', component: LogosView },
     { path: '/tv-shows/backdrops', name: 'tv-backdrops', component: BackdropsView },
     { path: '/tv-shows/square-art', name: 'tv-square-art', component: SquareArtView },
+    { path: '/tv-shows/media-mirror', name: 'tv-media-mirror', component: MediaMirrorView },
     { path: '/backup', name: 'backup', component: BackupRestoreView },
     { path: '/templates', name: 'template-manager', component: TemplateManagerView },
     { path: '/overlays', name: 'overlay-config-manager', component: OverlayConfigManagerView },

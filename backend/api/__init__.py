@@ -26,6 +26,7 @@ from . import (
     cleanup,
     media_server,
     media_server_send,
+    media_mirror,
 )
 
 router = APIRouter()
@@ -55,3 +56,4 @@ router.include_router(version_info.router)
 router.include_router(cleanup.router)
 router.include_router(media_server.router)
 router.include_router(media_server_send.router)
+router.include_router(media_mirror.router)

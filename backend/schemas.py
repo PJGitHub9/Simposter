@@ -233,6 +233,25 @@ class LibraryGroupMember(BaseModel):
                             # UI can show a name without a live per-server lookup.
 
 
+class MediaMirrorConfig(BaseModel):
+    """Media Mirror (Quirk #123) -- designates one member of a LibraryGroup as
+    "the truth" and one or more other members as mirror targets, so the
+    same poster/logo/backdrop/square-art a user maintains on their primary
+    server automatically gets copied to every other linked server, instead
+    of each server's art drifting independently. Nested directly on the
+    owning LibraryGroup (not a separate top-level settings list) -- mirroring
+    is inherently a property of one specific group's membership, matching
+    how mergeItems/preferredServerId already live on the group itself."""
+    enabled: bool = False
+    sourceServerId: Optional[str] = None
+    targetServerIds: List[str] = Field(default_factory=list)
+    assetTypes: List[str] = Field(default_factory=list)  # subset of poster/logo/backdrop/square_art
+    scheduleEnabled: bool = False
+    scheduleCron: Optional[str] = None
+    lastRunAt: Optional[str] = None
+    lastRunStats: Optional[dict] = None  # {"checked", "updated", "skipped", "unmapped", "failed"}
+
+
 class LibraryGroup(BaseModel):
     """A user-defined set of libraries across different media servers that
     represent 'the same logical library' -- e.g. Plex 'Movies' + Jellyfin
@@ -269,6 +288,7 @@ class LibraryGroup(BaseModel):
                               # own precedent -- a user may want one group merged and
                               # another kept separate. See CLAUDE.md's Jellyfin-integration
                               # Quirks.
+    mirror: Optional[MediaMirrorConfig] = None
 
 
 class UISettings(BaseModel):

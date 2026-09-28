@@ -2852,6 +2852,37 @@ def set_library_group_preferred_server(server_id: str, library_id: str, media_ty
     return updated_group
 
 
+def set_library_group_mirror_config(server_id: str, library_id: str, media_type: str, mirror_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Updates just one Library Group's `mirror` config in place and saves
+    immediately (Quirk #123's Media Mirror feature) -- same "identify the
+    group via a (server_id, library_id, media_type) triple, mutate one
+    field, save now" pattern as set_library_group_preferred_server() above,
+    since Media Mirror is edited from its own dedicated view (routed the
+    same way Logos/Backdrops/Square Art already are), not gated behind
+    Settings' own Save button. `mirror_config` replaces the group's whole
+    `mirror` dict wholesale (the frontend always sends the complete object,
+    matching this project's established settings-save convention -- Quirk
+    #84's own round-trip test caught a bare-partial-payload bug from
+    assuming otherwise). Returns the updated group dict, or None if no group
+    matches."""
+    settings_row = get_ui_settings() or {}
+    groups = settings_row.get("libraryGroups") or []
+    updated_group = None
+    for group in groups:
+        if group.get("mediaType") != media_type:
+            continue
+        members = group.get("members") or []
+        if any(m.get("serverId") == server_id and m.get("libraryId") == str(library_id) for m in members):
+            group["mirror"] = mirror_config
+            updated_group = group
+            break
+    if updated_group is None:
+        return None
+    settings_row["libraryGroups"] = groups
+    save_ui_settings(settings_row)
+    return updated_group
+
+
 def get_cached_tv_shows_multi(pairs: List[tuple], preferred_server_id: Optional[str] = None, merge_items: bool = True) -> List[Dict[str, Any]]:
     """TV mirror of get_cached_movies_multi() -- see its docstring and
     _dedupe_by_tmdb_id()'s for the Library Group union + de-duplication
@@ -2881,6 +2912,66 @@ def get_cached_tv_shows_multi(pairs: List[tuple], preferred_server_id: Optional[
             items = [item for item in items if item.get("server_id") == preferred_server_id]
         return items
     return _dedupe_by_tmdb_id(items, preferred_server_id or "plex-1")
+
+
+def _build_mirror_mapping(items: List[Dict[str, Any]], source_server_id: str, target_server_ids: List[str]) -> List[Dict[str, Any]]:
+    """Groups a Library Group's raw (unmerged, cached) items by tmdb_id and
+    resolves, for each item present on the mirror's source server, which
+    rating_key (if any) represents the same title on each configured target
+    server -- the "confirm mappings" data Media Mirror's UI shows directly
+    (Quirk #123). Only items actually present on `source_server_id` are
+    included; a title that exists on a target but not the source isn't this
+    mirror's concern (nothing to copy FROM). An item with no tmdb_id at all
+    can never resolve to anything on another server (matching this app's
+    other tmdb_id-matching features, Quirk #67/#120) and is still reported,
+    with every target left unmapped, so it's visible as needing attention
+    rather than silently dropped from the mapping view entirely."""
+    by_tmdb: Dict[Any, List[Dict[str, Any]]] = {}
+    no_tmdb_from_source: List[Dict[str, Any]] = []
+    for item in items:
+        tmdb_id = item.get("tmdb_id")
+        if not tmdb_id:
+            if item.get("server_id") == source_server_id:
+                no_tmdb_from_source.append(item)
+            continue
+        by_tmdb.setdefault(tmdb_id, []).append(item)
+
+    mapping: List[Dict[str, Any]] = []
+    for tmdb_id, group in by_tmdb.items():
+        source_item = next((g for g in group if g.get("server_id") == source_server_id), None)
+        if not source_item:
+            continue
+        targets: Dict[str, Optional[str]] = {}
+        for target_id in target_server_ids:
+            match = next((g for g in group if g.get("server_id") == target_id), None)
+            targets[target_id] = match.get("rating_key") if match else None
+        mapping.append({
+            "tmdb_id": tmdb_id,
+            "source_rating_key": source_item.get("rating_key"),
+            "title": source_item.get("title"),
+            "year": source_item.get("year"),
+            "targets": targets,
+        })
+
+    for item in no_tmdb_from_source:
+        mapping.append({
+            "tmdb_id": None,
+            "source_rating_key": item.get("rating_key"),
+            "title": item.get("title"),
+            "year": item.get("year"),
+            "targets": {t: None for t in target_server_ids},
+        })
+    return mapping
+
+
+def get_movie_mirror_mapping(pairs: List[tuple], source_server_id: str, target_server_ids: List[str]) -> List[Dict[str, Any]]:
+    """Media Mirror's movie mapping (Quirk #123) -- see _build_mirror_mapping()."""
+    return _build_mirror_mapping(get_cached_movies_multi(pairs, merge_items=False), source_server_id, target_server_ids)
+
+
+def get_tv_mirror_mapping(pairs: List[tuple], source_server_id: str, target_server_ids: List[str]) -> List[Dict[str, Any]]:
+    """Media Mirror's TV mapping (Quirk #123) -- see _build_mirror_mapping()."""
+    return _build_mirror_mapping(get_cached_tv_shows_multi(pairs, merge_items=False), source_server_id, target_server_ids)
 
 
 def get_cached_tv_show(rating_key: str) -> Optional[Dict[str, Any]]:
