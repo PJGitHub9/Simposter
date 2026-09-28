@@ -306,6 +306,53 @@ function runPlexOptimizeDb() {
   if (!confirm("Start Plex's Optimize Database operation?")) return
   runPlexActionFor('optimize-db', plexOptimizeState)
 }
+
+// --- Simposter's own SQLite database (distinct from Plex's Optimize Database
+// above, which only ever touches Plex's own server-side DB) ------------------
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const dbStats = ref<{ file_size_bytes: number; reclaimable_bytes: number } | null>(null)
+const dbVacuumState = ref<PlexActionState>('idle')
+const dbVacuumResult = ref<string | null>(null)
+
+async function loadDbStats() {
+  try {
+    const res = await fetch(`${apiBase}/api/cleanup/database/stats`)
+    if (res.ok) dbStats.value = await res.json()
+  } catch {
+    /* non-critical */
+  }
+}
+
+loadDbStats()
+
+async function runDbVacuum() {
+  if (!dbStats.value) return
+  const reclaimable = formatBytes(dbStats.value.reclaimable_bytes)
+  if (!confirm(`Compact Simposter's database? This reclaims roughly ${reclaimable} of unused space by rewriting the file -- safe and reversible only in the sense that no data is lost, just the file is rewritten.`)) return
+  dbVacuumState.value = 'running'
+  dbVacuumResult.value = null
+  try {
+    const res = await fetch(`${apiBase}/api/cleanup/database/vacuum`, { method: 'POST' })
+    if (res.ok) {
+      const data = await res.json()
+      dbVacuumResult.value = `Reclaimed ${formatBytes(data.bytes_reclaimed)} (${formatBytes(data.bytes_before)} → ${formatBytes(data.bytes_after)})`
+      dbVacuumState.value = 'done'
+      await loadDbStats()
+    } else {
+      dbVacuumState.value = 'error'
+    }
+  } catch {
+    dbVacuumState.value = 'error'
+  } finally {
+    setTimeout(() => { dbVacuumState.value = 'idle' }, 5000)
+  }
+}
 </script>
 
 <template>
@@ -474,6 +521,35 @@ function runPlexOptimizeDb() {
         <button @click="emit('save')" class="primary" :disabled="!unsavedChanges">
           {{ unsavedChanges ? 'Save Changes' : 'No Changes' }}
         </button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Simposter Database Maintenance</h3>
+      <p class="section-description">
+        Simposter's own <code>simposter.db</code> -- distinct from the Plex maintenance below, which only touches
+        Plex's server-side database. Years of settings/cache/history changes leave behind unused free pages in the
+        file that SQLite doesn't reclaim on its own; compacting rewrites the file to reclaim that space.
+      </p>
+
+      <div class="preset-actions">
+        <div class="preset-action-item">
+          <div class="preset-info">
+            <strong>Compact Database</strong>
+            <p v-if="dbStats">
+              Current size: {{ formatBytes(dbStats.file_size_bytes) }}
+              <span v-if="dbStats.reclaimable_bytes > 0"> ({{ formatBytes(dbStats.reclaimable_bytes) }} reclaimable)</span>
+            </p>
+            <p v-if="dbVacuumResult" class="note">{{ dbVacuumResult }}</p>
+          </div>
+          <button
+            @click="runDbVacuum"
+            :disabled="dbVacuumState === 'running' || !dbStats"
+            class="secondary"
+          >
+            {{ dbVacuumState === 'running' ? 'Compacting...' : dbVacuumState === 'done' ? 'Done' : dbVacuumState === 'error' ? 'Failed' : 'Compact Database' }}
+          </button>
+        </div>
       </div>
     </div>
 

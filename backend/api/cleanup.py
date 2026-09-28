@@ -504,3 +504,49 @@ def api_cleanup_plex_optimize_db():
         raise HTTPException(500, f"Failed to start Optimize DB: {e}")
     logger.info("[CLEANUP] Plex Optimize DB started")
     return {"status": "started"}
+
+
+# ---------------------------------------------------------------------------
+# Simposter's own SQLite database -- distinct from the Plex "Optimize DB" call
+# above, which only ever touches Plex's own server-side database. This app's
+# `simposter.db` accumulates free pages from years of ALTER TABLE migrations
+# and cache/history churn (WAL mode never reclaims that space on its own) --
+# VACUUM rewrites the file to reclaim it. Manual/confirmed only, like every
+# other destructive-ish action in this tool -- never run automatically.
+# ---------------------------------------------------------------------------
+
+@router.get("/cleanup/database/stats")
+def api_cleanup_database_stats():
+    import sqlite3
+    conn = sqlite3.connect(str(db.DB_PATH), timeout=10)
+    try:
+        page_count = conn.execute("PRAGMA page_count;").fetchone()[0]
+        freelist_count = conn.execute("PRAGMA freelist_count;").fetchone()[0]
+        page_size = conn.execute("PRAGMA page_size;").fetchone()[0]
+    finally:
+        conn.close()
+    return {
+        "file_size_bytes": page_count * page_size,
+        "reclaimable_bytes": freelist_count * page_size,
+    }
+
+
+@router.post("/cleanup/database/vacuum")
+def api_cleanup_database_vacuum():
+    import sqlite3
+    before = Path(db.DB_PATH).stat().st_size
+    # VACUUM can't run inside a transaction and needs its own connection --
+    # reusing the app's pooled connection here would risk a "cannot VACUUM
+    # from within a transaction" error if anything else has one open.
+    conn = sqlite3.connect(str(db.DB_PATH), timeout=30, isolation_level=None)
+    try:
+        conn.execute("VACUUM;")
+        conn.execute("PRAGMA optimize;")
+    except Exception as e:
+        raise HTTPException(500, f"VACUUM failed: {e}")
+    finally:
+        conn.close()
+    after = Path(db.DB_PATH).stat().st_size
+    logger.info("[CLEANUP] Database VACUUM: %s -> %s (%s reclaimed)",
+                _human_bytes(before), _human_bytes(after), _human_bytes(max(0, before - after)))
+    return {"bytes_before": before, "bytes_after": after, "bytes_reclaimed": max(0, before - after)}

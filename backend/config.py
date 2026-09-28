@@ -304,13 +304,30 @@ class RedactingFormatter(logging.Formatter):
             redacted = redacted.replace(settings.TMDB_API_KEY, settings.TMDB_API_KEY[:4] + "***REDACTED***")
         return redacted
 
+# High-frequency UI progress-polling endpoints (batch/scan/backup progress bars,
+# polled every 200ms-3s while an operation runs) add zero diagnostic value to the
+# access log and drown out everything else in it -- dropped entirely below,
+# regardless of configured LOG_LEVEL, rather than just downgraded to DEBUG.
+_NOISY_POLL_PATHS = (
+    "/api/batch-progress",
+    "/api/backup/progress",
+    "/api/scan-progress",
+)
+
 class APILogDowngradeFilter(logging.Filter):
-    """Force uvicorn access logs to DEBUG level so they don't spam INFO."""
+    """Force uvicorn access logs to DEBUG level so they don't spam INFO,
+    and drop known high-frequency polling requests entirely."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name.startswith("uvicorn"):
             record.levelname = "DEBUG"
             record.levelno = logging.DEBUG
+            try:
+                msg = record.getMessage()
+            except Exception:
+                msg = ""
+            if any(p in msg for p in _NOISY_POLL_PATHS):
+                return False
         return True
 
 logger = logging.getLogger("simposter")
