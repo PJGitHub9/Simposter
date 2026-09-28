@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 import requests
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
 from .. import cache, database as db
 from .art_cache import make_art_cache
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
@@ -513,13 +513,18 @@ def _get_plex_collections(lib_ids: Optional[List[str]] = None) -> List[dict]:
 
 
 @router.get("/movies", response_model=List[Movie])
-def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None, deduplicate: bool = False):
+def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str = None, server_id: str = "plex-1", deduplicate: bool = False):
     """
     Return movies from cache. Always returns from cache - use /scan-library to refresh.
     The force_refresh parameter is deprecated but kept for backwards compatibility.
 
     Args:
         deduplicate: If True, removes duplicate movies with the same TMDb ID (keeps most recently added)
+        server_id: which server `library_id` belongs to (Phase 8a) -- defaults to
+            "plex-1" so every existing caller/URL is byte-identical to before this
+            param existed. Only matters when `library_id` is itself a member of a
+            Library Group; a standalone library_id with no group already resolves
+            correctly via the plain-filter fallback below regardless of server.
     """
     # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
     if library_id in ("default", ""):
@@ -531,10 +536,15 @@ def api_movies(force_refresh: bool = False, max_age: int = 900, library_id: str 
     # library with no links returns None here and falls through to the normal,
     # unmodified single-library path -- zero behavior change for every install
     # that's never linked anything.
-    group_members = get_library_group_members("plex-1", library_id, "movie") if library_id else None
+    group_members = get_library_group_members(server_id, library_id, "movie") if library_id else None
     if group_members:
-        preferred_server = get_library_group_preferred_server("plex-1", library_id, "movie") or "plex-1"
-        cached = db.get_cached_movies_multi(group_members, preferred_server)
+        # Not coalesced to 'plex-1' here -- get_cached_movies_multi() needs the raw
+        # None to tell "no merge-winner preference set" apart from "filter to only
+        # plex-1's items" when mergeItems is off (Quirk #121). It still resolves
+        # None to 'plex-1' itself for the merge-winner case internally.
+        preferred_server = get_library_group_preferred_server(server_id, library_id, "movie")
+        merge_enabled = get_library_group_merge_enabled(server_id, library_id, "movie")
+        cached = db.get_cached_movies_multi(group_members, preferred_server, merge_enabled)
     else:
         # Always return from cache (which includes labels populated by scans)
         cached = cache.get_cached_movies(library_id=library_id)
@@ -1293,9 +1303,18 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         processed = 0
         movie_cache_by_lib = {}
 
-        # Bulk fetch labels for all movies to avoid N+1 queries
+        # Bulk fetch labels for all movies to avoid N+1 queries. Also extracts tmdb_id
+        # from the same metadata response (no extra network call) -- previously this
+        # scan never resolved tmdb_id at all, leaving it NULL on every movie_cache row
+        # until a user happened to open that specific movie in the manual editor
+        # (get_movie_tmdb_id()'s own cache.update_tmdb() side effect was the only
+        # writer). That silently broke anything keyed on tmdb_id for a never-opened
+        # item -- the reuseCachedPosterDays grace period (Quirk #41) and, once a
+        # second server is linked, cross-server merge/dedup (Quirk #67/#120) both
+        # depend on it. See CLAUDE.md Quirk #120's follow-up for the real report.
         movie_keys = [movie.key for movie in movies]
         bulk_labels = {}
+        bulk_tmdb_ids = {}
         if movie_keys:
             try:
                 logger.info(f"[SCAN] Bulk fetching labels for {len(movie_keys)} movies")
@@ -1311,6 +1330,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                             if tag:
                                 labels_list.append(tag)
                         bulk_labels[movie_key] = labels_list
+                        bulk_tmdb_ids[movie_key] = extract_tmdb_id_from_metadata(r.text)
                     except Exception as e:
                         logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
                         bulk_labels[movie_key] = []
@@ -1437,12 +1457,14 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "title": movie.title,
                 "year": movie.year,
                 "added_at": movie.addedAt,
+                "tmdb_id": bulk_tmdb_ids.get(movie.key),
                 "poster_url": poster_results.get(movie.key),
                 "logo_url": logo_results.get(movie.key),
                 "art_url": art_results.get(movie.key),
                 "square_art_url": square_art_results.get(movie.key),
                 "labels": bulk_labels.get(movie.key, []),
                 "library_id": lib_id,
+                "edition": getattr(movie, "edition", None),
             })
 
             processed += 1
@@ -1559,11 +1581,33 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch labels for TV show {show.get('key')}: {e}")
 
+            # Resolve tmdb_id/tvdb_id from Plex's own GUID metadata -- previously the
+            # TV scan never populated either, only the manual editor's own per-item
+            # api_tv_show_tmdb() lookup did, so a show never opened in the editor had
+            # tmdb_id=NULL forever, silently breaking reuseCachedPosterDays and
+            # cross-server merge/dedup for it (see the matching movie-scan comment
+            # above, and CLAUDE.md Quirk #120). Deliberately skips the TVDb-external-id
+            # fallback api_tv_show_tmdb() does when tvdb_id isn't directly in the Plex
+            # GUIDs -- that's a real TMDb API call per show, too heavy for every item
+            # in a bulk scan; opening the show once in the editor still fills it in.
+            tmdb_id = None
+            tvdb_id = None
+            try:
+                url = f"{settings.PLEX_URL}/library/metadata/{show.get('key')}"
+                r = plex_session.get(url, headers=plex_headers(), timeout=10)
+                r.raise_for_status()
+                tmdb_id = extract_tmdb_id_from_metadata(r.text)
+                tvdb_id = extract_tvdb_id_from_metadata(r.text)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch tmdb/tvdb id for TV show {show.get('key')}: {e}")
+
             tv_cache_by_lib[lib_id].append({
                 "rating_key": show.get("key"),
                 "title": show.get("title"),
                 "year": show.get("year"),
                 "added_at": show.get("addedAt"),
+                "tmdb_id": tmdb_id,
+                "tvdb_id": tvdb_id,
                 "poster_url": poster_url,
                 "logo_url": logo_url,
                 "art_url": art_url,

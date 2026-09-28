@@ -29,6 +29,8 @@ const selectedItem = ref<LogoItem | null>(null)
 
 const isTV = computed(() => route.name === 'tv-logos')
 const libraryId = computed(() => (route.query.library as string) || '')
+// Phase 8a -- see App.vue's resolveLibraryTarget() for where this comes from.
+const serverId = computed(() => (route.query.server as string) || '')
 
 // Same "Show posters from" live-preference control Movies/TV Shows already
 // have (Quirk #85) -- this page's `logo_url` comes from the exact same
@@ -89,7 +91,7 @@ watch([filter, search, sortBy, filterLabel], resetPage)
 
 function refresh() {
   failedImages.value = new Set()
-  fetchItems(isTV.value, libraryId.value)
+  fetchItems(isTV.value, libraryId.value, undefined, serverId.value)
 }
 
 function openEditor(item: LogoItem) {

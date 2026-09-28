@@ -31,6 +31,8 @@ const selectedItem = ref<BackdropItem | null>(null)
 
 const isTV = computed(() => route.name === 'tv-backdrops')
 const libraryId = computed(() => (route.query.library as string) || '')
+// Phase 8a -- see App.vue's resolveLibraryTarget() for where this comes from.
+const serverId = computed(() => (route.query.server as string) || '')
 
 // Same "Show posters from" live-preference control Movies/TV Shows already
 // have (Quirk #85) -- this page's `art_url` comes from the exact same
@@ -97,7 +99,7 @@ async function refresh() {
   refreshingList.value = true
   failedImages.value = new Set()
   try {
-    await fetchItems(isTV.value, libraryId.value)
+    await fetchItems(isTV.value, libraryId.value, undefined, serverId.value)
   } finally {
     refreshingList.value = false
   }

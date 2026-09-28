@@ -1010,6 +1010,42 @@ def init_database():
         except Exception as media_servers_err:
             logger.warning(f"[DB] Could not seed mediaServers: {media_servers_err}")
 
+        # Scrub the plex-1 mediaServers entry's url/token fields -- confirmed dead
+        # data (verified directly by reading PlexClient/registry.py, not assumed):
+        # the migration seed above writes a real url/token into that entry once, but
+        # nothing anywhere ever reads them back out again -- PlexClient's every real
+        # method always uses settings.PLEX_URL/PLEX_TOKEN directly (Quirk #58's own
+        # documented limitation), never self.url/self.token, and the Settings UI's
+        # primary Plex card writes edits straight into settings.plex, never back into
+        # this entry (Quirk #79). Left in place, these fields are actively
+        # misleading -- they look like a live value but silently go stale the moment
+        # a user edits their real Plex URL/token anywhere else, forever, since
+        # nothing ever refreshes them. Idempotent (a no-op once already cleaned) --
+        # matches the retry-queue abandoned-row DELETE precedent (Quirk #24), no
+        # separate has-run flag needed.
+        try:
+            row = cursor.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+            if row and row["value"]:
+                servers = json.loads(row["value"])
+                changed = False
+                for entry in servers:
+                    if entry.get("id") == "plex-1" and entry.get("type") == "plex":
+                        if entry.get("url"):
+                            entry["url"] = ""
+                            changed = True
+                        if "token" in entry:
+                            del entry["token"]
+                            changed = True
+                if changed:
+                    cursor.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'mediaServers'",
+                        (json.dumps(servers),)
+                    )
+                    conn.commit()
+                    logger.info("[DB] Cleared unused url/token from the plex-1 mediaServers entry (dead data, never read -- see CLAUDE.md)")
+        except Exception as scrub_err:
+            logger.warning(f"[DB] Could not scrub plex-1 mediaServers entry: {scrub_err}")
+
         # Seed libraryGroups by converting each existing Plex libraryMappings /
         # tvShowLibraryMappings entry into a single-member LibraryGroup (server_id
         # 'plex-1', matching the mediaServers seed above) -- purely additive: the
@@ -2298,19 +2334,35 @@ def _dedupe_by_tmdb_id(items: List[Dict[str, Any]], preferred_server_id: str = "
     return no_tmdb + deduped
 
 
-def get_cached_movies_multi(pairs: List[tuple], preferred_server_id: str = "plex-1") -> List[Dict[str, Any]]:
+def get_cached_movies_multi(pairs: List[tuple], preferred_server_id: Optional[str] = None, merge_items: bool = True) -> List[Dict[str, Any]]:
     """Like get_cached_movies(), but for a Library Group spanning several
     (server_id, library_id) pairs (Quirk #62/#64) -- unions every pair's rows
-    into one list, then de-duplicates by tmdb_id (_dedupe_by_tmdb_id()) so the
-    same movie present on more than one linked server shows as one card, not
-    several. `preferred_server_id` is the caller's already-resolved choice for
-    THIS specific group (config.py's get_library_group_preferred_server(), or
-    'plex-1' when the group has no override set) -- this function itself has
-    no settings lookup of its own anymore; a single global preference used to
-    live here (Quirk #74's automation.preferredPosterServer) but was replaced
-    by a per-group one (schemas.py's LibraryGroup.preferredServerId), since
-    one global choice wasn't granular enough once an install has more than
-    one linked group at once."""
+    into one list, then (when `merge_items` is True, the default) de-duplicates
+    by tmdb_id (_dedupe_by_tmdb_id()) so the same movie present on more than
+    one linked server shows as one card, not several. `preferred_server_id` is
+    the caller's already-resolved choice for THIS specific group (config.py's
+    get_library_group_preferred_server(), or None when the group has no
+    override set) -- this function itself has no settings lookup of its own
+    anymore; a single global preference used to live here (Quirk #74's
+    automation.preferredPosterServer) but was replaced by a per-group one
+    (schemas.py's LibraryGroup.preferredServerId), since one global choice
+    wasn't granular enough once an install has more than one linked group at
+    once.
+
+    `preferred_server_id` has TWO different meanings depending on
+    `merge_items`, matching the same one stored field's dual role in the
+    frontend's "Show posters from" dropdown (Quirk #121):
+      - merge_items=True (the default): the merge-WINNER. Falls back to
+        'plex-1' when unset, matching this function's original hardcoded
+        behavior -- see _dedupe_by_tmdb_id().
+      - merge_items=False (LibraryGroup.mergeItems, Quirk #120): a FILTER.
+        None/empty means "all" (every linked server's copy shows as its own
+        card, unfiltered -- the original no-merge behavior). A real
+        server_id means "only this server's items" -- every other linked
+        server's copy of that same union is dropped entirely before
+        returning, with no also_on/other_servers populated either way
+        (there's nothing to cross-reference once nothing was ever unioned
+        for display)."""
     if not pairs:
         return []
     with get_db() as conn:
@@ -2327,7 +2379,12 @@ def get_cached_movies_multi(pairs: List[tuple], preferred_server_id: str = "plex
         """, params)
         rows = cursor.fetchall()
 
-    return _dedupe_by_tmdb_id([_movie_row_to_dict(row) for row in rows], preferred_server_id)
+    items = [_movie_row_to_dict(row) for row in rows]
+    if not merge_items:
+        if preferred_server_id:
+            items = [item for item in items if item.get("server_id") == preferred_server_id]
+        return items
+    return _dedupe_by_tmdb_id(items, preferred_server_id or "plex-1")
 
 
 def get_movie_cache_stats(library_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2795,11 +2852,13 @@ def set_library_group_preferred_server(server_id: str, library_id: str, media_ty
     return updated_group
 
 
-def get_cached_tv_shows_multi(pairs: List[tuple], preferred_server_id: str = "plex-1") -> List[Dict[str, Any]]:
+def get_cached_tv_shows_multi(pairs: List[tuple], preferred_server_id: Optional[str] = None, merge_items: bool = True) -> List[Dict[str, Any]]:
     """TV mirror of get_cached_movies_multi() -- see its docstring and
     _dedupe_by_tmdb_id()'s for the Library Group union + de-duplication
-    behavior, and the `preferred_server_id` parameter's own docstring for why
-    this no longer reads a global setting itself."""
+    behavior, the `preferred_server_id` parameter's own docstring for the
+    dual merge-winner/filter meaning it has depending on `merge_items`
+    (Quirk #121), and `merge_items` for the per-group opt-out of the dedup
+    step entirely."""
     if not pairs:
         return []
     with get_db() as conn:
@@ -2816,7 +2875,12 @@ def get_cached_tv_shows_multi(pairs: List[tuple], preferred_server_id: str = "pl
         """, params)
         rows = cursor.fetchall()
 
-    return _dedupe_by_tmdb_id([_tv_row_to_dict(row) for row in rows], preferred_server_id)
+    items = [_tv_row_to_dict(row) for row in rows]
+    if not merge_items:
+        if preferred_server_id:
+            items = [item for item in items if item.get("server_id") == preferred_server_id]
+        return items
+    return _dedupe_by_tmdb_id(items, preferred_server_id or "plex-1")
 
 
 def get_cached_tv_show(rating_key: str) -> Optional[Dict[str, Any]]:

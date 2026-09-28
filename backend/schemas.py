@@ -260,6 +260,15 @@ class LibraryGroup(BaseModel):
                                               # group at once; this is scoped per-group
                                               # instead, edited from that group's own
                                               # Linked Libraries section in Settings.
+    mergeItems: bool = True  # Whether a title present on more than one of this group's
+                              # linked servers collapses into a single card (True, the
+                              # original/default behavior -- database.py's
+                              # _dedupe_by_tmdb_id()) or shows as one card per server
+                              # (False -- every server's copy of an item stays its own
+                              # card). Per-group, not global, matching preferredServerId's
+                              # own precedent -- a user may want one group merged and
+                              # another kept separate. See CLAUDE.md's Jellyfin-integration
+                              # Quirks.
 
 
 class UISettings(BaseModel):

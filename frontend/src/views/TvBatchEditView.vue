@@ -131,6 +131,8 @@ const currentSeasonIndex = ref<number>(0)
 // Get current library from route query params
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || '')
+// Phase 8a -- see App.vue's resolveLibraryTarget() for where this comes from.
+const currentServer = computed(() => (route.query.server as string) || '')
 
 // Label cache (library-specific)
 const getLabelsCacheKey = () => {
@@ -227,7 +229,11 @@ const sendLogos = ref(false)
 // BatchEditView.vue's identical block for the full design note.
 const libraryGroupPref = useLibraryGroupPreference('tv')
 const selectedTargets = ref<Set<string>>(new Set())
-const otherServerOptions = computed(() => libraryGroupPref.options.value.filter(o => o.id !== 'plex-1'))
+// Excludes both 'plex-1' and '' -- the latter is the "All" filter pseudo-option
+// useLibraryGroupPreference adds to `options` when a group has merging turned
+// off (Quirk #121); it's a display-filter choice, never a real, sendable
+// server, so it must never leak into this send-target checkbox list.
+const otherServerOptions = computed(() => libraryGroupPref.options.value.filter(o => o.id !== 'plex-1' && o.id !== ''))
 const hasAnySendTarget = computed(() => sendToPlex.value || selectedTargets.value.size > 0)
 // Which server's poster/identity the grid displays (Quirk #85's exact pattern,
 // reused from MoviesView.vue/BatchEditView.vue) -- re-fetches so merged items
@@ -499,7 +505,10 @@ const fetchMovies = async (forceRefresh = false) => {
   error.value = null
   try {
     if (!tvShowsLoadedFlag.value || forceRefresh) {
-      const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+      const tvParams = new URLSearchParams()
+      if (currentLibrary.value) tvParams.set('library_id', currentLibrary.value)
+      if (currentServer.value) tvParams.set('server_id', currentServer.value)
+      const res = await fetch(`${apiBase}/api/tv-shows${tvParams.toString() ? '?' + tvParams.toString() : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = (await res.json()) as TvShow[]
       tvShowsCache.value = data

@@ -59,12 +59,14 @@ def refresh_from_list(movies):
                     "title": m.get("title"),
                     "year": m.get("year"),
                     "added_at": m.get("added_at") or m.get("addedAt"),
+                    "tmdb_id": m.get("tmdb_id"),
                     "poster_url": m.get("poster_url"),
                     "logo_url": m.get("logo_url"),
                     "art_url": m.get("art_url"),
                     "square_art_url": m.get("square_art_url"),
                     "labels": m.get("labels") or [],
                     "library_id": m.get("library_id") or "default",
+                    "edition": m.get("edition"),
                 })
             else:
                 # Movie object

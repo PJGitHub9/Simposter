@@ -398,12 +398,13 @@ const captureSettingsSnapshot = () => {
     appriseNotifyManual: localAppriseNotifyManual.value,
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
-    // mediaServers/preferredPosterServer are bound directly to the store
-    // (no local staging ref, unlike everything else here -- Quirk #79) so
-    // read straight from it rather than from a localXxx ref that doesn't
-    // exist for these two fields.
+    // mediaServers/preferredPosterServer/libraryGroups are bound directly to
+    // the store (no local staging ref, unlike everything else here -- Quirk
+    // #79/#119) so read straight from it rather than from a localXxx ref
+    // that doesn't exist for these fields.
     mediaServers: JSON.parse(JSON.stringify(settings.mediaServers.value)),
-    preferredPosterServer: settings.automation.value.preferredPosterServer
+    preferredPosterServer: settings.automation.value.preferredPosterServer,
+    libraryGroups: JSON.parse(JSON.stringify(settings.libraryGroups.value))
   })
   hasUnsavedChanges.value = false
 
@@ -493,7 +494,8 @@ const checkForChanges = () => {
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
     mediaServers: settings.mediaServers.value,
-    preferredPosterServer: settings.automation.value.preferredPosterServer
+    preferredPosterServer: settings.automation.value.preferredPosterServer,
+    libraryGroups: settings.libraryGroups.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -518,10 +520,19 @@ const checkForChanges = () => {
   sectionsWithChanges.value.plexConnection =
     localPlexUrl.value !== initial.plexUrl ||
     localPlexToken.value !== initial.plexToken
+  // libraryGroups (Quirk #119's unified group model) also needs comparing per
+  // media type -- adding/removing a group, linking/unlinking a Jellyfin/Emby
+  // member, or editing a Plex-less group's own settings all happen directly
+  // against the store, not localLibraries/localTvShowLibraries, so those two
+  // alone would miss exactly the "add/remove groups" case the user reported.
+  const initialGroups: any[] = initial.libraryGroups || []
+  const byMediaType = (list: any[], mediaType: string) => list.filter(g => g && g.mediaType === mediaType)
   sectionsWithChanges.value.movieLibraries =
-    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries)
+    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries) ||
+    JSON.stringify(byMediaType(settings.libraryGroups.value, 'movie')) !== JSON.stringify(byMediaType(initialGroups, 'movie'))
   sectionsWithChanges.value.tvLibraries =
-    JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries)
+    JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries) ||
+    JSON.stringify(byMediaType(settings.libraryGroups.value, 'tv')) !== JSON.stringify(byMediaType(initialGroups, 'tv'))
   sectionsWithChanges.value.mediaServers =
     JSON.stringify(settings.mediaServers.value) !== JSON.stringify(initial.mediaServers) ||
     settings.automation.value.preferredPosterServer !== initial.preferredPosterServer
@@ -1294,7 +1305,12 @@ watch([
   // already gets (Quirk #79's follow-up -- the user asked for this
   // explicitly after noticing it was missing).
   () => settings.mediaServers.value,
-  () => settings.automation.value.preferredPosterServer
+  () => settings.automation.value.preferredPosterServer,
+  // Same reasoning as mediaServers above -- LibraryGroupCard.vue (Quirk #119)
+  // writes straight to settings.libraryGroups directly, no local staging ref,
+  // so adding/removing/editing a group there needs to be watched off the
+  // store itself too, or it silently never flips the unsaved-changes flag.
+  () => settings.libraryGroups.value
 ], () => {
   if (watchersEnabled.value) {
     checkForChanges()

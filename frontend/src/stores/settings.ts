@@ -44,6 +44,12 @@ export type LibraryGroup = {
                                       // grid finds the same title on more than one server
                                       // (backend's _dedupe_by_tmdb_id()) -- replaces the
                                       // old global automation.preferredPosterServer.
+  mergeItems?: boolean               // True (default) collapses a title present on more
+                                      // than one linked server into a single card (the
+                                      // behavior preferredServerId above governs). False
+                                      // shows every server's copy as its own separate card
+                                      // -- no also_on/other_servers populated either, since
+                                      // nothing was collapsed to cross-reference.
 }
 
 export type PlexSettings = {

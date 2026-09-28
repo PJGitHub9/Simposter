@@ -32,6 +32,8 @@ const selectedItem = ref<SquareArtItem | null>(null)
 
 const isTV = computed(() => route.name === 'tv-square-art')
 const libraryId = computed(() => (route.query.library as string) || '')
+// Phase 8a -- see App.vue's resolveLibraryTarget() for where this comes from.
+const serverId = computed(() => (route.query.server as string) || '')
 
 // Same "Show posters from" live-preference control Movies/TV Shows already
 // have (Quirk #85). `mediaType` is fixed at this component's own creation
@@ -49,8 +51,15 @@ async function onPreferredServerChange(serverId: string) {
 // confirmation), so every tile would show as permanently "missing" if the
 // preferred server for this library is set to anything but Plex. Rather
 // than render a grid that can never show anything real, hide it entirely
-// and say so plainly.
-const nonPlexSelected = computed(() => libraryGroupPref.hasChoice.value && libraryGroupPref.preferredServerId.value !== 'plex-1')
+// and say so plainly. Excludes '' (the "All" filter option a merge-disabled
+// group's dropdown gets, Quirk #121) -- "All" still includes Plex's own
+// items, which DO have square art, so it must never trip this guard the
+// same way a specific non-Plex server selection does.
+const nonPlexSelected = computed(() =>
+  libraryGroupPref.hasChoice.value &&
+  libraryGroupPref.preferredServerId.value !== 'plex-1' &&
+  libraryGroupPref.preferredServerId.value !== ''
+)
 
 const withSquareArt = computed(() => items.value.filter((m) => m.square_art_url))
 const withoutSquareArt = computed(() => items.value.filter((m) => !m.square_art_url))
@@ -103,7 +112,7 @@ function refresh() {
     addedAt: m.addedAt,
     labels: m.labels || [],
     server_id: m.server_id,
-  }))
+  }), serverId.value)
 }
 
 function openModal(item: SquareArtItem) {

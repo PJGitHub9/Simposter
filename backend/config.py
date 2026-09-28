@@ -1435,3 +1435,17 @@ def get_library_group_preferred_server(server_id: str, library_id: str, media_ty
     if not group:
         return None
     return group.get("preferredServerId") or None
+
+
+def get_library_group_merge_enabled(server_id: str, library_id: str, media_type: str) -> bool:
+    """The specific group's own mergeItems setting (Quirk #119's follow-up --
+    the user asked for a real per-group choice between "1 poster per item"
+    (merged, the original default) and showing each linked server's copy as
+    its own card). Defaults to True (merge) when there's no group at all, or
+    the group predates this field and has no explicit value -- matching the
+    behavior every existing install already had before this setting existed,
+    so this is a strict no-op unless a group is explicitly opted out."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return True
+    return group.get("mergeItems", True) is not False

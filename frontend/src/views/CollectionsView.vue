@@ -135,6 +135,7 @@ watch(defaultLibraryId, (val, oldVal) => {
       <div>
         <p class="label">&#x1F4DA; Collections</p>
         <h2>{{ libraryLabel }}</h2>
+        <p class="collections-plex-note">Plex only currently</p>
       </div>
       <button @click="refreshCollections" class="refresh-btn" :disabled="loading">
         {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
@@ -193,6 +194,12 @@ watch(defaultLibraryId, (val, oldVal) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.collections-plex-note {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .refresh-btn {

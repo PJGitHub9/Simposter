@@ -32,6 +32,8 @@ const labelInFlight = new Set<string>()
 const tvShowsLoaded = tvShowsLoadedFlag
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || 'default')
+// Phase 8a -- see MoviesView.vue's identical computed for the full reasoning.
+const currentServer = computed(() => (route.query.server as string) || '')
 const libraryGroupPref = useLibraryGroupPreference('tv')
 async function onPreferredServerChange(serverId: string) {
   if (!currentLibrary.value || currentLibrary.value === 'default') return
@@ -344,7 +346,10 @@ const fetchTvShows = async () => {
   error.value = null
   try {
     // Always fetch to ensure we have the correct library's data
-    const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+    const tvShowsParams = new URLSearchParams()
+    if (currentLibrary.value) tvShowsParams.set('library_id', currentLibrary.value)
+    if (currentServer.value) tvShowsParams.set('server_id', currentServer.value)
+    const res = await fetch(`${apiBase}/api/tv-shows${tvShowsParams.toString() ? '?' + tvShowsParams.toString() : ''}`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = (await res.json()) as (TvShow & { labels?: string[] })[]
     // Seed caches from server data when available

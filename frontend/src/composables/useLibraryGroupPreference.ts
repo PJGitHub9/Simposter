@@ -21,6 +21,7 @@ interface GroupMember {
 interface GroupInfo {
   members: GroupMember[]
   preferredServerId: string | null
+  mergeItems?: boolean
 }
 
 export function useLibraryGroupPreference(mediaType: 'movie' | 'tv') {
@@ -29,22 +30,41 @@ export function useLibraryGroupPreference(mediaType: 'movie' | 'tv') {
   const group = ref<GroupInfo | null>(null)
   const saving = ref(false)
 
-  // Options always list the Plex member first (it's the group's structural
-  // anchor -- Quirk #62 -- so it's always present when a group exists at all),
-  // then every other linked member.
+  // Whether this group merges same-title items across its linked servers into
+  // one card (Quirk #120's per-group toggle, Settings -> Libraries). Defaults
+  // true when unset, matching the backend's own get_library_group_merge_enabled()
+  // default -- every existing group before this field existed behaves exactly
+  // as before.
+  const mergeEnabled = computed(() => group.value?.mergeItems !== false)
+
+  // The dropdown's meaning flips depending on mergeEnabled (Quirk #121):
+  //   - merge on:  "which server wins when the same title is found on more
+  //     than one linked server" -- Plex first, then every other member.
+  //   - merge off: a genuine FILTER -- "All" (every linked server's own copy
+  //     shows as its own card, the default) or one specific server (only that
+  //     server's items are shown at all, everything else dropped).
   const options = computed(() => {
     if (!group.value) return []
     const others = group.value.members.filter(m => m.serverId !== 'plex-1')
-    return [
+    const servers = [
       { id: 'plex-1', label: mediaServerLabel('plex-1', settingsStore.mediaServers.value) },
       ...others.map(m => ({ id: m.serverId, label: mediaServerLabel(m.serverId, settingsStore.mediaServers.value) })),
     ]
+    if (mergeEnabled.value) return servers
+    return [{ id: '', label: 'All' }, ...servers]
   })
 
   // Only worth showing the dropdown at all once there's a real choice to make.
   const hasChoice = computed(() => options.value.length > 1)
 
-  const preferredServerId = computed(() => group.value?.preferredServerId || 'plex-1')
+  // Merge mode: unset always means "plex-1" (the established default winner).
+  // Filter mode: unset means "All" (id: '') -- never silently default to
+  // plex-1 here, or turning merge off would look like it also filtered down
+  // to Plex-only, which is not what an unset filter is supposed to mean.
+  const preferredServerId = computed(() => {
+    if (!mergeEnabled.value) return group.value?.preferredServerId || ''
+    return group.value?.preferredServerId || 'plex-1'
+  })
 
   async function load(libraryId: string) {
     group.value = null
@@ -87,5 +107,5 @@ export function useLibraryGroupPreference(mediaType: 'movie' | 'tv') {
     }
   }
 
-  return { group, options, hasChoice, preferredServerId, saving, load, setPreferred }
+  return { group, options, hasChoice, mergeEnabled, preferredServerId, saving, load, setPreferred }
 }

@@ -135,6 +135,8 @@ const currentPage = ref<number>(1)
 // Get current library from route query params
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || '')
+// Phase 8a -- see App.vue's resolveLibraryTarget() for where this comes from.
+const currentServer = computed(() => (route.query.server as string) || '')
 
 // Label cache (library-specific)
 const getLabelsCacheKey = () => {
@@ -229,7 +231,11 @@ const sendLogos = ref(false)
 // MovieBatchRequest.targets' docstring in schemas.py for the full design).
 const libraryGroupPref = useLibraryGroupPreference('movie')
 const selectedTargets = ref<Set<string>>(new Set())
-const otherServerOptions = computed(() => libraryGroupPref.options.value.filter(o => o.id !== 'plex-1'))
+// Excludes both 'plex-1' and '' -- the latter is the "All" filter pseudo-option
+// useLibraryGroupPreference adds to `options` when a group has merging turned
+// off (Quirk #121); it's a display-filter choice, never a real, sendable
+// server, so it must never leak into this send-target checkbox list.
+const otherServerOptions = computed(() => libraryGroupPref.options.value.filter(o => o.id !== 'plex-1' && o.id !== ''))
 const hasAnySendTarget = computed(() => sendToPlex.value || selectedTargets.value.size > 0)
 // Which server's poster/identity the grid displays (Quirk #85's exact pattern,
 // reused from MoviesView.vue) -- re-fetches so merged items resolve under the
@@ -497,6 +503,7 @@ const fetchMovies = async (forceRefresh = false) => {
     if (!moviesLoadedFlag.value || forceRefresh) {
       const params = new URLSearchParams()
       if (currentLibrary.value) params.set('library_id', currentLibrary.value)
+      if (currentServer.value) params.set('server_id', currentServer.value)
       if (settings.deduplicateMovies.value) params.set('deduplicate', 'true')
       const res = await fetch(`${apiBase}/api/movies${params.toString() ? '?' + params.toString() : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)

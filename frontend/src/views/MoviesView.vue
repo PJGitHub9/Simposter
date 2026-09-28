@@ -31,6 +31,10 @@ const labelInFlight = new Set<string>()
 const moviesLoaded = moviesLoadedFlag
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || '')
+// Phase 8a -- which server currentLibrary belongs to. Absent for every existing
+// Plex-derived tab/URL (backend defaults to "plex-1"); set for a Jellyfin/Emby-only
+// tab, see App.vue's resolveLibraryTarget().
+const currentServer = computed(() => (route.query.server as string) || '')
 const libraryGroupPref = useLibraryGroupPreference('movie')
 async function onPreferredServerChange(serverId: string) {
   if (!currentLibrary.value) return
@@ -348,6 +352,7 @@ const fetchMovies = async (forceRefresh = false) => {
     // Always fetch to ensure we have the correct library's data
     const params = new URLSearchParams()
     if (currentLibrary.value) params.set('library_id', currentLibrary.value)
+    if (currentServer.value) params.set('server_id', currentServer.value)
     if (forceRefresh) params.set('force_refresh', 'true')
     if (settings.deduplicateMovies.value) params.set('deduplicate', 'true')
     const url = `${apiBase}/api/movies${params.toString() ? '?' + params.toString() : ''}`

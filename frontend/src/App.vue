@@ -24,18 +24,81 @@ import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
 import { onboardingLaunchRequested } from '@/composables/useOnboardingLauncher'
 
+// Phase 8a -- a LibraryGroup with at least one member but NO Plex member represents a
+// standalone Jellyfin/Emby-only library (created via Settings -> Libraries's "Jellyfin/
+// Emby Libraries" section). Gives each one its own sidebar tab, keyed
+// `movies-group-{id}`/`tv-shows-group-{id}` so handleTabSelect/handleSubmenuClick's
+// existing `tab.replace('movies-', '')`-style parsing naturally yields `group-{id}`,
+// which resolveLibraryTarget() below already knows how to turn into a real
+// {server, library} pair -- no prefix-branching needed at the call sites.
+const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
+  const groups = (settings.libraryGroups.value || []).filter(g =>
+    g.mediaType === mediaType &&
+    (g.members?.length ?? 0) > 0 &&
+    !(g.members || []).some(m => m.serverId === 'plex-1')
+  )
+  const prefix = mediaType === 'movie' ? 'movies' : 'tv-shows'
+  const icon = mediaType === 'movie' ? '\u{1F3AC}' : '\u{1F4FA}'
+  // Square Art is Plex-only (no Jellyfin/Emby equivalent, Quirk #44/#92) -- omit it
+  // from a non-Plex tab's submenu entirely rather than linking to a permanently-empty view.
+  const movieItems: [string, string][] = [
+    ['batch', '\u{270F}\uFE0F Batch Edit'],
+    ['logos', '\u{1F5BC}\uFE0F Logos'],
+    ['backdrops', '\u{1F39E}\uFE0F Backdrops'],
+    ['assets', '\u{1F4C1} Local Assets'],
+    ['backup', '\u{1F4E6} Backup / Restore'],
+  ]
+  const tvItems: [string, string][] = [
+    ['tv-batch', '\u{270F}\uFE0F Batch Edit'],
+    ['tv-logos', '\u{1F5BC}\uFE0F Logos'],
+    ['tv-backdrops', '\u{1F39E}\uFE0F Backdrops'],
+    ['tv-assets', '\u{1F4C1} Local Assets'],
+    ['tv-backup', '\u{1F4E6} Backup / Restore'],
+  ]
+  const items = mediaType === 'movie' ? movieItems : tvItems
+  return groups.map(g => ({
+    key: `${prefix}-group-${g.id}`,
+    label: `${icon} ${g.name || 'Library'}`,
+    submenu: items.map(([k, label]) => ({ key: `${k}-group-${g.id}`, label }))
+  }))
+}
+
+// Resolves a tab-derived `libId` (either a raw Plex library id, as today, or
+// `group-{libraryGroupId}` for a Phase 8a non-Plex tab) into the {library, server}
+// query params a route push needs. Omits `server` entirely for the Plex case so every
+// existing URL/bookmark stays byte-identical (the backend already defaults to "plex-1"
+// when the param is absent).
+const resolveLibraryTarget = (libId: string): { library: string; server?: string } => {
+  if (libId.startsWith('group-')) {
+    const groupId = libId.slice('group-'.length)
+    const group = (settings.libraryGroups.value || []).find(g => g.id === groupId)
+    const member = group?.members?.[0]
+    if (member) return { library: member.libraryId, server: member.serverId }
+  }
+  return { library: libId }
+}
+
 const tabs = computed<MenuItem[]>(() => {
   // Check if Plex is configured
   const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
+  // Phase 8a -- a Jellyfin/Emby-only install (no Plex at all) is no longer locked out
+  // of the app; it just has no Plex-derived tabs below. See onMounted()'s matching gate.
+  const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
 
-  // If Plex not configured, only show Settings
-  if (!plexConfigured) {
+  // If nothing at all is configured, only show Settings
+  if (!anyServerConfigured) {
     return [
       { key: 'settings', label: '\u{2699}\uFE0F Settings' }
     ]
   }
 
-  const libs = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length
+  // The single-library fallback tab only makes sense once Plex itself is actually
+  // configured (it derives its label from Plex's own movieLibraryName setting) -- a
+  // Plex-less install with only Jellyfin/Emby configured gets zero Plex-derived tabs,
+  // its libraries show up via nonPlexGroupTabs() below instead.
+  const libs = !plexConfigured
+    ? []
+    : settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length
     ? settings.plex.value.libraryMappings
     : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
 
@@ -44,7 +107,7 @@ const tabs = computed<MenuItem[]>(() => {
     label: `\u{1F3AC} ${lib.displayName || lib.title || `Library ${idx + 1}`}`,
     submenu: [
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
-      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections (NEW)' },
+      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
       { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
       { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
@@ -53,7 +116,7 @@ const tabs = computed<MenuItem[]>(() => {
     ]
   }))
 
-  const tvLibs = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings.length
+  const tvLibs = plexConfigured && settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings.length
     ? settings.plex.value.tvShowLibraryMappings
     : []
 
@@ -72,7 +135,9 @@ const tabs = computed<MenuItem[]>(() => {
 
   return [
     ...movieTabs,
+    ...nonPlexGroupTabs('movie'),
     ...tvShowTabs,
+    ...nonPlexGroupTabs('tv'),
     { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
     { key: 'overlay-config-manager', label: '\u{1F4D0} Overlay Config' },
     { key: 'history', label: '\u{1F4CB} History' },
@@ -103,6 +168,12 @@ const handleQuickGuideDone = () => {
   const firstLib = settings.plex.value.libraryMappings?.[0]
   if (firstLib?.id) {
     router.push({ name: 'movies', query: { library: firstLib.id } })
+    return
+  }
+  // Phase 8a -- no Plex library at all, fall back to the first Jellyfin/Emby-only group
+  const firstGroup = nonPlexGroupTabs('movie')[0]
+  if (firstGroup) {
+    router.push({ name: 'movies', query: resolveLibraryTarget(firstGroup.key.replace('movies-', '')) })
   } else {
     router.push({ name: 'movies' })
   }
@@ -397,10 +468,10 @@ const handleTabSelect = (tab: TabKey) => {
   }
   if (tab.startsWith('movies-')) {
     const libId = tab.replace('movies-', '')
-    router.push({ name: 'movies', query: { library: libId } })
+    router.push({ name: 'movies', query: resolveLibraryTarget(libId) })
   } else if (tab.startsWith('tv-shows-')) {
     const libId = tab.replace('tv-shows-', '')
-    router.push({ name: 'tv-shows', query: { library: libId } })
+    router.push({ name: 'tv-shows', query: resolveLibraryTarget(libId) })
   } else {
     router.push({ name: tab })
   }
@@ -429,11 +500,14 @@ onMounted(async () => {
     await settings.load()
   }
 
-  // Check if Plex is configured — show onboarding for new users
+  // Check if any server is configured — show onboarding for new users. Phase 8a: an
+  // install with only Jellyfin/Emby configured (no Plex) is no longer redirected to
+  // Settings — matches the tabs computed's identical anyServerConfigured check above.
   const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
+  const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
   if (!settings.onboardingCompleted.value) {
     showOnboarding.value = true
-  } else if (!plexConfigured && route.path !== '/settings') {
+  } else if (!anyServerConfigured && route.path !== '/settings') {
     router.push('/settings')
   }
 
@@ -711,35 +785,37 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
   if (parentKey.startsWith('movies-')) {
     const libId = parentKey.replace('movies-', '')
+    const target = resolveLibraryTarget(libId)
     if (submenuKey.startsWith('batch-')) {
-      router.push({ name: 'batch-edit', query: { library: libId } })
+      router.push({ name: 'batch-edit', query: target })
     } else if (submenuKey.startsWith('collections-')) {
-      router.push({ name: 'collections', query: { library: libId } })
+      router.push({ name: 'collections', query: target })
     } else if (submenuKey.startsWith('logos-')) {
-      router.push({ name: 'logos', query: { library: libId } })
+      router.push({ name: 'logos', query: target })
     } else if (submenuKey.startsWith('backdrops-')) {
-      router.push({ name: 'backdrops', query: { library: libId } })
+      router.push({ name: 'backdrops', query: target })
     } else if (submenuKey.startsWith('square-art-')) {
-      router.push({ name: 'square-art', query: { library: libId } })
+      router.push({ name: 'square-art', query: target })
     } else if (submenuKey.startsWith('assets-')) {
-      router.push({ name: 'local-assets', query: { library: libId } })
+      router.push({ name: 'local-assets', query: target })
     } else if (submenuKey.startsWith('backup-')) {
-      router.push({ name: 'backup', query: { library: libId, type: 'movie' } })
+      router.push({ name: 'backup', query: { ...target, type: 'movie' } })
     }
   } else if (parentKey.startsWith('tv-shows-')) {
     const libId = parentKey.replace('tv-shows-', '')
+    const target = resolveLibraryTarget(libId)
     if (submenuKey.startsWith('tv-batch-')) {
-      router.push({ name: 'tv-batch-edit', query: { library: libId } })
+      router.push({ name: 'tv-batch-edit', query: target })
     } else if (submenuKey.startsWith('tv-logos-')) {
-      router.push({ name: 'tv-logos', query: { library: libId } })
+      router.push({ name: 'tv-logos', query: target })
     } else if (submenuKey.startsWith('tv-backdrops-')) {
-      router.push({ name: 'tv-backdrops', query: { library: libId } })
+      router.push({ name: 'tv-backdrops', query: target })
     } else if (submenuKey.startsWith('tv-square-art-')) {
-      router.push({ name: 'tv-square-art', query: { library: libId } })
+      router.push({ name: 'tv-square-art', query: target })
     } else if (submenuKey.startsWith('tv-assets-')) {
-      router.push({ name: 'tv-local-assets', query: { library: libId } })
+      router.push({ name: 'tv-local-assets', query: target })
     } else if (submenuKey.startsWith('tv-backup-')) {
-      router.push({ name: 'backup', query: { library: libId, type: 'tv-show' } })
+      router.push({ name: 'backup', query: { ...target, type: 'tv-show' } })
     }
   }
 }

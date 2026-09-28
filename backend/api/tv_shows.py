@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from ..config import settings, plex_headers, logger, plex_session, POSTER_CACHE_DIR, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata, get_library_group_members, get_library_group_preferred_server
+from ..config import settings, plex_headers, logger, plex_session, POSTER_CACHE_DIR, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled
 from ..schemas import LabelsResponse
 from ..tmdb_client import get_images_for_tv_show, get_tv_show_details, get_tv_season_images, TMDBError, get_tv_external_ids
 from ..fanart_client import get_images_for_movie as get_fanart_images, get_images_for_tv_show as get_fanart_tv_images
@@ -213,10 +213,14 @@ def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> O
 
 
 @router.get("/tv-shows")
-def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
+def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: str = None, server_id: str = "plex-1"):
     """
     Return TV shows from cache. Always returns from cache - use /scan-library to refresh.
     The force_refresh parameter is deprecated but kept for backwards compatibility.
+
+    server_id: which server `library_id` belongs to (Phase 8a) -- see api_movies()'s
+    identical parameter for the full reasoning. Defaults to "plex-1" for byte-identical
+    behavior on every existing caller/URL.
     """
     try:
         # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
@@ -226,10 +230,15 @@ def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: st
         # See api_movies()'s identical comment -- unions in a linked server's items
         # (Quirk #62/#64) only when this library actually has one; otherwise falls
         # through to the normal, unmodified single-library path.
-        group_members = get_library_group_members("plex-1", library_id, "tv") if library_id else None
+        group_members = get_library_group_members(server_id, library_id, "tv") if library_id else None
         if group_members:
-            preferred_server = get_library_group_preferred_server("plex-1", library_id, "tv") or "plex-1"
-            cached = db.get_cached_tv_shows_multi(group_members, preferred_server)
+            # Not coalesced to 'plex-1' here -- get_cached_tv_shows_multi() needs the
+            # raw None to tell "no merge-winner preference set" apart from "filter to
+            # only plex-1's items" when mergeItems is off (Quirk #121). It still
+            # resolves None to 'plex-1' itself for the merge-winner case internally.
+            preferred_server = get_library_group_preferred_server(server_id, library_id, "tv")
+            merge_enabled = get_library_group_merge_enabled(server_id, library_id, "tv")
+            cached = db.get_cached_tv_shows_multi(group_members, preferred_server, merge_enabled)
         else:
             # Always return from cache (which includes labels populated by scans)
             cached = cache.get_cached_tv_shows(library_id=library_id)

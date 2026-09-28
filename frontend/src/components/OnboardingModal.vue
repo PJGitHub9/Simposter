@@ -10,10 +10,35 @@ const settings = useSettingsStore()
 const apiBase = getApiBase()
 
 // ── Steps ──────────────────────────────────────────────────────────────────
-const STEPS = ['welcome', 'plex', 'libraries', 'mediaservers', 'apikeys', 'automation', 'performance', 'notifications', 'finish'] as const
+// Phase 8a follow-up -- 'servers' (new) lets the user pick any combination of
+// Plex/Jellyfin/Emby up front; 'plex'/'mediaservers' are then only reached for
+// the types actually picked, and 'libraries' covers all of them together
+// afterward -- see visibleSteps below for how a step becomes conditionally
+// reachable instead of the whole flow assuming Plex is required.
+const STEPS = ['welcome', 'servers', 'plex', 'mediaservers', 'libraries', 'apikeys', 'automation', 'performance', 'notifications', 'finish'] as const
 type Step = typeof STEPS[number]
 const step = ref<Step>('welcome')
-const stepIndex = computed(() => STEPS.indexOf(step.value))
+
+// ── Servers step ───────────────────────────────────────────────────────────
+// Plex defaults to checked (still the overwhelmingly common case); Jellyfin/Emby
+// default unchecked. Any combination -- including Plex alone, Jellyfin+Emby with
+// no Plex at all, or all three -- is valid.
+const wantsPlex = ref(true)
+const wantsJellyfinServer = ref(false)
+const wantsEmbyServer = ref(false)
+const canAdvanceServers = computed(() => wantsPlex.value || wantsJellyfinServer.value || wantsEmbyServer.value)
+
+// visibleSteps -- the actual step sequence for THIS run, filtered by what was
+// picked on the 'servers' step. 'plex' is skipped entirely when Plex wasn't
+// chosen; 'mediaservers' is skipped when neither Jellyfin nor Emby was chosen.
+// goNext()/goBack() navigate through this list, not the raw STEPS array, so a
+// newly-conditional step doesn't need its own hand-written skip-by-one patch.
+const visibleSteps = computed<Step[]>(() => STEPS.filter(s => {
+  if (s === 'plex') return wantsPlex.value
+  if (s === 'mediaservers') return wantsJellyfinServer.value || wantsEmbyServer.value
+  return true
+}))
+const stepIndex = computed(() => visibleSteps.value.indexOf(step.value))
 
 // ── Plex step ──────────────────────────────────────────────────────────────
 const plexUrl = ref('')
@@ -47,10 +72,61 @@ const testPlex = async () => {
   }
 }
 
+// ── Media Servers step (only reached when wantsJellyfinServer/wantsEmbyServer
+// was checked on the 'servers' step) — two fully independent forms, one per
+// type, so a user who wants BOTH Jellyfin and Emby can configure both in this
+// one step rather than only ever being able to add one at a time. -────────────
+const jellyfinUrl = ref('')
+const jellyfinApiKey = ref('')
+const testingJellyfin = ref(false)
+const jellyfinError = ref('')
+const jellyfinOk = ref(false)
+const addedJellyfinServer = ref<MediaServerEntry | null>(null)
+
+const embyUrl = ref('')
+const embyApiKey = ref('')
+const testingEmby = ref(false)
+const embyError = ref('')
+const embyOk = ref(false)
+const addedEmbyServer = ref<MediaServerEntry | null>(null)
+
+// Shared test logic for both forms above -- the two are otherwise fully
+// independent state (separate url/key/status per type), this just avoids two
+// copies of the same fetch-and-interpret-the-response block.
+async function testMediaServerGeneric(
+  type: 'jellyfin' | 'emby', url: string, apiKey: string,
+  testingRef: typeof testingJellyfin, errorRef: typeof jellyfinError,
+  okRef: typeof jellyfinOk, addedRef: typeof addedJellyfinServer,
+) {
+  testingRef.value = true
+  errorRef.value = ''
+  okRef.value = false
+  addedRef.value = null
+  try {
+    const res = await fetch(`${apiBase}/api/media-server/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, url: url.trim(), apiKey: apiKey.trim() }),
+    })
+    const data = await res.json()
+    if (data.connected) {
+      okRef.value = true
+      addedRef.value = { id: mediaServerId(type, url), type, url: url.trim(), apiKey: apiKey.trim(), enabled: true }
+    } else {
+      errorRef.value = 'Could not connect — check the URL and API key'
+    }
+  } catch (e) {
+    errorRef.value = e instanceof Error ? e.message : 'Connection failed'
+  } finally {
+    testingRef.value = false
+  }
+}
+const testJellyfin = () => testMediaServerGeneric('jellyfin', jellyfinUrl.value, jellyfinApiKey.value, testingJellyfin, jellyfinError, jellyfinOk, addedJellyfinServer)
+const testEmby = () => testMediaServerGeneric('emby', embyUrl.value, embyApiKey.value, testingEmby, embyError, embyOk, addedEmbyServer)
+
 // ── Libraries step ─────────────────────────────────────────────────────────
 const movieLibSections = computed(() => plexSections.value.filter(s => s.type === 'movie'))
 const tvLibSections = computed(() => plexSections.value.filter(s => s.type === 'show'))
-const hasTvLibs = computed(() => selectedTvLibs.value.size > 0)
 
 const selectedMovieLibs = ref<Set<string>>(new Set())
 const selectedTvLibs = ref<Set<string>>(new Set())
@@ -69,52 +145,37 @@ const initLibraries = () => {
   selectedTvLibs.value = new Set(tvLibSections.value.map(s => s.key))
 }
 
-// ── Media Servers step (optional — Plex is already configured by this point;
-// this step lets a user also add a Jellyfin/Emby server, matching what
-// Settings → Media Servers already offers, so someone running more than one
-// server type doesn't have to know that tab exists to get started) ─────────
-const wantsJellyfin = ref(false)
-const jellyfinType = ref<'jellyfin' | 'emby'>('jellyfin')
-const jellyfinUrl = ref('')
-const jellyfinApiKey = ref('')
-const testingJellyfin = ref(false)
-const jellyfinError = ref('')
-const jellyfinOk = ref(false)
-// The server that got a successful test, so a later re-test with a changed
-// URL doesn't silently keep an earlier, now-stale "ok" result in the finish
-// payload — added_mediaServer is only ever set right after a real pass.
-const addedMediaServer = ref<MediaServerEntry | null>(null)
-
-const testJellyfin = async () => {
-  testingJellyfin.value = true
-  jellyfinError.value = ''
-  jellyfinOk.value = false
-  addedMediaServer.value = null
-  try {
-    const res = await fetch(`${apiBase}/api/media-server/test-connection`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: jellyfinType.value, url: jellyfinUrl.value.trim(), apiKey: jellyfinApiKey.value.trim() }),
-    })
-    const data = await res.json()
-    if (data.connected) {
-      jellyfinOk.value = true
-      addedMediaServer.value = {
-        id: mediaServerId(jellyfinType.value, jellyfinUrl.value),
-        type: jellyfinType.value,
-        url: jellyfinUrl.value.trim(),
-        apiKey: jellyfinApiKey.value.trim(),
-        enabled: true,
-      }
-    } else {
-      jellyfinError.value = 'Could not connect — check the URL and API key'
-    }
-  } catch (e) {
-    jellyfinError.value = e instanceof Error ? e.message : 'Connection failed'
-  } finally {
-    testingJellyfin.value = false
-  }
+// Jellyfin/Emby libraries -- fetched (GET /api/media-server/libraries, already
+// built for Settings -> Media Servers/Libraries) right after the 'mediaservers'
+// step saves whichever server(s) were successfully tested, since that endpoint
+// only ever sees servers already present in the saved `mediaServers` setting.
+// Reuses the exact same "one standalone LibraryGroup per selected library"
+// creation shape StandaloneServerLibraries.vue established (Phase 8a) -- see
+// saveSettings() below for where those groups actually get built.
+interface DiscoveredLibrary { serverId: string; serverType: string; libraryId: string; libraryName: string; mediaType: string }
+const nonPlexDiscovered = ref<DiscoveredLibrary[]>([])
+const selectedNonPlexLibs = ref<Set<string>>(new Set())  // keyed `${serverId}:${libraryId}`
+const nonPlexKey = (d: DiscoveredLibrary) => `${d.serverId}:${d.libraryId}`
+const toggleNonPlexLib = (d: DiscoveredLibrary) => {
+  const key = nonPlexKey(d)
+  if (selectedNonPlexLibs.value.has(key)) selectedNonPlexLibs.value.delete(key)
+  else selectedNonPlexLibs.value.add(key)
 }
+async function fetchNonPlexLibraries() {
+  try {
+    const res = await fetch(`${apiBase}/api/media-server/libraries`)
+    const data = await res.json()
+    nonPlexDiscovered.value = (data.libraries || []).filter((l: DiscoveredLibrary) => l.serverId !== 'plex-1')
+    // Pre-select everything found, matching initLibraries()'s Plex behavior above.
+    selectedNonPlexLibs.value = new Set(nonPlexDiscovered.value.map(nonPlexKey))
+  } catch { /* leave empty -- user can add libraries later in Settings */ }
+}
+const nonPlexMovieLibs = computed(() => nonPlexDiscovered.value.filter(d => d.mediaType === 'movie'))
+const nonPlexTvLibs = computed(() => nonPlexDiscovered.value.filter(d => d.mediaType === 'tv'))
+const hasTvLibs = computed(() =>
+  selectedTvLibs.value.size > 0 ||
+  nonPlexTvLibs.value.some(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
+)
 
 // ── API Keys step ──────────────────────────────────────────────────────────
 const tmdbApiKey = ref('')
@@ -251,10 +312,16 @@ const saveSettings = async () => {
       .filter(s => selectedTvLibs.value.has(s.key))
       .map(s => ({ id: s.key, title: s.title, displayName: s.title }))
 
-    // Labels to remove after sending (Kometa adds "Overlay")
-    const labelsToRemove = usingKometa.value ? ['Overlay'] : []
+    // Labels to remove after sending (Kometa adds "Overlay") -- Plex-only concept
+    // (Quirk #93), only meaningful when Plex was actually chosen.
+    const labelsToRemove = wantsPlex.value && usingKometa.value ? ['Overlay'] : []
 
-    settings.plex.value = {
+    // sendLogosToPlex applies to any linked server today (Quirk #93 relabeled the UI
+    // to say so, though the underlying field name stayed the same) so it's always
+    // written -- but the rest of this object (url/token/library mappings) is
+    // Plex-specific and only overwritten when Plex was actually chosen this run, so
+    // re-running the wizard without Plex can't blank out a real prior Plex connection.
+    settings.plex.value = wantsPlex.value ? {
       ...settings.plex.value,
       url: plexUrl.value,
       token: plexToken.value,
@@ -264,6 +331,9 @@ const saveSettings = async () => {
       tvShowLibraryName: tvMappings[0]?.title || '',
       tvShowLibraryNames: tvMappings.map(m => m.title),
       tvShowLibraryMappings: tvMappings.map(m => ({ ...m })),
+      sendLogosToPlex: sendLogosToPlex.value,
+    } : {
+      ...settings.plex.value,
       sendLogosToPlex: sendLogosToPlex.value,
     }
     settings.tmdb.value = { apiKey: tmdbApiKey.value.trim() }
@@ -291,28 +361,101 @@ const saveSettings = async () => {
       // defaultLabelsToRemove/usingKometa). Previously this toggle was wired to
       // webhookAutoLabels by mistake, which meant "apply a label" silently did
       // nothing (removing a label that was never there is a no-op) — see CLAUDE.md.
-      labelToAdd: sendLabel.value ? labelName.value : '',
-      // Persist "Using Kometa?" as an ongoing setting too (Settings → Libraries →
-      // "Kometa Compatibility"), not just a one-time apply to libraries selected right
-      // now — so a library added later also gets "Overlay" auto-checked.
-      kometaCompatibility: usingKometa.value,
       webhookAlwaysRegenerateSeason: false,
       retryUntilTemplateMet: true,
+      // labelToAdd/kometaCompatibility are Plex-only (Quirk #93) -- only include them
+      // (overwriting whatever's already there) when Plex was actually chosen this run,
+      // matching this step's controls being hidden entirely otherwise.
+      ...(wantsPlex.value ? {
+        labelToAdd: sendLabel.value ? labelName.value : '',
+        kometaCompatibility: usingKometa.value,
+      } : {}),
     }
     const allLibIds = [
       ...movieMappings.map(m => m.id),
       ...tvMappings.map(m => m.id),
     ]
+    // The scheduled scan is still Plex-anchored-libraries-only today (Phase 8b hasn't
+    // built a Jellyfin/Emby-only equivalent yet -- CLAUDE.md's Quirk #93/#116) --
+    // libraryIds is correctly empty when Plex wasn't chosen, since there's nothing
+    // this scheduler can scan yet without a Plex library to anchor on.
     settings.scheduler.value = {
       ...settings.scheduler.value,
-      enabled: scanFrequency.value !== 'never',
+      enabled: wantsPlex.value && scanFrequency.value !== 'never',
       cronExpression: scanCronExpression.value || '0 1 * * *',
       libraryIds: allLibIds,
     }
-    // defaultLabelsToRemove keyed by library ID so SettingsView renders correctly
-    const labelsRecord: Record<string, string[]> = {}
-    allLibIds.forEach(id => { labelsRecord[id] = labelsToRemove })
-    settings.defaultLabelsToRemove.value = labelsRecord
+    // defaultLabelsToRemove keyed by library ID so SettingsView renders correctly --
+    // Plex-only concept, skipped entirely when Plex wasn't chosen.
+    if (wantsPlex.value) {
+      const labelsRecord: Record<string, string[]> = {}
+      allLibIds.forEach(id => { labelsRecord[id] = labelsToRemove })
+      settings.defaultLabelsToRemove.value = labelsRecord
+    }
+
+    // Auto-matched Library Group creation, covering every library selected across
+    // every server (not just standalone Jellyfin/Emby ones) -- every selection
+    // becomes ITS OWN group unless another selection of the SAME media type has
+    // the exact same name (case/whitespace-insensitive), in which case they're
+    // merged into one shared group instead. This is the "auto-match" design the
+    // user picked directly (over a manual-pairing step) after being asked: pick
+    // 3 Plex libraries and 2 Jellyfin libraries whose names each match one of
+    // those 3, and you get exactly 3 groups (2 linked, 1 Plex-only) -- no name
+    // match anywhere still yields one group per selection, same as the plain
+    // standalone-group behavior this replaces. Every group gets a real sidebar
+    // tab immediately (App.vue's nonPlexGroupTabs(), Quirk #116) with no separate
+    // trip to Settings required; a user can always add/remove members or split a
+    // wrongly-matched group apart afterward via Settings -> Libraries -> Linked
+    // Libraries (LinkedServerLibraries.vue), exactly as they already can today.
+    interface LibCandidate { serverId: string; libraryId: string; libraryName: string; mediaType: 'movie' | 'tv' }
+    const candidates: LibCandidate[] = []
+    if (wantsPlex.value) {
+      movieMappings.forEach(m => candidates.push({ serverId: 'plex-1', libraryId: String(m.id), libraryName: m.title, mediaType: 'movie' }))
+      tvMappings.forEach(m => candidates.push({ serverId: 'plex-1', libraryId: String(m.id), libraryName: m.title, mediaType: 'tv' }))
+    }
+    nonPlexDiscovered.value
+      .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
+      .forEach(d => candidates.push({ serverId: d.serverId, libraryId: d.libraryId, libraryName: d.libraryName, mediaType: d.mediaType as 'movie' | 'tv' }))
+
+    if (candidates.length) {
+      // Bucket by (mediaType, normalized name) -- exact match only (no fuzzy/
+      // substring matching), so "Movies" and "4K Movies" are deliberately kept
+      // separate rather than risking a false-positive merge.
+      const buckets = new Map<string, LibCandidate[]>()
+      for (const c of candidates) {
+        const key = `${c.mediaType}:${c.libraryName.trim().toLowerCase()}`
+        if (!buckets.has(key)) buckets.set(key, [])
+        buckets.get(key)!.push(c)
+      }
+      const existingGroupIds = new Set(settings.libraryGroups.value.map(g => g.id))
+      const newGroups = Array.from(buckets.values())
+        .map(members => {
+          const plexMember = members.find(m => m.serverId === 'plex-1')
+          const anchor = plexMember || members[0]!
+          // Matches the id scheme ensureGroup()/the startup migration already use
+          // for a Plex-anchored group (LinkedServerLibraries.vue, Quirk #62), and
+          // StandaloneServerLibraries.vue's scheme for a server-only one (Quirk
+          // #116) -- so a later manual link/unlink in Settings resolves the SAME
+          // group instead of creating a duplicate.
+          const id = plexMember
+            ? `group-${anchor.mediaType}-${anchor.libraryId}`
+            : `group-${anchor.mediaType}-${anchor.serverId}-${anchor.libraryId}`
+          return {
+            id,
+            name: anchor.libraryName || anchor.libraryId,
+            mediaType: anchor.mediaType,
+            members: members.map(m => ({ serverId: m.serverId, libraryId: m.libraryId, libraryName: m.libraryName })),
+            autoGenerateEnabled: false,
+            autoGeneratePresetId: null,
+            autoGenerateTemplateId: null,
+            labelsToRemove: [] as string[],
+          }
+        })
+        .filter(g => !existingGroupIds.has(g.id))
+      if (newGroups.length) {
+        settings.libraryGroups.value = [...settings.libraryGroups.value, ...newGroups]
+      }
+    }
 
     await settings.save()
     settingsSaved.value = true
@@ -370,31 +513,63 @@ const savePlexEarly = async () => {
 
 // ── Navigation ─────────────────────────────────────────────────────────────
 const canAdvance = computed(() => {
+  if (step.value === 'servers') return canAdvanceServers.value
   if (step.value === 'plex') return plexOk.value
-  if (step.value === 'libraries') return selectedMovieLibs.value.size > 0
   if (step.value === 'apikeys') return canAdvanceApiKeys.value
   return true
 })
 
+// Navigate by scanning forward/backward through the FULL step list for the next
+// one that's currently in visibleSteps, rather than indexing into visibleSteps
+// from the current step's position in it. This matters specifically because
+// "Skip Plex for now" (on the 'plex' step) flips wantsPlex to false and calls
+// goNext() in the same synchronous handler -- by the time goNext() runs,
+// visibleSteps no longer contains 'plex' at all, so looking up the CURRENT
+// step's own index in the already-changed list would be -1. Scanning forward
+// from the step's position in the always-stable STEPS array sidesteps that
+// entirely, and is correct for every other (non-transitioning) case too.
 const goNext = async () => {
   if (step.value === 'plex' && plexOk.value) initLibraries()
-  if (step.value === 'libraries') {
-    // Save Plex + library selection immediately so the scan can find them
-    await savePlexEarly()
-    // Fire-and-forget — scan runs in the background while user completes setup
-    fetch(`${apiBase}/api/scan-library`, { method: 'POST' }).catch(() => {})
+  if (step.value === 'mediaservers') {
+    // Save immediately, same reasoning as the Plex early-save below — don't let a
+    // real, successfully-tested server sit only in local component state until
+    // the wizard's much-later final save, in case the user closes out early.
+    // Merge rather than overwrite: mediaServers may already hold entries seeded
+    // by the backend (Quirk #57) or from a prior run — replace by id, don't
+    // just append blindly (Quirk #70).
+    const toAdd = [addedJellyfinServer.value, addedEmbyServer.value].filter((s): s is MediaServerEntry => !!s)
+    if (toAdd.length) {
+      const addIds = new Set(toAdd.map(s => s.id))
+      const existing = settings.mediaServers.value.filter(s => !addIds.has(s.id))
+      settings.mediaServers.value = [...existing, ...toAdd]
+      await settings.save()
+    }
+    // Discover what's actually on the server(s) just saved, for the upcoming
+    // 'libraries' step -- GET /api/media-server/libraries only sees servers
+    // already present in the saved mediaServers setting, hence fetching this
+    // only after the save above, not any earlier.
+    await fetchNonPlexLibraries()
   }
-  if (step.value === 'mediaservers' && wantsJellyfin.value && addedMediaServer.value) {
-    // Save immediately, same reasoning as the Plex early-save above — don't
-    // let a real, successfully-tested server sit only in local component
-    // state until the wizard's much-later final save, in case the user
-    // closes out early. Merge rather than overwrite: mediaServers may
-    // already hold a 'plex-1' entry seeded by the backend (Quirk #57), and
-    // re-testing after editing the URL could add a second entry sharing the
-    // same stable id (Quirk #70) — replace by id, don't just append blindly.
-    const existing = settings.mediaServers.value.filter(s => s.id !== addedMediaServer.value!.id)
-    settings.mediaServers.value = [...existing, addedMediaServer.value]
-    await settings.save()
+  if (step.value === 'libraries') {
+    if (wantsPlex.value) {
+      // Save Plex + library selection immediately so the scan can find them
+      await savePlexEarly()
+      // Fire-and-forget — scan runs in the background while user completes setup
+      fetch(`${apiBase}/api/scan-library`, { method: 'POST' }).catch(() => {})
+    }
+    // Same fire-and-forget pattern for whichever Jellyfin/Emby libraries were
+    // selected -- POST /api/media-server/{server_id}/scan (Quirk #66's scoped
+    // scan), the exact same call StandaloneServerLibraries.vue's own "Scan"
+    // button makes. The LibraryGroups these libraries belong to are created
+    // later in saveSettings() (called from the 'performance' step below) --
+    // scanning doesn't need the group to exist first (Quirk #116: a standalone
+    // library's rows filter correctly by library_id alone).
+    nonPlexDiscovered.value
+      .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
+      .forEach(d => {
+        const params = new URLSearchParams({ library_id: d.libraryId, media_type: d.mediaType })
+        fetch(`${apiBase}/api/media-server/${d.serverId}/scan?${params.toString()}`, { method: 'POST' }).catch(() => {})
+      })
   }
   if (step.value === 'performance') await saveSettings()
   if (step.value === 'notifications') {
@@ -409,13 +584,15 @@ const goNext = async () => {
     await settings.save()
     importDefaultPreset()  // fire-and-forget; finish step shows progress passively
   }
-  const idx = stepIndex.value
-  if (idx < STEPS.length - 1) step.value = STEPS[idx + 1]!
+  let nextIdx = STEPS.indexOf(step.value) + 1
+  while (nextIdx < STEPS.length && !visibleSteps.value.includes(STEPS[nextIdx]!)) nextIdx++
+  if (nextIdx < STEPS.length) step.value = STEPS[nextIdx]!
 }
 
 const goBack = () => {
-  const idx = stepIndex.value
-  if (idx > 0) step.value = STEPS[idx - 1]!
+  let idx = STEPS.indexOf(step.value) - 1
+  while (idx >= 0 && !visibleSteps.value.includes(STEPS[idx]!)) idx--
+  if (idx >= 0) step.value = STEPS[idx]!
 }
 
 // ── Close ──────────────────────────────────────────────────────────────────
@@ -447,17 +624,24 @@ onMounted(() => {
   if (settings.tmdb.value.apiKey) tmdbApiKey.value = settings.tmdb.value.apiKey
   if (settings.tvdb.value.apiKey) tvdbApiKey.value = settings.tvdb.value.apiKey
   if (settings.fanart.value.apiKey) fanartApiKey.value = settings.fanart.value.apiKey
-  // Re-running the wizard (Settings → Advanced → Run Startup Wizard) with a
-  // Jellyfin/Emby server already configured: prefill type/URL for context,
-  // but deliberately leave the API key blank rather than the masked
-  // placeholder GET /api/ui-settings returns (Quirk #60's secret masking) —
-  // sending that placeholder straight into Test Connection would just fail,
-  // since restore-if-unchanged only applies on save, not on this endpoint.
-  const existingNonPlex = settings.mediaServers.value.find(s => s.type !== 'plex')
-  if (existingNonPlex) {
-    wantsJellyfin.value = true
-    jellyfinType.value = existingNonPlex.type as 'jellyfin' | 'emby'
-    jellyfinUrl.value = existingNonPlex.url
+  // Re-running the wizard (Settings → Advanced → Run Startup Wizard) with servers
+  // already configured: pre-check/prefill for context, but deliberately leave API
+  // keys/tokens blank rather than the masked placeholder GET /api/ui-settings
+  // returns (Quirk #60's secret masking) — sending that placeholder straight into
+  // Test Connection would just fail, since restore-if-unchanged only applies on
+  // save, not on this endpoint. Plex defaults to checked either way (matches this
+  // step's own default for a fresh install); Jellyfin/Emby only pre-check if a
+  // real entry of that type already exists.
+  wantsPlex.value = true
+  const existingJellyfin = settings.mediaServers.value.find(s => s.type === 'jellyfin')
+  if (existingJellyfin) {
+    wantsJellyfinServer.value = true
+    jellyfinUrl.value = existingJellyfin.url
+  }
+  const existingEmby = settings.mediaServers.value.find(s => s.type === 'emby')
+  if (existingEmby) {
+    wantsEmbyServer.value = true
+    embyUrl.value = existingEmby.url
   }
 })
 </script>
@@ -469,7 +653,7 @@ onMounted(() => {
         <!-- Progress dots -->
         <div class="ob-dots">
           <span
-            v-for="(s, i) in STEPS"
+            v-for="(s, i) in visibleSteps"
             :key="s"
             class="ob-dot"
             :class="{ active: i === stepIndex, done: i < stepIndex }"
@@ -480,14 +664,46 @@ onMounted(() => {
         <template v-if="step === 'welcome'">
           <div class="ob-icon">🎬</div>
           <h2 class="ob-title">Welcome to Simposter</h2>
-          <p class="ob-sub">Let's get you set up in a few quick steps. You'll connect your Plex server, pick your libraries, and configure your defaults.</p>
+          <p class="ob-sub">Let's get you set up in a few quick steps. You'll connect your media server(s), pick your libraries, and configure your defaults.</p>
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="skip">Skip setup</button>
             <button class="ob-btn-primary" @click="goNext">Get started</button>
           </div>
         </template>
 
-        <!-- ── Plex Connection ── -->
+        <!-- ── Servers (which to configure) ── -->
+        <template v-else-if="step === 'servers'">
+          <div class="ob-icon">🖥️</div>
+          <h2 class="ob-title">Which media server(s) do you use?</h2>
+          <p class="ob-sub">Pick any combination — Simposter can send posters to more than one server at once.</p>
+          <label class="ob-lib-row" :class="{ selected: wantsPlex }" @click="wantsPlex = !wantsPlex">
+            <span class="ob-checkbox" :class="{ checked: wantsPlex }">
+              <svg v-if="wantsPlex" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <img src="/icons/plex.svg" class="ob-server-icon" alt="" />
+            Plex
+          </label>
+          <label class="ob-lib-row" :class="{ selected: wantsJellyfinServer }" @click="wantsJellyfinServer = !wantsJellyfinServer">
+            <span class="ob-checkbox" :class="{ checked: wantsJellyfinServer }">
+              <svg v-if="wantsJellyfinServer" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <img src="/icons/jellyfin.svg" class="ob-server-icon" alt="" />
+            Jellyfin
+          </label>
+          <label class="ob-lib-row" :class="{ selected: wantsEmbyServer }" @click="wantsEmbyServer = !wantsEmbyServer">
+            <span class="ob-checkbox" :class="{ checked: wantsEmbyServer }">
+              <svg v-if="wantsEmbyServer" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <img src="/icons/emby.svg" class="ob-server-icon" alt="" />
+            Emby
+          </label>
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
+          </div>
+        </template>
+
+        <!-- ── Plex Connection (only reached if Plex was picked) ── -->
         <template v-else-if="step === 'plex'">
           <div class="ob-icon">🔌</div>
           <h2 class="ob-title">Connect your Plex server</h2>
@@ -504,6 +720,7 @@ onMounted(() => {
           </div>
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
+            <button v-if="!plexOk" class="ob-btn-ghost" @click="wantsPlex = false; goNext()">Skip Plex for now</button>
             <button class="ob-btn-secondary" :disabled="testingPlex || !plexUrl || !plexToken" @click="testPlex">
               <span v-if="testingPlex" class="ob-spinner" />
               {{ testingPlex ? 'Testing...' : 'Test connection' }}
@@ -512,52 +729,14 @@ onMounted(() => {
           </div>
         </template>
 
-        <!-- ── Libraries ── -->
-        <template v-else-if="step === 'libraries'">
-          <div class="ob-icon">📚</div>
-          <h2 class="ob-title">Select your libraries</h2>
-          <p class="ob-sub">Choose which Plex libraries Simposter should manage.</p>
-          <div class="ob-lib-section" v-if="movieLibSections.length > 0">
-            <div class="ob-lib-heading">Movie libraries</div>
-            <label v-for="lib in movieLibSections" :key="lib.key" class="ob-lib-row" :class="{ selected: selectedMovieLibs.has(lib.key) }" @click="toggleMovieLib(lib.key)">
-              <span class="ob-checkbox" :class="{ checked: selectedMovieLibs.has(lib.key) }">
-                <svg v-if="selectedMovieLibs.has(lib.key)" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              🎬 {{ lib.title }}
-            </label>
-          </div>
-          <div class="ob-lib-section" v-if="tvLibSections.length > 0">
-            <div class="ob-lib-heading">TV show libraries</div>
-            <label v-for="lib in tvLibSections" :key="lib.key" class="ob-lib-row" :class="{ selected: selectedTvLibs.has(lib.key) }" @click="toggleTvLib(lib.key)">
-              <span class="ob-checkbox" :class="{ checked: selectedTvLibs.has(lib.key) }">
-                <svg v-if="selectedTvLibs.has(lib.key)" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </span>
-              📺 {{ lib.title }}
-            </label>
-          </div>
-          <div class="ob-actions">
-            <button class="ob-btn-ghost" @click="goBack">Back</button>
-            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
-          </div>
-        </template>
-
-        <!-- ── Media Servers (optional) ── -->
+        <!-- ── Media Servers (only reached if Jellyfin and/or Emby was picked) ── -->
         <template v-else-if="step === 'mediaservers'">
           <div class="ob-icon">🖥️</div>
-          <h2 class="ob-title">Also using Jellyfin or Emby?</h2>
-          <p class="ob-sub">Optional — Simposter can send posters to more than one media server. Skip this if Plex is all you use, you can always add one later in Settings → Media Servers.</p>
-          <label class="ob-lib-row" :class="{ selected: wantsJellyfin }" @click="wantsJellyfin = !wantsJellyfin">
-            <span class="ob-checkbox" :class="{ checked: wantsJellyfin }">
-              <svg v-if="wantsJellyfin" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </span>
-            Add a Jellyfin or Emby server
-          </label>
-          <div v-if="wantsJellyfin" class="ob-form">
-            <label class="ob-label">Server type</label>
-            <div class="ob-actions" style="justify-content: flex-start; margin-bottom: 8px;">
-              <button class="ob-btn-secondary" :class="{ 'ob-btn-active': jellyfinType === 'jellyfin' }" @click="jellyfinType = 'jellyfin'; jellyfinOk = false">Jellyfin</button>
-              <button class="ob-btn-secondary" :class="{ 'ob-btn-active': jellyfinType === 'emby' }" @click="jellyfinType = 'emby'; jellyfinOk = false">Emby</button>
-            </div>
+          <h2 class="ob-title">Connect your media server(s)</h2>
+          <p class="ob-sub">Enter the connection details for each server you picked.</p>
+
+          <div v-if="wantsJellyfinServer" class="ob-form">
+            <div class="ob-lib-heading">Jellyfin</div>
             <label class="ob-label">Server URL</label>
             <input v-model="jellyfinUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:8096" @keyup.enter="testJellyfin" @input="jellyfinOk = false" />
             <label class="ob-label">API Key</label>
@@ -571,9 +750,79 @@ onMounted(() => {
               </button>
             </div>
           </div>
+
+          <div v-if="wantsEmbyServer" class="ob-form" :style="wantsJellyfinServer ? 'margin-top: 20px;' : ''">
+            <div class="ob-lib-heading">Emby</div>
+            <label class="ob-label">Server URL</label>
+            <input v-model="embyUrl" class="ob-input" type="url" placeholder="http://192.168.1.100:8096" @keyup.enter="testEmby" @input="embyOk = false" />
+            <label class="ob-label">API Key</label>
+            <input v-model="embyApiKey" class="ob-input" type="password" placeholder="Generated in Dashboard → API Keys" @keyup.enter="testEmby" @input="embyOk = false" />
+            <div v-if="embyError" class="ob-error">{{ embyError }}</div>
+            <div v-if="embyOk" class="ob-success">Connected!</div>
+            <div class="ob-actions" style="justify-content: flex-start; margin-top: 8px;">
+              <button class="ob-btn-secondary" :disabled="testingEmby || !embyUrl || !embyApiKey" @click="testEmby">
+                <span v-if="testingEmby" class="ob-spinner" />
+                {{ testingEmby ? 'Testing...' : 'Test connection' }}
+              </button>
+            </div>
+          </div>
+
+          <p class="ob-hint-text" style="margin-top: 12px;">A server left untested here can still be added later in Settings → Media Servers.</p>
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
-            <button class="ob-btn-primary" @click="goNext">{{ wantsJellyfin && jellyfinOk ? 'Next' : 'Skip / Next' }}</button>
+            <button class="ob-btn-primary" @click="goNext">Next</button>
+          </div>
+        </template>
+
+        <!-- ── Libraries (covers whichever server(s) were picked) ── -->
+        <template v-else-if="step === 'libraries'">
+          <div class="ob-icon">📚</div>
+          <h2 class="ob-title">Select your libraries</h2>
+          <p class="ob-sub">Choose which libraries Simposter should manage.</p>
+          <div class="ob-lib-section" v-if="wantsPlex && movieLibSections.length > 0">
+            <div class="ob-lib-heading">Plex — Movie libraries</div>
+            <label v-for="lib in movieLibSections" :key="lib.key" class="ob-lib-row" :class="{ selected: selectedMovieLibs.has(lib.key) }" @click="toggleMovieLib(lib.key)">
+              <span class="ob-checkbox" :class="{ checked: selectedMovieLibs.has(lib.key) }">
+                <svg v-if="selectedMovieLibs.has(lib.key)" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              🎬 {{ lib.title }}
+            </label>
+          </div>
+          <div class="ob-lib-section" v-if="wantsPlex && tvLibSections.length > 0">
+            <div class="ob-lib-heading">Plex — TV show libraries</div>
+            <label v-for="lib in tvLibSections" :key="lib.key" class="ob-lib-row" :class="{ selected: selectedTvLibs.has(lib.key) }" @click="toggleTvLib(lib.key)">
+              <span class="ob-checkbox" :class="{ checked: selectedTvLibs.has(lib.key) }">
+                <svg v-if="selectedTvLibs.has(lib.key)" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              📺 {{ lib.title }}
+            </label>
+          </div>
+          <!-- Jellyfin/Emby -- discovered live from the server(s) just saved on the
+               'mediaservers' step (fetchNonPlexLibraries(), called from goNext()).
+               Each selection becomes its own standalone LibraryGroup on Finish
+               (Quirk #116's StandaloneServerLibraries.vue mechanism), so it gets a
+               real sidebar tab immediately, without a separate trip to Settings. -->
+          <div class="ob-lib-section" v-if="nonPlexMovieLibs.length > 0">
+            <div class="ob-lib-heading">Movie libraries (Jellyfin/Emby)</div>
+            <label v-for="lib in nonPlexMovieLibs" :key="nonPlexKey(lib)" class="ob-lib-row" :class="{ selected: selectedNonPlexLibs.has(nonPlexKey(lib)) }" @click="toggleNonPlexLib(lib)">
+              <span class="ob-checkbox" :class="{ checked: selectedNonPlexLibs.has(nonPlexKey(lib)) }">
+                <svg v-if="selectedNonPlexLibs.has(nonPlexKey(lib))" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              🎬 {{ lib.libraryName }} <span class="ob-optional">({{ lib.serverType }})</span>
+            </label>
+          </div>
+          <div class="ob-lib-section" v-if="nonPlexTvLibs.length > 0">
+            <div class="ob-lib-heading">TV show libraries (Jellyfin/Emby)</div>
+            <label v-for="lib in nonPlexTvLibs" :key="nonPlexKey(lib)" class="ob-lib-row" :class="{ selected: selectedNonPlexLibs.has(nonPlexKey(lib)) }" @click="toggleNonPlexLib(lib)">
+              <span class="ob-checkbox" :class="{ checked: selectedNonPlexLibs.has(nonPlexKey(lib)) }">
+                <svg v-if="selectedNonPlexLibs.has(nonPlexKey(lib))" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              📺 {{ lib.libraryName }} <span class="ob-optional">({{ lib.serverType }})</span>
+            </label>
+          </div>
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
           </div>
         </template>
 
@@ -646,33 +895,37 @@ onMounted(() => {
           <p class="ob-sub">A few quick preferences for how Simposter runs in the background.</p>
 
           <div class="ob-form">
-            <!-- Kometa -->
-            <div class="ob-switch-row" @click="usingKometa = !usingKometa">
-              <div class="ob-switch-body">
-                <div class="ob-switch-label">Using Kometa?</div>
-                <div class="ob-switch-desc">If yes, Simposter will remove the "Overlay" label from Plex items after sending a poster so Kometa doesn't overwrite your artwork.</div>
+            <!-- Kometa / "Apply a label" — both Plex-only concepts (label add/remove
+                 has no Jellyfin/Emby equivalent, Quirk #59/#93), hidden entirely rather
+                 than shown-but-inert when Plex wasn't picked on the 'servers' step. -->
+            <template v-if="wantsPlex">
+              <div class="ob-switch-row" @click="usingKometa = !usingKometa">
+                <div class="ob-switch-body">
+                  <div class="ob-switch-label">Using Kometa?</div>
+                  <div class="ob-switch-desc">If yes, Simposter will remove the "Overlay" label from Plex items after sending a poster so Kometa doesn't overwrite your artwork.</div>
+                </div>
+                <div class="ob-switch" :class="{ on: usingKometa }"><div class="ob-switch-thumb" /></div>
               </div>
-              <div class="ob-switch" :class="{ on: usingKometa }"><div class="ob-switch-thumb" /></div>
-            </div>
 
-            <!-- Label when sent -->
-            <div class="ob-switch-row" @click="sendLabel = !sendLabel">
-              <div class="ob-switch-body">
-                <div class="ob-switch-label">Apply a label after sending a poster?</div>
-                <div class="ob-switch-desc">Tags Plex items with a label so you can track which posters were generated by Simposter.</div>
+              <div class="ob-switch-row" @click="sendLabel = !sendLabel">
+                <div class="ob-switch-body">
+                  <div class="ob-switch-label">Apply a label after sending a poster?</div>
+                  <div class="ob-switch-desc">Tags Plex items with a label so you can track which posters were generated by Simposter.</div>
+                </div>
+                <div class="ob-switch" :class="{ on: sendLabel }"><div class="ob-switch-thumb" /></div>
               </div>
-              <div class="ob-switch" :class="{ on: sendLabel }"><div class="ob-switch-thumb" /></div>
-            </div>
-            <div v-if="sendLabel" class="ob-indent">
-              <label class="ob-label">Label name</label>
-              <input v-model="labelName" class="ob-input" type="text" placeholder="Simposter" />
-            </div>
+              <div v-if="sendLabel" class="ob-indent">
+                <label class="ob-label">Label name</label>
+                <input v-model="labelName" class="ob-input" type="text" placeholder="Simposter" />
+              </div>
+            </template>
 
-            <!-- Send logos to Plex -->
+            <!-- Applies to any linked server today, not Plex-only (Quirk #93) -- shown
+                 regardless of which server(s) were picked. -->
             <div class="ob-switch-row" @click="sendLogosToPlex = !sendLogosToPlex">
               <div class="ob-switch-body">
-                <div class="ob-switch-label">Send logos to Plex?</div>
-                <div class="ob-switch-desc">After generating a poster, also upload the clear logo to Plex so it appears in your media info panels.</div>
+                <div class="ob-switch-label">Send logos to your media server(s)?</div>
+                <div class="ob-switch-desc">After generating a poster, also upload the clear logo so it appears in your media info panels.</div>
               </div>
               <div class="ob-switch" :class="{ on: sendLogosToPlex }"><div class="ob-switch-thumb" /></div>
             </div>
@@ -686,8 +939,10 @@ onMounted(() => {
               </select>
             </div>
 
-            <!-- Scan schedule -->
-            <div class="ob-field-group">
+            <!-- Scan schedule -- still Plex-anchored-libraries-only (Phase 8b hasn't
+                 built a Jellyfin/Emby-only scheduled scan yet, CLAUDE.md Quirk #93/#116)
+                 so this is hidden entirely, not shown-but-inert, when Plex wasn't picked. -->
+            <div v-if="wantsPlex" class="ob-field-group">
               <div class="ob-field-label">How often should Simposter scan for new content?</div>
               <div class="ob-seg">
                 <button class="ob-seg-btn" :class="{ active: scanFrequency === 'never' }" @click="scanFrequency = 'never'">Never</button>
@@ -702,6 +957,7 @@ onMounted(() => {
               </div>
               <div v-else-if="scanFrequency !== 'never'" class="ob-hint-text">{{ scanFrequency === 'daily' ? 'Runs at 1 AM every day' : 'Runs at 1 AM every Sunday' }}</div>
             </div>
+            <p v-else class="ob-hint-text">Scheduled scanning isn't available yet for Jellyfin/Emby-only libraries — use the "Scan" button in Settings → Libraries in the meantime.</p>
           </div>
 
           <div class="ob-actions">
@@ -946,6 +1202,7 @@ onMounted(() => {
   flex-shrink: 0; transition: all 0.15s;
 }
 .ob-checkbox.checked { background: var(--accent, #3dd6b7); border-color: var(--accent, #3dd6b7); color: #0b0d14; }
+.ob-server-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
 /* Select */
 .ob-select { appearance: none; cursor: pointer; }
