@@ -1218,7 +1218,22 @@ const fetchPresets = async () => {
 onMounted(async () => {
   watchersEnabled.value = false
 
-  if (!settings.loaded.value) {
+  // Only re-fetch (and only re-baseline the unsaved-changes snapshot) when
+  // settings genuinely weren't loaded yet this session. Re-running
+  // captureSettingsSnapshot() unconditionally on every mount was a real bug:
+  // navigating to Settings a second time within the same session (route away
+  // and back -- this component fully remounts) always re-fired it, silently
+  // re-baselining "current" as "saved" for anything bound directly to the
+  // store with no local staging ref (libraryGroups/mediaServers/
+  // preferredPosterServer, Quirk #79/#119/#120) -- an unsaved live edit (e.g.
+  // toggling a group's "Merge items" checkbox) survives the remount visually
+  // since it's the store's actual in-memory value, but re-baselining against
+  // it made hasUnsavedChanges/Save look like there was nothing to persist,
+  // even though the backend was never actually told about it. Reported
+  // directly: had to uncheck+save+check+save (two real saves) to make a
+  // single checkbox change actually stick.
+  const alreadyLoaded = settings.loaded.value
+  if (!alreadyLoaded) {
     await settings.load()
   }
 
@@ -1232,7 +1247,18 @@ onMounted(async () => {
   await fetchSchedulerStatus()
 
   await nextTick()
-  captureSettingsSnapshot()
+  if (!alreadyLoaded) {
+    captureSettingsSnapshot()
+  } else {
+    // Re-evaluate against the EXISTING (still-correct) baseline immediately,
+    // so a remount with a genuinely still-unsaved edit shows the yellow
+    // "unsaved changes" state right away, instead of only after the user's
+    // next edit happens to re-trigger the (currently disabled) watcher.
+    checkForChanges()
+    setTimeout(() => {
+      watchersEnabled.value = true
+    }, 100)
+  }
 })
 
 watch(
