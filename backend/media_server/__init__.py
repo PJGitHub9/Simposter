@@ -6,7 +6,7 @@ CLAUDE.md Quirk #58 for what shipped vs. what's still pending.
 from .base import ImageType, Library, MediaItem, MediaItemMetadata, MediaServerClient
 from .plex_client import PlexClient
 from .jellyfin_client import JellyfinClient
-from .registry import get_client, get_enabled_clients
+from .registry import get_client, get_enabled_clients, get_server_label
 
 __all__ = [
     "ImageType",
@@ -18,4 +18,5 @@ __all__ = [
     "JellyfinClient",
     "get_client",
     "get_enabled_clients",
+    "get_server_label",
 ]

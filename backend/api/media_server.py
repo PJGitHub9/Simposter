@@ -423,3 +423,28 @@ def api_set_library_group_preferred_server(payload: PreferredServerUpdate):
     if updated is None:
         raise HTTPException(404, "No Library Group found for this library")
     return {"group": updated}
+
+
+class MergeItemsUpdate(BaseModel):
+    server_id: str
+    library_id: str
+    media_type: str
+    merge_items: bool
+
+
+@router.post("/library-group/merge-items")
+def api_set_library_group_merge_items(payload: MergeItemsUpdate):
+    """The write side of the Merge Items checkbox (Settings -> Libraries) --
+    persists immediately on every change instead of waiting for Settings'
+    own page-wide Save button, matching the preferred-server endpoint above.
+    Added specifically to remove any dependency on remembering to click Save
+    (or on correctly navigating the "unsaved changes" confirm dialog) before
+    the toggle can take effect for the Movies/TV grid's own merge-aware
+    fetch."""
+    from .. import database as db
+    updated = db.set_library_group_merge_items(
+        payload.server_id, payload.library_id, payload.media_type, payload.merge_items
+    )
+    if updated is None:
+        raise HTTPException(404, "No Library Group found for this library")
+    return {"group": updated}

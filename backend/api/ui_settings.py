@@ -419,6 +419,32 @@ def save_ui_settings_endpoint(payload: UISettings):
                 **current.get(nested_key, {}),
                 **incoming.get(nested_key, {}),
             }
+        # mediaServers/libraryGroups are top-level LIST fields, unlike the dict-shaped
+        # keys above -- {**current, **incoming} means `incoming`'s value wins outright
+        # whenever the key is present, with no protection at all against an incoming
+        # payload that's empty/incomplete for a reason unrelated to the user actually
+        # wanting to clear it (a stale in-memory store on the sending tab, a request
+        # racing an in-flight load, etc.). Both are bound directly to the frontend
+        # store with no local staging ref (Quirk #79/#119), so every real settings
+        # save is supposed to echo back the CURRENT full list -- an empty incoming
+        # list when the DB already has real entries is far more likely a bug on the
+        # sending side than a deliberate "remove every server/group" action, and this
+        # app has already been burned twice by exactly this shape of silent-wipe bug
+        # (Quirk #60's original missing-field case, Quirk #62's libraryGroups case).
+        # Reported live: a real mediaServers wipe from an unrelated settings save left
+        # Media Mirror's "Run Now" failing with "Source server 'plex-1' is not
+        # configured/enabled" even though every other part of the UI still showed
+        # Plex as configured (libraryGroups, a separate setting, was untouched).
+        for list_key in ("mediaServers", "libraryGroups"):
+            incoming_list = incoming.get(list_key)
+            current_list = current.get(list_key)
+            if isinstance(current_list, list) and current_list and (not isinstance(incoming_list, list) or not incoming_list):
+                logger.warning(
+                    "[UI_SETTINGS] Incoming '%s' was empty/missing but %d already-saved entr%s existed -- "
+                    "keeping the existing entries instead of silently wiping them",
+                    list_key, len(current_list), "y" if len(current_list) == 1 else "ies",
+                )
+                merged[list_key] = current_list
 
         merged = _normalize_plex_payload(merged)
         _apply_runtime_settings(merged)

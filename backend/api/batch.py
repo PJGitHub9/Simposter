@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from ..schemas import BatchRequest, MovieBatchRequest, TVShowBatchRequest
 from ..config import settings, plex_remove_label, plex_add_label, get_label_to_add, logger, get_movie_tmdb_id, get_movie_folder_name, get_media_folder_name, save_render_cache_by_tmdb, load_render_cache_by_tmdb, get_reuse_cached_poster_days
 from ..config import load_presets
@@ -43,6 +43,7 @@ batch_status = {
     "started_at": None,
     "finished_at": None,
     "error": None,
+    "cancel_requested": False,
 }
 batch_status_lock = threading.Lock()
 
@@ -51,6 +52,30 @@ def _update_batch_status(updates: dict):
     """Thread-safe batch status update."""
     with batch_status_lock:
         batch_status.update(updates)
+
+
+def _is_batch_cancel_requested() -> bool:
+    with batch_status_lock:
+        return bool(batch_status.get("cancel_requested"))
+
+
+@router.post("/batch-cancel")
+def api_batch_cancel():
+    """Requests a graceful stop of the currently-running batch. Can't
+    interrupt whatever item(s) are already mid-render/mid-upload -- Python
+    threads can't be forcibly killed -- but every item that hasn't started
+    real work yet bails out immediately via the cancel-request check at the
+    very top of _process_single_movie()/_process_single_tv_show(), so a
+    large batch winds down quickly (within roughly one in-flight item's
+    remaining render time) rather than working through its whole queue.
+    Only one batch runs globally at a time (batch_status is one shared dict,
+    not per-run), so there's nothing to identify beyond "the current one"."""
+    with batch_status_lock:
+        if batch_status.get("state") != "running":
+            raise HTTPException(400, "No batch is currently running")
+        batch_status["cancel_requested"] = True
+    logger.info("[BATCH] Stop requested -- finishing in-flight item(s), skipping the rest")
+    return {"status": "cancel_requested"}
 
 
 def _server_type_label(server_id: str) -> str:
@@ -172,6 +197,10 @@ def _process_single_movie(
     except Exception:
         pass
 
+    if _is_batch_cancel_requested():
+        logger.info("[BATCH] Skipping rating_key=%s [%s] -- batch was stopped", rating_key, title_hint)
+        return {"rating_key": rating_key, "title": title_hint, "status": "cancelled"}
+
     # Lazy, memoized {folder} lookup -- a single-element list dodges the need for
     # `nonlocal` while still letting both the save_locally and send_to_plex blocks
     # below share one Plex metadata fetch instead of firing it twice per movie.
@@ -179,7 +208,15 @@ def _process_single_movie(
 
     def _get_movie_folder_name_once() -> Optional[str]:
         if not _folder_name_cache:
-            _folder_name_cache.append(get_movie_folder_name(rating_key))
+            # Server-aware: get_movie_folder_name() is Plex-only (a live Plex
+            # metadata fetch, up to its own 6s timeout) -- calling it for a
+            # Jellyfin/Emby-sourced item is always doomed anyway (falls back
+            # to {title}), so skip straight to that fallback instead of
+            # paying for the wasted fetch. is_plex_item is assigned later in
+            # this function, before either real call site (save_locally/
+            # send_to_plex below) invokes this closure -- Python resolves
+            # free variables at call time, so this is safe.
+            _folder_name_cache.append(get_movie_folder_name(rating_key) if is_plex_item else None)
         return _folder_name_cache[0]
 
     try:
@@ -210,10 +247,23 @@ def _process_single_movie(
         # so missing this meant every batch render of a Jellyfin-sourced item
         # failed outright with "No TMDb ID found." rather than degrading to a
         # wrong-but-working fallback the way preview.py's did before its own fix.
+        #
+        # For a genuine Plex item, ALSO prefer the cached tmdb_id over a live
+        # fetch when one's already known -- the scan itself resolves and
+        # caches tmdb_id for Plex movies now too (Quirk #120's own fix), so
+        # get_movie_tmdb_id()'s live re-fetch here is usually redundant. Real
+        # bug this closes: a batch run only sending to Jellyfin (not Plex at
+        # all) would still fail every Plex-sourced item outright whenever
+        # Plex itself happened to be unreachable (different network, VPN off,
+        # server down) -- there was never any reason to require Plex to be
+        # UP just to learn an ID this app already has cached. Only falls
+        # through to the live fetch when nothing's cached yet (e.g. a title
+        # added since the last scan).
         if db.get_server_id_for_rating_key(rating_key) != "plex-1":
             tmdb_id, _ = db.get_ids_for_rating_key(rating_key)
         else:
-            tmdb_id = get_movie_tmdb_id(rating_key)
+            cached_tmdb_id, _ = db.get_ids_for_rating_key(rating_key)
+            tmdb_id = cached_tmdb_id or get_movie_tmdb_id(rating_key)
         if not tmdb_id:
             raise Exception("No TMDb ID found.")
         logger.debug("[BATCH] rating_key=%s [%s] tmdb_id=%s", rating_key, title_hint, tmdb_id)
@@ -420,6 +470,16 @@ def _process_single_movie(
         # malformed-request connection drop, not a clean 404) that used to abort
         # the whole batch item. See CLAUDE.md Quirk #106.
         is_plex_item = db.get_server_id_for_rating_key(rating_key) == "plex-1"
+
+        # A second checkpoint, not just the one at the very top of this
+        # function -- an item whose worker thread picked it up BEFORE Stop
+        # was clicked has already passed that first check, but the metadata
+        # fetch above (TMDb/Fanart, real network calls) can take real time.
+        # Bailing out here means it doesn't also pay for the render+upload,
+        # the most expensive remaining part, once cancellation is known.
+        if _is_batch_cancel_requested():
+            logger.info("[BATCH] Stopping rating_key=%s [%s] mid-item -- batch was stopped", rating_key, title_hint)
+            return {"rating_key": rating_key, "title": title_hint, "status": "cancelled"}
 
         # ---------------------------
         # Render
@@ -914,6 +974,11 @@ def _process_single_tv_show(
             title_hint = _cached_title
     except Exception:
         pass
+
+    if _is_batch_cancel_requested():
+        logger.info("[BATCH TV] Skipping rating_key=%s [%s] -- batch was stopped", rating_key, title_hint)
+        return {"rating_key": rating_key, "show_title": title_hint, "status": "cancelled", "results": []}
+
     try:
         template_id = req.template_id
         preset_id = req.preset_id
@@ -946,9 +1011,22 @@ def _process_single_tv_show(
         # get_cached_media_info() directly (Quirk #91), unlike the Plex path
         # which relies on this piggyback as its main update mechanism outside
         # a full library scan.
-        if db.get_server_id_for_rating_key(rating_key) != "plex-1":
-            tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
-        else:
+        #
+        # For a genuine Plex show, ALSO prefer the cached tmdb_id/tvdb_id over
+        # a live fetch when they're already known -- the TV scan resolves and
+        # caches both for Plex shows now too (Quirk #120's own fix). Without
+        # this, a batch run only sending to Jellyfin (not Plex at all) would
+        # still fail every Plex-sourced show outright whenever Plex happened
+        # to be unreachable, purely to re-learn an ID already cached. Only
+        # falls through to the live fetch when nothing's cached yet, in which
+        # case the piggyback media-info caching below still runs exactly as
+        # before -- inject_plex_media_metadata()'s own cache-first
+        # get_plex_media_info() call later in the render already covers media
+        # info independently either way, so skipping this piggyback when
+        # reading from cache isn't a loss.
+        is_plex_show = db.get_server_id_for_rating_key(rating_key) == "plex-1"
+        tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+        if is_plex_show and not tmdb_id:
             url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
             try:
                 r = plex_session.get(url, headers=plex_headers(), timeout=6)
@@ -1425,6 +1503,15 @@ def _render_all_tv_seasons(
 
     # Now process individual seasons
     for season in seasons:
+        # A show with many seasons can take a while to work through -- check
+        # between seasons (not just once at the very top of
+        # _process_single_tv_show(), before this whole function was even
+        # called) so stopping a batch doesn't mean waiting out every
+        # remaining season of an already-in-flight show.
+        if source == "batch" and _is_batch_cancel_requested():
+            logger.info("[BATCH TV] Stopping %s mid-show -- batch was stopped", show_title)
+            break
+
         season_index = season["index"]
         season_key = season["key"]
         season_title = season["title"]
@@ -1719,7 +1806,11 @@ def _render_and_save_poster(
         if is_tv and season_title is not None:
             return None
         if not _folder_name_cache:
-            _folder_name_cache.append(get_media_folder_name(rating_key, is_tv))
+            # Server-aware: get_media_folder_name() forwards to a Plex-only
+            # live metadata fetch either way (movie or show) -- skip it
+            # entirely for a Jellyfin/Emby-sourced item rather than paying
+            # for a doomed fetch before falling back to {title} anyway.
+            _folder_name_cache.append(get_media_folder_name(rating_key, is_tv) if is_plex_item else None)
         return _folder_name_cache[0]
 
     needs_retry = (logo_was_expected and logo_url is None) or poster_fallback_used or logo_fallback_used
@@ -2204,7 +2295,9 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
 
     results = []
 
-    # Initialize batch status
+    # Initialize batch status -- cancel_requested reset explicitly here too,
+    # in case a prior run somehow left it set (it's also reset at the end of
+    # every run below, this is defense-in-depth, not the only reset).
     _update_batch_status({
         "state": "running",
         "total": len(req.rating_keys),
@@ -2214,6 +2307,7 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
         "started_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None,
         "error": None,
+        "cancel_requested": False,
     })
 
     # Load preset options if provided
@@ -2275,6 +2369,7 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
     last_title = ""
     success_count = 0
     failed_count = 0
+    cancelled_count = 0
     poster_fallback_count = 0
     logo_fallback_count = 0
 
@@ -2320,9 +2415,15 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
             try:
                 result = future.result()
                 results.append(result)
-                # Track success/failure
+                # Track success/failure/cancelled -- a "cancelled" item (only
+                # ever produced when the batch was stopped, see
+                # _is_batch_cancel_requested()) is neither a success nor a
+                # real failure, so it's counted separately rather than
+                # inflating failed_count for something the user asked for.
                 if result.get("status") == "ok":
                     success_count += 1
+                elif result.get("status") == "cancelled":
+                    cancelled_count += 1
                 else:
                     failed_count += 1
                 # Enqueue for retry if ideal template conditions weren't met
@@ -2407,11 +2508,19 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                 except Exception as update_err:
                     logger.debug("[BATCH] Failed to update Discord progress: %s", update_err)
 
-    # Mark batch as complete
+    # Mark batch as complete -- "cancelled" is a distinct final state from
+    # "done" (checked before resetting the flag) so the frontend can show a
+    # genuinely different message ("Batch stopped" vs. "Batch complete")
+    # rather than looking identical to a normal finish.
+    was_cancelled = _is_batch_cancel_requested()
+    if was_cancelled:
+        logger.info("[BATCH] Stopped by user -- %d completed, %d skipped, %d failed",
+                    success_count, cancelled_count, failed_count)
     _update_batch_status({
-        "state": "done",
+        "state": "cancelled" if was_cancelled else "done",
         "finished_at": datetime.now(timezone.utc).isoformat(),
-        "current_step": "Finished",
+        "current_step": "Stopped" if was_cancelled else "Finished",
+        "cancel_requested": False,
     })
 
     # Send Discord completion notification

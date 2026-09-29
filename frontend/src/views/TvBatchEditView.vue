@@ -50,7 +50,7 @@ type PosterStatus = {
 type BatchResult = {
   rating_key: string
   title: string
-  status: 'ok' | 'error'
+  status: 'ok' | 'error' | 'cancelled'
   error?: string
   poster_fallback?: boolean
   logo_fallback?: boolean
@@ -64,11 +64,16 @@ const BATCH_RESULTS_KEY = 'simposter-batch-results-tv'
 const batchResults = ref<BatchResult[]>([])
 const showBatchResults = ref(false)
 const batchResultsShowFailed = ref(true)
+const batchResultsShowCancelled = ref(false)
 const batchResultsShowFallback = ref(false)
 const batchResultsTimestamp = ref<number | null>(null)
 
 const batchFailed = computed(() => batchResults.value.filter(r => r.status === 'error'))
 const batchSucceeded = computed(() => batchResults.value.filter(r => r.status === 'ok'))
+// A "cancelled" result only ever comes from the batch being stopped mid-run --
+// distinct from a real failure, so it gets its own bucket rather than
+// silently disappearing from every count.
+const batchCancelled = computed(() => batchResults.value.filter(r => r.status === 'cancelled'))
 const batchPosterFallback = computed(() => batchResults.value.filter(r => r.status === 'ok' && r.poster_fallback))
 const batchLogoFallback = computed(() => batchResults.value.filter(r => r.status === 'ok' && r.logo_fallback))
 
@@ -836,7 +841,11 @@ const processBatch = async () => {
     }
 
     const data = await response.json()
-    batchResults.value = data.results || []
+    // TV batch results come back with `show_title`, not `title` (matching
+    // every _process_single_tv_show() result shape server-side) -- normalize
+    // here so the Failed/Stopped lists below show the real show name instead
+    // of "Unknown" for every single TV item.
+    batchResults.value = (data.results || []).map((r: any) => ({ ...r, title: r.title || r.show_title || '' }))
     batchResultsTimestamp.value = Date.now()
     showBatchResults.value = true
     batchResultsShowFailed.value = true
@@ -1660,6 +1669,10 @@ onMounted(async () => {
           <span class="stat-num">{{ batchFailed.length }}</span>
           <span class="stat-label">Failed</span>
         </div>
+        <div class="summary-stat cancelled" v-if="batchCancelled.length">
+          <span class="stat-num">{{ batchCancelled.length }}</span>
+          <span class="stat-label">Stopped</span>
+        </div>
         <div class="summary-stat fallback" v-if="batchPosterFallback.length">
           <span class="stat-num">{{ batchPosterFallback.length }}</span>
           <span class="stat-label">Poster Fallback</span>
@@ -1680,6 +1693,20 @@ onMounted(async () => {
           <div v-for="item in batchFailed" :key="item.rating_key" class="result-item result-error">
             <span class="result-title">{{ item.title || 'Unknown' }}</span>
             <span class="result-reason">{{ shortError(item.error || '', item.rating_key) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stopped items (only ever populated when the batch was cancelled mid-run) -->
+      <div v-if="batchCancelled.length" class="results-section">
+        <button class="section-toggle" @click="batchResultsShowCancelled = !batchResultsShowCancelled">
+          <span class="toggle-icon">{{ batchResultsShowCancelled ? '▾' : '▸' }}</span>
+          Stopped ({{ batchCancelled.length }})
+        </button>
+        <div v-if="batchResultsShowCancelled" class="results-list">
+          <div v-for="item in batchCancelled" :key="item.rating_key" class="result-item result-cancelled">
+            <span class="result-title">{{ item.title || 'Unknown' }}</span>
+            <span class="result-reason">Skipped -- batch was stopped before this item started</span>
           </div>
         </div>
       </div>
@@ -2015,6 +2042,7 @@ onMounted(async () => {
 }
 .summary-stat.ok    { background: rgba(61, 214, 183, 0.12); border: 1px solid rgba(61, 214, 183, 0.3); }
 .summary-stat.error { background: rgba(239, 68, 68, 0.12);  border: 1px solid rgba(239, 68, 68, 0.3); }
+.summary-stat.cancelled { background: rgba(148, 163, 184, 0.1); border: 1px solid rgba(148, 163, 184, 0.3); }
 .summary-stat.fallback { background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); }
 
 .stat-num {
@@ -2024,6 +2052,7 @@ onMounted(async () => {
 }
 .summary-stat.ok .stat-num     { color: #3dd6b7; }
 .summary-stat.error .stat-num  { color: #ef4444; }
+.summary-stat.cancelled .stat-num { color: #94a3b8; }
 .summary-stat.fallback .stat-num { color: #fbbf24; }
 
 .stat-label {
@@ -2072,6 +2101,7 @@ onMounted(async () => {
   font-size: 13px;
 }
 .result-error   { background: rgba(239, 68, 68, 0.08); }
+.result-cancelled { background: rgba(148, 163, 184, 0.08); }
 .result-fallback { background: rgba(251, 191, 36, 0.07); }
 
 .result-title {
@@ -2085,6 +2115,7 @@ onMounted(async () => {
   max-width: 280px;
 }
 .result-error .result-title   { color: #fca5a5; }
+.result-cancelled .result-title { color: #cbd5e1; }
 .result-fallback .result-title { color: #fde68a; }
 
 .result-reason {

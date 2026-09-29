@@ -38,7 +38,7 @@ from pydantic import BaseModel
 
 from ..config import logger, get_library_group_for
 from .. import database as db
-from ..media_server import get_client, ImageType
+from ..media_server import get_client, get_server_label, ImageType
 
 router = APIRouter(prefix="/media-mirror", tags=["media-mirror"])
 
@@ -79,7 +79,35 @@ def api_save_mirror_config(req: MirrorConfigRequest):
     updated = db.set_library_group_mirror_config(req.server_id, req.library_id, req.media_type, req.mirror)
     if updated is None:
         raise HTTPException(404, "No Library Group found for this library")
+
+    # Auto-apply the schedule on every config save (matching the poster-retry
+    # scheduler's own "auto-apply on save" convention, not the scan scheduler's
+    # separate-endpoint one) -- never fails the save itself if scheduling has
+    # a problem (a bad cron expression is already validated client-side, but a
+    # scheduler-not-initialized edge case shouldn't block persisting the config).
+    from .. import scheduler as scheduler_module
+    mirror_cfg = updated.get("mirror") or {}
+    try:
+        if mirror_cfg.get("enabled") and mirror_cfg.get("scheduleEnabled") and mirror_cfg.get("scheduleCron"):
+            scheduler_module.schedule_media_mirror(req.server_id, req.library_id, req.media_type, mirror_cfg["scheduleCron"])
+        else:
+            scheduler_module.cancel_media_mirror(req.server_id, req.library_id, req.media_type)
+    except Exception as e:
+        logger.warning("[MIRROR] Could not update the schedule for %s/%s/%s: %s", req.server_id, req.library_id, req.media_type, e)
+
     return {"group": updated}
+
+
+@router.get("/schedule")
+def api_get_mirror_schedule(server_id: str = "plex-1", library_id: str = "", media_type: str = "movie"):
+    """Read-only "next run" info for one group's scheduled mirror (matching
+    GET /api/cleanup/schedule's established shape) -- the enabled/cron/
+    asset-types themselves live on the group's own saved mirror config
+    (already returned by every other endpoint above), this is purely for
+    displaying when it'll next actually fire."""
+    from .. import scheduler as scheduler_module
+    schedule = scheduler_module.get_media_mirror_schedule(server_id, library_id, media_type)
+    return {"schedule": schedule}
 
 
 def _resolve_mapping(group: dict, media_type: str, source_server_id: str, target_server_ids: List[str]) -> List[dict]:
@@ -118,6 +146,20 @@ def api_get_mirror_mapping(
     return {"mapping": mapping, "source_server_id": src, "target_server_ids": targets}
 
 
+_ASSET_TYPE_LABELS = {
+    "poster": "Poster",
+    "logo": "Logo",
+    "backdrop": "Backdrop",
+    "square_art": "Square Art",
+}
+
+
+def _title_display(entry: dict) -> str:
+    title = entry.get("title") or entry.get("source_rating_key") or "Unknown"
+    year = entry.get("year")
+    return f"{title} ({year})" if year else title
+
+
 def _download_and_normalize(source_client, source_rating_key: str, asset_type: str) -> Optional[tuple]:
     """Downloads the source server's CURRENT image of this type and
     normalizes it through the same PIL functions every other send path in
@@ -141,6 +183,80 @@ def _download_and_normalize(source_client, source_rating_key: str, asset_type: s
     # backdrop and square_art both get the same treatment -- Quirk #44's own
     # established reasoning ("the same kind of large photographic image").
     return normalize_backdrop_for_plex(raw)
+
+
+def _sync_one_item(
+    source_client, target_clients: Dict[str, Any], entry: dict, asset_types: List[str],
+    source_label: str, target_labels: Dict[str, str],
+) -> str:
+    """Downloads+uploads every configured asset type for one mapping row to
+    every one of its real (mapped) targets, logging one clean, human-readable
+    line per successful transfer -- "SourceLabel --> TargetLabel: AssetType -
+    Title (Year)" -- instead of the low-level JellyfinClient upload log being
+    the only trace of what happened (just a server_id and an opaque
+    rating_key, no title or direction). Shared by both the full-group run
+    loop below and the single-item manual "Send" endpoint, so both produce
+    identical log lines and identical per-item outcomes. Returns
+    "updated"/"skipped"/"unmapped"/"failed", matching _run_mirror()'s own
+    per-item stat buckets."""
+    title_display = _title_display(entry)
+    real_targets = {t: rk for t, rk in entry.get("targets", {}).items() if rk and t in target_clients}
+    if not real_targets:
+        return "unmapped"
+
+    source_rating_key = entry.get("source_rating_key")
+    item_touched = False
+    item_failed = False
+    for asset_type in asset_types:
+        try:
+            result = _download_and_normalize(source_client, source_rating_key, asset_type)
+        except Exception as e:
+            logger.warning("[MIRROR] Failed to fetch/normalize %s for '%s': %s", asset_type, title_display, e)
+            item_failed = True
+            continue
+        if result is None:
+            continue  # source has no image of this type -- nothing to mirror
+        image_bytes, content_type = result
+        asset_label = _ASSET_TYPE_LABELS.get(asset_type, asset_type)
+        for target_id, target_rating_key in real_targets.items():
+            target_label = target_labels.get(target_id, target_id)
+            try:
+                if asset_type == "poster":
+                    # Reuses the exact verify-after-upload diagnostic
+                    # media_server_send.py's api_send_poster() already has
+                    # (Quirk #77/#96) -- a clean HTTP response from
+                    # upload_image() is not proof the server actually stored
+                    # the new image (see Quirk #36's plex_add_label()
+                    # precedent for the same class of bug); re-fetching and
+                    # comparing size gives a real signal instead of trusting
+                    # a bare status code. Logo/backdrop/square_art don't have
+                    # this treatment yet -- only posters have ever needed it
+                    # in a real report so far.
+                    from .media_server_send import _upload_poster_and_verify
+                    _upload_poster_and_verify(target_clients[target_id], target_id, target_rating_key, image_bytes, content_type)
+                else:
+                    target_clients[target_id].upload_image(
+                        target_rating_key, _ASSET_TYPE_MAP[asset_type], image_bytes, content_type,
+                    )
+                item_touched = True
+                logger.info("[MIRROR] %s --> %s: %s - %s", source_label, target_label, asset_label, title_display)
+            except NotImplementedError:
+                # e.g. square_art has no Jellyfin/Emby equivalent (Quirk #59) -- a
+                # routine, expected skip for this one target, not a real failure.
+                logger.info(
+                    "[MIRROR] %s not supported on %s, skipping for '%s'", asset_type, target_label, title_display,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[MIRROR] %s --> %s: %s - %s FAILED: %s", source_label, target_label, asset_label, title_display, e,
+                )
+                item_failed = True
+
+    if item_failed:
+        return "failed"
+    if item_touched:
+        return "updated"
+    return "skipped"
 
 
 def _run_mirror(server_id: str, library_id: str, media_type: str):
@@ -176,52 +292,24 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
         mapping = _resolve_mapping(group, media_type, source_server_id, target_server_ids)
         unmapped_titles: List[str] = []
 
+        source_label = get_server_label(source_server_id)
+        target_labels = {t: get_server_label(t) for t in target_clients}
+
         updated = skipped = unmapped = failed = 0
         total = len(mapping)
         _update_status(key, {"total": total})
 
         for idx, entry in enumerate(mapping, start=1):
-            title = entry.get("title") or entry.get("source_rating_key") or ""
-            _update_status(key, {"processed": idx - 1, "current": title})
+            title_display = _title_display(entry)
+            _update_status(key, {"processed": idx - 1, "current": title_display})
 
-            real_targets = {t: rk for t, rk in entry.get("targets", {}).items() if rk and t in target_clients}
-            if not real_targets:
+            status = _sync_one_item(source_client, target_clients, entry, asset_types, source_label, target_labels)
+            if status == "unmapped":
                 unmapped += 1
-                unmapped_titles.append(title)
-                continue
-
-            source_rating_key = entry.get("source_rating_key")
-            item_touched = False
-            item_failed = False
-            for asset_type in asset_types:
-                try:
-                    result = _download_and_normalize(source_client, source_rating_key, asset_type)
-                except Exception as e:
-                    logger.warning("[MIRROR] Failed to fetch/normalize %s for '%s': %s", asset_type, title, e)
-                    item_failed = True
-                    continue
-                if result is None:
-                    continue  # source has no image of this type -- nothing to mirror
-                image_bytes, content_type = result
-                for target_id, target_rating_key in real_targets.items():
-                    try:
-                        target_clients[target_id].upload_image(
-                            target_rating_key, _ASSET_TYPE_MAP[asset_type], image_bytes, content_type,
-                        )
-                        item_touched = True
-                    except NotImplementedError:
-                        # e.g. square_art has no Jellyfin/Emby equivalent (Quirk #59) -- a
-                        # routine, expected skip for this one target, not a real failure.
-                        logger.info(
-                            "[MIRROR] %s not supported on %s, skipping for '%s'", asset_type, target_id, title,
-                        )
-                    except Exception as e:
-                        logger.warning("[MIRROR] Failed to upload %s for '%s' to %s: %s", asset_type, title, target_id, e)
-                        item_failed = True
-
-            if item_failed:
+                unmapped_titles.append(title_display)
+            elif status == "failed":
                 failed += 1
-            elif item_touched:
+            elif status == "updated":
                 updated += 1
             else:
                 skipped += 1
@@ -279,6 +367,56 @@ def api_run_mirror(req: MirrorRunRequest):
     thread = threading.Thread(target=_run_mirror, args=(req.server_id, req.library_id, req.media_type), daemon=True)
     thread.start()
     return {"status": "started"}
+
+
+class MirrorSendItemRequest(BaseModel):
+    server_id: str = "plex-1"
+    library_id: str
+    media_type: str
+    source_rating_key: str
+
+
+@router.post("/send-item")
+def api_send_mirror_item(req: MirrorSendItemRequest):
+    """Manual, single-item sync -- the "Send" button next to a row in the
+    Confirm Mappings table, for when the user doesn't want to wait for (or
+    doesn't need) a full "Run Now" across the whole group. Synchronous
+    (small, single-item, typically sub-second) rather than the background-
+    thread-plus-poll shape the full run uses -- there's no meaningful
+    progress bar for one item, just a direct pass/fail. Reuses the group's
+    own saved source/target/asset-type config, matching a full run's
+    behavior exactly, just scoped to the one row identified by
+    source_rating_key."""
+    group = get_library_group_for(req.server_id, req.library_id, req.media_type)
+    if not group:
+        raise HTTPException(404, "No Library Group found for this library")
+    mirror = group.get("mirror") or {}
+    source_server_id = mirror.get("sourceServerId")
+    target_server_ids = [t for t in (mirror.get("targetServerIds") or []) if t]
+    asset_types = [a for a in (mirror.get("assetTypes") or []) if a in _ASSET_TYPE_MAP]
+    if not source_server_id or not target_server_ids or not asset_types:
+        raise HTTPException(400, "Media Mirror is missing a source server, target server(s), or asset type(s)")
+
+    source_client = get_client(source_server_id)
+    if not source_client:
+        raise HTTPException(400, f"Source server '{source_server_id}' is not configured/enabled")
+    target_clients = {}
+    for target_id in target_server_ids:
+        client = get_client(target_id)
+        if client:
+            target_clients[target_id] = client
+    if not target_clients:
+        raise HTTPException(400, "No configured target server is currently reachable")
+
+    mapping = _resolve_mapping(group, req.media_type, source_server_id, target_server_ids)
+    entry = next((e for e in mapping if e.get("source_rating_key") == req.source_rating_key), None)
+    if not entry:
+        raise HTTPException(404, "This item wasn't found in the current mapping -- try Refresh Mapping")
+
+    source_label = get_server_label(source_server_id)
+    target_labels = {t: get_server_label(t) for t in target_clients}
+    status = _sync_one_item(source_client, target_clients, entry, asset_types, source_label, target_labels)
+    return {"status": status, "title": _title_display(entry)}
 
 
 @router.get("/run-status")

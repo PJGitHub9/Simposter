@@ -267,7 +267,17 @@ def api_preview(req: PreviewRequest):
                     if tmdb_id:
                         logger.debug("[PREVIEW] Resolved tmdb_id=%s for non-Plex rating_key=%s%s from DB cache", tmdb_id, rating_key, _dt)
                 else:
-                    tmdb_id = get_movie_tmdb_id(rating_key)
+                    # Also prefer the cached tmdb_id over a live fetch for a
+                    # genuine Plex item, same as batch.py's own fix -- the
+                    # scan already resolves and caches tmdb_id for Plex items
+                    # too (Quirk #120), so re-fetching it live on every single
+                    # preview is both slow (a real Plex round-trip/timeout per
+                    # click) and, when Plex happens to be unreachable, fails
+                    # outright -- even for a preview that has nothing to do
+                    # with Plex being reachable right now. Only falls through
+                    # to the live fetch when nothing's cached yet.
+                    cached_tmdb_id, _ = db.get_ids_for_rating_key(rating_key)
+                    tmdb_id = cached_tmdb_id or get_movie_tmdb_id(rating_key)
                 if tmdb_id:
                     logger.debug("[PREVIEW] Found tmdb_id=%s for rating_key=%s%s", tmdb_id, rating_key, _dt)
 
@@ -405,8 +415,16 @@ def api_preview(req: PreviewRequest):
                         logger.debug("[PREVIEW] Skipping logo fetch because logo_mode='none'")
                 else:
                     logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s%s, trying Plex poster", rating_key, _dt)
-                    # Fallback: Try Plex poster directly
-                    if not background_url:
+                    # Fallback: Try Plex poster directly. Also treated as
+                    # "not yet resolved" when background_url is still the
+                    # frontend's own internal marker URL (/api/movie/.../poster)
+                    # -- a bare `not background_url` check never fires here for
+                    # Batch Edit's preview panel, which always sends that
+                    # marker URL non-empty, so this fallback silently never ran
+                    # and the marker URL itself got treated as a literal image
+                    # source downstream (a confusing self-referential 404,
+                    # not a real Plex/TMDb failure).
+                    if not background_url or "/api/movie/" in background_url or "/api/tv-show/" in background_url:
                         try:
                             from ..config import settings as config_settings
                             plex_base = config_settings.PLEX_URL.rstrip('/')
@@ -417,8 +435,10 @@ def api_preview(req: PreviewRequest):
                             logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
                 logger.warning("[PREVIEW] TMDB lookup failed: %s", e)
-                # Fallback: try to fetch poster directly from Plex
-                if not background_url and rating_key:
+                # Fallback: try to fetch poster directly from Plex -- same
+                # marker-URL-aware check as above, still requiring rating_key
+                # (matching the original condition's own requirement).
+                if rating_key and (not background_url or "/api/movie/" in background_url or "/api/tv-show/" in background_url):
                     try:
                         from ..config import settings as config_settings
                         plex_base = config_settings.PLEX_URL.rstrip('/')
@@ -449,12 +469,19 @@ def api_preview(req: PreviewRequest):
                     if tmdb_id or tvdb_id:
                         logger.debug("[PREVIEW] Resolved tmdb_id=%s tvdb_id=%s for non-Plex TV rating_key=%s%s from DB cache", tmdb_id, tvdb_id, rating_key, _dt)
                 else:
-                    url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
-                    r = plex_session.get(url, headers=plex_headers(), timeout=6)
-                    r.raise_for_status()
+                    # Also prefer the cached tmdb_id/tvdb_id over a live fetch
+                    # for a genuine Plex show, same as the movie branch above --
+                    # the TV scan already resolves and caches both for Plex
+                    # shows too (Quirk #120). Only falls through to the live
+                    # fetch when nothing's cached yet.
+                    tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+                    if not tmdb_id:
+                        url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
+                        r = plex_session.get(url, headers=plex_headers(), timeout=6)
+                        r.raise_for_status()
 
-                    tmdb_id = extract_tmdb_id_from_metadata(r.text)
-                    tvdb_id = extract_tvdb_id_from_metadata(r.text)
+                        tmdb_id = extract_tmdb_id_from_metadata(r.text)
+                        tvdb_id = extract_tvdb_id_from_metadata(r.text)
 
                 if tmdb_id and not tvdb_id:
                     try:
@@ -613,8 +640,11 @@ def api_preview(req: PreviewRequest):
                         except Exception as tvdb_err:
                             logger.warning("[PREVIEW] TVDB lookup failed: %s", tvdb_err)
 
-                    # Fallback 2: Try Plex poster directly
-                    if not background_url:
+                    # Fallback 2: Try Plex poster directly -- also treated as
+                    # "not yet resolved" when background_url is still the
+                    # frontend's own internal marker URL, same reasoning as
+                    # the movie branch above.
+                    if not background_url or "/api/movie/" in background_url or "/api/tv-show/" in background_url:
                         try:
                             plex_base = config_settings.PLEX_URL.rstrip('/')
                             plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
@@ -624,8 +654,9 @@ def api_preview(req: PreviewRequest):
                             logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
                 logger.warning("[PREVIEW] TV show lookup failed: %s", e)
-                # Fallback: try to fetch poster directly from Plex
-                if not background_url and rating_key:
+                # Fallback: try to fetch poster directly from Plex -- same
+                # marker-URL-aware check as above.
+                if rating_key and (not background_url or "/api/movie/" in background_url or "/api/tv-show/" in background_url):
                     try:
                         from ..config import settings as config_settings
                         plex_base = config_settings.PLEX_URL.rstrip('/')

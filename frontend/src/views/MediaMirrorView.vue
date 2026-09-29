@@ -22,6 +22,8 @@ type MirrorGroup = {
     sourceServerId?: string | null
     targetServerIds?: string[]
     assetTypes?: string[]
+    scheduleEnabled?: boolean
+    scheduleCron?: string | null
     lastRunAt?: string | null
     lastRunStats?: {
       checked?: number
@@ -68,11 +70,31 @@ const assetTypes = ref<Set<string>>(new Set(['poster']))
 const saving = ref(false)
 const saveMessage = ref('')
 
+// Scheduled sync (Quirk #123's follow-up) -- runs a full sync on a cron,
+// same shape as Settings -> Cleanup's own scheduled-cleanup UI (checkbox +
+// cron text input + "Next Run"). Rides along on the SAME config save as
+// everything else above (mirror.scheduleEnabled/scheduleCron are just two
+// more fields on the one config object POST /config already saves as a
+// unit) -- no separate save action needed, unlike Cleanup's page-wide Save
+// Changes button, since Media Mirror's config has always auto-saved on its
+// own "Save Configuration" click.
+const scheduleEnabled = ref(false)
+const scheduleCron = ref('0 3 * * 0')
+const nextRun = ref<string | null>(null)
+
 const mapping = ref<MirrorMappingEntry[]>([])
 const mappingLoading = ref(false)
 
 const runStatus = ref<RunStatus>({ state: 'idle' })
 let pollHandle: ReturnType<typeof setInterval> | null = null
+// Continuous polling (started on mount, only stopped on unmount) means
+// `runStatus` is always live/trustworthy -- no need for a session-scoped
+// gate to hide a stale completed-with-error status, since the very next
+// poll after mount already reflects reality. `previousRunState` lets the
+// poller detect a running->done transition (to refresh the group/mapping)
+// without ever needing to stop and restart the interval around a run.
+const starting = ref(false)
+let previousRunState: RunStatus['state'] | undefined
 
 // Every server this library's group actually links, labeled via the same
 // shared helper the rest of the app already uses (Quirk #79) so a custom
@@ -99,6 +121,25 @@ const ASSET_TYPE_LABELS: Record<string, string> = {
   square_art: 'Square Art',
 }
 
+// Square Art has no Jellyfin/Emby equivalent at all -- JellyfinClient can't
+// download it from a non-Plex source (Quirk #59) and can't upload it to a
+// non-Plex target (raises NotImplementedError, harmlessly skipped per item
+// by the sync engine -- Quirk #123). It only ever does anything useful when
+// BOTH the source and at least one selected target are Plex, matching the
+// same "Square art only available in Plex" rule this app already applies
+// to the Logos/Backdrops/Square Art library tabs (Quirk #92).
+const isPlexId = (id: string) => id.startsWith('plex')
+const squareArtAvailable = computed(() =>
+  isPlexId(sourceServerId.value) && Array.from(targetServerIds.value).some(isPlexId)
+)
+watch(squareArtAvailable, (available) => {
+  if (!available && assetTypes.value.has('square_art')) {
+    const next = new Set(assetTypes.value)
+    next.delete('square_art')
+    assetTypes.value = next
+  }
+})
+
 function toggleTarget(id: string) {
   const next = new Set(targetServerIds.value)
   if (next.has(id)) next.delete(id)
@@ -107,6 +148,7 @@ function toggleTarget(id: string) {
 }
 
 function toggleAssetType(id: string) {
+  if (id === 'square_art' && !squareArtAvailable.value) return
   const next = new Set(assetTypes.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
@@ -131,6 +173,7 @@ async function fetchGroup() {
   } finally {
     loading.value = false
   }
+  await fetchSchedule()
 }
 
 function applyConfigFromGroup() {
@@ -139,6 +182,27 @@ function applyConfigFromGroup() {
   sourceServerId.value = mirror?.sourceServerId || group.value?.members?.[0]?.serverId || ''
   targetServerIds.value = new Set((mirror?.targetServerIds || []).filter(Boolean))
   assetTypes.value = new Set((mirror?.assetTypes && mirror.assetTypes.length) ? mirror.assetTypes : ['poster'])
+  scheduleEnabled.value = !!mirror?.scheduleEnabled
+  scheduleCron.value = mirror?.scheduleCron || '0 3 * * 0'
+}
+
+async function fetchSchedule() {
+  if (!libraryId.value) {
+    nextRun.value = null
+    return
+  }
+  try {
+    const params = new URLSearchParams({
+      server_id: serverId.value, library_id: libraryId.value, media_type: mediaType.value,
+    })
+    const res = await fetch(`${apiBase}/api/media-mirror/schedule?${params.toString()}`)
+    if (res.ok) {
+      const data = await res.json()
+      nextRun.value = data.schedule?.next_run_time || null
+    }
+  } catch {
+    nextRun.value = null
+  }
 }
 
 // Switching the source server should drop it from the target list if it was
@@ -154,6 +218,12 @@ watch(sourceServerId, (val) => {
 async function saveConfig() {
   saving.value = true
   saveMessage.value = ''
+  // A saved config invalidates whatever an earlier run's error was about --
+  // don't leave a stale failure banner from before this save sitting there.
+  if (runStatus.value.state !== 'running') {
+    runStatus.value = { state: 'idle' }
+    previousRunState = 'idle'
+  }
   try {
     const res = await fetch(`${apiBase}/api/media-mirror/config`, {
       method: 'POST',
@@ -167,6 +237,8 @@ async function saveConfig() {
           sourceServerId: sourceServerId.value || null,
           targetServerIds: Array.from(targetServerIds.value),
           assetTypes: Array.from(assetTypes.value),
+          scheduleEnabled: scheduleEnabled.value,
+          scheduleCron: scheduleCron.value || null,
         },
       }),
     })
@@ -175,6 +247,7 @@ async function saveConfig() {
       group.value = data.group || group.value
       saveMessage.value = 'Saved.'
       await fetchMapping()
+      await fetchSchedule()
     } else {
       saveMessage.value = 'Failed to save.'
     }
@@ -214,6 +287,65 @@ async function fetchMapping() {
 
 const unmappedCount = computed(() => mapping.value.filter(m => !Object.values(m.targets || {}).some(v => v)).length)
 
+function rowHasAnyMatch(entry: MirrorMappingEntry): boolean {
+  return Array.from(targetServerIds.value).some(id => !!(entry.targets && entry.targets[id]))
+}
+
+// Per-row manual "Send" (Quirk #123's follow-up) -- keyed by source_rating_key
+// so multiple rows can be in flight independently, matching the Set-ref
+// pattern this app already uses elsewhere for per-item async state.
+const sendingKeys = ref<Set<string>>(new Set())
+const sendResults = ref<Record<string, string>>({})
+
+function sendResultLabel(status: string): string {
+  if (status === 'updated') return '✓ Sent'
+  if (status === 'skipped') return '— Nothing to send'
+  if (status === 'unmapped') return '— No match'
+  if (status === 'failed') return '✗ Failed'
+  return '✗ Error'
+}
+
+async function sendItem(entry: MirrorMappingEntry) {
+  const key = entry.source_rating_key
+  if (!key) return
+  sendingKeys.value = new Set(sendingKeys.value).add(key)
+  const clearedResults = { ...sendResults.value }
+  delete clearedResults[key]
+  sendResults.value = clearedResults
+  try {
+    const res = await fetch(`${apiBase}/api/media-mirror/send-item`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        server_id: serverId.value,
+        library_id: libraryId.value,
+        media_type: mediaType.value,
+        source_rating_key: key,
+      }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      sendResults.value = { ...sendResults.value, [key]: data.status || 'updated' }
+    } else {
+      const data = await res.json().catch(() => ({}))
+      sendResults.value = { ...sendResults.value, [key]: 'error' }
+      saveMessage.value = data.detail || 'Could not send this item.'
+      setTimeout(() => { saveMessage.value = '' }, 4000)
+    }
+  } catch {
+    sendResults.value = { ...sendResults.value, [key]: 'error' }
+  } finally {
+    const next = new Set(sendingKeys.value)
+    next.delete(key)
+    sendingKeys.value = next
+    setTimeout(() => {
+      const cleared = { ...sendResults.value }
+      delete cleared[key]
+      sendResults.value = cleared
+    }, 5000)
+  }
+}
+
 async function pollRunStatus() {
   try {
     const params = new URLSearchParams({
@@ -223,21 +355,19 @@ async function pollRunStatus() {
     if (res.ok) {
       const data: RunStatus = await res.json()
       runStatus.value = data
-      if (data.state !== 'running' && pollHandle) {
-        clearInterval(pollHandle)
-        pollHandle = null
-        if (data.state === 'done') {
-          await fetchGroup()
-          await fetchMapping()
-        }
+      if (previousRunState === 'running' && data.state === 'done') {
+        await fetchGroup()
+        await fetchMapping()
       }
+      previousRunState = data.state
     }
   } catch {
-    // transient -- keep polling
+    // transient -- keep polling regardless
   }
 }
 
 async function runNow() {
+  starting.value = true
   try {
     const res = await fetch(`${apiBase}/api/media-mirror/run`, {
       method: 'POST',
@@ -246,8 +376,7 @@ async function runNow() {
     })
     if (res.ok) {
       runStatus.value = { state: 'running', total: 0, processed: 0 }
-      if (pollHandle) clearInterval(pollHandle)
-      pollHandle = setInterval(pollRunStatus, 1000)
+      previousRunState = 'running'
     } else {
       const data = await res.json().catch(() => ({}))
       saveMessage.value = data.detail || 'Could not start run.'
@@ -256,6 +385,8 @@ async function runNow() {
   } catch {
     saveMessage.value = 'Could not start run.'
     setTimeout(() => { saveMessage.value = '' }, 4000)
+  } finally {
+    starting.value = false
   }
 }
 
@@ -277,7 +408,10 @@ async function refresh() {
 }
 
 watch([libraryId, serverId], refresh)
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  pollHandle = setInterval(pollRunStatus, 2000)
+})
 onUnmounted(() => {
   if (pollHandle) clearInterval(pollHandle)
 })
@@ -346,28 +480,49 @@ onUnmounted(() => {
           <div class="config-field">
             <label class="field-label">Asset types</label>
             <div class="checkbox-list">
-              <label v-for="(label, id) in ASSET_TYPE_LABELS" :key="id" class="checkbox-item">
+              <label
+                v-for="(label, id) in ASSET_TYPE_LABELS"
+                :key="id"
+                class="checkbox-item"
+                :class="{ 'checkbox-item-disabled': id === 'square_art' && !squareArtAvailable }"
+                :title="id === 'square_art' && !squareArtAvailable
+                  ? 'Square Art only works when both the source and at least one target are Plex — Jellyfin/Emby have no square art equivalent.'
+                  : undefined"
+              >
                 <input
                   type="checkbox"
                   :checked="assetTypes.has(id)"
+                  :disabled="id === 'square_art' && !squareArtAvailable"
                   @change="toggleAssetType(id)"
                 />
                 {{ label }}
               </label>
             </div>
           </div>
+
+          <div class="config-field">
+            <label class="field-label checkbox-field-label">
+              <input type="checkbox" v-model="scheduleEnabled" />
+              Run on a schedule
+            </label>
+            <div v-if="scheduleEnabled" class="schedule-config">
+              <input v-model="scheduleCron" type="text" class="toolbar-select cron-input" placeholder="0 3 * * 0" />
+              <span class="help-text">Example: "0 3 * * 0" = Weekly, Sundays at 3 AM. Runs a full sync each time (not incremental).</span>
+              <div v-if="nextRun" class="next-run-note">Next run: {{ formatLastRun(nextRun) }}</div>
+            </div>
+          </div>
         </div>
 
         <div class="config-actions">
-          <button class="primary" :disabled="saving" @click="saveConfig">
+          <button class="primary" :disabled="saving || runStatus.state === 'running'" @click="saveConfig">
             {{ saving ? 'Saving...' : 'Save Configuration' }}
           </button>
           <button
             class="secondary"
-            :disabled="!enabled || runStatus.state === 'running' || sourceServerId === '' || targetServerIds.size === 0"
+            :disabled="starting || !enabled || runStatus.state === 'running' || sourceServerId === '' || targetServerIds.size === 0"
             @click="runNow"
           >
-            {{ runStatus.state === 'running' ? 'Running...' : 'Run Now' }}
+            {{ starting ? 'Starting...' : (runStatus.state === 'running' ? 'Running...' : 'Run Now') }}
           </button>
         </div>
 
@@ -426,6 +581,7 @@ onUnmounted(() => {
                   <th v-for="id in Array.from(targetServerIds)" :key="id">
                     {{ memberOptions.find(o => o.id === id)?.label || id }}
                   </th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -434,6 +590,22 @@ onUnmounted(() => {
                   <td v-for="id in Array.from(targetServerIds)" :key="id">
                     <span v-if="entry.targets && entry.targets[id]" class="mapped-ok">✓ Mapped</span>
                     <span v-else class="mapped-missing">— No match</span>
+                  </td>
+                  <td class="mapping-send-cell">
+                    <button
+                      class="secondary-small"
+                      :disabled="!entry.source_rating_key || sendingKeys.has(entry.source_rating_key) || !rowHasAnyMatch(entry)"
+                      @click="sendItem(entry)"
+                    >
+                      {{ entry.source_rating_key && sendingKeys.has(entry.source_rating_key) ? 'Sending...' : 'Send' }}
+                    </button>
+                    <span
+                      v-if="entry.source_rating_key && sendResults[entry.source_rating_key]"
+                      class="send-result-inline"
+                      :class="{ 'send-result-ok': sendResults[entry.source_rating_key] === 'updated' }"
+                    >
+                      {{ sendResultLabel(sendResults[entry.source_rating_key] || '') }}
+                    </span>
                   </td>
                 </tr>
               </tbody>
@@ -593,10 +765,47 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
+.checkbox-item-disabled {
+  color: #6b7a99;
+  cursor: not-allowed;
+}
+
+.checkbox-item-disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
 .no-labels-hint {
   font-size: 12px;
   color: #6b7a99;
   font-style: italic;
+}
+
+.checkbox-field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.schedule-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.cron-input {
+  max-width: 180px;
+}
+
+.help-text {
+  font-size: 12px;
+  color: #6b7a99;
+}
+
+.next-run-note {
+  font-size: 12px;
+  color: var(--accent, #3dd6b7);
 }
 
 .config-actions {
@@ -746,5 +955,21 @@ button.secondary-small:disabled {
 
 .mapped-missing {
   color: #6b7a99;
+}
+
+.mapping-send-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.send-result-inline {
+  font-size: 12px;
+  color: #6b7a99;
+}
+
+.send-result-ok {
+  color: var(--accent, #3dd6b7);
 }
 </style>

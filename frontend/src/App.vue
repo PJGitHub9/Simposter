@@ -672,6 +672,25 @@ const stopBatchPolling = () => {
 // Export for use by BatchEditModal
 ;(window as any).startBatchPolling = startBatchPolling
 
+const batchStopping = ref(false)
+const stopBatch = async () => {
+  if (batchStopping.value) return
+  batchStopping.value = true
+  const apiBase = getApiBase()
+  try {
+    await fetch(`${apiBase}/api/batch-cancel`, { method: 'POST' })
+    // Doesn't wait for the batch to actually finish winding down -- the
+    // existing poller (already running at 200ms) picks up the resulting
+    // state=cancelled the same way it picks up state=done, no extra
+    // polling logic needed here.
+  } catch {
+    /* the regular poller will just keep showing "running" if this failed --
+       the button stays clickable to try again */
+  } finally {
+    batchStopping.value = false
+  }
+}
+
 // --- Backup progress polling (same pattern as batch) ---
 const fetchBackupStatus = async () => {
   const apiBase = getApiBase()
@@ -915,6 +934,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       <div v-if="operationStatus.state.value === 'running'" class="spinner"></div>
       <div v-else-if="operationStatus.state.value === 'done'" class="checkmark">✓</div>
       <div v-else-if="operationStatus.state.value === 'error'" class="error-icon">✕</div>
+      <div v-else-if="operationStatus.state.value === 'cancelled'" class="error-icon">■</div>
 
       <div class="operation-body">
         <p class="title">
@@ -923,7 +943,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
           </span>
           <span v-else-if="operationStatus.type.value === 'batch'">
             {{ operationStatus.state.value === 'running' ? 'Processing batch...' :
-               operationStatus.state.value === 'error' ? 'Batch failed!' : 'Batch complete!' }}
+               operationStatus.state.value === 'error' ? 'Batch failed!' :
+               operationStatus.state.value === 'cancelled' ? 'Batch stopped.' : 'Batch complete!' }}
           </span>
           <span v-else-if="operationStatus.type.value === 'backup'">
             {{ operationStatus.state.value === 'running' ? 'Backup / Restore in progress...' :
@@ -937,6 +958,15 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
           <span v-if="operationStatus.currentStep.value" class="batch-step">{{ operationStatus.currentStep.value }}</span>
           <span v-if="operationStatus.currentMovie.value" class="batch-movie">{{ operationStatus.currentMovie.value }}</span>
         </p>
+
+        <button
+          v-if="operationStatus.type.value === 'batch' && operationStatus.state.value === 'running'"
+          class="stop-batch-btn"
+          :disabled="batchStopping"
+          @click="stopBatch"
+        >
+          {{ batchStopping ? 'Stopping...' : 'Stop' }}
+        </button>
 
         <!-- For scan, show simpler format -->
         <template v-else>
@@ -1254,6 +1284,29 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   font-size: 12px;
   color: #ff6b6b;
   font-weight: 500;
+}
+
+.stop-batch-btn {
+  margin-top: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.stop-batch-btn:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.stop-batch-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* Mobile hamburger button */

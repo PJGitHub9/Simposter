@@ -59,6 +59,12 @@ const activeTab = ref<'general' | 'libraries' | 'media-servers' | 'output' | 'pe
 const hasUnsavedChanges = ref(false)
 const initialSettingsSnapshot = ref('')
 const watchersEnabled = ref(false)
+// The last-saved libraryGroups list -- threaded down to LibrariesTab ->
+// LibraryGroupCard so each card can show its OWN unsaved indicator (a
+// per-group "Merge items" toggle, say) instead of only the whole-section
+// yellow border, which is easy to miss on a page with several groups. Kept
+// in sync with initialSettingsSnapshot inside captureSettingsSnapshot().
+const initialLibraryGroups = ref<any[]>([])
 
 // Track which sections have unsaved changes
 const sectionsWithChanges = ref({
@@ -526,6 +532,7 @@ const checkForChanges = () => {
   // against the store, not localLibraries/localTvShowLibraries, so those two
   // alone would miss exactly the "add/remove groups" case the user reported.
   const initialGroups: any[] = initial.libraryGroups || []
+  initialLibraryGroups.value = initialGroups
   const byMediaType = (list: any[], mediaType: string) => list.filter(g => g && g.mediaType === mediaType)
   sectionsWithChanges.value.movieLibraries =
     JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries) ||
@@ -1218,24 +1225,15 @@ const fetchPresets = async () => {
 onMounted(async () => {
   watchersEnabled.value = false
 
-  // Only re-fetch (and only re-baseline the unsaved-changes snapshot) when
-  // settings genuinely weren't loaded yet this session. Re-running
-  // captureSettingsSnapshot() unconditionally on every mount was a real bug:
-  // navigating to Settings a second time within the same session (route away
-  // and back -- this component fully remounts) always re-fired it, silently
-  // re-baselining "current" as "saved" for anything bound directly to the
-  // store with no local staging ref (libraryGroups/mediaServers/
-  // preferredPosterServer, Quirk #79/#119/#120) -- an unsaved live edit (e.g.
-  // toggling a group's "Merge items" checkbox) survives the remount visually
-  // since it's the store's actual in-memory value, but re-baselining against
-  // it made hasUnsavedChanges/Save look like there was nothing to persist,
-  // even though the backend was never actually told about it. Reported
-  // directly: had to uncheck+save+check+save (two real saves) to make a
-  // single checkbox change actually stick.
-  const alreadyLoaded = settings.loaded.value
-  if (!alreadyLoaded) {
-    await settings.load()
-  }
+  // Always re-fetch from the backend and re-baseline against it on every
+  // mount -- a fresh visit to Settings should show the actual saved state,
+  // not whatever was left in the store from a prior visit's unsaved edit
+  // (e.g. toggling a group's "Merge items" checkbox and navigating away
+  // without saving). settings.load() unconditionally overwrites every store
+  // field, including the ones bound directly with no local staging ref
+  // (libraryGroups/mediaServers/preferredPosterServer, Quirk #79/#119/#120),
+  // so baselining against it here is always correct.
+  await settings.load()
 
   await loadLocalSettings()
   await fetchPresets()
@@ -1247,18 +1245,10 @@ onMounted(async () => {
   await fetchSchedulerStatus()
 
   await nextTick()
-  if (!alreadyLoaded) {
-    captureSettingsSnapshot()
-  } else {
-    // Re-evaluate against the EXISTING (still-correct) baseline immediately,
-    // so a remount with a genuinely still-unsaved edit shows the yellow
-    // "unsaved changes" state right away, instead of only after the user's
-    // next edit happens to re-trigger the (currently disabled) watcher.
-    checkForChanges()
-    setTimeout(() => {
-      watchersEnabled.value = true
-    }, 100)
-  }
+  captureSettingsSnapshot()
+  setTimeout(() => {
+    watchersEnabled.value = true
+  }, 100)
 })
 
 watch(
@@ -1358,6 +1348,16 @@ watch(() => route.query.tab, (newTab) => {
   }
 })
 
+// libraryGroups/mediaServers/automation.preferredPosterServer are bound
+// directly to the store with no local staging ref (Quirk #79/#119/#120),
+// so an unsaved edit deliberately survives leaving and returning to
+// Settings (rather than being silently discarded) -- the per-field
+// "● Unsaved" indicator (LibraryGroupCard.vue's mergeUnsaved, plus the
+// existing whole-section yellow border) is what tells you it still needs
+// saving. A revert-on-confirmed-leave version of this was tried and
+// reverted at the user's own request: they preferred the edit staying
+// visible with a clear "still unsaved" marker over it silently vanishing
+// the moment you navigate away, even with a confirm dialog in between.
 onBeforeRouteLeave((_to, _from, next) => {
   stopScanPolling()
 
@@ -1516,6 +1516,7 @@ onMounted(() => {
         :schedulerChanged="sectionsWithChanges.scheduler"
         :movieLibrariesChanged="sectionsWithChanges.movieLibraries"
         :tvLibrariesChanged="sectionsWithChanges.tvLibraries"
+        :initialLibraryGroups="initialLibraryGroups"
         :sendLogosToPlex="localSendLogosToPlex"
         :kometaCompatibility="localKometaCompatibility"
         @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"

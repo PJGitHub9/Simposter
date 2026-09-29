@@ -2852,6 +2852,35 @@ def set_library_group_preferred_server(server_id: str, library_id: str, media_ty
     return updated_group
 
 
+def set_library_group_merge_items(server_id: str, library_id: str, media_type: str, merge_items: bool) -> Optional[Dict[str, Any]]:
+    """Updates just one Library Group's `mergeItems` in place and saves
+    immediately -- same "identify the group, mutate one field, save now"
+    pattern as set_library_group_preferred_server() above, applied to the
+    Merge Items checkbox (Quirk #120/#121) instead of gating it behind
+    Settings' own Save button. Added specifically so toggling it can never be
+    lost by navigating away without clicking Save, or by the confirm-leave
+    dialog being dismissed the wrong way -- the checkbox now behaves exactly
+    like its sibling "Show posters from" control. Returns the updated group
+    dict, or None if no group matches the given (server_id, library_id,
+    media_type)."""
+    settings_row = get_ui_settings() or {}
+    groups = settings_row.get("libraryGroups") or []
+    updated_group = None
+    for group in groups:
+        if group.get("mediaType") != media_type:
+            continue
+        members = group.get("members") or []
+        if any(m.get("serverId") == server_id and m.get("libraryId") == str(library_id) for m in members):
+            group["mergeItems"] = merge_items
+            updated_group = group
+            break
+    if updated_group is None:
+        return None
+    settings_row["libraryGroups"] = groups
+    save_ui_settings(settings_row)
+    return updated_group
+
+
 def set_library_group_mirror_config(server_id: str, library_id: str, media_type: str, mirror_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Updates just one Library Group's `mirror` config in place and saves
     immediately (Quirk #123's Media Mirror feature) -- same "identify the

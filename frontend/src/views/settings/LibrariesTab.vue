@@ -80,6 +80,11 @@ const props = defineProps<{
   schedulerChanged?: boolean
   movieLibrariesChanged?: boolean
   tvLibrariesChanged?: boolean
+  // The last-SAVED libraryGroups list (not the live store) -- lets each
+  // LibraryGroupCard show its own per-field "unsaved" dot instead of only
+  // the whole-section yellow border above, which a user can miss when
+  // there are several groups and only one of them actually changed.
+  initialLibraryGroups?: any[]
   sendLogosToPlex: boolean
   kometaCompatibility: boolean
 }>()
@@ -630,6 +635,7 @@ watch(
           v-for="card in movieUnifiedCards"
           :key="card.key"
           :group="card.group"
+          :initial-group="(props.initialLibraryGroups || []).find(g => g && g.id === card.group.id) || null"
           media-type="movie"
           :discovered="discoveredLibraries"
           :plex-libraries="plexLibraries"
@@ -665,6 +671,7 @@ watch(
           v-for="card in tvUnifiedCards"
           :key="card.key"
           :group="card.group"
+          :initial-group="(props.initialLibraryGroups || []).find(g => g && g.id === card.group.id) || null"
           media-type="tv"
           :discovered="discoveredLibraries"
           :plex-libraries="plexLibraries"
