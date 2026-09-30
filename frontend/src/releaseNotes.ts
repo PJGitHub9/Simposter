@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.2',
+    date: '2026-09-30',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Beta version of Jellyfin/Emby support implemented — connect one or more media servers, link libraries into shared groups, browse merged content, and send posters/logos/backdrops across servers. Still in beta: please report any issues you run into.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.114',
     date: '2026-09-23',
     sections: [

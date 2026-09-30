@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.6.2 (2026-09-30) — `dev-jellyfin` branch — Beta: Jellyfin/Emby Support
+
+**First versioned release of the Jellyfin/Emby multi-server work.** Everything below has been building up unversioned on this branch since the previous entry (v1.6.113/114) — see CLAUDE.md Quirks #56 onward for the full, detailed build history. This is a beta: multi-server support is genuinely usable, but has known gaps (see below) and hasn't had extensive real-world testing yet — please report anything that looks wrong.
+
+### New Features
+- **Connect one or more media servers** — Plex, Jellyfin, and/or Emby, any combination, all at once (Settings → Media Servers). An install can now run Plex-only (unchanged from before), Jellyfin/Emby-only (no Plex required at all), or any mix.
+- **Library Groups** (Settings → Libraries) — link the same logical library across servers (e.g. Plex "Movies" + Jellyfin "Movies") into one group. A group can have any combination of members, including just a single Jellyfin/Emby library with no Plex at all.
+- **Merged browsing** — the same movie/show found on more than one linked server shows as a single card by default (toggle per-library via "Show posters from," or per-group via "Merge items" in Settings → Libraries).
+- **Multi-server send** — the manual editor, the grid's resend button, and Batch Edit can all send posters/logos/backdrops to Plex and/or Jellyfin/Emby, including for a merged item reaching its counterpart on another server.
+- **Media Mirror** — designate one linked server's library as "the truth" and copy its posters/logos/backdrops/square art to other linked servers, either manually ("Run Now") or on a schedule.
+- **Scheduled Scans** now cover Plex and/or Jellyfin and/or Emby — a single global schedule scans configured Plex libraries, every linked Jellyfin/Emby library, and every standalone Jellyfin/Emby-only group.
+- **Scan All Libraries / a single library's "Scan" button** now both correctly scan any linked Jellyfin/Emby library too, not just the Plex side.
+
+### Known Limitations (beta)
+- Webhook-triggered automation (Radarr/Sonarr/Tautulli) and the "recently added" auto-generate poll are still Plex-first-class — a webhook-triggered poster does sync to linked servers afterward, but the initial trigger itself still needs a Plex-anchored library.
+- Discord/Apprise notifications are not yet fully multi-server aware.
+- TV season-level sends to Jellyfin/Emby are supported; some edge cases around season resolution are still being verified against real servers.
+- Labels (removal after sending, Kometa compatibility) remain a Plex-only concept — Jellyfin/Emby have no equivalent mechanism.
+
+### Bug Fixes (this release)
+- A genuinely standalone Jellyfin/Emby-only library group was never covered by "Scan All Libraries" or the scheduled scan — only libraries linked to a Plex library were. Both now cover every linked and standalone group.
+- The "Rescanning library..." overlay could freeze mid-scan if you navigated away from Settings — the polling that kept it updated was tied to that page's own lifecycle instead of the overlay's actual global visibility. It now updates correctly regardless of which page you're on.
+- Linking a Plex library into an existing Library Group from Settings → Libraries could silently create a duplicate/incorrect entry instead of joining the group you picked it from, due to a race between two places independently writing the same data. Fixed to a single, correct writer.
+- Testing a Plex connection no longer auto-populates every discovered library as "tracked" — library tracking now only ever happens through the explicit per-group linking picker, matching the "pick what you want tracked" model the rest of Settings → Libraries already uses.
+- Onboarding re-runs (Settings → Advanced → "Run Startup Wizard") no longer auto-create or auto-scan Library Groups — that now only happens on a genuine first-time setup; a re-run only touches what you explicitly edit and save.
+
 ## v1.6.114 (2026-09-23) — `dev-jellyfin` branch
 ### New Features
 - **Settings → Media Servers**: a new tab to add, enable, test-connect, and remove Plex/Jellyfin/Emby entries in the `mediaServers` setting through the actual UI, replacing the direct-SQL workaround the Phase 3 debug endpoints required.
