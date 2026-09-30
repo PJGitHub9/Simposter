@@ -82,7 +82,25 @@ for env_path in env_candidates:
 #  Settings (loads .env properly)
 # ===============================
 class Settings(BaseSettings):
-    PLEX_URL: str = "http://localhost:32400"
+    # Empty by default, not a placeholder like "http://localhost:32400" --
+    # this class-level default only ever kicks in when no PLEX_URL env var is
+    # set at all, and _default_ui_settings() (ui_settings.py) copies whatever
+    # this evaluates to straight into a fresh install's "not yet configured"
+    # settings response. A non-empty placeholder there looked exactly like a
+    # real, user-provided value everywhere else in the app that checks
+    # `if settings.PLEX_URL` to mean "Plex is configured" -- including once it
+    # got saved into the DB as a real settings row by the very first save (an
+    # onboarding "Skip Plex" run included), permanently making a genuinely
+    # never-configured install look configured. This default was never
+    # load-bearing for docker-compose.yml (which never sets this env var) or
+    # the documented .env.example convenience flow (that sets a REAL env var,
+    # picked up independently via os.getenv() in _env_overrides() below,
+    # regardless of this class default) -- verified before removing it. Two
+    # other places in this codebase (ui_settings.py, database.py) already
+    # special-cased the literal "http://localhost:32400" string as "not
+    # really configured" for exactly this reason; fixing it here instead
+    # closes the root cause rather than needing a third special case.
+    PLEX_URL: str = ""
     PLEX_TOKEN: str = ""
     PLEX_MOVIE_LIBRARY_NAME: str = ""
     PLEX_MOVIE_LIBRARY_NAMES: List[str] = []

@@ -127,7 +127,14 @@ interface ServerStatusEntry {
   title: string
 }
 const allServerStatuses = computed<ServerStatusEntry[]>(() => [
-  { key: 'plex-1', label: plexServerLabel.value, status: plexStatus.value, title: plexStatusTitle.value },
+  // 'unconfigured' means Plex was never set up at all (a genuinely Jellyfin/
+  // Emby-only install, Phase 8a) -- not the same as 'down' (configured but
+  // currently unreachable, which SHOULD still show a red pill). Omitting the
+  // whole entry for 'unconfigured' avoids showing a permanent, meaningless
+  // "Plex" pill for a server the user never set up in the first place.
+  ...(plexStatus.value === 'unconfigured' ? [] : [
+    { key: 'plex-1', label: plexServerLabel.value, status: plexStatus.value, title: plexStatusTitle.value },
+  ]),
   ...mediaServerStatuses.value.map(s => ({
     key: s.server_id,
     label: mediaServerLabel(s),

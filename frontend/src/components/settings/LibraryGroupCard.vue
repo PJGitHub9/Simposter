@@ -32,7 +32,7 @@
          when not. Plex is no longer required/special here (a group can be
          Plex-only, Jellyfin-only, a mix, or -- while being built -- empty). -->
     <div class="linked-card">
-      <div class="server-row">
+      <div v-if="showPlexRow" class="server-row">
         <span class="server-type-badge plex">Plex</span>
         <div class="server-row-body">
           <template v-if="plexMember">
@@ -282,9 +282,20 @@ function serverExists(serverId: string): boolean {
   return settingsStore.mediaServers.value.some(s => s.id === serverId)
 }
 
+// Whether Plex is actually connected right now (matches App.vue's own
+// identical plexConfigured check). A group's Plex row is shown when EITHER
+// Plex is configured (so it CAN be linked) OR the group already has a Plex
+// member (even if Plex has since been disconnected -- so the now-orphaned
+// link is still visible and can be unlinked, matching the existing
+// chip-broken/serverExists() handling for Jellyfin/Emby members below).
+// Previously always rendered unconditionally, showing a permanently-empty
+// "Link a Plex library..." row even on an install with no Plex configured
+// at all.
+const plexConfigured = computed(() => !!(settingsStore.plex.value.url && settingsStore.plex.value.token))
 const plexMember = computed<LibraryGroupMember | undefined>(() =>
   props.group.members.find(m => m.serverId === 'plex-1')
 )
+const showPlexRow = computed(() => plexConfigured.value || !!plexMember.value)
 const plexLibraryLabel = computed(() => {
   if (!plexMember.value) return ''
   const opt = props.plexLibraries.find(p => p.key === plexMember.value!.libraryId)
@@ -298,8 +309,15 @@ const otherMemberGroupDefs = [
   { type: 'jellyfin', label: 'Jellyfin' },
   { type: 'emby', label: 'Emby' },
 ] as const
+// Same reasoning as showPlexRow above: only show a Jellyfin/Emby row when a
+// server of that type is actually configured (so it CAN be linked) OR the
+// group already has a member of that type (so an existing/orphaned link
+// stays visible and unlinkable). Previously always showed both rows
+// unconditionally, regardless of whether either type was ever configured.
 const otherMemberGroupsAlways = computed(() =>
-  otherMemberGroupDefs.map(g => ({ ...g, members: otherMembers.value.filter(m => serverTypeFor(m.serverId) === g.type) }))
+  otherMemberGroupDefs
+    .map(g => ({ ...g, members: otherMembers.value.filter(m => serverTypeFor(m.serverId) === g.type) }))
+    .filter(g => g.members.length > 0 || settingsStore.mediaServers.value.some(s => s.type === g.type && s.enabled))
 )
 
 const availablePlexLibraries = computed(() =>

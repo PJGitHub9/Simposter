@@ -406,8 +406,32 @@ const groupedContentForSearch = computed(() => {
   return groups
 })
 
+// Reverse of resolveLibraryTarget() above -- given the CURRENT route's
+// already-resolved library/server query params, finds which non-Plex-only
+// LibraryGroup (if any) they belong to and returns its `group-{id}` suffix,
+// matching the tab key nonPlexGroupTabs() generated for it. Without this,
+// activeTab/activeSubmenu below would rebuild a tab key straight from
+// route.query.library (correct for a Plex tab, where that query param IS
+// already the tab-key suffix) -- but for a Jellyfin/Emby-only group tab, the
+// URL carries the group's *resolved member's own* library id (e.g. a real
+// Jellyfin library id), never the group id itself, so the rebuilt key could
+// never match the tab's actual `group-{id}` key -- Sidebar.vue's
+// `tab.key === activeKey` check always failed, so a group tab's submenu
+// (Logos/Backdrops/etc) silently never rendered at all, and the tab never
+// showed as active/highlighted either. Plex tabs are unaffected (serverId
+// defaults to/equals 'plex-1', early-returns libQuery unchanged).
+const resolveTabSuffix = (libQuery: string, serverQuery: string): string => {
+  if (!libQuery) return libQuery
+  const serverId = serverQuery || 'plex-1'
+  if (serverId === 'plex-1') return libQuery
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libQuery)
+  )
+  return group ? `group-${group.id}` : libQuery
+}
+
 const activeTab = computed<TabKey>(() => {
-  const libQuery = (route.query.library as string) || ''
+  const libQuery = resolveTabSuffix((route.query.library as string) || '', (route.query.server as string) || '')
   if (route.name === 'backup' && (route.query.type as string) === 'tv-show') {
     if (libQuery) return `tv-shows-${libQuery}`
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -429,7 +453,7 @@ const activeTab = computed<TabKey>(() => {
 })
 
 const activeSubmenu = computed<string>(() => {
-  const libQuery = (route.query.library as string) || ''
+  const libQuery = resolveTabSuffix((route.query.library as string) || '', (route.query.server as string) || '')
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
   if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`

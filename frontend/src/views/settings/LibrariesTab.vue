@@ -108,6 +108,15 @@ const emit = defineEmits<{
   'library-removed': [libraryId: string]
 }>()
 
+// Whether Plex is actually connected right now -- used to hide the handful
+// of genuinely Plex-only controls on this page (Scan All Libraries, Default
+// Labels to Remove, Kometa Compatibility -- none of these have any effect,
+// or any real target to act on, for a Jellyfin/Emby-only install) rather
+// than always showing them with just a "Plex only" text tag. The per-group
+// Plex/Emby link rows (LibraryGroupCard.vue) have their own identical,
+// independent check for the same reason.
+const plexConfigured = computed(() => !!(props.plexUrl && props.plexToken))
+
 const localLibraries = computed({
   get: () => {
     // Reconstruct the template:preset format for display
@@ -606,7 +615,7 @@ watch(
       <p class="help-text">When enabled, the "Send logo" option will be pre-checked in the poster editor and batch edit screens. In the manual poster editor this already applies to whichever server(s) an item is linked to (Plex, Jellyfin, or Emby); Batch Edit's logo send is still Plex-only for now.</p>
     </div>
 
-    <div class="scan-all-row">
+    <div v-if="plexConfigured" class="scan-all-row">
       <button
         @click="emit('scan-library')"
         :disabled="scanCooldown"
@@ -695,8 +704,11 @@ watch(
       </div>
     </div>
 
-    <!-- Default Labels to Remove -->
-    <div class="section">
+    <!-- Default Labels to Remove -- Plex-only by nature (label removal has no
+         Jellyfin/Emby equivalent, and Kometa only ever runs against Plex), so
+         the whole section is hidden rather than shown-but-inert for an
+         install with no Plex configured at all. -->
+    <div v-if="plexConfigured" class="section">
       <div class="section-header-inline">
         <div>
           <h3 style="margin-bottom: 4px;">Default Labels to Remove <span class="plex-only-tag">Plex only</span></h3>
@@ -763,8 +775,19 @@ watch(
       </div>
     </div>
 
-    <!-- Scheduled Scans -->
-    <div :class="['section', { 'section-unsaved': schedulerChanged }]">
+    <!-- Scheduled Scans -- Plex-only (it only ever scans Plex-anchored
+         libraries, matching the identical, already-established note in
+         OnboardingModal.vue's own "Scan Schedule" step). Shown as an honest
+         explanatory note rather than a silently-hidden section, matching
+         this page's own established "state the real limitation, don't just
+         show nothing" convention. -->
+    <div v-if="!plexConfigured" class="section">
+      <h3>Scheduled Scans</h3>
+      <p class="section-description" style="margin: 0;">
+        Scheduled scanning isn't available yet for Jellyfin/Emby-only libraries — use the "Scan" button on a library group above in the meantime.
+      </p>
+    </div>
+    <div v-else :class="['section', { 'section-unsaved': schedulerChanged }]">
       <h3>Scheduled Scans</h3>
 
       <div class="scheduler-header">

@@ -36,7 +36,7 @@
              doesn't look like a different kind of thing, just labeled
              "Primary" since it's the connection actually used for
              rendering/sending today and can't be removed. -->
-        <div v-if="group.type === 'plex'" class="server-card">
+        <div v-if="group.type === 'plex' && showPrimaryPlexForm" class="server-card">
           <div class="server-card-row">
             <span class="server-type-badge plex">PLEX</span>
             <input v-model="primaryPlexName" placeholder="Name (optional, e.g. Plex)" class="server-name-input" />
@@ -57,7 +57,23 @@
             <span v-if="testConnection" class="test-result-inline" :class="{ ok: testConnection.startsWith('✓') }">{{ testConnection }}</span>
           </div>
           <p class="scan-hint">Which Plex libraries to track is managed in Settings → Libraries.</p>
+          <!-- Only shown while the primary connection isn't actually
+               configured yet (still blank/mid-add) -- an ALREADY-configured
+               primary connection stays non-removable (Quirk #79: 'plex-1' is
+               a structural anchor other Library Groups may depend on), but
+               there was previously no way to back out of an accidentally- or
+               curiosity-opened blank form at all, the user's own direct
+               report ("why cant i remove the blank plex server?"). -->
+          <div v-if="!primaryPlexConfigured" class="server-card-footer">
+            <button class="remove-btn-text" @click="cancelPrimaryPlex">
+              Remove Server
+            </button>
+          </div>
         </div>
+
+        <p v-if="group.type === 'plex' && !showPrimaryPlexForm" class="empty-state">
+          No Plex server configured yet — add one below.
+        </p>
 
         <!-- Every other configured server of this type -->
         <div v-for="server in group.servers" :key="server.id" class="server-card">
@@ -123,8 +139,21 @@
            anything right then, which was a real, direct part of "so
            cluttered" (the user's own words: "dont add all the textboxes,
            just a plus button that makes those items appear"). -->
+      <!-- Plex's own "add" button branches: with no primary connection yet,
+           it opens THAT card (not a second, send-limited entry -- there's
+           no "another" if there isn't a first one yet). Once the primary
+           is configured/open, it reverts to its original job: adding a
+           genuinely second Plex entry. -->
       <button
-        v-if="!addFormOpen[group.type]"
+        v-if="group.type === 'plex' && !showPrimaryPlexForm"
+        type="button"
+        class="secondary-small add-server-toggle"
+        @click="primaryPlexManuallyOpened = true"
+      >
+        + Add Plex Server
+      </button>
+      <button
+        v-else-if="!addFormOpen[group.type]"
         type="button"
         class="secondary-small add-server-toggle"
         @click="addFormOpen[group.type] = true"
@@ -263,6 +292,32 @@ const primaryPlexName = computed({
     }
   }
 })
+
+// The primary Plex card is shown by default only when Plex already has real
+// connection info (existing installs -- zero regression). For an install
+// where Plex is genuinely not configured at all (a fresh DB, or one where
+// Plex was removed), it starts collapsed behind a "+ Add Plex Server"
+// button instead of an always-visible card with empty URL/token fields --
+// the user's own report: "it's like a dummy Plex server was added for some
+// reason... it should be blank with an 'add plex server' button."
+const primaryPlexManuallyOpened = ref(false)
+const primaryPlexConfigured = computed(() => !!(props.plexUrl || props.plexToken))
+const showPrimaryPlexForm = computed(() => primaryPlexConfigured.value || primaryPlexManuallyOpened.value)
+
+// Backs out of an open-but-still-blank primary Plex card, collapsing it back
+// to the "+ Add Plex Server" button. Clears any partially-typed URL/token,
+// and drops the 'plex-1' mediaServers entry entirely if all it ever held was
+// a Name (typed before any real url/token existed) -- nothing left worth
+// keeping once cancelled. Never reachable once the connection is actually
+// configured (see the v-if guarding the button itself).
+function cancelPrimaryPlex() {
+  localPlexUrl.value = ''
+  localPlexToken.value = ''
+  if (primaryPlexEntry.value) {
+    servers.value = servers.value.filter(s => s.id !== 'plex-1')
+  }
+  primaryPlexManuallyOpened.value = false
+}
 
 interface ServerGroupDef {
   type: 'plex' | 'jellyfin' | 'emby'

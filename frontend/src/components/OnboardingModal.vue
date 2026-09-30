@@ -598,6 +598,21 @@ const goBack = () => {
 // ── Close ──────────────────────────────────────────────────────────────────
 const markOnboardingDone = async () => {
   try {
+    // Defense-in-depth: saveSettings() (above) is only ever triggered from
+    // ONE specific step-transition (`if (step.value === 'performance')` in
+    // goNext()) -- if that exact moment is ever missed for any reason (an
+    // odd navigation path, a step-index edge case, etc.), the wizard's real
+    // collected automation/performance/Plex/library-group fields never make
+    // it to the backend at all, and they'd otherwise stay stranded at their
+    // plain in-memory defaults -- which the unconditional settings.save()
+    // below would then persist AS the final result, silently discarding
+    // whatever the user actually configured (a real, reported case: the
+    // "existing content mode" toggle showing its default in the DB despite
+    // being set to "resend" in the wizard). Calling it again here is a safe
+    // no-op in the normal case (its own settingsSaved guard already fired),
+    // and the real save in the bug case -- either way, this function is the
+    // ONE path guaranteed to run on every close/skip.
+    await saveSettings()
     settings.onboardingCompleted.value = true
     await settings.save()
   } catch { /* non-fatal */ }
