@@ -659,6 +659,23 @@ const stopScanPolling = () => {
   }
 }
 
+// App.vue never unmounts (it's the root component) -- polling ownership
+// lives here, driven purely by the shared scan store's own visibility,
+// instead of being tied to whichever page happened to trigger the scan
+// (SettingsView.vue used to run its own separate poller for this, started
+// only when ITS OWN scanLibrary() fired a scan and explicitly stopped by
+// onBeforeRouteLeave the moment the user navigated away -- but the overlay
+// itself is globally visible via this same shared store regardless of
+// route, so navigating away mid-scan froze it at whatever state that
+// component's poller last captured, even though the scan kept running
+// server-side the whole time). Watching scan.visible here means polling
+// starts/stops correctly regardless of which page started the scan or
+// whether that page is still mounted.
+watch(() => scan.visible.value, (visible) => {
+  if (visible) startScanPolling()
+  else stopScanPolling()
+})
+
 // Batch progress polling
 const fetchBatchStatus = async () => {
   const apiBase = getApiBase()

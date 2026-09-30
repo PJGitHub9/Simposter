@@ -393,6 +393,48 @@ def api_scan_linked_libraries(server_id: str, library_id: str):
     return {"scanned": scanned, "errors": errors}
 
 
+def scan_all_linked_plex_libraries(library_id: Optional[str] = None) -> dict:
+    """Runs api_scan_linked_libraries() for every Plex library that has a
+    LibraryGroup, or just ONE specific library_id when given. The single
+    source of truth for "also scan whatever's linked" -- used by:
+    (1) api_scan_library() (movies.py) after ANY Plex scan, single-library OR
+        "Scan All Libraries" -- previously only the single-library UI path
+        (SettingsView.vue's scanLibrary(), via its own frontend-side
+        scan-linked fetch, gated on `if (libraryId)`) ever triggered this;
+        "Scan All Libraries" scanned every Plex library but never called
+        scan-linked for ANY of them, so a linked Jellyfin/Emby library never
+        got refreshed at all when a user scanned that way -- a real,
+        reported gap ("its also only scanning plex?").
+    (2) _scan_linked_libraries_for_scheduled_scan() (scheduler.py), which now
+        delegates here instead of duplicating this same iteration itself.
+    Reads `libraryGroups` fresh from the DB, the same way every other
+    settings-reading helper in this app does. A no-op (empty result) for an
+    install with no groups at all, or none linking a Jellyfin/Emby library --
+    the common case, so this must never be treated as an error."""
+    from .. import database as db
+
+    ui_settings = db.get_ui_settings() or {}
+    groups = ui_settings.get("libraryGroups") or []
+    plex_library_ids = set()
+    for group in groups:
+        for member in group.get("members") or []:
+            if member.get("serverId") == "plex-1" and member.get("libraryId"):
+                if library_id is None or str(member["libraryId"]) == str(library_id):
+                    plex_library_ids.add(str(member["libraryId"]))
+
+    all_scanned = []
+    all_errors = []
+    for lib_id in plex_library_ids:
+        try:
+            result = api_scan_linked_libraries(server_id="plex-1", library_id=lib_id)
+            all_scanned.extend(result.get("scanned") or [])
+            all_errors.extend(result.get("errors") or [])
+        except Exception as e:
+            all_errors.append({"server_id": "plex-1", "library_id": lib_id, "error": str(e)})
+
+    return {"scanned": all_scanned, "errors": all_errors}
+
+
 @router.get("/library-group")
 def api_get_library_group(server_id: str, library_id: str, media_type: str):
     """Backs the Movies/TV grid toolbar's live "prefer" dropdown (Quirk #85) --

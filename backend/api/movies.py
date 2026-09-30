@@ -1731,6 +1731,27 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         except Exception as e:
             logger.debug(f"[SCAN] Failed to purge stale by-tmdb render cache: {e}")
 
+        # Also scan any Jellyfin/Emby library linked to whatever was just
+        # scanned (scoped to library_id when one was given, or every linked
+        # Plex library when this was a "Scan All Libraries" run) -- a real,
+        # confirmed gap this closes: "Scan All Libraries" (library_id=None)
+        # previously never triggered this at all, since the only place that
+        # ever called scan-linked was the frontend's own single-library
+        # scanLibrary(libraryId), gated on `if (libraryId)`. Centralizing it
+        # here means it's covered regardless of how the scan was triggered
+        # (single-library click, "Scan All", or the scheduled job -- see
+        # scan_all_linked_plex_libraries()'s own docstring). Best-effort --
+        # a failure here must never fail the Plex scan that already succeeded.
+        try:
+            from .media_server import scan_all_linked_plex_libraries
+            linked_result = scan_all_linked_plex_libraries(library_id)
+            if linked_result.get("scanned"):
+                logger.info(f"[SCAN] Linked library scan: {linked_result['scanned']}")
+            if linked_result.get("errors"):
+                logger.warning(f"[SCAN] Linked library scan errors: {linked_result['errors']}")
+        except Exception as e:
+            logger.error(f"[SCAN] Failed to scan linked libraries: {e}")
+
         logger.info(f"[SCAN] Completed full library sync")
         scan_status.update({
             "state": "done",

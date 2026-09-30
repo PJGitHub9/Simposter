@@ -423,12 +423,24 @@ function buildUnifiedCards(mappings: LibraryMapping[], mediaType: 'movie' | 'tv'
   const cards: UnifiedCard[] = []
   const usedGroupIds = new Set<string>()
 
+  // Key is ALWAYS group-{id} -- stable across a group gaining/losing its
+  // Plex mapping, never mapping-{lib.id}. A prior version keyed the two
+  // branches differently, which meant Vue's v-for saw a genuinely different
+  // key the instant a Plex library got linked (a group transitions from the
+  // second loop below to this one) -- forcing a full LibraryGroupCard.vue
+  // component DESTROY+RECREATE, not just a re-render, wiping any in-progress
+  // local state on it (a Jellyfin/Emby picker selection not yet submitted,
+  // an open name-edit, etc.) at exactly the moment a user is most likely to
+  // still be mid-edit (picking Plex, then immediately picking Jellyfin for
+  // the same new group). A real, reported symptom this contributed to: a
+  // freshly-created group ending up with neither library actually linked
+  // after saving.
   mappings.forEach((lib, idx) => {
     if (!lib.id) return
     const group = allGroups.find(g => g.members.some(m => m.serverId === 'plex-1' && m.libraryId === String(lib.id)))
     if (!group) return // backfilled by ensureGroupsForMappings() on the next tick
     usedGroupIds.add(group.id)
-    cards.push({ key: `mapping-${lib.id}`, group, mappingIdx: idx })
+    cards.push({ key: `group-${group.id}`, group, mappingIdx: idx })
   })
 
   allGroups.forEach(g => {
@@ -460,38 +472,19 @@ function addNewGroup(mediaType: 'movie' | 'tv') {
 }
 
 function onLinkPlex(mediaType: 'movie' | 'tv', group: LibraryGroup, key: string, title: string) {
-  // A group is only ever meant to have ONE Plex member -- the picker/chip UI
-  // already enforces this (the "Link a Plex library..." row is replaced by
-  // a single chip the moment plexMember exists, LibraryGroupCard.vue), so
-  // under normal single-click use this function should never even be
-  // reachable a second time for the same group. But a fast double-click can
-  // fire this handler twice before Vue re-renders to hide that button -- a
-  // real, live-reported case ("why is there 2 plex's?" in Media Mirror's
-  // source dropdown, which lists every raw member with no dedup). Guarding
-  // here closes the race regardless of how many times this gets invoked.
-  if (group.members.some(m => m.serverId === 'plex-1')) return
+  // This function's ONLY job is the localLibraries/localTvShowLibraries side
+  // (the plain mapping-array entry) -- LibraryGroupCard.vue's own linkPlex()
+  // ALREADY writes the new member directly into settingsStore.libraryGroups
+  // itself, synchronously, before it ever emits link-plex up to here. A
+  // prior version of this function ALSO wrote to libraryGroups a second
+  // time, reasoning (wrongly) that nothing else did -- a genuine regression,
+  // not a fix: two independent writers racing to update the same group
+  // based on two different snapshots of it is exactly what caused a group
+  // to end up with duplicate/lost members depending on timing. Single
+  // writer (the child) for libraryGroups; this function only ever owns the
+  // mapping-array side, which the child has no reason to know about.
   const target = mediaType === 'movie' ? localLibraries : localTvShowLibraries
   target.value = [...target.value, newMappingEntry(key, title, group)]
-  // Add the new Plex member directly to THIS group -- previously relied
-  // entirely on ensureGroupsForMappings()'s reactive backfill to somehow
-  // connect the new mapping to a group, but that function can only ever
-  // recognize "a group already has this Plex library" or create a brand
-  // NEW standalone group for it; it has no way to know the user meant to
-  // join an EXISTING group (the one this picker lives on). The real, live
-  // bug this caused: linking Plex into an existing Jellyfin-only group
-  // silently created an unrelated, separate new single-library group
-  // instead, while the group actually being looked at never visibly
-  // changed -- no new Plex chip, no "unsaved" highlight on it, nothing.
-  // Mirrors onUnlinkPlex()'s own already-correct direct-mutation pattern
-  // just below. Keeps the group's existing id unchanged (no need to
-  // migrate it to the Plex-anchored id scheme -- every place that matters,
-  // ensureGroupsForMappings()'s own "exists" check included, matches by
-  // member content, not by id pattern).
-  settingsStore.libraryGroups.value = settingsStore.libraryGroups.value.map(g =>
-    g.id === group.id
-      ? { ...g, members: [...g.members, { serverId: 'plex-1', libraryId: key, libraryName: title }] }
-      : g
-  )
 }
 
 function onUnlinkPlex(mediaType: 'movie' | 'tv', group: LibraryGroup) {

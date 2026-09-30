@@ -568,38 +568,23 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
 
 
 def _scan_linked_libraries_for_scheduled_scan() -> None:
-    """Scans every Jellyfin/Emby library linked (via a Library Group) to a
+    """Scans every Jellyfin/Emby library linked (via a Library Group) to ANY
     Plex library, regardless of whether that specific Plex library_id was
     part of THIS scan's own library_ids scope -- simpler and more robust than
     threading which Plex libraries were actually just scanned through to
     here (the "scan all" branch above has no per-library result to key off
     of), and scan-linked() itself is already a cheap no-op for any group with
-    nothing else to refresh. Reads `libraryGroups` fresh from the DB, the
-    same way every other settings-reading helper in this app does."""
-    from . import database as db
-    from .api.media_server import api_scan_linked_libraries
+    nothing else to refresh. Delegates to scan_all_linked_plex_libraries()
+    (media_server.py) -- the same shared helper api_scan_library() now also
+    calls after a manual scan, so this no longer duplicates that iteration
+    itself (it used to, independently, before that shared helper existed)."""
+    from .api.media_server import scan_all_linked_plex_libraries
 
-    ui_settings = db.get_ui_settings() or {}
-    groups = ui_settings.get("libraryGroups") or []
-    plex_library_ids = set()
-    for group in groups:
-        for member in group.get("members") or []:
-            if member.get("serverId") == "plex-1" and member.get("libraryId"):
-                plex_library_ids.add(str(member["libraryId"]))
-
-    if not plex_library_ids:
-        return
-
-    logger.info("[SCHEDULER] Checking %d Plex library group(s) for linked Jellyfin/Emby libraries to scan", len(plex_library_ids))
-    for lib_id in plex_library_ids:
-        try:
-            result = api_scan_linked_libraries(server_id="plex-1", library_id=lib_id)
-            if result.get("scanned"):
-                logger.info("[SCHEDULER] Linked scan for Plex library %s: %s", lib_id, result["scanned"])
-            if result.get("errors"):
-                logger.warning("[SCHEDULER] Linked scan errors for Plex library %s: %s", lib_id, result["errors"])
-        except Exception as e:
-            logger.error("[SCHEDULER] Linked scan failed for Plex library %s: %s", lib_id, e)
+    result = scan_all_linked_plex_libraries()
+    if result.get("scanned"):
+        logger.info("[SCHEDULER] Linked scan: %s", result["scanned"])
+    if result.get("errors"):
+        logger.warning("[SCHEDULER] Linked scan errors: %s", result["errors"])
 
 
 def _scan_standalone_nonplex_groups() -> None:

@@ -141,7 +141,11 @@ const localTmdbRateLimit = ref(40)
 const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
 const localUseOverlayCache = ref(true)
-let scanPoller: number | null = null
+// Scan polling itself now lives entirely in App.vue, driven by the shared
+// scan store's own visibility (see its own comment on this) -- this page
+// only ever needs to flip scan.visible.value on/off, never run its own
+// separate polling loop (that used to stop the moment this page unmounted,
+// mid-scan, freezing the still-globally-visible overlay).
 
 // Automation settings
 const localWebhookAutoSend = ref(true)
@@ -928,7 +932,8 @@ const scanLibrary = async (libraryId?: string) => {
     scan.log.value = ['Starting rescan...']
     scan.progress.value = { processed: 0, total: 0 }
     scan.current.value = ''
-    startScanPolling()
+    // App.vue's own watcher on scan.visible starts polling the moment the
+    // line above flips it true -- no need to start our own here too.
 
     const apiBase = getApiBase()
     const url = new URL(`${apiBase}/api/scan-library`)
@@ -1020,7 +1025,6 @@ const scanLibrary = async (libraryId?: string) => {
       scan.visible.value = false
     }, 3000)
   }
-  stopScanPolling()
   scan.running.value = false
   scanCooldown.value = false
 }
@@ -1167,43 +1171,6 @@ const handleDbImport = async () => {
   } finally {
     dbImporting.value = false
     setTimeout(() => (saved.value = ''), 2500)
-  }
-}
-
-const startScanPolling = () => {
-  stopScanPolling()
-  const apiBase = getApiBase()
-  scanPoller = window.setInterval(async () => {
-    try {
-      const res = await fetch(`${apiBase}/api/scan-progress`)
-      if (!res.ok) return
-      const data = await res.json()
-      if (data.total) {
-        scan.progress.value = { processed: data.processed || 0, total: data.total || 0 }
-      }
-      if (data.current) {
-        scan.current.value = data.current
-      }
-      if (scan.progress.value.total) {
-        const pct = Math.min(100, Math.round((scan.progress.value.processed / scan.progress.value.total) * 100))
-        const line = `${scan.progress.value.processed}/${scan.progress.value.total} (${pct}%) ${scan.current.value || ''}`
-        scan.log.value = [line]
-      }
-      if (data.state && data.state !== 'running') {
-        stopScanPolling()
-        scan.running.value = false
-        scan.visible.value = false
-      }
-    } catch {
-      // ignore polling errors
-    }
-  }, 1000)
-}
-
-const stopScanPolling = () => {
-  if (scanPoller !== null) {
-    clearInterval(scanPoller)
-    scanPoller = null
   }
 }
 
@@ -1386,8 +1353,10 @@ watch(() => route.query.tab, (newTab) => {
 // visible with a clear "still unsaved" marker over it silently vanishing
 // the moment you navigate away, even with a confirm dialog in between.
 onBeforeRouteLeave((_to, _from, next) => {
-  stopScanPolling()
-
+  // Deliberately no longer stops scan polling here -- that's owned by
+  // App.vue now (see its own comment), specifically so a scan started from
+  // this page keeps its globally-visible overlay updated even after
+  // navigating away from Settings.
   if (hasUnsavedChanges.value) {
     const answer = window.confirm('You have unsaved changes. Are you sure you want to leave?')
     if (answer) {
@@ -1410,7 +1379,6 @@ onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
 
   onBeforeUnmount(() => {
-    stopScanPolling()
     window.removeEventListener('beforeunload', handleBeforeUnload)
   })
 })
