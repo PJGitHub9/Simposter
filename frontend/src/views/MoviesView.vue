@@ -35,6 +35,18 @@ const currentLibrary = computed(() => (route.query.library as string) || '')
 // Plex-derived tab/URL (backend defaults to "plex-1"); set for a Jellyfin/Emby-only
 // tab, see App.vue's resolveLibraryTarget().
 const currentServer = computed(() => (route.query.server as string) || '')
+// Labels are a Plex-only concept (Quirk #59/#93) -- "Filter by Label" is
+// meaningless for a library with no Plex member at all. A plain Plex tab
+// (currentServer empty/'plex-1') always has one by construction; a
+// Jellyfin/Emby-only tab only does if its Library Group also links a Plex
+// library (a merged group).
+const currentGroupHasPlex = computed(() => {
+  if (!currentServer.value || currentServer.value === 'plex-1') return true
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === currentServer.value && m.libraryId === currentLibrary.value)
+  )
+  return !!group?.members?.some(m => m.serverId === 'plex-1')
+})
 const libraryGroupPref = useLibraryGroupPreference('movie')
 async function onPreferredServerChange(serverId: string) {
   if (!currentLibrary.value) return
@@ -559,7 +571,7 @@ onMounted(async () => {
             <option value="desc">{{ sortBy === 'title' ? 'Z-A' : 'Newest First' }}</option>
           </select>
         </div>
-        <div class="control-group">
+        <div v-if="currentGroupHasPlex" class="control-group">
           <label for="label-select">Filter by Label:</label>
           <select id="label-select" v-model="filterLabel" class="control-select">
             <option value="">All Labels</option>

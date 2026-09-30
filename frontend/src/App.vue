@@ -31,6 +31,16 @@ import { onboardingLaunchRequested } from '@/composables/useOnboardingLauncher'
 // existing `tab.replace('movies-', '')`-style parsing naturally yields `group-{id}`,
 // which resolveLibraryTarget() below already knows how to turn into a real
 // {server, library} pair -- no prefix-branching needed at the call sites.
+// Media Mirror only makes sense once a group has a real source AND target to
+// copy between -- a single-library group has nothing to mirror to/from.
+// Shared by both the Plex-anchored tabs and the non-Plex group tabs below.
+const groupMemberCount = (serverId: string, libraryId: string): number => {
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libraryId)
+  )
+  return group?.members?.length ?? 1
+}
+
 const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
   const groups = (settings.libraryGroups.value || []).filter(g =>
     g.mediaType === mediaType &&
@@ -61,7 +71,9 @@ const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
   return groups.map(g => ({
     key: `${prefix}-group-${g.id}`,
     label: `${icon} ${g.name || 'Library'}`,
-    submenu: items.map(([k, label]) => ({ key: `${k}-group-${g.id}`, label }))
+    submenu: items
+      .filter(([k]) => !k.includes('media-mirror') || g.members.length > 1)
+      .map(([k, label]) => ({ key: `${k}-group-${g.id}`, label }))
   }))
 }
 
@@ -113,7 +125,7 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
       { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
-      { key: `media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' },
+      ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -131,7 +143,7 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `tv-backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
       { key: `tv-square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
-      { key: `tv-media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' },
+      ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `tv-media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
       { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]

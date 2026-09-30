@@ -34,6 +34,15 @@ const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || 'default')
 // Phase 8a -- see MoviesView.vue's identical computed for the full reasoning.
 const currentServer = computed(() => (route.query.server as string) || '')
+// Labels are a Plex-only concept (Quirk #59/#93) -- see MoviesView.vue's
+// identical computed for the full reasoning.
+const currentGroupHasPlex = computed(() => {
+  if (!currentServer.value || currentServer.value === 'plex-1') return true
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === currentServer.value && m.libraryId === currentLibrary.value)
+  )
+  return !!group?.members?.some(m => m.serverId === 'plex-1')
+})
 const libraryGroupPref = useLibraryGroupPreference('tv')
 async function onPreferredServerChange(serverId: string) {
   if (!currentLibrary.value || currentLibrary.value === 'default') return
@@ -552,7 +561,7 @@ onMounted(async () => {
             <option value="desc">{{ sortBy === 'title' ? 'Z-A' : 'Newest First' }}</option>
           </select>
         </div>
-        <div class="control-group">
+        <div v-if="currentGroupHasPlex" class="control-group">
           <label for="label-select">Filter by Label:</label>
           <select id="label-select" v-model="filterLabel" class="control-select">
             <option value="">All Labels</option>

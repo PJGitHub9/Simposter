@@ -116,6 +116,16 @@ const emit = defineEmits<{
 // Plex/Emby link rows (LibraryGroupCard.vue) have their own identical,
 // independent check for the same reason.
 const plexConfigured = computed(() => !!(props.plexUrl && props.plexToken))
+// Whether ANY server (Plex, Jellyfin, or Emby) is configured -- matches
+// App.vue's identical anyServerConfigured check. Scheduled Scans is no
+// longer Plex-only (the scheduler now also covers linked AND standalone
+// Jellyfin/Emby-only library groups, see backend/scheduler.py's
+// _scan_standalone_nonplex_groups()), so its own gate is broader than the
+// genuinely Plex-only controls above (Scan All Libraries, Default Labels to
+// Remove, Kometa Compatibility), which stay gated on plexConfigured alone.
+const anyServerConfigured = computed(() =>
+  plexConfigured.value || settingsStore.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
+)
 
 const localLibraries = computed({
   get: () => {
@@ -775,16 +785,19 @@ watch(
       </div>
     </div>
 
-    <!-- Scheduled Scans -- Plex-only (it only ever scans Plex-anchored
-         libraries, matching the identical, already-established note in
-         OnboardingModal.vue's own "Scan Schedule" step). Shown as an honest
-         explanatory note rather than a silently-hidden section, matching
-         this page's own established "state the real limitation, don't just
-         show nothing" convention. -->
-    <div v-if="!plexConfigured" class="section">
+    <!-- Scheduled Scans -- covers Plex and/or Jellyfin and/or Emby (the
+         scheduler scans configured Plex libraries by the checklist below,
+         PLUS every linked and standalone Jellyfin/Emby library group
+         automatically, same as the manual "Scan" button already does per
+         group -- backend/scheduler.py's _scan_linked_libraries_for_
+         scheduled_scan()/_scan_standalone_nonplex_groups()). Only hidden
+         when nothing at all is configured yet, matching this page's own
+         established "state the real limitation, don't just show nothing"
+         convention for the genuine no-server case. -->
+    <div v-if="!anyServerConfigured" class="section">
       <h3>Scheduled Scans</h3>
       <p class="section-description" style="margin: 0;">
-        Scheduled scanning isn't available yet for Jellyfin/Emby-only libraries — use the "Scan" button on a library group above in the meantime.
+        Connect a media server above (or in Settings → Media Servers) before setting up a scan schedule.
       </p>
     </div>
     <div v-else :class="['section', { 'section-unsaved': schedulerChanged }]">
@@ -813,8 +826,13 @@ watch(
 
       <div v-if="localSchedulerEnabled" class="scheduler-config">
         <div class="library-selection">
-          <span class="label-text">Libraries to Scan</span>
-          <span class="help-text">Select libraries to scan automatically (leave all unchecked for all libraries)</span>
+          <span class="label-text">Plex Libraries to Scan</span>
+          <span v-if="availableLibrariesForScheduler.length" class="help-text">
+            Select Plex libraries to scan automatically (leave all unchecked for all libraries). Any Jellyfin/Emby library linked to a group, or a standalone Jellyfin/Emby-only group, is always scanned too — no separate selection needed for those.
+          </span>
+          <span v-else class="help-text">
+            No Plex libraries configured — every linked and standalone Jellyfin/Emby library group is still scanned automatically on this schedule.
+          </span>
 
           <div class="library-checkboxes-horizontal">
             <label

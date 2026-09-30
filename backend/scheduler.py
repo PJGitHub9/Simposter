@@ -550,6 +550,17 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
         except Exception as e:
             logger.error("[SCHEDULER] Failed to scan linked Jellyfin/Emby libraries: %s", e, exc_info=True)
 
+        # Also scan any standalone Jellyfin/Emby-only groups (no Plex member
+        # at all) -- the one case the linked-libraries scan above can't reach,
+        # since it only ever walks outward from an already-scanned Plex
+        # library (see that function's own docstring). This is what makes
+        # "Enable scheduled scanning" actually cover Plex and/or Jellyfin
+        # and/or Emby, not just Plex-anchored/merged groups.
+        try:
+            _scan_standalone_nonplex_groups()
+        except Exception as e:
+            logger.error("[SCHEDULER] Failed to scan standalone Jellyfin/Emby-only groups: %s", e, exc_info=True)
+
         logger.info("[SCHEDULER] ========== SCHEDULED SCAN FINISHED ==========")
 
     except Exception as e:
@@ -589,6 +600,49 @@ def _scan_linked_libraries_for_scheduled_scan() -> None:
                 logger.warning("[SCHEDULER] Linked scan errors for Plex library %s: %s", lib_id, result["errors"])
         except Exception as e:
             logger.error("[SCHEDULER] Linked scan failed for Plex library %s: %s", lib_id, e)
+
+
+def _scan_standalone_nonplex_groups() -> None:
+    """Scans every Library Group that has NO Plex member at all (a genuinely
+    standalone Jellyfin/Emby-only group, created via Settings -> Libraries'
+    "+ New Group" with no Plex row linked -- Quirk #116). This is the one
+    case _scan_linked_libraries_for_scheduled_scan() above structurally can't
+    reach: it only ever walks from a Plex library outward to what's linked to
+    it, so a group with nothing Plex in it at all was silently never touched
+    by the scheduled job, even with "Enable scheduled scanning" checked --
+    the only way to refresh it was the group's own manual "Scan" button.
+    Reuses api_scan_media_server()'s already-scoped-per-library mode (Quirk
+    #66) -- the exact same call each member's own manual "Scan" button
+    already makes -- one call per member, not one call per whole server (a
+    server can have several groups, or several members within one group)."""
+    from . import database as db
+    from .api.media_server import api_scan_media_server
+
+    ui_settings = db.get_ui_settings() or {}
+    groups = ui_settings.get("libraryGroups") or []
+    standalone_members = []
+    for group in groups:
+        members = group.get("members") or []
+        if not members or any(m.get("serverId") == "plex-1" for m in members):
+            continue
+        media_type = "movie" if group.get("mediaType") == "movie" else "tv"
+        for member in members:
+            server_id = member.get("serverId")
+            library_id = member.get("libraryId")
+            if server_id and library_id:
+                standalone_members.append((server_id, library_id, media_type))
+
+    if not standalone_members:
+        return
+
+    logger.info("[SCHEDULER] Scanning %d standalone Jellyfin/Emby library group member(s) with no Plex counterpart", len(standalone_members))
+    for server_id, library_id, media_type in standalone_members:
+        try:
+            result = api_scan_media_server(server_id=server_id, library_id=library_id, media_type=media_type)
+            logger.info("[SCHEDULER] Standalone scan for %s library %s: %d item(s)", server_id, library_id,
+                        result.get("total_movies_found", 0) + result.get("total_shows_found", 0))
+        except Exception as e:
+            logger.error("[SCHEDULER] Standalone scan failed for %s library %s: %s", server_id, library_id, e)
 
 
 _retry_job_id = "poster_retry_job"
