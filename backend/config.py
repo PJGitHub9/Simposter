@@ -1034,7 +1034,23 @@ def get_media_folder_name(rating_key: str, is_tv: bool = False) -> Optional[str]
     a resolved {folder} instead of always falling back to {title}.
 
     Behavior for movies is byte-identical to calling get_movie_folder_name()
-    directly (this just forwards to it) -- no change to existing behavior."""
+    directly (this just forwards to it) -- no change to existing behavior.
+
+    Server-aware at THIS single entry point rather than requiring every
+    caller to check first: get_show_folder_name()/get_movie_folder_name()
+    are both unconditionally Plex-only (a live Plex metadata fetch), always
+    doomed for a Jellyfin/Emby-sourced rating_key. Several callers (batch.py's
+    two closures) already guard this themselves at the call site, but that
+    pattern doesn't scale -- save.py's own direct call had no such guard and
+    silently paid for a doomed fetch on every "Save to Disk" of a Jellyfin
+    item whenever Plex happened to be configured-but-unreachable. Checking
+    once, here, protects every current and future caller uniformly."""
+    try:
+        from . import database as db
+        if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+            return None
+    except Exception:
+        pass  # DB not available yet or lookup failed -- fall through to the original behavior
     if is_tv:
         return get_show_folder_name(rating_key)
     return get_movie_folder_name(rating_key)

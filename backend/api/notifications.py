@@ -164,6 +164,29 @@ def _get_source_label(source: str) -> str:
     }.get(source, source)
 
 
+def _get_action_text(action: str, server_id: Optional[str] = None) -> str:
+    """Human-readable label for a notification's "Action" field/line,
+    server-aware. Consolidates what used to be 3 independently-duplicated
+    ternaries (native Discord, Discord-via-Apprise, plain-text Apprise) that
+    only ever distinguished "sent_to_plex" from everything else -- silently
+    collapsing "sent_to_media_server" (the real Jellyfin/Emby sync action,
+    see record_poster_history() call sites in media_server_send.py/webhooks.py)
+    and "resent_to_plex" into the same misleading "Saved locally" text. One
+    source of truth now, matching get_server_label()'s own "can't drift"
+    reasoning (registry.py) -- extend HERE if a new action string is ever
+    added, not by re-copying a ternary a 4th time."""
+    if action == "sent_to_plex":
+        return "Sent to Plex"
+    if action == "resent_to_plex":
+        return "Resent to Plex"
+    if action == "sent_to_media_server":
+        if server_id:
+            from ..media_server import get_server_label
+            return f"Sent to {get_server_label(server_id)}"
+        return "Sent to media server"
+    return "Saved locally"
+
+
 def _get_asset_type_label(asset_type: str) -> Optional[str]:
     """Readable label for a non-poster asset type, matching this app's own
     established emoji convention (see CLAUDE.md's Emoji Usage Convention) so a
@@ -192,6 +215,7 @@ def send_discord_notification(
     success_count: int = 0,
     failed_count: int = 0,
     asset_type: str = "poster",
+    server_id: Optional[str] = None,
 ) -> bool:
     """
     Send a Discord webhook notification for poster generation.
@@ -237,7 +261,7 @@ def send_discord_notification(
             year_str = f" ({year})" if year else ""
             description = f"**{title}**{year_str}"
 
-        action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
+        action_text = _get_action_text(action, server_id)
 
         embed = {
             "title": f"{emoji} {source_label} Complete",
@@ -350,12 +374,13 @@ def _build_notification_embed(
     failed_count: int,
     poster_data: Optional[bytes] = None,
     asset_type: str = "poster",
+    server_id: Optional[str] = None,
 ) -> dict:
     """Build a Discord embed dict — shared between native Discord and Apprise Discord paths."""
     emoji = _get_source_emoji(source)
     source_label = _get_source_label(source)
     library_name = _get_library_name(library_id)
-    action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
+    action_text = _get_action_text(action, server_id)
 
     if failed_count > 0 and success_count == 0:
         color = 0xFF4757
@@ -408,6 +433,7 @@ def send_apprise_notification(
     failed_count: int = 0,
     poster_data: Optional[bytes] = None,
     asset_type: str = "poster",
+    server_id: Optional[str] = None,
 ) -> bool:
     """
     Send an Apprise notification for poster generation events.
@@ -426,7 +452,7 @@ def send_apprise_notification(
     emoji = _get_source_emoji(source)
     source_label = _get_source_label(source)
     library_name = _get_library_name(library_id)
-    action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
+    action_text = _get_action_text(action, server_id)
 
     discord_urls: List[str] = []
     other_urls: List[str] = []
@@ -448,7 +474,7 @@ def send_apprise_notification(
             title=title, year=year, template_id=template_id,
             library_id=library_id, source=source, action=action,
             count=count, success_count=success_count, failed_count=failed_count,
-            poster_data=poster_data, asset_type=asset_type,
+            poster_data=poster_data, asset_type=asset_type, server_id=server_id,
         )
         for webhook_url in discord_urls:
             try:

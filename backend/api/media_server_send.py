@@ -11,10 +11,25 @@ completely untouched over a shared abstraction that risks it (see Quirk #61's
 identical reasoning for upsert_media_server_movies() vs. bulk_refresh_cache()).
 
 Deliberately scoped to poster/logo/backdrop only (no square_art -- Jellyfin's
-own client.upload_image() raises NotImplementedError for it, see Quirk #59),
-and deliberately does NOT send Discord/Apprise notifications yet (plexsend.py's
-sends do) -- a reasonable, explicitly-noted simplification for a first version,
-not an oversight.
+own client.upload_image() raises NotImplementedError for it, see Quirk #59).
+
+api_send_poster()/api_send_logo() now DO send Discord/Apprise notifications
+(added in the Jellyfin-only-user audit pass -- was deliberately deferred
+before, "a reasonable, explicitly-noted simplification for a first version,
+not an oversight"), via _notify_manual_send() below -- mirrors plexsend.py's
+equivalent manual-send notification (source="manual", the same source string
+plexsend.py already uses, so the existing "notify me on manual sends" Settings
+toggle governs this too, not a separate one). Title/year are resolved from
+cache (db.get_title_for_rating_key()) since MediaServerSendRequest carries
+neither -- a cache miss (item never scanned) falls back to the raw item id,
+same graceful-degradation pattern the rest of this app already uses (see
+CLAUDE.md Quirk #24's identical rating_key fallback for History). The sync
+paths (sync_render_to_linked_servers() in this same file, and webhooks.py's
+_sync_poster_to_other_servers()) deliberately do NOT get this treatment --
+batch.py's own direct-Plex-upload branch has no per-item notification either
+(only one summary notification at the very end of a whole batch run, see
+send_batch_notification()), so adding one only for the sync branch would be a
+NEW inconsistency, not a cleanup.
 """
 import base64
 from typing import Dict, List, Optional
@@ -92,6 +107,31 @@ def _resolve_season_item_id(client, series_item_id: str, season_index: Optional[
         logger.debug("[MEDIA_SERVER_SEND:%s] Could not resolve season %s for series item=%s [%s]",
                      client.server_id, season_index, series_item_id, title_hint)
     return resolved
+
+
+def _notify_manual_send(rating_key: str, server_id: str, asset_type: str) -> None:
+    """Fires the same Discord/Apprise notification plexsend.py's equivalent
+    manual sends already do (source="manual", action="sent_to_media_server") --
+    best-effort, never raises (a notification failure must never fail the
+    send itself, matching every other notification call site in this app)."""
+    try:
+        from .. import database as db
+        from .notifications import send_discord_notification, send_apprise_notification
+        title, year = db.get_title_for_rating_key(rating_key)
+        library_id = db.get_library_id_for_rating_key(rating_key)
+        kwargs = dict(
+            title=title or rating_key,
+            year=year,
+            library_id=library_id,
+            source="manual",
+            action="sent_to_media_server",
+            asset_type=asset_type,
+            server_id=server_id,
+        )
+        send_discord_notification(**kwargs)
+        send_apprise_notification(**kwargs)
+    except Exception as e:
+        logger.debug("[MEDIA_SERVER_SEND:%s] Notification failed: %s", server_id, e)
 
 
 @router.get("/resolve-season-item")
@@ -272,6 +312,11 @@ def api_send_poster(req: MediaServerSendRequest):
 
     logger.info("[MEDIA_SERVER_SEND:%s] Poster sent for item_id=%s%s", server_id, item_id,
                 f" (season {req.season_index} of series {req.rating_key})" if req.season_index is not None else "")
+    # req.rating_key (not item_id) -- only the series/movie-level id is ever
+    # scanned/cached with its own title/library_id row (Quirk #100); a
+    # season-resolved item_id is never individually cached, so looking it up
+    # directly would always miss.
+    _notify_manual_send(req.rating_key, server_id, "poster")
     return {"status": "ok", "poster_url": new_poster_url, "item_id": item_id}
 
 
@@ -296,6 +341,7 @@ def api_send_logo(req: MediaServerSendRequest):
 
     logger.info("[MEDIA_SERVER_SEND:%s] Logo sent for item_id=%s%s", server_id, item_id,
                 f" (season {req.season_index} of series {req.rating_key})" if req.season_index is not None else "")
+    _notify_manual_send(req.rating_key, server_id, "logo")
     return {"status": "ok", "logo_url": new_logo_url, "item_id": item_id}
 
 

@@ -912,6 +912,16 @@ def api_collection_movies(rating_key: str):
 @router.get("/movie/{rating_key}/labels", response_model=LabelsResponse)
 def api_movie_labels(rating_key: str):
     rating_key = validate_rating_key(rating_key)
+    # Labels are a Plex-only concept in this app (Quirk #59/#93 -- Jellyfin/
+    # Emby have no equivalent, remove_label()/add_label() are deliberate
+    # no-ops for them). This endpoint was unconditionally Plex-only with no
+    # server_id check at all -- already degraded gracefully (returns []
+    # rather than crashing), but for a Jellyfin item it always wasted a real
+    # Plex round-trip/timeout first, every time the grid fetched labels for
+    # it. Skip straight to the empty result instead.
+    from .. import database as db
+    if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+        return LabelsResponse(labels=[])
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=10)

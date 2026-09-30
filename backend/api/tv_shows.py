@@ -335,16 +335,27 @@ def api_tv_show_select_poster(
     """
     from ..assets.selection import pick_poster
 
-    # Get TMDB/TVDB IDs for the show
-    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-    try:
-        r = plex_session.get(url, headers=plex_headers(), timeout=6)
-        r.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch TV show metadata: {e}")
+    # Get TMDB/TVDB IDs for the show. Prefer whatever's already cached (works
+    # for both Plex and Jellyfin/Emby items) before ever attempting a live
+    # Plex-only fetch -- a Jellyfin item has no Plex metadata to fetch at all,
+    # and used to hard-crash this endpoint with a 500 (see CLAUDE.md Quirk
+    # audit -- same class of bug as api_tv_show_tmdb()/preview.py, just never
+    # fixed here since this route wasn't touched by those earlier passes).
+    cached_tmdb_id, cached_tvdb_id = db.get_ids_for_rating_key(rating_key)
+    is_plex_show = db.get_server_id_for_rating_key(rating_key) == "plex-1"
 
-    tmdb_id = extract_tmdb_id_from_metadata(r.text)
-    tvdb_id = extract_tvdb_id_from_metadata(r.text)
+    tmdb_id = cached_tmdb_id
+    tvdb_id = cached_tvdb_id
+
+    if is_plex_show and not (tmdb_id or tvdb_id):
+        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        try:
+            r = plex_session.get(url, headers=plex_headers(), timeout=6)
+            r.raise_for_status()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch TV show metadata: {e}")
+        tmdb_id = extract_tmdb_id_from_metadata(r.text)
+        tvdb_id = extract_tvdb_id_from_metadata(r.text)
 
     if tmdb_id and not tvdb_id:
         try:
@@ -440,6 +451,12 @@ def api_tv_show_select_poster(
 
 @router.get("/tv-show/{rating_key}/labels", response_model=LabelsResponse)
 def api_tv_show_labels(rating_key: str):
+    # Labels are a Plex-only concept (Quirk #59/#93) -- same fix as the
+    # movie-side api_movie_labels(): skip the doomed live fetch entirely for
+    # a Jellyfin/Emby item instead of wasting a real Plex round-trip/timeout
+    # on every grid label fetch for it.
+    if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+        return LabelsResponse(labels=[])
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=10)
@@ -477,7 +494,6 @@ def api_tv_show_labels(rating_key: str):
         from ..config import extract_media_info_from_metadata
         media_info = extract_media_info_from_metadata(r.text)
         if media_info:
-            from .. import database as db
             db.update_tv_media_info(
                 rating_key,
                 media_info.get("video_resolution"),

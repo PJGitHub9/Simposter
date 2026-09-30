@@ -3344,6 +3344,28 @@ def get_title_for_rating_key(rating_key: str) -> tuple:
     return None, None
 
 
+def get_library_id_for_rating_key(rating_key: str) -> Optional[str]:
+    """Return the cached library_id for a rating_key from movie_cache or
+    tv_cache. Mirrors get_title_for_rating_key()'s exact lookup shape as a
+    separate function rather than widening that one's return signature --
+    it already has 14 existing callers all unpacking exactly (title, year),
+    and this app's own established convention (Quirk #60) is a small,
+    narrowly-scoped addition over a risky shared-signature change. Used by
+    media_server_send.py's manual Send-to-Jellyfin/Emby notification (which
+    otherwise has no library_id at all to pass to _should_notify()'s
+    per-library filter) -- falls back to None (no filter applied) if not
+    cached, which is a safe default."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT library_id FROM movie_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT library_id FROM tv_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+            ).fetchone()
+    return row["library_id"] if row and row["library_id"] else None
+
+
 def get_server_id_for_rating_key(rating_key: str) -> str:
     """Which configured media server (Quirk #57's `mediaServers` model) a
     rating_key/item id belongs to -- checked against movie_cache/tv_cache/
