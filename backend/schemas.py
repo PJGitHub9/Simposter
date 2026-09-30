@@ -97,7 +97,7 @@ class PresetDeleteRequest(BaseModel):
 class MediaServerEntry(BaseModel):
     id: str
     type: str  # "plex" | "jellyfin" | "emby"
-    name: Optional[str] = None  # user-supplied display label (e.g. "pj-jellyfin") so
+    name: Optional[str] = None  # user-supplied display label (e.g. "jellyfin-main") so
                                  # multiple same-type servers can be told apart in the UI --
                                  # falls back to a generic type label ("Jellyfin"/"Emby")
                                  # everywhere it's displayed when unset/blank.

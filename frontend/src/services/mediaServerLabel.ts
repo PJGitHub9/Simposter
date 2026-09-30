@@ -4,7 +4,7 @@
 // status badge, and Settings' own linked-library chips. Consolidated here
 // (rather than each call site deriving its own label) specifically so a
 // custom `name` (added so a user with two Jellyfin servers can tell them
-// apart -- e.g. "pj-jellyfin") is honored everywhere consistently, instead
+// apart -- e.g. "jellyfin-main") is honored everywhere consistently, instead
 // of some places showing the name and others silently falling back to a
 // generic "Jellyfin" because they never got updated.
 import type { MediaServerEntry } from '@/stores/settings'

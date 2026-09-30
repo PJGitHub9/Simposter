@@ -460,27 +460,71 @@ function addNewGroup(mediaType: 'movie' | 'tv') {
 }
 
 function onLinkPlex(mediaType: 'movie' | 'tv', group: LibraryGroup, key: string, title: string) {
+  // A group is only ever meant to have ONE Plex member -- the picker/chip UI
+  // already enforces this (the "Link a Plex library..." row is replaced by
+  // a single chip the moment plexMember exists, LibraryGroupCard.vue), so
+  // under normal single-click use this function should never even be
+  // reachable a second time for the same group. But a fast double-click can
+  // fire this handler twice before Vue re-renders to hide that button -- a
+  // real, live-reported case ("why is there 2 plex's?" in Media Mirror's
+  // source dropdown, which lists every raw member with no dedup). Guarding
+  // here closes the race regardless of how many times this gets invoked.
+  if (group.members.some(m => m.serverId === 'plex-1')) return
   const target = mediaType === 'movie' ? localLibraries : localTvShowLibraries
   target.value = [...target.value, newMappingEntry(key, title, group)]
+  // Add the new Plex member directly to THIS group -- previously relied
+  // entirely on ensureGroupsForMappings()'s reactive backfill to somehow
+  // connect the new mapping to a group, but that function can only ever
+  // recognize "a group already has this Plex library" or create a brand
+  // NEW standalone group for it; it has no way to know the user meant to
+  // join an EXISTING group (the one this picker lives on). The real, live
+  // bug this caused: linking Plex into an existing Jellyfin-only group
+  // silently created an unrelated, separate new single-library group
+  // instead, while the group actually being looked at never visibly
+  // changed -- no new Plex chip, no "unsaved" highlight on it, nothing.
+  // Mirrors onUnlinkPlex()'s own already-correct direct-mutation pattern
+  // just below. Keeps the group's existing id unchanged (no need to
+  // migrate it to the Plex-anchored id scheme -- every place that matters,
+  // ensureGroupsForMappings()'s own "exists" check included, matches by
+  // member content, not by id pattern).
+  settingsStore.libraryGroups.value = settingsStore.libraryGroups.value.map(g =>
+    g.id === group.id
+      ? { ...g, members: [...g.members, { serverId: 'plex-1', libraryId: key, libraryName: title }] }
+      : g
+  )
 }
 
 function onUnlinkPlex(mediaType: 'movie' | 'tv', group: LibraryGroup) {
-  const plexMember = group.members.find(m => m.serverId === 'plex-1')
-  if (!plexMember) return
+  // Every plex-1 member, not just the first -- self-healing for a group
+  // already corrupted by the pre-fix onLinkPlex() double-click race (a
+  // group is only ever meant to have one Plex member; the guard in
+  // onLinkPlex() above prevents a NEW one, but this needs to actually clean
+  // up whatever already got added before that guard existed, since the
+  // group's own "Link a Plex library..." picker stays hidden -- and the
+  // picker/chip UI only ever showed the FIRST one anyway -- for as long as
+  // ANY plex-1 member remains, so there was previously no way to reach a
+  // second, hidden duplicate through the normal UI at all).
+  const plexMembers = group.members.filter(m => m.serverId === 'plex-1')
+  if (!plexMembers.length) return
   const target = mediaType === 'movie' ? localLibraries : localTvShowLibraries
   const savedIds = mediaType === 'movie' ? props.savedLibraryIds : props.savedTvShowLibraryIds
-  const idx = target.value.findIndex(l => String(l.id) === plexMember.libraryId)
-  if (idx === -1) return
-  const lib = target.value[idx]
-  const wasSaved = lib?.id && savedIds.has(String(lib.id))
-  if (wasSaved) {
-    const label = lib!.displayName || lib!.title || lib!.id
-    if (!window.confirm(`Remove "${label}"? This also deletes its cached posters/labels and pending retry-queue entries once you save (History is kept). This can't be undone.`)) {
-      return
+  const plexLibraryIds = new Set(plexMembers.map(m => m.libraryId))
+  const toRemove = target.value.filter(l => l.id && plexLibraryIds.has(String(l.id)))
+  if (toRemove.length) {
+    const anySaved = toRemove.some(l => savedIds.has(String(l.id)))
+    if (anySaved) {
+      const label = toRemove.length > 1
+        ? `these ${toRemove.length} libraries`
+        : `"${toRemove[0]!.displayName || toRemove[0]!.title || toRemove[0]!.id}"`
+      if (!window.confirm(`Remove ${label}? This also deletes cached posters/labels and pending retry-queue entries once you save (History is kept). This can't be undone.`)) {
+        return
+      }
+    }
+    target.value = target.value.filter(l => !(l.id && plexLibraryIds.has(String(l.id))))
+    for (const lib of toRemove) {
+      if (lib.id && savedIds.has(String(lib.id))) emit('library-removed', String(lib.id))
     }
   }
-  target.value = target.value.filter((_, i) => i !== idx)
-  if (wasSaved && lib?.id) emit('library-removed', String(lib.id))
   const remainingMembers = group.members.filter(m => m.serverId !== 'plex-1')
   if (remainingMembers.length === 0) {
     settingsStore.libraryGroups.value = settingsStore.libraryGroups.value.filter(g => g.id !== group.id)

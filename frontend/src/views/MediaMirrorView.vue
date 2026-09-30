@@ -96,15 +96,26 @@ let pollHandle: ReturnType<typeof setInterval> | null = null
 const starting = ref(false)
 let previousRunState: RunStatus['state'] | undefined
 
-// Every server this library's group actually links, labeled via the same
+// Every DISTINCT server this library's group links, labeled via the same
 // shared helper the rest of the app already uses (Quirk #79) so a custom
-// server name is honored here too.
+// server name is honored here too. Deduped by serverId, not a plain map --
+// a group's own picker UI enforces at most one member per server type
+// (LibraryGroupCard.vue's Plex row only ever shows a single chip), but a
+// group that already has a duplicate from before that guard existed would
+// otherwise render two <option>s sharing the exact same value here, which
+// is genuinely broken (v-model can't tell them apart) rather than just
+// confusing to look at -- defensive regardless of whether the underlying
+// data has been cleaned up yet.
 const memberOptions = computed(() => {
   if (!group.value) return []
-  return group.value.members.map(m => ({
-    id: m.serverId,
-    label: mediaServerLabel(m.serverId, settings.mediaServers.value),
-  }))
+  const seen = new Set<string>()
+  const options: { id: string; label: string }[] = []
+  for (const m of group.value.members) {
+    if (seen.has(m.serverId)) continue
+    seen.add(m.serverId)
+    options.push({ id: m.serverId, label: mediaServerLabel(m.serverId, settings.mediaServers.value) })
+  }
+  return options
 })
 
 const targetOptions = computed(() => memberOptions.value.filter(o => o.id !== sourceServerId.value))

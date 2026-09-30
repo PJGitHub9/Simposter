@@ -9,6 +9,25 @@ const emit = defineEmits<{ (e: 'done'): void }>()
 const settings = useSettingsStore()
 const apiBase = getApiBase()
 
+// Captured once, at mount, before anything in this run could change it --
+// true only when the wizard is being RE-RUN on an already-onboarded install
+// (Settings -> Advanced -> "Run Startup Wizard", Quirk #73), never for a
+// genuine first-time run (App.vue only ever opens this modal automatically
+// while onboardingCompleted is still false, and this session's own
+// markOnboardingDone() is the only thing that ever sets it true, always at
+// the very end). Used to gate the two "do this automatically" behaviors
+// below that make sense for a brand-new install walking through setup for
+// the first time, but are a real, reported problem for a re-run used just
+// to add one more server to an already-configured install: auto-creating
+// Library Groups by name-matching every selected library (a re-run's
+// candidates would include the user's EXISTING libraries too, since
+// movieLibSections/tvLibSections are populated from whatever's already
+// configured -- silently duplicating/merging already-deliberately-arranged
+// groups the user never asked to touch this run) and auto-scanning
+// immediately on leaving the 'libraries' step (before the user has even
+// reached Finish, let alone reviewed or saved anything).
+const isRerun = settings.onboardingCompleted.value
+
 // ── Steps ──────────────────────────────────────────────────────────────────
 // Phase 8a follow-up -- 'servers' (new) lets the user pick any combination of
 // Plex/Jellyfin/Emby up front; 'plex'/'mediaservers' are then only reached for
@@ -393,8 +412,9 @@ const saveSettings = async () => {
       settings.defaultLabelsToRemove.value = labelsRecord
     }
 
-    // Auto-matched Library Group creation, covering every library selected across
-    // every server (not just standalone Jellyfin/Emby ones) -- every selection
+    // Auto-matched Library Group creation -- FIRST-TIME ONBOARDING ONLY
+    // (isRerun guard below). Covers every library selected across every
+    // server (not just standalone Jellyfin/Emby ones) -- every selection
     // becomes ITS OWN group unless another selection of the SAME media type has
     // the exact same name (case/whitespace-insensitive), in which case they're
     // merged into one shared group instead. This is the "auto-match" design the
@@ -407,53 +427,70 @@ const saveSettings = async () => {
     // trip to Settings required; a user can always add/remove members or split a
     // wrongly-matched group apart afterward via Settings -> Libraries -> Linked
     // Libraries (LinkedServerLibraries.vue), exactly as they already can today.
-    interface LibCandidate { serverId: string; libraryId: string; libraryName: string; mediaType: 'movie' | 'tv' }
-    const candidates: LibCandidate[] = []
-    if (wantsPlex.value) {
-      movieMappings.forEach(m => candidates.push({ serverId: 'plex-1', libraryId: String(m.id), libraryName: m.title, mediaType: 'movie' }))
-      tvMappings.forEach(m => candidates.push({ serverId: 'plex-1', libraryId: String(m.id), libraryName: m.title, mediaType: 'tv' }))
-    }
-    nonPlexDiscovered.value
-      .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
-      .forEach(d => candidates.push({ serverId: d.serverId, libraryId: d.libraryId, libraryName: d.libraryName, mediaType: d.mediaType as 'movie' | 'tv' }))
-
-    if (candidates.length) {
-      // Bucket by (mediaType, normalized name) -- exact match only (no fuzzy/
-      // substring matching), so "Movies" and "4K Movies" are deliberately kept
-      // separate rather than risking a false-positive merge.
-      const buckets = new Map<string, LibCandidate[]>()
-      for (const c of candidates) {
-        const key = `${c.mediaType}:${c.libraryName.trim().toLowerCase()}`
-        if (!buckets.has(key)) buckets.set(key, [])
-        buckets.get(key)!.push(c)
+    //
+    // Skipped entirely on a re-run (a real, reported bug): movieMappings/
+    // tvMappings/nonPlexDiscovered are built from whatever's CURRENTLY
+    // configured, not just what changed this run -- on an already-onboarded
+    // install, that includes the user's existing, already-deliberately-
+    // arranged libraries too. A newly-added Plex library whose name happens
+    // to match an existing Jellyfin-only group's name would then bucket
+    // together with it, but existingGroupIds.has(g.id) never recognizes the
+    // match: the bucket's computed id uses the PLEX-anchored scheme
+    // (group-{mediaType}-{plexLibraryId}) while the existing group was
+    // created under the standalone scheme (group-{mediaType}-{serverId}-
+    // {libraryId}) -- two different ids for what should be one group, so
+    // this created a brand-new, DUPLICATE group instead of linking into the
+    // existing one, on every wizard re-run. A re-run should only ever touch
+    // groups the user explicitly edits in Settings -> Libraries and saves.
+    if (!isRerun) {
+      interface LibCandidate { serverId: string; libraryId: string; libraryName: string; mediaType: 'movie' | 'tv' }
+      const candidates: LibCandidate[] = []
+      if (wantsPlex.value) {
+        movieMappings.forEach(m => candidates.push({ serverId: 'plex-1', libraryId: String(m.id), libraryName: m.title, mediaType: 'movie' }))
+        tvMappings.forEach(m => candidates.push({ serverId: 'plex-1', libraryId: String(m.id), libraryName: m.title, mediaType: 'tv' }))
       }
-      const existingGroupIds = new Set(settings.libraryGroups.value.map(g => g.id))
-      const newGroups = Array.from(buckets.values())
-        .map(members => {
-          const plexMember = members.find(m => m.serverId === 'plex-1')
-          const anchor = plexMember || members[0]!
-          // Matches the id scheme ensureGroup()/the startup migration already use
-          // for a Plex-anchored group (LinkedServerLibraries.vue, Quirk #62), and
-          // StandaloneServerLibraries.vue's scheme for a server-only one (Quirk
-          // #116) -- so a later manual link/unlink in Settings resolves the SAME
-          // group instead of creating a duplicate.
-          const id = plexMember
-            ? `group-${anchor.mediaType}-${anchor.libraryId}`
-            : `group-${anchor.mediaType}-${anchor.serverId}-${anchor.libraryId}`
-          return {
-            id,
-            name: anchor.libraryName || anchor.libraryId,
-            mediaType: anchor.mediaType,
-            members: members.map(m => ({ serverId: m.serverId, libraryId: m.libraryId, libraryName: m.libraryName })),
-            autoGenerateEnabled: false,
-            autoGeneratePresetId: null,
-            autoGenerateTemplateId: null,
-            labelsToRemove: [] as string[],
-          }
-        })
-        .filter(g => !existingGroupIds.has(g.id))
-      if (newGroups.length) {
-        settings.libraryGroups.value = [...settings.libraryGroups.value, ...newGroups]
+      nonPlexDiscovered.value
+        .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
+        .forEach(d => candidates.push({ serverId: d.serverId, libraryId: d.libraryId, libraryName: d.libraryName, mediaType: d.mediaType as 'movie' | 'tv' }))
+
+      if (candidates.length) {
+        // Bucket by (mediaType, normalized name) -- exact match only (no fuzzy/
+        // substring matching), so "Movies" and "4K Movies" are deliberately kept
+        // separate rather than risking a false-positive merge.
+        const buckets = new Map<string, LibCandidate[]>()
+        for (const c of candidates) {
+          const key = `${c.mediaType}:${c.libraryName.trim().toLowerCase()}`
+          if (!buckets.has(key)) buckets.set(key, [])
+          buckets.get(key)!.push(c)
+        }
+        const existingGroupIds = new Set(settings.libraryGroups.value.map(g => g.id))
+        const newGroups = Array.from(buckets.values())
+          .map(members => {
+            const plexMember = members.find(m => m.serverId === 'plex-1')
+            const anchor = plexMember || members[0]!
+            // Matches the id scheme ensureGroup()/the startup migration already use
+            // for a Plex-anchored group (LinkedServerLibraries.vue, Quirk #62), and
+            // StandaloneServerLibraries.vue's scheme for a server-only one (Quirk
+            // #116) -- so a later manual link/unlink in Settings resolves the SAME
+            // group instead of creating a duplicate.
+            const id = plexMember
+              ? `group-${anchor.mediaType}-${anchor.libraryId}`
+              : `group-${anchor.mediaType}-${anchor.serverId}-${anchor.libraryId}`
+            return {
+              id,
+              name: anchor.libraryName || anchor.libraryId,
+              mediaType: anchor.mediaType,
+              members: members.map(m => ({ serverId: m.serverId, libraryId: m.libraryId, libraryName: m.libraryName })),
+              autoGenerateEnabled: false,
+              autoGeneratePresetId: null,
+              autoGenerateTemplateId: null,
+              labelsToRemove: [] as string[],
+            }
+          })
+          .filter(g => !existingGroupIds.has(g.id))
+        if (newGroups.length) {
+          settings.libraryGroups.value = [...settings.libraryGroups.value, ...newGroups]
+        }
       }
     }
 
@@ -552,10 +589,19 @@ const goNext = async () => {
   }
   if (step.value === 'libraries') {
     if (wantsPlex.value) {
-      // Save Plex + library selection immediately so the scan can find them
+      // Save Plex connection + selected library mappings either way -- a
+      // re-run still needs this persisted so the wizard doesn't lose it if
+      // closed early. Only the SCAN itself (below) is skipped on a re-run.
       await savePlexEarly()
-      // Fire-and-forget — scan runs in the background while user completes setup
-      fetch(`${apiBase}/api/scan-library`, { method: 'POST' }).catch(() => {})
+      if (!isRerun) {
+        // Fire-and-forget — scan runs in the background while user completes setup.
+        // First-time onboarding only: a re-run's own auto-scan-on-save (Quirk #33,
+        // triggered by the normal Settings -> Libraries save path once the wizard
+        // finishes) already covers whatever the user actually changed, scoped to
+        // just that -- firing this too would additionally rescan every
+        // already-configured library the user didn't touch this run.
+        fetch(`${apiBase}/api/scan-library`, { method: 'POST' }).catch(() => {})
+      }
     }
     // Same fire-and-forget pattern for whichever Jellyfin/Emby libraries were
     // selected -- POST /api/media-server/{server_id}/scan (Quirk #66's scoped
@@ -563,13 +609,16 @@ const goNext = async () => {
     // button makes. The LibraryGroups these libraries belong to are created
     // later in saveSettings() (called from the 'performance' step below) --
     // scanning doesn't need the group to exist first (Quirk #116: a standalone
-    // library's rows filter correctly by library_id alone).
-    nonPlexDiscovered.value
-      .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
-      .forEach(d => {
-        const params = new URLSearchParams({ library_id: d.libraryId, media_type: d.mediaType })
-        fetch(`${apiBase}/api/media-server/${d.serverId}/scan?${params.toString()}`, { method: 'POST' }).catch(() => {})
-      })
+    // library's rows filter correctly by library_id alone). First-time only,
+    // same reasoning as the Plex scan above.
+    if (!isRerun) {
+      nonPlexDiscovered.value
+        .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
+        .forEach(d => {
+          const params = new URLSearchParams({ library_id: d.libraryId, media_type: d.mediaType })
+          fetch(`${apiBase}/api/media-server/${d.serverId}/scan?${params.toString()}`, { method: 'POST' }).catch(() => {})
+        })
+    }
   }
   if (step.value === 'performance') await saveSettings()
   if (step.value === 'notifications') {

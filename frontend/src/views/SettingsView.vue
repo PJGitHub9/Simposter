@@ -7,6 +7,7 @@ import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { setSessionStorage, getSessionStorage } from '../composables/useSessionStorage'
+import { onboardingJustSaved } from '@/composables/useOnboardingLauncher'
 
 // Import tab components
 import GeneralTab from './settings/GeneralTab.vue'
@@ -759,24 +760,22 @@ const testPlexConnection = async () => {
       const movieSectionsList = movieLibs.map((s: PlexLibrary) => s.title).join(', ')
       const tvShowSectionsList = tvShowLibs.map((s: PlexLibrary) => s.title).join(', ')
       testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${movieSectionsList}${tvShowLibs.length > 0 ? ` and ${tvShowLibs.length} TV show libraries: ${tvShowSectionsList}` : ''}`
-      if (movieLibs.length > 0) {
-        if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
-          localLibraries.value = movieLibs.map((s: PlexLibrary, idx: number) => ({
-            id: s.key,
-            title: s.title,
-            displayName: s.title || `Library ${idx + 1}`,
-          }))
-        }
-      }
-      if (tvShowLibs.length > 0) {
-        if (!localTvShowLibraries.value.length || localTvShowLibraries.value.every(l => !l.id)) {
-          localTvShowLibraries.value = tvShowLibs.map((s: PlexLibrary, idx: number) => ({
-            id: s.key,
-            title: s.title,
-            displayName: s.title || `TV Library ${idx + 1}`,
-          }))
-        }
-      }
+      // Deliberately does NOT auto-populate localLibraries/localTvShowLibraries
+      // with everything just discovered (this function used to, before the
+      // per-group "Link a Plex library..." picker existed in
+      // LibraryGroupCard.vue -- plexLibraries.value above is already
+      // everything that picker needs to offer as options). Auto-committing
+      // every discovered library as "tracked" the moment Test Connection
+      // succeeded was a real, reported bug: LibrariesTab.vue's
+      // ensureGroupsForMappings() watches these same arrays and immediately
+      // backfills a group per entry with no save step of its own, so the
+      // very next Save on ANY Settings tab (the page-wide save always
+      // includes the full current libraryGroups/localLibraries state)
+      // silently created and persisted a group per Plex library the moment
+      // the user saved the Media Servers tab -- before ever visiting
+      // Libraries, let alone picking anything. The user must now explicitly
+      // link each library via a group's own picker before it becomes
+      // tracked/saved/scanned.
     } else {
       testConnection.value = `✗ ${data.error}: ${data.message}`
     }
@@ -1267,6 +1266,34 @@ watch(
     }
   }
 )
+
+// The onboarding wizard saves directly to the shared settings store
+// (plex/automation/libraryGroups/mediaServers, etc.), bypassing this page's
+// own local staging refs and "last saved" snapshot entirely -- if this page
+// was already mounted when the wizard ran (Settings -> Advanced -> "Run
+// Startup Wizard"), it never found out the store just changed out from under
+// it, so its own watchers correctly (but wrongly, since it WAS saved)
+// flagged the page as having unsaved changes the moment the wizard/
+// QuickStartGuide closed. Re-running the exact same re-sync onMounted()
+// already does on a genuine fresh load -- re-fetch from the backend and
+// re-baseline everything against it -- fixes this the same way a real page
+// reload would, without requiring one.
+watch(onboardingJustSaved, async (val, oldVal) => {
+  if (val === oldVal) return
+  watchersEnabled.value = false
+  await settings.load()
+  await loadLocalSettings()
+
+  if (settings.plex.value.url && settings.plex.value.token) {
+    await testPlexConnection()
+  }
+
+  await nextTick()
+  captureSettingsSnapshot()
+  setTimeout(() => {
+    watchersEnabled.value = true
+  }, 100)
+})
 
 watch([
   localTheme,

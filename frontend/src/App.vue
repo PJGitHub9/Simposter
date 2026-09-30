@@ -22,7 +22,7 @@ import { useSettingsStore } from './stores/settings'
 import { useScanStore } from './stores/scan'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
-import { onboardingLaunchRequested } from '@/composables/useOnboardingLauncher'
+import { onboardingLaunchRequested, notifyOnboardingSaved } from '@/composables/useOnboardingLauncher'
 
 // Phase 8a -- a LibraryGroup with at least one member but NO Plex member represents a
 // standalone Jellyfin/Emby-only library (created via Settings -> Libraries's "Jellyfin/
@@ -106,15 +106,23 @@ const tabs = computed<MenuItem[]>(() => {
     ]
   }
 
-  // The single-library fallback tab only makes sense once Plex itself is actually
-  // configured (it derives its label from Plex's own movieLibraryName setting) -- a
-  // Plex-less install with only Jellyfin/Emby configured gets zero Plex-derived tabs,
-  // its libraries show up via nonPlexGroupTabs() below instead.
-  const libs = !plexConfigured
-    ? []
-    : settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length
+  // A Plex-configured install with no real library mappings yet gets ZERO
+  // Plex-derived tabs -- not a phantom "Movies" tab. That fallback used to
+  // synthesize one from the legacy movieLibraryName setting, from before
+  // library tracking went through explicit per-group linking
+  // (LibraryGroupCard.vue's "Link a Plex library..." picker) -- a real,
+  // reported bug once testPlexConnection() stopped auto-populating
+  // libraryMappings on a successful test (see SettingsView.vue): every
+  // Plex-configured-but-nothing-linked-yet install now hit this fallback
+  // and got a tab with no corresponding entry anywhere in Settings ->
+  // Libraries at all. A Plex-less install with only Jellyfin/Emby
+  // configured already correctly gets zero Plex-derived tabs here too --
+  // its libraries show up via nonPlexGroupTabs() below instead, and a
+  // linked Plex library shows up here the moment it's actually linked
+  // (settings.plex.value.libraryMappings gains a real entry then).
+  const libs = plexConfigured && settings.plex.value.libraryMappings
     ? settings.plex.value.libraryMappings
-    : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
+    : []
 
   const movieTabs: MenuItem[] = libs.map((lib, idx) => ({
     key: `movies-${lib.id || idx}`,
@@ -889,7 +897,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 <template>
   <div class="shell">
     <NotificationContainer />
-    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true" />
+    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true; notifyOnboardingSaved()" />
     <QuickStartGuide v-if="showQuickGuide" @done="handleQuickGuideDone" />
     <UpdateAnnouncementModal @view-full-changelog="showChangelog = true" />
 

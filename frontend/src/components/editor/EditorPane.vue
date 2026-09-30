@@ -55,7 +55,7 @@ const linkedServers = computed<LinkedServer[]>(() => {
 })
 const hasMultipleServers = computed(() => linkedServers.value.length > 1)
 
-// Prefers a user-supplied name ("pj-jellyfin") over the generic type label
+// Prefers a user-supplied name ("jellyfin-main") over the generic type label
 // ("Jellyfin") -- see mediaServerLabel.ts's own docstring for why this is
 // shared rather than reimplemented per file.
 function serverTypeLabel(serverId: string): string {

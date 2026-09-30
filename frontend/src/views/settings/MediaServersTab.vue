@@ -79,7 +79,7 @@
         <div v-for="server in group.servers" :key="server.id" class="server-card">
           <div class="server-card-row">
             <span class="server-type-badge" :class="server.type">{{ typeLabel(server.type) }}</span>
-            <input v-model="server.name" placeholder="Name (e.g. pj-jellyfin)" class="server-name-input" />
+            <input v-model="server.name" :placeholder="`Name (e.g. ${nameExample(server.type)})`" class="server-name-input" />
             <label class="enabled-toggle">
               <input type="checkbox" v-model="server.enabled" /> Enabled
             </label>
@@ -175,7 +175,7 @@
           an additional Plex entry can be tested and linked for browsing, but won't receive sends yet.
         </p>
         <div class="add-server-row">
-          <input v-model="newServerState[group.type].name" placeholder="Name (e.g. pj-jellyfin)" class="server-name-input" />
+          <input v-model="newServerState[group.type].name" :placeholder="`Name (e.g. ${nameExample(group.type)})`" class="server-name-input" />
           <input v-model="newServerState[group.type].url" placeholder="Server URL" class="server-url-input" />
           <input
             v-model="newServerState[group.type].credential"
@@ -345,6 +345,13 @@ const serverGroups = computed(() =>
 
 function typeLabel(type: string): string {
   return ({ plex: 'Plex', jellyfin: 'Jellyfin', emby: 'Emby' } as Record<string, string>)[type] || type
+}
+
+// Type-appropriate example for the optional "Name" field's placeholder --
+// generic, not tied to any one person's real server naming (this field is a
+// shared, multi-user app's UI, not a personal config file).
+function nameExample(type: string): string {
+  return ({ plex: 'plex-secondary', jellyfin: 'jellyfin-main', emby: 'emby-main' } as Record<string, string>)[type] || `${type}-main`
 }
 
 interface ServerSection {
