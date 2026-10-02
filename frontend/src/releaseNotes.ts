@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.112',
+    date: '2026-10-02',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fixed a local poster/logo upload being rejected ("URL resolves to a blocked network range") right after uploading, on some deployments (notably seedboxes) where the backend\'s DNS resolution of its own public address could land on a link-local IP. The upload itself always worked — only the very next preview/render step was incorrectly blocking the file it had just served.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.111',
     date: '2026-10-02',
     sections: [
