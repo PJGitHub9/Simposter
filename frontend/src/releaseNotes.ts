@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.6.111',
+    date: '2026-10-02',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster/logo upload redesigned: click "Upload Poster"/"Upload Logo" to open a modal with two options — upload a local file, or paste a direct image URL (with a live preview before you commit to it). Dragging a file straight onto the zone still works as a shortcut.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.110',
     date: '2026-09-26',
     sections: [

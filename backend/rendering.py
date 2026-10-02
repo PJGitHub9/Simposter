@@ -13,7 +13,7 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-from .config import logger, settings
+from .config import logger, settings, EXTERNAL_IMAGE_FETCH_HEADERS
 from .templates import get_renderer
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ def _download_image(url: str) -> Image.Image:
     for attempt in range(max_retries):
         try:
             # Increase timeout from 20s to 60s for slow connections
-            resp = requests.get(url, timeout=60)
+            resp = requests.get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             resp.raise_for_status()
             break
         except requests.exceptions.Timeout:

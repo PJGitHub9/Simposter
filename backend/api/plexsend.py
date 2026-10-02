@@ -9,7 +9,7 @@ from PIL import Image
 from pydantic import BaseModel
 from typing import List, Optional
 
-from ..config import settings, plex_headers, plex_session, plex_remove_label, plex_add_label, get_label_to_add, logger, get_media_folder_name
+from ..config import settings, plex_headers, plex_session, plex_remove_label, plex_add_label, get_label_to_add, logger, get_media_folder_name, EXTERNAL_IMAGE_FETCH_HEADERS
 from ..rendering import render_poster_image
 from ..schemas import PlexSendRequest, PlexLogoSendRequest, PlexBackdropSendRequest, PlexSquareArtSendRequest
 from ..save_paths import SaveContext, resolve_library_label, save_or_cache_render, load_cached_render, save_to_asset_folder_on_send_enabled
@@ -314,7 +314,7 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
         from ..middleware.validation import validate_url
         req.logo_url = validate_url(req.logo_url)
         try:
-            r = requests.get(req.logo_url, timeout=15)
+            r = requests.get(req.logo_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/png").split(";")[0].strip()
             logo_bytes = r.content
@@ -405,7 +405,7 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
         from ..middleware.validation import validate_url
         req.art_url = validate_url(req.art_url)
         try:
-            r = requests.get(req.art_url, timeout=15)
+            r = requests.get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             art_bytes = r.content
@@ -510,7 +510,7 @@ def api_plex_send_square_art(req: PlexSquareArtSendRequest):
         from ..middleware.validation import validate_url
         req.art_url = validate_url(req.art_url)
         try:
-            r = requests.get(req.art_url, timeout=15)
+            r = requests.get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             art_bytes = r.content
