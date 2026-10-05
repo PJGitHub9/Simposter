@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 
 interface LibraryMapping {
   id: string
@@ -176,6 +178,8 @@ const testApprise = async () => {
   }
 }
 
+const settingsStore = useSettingsStore()
+
 // Combine all libraries for display
 const allLibraries = computed(() => {
   const movieLibs = props.libraries.map(lib => ({
@@ -188,7 +192,26 @@ const allLibraries = computed(() => {
     type: 'tv' as const,
     label: `${lib.displayName || lib.title || lib.id} (TV)`
   }))
-  return [...movieLibs, ...tvLibs]
+  // Jellyfin/Emby libraries live only in Library Groups, not the Plex
+  // mappings above. Without them here they could never be ticked -- and once
+  // ANY library was ticked, the backend's filter blocked every notification
+  // for them.
+  const plexIds = new Set([...movieLibs, ...tvLibs].map(l => String(l.id)))
+  const otherLibs: { id: string; type: 'movie' | 'tv'; label: string }[] = []
+  for (const g of settingsStore.libraryGroups.value || []) {
+    for (const m of g.members || []) {
+      if (m.serverId === 'plex-1' || !m.libraryId || plexIds.has(String(m.libraryId))) continue
+      plexIds.add(String(m.libraryId))
+      const tv = g.mediaType === 'tv'
+      const name = g.name || m.libraryName || m.libraryId
+      otherLibs.push({
+        id: String(m.libraryId),
+        type: tv ? 'tv' : 'movie',
+        label: `${name} (${mediaServerLabel(m.serverId, settingsStore.mediaServers.value)}${tv ? ', TV' : ''})`,
+      })
+    }
+  }
+  return [...movieLibs, ...tvLibs, ...otherLibs]
 })
 
 const isLibrarySelected = (libraryId: string) => {

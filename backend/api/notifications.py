@@ -149,12 +149,14 @@ def _get_library_name(library_id: Optional[str]) -> str:
                 return mapping.get("displayName") or mapping.get("title") or library_id
 
         # Fall back to a Jellyfin/Emby-only Library Group member (no Plex side
-        # to have a mapping entry for at all) -- use the group's own display
-        # name if the member itself has no snapshot name.
+        # to have a mapping entry for at all). Group name first, then the
+        # member's own library name -- the same priority the UI (History,
+        # Local Assets, search) and backup folders use, so a library is called
+        # the same thing everywhere.
         for group in ui_settings.get("libraryGroups", []) or []:
             for member in group.get("members", []) or []:
-                if member.get("libraryId") == library_id:
-                    return member.get("libraryName") or group.get("name") or library_id
+                if str(member.get("libraryId")) == str(library_id):
+                    return group.get("name") or member.get("libraryName") or library_id
 
         return library_id
     except Exception:
