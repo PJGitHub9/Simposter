@@ -103,7 +103,7 @@ const emit = defineEmits<{
   'update:defaultTvLabelsToRemove': [value: Record<string, string[]>]
   'update:sendLogosToPlex': [value: boolean]
   'update:kometaCompatibility': [value: boolean]
-  'scan-library': [libraryId?: string]
+  'scan-library': [libraryId?: string, forceRefresh?: boolean]
   'save': []
   'library-removed': [libraryId: string]
 }>()
@@ -670,7 +670,16 @@ watch(
       >
         {{ scanCooldown ? 'Scanning...' : 'Scan All Libraries' }}
       </button>
+      <button
+        @click="emit('scan-library', undefined, true)"
+        :disabled="scanCooldown"
+        class="secondary-small"
+        title="A normal scan skips any item whose poster/logo/backdrop/square art is already cached, for speed. Use this instead after changing posters directly in Plex, to force everything to re-download."
+      >
+        {{ scanCooldown ? 'Scanning...' : '🔄 Force Refresh All Art' }}
+      </button>
     </div>
+    <p v-if="plexConfigured" class="help-text">Scans now skip art that's already cached, for speed — "Force Refresh All Art" re-downloads everything from Plex, same as scans always used to.</p>
 
     <!-- Libraries Grid -- two main groups, Movies and TV Shows. Each one lists
          Library Groups: a group can contain any combination of Plex/Jellyfin/
@@ -985,6 +994,7 @@ h4 {
 
 .scan-all-row {
   display: flex;
+  gap: 10px;
   margin-bottom: 16px;
 }
 

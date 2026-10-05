@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
+import { compareTitles } from '@/services/sortTitle'
 
 type MirrorMappingEntry = {
   tmdb_id: number | string | null
@@ -26,6 +27,23 @@ type MirrorGroup = {
     scheduleCron?: string | null
     lastRunAt?: string | null
     lastRunStats?: {
+      checked?: number
+      updated?: number
+      skipped?: number
+      unmapped?: number
+      failed?: number
+      unmappedSample?: string[]
+    } | null
+    // Movie-group-only (Quirk #123's follow-up, added right after the
+    // cross-server collection-title-matching fix -- see
+    // _dedupe_collections_by_title() in database.py) -- reuses this SAME
+    // mirror config's sourceServerId/targetServerIds rather than needing its
+    // own independent set, but gets its OWN asset-type selection
+    // (collectionAssetTypes) -- a user wanting to mirror collections only,
+    // with no movie asset types checked, previously had no way to do that.
+    mirrorCollections?: boolean
+    collectionAssetTypes?: string[]
+    lastRunCollectionStats?: {
       checked?: number
       updated?: number
       skipped?: number
@@ -84,6 +102,18 @@ const nextRun = ref<string | null>(null)
 
 const mapping = ref<MirrorMappingEntry[]>([])
 const mappingLoading = ref(false)
+
+// Collections mirroring (Quirk #123's follow-up) -- movie-group-only, since
+// Collections themselves are always resolved via the owning "movie" Library
+// Group (api_collections() never gives them their own media_type). Reuses
+// this same group's source/target/asset-type config above; its own mapping
+// is a SEPARATE fetch (a different mapping FUNCTION server-side, matching
+// by normalized title instead of tmdb_id) so it's tracked with its own
+// ref/loading state rather than sharing `mapping`.
+const mirrorCollections = ref(false)
+const collectionAssetTypes = ref<Set<string>>(new Set(['poster']))
+const collectionMapping = ref<MirrorMappingEntry[]>([])
+const collectionMappingLoading = ref(false)
 
 const runStatus = ref<RunStatus>({ state: 'idle' })
 let pollHandle: ReturnType<typeof setInterval> | null = null
@@ -144,10 +174,16 @@ const squareArtAvailable = computed(() =>
   isPlexId(sourceServerId.value) && Array.from(targetServerIds.value).some(isPlexId)
 )
 watch(squareArtAvailable, (available) => {
-  if (!available && assetTypes.value.has('square_art')) {
+  if (available) return
+  if (assetTypes.value.has('square_art')) {
     const next = new Set(assetTypes.value)
     next.delete('square_art')
     assetTypes.value = next
+  }
+  if (collectionAssetTypes.value.has('square_art')) {
+    const next = new Set(collectionAssetTypes.value)
+    next.delete('square_art')
+    collectionAssetTypes.value = next
   }
 })
 
@@ -164,6 +200,14 @@ function toggleAssetType(id: string) {
   if (next.has(id)) next.delete(id)
   else next.add(id)
   assetTypes.value = next
+}
+
+function toggleCollectionAssetType(id: string) {
+  if (id === 'square_art' && !squareArtAvailable.value) return
+  const next = new Set(collectionAssetTypes.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  collectionAssetTypes.value = next
 }
 
 async function fetchGroup() {
@@ -195,6 +239,8 @@ function applyConfigFromGroup() {
   assetTypes.value = new Set((mirror?.assetTypes && mirror.assetTypes.length) ? mirror.assetTypes : ['poster'])
   scheduleEnabled.value = !!mirror?.scheduleEnabled
   scheduleCron.value = mirror?.scheduleCron || '0 3 * * 0'
+  mirrorCollections.value = !isTV.value && !!mirror?.mirrorCollections
+  collectionAssetTypes.value = new Set((mirror?.collectionAssetTypes && mirror.collectionAssetTypes.length) ? mirror.collectionAssetTypes : ['poster'])
 }
 
 async function fetchSchedule() {
@@ -250,6 +296,8 @@ async function saveConfig() {
           assetTypes: Array.from(assetTypes.value),
           scheduleEnabled: scheduleEnabled.value,
           scheduleCron: scheduleCron.value || null,
+          mirrorCollections: !isTV.value && mirrorCollections.value,
+          collectionAssetTypes: Array.from(collectionAssetTypes.value),
         },
       }),
     })
@@ -258,6 +306,7 @@ async function saveConfig() {
       group.value = data.group || group.value
       saveMessage.value = 'Saved.'
       await fetchMapping()
+      await fetchCollectionMapping()
       await fetchSchedule()
     } else {
       saveMessage.value = 'Failed to save.'
@@ -296,11 +345,74 @@ async function fetchMapping() {
   }
 }
 
+async function fetchCollectionMapping() {
+  if (isTV.value || !mirrorCollections.value || !libraryId.value || !sourceServerId.value || targetServerIds.value.size === 0) {
+    collectionMapping.value = []
+    return
+  }
+  collectionMappingLoading.value = true
+  try {
+    const params = new URLSearchParams({
+      server_id: serverId.value,
+      library_id: libraryId.value,
+      media_type: 'collection',
+      source_server_id: sourceServerId.value,
+      target_server_ids: Array.from(targetServerIds.value).join(','),
+    })
+    const res = await fetch(`${apiBase}/api/media-mirror/mapping?${params.toString()}`)
+    if (res.ok) {
+      const data = await res.json()
+      collectionMapping.value = data.mapping || []
+    }
+  } catch {
+    collectionMapping.value = []
+  } finally {
+    collectionMappingLoading.value = false
+  }
+}
+
 const unmappedCount = computed(() => mapping.value.filter(m => !Object.values(m.targets || {}).some(v => v)).length)
+const unmappedCollectionCount = computed(() => collectionMapping.value.filter(m => !Object.values(m.targets || {}).some(v => v)).length)
 
 function rowHasAnyMatch(entry: MirrorMappingEntry): boolean {
   return Array.from(targetServerIds.value).some(id => !!(entry.targets && entry.targets[id]))
 }
+
+// Client-side search/filter/sort for the two mapping tables, so finding one
+// specific item to send with its per-row Send button doesn't mean scrolling
+// a whole library. Separate state per table -- they list different things.
+type MappingFilter = 'all' | 'mapped' | 'unmapped'
+const mappingSearch = ref('')
+const mappingFilter = ref<MappingFilter>('all')
+const mappingSort = ref<'title_asc' | 'title_desc'>('title_asc')
+const collectionSearch = ref('')
+const collectionFilter = ref<MappingFilter>('all')
+const collectionSort = ref<'title_asc' | 'title_desc'>('title_asc')
+
+function filterMapping(
+  entries: MirrorMappingEntry[],
+  search: string,
+  filter: MappingFilter,
+  sort: 'title_asc' | 'title_desc'
+): MirrorMappingEntry[] {
+  const q = search.trim().toLowerCase()
+  const out = entries.filter(e => {
+    if (q && !(e.title || '').toLowerCase().includes(q)) return false
+    if (filter === 'mapped') return rowHasAnyMatch(e)
+    if (filter === 'unmapped') return !rowHasAnyMatch(e)
+    return true
+  })
+  out.sort((a, b) => compareTitles(a.title || '', b.title || ''))
+  if (sort === 'title_desc') out.reverse()
+  return out
+}
+
+const displayMapping = computed(() =>
+  filterMapping(mapping.value, mappingSearch.value, mappingFilter.value, mappingSort.value)
+)
+const displayCollectionMapping = computed(() =>
+  filterMapping(collectionMapping.value, collectionSearch.value, collectionFilter.value, collectionSort.value)
+)
 
 // Per-row manual "Send" (Quirk #123's follow-up) -- keyed by source_rating_key
 // so multiple rows can be in flight independently, matching the Set-ref
@@ -316,7 +428,7 @@ function sendResultLabel(status: string): string {
   return '✗ Error'
 }
 
-async function sendItem(entry: MirrorMappingEntry) {
+async function sendItem(entry: MirrorMappingEntry, mediaTypeOverride?: string) {
   const key = entry.source_rating_key
   if (!key) return
   sendingKeys.value = new Set(sendingKeys.value).add(key)
@@ -330,7 +442,7 @@ async function sendItem(entry: MirrorMappingEntry) {
       body: JSON.stringify({
         server_id: serverId.value,
         library_id: libraryId.value,
-        media_type: mediaType.value,
+        media_type: mediaTypeOverride || mediaType.value,
         source_rating_key: key,
       }),
     })
@@ -415,6 +527,7 @@ async function refresh() {
   await pollRunStatus()
   if (sourceServerId.value && targetServerIds.value.size > 0) {
     await fetchMapping()
+    await fetchCollectionMapping()
   }
 }
 
@@ -511,6 +624,33 @@ onUnmounted(() => {
             </div>
           </div>
 
+          <div v-if="!isTV" class="config-field">
+            <label class="field-label checkbox-field-label">
+              <input type="checkbox" v-model="mirrorCollections" @change="fetchCollectionMapping" />
+              Also mirror Collections
+            </label>
+            <span class="help-text">Uses the same source/targets above, matched by collection name. Has its own asset-type selection below.</span>
+            <div v-if="mirrorCollections" class="checkbox-list collection-asset-types">
+              <label
+                v-for="(label, id) in ASSET_TYPE_LABELS"
+                :key="id"
+                class="checkbox-item"
+                :class="{ 'checkbox-item-disabled': id === 'square_art' && !squareArtAvailable }"
+                :title="id === 'square_art' && !squareArtAvailable
+                  ? 'Square Art only works when both the source and at least one target are Plex — Jellyfin/Emby have no square art equivalent.'
+                  : undefined"
+              >
+                <input
+                  type="checkbox"
+                  :checked="collectionAssetTypes.has(id)"
+                  :disabled="id === 'square_art' && !squareArtAvailable"
+                  @change="toggleCollectionAssetType(id)"
+                />
+                {{ label }}
+              </label>
+            </div>
+          </div>
+
           <div class="config-field">
             <label class="field-label checkbox-field-label">
               <input type="checkbox" v-model="scheduleEnabled" />
@@ -530,7 +670,7 @@ onUnmounted(() => {
           </button>
           <button
             class="secondary"
-            :disabled="starting || !enabled || runStatus.state === 'running' || sourceServerId === '' || targetServerIds.size === 0"
+            :disabled="starting || !enabled || runStatus.state === 'running' || sourceServerId === '' || targetServerIds.size === 0 || (assetTypes.size === 0 && !(mirrorCollections && collectionAssetTypes.size > 0))"
             @click="runNow"
           >
             {{ starting ? 'Starting...' : (runStatus.state === 'running' ? 'Running...' : 'Run Now') }}
@@ -543,6 +683,11 @@ onUnmounted(() => {
           {{ group.mirror.lastRunStats?.skipped ?? 0 }} unchanged,
           {{ group.mirror.lastRunStats?.unmapped ?? 0 }} unmapped,
           {{ group.mirror.lastRunStats?.failed ?? 0 }} failed
+          <template v-if="mirrorCollections && group.mirror?.lastRunCollectionStats">
+            — collections: {{ group.mirror.lastRunCollectionStats.updated ?? 0 }} updated,
+            {{ group.mirror.lastRunCollectionStats.unmapped ?? 0 }} unmapped,
+            {{ group.mirror.lastRunCollectionStats.failed ?? 0 }} failed
+          </template>
         </div>
 
         <div v-if="runStatus.state === 'running'" class="run-progress">
@@ -584,7 +729,21 @@ onUnmounted(() => {
           <div v-if="unmappedCount > 0" class="unmapped-warning">
             ⚠ {{ unmappedCount }} item(s) have no match on any selected target server and will be skipped.
           </div>
-          <div class="mapping-table-wrap">
+          <div class="mapping-toolbar">
+            <input v-model="mappingSearch" type="text" class="search-input" placeholder="Search titles..." />
+            <select v-model="mappingFilter" class="toolbar-select">
+              <option value="all">All</option>
+              <option value="mapped">Mapped</option>
+              <option value="unmapped">No match</option>
+            </select>
+            <select v-model="mappingSort" class="toolbar-select">
+              <option value="title_asc">Title A–Z</option>
+              <option value="title_desc">Title Z–A</option>
+            </select>
+            <span class="mapping-count">{{ displayMapping.length }} of {{ mapping.length }}</span>
+          </div>
+          <div v-if="displayMapping.length === 0" class="state-msg small">No items match this search/filter.</div>
+          <div v-else class="mapping-table-wrap">
             <table class="mapping-table">
               <thead>
                 <tr>
@@ -596,7 +755,7 @@ onUnmounted(() => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="entry in mapping" :key="entry.source_rating_key || entry.title || ''">
+                <tr v-for="entry in displayMapping" :key="entry.source_rating_key || entry.title || ''">
                   <td>{{ entry.title }}<span v-if="entry.year" class="mapping-year"> ({{ entry.year }})</span></td>
                   <td v-for="id in Array.from(targetServerIds)" :key="id">
                     <span v-if="entry.targets && entry.targets[id]" class="mapped-ok">✓ Mapped</span>
@@ -607,6 +766,83 @@ onUnmounted(() => {
                       class="secondary-small"
                       :disabled="!entry.source_rating_key || sendingKeys.has(entry.source_rating_key) || !rowHasAnyMatch(entry)"
                       @click="sendItem(entry)"
+                    >
+                      {{ entry.source_rating_key && sendingKeys.has(entry.source_rating_key) ? 'Sending...' : 'Send' }}
+                    </button>
+                    <span
+                      v-if="entry.source_rating_key && sendResults[entry.source_rating_key]"
+                      class="send-result-inline"
+                      :class="{ 'send-result-ok': sendResults[entry.source_rating_key] === 'updated' }"
+                    >
+                      {{ sendResultLabel(sendResults[entry.source_rating_key] || '') }}
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+
+      <div v-if="mirrorCollections" class="section">
+        <div class="section-header-inline">
+          <h3>Confirm Collection Mappings</h3>
+          <button class="secondary-small" :disabled="collectionMappingLoading" @click="fetchCollectionMapping">
+            {{ collectionMappingLoading ? 'Checking...' : 'Refresh Mapping' }}
+          </button>
+        </div>
+        <div class="section-description">
+          Collections are matched by NAME (not TMDb ID) across servers, since Jellyfin/Emby append "Collection" to
+          the end of a collection's name — e.g. Plex's "Marvel Cinematic Universe" matches Jellyfin's
+          "Marvel Cinematic Universe Collection" automatically.
+        </div>
+
+        <div v-if="sourceServerId === '' || targetServerIds.size === 0" class="state-msg small">
+          Pick a source and at least one target above to preview the mapping.
+        </div>
+        <div v-else-if="collectionMappingLoading" class="state-msg small">Checking mapping...</div>
+        <div v-else-if="collectionMapping.length === 0" class="state-msg small">No collections found on the source server.</div>
+        <template v-else>
+          <div v-if="unmappedCollectionCount > 0" class="unmapped-warning">
+            ⚠ {{ unmappedCollectionCount }} collection(s) have no name match on any selected target server and will be skipped.
+          </div>
+          <div class="mapping-toolbar">
+            <input v-model="collectionSearch" type="text" class="search-input" placeholder="Search collections..." />
+            <select v-model="collectionFilter" class="toolbar-select">
+              <option value="all">All</option>
+              <option value="mapped">Mapped</option>
+              <option value="unmapped">No match</option>
+            </select>
+            <select v-model="collectionSort" class="toolbar-select">
+              <option value="title_asc">Title A–Z</option>
+              <option value="title_desc">Title Z–A</option>
+            </select>
+            <span class="mapping-count">{{ displayCollectionMapping.length }} of {{ collectionMapping.length }}</span>
+          </div>
+          <div v-if="displayCollectionMapping.length === 0" class="state-msg small">No collections match this search/filter.</div>
+          <div v-else class="mapping-table-wrap">
+            <table class="mapping-table">
+              <thead>
+                <tr>
+                  <th>Collection</th>
+                  <th v-for="id in Array.from(targetServerIds)" :key="id">
+                    {{ memberOptions.find(o => o.id === id)?.label || id }}
+                  </th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="entry in displayCollectionMapping" :key="entry.source_rating_key || entry.title || ''">
+                  <td>{{ entry.title }}<span v-if="entry.year" class="mapping-year"> ({{ entry.year }})</span></td>
+                  <td v-for="id in Array.from(targetServerIds)" :key="id">
+                    <span v-if="entry.targets && entry.targets[id]" class="mapped-ok">✓ Mapped</span>
+                    <span v-else class="mapped-missing">— No match</span>
+                  </td>
+                  <td class="mapping-send-cell">
+                    <button
+                      class="secondary-small"
+                      :disabled="!entry.source_rating_key || sendingKeys.has(entry.source_rating_key) || !rowHasAnyMatch(entry)"
+                      @click="sendItem(entry, 'collection')"
                     >
                       {{ entry.source_rating_key && sendingKeys.has(entry.source_rating_key) ? 'Sending...' : 'Send' }}
                     </button>
@@ -761,6 +997,37 @@ onUnmounted(() => {
   color: #c9d1e0;
 }
 
+.mapping-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.search-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 5px 10px;
+  font-size: 13px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9d1e0;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.search-input:focus {
+  border-color: rgba(61, 214, 183, 0.5);
+}
+
+.mapping-count {
+  font-size: 12px;
+  color: var(--muted, #8b93a7);
+  white-space: nowrap;
+}
+
 .checkbox-list {
   display: flex;
   flex-direction: column;
@@ -796,6 +1063,13 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   cursor: pointer;
+}
+
+.collection-asset-types {
+  margin-top: 6px;
+  margin-left: 20px;
+  padding-left: 10px;
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
 }
 
 .schedule-config {

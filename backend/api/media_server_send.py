@@ -172,7 +172,7 @@ def _resolve_non_plex_client(rating_key: str, server_id_hint: Optional[str] = No
     return server_id, client
 
 
-def _upload_poster_and_verify(client, server_id: str, item_id: str, image_bytes: bytes, content_type: str) -> None:
+def _upload_poster_and_verify(client, server_id: str, item_id: str, image_bytes: bytes, content_type: str, is_collection: bool = False) -> None:
     """Core upload+verify-diagnostic logic for a poster, factored out of
     api_send_poster() so batch.py's multi-server sync (which already has a
     resolved (client, item_id) pair from find_item_by_external_id() rather
@@ -180,8 +180,15 @@ def _upload_poster_and_verify(client, server_id: str, item_id: str, image_bytes:
     the exact same upload call and Quirk #77 verification diagnostics
     instead of a third independent copy of this logic. Raises on a genuine
     upload failure (caller's responsibility to catch/report); the
-    verification re-fetch is purely diagnostic and never raises."""
-    client.upload_image(item_id, ImageType.POSTER, image_bytes, content_type)
+    verification re-fetch is purely diagnostic and never raises.
+
+    `is_collection` (default False, so every existing caller is unaffected)
+    threads through to PlexClient.upload_image()'s own is_collection flag --
+    a Plex collection's poster write has to go to /library/collections/{id}/
+    posters, not /library/metadata/{id}/posters (see plexsend.py's
+    _plex_media_segment()). Jellyfin/Emby ignore it (no such URL distinction
+    there -- interface parity only, same as upload_image()'s own doc)."""
+    client.upload_image(item_id, ImageType.POSTER, image_bytes, content_type, is_collection=is_collection)
 
     # A 200 from upload_image() only proves the server ACCEPTED the request --
     # not that it actually stored the new image (see CLAUDE.md Quirk #36's
@@ -357,6 +364,7 @@ def sync_render_to_linked_servers(
     title_hint: str = "?",
     season_index: Optional[int] = None,
     tvdb_id: Optional[int] = None,
+    source_server_id: str = "plex-1",
 ) -> List[Dict[str, str]]:
     """Sends already-rendered poster/logo bytes (whichever are given -- both
     are optional and independent) to whichever of `target_ids` are BOTH
@@ -410,11 +418,23 @@ def sync_render_to_linked_servers(
     this area (#96/#99/#100/#110) believing it had been verified working,
     because every one of those tests used a mock configured to return a
     truthy value unconditionally, which never exercised this real
-    argument-gating check. See Quirk #111 for the full story."""
+    argument-gating check. See Quirk #111 for the full story.
+
+    `source_server_id` (Quirk #132): the server the CALLING item's own
+    `library_id` actually belongs to -- defaults to "plex-1" since every
+    caller before Phase 8a only ever had a Plex-anchored library_id, but
+    get_library_group_members() requires the EXACT (server_id, library_id)
+    pair that's a real member of the group, not just any library_id -- a
+    standalone Jellyfin/Emby-only LibraryGroup (Quirk #116, no Plex member
+    at all) has a non-Plex library_id as its anchor, and hardcoding
+    "plex-1" here meant that pair could never match any group member, so
+    this function silently returned [] for every batch item browsed from
+    a Plex-less group's own tab, no matter how correctly everything else
+    was configured."""
     if not tmdb_id or not target_ids:
         return []
     from ..config import get_library_group_members
-    linked = get_library_group_members("plex-1", str(library_id or ""), media_type) if library_id else None
+    linked = get_library_group_members(source_server_id, str(library_id or ""), media_type) if library_id else None
     # Keep each linked member's OWN library_id, not just its server_id --
     # a real, live-reported bug (Gran Turismo existing in both a linked
     # "4k-Movies" Jellyfin library and an untracked "Movies" library on the
@@ -491,4 +511,10 @@ def api_send_backdrop(req: MediaServerSendRequest):
         logger.debug("[MEDIA_SERVER_SEND:%s] Failed to update backdrop cache after upload: %s", server_id, e)
 
     logger.info("[MEDIA_SERVER_SEND:%s] Backdrop sent for rating_key=%s", server_id, req.rating_key)
+    # Was missing entirely before -- poster/logo sends both notify via
+    # _notify_manual_send(), backdrop simply never got the same call added
+    # (not a deliberate scope cut, see api_send_poster()/api_send_logo()'s
+    # own notification calls and this module's docstring, which only
+    # excludes square_art for a real reason -- Jellyfin has no equivalent).
+    _notify_manual_send(req.rating_key, server_id, "backdrop")
     return {"status": "ok", "art_url": new_art_url}

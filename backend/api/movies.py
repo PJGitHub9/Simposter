@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 import requests
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata, normalize_collection_title
 from .. import cache, database as db
 from .art_cache import make_art_cache
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
@@ -624,15 +624,68 @@ def api_all_movie_labels(library_id: str = None):
 
 
 @router.get("/collections")
-def api_collections(force_refresh: bool = False, library_id: str = None):
-    """Return Plex collections for the specified library (or all movie libraries by default)."""
+def api_collections(force_refresh: bool = False, library_id: str = None, server_id: str = "plex-1"):
+    """Return collections for the specified library (or all movie libraries by
+    default).
+
+    server_id (default "plex-1", so every existing caller/URL is byte-identical
+    to before this param existed -- Phase 8a's own established convention,
+    Quirk #116/#120): when non-Plex, fetches Jellyfin/Emby BoxSets instead of
+    Plex collections. Collections were the one media type this multi-server
+    effort hadn't reached yet -- everything downstream (api_collection_tmdb(),
+    the TMDb/Fanart image lookups) already works for a non-Plex collection row
+    with zero changes, since those resolve purely from the cached title, not a
+    live Plex fetch.
+
+    If `library_id` belongs to a Library Group with other linked members
+    (Quirk #62/#64), ALL members' collections are unioned in (via
+    db.get_cached_collections_multi(), no dedup -- see its own docstring) --
+    was missing entirely until now: unlike /api/movies//api/tv-shows, this
+    endpoint only ever queried the single `server_id` given, so a Plex-anchored
+    group's Collections page never showed a linked Jellyfin member's
+    collections even after they'd been correctly scanned (Quirk #130).
+    User-reported directly: "i ran a scan on my 'movies' group. jellyfin
+    collections didnt show up." -- the scan worked, this read path never
+    looked at what it wrote for anything beyond the one `server_id` queried."""
     if library_id in ("default", ""):
         library_id = None
 
     lib_ids = [library_id] if library_id else None
+    is_plex = server_id == "plex-1"
+
+    def _resolve_non_plex_collection_poster(rating_key: str) -> str:
+        """Mirrors _get_plex_collections()'s own poster-resolution exactly
+        (prefer an already-disk-cached file, else fall back to the generic
+        /api/movie/{key}/poster proxy -- collections have no dedicated poster
+        endpoint of their own, see CLAUDE.md's Collections Quirk) -- but for
+        a non-Plex collection, since JellyfinClient.list_collections() always
+        returns poster=None (no per-item image fetch is made during listing,
+        by design). Without this, a Jellyfin collection's `poster` field was
+        left as a bare None/null, which the frontend's normalizePoster(null)
+        turns into no src at all -- the browser never even requests the
+        generic poster proxy, so fetch_and_cache_poster() (which WOULD
+        correctly route to Jellyfin via db.get_server_id_for_rating_key(),
+        Quirk #65) never gets a chance to run. User-reported directly, right
+        after the merge fix above: "it loaded but the posters didnt load for
+        collections." Plex collections never hit this gap because
+        _get_plex_collections() already had this exact fallback built in from
+        the start."""
+        cached = _poster_cache_path(rating_key)
+        return _poster_cache_url(rating_key, cached) if cached else f"/api/movie/{rating_key}/poster"
+
+    group_members = get_library_group_members(server_id, library_id, "movie") if library_id else None
+    # Same per-group toggle movies/TV already use (Quirk #120/#121) -- "merge
+    # items" now also controls whether a collection present on more than one
+    # linked server (matched by normalized title, _dedupe_collections_by_title())
+    # collapses into one card or shows each server's own copy separately.
+    merge_enabled = get_library_group_merge_enabled(server_id, library_id, "movie") if group_members else True
+    # Same "Show posters from" dropdown Movies/TV already have (Quirk #85/#121),
+    # now wired up for Collections too -- the merge-winner when merge_enabled,
+    # or a genuine per-server filter when it isn't.
+    preferred_server_id = get_library_group_preferred_server(server_id, library_id, "movie") if group_members else None
 
     if not force_refresh and _collections_cache_fresh(max_age_seconds=900, library_id=library_id):
-        cached = cache.get_cached_collections(library_id=library_id)
+        cached = db.get_cached_collections_multi(group_members, preferred_server_id, merge_enabled) if group_members else cache.get_cached_collections(library_id=library_id)
         if cached:
             return [
                 {
@@ -642,13 +695,89 @@ def api_collections(force_refresh: bool = False, library_id: str = None):
                     "addedAt": c.get("addedAt"),
                     "poster": c.get("poster_url"),
                     "library_id": c.get("library_id"),
+                    "server_id": c.get("server_id", "plex-1"),
+                    "also_on": c.get("also_on"),
+                    "other_servers": c.get("other_servers"),
                 }
                 for c in cached
             ]
 
-    items = _get_plex_collections(lib_ids)
+    # A linked group needs every member actually scanned, not just the one
+    # `server_id` this request happened to be made with -- fetch/persist the
+    # Plex side AND every linked non-Plex member before reading the merged
+    # result back, so a freshly-scanned OR freshly-fetched group always shows
+    # everything regardless of which member's server_id this specific request used.
+    if group_members:
+        for member_server_id, member_library_id in group_members:
+            if member_server_id == "plex-1":
+                plex_items = _get_plex_collections([member_library_id])
+                if plex_items:
+                    cache.refresh_collections_from_list(plex_items)
+            else:
+                from ..media_server import get_client as _get_client
+                member_client = _get_client(member_server_id)
+                if member_client and hasattr(member_client, "list_collections"):
+                    member_items = member_client.list_collections(member_library_id)
+                    if member_items:
+                        db.upsert_media_server_collections(member_server_id, member_library_id, [
+                            {
+                                "rating_key": i["key"], "title": i.get("title") or "", "year": i.get("year"),
+                                "added_at": i.get("addedAt"),
+                                "poster_url": i.get("poster") or _resolve_non_plex_collection_poster(i["key"]),
+                            }
+                            for i in member_items
+                        ])
+        merged = db.get_cached_collections_multi(group_members, preferred_server_id, merge_enabled)
+        return [
+            {
+                "key": c.get("rating_key"), "title": c.get("title"), "year": c.get("year"),
+                "addedAt": c.get("addedAt"), "poster": c.get("poster_url"),
+                "library_id": c.get("library_id"), "server_id": c.get("server_id", "plex-1"),
+                "also_on": c.get("also_on"),
+                "other_servers": c.get("other_servers"),
+            }
+            for c in merged
+        ]
+
+    if is_plex:
+        items = _get_plex_collections(lib_ids)
+        if items:
+            cache.refresh_collections_from_list(items)
+        for item in items:
+            item["server_id"] = "plex-1"
+        return items
+
+    from ..media_server import get_client
+    client = get_client(server_id)
+    if not client or not hasattr(client, "list_collections"):
+        return []
+    items = client.list_collections(library_id)
     if items:
-        cache.refresh_collections_from_list(items)
+        # list_collections() returns the same {key, title, year, addedAt,
+        # poster, library_id} API-response shape _get_plex_collections() does
+        # -- upsert_media_server_collections() (like bulk_refresh_collection_cache()
+        # before it) expects the DB-row shape instead (rating_key/added_at/
+        # poster_url), matching upsert_media_server_movies()'s own convention.
+        db.upsert_media_server_collections(server_id, library_id or "", [
+            {
+                "rating_key": i["key"],
+                "title": i.get("title") or "",
+                "year": i.get("year"),
+                "added_at": i.get("addedAt"),
+                "poster_url": i.get("poster") or _resolve_non_plex_collection_poster(i["key"]),
+            }
+            for i in items
+        ])
+    for item in items:
+        item["server_id"] = server_id
+        # list_collections() itself always returns poster=None (no per-item
+        # image fetch during listing) -- without this fallback the frontend's
+        # normalizePoster(null) gives the <img> no src at all, so the browser
+        # never even requests /api/movie/{key}/poster, meaning
+        # fetch_and_cache_poster() (which WOULD correctly route to this
+        # server) never runs. See _resolve_non_plex_collection_poster()'s own
+        # docstring for the full story.
+        item["poster"] = item.get("poster") or _resolve_non_plex_collection_poster(item["key"])
     return items
 
 
@@ -777,12 +906,7 @@ def _best_collection_match(title: str, results: List[dict]) -> Optional[dict]:
     if not results:
         return None
 
-    def normalize(name: str) -> str:
-        n = (name or "").strip().lower()
-        if n.endswith(" collection"):
-            n = n[: -len(" collection")]
-        return n.strip()
-
+    normalize = normalize_collection_title
     target = normalize(title)
 
     exact = [r for r in results if normalize(r.get("name") or "") == target]
@@ -889,6 +1013,22 @@ def api_collection_movies(rating_key: str):
     that's a per-collection judgment call for whoever's using it, not
     something this endpoint can determine."""
     rating_key = validate_rating_key(rating_key)
+
+    # A Jellyfin/Emby BoxSet's id isn't a real Plex rating_key -- the direct
+    # XML fetch below would either 404 or time out against settings.PLEX_URL,
+    # surfacing as a confusing 502 (the same class of gap already fixed for
+    # api_movie_labels() just below this function). Route through the
+    # already-confirmed /Items?ParentId=... pattern instead (Quirk #126/#127's
+    # collections work).
+    from .. import database as db
+    server_id = db.get_server_id_for_rating_key(rating_key)
+    if server_id != "plex-1":
+        from ..media_server import get_client
+        client = get_client(server_id)
+        if not client or not hasattr(client, "list_collection_members"):
+            return {"movies": []}
+        return {"movies": client.list_collection_members(rating_key)}
+
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=10)
@@ -1261,8 +1401,23 @@ def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
 
 
 @router.post("/scan-library")
-def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refresh: bool = Query(True)):
-    """Comprehensive full-library sync: fetch movies, TV shows, and collections. If library_id provided, scan only that library. force_poster_refresh re-downloads all posters from Plex (default: True)."""
+def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refresh: bool = Query(False)):
+    """Comprehensive full-library sync: fetch movies, TV shows, and collections.
+    If library_id provided, scan only that library.
+
+    force_poster_refresh (default: False, changed from True): when False, a
+    routine scan skips the network fetch + re-encode entirely for any item
+    whose poster/logo/backdrop/square_art is already cached on disk (the
+    existing fetch_and_cache_poster()/art_cache.py short-circuit, previously
+    never actually reachable from a real scan since this always defaulted to
+    True with no UI control to turn it off). For a 2000-movie library this is
+    the difference between ~8000 real image downloads + Pillow re-encodes
+    every single scan vs. only the handful that are actually new. User-
+    reported as a real CPU spike + 5+ minute scan time for 2k movies -- see
+    CLAUDE.md's scan-performance Quirk. Pass force_poster_refresh=true
+    explicitly (the "Force Refresh All Art" action, Settings -> Libraries) to
+    get the old always-refetch behavior when actually wanted (e.g. after
+    bulk-changing posters directly in Plex)."""
     try:
         # Prevent multiple simultaneous scans
         if scan_status.get("state") == "running":
@@ -1325,35 +1480,51 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         movie_keys = [movie.key for movie in movies]
         bulk_labels = {}
         bulk_tmdb_ids = {}
+        # Parallelized (was a fully sequential one-request-at-a-time loop) --
+        # this is a lightweight XML metadata fetch, the same /library/metadata/{key}
+        # request the poster-fetch phase below already makes concurrently at
+        # max_workers=10, so there's no new risk profile here, just the same
+        # concurrency this function already trusts for a heavier (image) fetch.
+        # For a 2000-movie library, a sequential loop here was easily the single
+        # biggest contributor to a 5+ minute scan -- 2000 one-at-a-time round
+        # trips before the already-parallel image-fetch phase even starts.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _fetch_label_for_movie(movie_key: str):
+            try:
+                url = f"{settings.PLEX_URL}/library/metadata/{movie_key}"
+                r = plex_session.get(url, headers=plex_headers(), timeout=10)
+                r.raise_for_status()
+                root = ET.fromstring(r.text)
+                labels_list = []
+                for label in root.findall(".//Label"):
+                    tag = label.get('tag', '').strip()
+                    if tag:
+                        labels_list.append(tag)
+                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
+                return movie_key, [], None
+
         if movie_keys:
             try:
-                logger.info(f"[SCAN] Bulk fetching labels for {len(movie_keys)} movies")
-                for label_idx, movie_key in enumerate(movie_keys, start=1):
-                    try:
-                        url = f"{settings.PLEX_URL}/library/metadata/{movie_key}"
-                        r = plex_session.get(url, headers=plex_headers(), timeout=10)
-                        r.raise_for_status()
-                        root = ET.fromstring(r.text)
-                        labels_list = []
-                        for label in root.findall(".//Label"):
-                            tag = label.get('tag', '').strip()
-                            if tag:
-                                labels_list.append(tag)
+                logger.info(f"[SCAN] Bulk fetching labels for {len(movie_keys)} movies (parallel)")
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    label_futures = {executor.submit(_fetch_label_for_movie, key): key for key in movie_keys}
+                    label_done = 0
+                    for future in as_completed(label_futures):
+                        movie_key, labels_list, tmdb_id = future.result()
                         bulk_labels[movie_key] = labels_list
-                        bulk_tmdb_ids[movie_key] = extract_tmdb_id_from_metadata(r.text)
-                    except Exception as e:
-                        logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
-                        bulk_labels[movie_key] = []
-                    # This is a sequential per-movie network call and can be the slowest
-                    # part of a scan for large libraries — without this, scan_status stayed
-                    # unchanged (looking stalled) for the entire label-fetch phase.
-                    scan_status.update({"current": f"Fetching labels ({label_idx}/{len(movie_keys)})"})
+                        bulk_tmdb_ids[movie_key] = tmdb_id
+                        label_done += 1
+                        # Without this, scan_status stayed unchanged (looking stalled)
+                        # for the entire label-fetch phase.
+                        scan_status.update({"current": f"Fetching labels ({label_done}/{len(movie_keys)})"})
                 logger.info(f"[SCAN] Successfully fetched labels for {len(bulk_labels)} movies")
             except Exception as e:
                 logger.warning(f"[SCAN] Bulk label fetch failed, will skip labels: {e}")
 
         # Parallelize poster + logo + backdrop + square art fetching using ThreadPoolExecutor
-        from concurrent.futures import ThreadPoolExecutor, as_completed
         poster_results = {}
         logo_results = {}
         art_results = {}
@@ -1536,60 +1707,65 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 except Exception:
                     pass  # Never block scan for this
 
-        # Process TV shows per library
+        # Process TV shows per library. Parallelized across shows (was a fully
+        # sequential one-show-at-a-time loop with up to 6 Plex requests per
+        # show -- poster, logo, backdrop, square art, labels, tmdb/tvdb -- and
+        # zero concurrency at all, unlike the movie path above). For a
+        # TV-heavy library this was an even bigger scan-time contributor than
+        # the movie label-fetch loop fixed above. Kept at per-show granularity
+        # (each of the 10 concurrent workers still does its own 6 calls
+        # sequentially) rather than splitting every sub-fetch into its own
+        # pool the way movies' poster/logo/backdrop/square-art fetches are --
+        # simpler to keep correct, and still a ~10x reduction in wall-clock
+        # time for this phase.
         tv_cache_by_lib = {}
-        for show in tv_shows:
+
+        def _fetch_tv_show_data(show: dict) -> dict:
+            key = show.get("key")
             lib_id = show.get("library_id") or "default"
-            if lib_id not in tv_cache_by_lib:
-                tv_cache_by_lib[lib_id] = []
-            
-            # Fetch poster
+
             poster_url = None
             try:
-                poster_path = fetch_and_cache_poster(show.get("key"), force_refresh=force_poster_refresh)
+                poster_path = fetch_and_cache_poster(key, force_refresh=force_poster_refresh)
                 if poster_path:
-                    poster_url = _poster_cache_url(show.get("key"), poster_path)
+                    poster_url = _poster_cache_url(key, poster_path)
             except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch poster for TV show {show.get('key')}: {e}")
+                logger.debug(f"[SCAN] Failed to fetch poster for TV show {key}: {e}")
 
-            # Fetch clearlogo from Plex
             logo_url = None
             try:
-                logo_path = fetch_and_cache_logo(show.get("key"), force_refresh=force_poster_refresh)
+                logo_path = fetch_and_cache_logo(key, force_refresh=force_poster_refresh)
                 if logo_path:
-                    logo_url = _logo_cache_url(show.get("key"), logo_path)
+                    logo_url = _logo_cache_url(key, logo_path)
             except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch logo for TV show {show.get('key')}: {e}")
+                logger.debug(f"[SCAN] Failed to fetch logo for TV show {key}: {e}")
 
-            # Fetch backdrop ("art") from Plex
             art_url = None
             try:
-                art_path = fetch_and_cache_backdrop(show.get("key"), force_refresh=force_poster_refresh)
+                art_path = fetch_and_cache_backdrop(key, force_refresh=force_poster_refresh)
                 if art_path:
                     # Pre-warm the grid thumbnail now, from bytes already on disk --
                     # see the matching movie-scan comment above / CLAUDE.md Quirk #49.
-                    _art_thumbnail(show.get("key"), art_path)
-                    art_url = _art_cache_url(show.get("key"), art_path)
+                    _art_thumbnail(key, art_path)
+                    art_url = _art_cache_url(key, art_path)
             except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch backdrop for TV show {show.get('key')}: {e}")
+                logger.debug(f"[SCAN] Failed to fetch backdrop for TV show {key}: {e}")
 
-            # Fetch square art from Plex
             square_art_url = None
             try:
-                sq_path = fetch_and_cache_square_art(show.get("key"), force_refresh=force_poster_refresh)
+                sq_path = fetch_and_cache_square_art(key, force_refresh=force_poster_refresh)
                 if sq_path:
-                    _square_art_thumbnail(show.get("key"), sq_path)
-                    square_art_url = _square_art_cache_url(show.get("key"), sq_path)
+                    _square_art_thumbnail(key, sq_path)
+                    square_art_url = _square_art_cache_url(key, sq_path)
             except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch square art for TV show {show.get('key')}: {e}")
+                logger.debug(f"[SCAN] Failed to fetch square art for TV show {key}: {e}")
 
-            # Fetch labels
             labels = []
             try:
-                labels_data = api_tv_show_labels(show.get("key"))
+                labels_data = api_tv_show_labels(key)
                 labels = labels_data.labels
             except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch labels for TV show {show.get('key')}: {e}")
+                logger.debug(f"[SCAN] Failed to fetch labels for TV show {key}: {e}")
 
             # Resolve tmdb_id/tvdb_id from Plex's own GUID metadata -- previously the
             # TV scan never populated either, only the manual editor's own per-item
@@ -1603,16 +1779,16 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             tmdb_id = None
             tvdb_id = None
             try:
-                url = f"{settings.PLEX_URL}/library/metadata/{show.get('key')}"
+                url = f"{settings.PLEX_URL}/library/metadata/{key}"
                 r = plex_session.get(url, headers=plex_headers(), timeout=10)
                 r.raise_for_status()
                 tmdb_id = extract_tmdb_id_from_metadata(r.text)
                 tvdb_id = extract_tvdb_id_from_metadata(r.text)
             except Exception as e:
-                logger.debug(f"[SCAN] Failed to fetch tmdb/tvdb id for TV show {show.get('key')}: {e}")
+                logger.debug(f"[SCAN] Failed to fetch tmdb/tvdb id for TV show {key}: {e}")
 
-            tv_cache_by_lib[lib_id].append({
-                "rating_key": show.get("key"),
+            return {
+                "rating_key": key,
                 "title": show.get("title"),
                 "year": show.get("year"),
                 "added_at": show.get("addedAt"),
@@ -1624,12 +1800,21 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "square_art_url": square_art_url,
                 "labels": labels,
                 "library_id": lib_id,
-            })
-            
-            processed += 1
-            if processed % 50 == 0 or processed == total_items:
-                logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
-            scan_status.update({"processed": processed, "current": show.get("title") or ""})
+            }
+
+        if tv_shows:
+            logger.info(f"[SCAN] Fetching art/labels/ids for {len(tv_shows)} TV shows (parallel)")
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                show_futures = {executor.submit(_fetch_tv_show_data, show): show for show in tv_shows}
+                for future in as_completed(show_futures):
+                    show_result = future.result()
+                    lib_id = show_result["library_id"]
+                    tv_cache_by_lib.setdefault(lib_id, []).append(show_result)
+
+                    processed += 1
+                    if processed % 50 == 0 or processed == total_items:
+                        logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
+                    scan_status.update({"processed": processed, "current": show_result.get("title") or ""})
         
         # Bulk refresh TV cache per library and detect new content
         for lib_id, cached_shows in tv_cache_by_lib.items():

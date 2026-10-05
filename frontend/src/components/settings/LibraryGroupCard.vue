@@ -203,6 +203,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useSettingsStore, type LibraryGroup, type LibraryGroupMember } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
 import { getApiBase } from '@/services/apiBase'
+import { useScanStore } from '@/stores/scan'
 
 interface DiscoveredLibrary {
   serverId: string
@@ -270,6 +271,7 @@ const emit = defineEmits<{
 const settingsStore = useSettingsStore()
 const groups = settingsStore.libraryGroups
 const apiBase = getApiBase()
+const scan = useScanStore()
 
 function serverTypeFor(serverId: string): string {
   const s = settingsStore.mediaServers.value.find(s => s.id === serverId)
@@ -497,9 +499,24 @@ const scanError = ref('')
 async function scanNonPlex() {
   scanningNonPlex.value = true
   scanError.value = ''
+  // Connects this scan to the SAME global scan-progress overlay the Plex
+  // scan already uses (App.vue's startScanPolling() is triggered by this
+  // exact visible flip, matching SettingsView.vue's own scanLibrary()) --
+  // previously a Plex-less group's "Scan" click had no visible feedback
+  // anywhere outside this card's own small busy state, even though the
+  // backend (as of this fix) now reports real per-library/per-phase
+  // progress into scan_status the whole time.
+  scan.visible.value = true
+  scan.log.value = ['Starting scan...']
+  scan.progress.value = { processed: 0, total: 0 }
+  scan.current.value = ''
   try {
     for (const m of props.group.members) {
-      const params = new URLSearchParams({ library_id: m.libraryId, media_type: props.mediaType })
+      const params = new URLSearchParams({
+        library_id: m.libraryId,
+        media_type: props.mediaType,
+        library_name: m.libraryName || m.libraryId,
+      })
       const res = await fetch(`${apiBase}/api/media-server/${m.serverId}/scan?${params.toString()}`, { method: 'POST' })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))

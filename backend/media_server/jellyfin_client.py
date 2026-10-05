@@ -161,6 +161,84 @@ class JellyfinClient(MediaServerClient):
             ))
         return out
 
+    def list_collections(self, library_id: Optional[str] = None) -> List[dict]:
+        """Bulk GET /Items?IncludeItemTypes=BoxSet -- the same confirmed /Items
+        endpoint shape every other listing method on this client already uses
+        (list_items(), list_seasons(), find_season_by_index()), just a
+        different IncludeItemTypes filter value. Jellyfin's own "Collection"
+        concept is a BoxSet item type (list_items() already references this
+        exact type name via its CollapseBoxSetItems=false param, confirming
+        BoxSet is a real, queryable item type on this API, not a guess).
+        ParentId (library_id) is optional -- a BoxSet isn't necessarily scoped
+        to one library the way a Plex collection is, but scoping to one when
+        given keeps this consistent with every other per-library listing call
+        in this app. Returns the same {key, title, year, addedAt, poster,
+        library_id} shape _get_plex_collections() (movies.py) already
+        produces, so api_collections() needs no shape-translation step --
+        poster is always None here (no per-item fetch is made; the caller
+        resolves a real cached poster URL the same way the Plex path does,
+        via the generic /api/movie/{key}/poster?meta=1 fallback already built
+        for exactly this -- Quirk #65)."""
+        params = {
+            "IncludeItemTypes": "BoxSet",
+            "Recursive": "true",
+            "Fields": "DateCreated",
+        }
+        if library_id:
+            params["ParentId"] = library_id
+        try:
+            r = requests.get(f"{self.url}/Items", headers=self._headers(), params=params, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            logger.warning("[JELLYFIN_CLIENT:%s] list_collections failed: %s", self.server_id, e)
+            return []
+
+        out: List[dict] = []
+        for item in data.get("Items", []):
+            item_id = item.get("Id")
+            if not item_id:
+                continue
+            out.append({
+                "key": item_id,
+                "title": item.get("Name") or "",
+                "year": None,
+                "addedAt": _parse_jellyfin_datetime(item.get("DateCreated")),
+                "poster": None,
+                "library_id": library_id or "",
+            })
+        return out
+
+    def list_collection_members(self, collection_item_id: str) -> List[dict]:
+        """Movies belonging to a BoxSet -- same confirmed /Items?ParentId=...
+        pattern every other per-container listing method on this client uses
+        (list_items(), list_seasons()), just targeting a BoxSet's own item id
+        as the ParentId instead of a library id. Mirrors movies.py's
+        api_collection_movies() output shape ({key, title, year}) so that
+        endpoint needs no shape-translation step for the Jellyfin branch."""
+        params = {
+            "ParentId": collection_item_id,
+            "IncludeItemTypes": "Movie",
+            "Recursive": "true",
+            "Fields": "ProductionYear",
+        }
+        try:
+            r = requests.get(f"{self.url}/Items", headers=self._headers(), params=params, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            logger.warning("[JELLYFIN_CLIENT:%s] list_collection_members failed for %s: %s", self.server_id, collection_item_id, e)
+            return []
+
+        out: List[dict] = []
+        for item in data.get("Items", []):
+            item_id = item.get("Id")
+            title = item.get("Name") or ""
+            if not item_id or not title:
+                continue
+            out.append({"key": item_id, "title": title, "year": item.get("ProductionYear")})
+        return out
+
     def _fetch_items_by_ids(self, item_ids: List[str], fields: str = "ProviderIds,Path,MediaStreams,Tags") -> List[dict]:
         """Shared helper for get_item_metadata()/item_exists() -- deliberately
         reuses the *confirmed* bulk /Items endpoint (via the Ids filter)

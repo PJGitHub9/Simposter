@@ -6,12 +6,82 @@ import { usePresetService } from '../../services/presets'
 import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 import { getApiBase } from '../../services/apiBase'
+import { mediaServerLabel } from '../../services/mediaServerLabel'
+import SendToServerModal from './SendToServerModal.vue'
 
 const props = defineProps<{ movie: MovieInput }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const apiBase = getApiBase()
 const settings = useSettingsStore()
+
+// Mirrors EditorPane.vue's identical computed (Quirk #68) -- used only for
+// the single-server send-button label below now (see sendButtonLabel).
+const isNonPlexItem = computed(() => !!props.movie.server_id && props.movie.server_id !== 'plex-1')
+
+// ── Multi-server preview + send -- mirrors EditorPane.vue's identical block
+// (Quirk #75/#128) exactly, closing the gap that Quirk left deliberately
+// deferred for this pane ("reasonable follow-up, not done here"). A collection
+// that exists on more than one linked server (other_servers,
+// database.py's _dedupe_collections_by_title()) can now preview/send against
+// any of them from here too, not just via the Simposter Creator. User-reported
+// directly, from a real multi-server collection card: "when sending poster we
+// should have the option of which server to send to (similar to manual editor
+// for posters)." ─────────────────────────────────────────────────────────────
+type LinkedServer = { server_id: string; rating_key: string }
+const linkedServers = computed<LinkedServer[]>(() => {
+  const current: LinkedServer = { server_id: props.movie.server_id || 'plex-1', rating_key: props.movie.key }
+  const others = (props.movie.other_servers || []).map(s => ({ server_id: s.server_id, rating_key: s.rating_key }))
+  return [current, ...others]
+})
+const hasMultipleServers = computed(() => linkedServers.value.length > 1)
+
+function serverTypeLabel(serverId: string): string {
+  return mediaServerLabel(serverId, settings.mediaServers.value)
+}
+
+const viewingServerId = ref(props.movie.server_id || 'plex-1')
+watch(() => props.movie.key, () => { viewingServerId.value = props.movie.server_id || 'plex-1' })
+const viewingRatingKey = computed(() =>
+  linkedServers.value.find(s => s.server_id === viewingServerId.value)?.rating_key || props.movie.key
+)
+function cycleViewingServer(direction: 1 | -1) {
+  const ids = linkedServers.value.map(s => s.server_id)
+  const idx = ids.indexOf(viewingServerId.value)
+  viewingServerId.value = ids[(idx + direction + ids.length) % ids.length]!
+}
+const currentPosterLabel = computed(() => `Current Poster (${serverTypeLabel(viewingServerId.value)})`)
+const currentLogoLabel = computed(() => `Current Logo (${serverTypeLabel(viewingServerId.value)})`)
+
+const sendTargetIds = ref<Set<string>>(new Set())
+watch(linkedServers, (servers) => {
+  const validIds = new Set(servers.map(s => s.server_id))
+  const stillValid = Array.from(sendTargetIds.value).filter(id => validIds.has(id))
+  sendTargetIds.value = stillValid.length > 0 ? new Set(stillValid) : validIds
+}, { immediate: true })
+const showSendModal = ref(false)
+const sendModalOptions = computed(() => linkedServers.value.map(s => ({ server_id: s.server_id, label: serverTypeLabel(s.server_id) })))
+const sendButtonLabel = computed(() => {
+  if (!hasMultipleServers.value) return isNonPlexItem.value ? 'Send Poster' : 'Send to Plex'
+  return 'Send to Media Server'
+})
+const posterSending = ref(false)
+function onSendClick() {
+  if (hasMultipleServers.value) {
+    showSendModal.value = true
+    return
+  }
+  doSend()
+}
+function onSendModalConfirm(serverIds: string[]) {
+  sendTargetIds.value = new Set(serverIds)
+  showSendModal.value = false
+  doSend()
+}
+function resolveSendTargets(): LinkedServer[] {
+  const filtered = linkedServers.value.filter(s => sendTargetIds.value.has(s.server_id))
+  return filtered.length > 0 ? filtered : linkedServers.value
+}
 
 // ---------------------------------------------------------------------------
 // Background — flat color + a Gradient Style dropdown matching create_poster.ps1's
@@ -387,7 +457,7 @@ const existingPoster = ref<string | null>(null)
 const posterRefreshKey = ref(0)
 const fetchExistingPoster = async (forceRefresh = false) => {
   try {
-    const endpoint = `${apiBase}/api/movie/${props.movie.key}/poster?meta=1${forceRefresh ? '&force_refresh=1' : ''}`
+    const endpoint = `${apiBase}/api/movie/${viewingRatingKey.value}/poster?meta=1${forceRefresh ? '&force_refresh=1' : ''}`
     const res = await fetch(endpoint)
     if (!res.ok) {
       existingPoster.value = null
@@ -414,7 +484,7 @@ const logoRefreshKey = ref(0)
 const fetchExistingLogo = async (forceRefresh = false) => {
   try {
     const params = `${forceRefresh ? 'force_refresh=1&' : ''}v=${Date.now()}`
-    const url = `${apiBase}/api/logo/${props.movie.key}?${params}`
+    const url = `${apiBase}/api/logo/${viewingRatingKey.value}?${params}`
     const res = await fetch(url)
     existingLogo.value = res.ok ? url : null
   } catch {
@@ -424,10 +494,38 @@ const fetchExistingLogo = async (forceRefresh = false) => {
   }
 }
 
-// Send logo to Plex — same standalone endpoint the movie/TV editors use.
-// No is_collection flag needed: /api/plex/send-logo uploads via Plex's
-// /library/metadata/{id}/clearLogos path, which works for a collection's
-// rating key the same as a movie's (verified working by direct testing).
+// Switching which linked server's poster/logo is being previewed re-fetches
+// both against that server's own rating_key -- mirrors EditorPane.vue's
+// identical watcher.
+watch(viewingServerId, () => {
+  fetchExistingPoster()
+  fetchExistingLogo()
+})
+
+// Send a logo to one specific linked server -- mirrors EditorPane.vue's
+// sendLogoToServer() exactly (Quirk #75). No is_collection flag needed on the
+// Plex branch: /api/plex/send-logo always uploads via Plex's generic
+// /library/metadata/{id}/clearLogos path regardless of collection vs movie
+// (verified working by direct testing, same as the single-server version
+// below already relied on).
+async function sendLogoToServer(serverId: string, ratingKey: string): Promise<boolean> {
+  if (!logoUrl.value) return false
+  try {
+    const endpoint = serverId === 'plex-1' ? '/api/plex/send-logo' : '/api/media-server/send-logo'
+    const body: Record<string, unknown> = serverId === 'plex-1'
+      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: false }
+      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: false }
+    const res = await fetch(`${apiBase}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
 const sendLogo = ref((settings.plex.value as any).sendLogosToPlex ?? false)
 const logoSending = ref(false)
 const doSendLogoOnly = async () => {
@@ -437,20 +535,14 @@ const doSendLogoOnly = async () => {
   }
   logoSending.value = true
   try {
-    const res = await fetch(`${apiBase}/api/plex/send-logo`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        rating_key: props.movie.key,
-        logo_url: logoUrl.value,
-        is_tv: false,
-      }),
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    success('Logo sent to Plex!')
+    const targets = resolveSendTargets()
+    const results = await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
+    const okCount = results.filter(Boolean).length
+    if (okCount === 0) throw new Error('Failed to send logo')
+    success(okCount === targets.length ? 'Logo sent!' : `Logo sent to ${okCount}/${targets.length} server(s)`)
     await fetchExistingLogo()
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to send logo to Plex'
+    const message = err instanceof Error ? err.message : 'Failed to send logo'
     notifyError(message)
   } finally {
     logoSending.value = false
@@ -520,18 +612,66 @@ const doSave = async () => {
   }
 }
 
-const doSend = async () => {
-  try {
-    const result = await render.send(props.movie, '', logoUrl.value, optionsPayload.value, [], 'kometa', selectedPreset.value, sendLogo.value)
-    if (result) {
-      success('Successfully sent poster to Plex!')
-      await new Promise((resolve) => setTimeout(resolve, 600))
-      await fetchExistingPoster(true)
-      await fetchExistingLogo()
+// Send a poster to one specific linked server -- mirrors EditorPane.vue's
+// sendPosterToServer() exactly (Quirk #69/#75). Plex still goes through
+// render.send() (a genuine server-side re-render via /api/plex/send, best
+// quality, is_collection-aware via basePayload); Jellyfin/Emby reuse the
+// already-rendered client preview (no second render pipeline for a non-Plex
+// destination). The "send logo" checkbox bundles the logo send on EVERY
+// target explicitly here, rather than relying on render.send()'s own
+// internal bundling (which only covers the Plex branch) -- keeps the
+// behavior uniform across every server type instead of silently dropping
+// the logo for a non-Plex target when the checkbox is checked.
+async function sendPosterToServer(serverId: string, ratingKey: string): Promise<boolean> {
+  let ok: boolean
+  if (serverId === 'plex-1') {
+    const targetMovie = {
+      ...props.movie,
+      key: ratingKey,
+      server_id: 'plex-1',
+      library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
     }
+    try {
+      const result = await render.send(targetMovie, '', logoUrl.value, optionsPayload.value, [], 'kometa', selectedPreset.value, false)
+      ok = !!result
+    } catch {
+      ok = false
+    }
+  } else {
+    if (!lastPreview.value) return false
+    try {
+      const res = await fetch(`${apiBase}/api/media-server/send-poster`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: false }),
+      })
+      ok = res.ok
+    } catch {
+      ok = false
+    }
+  }
+  if (ok && sendLogo.value && logoUrl.value) {
+    await sendLogoToServer(serverId, ratingKey)
+  }
+  return ok
+}
+
+const doSend = async () => {
+  posterSending.value = true
+  try {
+    const targets = resolveSendTargets()
+    const results = await Promise.all(targets.map(t => sendPosterToServer(t.server_id, t.rating_key)))
+    const okCount = results.filter(Boolean).length
+    if (okCount === 0) throw new Error('Failed to send poster')
+    success(okCount === targets.length ? 'Poster sent!' : `Sent to ${okCount}/${targets.length} server(s)`)
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    await fetchExistingPoster(true)
+    await fetchExistingLogo()
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to send poster to Plex'
+    const message = err instanceof Error ? err.message : 'Failed to send poster'
     notifyError(message)
+  } finally {
+    posterSending.value = false
   }
 }
 
@@ -907,8 +1047,13 @@ onMounted(async () => {
     <div class="preview-pane">
       <div class="preview-inner">
         <div class="preview-existing">
+          <div v-if="hasMultipleServers" class="server-toggle-row">
+            <button class="server-toggle-btn" title="Previous server" @click="cycleViewingServer(-1)">‹</button>
+            <span class="server-toggle-label">{{ serverTypeLabel(viewingServerId) }}</span>
+            <button class="server-toggle-btn" title="Next server" @click="cycleViewingServer(1)">›</button>
+          </div>
           <div class="preview-label">
-            <span>Current Plex Poster</span>
+            <span>{{ currentPosterLabel }}</span>
             <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
@@ -921,8 +1066,8 @@ onMounted(async () => {
           <div v-else class="preview-empty small">No poster</div>
 
           <div class="preview-label" style="margin-top: 14px;">
-            <span>Current Plex Logo</span>
-            <button class="refresh-btn" title="Fetch logo from Plex" @click="fetchExistingLogo(true)">
+            <span>{{ currentLogoLabel }}</span>
+            <button class="refresh-btn" title="Fetch logo" @click="fetchExistingLogo(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
@@ -939,18 +1084,32 @@ onMounted(async () => {
           <div class="preview-label">
             <span>Preview</span>
             <div class="preview-actions float-right">
-              <label class="send-logo-toggle" title="Also send the selected logo to Plex">
+              <label class="send-logo-toggle" title="Also send the selected logo wherever the poster is sent">
                 <input type="checkbox" v-model="sendLogo" />
                 <span>Send logo</span>
               </label>
-              <button title="Send Logo to Plex" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+              <button
+                title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly"
+              >
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo' }}</span>
               </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
-              <button title="Send to Plex" class="btn-plex btn-inline" :disabled="loading" @click="doSend">📺 <span class="btn-label">Send to Plex</span></button>
+              <button
+                :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending" @click="onSendClick"
+              >
+                <svg v-if="posterSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                <span v-else>📺</span>
+                <span class="btn-label">{{ posterSending ? 'Sending...' : sendButtonLabel }}</span>
+              </button>
             </div>
           </div>
+          <SendToServerModal
+            v-if="showSendModal"
+            :options="sendModalOptions"
+            @close="showSendModal = false"
+            @send="onSendModalConfirm"
+          />
           <div class="preview-container">
             <img v-if="lastPreview" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else class="preview-empty">{{ loading ? 'Rendering…' : 'No preview yet' }}</div>
@@ -1337,6 +1496,37 @@ onMounted(async () => {
 .preview-existing {
   text-align: center;
   flex-shrink: 0;
+}
+
+.server-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.server-toggle-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #c9d1e0;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.server-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.server-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a8b3cf;
+  min-width: 60px;
 }
 
 .existing-img {

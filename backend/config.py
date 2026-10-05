@@ -1419,6 +1419,25 @@ def get_reuse_cached_poster_days() -> float:
         return 0.0
 
 
+def normalize_collection_title(name: str) -> str:
+    """Strips a trailing " Collection" (case-insensitive) and lowercases/trims
+    for fuzzy-matching a collection's name across servers/sources. Extracted
+    from movies.py's _best_collection_match() (originally built to match a
+    plain Plex collection title against TMDb's own "X Collection"-suffixed
+    search results) into a shared, module-level function so database.py's
+    cross-server collection dedup (get_cached_collections_multi(), Quirk
+    #130's follow-up) can reuse the identical normalization instead of a
+    second, driftable copy. User-reported directly, confirming the same
+    pattern applies a second place: "i think jellyfin adds 'collection' to
+    the end of the collection name whereas plex doesnt" -- e.g. Plex's "Marvel
+    Cinematic Universe" vs. Jellyfin's "Marvel Cinematic Universe Collection"
+    for what is, in the real world, the exact same collection."""
+    n = (name or "").strip().lower()
+    if n.endswith(" collection"):
+        n = n[: -len(" collection")]
+    return n.strip()
+
+
 def get_library_group_for(server_id: str, library_id: str, media_type: str) -> Optional[dict]:
     """Finds and returns the whole LibraryGroup a (server_id, library_id) pair
     belongs to (Quirk #62/#64), or None if it's in no group at all. The shared

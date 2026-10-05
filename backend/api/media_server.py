@@ -130,6 +130,24 @@ def api_list_all_libraries():
     return {"libraries": libraries, "errors": errors}
 
 
+def _update_scan_status(message: str) -> None:
+    """Best-effort write into the SAME shared scan_status dict movies.py's own
+    Plex scan already writes "current" into -- lets a Jellyfin/Emby linked-
+    library scan (which runs synchronously right after the Plex scan, inside
+    the same /api/scan-library request, see api_scan_library()'s own call to
+    scan_all_linked_plex_libraries()) show up in the one scan-progress overlay
+    the frontend already polls, instead of that phase running completely
+    invisibly. A plain dict mutation (matching movies.py's own `scan_status.update(...)`
+    pattern -- no lock there either), imported lazily to avoid a module-load-time
+    circular import between movies.py and media_server.py. Never raises --
+    a status-display failure must never be allowed to fail the actual scan."""
+    try:
+        from .movies import scan_status
+        scan_status.update({"current": message})
+    except Exception:
+        pass
+
+
 def _scan_one_library(client, server_id: str, library_id: str, media_type: str, library_name: str = "") -> dict:
     """Scan exactly one library on one non-Plex server and upsert its items.
     The shared building block for both the per-library scan (the normal UI
@@ -168,6 +186,46 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
         "library_id": library_id,
         "library_name": library_name,
         "media_type": media_type,
+        "item_count": len(items),
+        **counts,
+    }
+
+
+def _scan_one_collection_library(client, server_id: str, library_id: str, library_name: str = "") -> dict:
+    """Collections mirror of _scan_one_library() above -- a genuinely separate
+    function rather than a media_type="collection" branch inside it, since
+    list_items()/upsert_media_server_movies()/_tv_shows() all have no concept
+    of a collection at all (Collections is a movie-only Plex concept, Quirk
+    #21/#128 -- JellyfinClient.list_collections() is its own method, not a
+    list_items() filter). Was missing entirely until now: Quirk #128 built
+    Jellyfin collection listing + a real upsert_media_server_collections()
+    writer, but only ever wired them into the on-demand /api/collections
+    endpoint (fired when a user actually visits the Collections page) -- this
+    is the scan path itself, called from api_scan_linked_libraries()/
+    scan_all_linked_plex_libraries() so a group's "Scan" click populates
+    collection_cache the same way it already populates movie_cache/tv_cache,
+    instead of only ever getting collections on first page visit.
+    User-reported directly: "it did not scan jellyfins collections when i
+    scanned a group." No art-fetching here (Collections' own poster/logo come
+    from TMDb/Fanart via the Simposter/Kometa Creator editors, not from the
+    source server itself, unlike movies/TV -- see Quirk #128)."""
+    if not hasattr(client, "list_collections"):
+        return {"library_id": library_id, "library_name": library_name, "media_type": "collection", "item_count": 0}
+    from .. import database as db
+
+    items = client.list_collections(library_id)
+    rows = [
+        {
+            "rating_key": i["key"], "title": i.get("title") or "", "year": i.get("year"),
+            "added_at": i.get("addedAt"), "poster_url": i.get("poster"),
+        }
+        for i in items
+    ]
+    counts = db.upsert_media_server_collections(server_id, library_id, rows)
+    return {
+        "library_id": library_id,
+        "library_name": library_name,
+        "media_type": "collection",
         "item_count": len(items),
         **counts,
     }
@@ -252,7 +310,7 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
 
 
 @router.post("/{server_id}/scan")
-def api_scan_media_server(server_id: str, library_id: Optional[str] = None, media_type: Optional[str] = None):
+def api_scan_media_server(server_id: str, library_id: Optional[str] = None, media_type: Optional[str] = None, library_name: Optional[str] = None):
     """Pull item data into movie_cache/tv_cache, tagged with this server's own
     server_id -- via upsert_media_server_movies()/_tv_shows() (database.py),
     deliberately separate from the existing Plex scan path
@@ -275,8 +333,15 @@ def api_scan_media_server(server_id: str, library_id: Optional[str] = None, medi
     Plex is intentionally rejected here -- it already has its own scan flow
     (Settings -> Libraries -> Scan, /api/scan-library) which this does not
     replace or duplicate.
+
+    `library_name` (optional): a display name for the shared scan-progress
+    overlay (_update_scan_status()) -- the frontend already has this (the
+    group member's own LibraryGroupMember.libraryName) and passing it through
+    avoids a second, redundant client.list_libraries() call here just to look
+    one up. Falls back to the bare library_id when omitted, which is still
+    informative, just less friendly.
     """
-    from ..media_server import get_client, PlexClient
+    from ..media_server import get_client, PlexClient, get_server_label
 
     client = get_client(server_id)
     if not client:
@@ -287,10 +352,45 @@ def api_scan_media_server(server_id: str, library_id: Optional[str] = None, medi
     if library_id:
         if not media_type:
             raise HTTPException(400, "media_type is required when library_id is given")
-        result = _scan_one_library(client, server_id, library_id, media_type)
+        display_name = library_name or library_id
+        server_label = get_server_label(server_id)
+        # Drives the SAME shared scan-progress overlay the Plex scan uses
+        # (previously this standalone/Plex-less path had no connection to it
+        # at all -- a Jellyfin/Emby-only group's "Scan" click showed nothing
+        # globally, only LibraryGroupCard.vue's own local busy state). Guarded
+        # against a concurrent Plex scan the same way movies.py's own
+        # api_scan_library() guards against a concurrent run of itself.
+        from .movies import scan_status
+        from datetime import datetime, timezone
+        if scan_status.get("state") == "running":
+            raise HTTPException(409, "A scan is already in progress")
+        total_steps = 2 if media_type == "movie" else 1
+        scan_status.update({
+            "state": "running", "total": total_steps, "processed": 0,
+            "current": f"Scanning {server_label}: {display_name} ({'TV shows' if media_type == 'tv' else 'movies'})",
+            "started_at": datetime.now(timezone.utc).isoformat(), "finished_at": None, "error": None,
+        })
+        try:
+            result = _scan_one_library(client, server_id, library_id, media_type, display_name)
+            results = [result]
+            scan_status.update({"processed": 1})
+            # Collections have no media_type of their own in this app's model
+            # (Quirk #21) -- scan them alongside a movie library, same as
+            # api_scan_linked_libraries() does for a Plex-anchored group. Was
+            # missing entirely here too, the same "on-demand endpoint built,
+            # scan path never wired up" gap -- user-reported directly for a
+            # Plex-less (standalone) movie group specifically.
+            if media_type == "movie":
+                _update_scan_status(f"Scanning {server_label}: {display_name} (collections)")
+                results.append(_scan_one_collection_library(client, server_id, library_id, display_name))
+                scan_status.update({"processed": 2})
+            scan_status.update({"state": "done", "finished_at": datetime.now(timezone.utc).isoformat()})
+        except Exception as e:
+            scan_status.update({"state": "error", "error": str(e), "finished_at": datetime.now(timezone.utc).isoformat()})
+            raise
         return {
             "server_id": server_id,
-            "libraries": [result],
+            "libraries": results,
             "total_movies_found": result["item_count"] if media_type == "movie" else 0,
             "total_shows_found": result["item_count"] if media_type == "tv" else 0,
         }
@@ -305,6 +405,7 @@ def api_scan_media_server(server_id: str, library_id: Optional[str] = None, medi
         library_results.append(result)
         if lib.media_type == "movie":
             total_movies += result["item_count"]
+            library_results.append(_scan_one_collection_library(client, server_id, lib.id, lib.name))
         else:
             total_shows += result["item_count"]
 
@@ -363,28 +464,59 @@ def api_scan_linked_libraries(server_id: str, library_id: str):
 
     Deliberately does not scan the `server_id`/`library_id` pair passed in --
     that's assumed to be the Plex side, already scanned by the caller via the
-    existing /api/scan-library flow, immediately before this is called."""
-    from ..config import get_library_group_members
-    from ..media_server import get_client
+    existing /api/scan-library flow, immediately before this is called.
+
+    Updates the same shared scan_status dict movies.py's own Plex scan writes
+    to, with the member's own library name (from the group's stored
+    LibraryGroupMember.libraryName snapshot -- Quirk #62) and server label
+    (get_server_label(), honors a custom Settings name) plus which content
+    type is currently being fetched -- previously this whole phase ran
+    completely silently, so the scan overlay looked frozen/finished the
+    instant the Plex portion ended even though a real, sometimes lengthy
+    Jellyfin/Emby scan was still running in the background. User-reported
+    directly: "it did not scan jellyfins collections when i scanned a group
+    (seemed to only scan plex's library)" -- partly a real gap (collections
+    genuinely weren't scanned, fixed above) and partly this exact invisibility
+    making a real, working Jellyfin movie/TV scan look like it never ran."""
+    from ..config import get_library_group_for
+    from ..media_server import get_client, get_server_label
 
     scanned = []
     errors = []
     for media_type in ("movie", "tv"):
-        members = get_library_group_members(server_id, library_id, media_type)
-        if not members:
+        group = get_library_group_for(server_id, library_id, media_type)
+        members = group.get("members") if group else None
+        if not members or len(members) <= 1:
             continue
-        for member_server_id, member_library_id in members:
+        for member in members:
+            member_server_id = member.get("serverId")
+            member_library_id = member.get("libraryId")
+            member_library_name = member.get("libraryName") or member_library_id
             if member_server_id == server_id and member_library_id == library_id:
                 continue
             client = get_client(member_server_id)
             if not client:
                 errors.append({"server_id": member_server_id, "library_id": member_library_id, "error": "server not configured or unsupported"})
                 continue
+            server_label = get_server_label(member_server_id)
             try:
-                result = _scan_one_library(client, member_server_id, member_library_id, media_type)
+                _update_scan_status(f"Scanning {server_label}: {member_library_name} ({'TV shows' if media_type == 'tv' else 'movies'})")
+                result = _scan_one_library(client, member_server_id, member_library_id, media_type, member_library_name)
                 scanned.append({"server_id": member_server_id, **result})
             except Exception as e:
                 errors.append({"server_id": member_server_id, "library_id": member_library_id, "error": str(e)})
+            # Collections are a movie-only Plex concept (Quirk #21) with no
+            # media_type of their own in the Library Group model -- scan them
+            # alongside a linked member's movie library, not as a separate
+            # loop iteration. See _scan_one_collection_library()'s own
+            # docstring for why this was missing entirely until now.
+            if media_type == "movie":
+                try:
+                    _update_scan_status(f"Scanning {server_label}: {member_library_name} (collections)")
+                    coll_result = _scan_one_collection_library(client, member_server_id, member_library_id, member_library_name)
+                    scanned.append({"server_id": member_server_id, **coll_result})
+                except Exception as e:
+                    errors.append({"server_id": member_server_id, "library_id": member_library_id, "media_type": "collection", "error": str(e)})
         # A Plex library_id only ever belongs to one media type's groups (movie
         # libraries and TV libraries are tracked in separate lists) -- once a
         # match is found, the other media_type has nothing left to check.

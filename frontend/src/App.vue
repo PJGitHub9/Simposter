@@ -53,6 +53,7 @@ const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
   // from a non-Plex tab's submenu entirely rather than linking to a permanently-empty view.
   const movieItems: [string, string][] = [
     ['batch', '\u{270F}\uFE0F Batch Edit'],
+    ['collections', '\u{1F4DA} Collections'],
     ['logos', '\u{1F5BC}\uFE0F Logos'],
     ['backdrops', '\u{1F39E}\uFE0F Backdrops'],
     ['media-mirror', '\u{1FA9E} Media Mirror'],

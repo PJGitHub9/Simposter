@@ -114,8 +114,19 @@ def _resolve_mapping(group: dict, media_type: str, source_server_id: str, target
     pairs = [(m.get("serverId"), m.get("libraryId")) for m in (group.get("members") or [])]
     if not pairs:
         return []
+    if media_type == "collection":
+        return db.get_collection_mirror_mapping(pairs, source_server_id, target_server_ids)
     fn = db.get_movie_mirror_mapping if media_type == "movie" else db.get_tv_mirror_mapping
     return fn(pairs, source_server_id, target_server_ids)
+
+
+def _group_lookup_media_type(media_type: str) -> str:
+    """Collections ride on the owning "movie" LibraryGroup, not a separate
+    media_type of their own (api_collections() resolves them the same way) --
+    so any endpoint that needs to actually FIND the group (not just pick
+    which mapping function to run) must look it up as "movie" even when the
+    caller's real media_type is "collection"."""
+    return "movie" if media_type == "collection" else media_type
 
 
 @router.get("/mapping")
@@ -129,8 +140,13 @@ def api_get_mirror_mapping(
     """Returns the source->target item mapping for this group -- the
     "confirm mappings" section the user directly asked for. Defaults to the
     group's own SAVED mirror config's source/targets, but accepts explicit
-    overrides so the UI can preview a mapping before the config is saved."""
-    group = get_library_group_for(server_id, library_id, media_type)
+    overrides so the UI can preview a mapping before the config is saved.
+
+    media_type="collection" previews the COLLECTIONS mirror mapping for this
+    same group (added per the user's direct follow-up ask) -- the group
+    itself is still looked up as "movie" (see _group_lookup_media_type()),
+    only the mapping FUNCTION differs."""
+    group = get_library_group_for(server_id, library_id, _group_lookup_media_type(media_type))
     if not group:
         raise HTTPException(404, "No Library Group found for this library")
 
@@ -187,7 +203,7 @@ def _download_and_normalize(source_client, source_rating_key: str, asset_type: s
 
 def _sync_one_item(
     source_client, target_clients: Dict[str, Any], entry: dict, asset_types: List[str],
-    source_label: str, target_labels: Dict[str, str],
+    source_label: str, target_labels: Dict[str, str], is_collection: bool = False,
 ) -> str:
     """Downloads+uploads every configured asset type for one mapping row to
     every one of its real (mapped) targets, logging one clean, human-readable
@@ -233,10 +249,11 @@ def _sync_one_item(
                     # this treatment yet -- only posters have ever needed it
                     # in a real report so far.
                     from .media_server_send import _upload_poster_and_verify
-                    _upload_poster_and_verify(target_clients[target_id], target_id, target_rating_key, image_bytes, content_type)
+                    _upload_poster_and_verify(target_clients[target_id], target_id, target_rating_key, image_bytes, content_type, is_collection=is_collection)
                 else:
                     target_clients[target_id].upload_image(
                         target_rating_key, _ASSET_TYPE_MAP[asset_type], image_bytes, content_type,
+                        is_collection=is_collection,
                     )
                 item_touched = True
                 logger.info("[MIRROR] %s --> %s: %s - %s", source_label, target_label, asset_label, title_display)
@@ -275,7 +292,17 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
         source_server_id = mirror.get("sourceServerId")
         target_server_ids = [t for t in (mirror.get("targetServerIds") or []) if t]
         asset_types = [a for a in (mirror.get("assetTypes") or []) if a in _ASSET_TYPE_MAP]
-        if not source_server_id or not target_server_ids or not asset_types:
+        # Collections ride on the SAME movie group/source/targets but get their
+        # OWN asset-type selection (collectionAssetTypes) -- resolved here,
+        # before the validation below, specifically so a collections-only run
+        # (movie assetTypes deliberately empty) is a valid, real configuration,
+        # not an error. See schemas.py's MediaMirrorConfig docstring for the
+        # user report that drove this.
+        mirror_collections = media_type == "movie" and bool(mirror.get("mirrorCollections"))
+        collection_asset_types = [a for a in (mirror.get("collectionAssetTypes") or []) if a in _ASSET_TYPE_MAP]
+        if not source_server_id or not target_server_ids or (
+            not asset_types and not (mirror_collections and collection_asset_types)
+        ):
             raise ValueError("Media Mirror is missing a source server, target server(s), or asset type(s)")
 
         source_client = get_client(source_server_id)
@@ -289,34 +316,64 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
             else:
                 logger.warning("[MIRROR] Target server '%s' is not configured/enabled -- skipping it this run", target_id)
 
-        mapping = _resolve_mapping(group, media_type, source_server_id, target_server_ids)
-        unmapped_titles: List[str] = []
-
         source_label = get_server_label(source_server_id)
         target_labels = {t: get_server_label(t) for t in target_clients}
 
-        updated = skipped = unmapped = failed = 0
-        total = len(mapping)
+        # Skip resolving the movie mapping entirely when there's no movie asset
+        # type selected -- a real, valid configuration now (collections-only
+        # mirroring), not just an edge case; resolving it anyway would waste a
+        # DB query and inflate `total` with items that could never update.
+        mapping = (
+            _resolve_mapping(group, media_type, source_server_id, target_server_ids) if asset_types else []
+        )
+        # Collections ride on the SAME movie group and the SAME source/target
+        # config -- a separate, opt-in boolean rather than its own independent
+        # config, per the user's direct follow-up ask right after the
+        # cross-server title-matching fix shipped (reusing this group's own
+        # direction felt more natural than asking the user to configure a
+        # near-duplicate second mirror just for collections) -- but collections
+        # get their OWN `collectionAssetTypes` selection, resolved above.
+        collection_mapping = (
+            _resolve_mapping(group, "collection", source_server_id, target_server_ids)
+            if mirror_collections and collection_asset_types else []
+        )
+
+        total = len(mapping) + len(collection_mapping)
         _update_status(key, {"total": total})
 
-        for idx, entry in enumerate(mapping, start=1):
-            title_display = _title_display(entry)
-            _update_status(key, {"processed": idx - 1, "current": title_display})
+        def _run_pass(pass_mapping: List[dict], pass_asset_types: List[str], is_collection: bool, processed_offset: int):
+            upd = skp = unm = fail = 0
+            titles: List[str] = []
+            for idx, entry in enumerate(pass_mapping, start=1):
+                title_display = _title_display(entry)
+                _update_status(key, {
+                    "processed": processed_offset + idx - 1,
+                    "current": f"{title_display} (collection)" if is_collection else title_display,
+                })
+                status = _sync_one_item(source_client, target_clients, entry, pass_asset_types, source_label, target_labels, is_collection=is_collection)
+                if status == "unmapped":
+                    unm += 1
+                    titles.append(title_display)
+                elif status == "failed":
+                    fail += 1
+                elif status == "updated":
+                    upd += 1
+                else:
+                    skp += 1
+            return upd, skp, unm, fail, titles
 
-            status = _sync_one_item(source_client, target_clients, entry, asset_types, source_label, target_labels)
-            if status == "unmapped":
-                unmapped += 1
-                unmapped_titles.append(title_display)
-            elif status == "failed":
-                failed += 1
-            elif status == "updated":
-                updated += 1
-            else:
-                skipped += 1
+        updated, skipped, unmapped, failed, unmapped_titles = _run_pass(mapping, asset_types, False, 0)
+        coll_updated = coll_skipped = coll_unmapped = coll_failed = 0
+        coll_unmapped_titles: List[str] = []
+        if mirror_collections and collection_asset_types:
+            coll_updated, coll_skipped, coll_unmapped, coll_failed, coll_unmapped_titles = _run_pass(
+                collection_mapping, collection_asset_types, True, len(mapping)
+            )
 
         _update_status(key, {
             "processed": total, "state": "done",
-            "updated": updated, "skipped": skipped, "unmapped": unmapped, "failed": failed,
+            "updated": updated + coll_updated, "skipped": skipped + coll_skipped,
+            "unmapped": unmapped + coll_unmapped, "failed": failed + coll_failed,
         })
 
         from datetime import datetime, timezone
@@ -325,11 +382,21 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
         # in "unmapped" above; the mapping endpoint itself (which the UI already
         # calls) is the real source of truth for exactly which items are
         # unmapped, this is just a quick-glance sample for the run summary.
+        # lastRunStats keeps its original movie/TV-only meaning (never includes
+        # collection items, even when mirrorCollections is on) -- a separate
+        # lastRunCollectionStats bucket holds the collections pass's own stats,
+        # so neither silently blends into the other's historical interpretation.
         mirror["lastRunStats"] = {
-            "checked": total, "updated": updated, "skipped": skipped,
+            "checked": len(mapping), "updated": updated, "skipped": skipped,
             "unmapped": unmapped, "failed": failed,
             "unmappedSample": unmapped_titles[:25],
         }
+        if mirror_collections:
+            mirror["lastRunCollectionStats"] = {
+                "checked": len(collection_mapping), "updated": coll_updated, "skipped": coll_skipped,
+                "unmapped": coll_unmapped, "failed": coll_failed,
+                "unmappedSample": coll_unmapped_titles[:25],
+            }
         db.set_library_group_mirror_config(server_id, library_id, media_type, mirror)
 
         # Deliberately NOT sending a notification for unmapped items on a manual
@@ -340,13 +407,16 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
         # that's part of the scheduler follow-up, not this manual-run slice, so
         # it can be built against the real notification-settings shape
         # (ui_settings["notifications"], not guessed) rather than rushed here.
-        if unmapped_titles:
+        all_unmapped_titles = unmapped_titles + coll_unmapped_titles
+        if all_unmapped_titles:
             logger.info("[MIRROR] %d unmapped item(s) in group '%s': %s%s",
-                        unmapped, group.get("name") or library_id, ", ".join(unmapped_titles[:5]),
-                        f" (+{len(unmapped_titles) - 5} more)" if len(unmapped_titles) > 5 else "")
+                        unmapped + coll_unmapped, group.get("name") or library_id, ", ".join(all_unmapped_titles[:5]),
+                        f" (+{len(all_unmapped_titles) - 5} more)" if len(all_unmapped_titles) > 5 else "")
 
-        logger.info("[MIRROR] Run complete for group '%s': %d updated, %d skipped, %d unmapped, %d failed",
-                    group.get("name") or library_id, updated, skipped, unmapped, failed)
+        logger.info("[MIRROR] Run complete for group '%s': %d updated, %d skipped, %d unmapped, %d failed%s",
+                    group.get("name") or library_id, updated + coll_updated, skipped + coll_skipped,
+                    unmapped + coll_unmapped, failed + coll_failed,
+                    f" (incl. {coll_updated} collection update(s))" if mirror_collections else "")
     except Exception as e:
         logger.error("[MIRROR] Run failed for %s: %s", key, e)
         _update_status(key, {"state": "error", "error": str(e)})
@@ -386,14 +456,24 @@ def api_send_mirror_item(req: MirrorSendItemRequest):
     progress bar for one item, just a direct pass/fail. Reuses the group's
     own saved source/target/asset-type config, matching a full run's
     behavior exactly, just scoped to the one row identified by
-    source_rating_key."""
-    group = get_library_group_for(req.server_id, req.library_id, req.media_type)
+    source_rating_key. media_type="collection" sends one collection row
+    (Quirk #123's follow-up) -- the group itself is still looked up as
+    "movie" (see _group_lookup_media_type())."""
+    group = get_library_group_for(req.server_id, req.library_id, _group_lookup_media_type(req.media_type))
     if not group:
         raise HTTPException(404, "No Library Group found for this library")
     mirror = group.get("mirror") or {}
     source_server_id = mirror.get("sourceServerId")
     target_server_ids = [t for t in (mirror.get("targetServerIds") or []) if t]
-    asset_types = [a for a in (mirror.get("assetTypes") or []) if a in _ASSET_TYPE_MAP]
+    # A collection row uses the group's own `collectionAssetTypes` selection,
+    # not the movie `assetTypes` -- mirrors the exact split `_run_mirror()`
+    # makes (Quirk #123's follow-up: collections-only mirroring is a real,
+    # valid configuration, not an error).
+    is_collection_item = req.media_type == "collection"
+    asset_types = [
+        a for a in (mirror.get("collectionAssetTypes" if is_collection_item else "assetTypes") or [])
+        if a in _ASSET_TYPE_MAP
+    ]
     if not source_server_id or not target_server_ids or not asset_types:
         raise HTTPException(400, "Media Mirror is missing a source server, target server(s), or asset type(s)")
 
@@ -415,7 +495,10 @@ def api_send_mirror_item(req: MirrorSendItemRequest):
 
     source_label = get_server_label(source_server_id)
     target_labels = {t: get_server_label(t) for t in target_clients}
-    status = _sync_one_item(source_client, target_clients, entry, asset_types, source_label, target_labels)
+    status = _sync_one_item(
+        source_client, target_clients, entry, asset_types, source_label, target_labels,
+        is_collection=is_collection_item,
+    )
     return {"status": status, "title": _title_display(entry)}
 
 

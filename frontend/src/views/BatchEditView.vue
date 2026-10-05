@@ -798,7 +798,8 @@ const processBatch = async () => {
       send_logos_to_plex: sendToPlex.value && sendLogos.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
       library_id: currentLibrary.value || undefined,
-      targets: Array.from(selectedTargets.value)
+      targets: Array.from(selectedTargets.value),
+      source_server_id: currentServer.value || undefined
     }
 
     // Use the global batch progress overlay (polls real backend status, persists across pages)

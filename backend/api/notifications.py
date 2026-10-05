@@ -118,7 +118,16 @@ def _should_notify(source: str, library_id: Optional[str] = None) -> bool:
 
 
 def _get_library_name(library_id: Optional[str]) -> str:
-    """Get display name for a library."""
+    """Get display name for a library. Checks Plex's own libraryMappings/
+    tvShowLibraryMappings first (unchanged, original behavior), then falls
+    back to scanning libraryGroups for ANY member whose libraryId matches --
+    needed because a Jellyfin/Emby-only library (Phase 8a) has no Plex
+    mapping entry at all, so without this a Jellyfin/Emby manual-send or
+    sync notification showed a raw library id/GUID instead of a real name.
+    Doesn't need server_id/media_type to disambiguate -- a Plex library_id
+    (short digits) and a Jellyfin/Emby one (a GUID) don't realistically
+    collide, the same reasoning this app's db.get_cached_movies() docstring
+    already established for not needing server-scoped lookups elsewhere."""
     if not library_id:
         return "Unknown Library"
 
@@ -138,6 +147,14 @@ def _get_library_name(library_id: Optional[str]) -> str:
         for mapping in plex_settings.get("tvShowLibraryMappings", []):
             if mapping.get("id") == library_id:
                 return mapping.get("displayName") or mapping.get("title") or library_id
+
+        # Fall back to a Jellyfin/Emby-only Library Group member (no Plex side
+        # to have a mapping entry for at all) -- use the group's own display
+        # name if the member itself has no snapshot name.
+        for group in ui_settings.get("libraryGroups", []) or []:
+            for member in group.get("members", []) or []:
+                if member.get("libraryId") == library_id:
+                    return member.get("libraryName") or group.get("name") or library_id
 
         return library_id
     except Exception:
@@ -201,6 +218,31 @@ def _get_asset_type_label(asset_type: str) -> Optional[str]:
     }.get(asset_type)
 
 
+def _get_synced_servers_label(synced_server_ids: Optional[List[str]]) -> Optional[str]:
+    """Readable "Also synced to: X, Y" value for a notification that ALSO
+    pushed to one or more linked Jellyfin/Emby servers alongside its primary
+    action (a manual Plex send with a linked library, a webhook/batch run
+    whose cross-server sync -- webhooks.py's _sync_poster_to_other_servers()
+    or media_server_send.py's sync_render_to_linked_servers() -- reached a
+    linked server too). Returns None (no field/line added at all) when the
+    list is empty, matching _get_asset_type_label()'s own "only add the field
+    when something non-default happened" convention. Deliberately excludes
+    'plex-1' -- a Plex delivery already has its own "Action: Sent to Plex"/
+    "Resent to Plex" text; this field exists only to surface the servers a
+    primary action's own action/server_id can't already express (which is
+    always exactly one), not to restate Plex a second time."""
+    if not synced_server_ids:
+        return None
+    from ..media_server import get_server_label
+    seen = []
+    for sid in synced_server_ids:
+        if sid and sid != "plex-1" and sid not in seen:
+            seen.append(sid)
+    if not seen:
+        return None
+    return ", ".join(get_server_label(sid) for sid in seen)
+
+
 def send_discord_notification(
     title: str,
     year: Optional[int] = None,
@@ -216,12 +258,16 @@ def send_discord_notification(
     failed_count: int = 0,
     asset_type: str = "poster",
     server_id: Optional[str] = None,
+    synced_server_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Send a Discord webhook notification for poster generation.
 
     Args:
         poster_data: Optional bytes of the poster image to attach directly to Discord
+        synced_server_ids: Linked Jellyfin/Emby server_ids ALSO reached this run
+            (webhook/batch cross-server sync), on top of whatever `action` already
+            says -- see _get_synced_servers_label()'s own docstring.
 
     Returns:
         True if notification was sent successfully, False otherwise
@@ -293,6 +339,10 @@ def send_discord_notification(
         asset_label = _get_asset_type_label(asset_type)
         if asset_label:
             embed["fields"].append({"name": "Asset", "value": asset_label, "inline": True})
+
+        synced_label = _get_synced_servers_label(synced_server_ids)
+        if synced_label:
+            embed["fields"].append({"name": "Also synced to", "value": synced_label, "inline": True})
 
         # Add poster thumbnail - either from attached file or URL
         if poster_data:
@@ -375,6 +425,7 @@ def _build_notification_embed(
     poster_data: Optional[bytes] = None,
     asset_type: str = "poster",
     server_id: Optional[str] = None,
+    synced_server_ids: Optional[List[str]] = None,
 ) -> dict:
     """Build a Discord embed dict — shared between native Discord and Apprise Discord paths."""
     emoji = _get_source_emoji(source)
@@ -414,6 +465,10 @@ def _build_notification_embed(
     if asset_label:
         embed["fields"].append({"name": "Asset", "value": asset_label, "inline": True})
 
+    synced_label = _get_synced_servers_label(synced_server_ids)
+    if synced_label:
+        embed["fields"].append({"name": "Also synced to", "value": synced_label, "inline": True})
+
     if poster_data:
         embed["thumbnail"] = {"url": "attachment://poster.jpg"}
 
@@ -434,6 +489,7 @@ def send_apprise_notification(
     poster_data: Optional[bytes] = None,
     asset_type: str = "poster",
     server_id: Optional[str] = None,
+    synced_server_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Send an Apprise notification for poster generation events.
@@ -475,6 +531,7 @@ def send_apprise_notification(
             library_id=library_id, source=source, action=action,
             count=count, success_count=success_count, failed_count=failed_count,
             poster_data=poster_data, asset_type=asset_type, server_id=server_id,
+            synced_server_ids=synced_server_ids,
         )
         for webhook_url in discord_urls:
             try:
@@ -525,6 +582,9 @@ def send_apprise_notification(
                 asset_label = _get_asset_type_label(asset_type)
                 if asset_label:
                     body += f"\nAsset: {asset_label}"
+                synced_label = _get_synced_servers_label(synced_server_ids)
+                if synced_label:
+                    body += f"\nAlso synced to: {synced_label}"
 
                 result = ap.notify(title=notify_title, body=body)
                 if result:
@@ -548,7 +608,9 @@ def send_batch_notification(
     preset_id: str,
     success_count: int,
     failed_count: int,
-    source: str = "batch"
+    source: str = "batch",
+    action: str = "sent_to_plex",
+    synced_server_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Send a notification for batch processing completion.
@@ -560,6 +622,16 @@ def send_batch_notification(
         success_count: Number of successful posters
         failed_count: Number of failed posters
         source: Source type ('batch', 'auto_generate', etc.)
+        action: Was previously ALWAYS hardcoded "sent_to_plex" here, regardless
+            of whether the batch run actually targeted Plex at all -- a real,
+            misleading bug for a Jellyfin/Emby-only batch (req.send_to_plex
+            False, targets=[...] only), which would still have said "Sent to
+            Plex" despite never touching Plex. Callers now pass the batch's
+            real `req.send_to_plex`-derived action instead.
+        synced_server_ids: Union of every non-Plex server_id actually synced
+            to across the whole batch run, for the "Also synced to" field --
+            independent of `action`, since a run can send to Plex directly
+            AND sync to a linked Jellyfin/Emby server in the same pass.
 
     Returns:
         True if notification was sent successfully
@@ -571,10 +643,11 @@ def send_batch_notification(
         preset_id=preset_id,
         library_id=library_id,
         source=source,
-        action="sent_to_plex",
+        action=action,
         count=total,
         success_count=success_count,
-        failed_count=failed_count
+        failed_count=failed_count,
+        synced_server_ids=synced_server_ids,
     )
 
 
@@ -784,6 +857,7 @@ def complete_batch_progress_notification(
     poster_data: Optional[bytes] = None,
     poster_fallback_count: int = 0,
     logo_fallback_count: int = 0,
+    synced_server_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Update batch progress notification with final completion status.
@@ -840,6 +914,10 @@ def complete_batch_progress_notification(
                 "value": " | ".join(fallback_parts),
                 "inline": True
             })
+
+        synced_label = _get_synced_servers_label(synced_server_ids)
+        if synced_label:
+            fields.append({"name": "Also synced to", "value": synced_label, "inline": True})
 
         embed = {
             "title": f"{emoji} {source_label} Complete",

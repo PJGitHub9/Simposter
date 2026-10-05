@@ -817,6 +817,7 @@ const processBatch = async () => {
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
       library_id: currentLibrary.value || undefined,
       targets: Array.from(selectedTargets.value),
+      source_server_id: currentServer.value || undefined,
       include_series: includeSeries.value,
       include_seasons: includeSeasons.value,
       // Include fallback settings so batch endpoint can handle template fallbacks

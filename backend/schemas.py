@@ -250,6 +250,26 @@ class MediaMirrorConfig(BaseModel):
     scheduleCron: Optional[str] = None
     lastRunAt: Optional[str] = None
     lastRunStats: Optional[dict] = None  # {"checked", "updated", "skipped", "unmapped", "failed"}
+    # Movie-group-only (Collections ride on the owning "movie" LibraryGroup,
+    # not a separate media_type -- see api_collections()). Off by default so
+    # every existing Media Mirror config is a strict no-op for this. Reuses
+    # the SAME sourceServerId/targetServerIds above (same reasoning as the
+    # original comment here: mirroring collections in a different direction
+    # than the movies they belong to wouldn't make sense) -- but gets its
+    # OWN assetTypes list (`collectionAssetTypes`, defaults empty), not the
+    # movie `assetTypes` above. A user who wants to mirror ONLY collections
+    # (testing the feature, or a group where movies aren't ready to mirror
+    # yet) previously had no way to do that -- `assetTypes` being empty
+    # correctly meant "nothing to copy" for BOTH movies and collections,
+    # since they shared the one list; unchecking every movie asset type
+    # (the only way to say "skip movies") also silently zeroed out
+    # collections. User-reported directly: "Media Mirror is missing a
+    # source server, target server(s), or asset type(s)" with "Also mirror
+    # Collections" checked and every movie asset type deliberately
+    # unchecked.
+    mirrorCollections: bool = False
+    collectionAssetTypes: List[str] = Field(default_factory=list)
+    lastRunCollectionStats: Optional[dict] = None
 
 
 class LibraryGroup(BaseModel):
@@ -406,6 +426,14 @@ class MovieBatchRequest(BaseModel):
     # batch's library via a Library Group (see CLAUDE.md Quirk #95's identical webhook-sync fix)
     # -- a target that isn't linked is silently skipped, never blindly synced to. 'plex-1' in this
     # list is a no-op (Plex already has its own real send path via send_to_plex).
+    source_server_id: Optional[str] = None  # Which server `library_id` itself belongs to -- i.e. the
+    # server of the LIBRARY GROUP ANCHOR this batch is being browsed/sent from, not necessarily the
+    # server any one selected item's rating_key resolves to (a merged item can display under a
+    # different server's identity than the group's own anchor). None/omitted defaults to "plex-1" at
+    # the call site, matching every pre-Phase-8a caller's implicit assumption. Required (non-"plex-1")
+    # for `targets` to resolve anything at all when browsing a Plex-less, Jellyfin/Emby-anchored
+    # LibraryGroup (Quirk #116/#132) -- without it, sync_render_to_linked_servers() looks for a
+    # ("plex-1", library_id) member pair that can never exist for that group.
 
 
 class TVShowBatchRequest(BaseModel):
@@ -428,9 +456,10 @@ class TVShowBatchRequest(BaseModel):
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
     require_textless_poster: bool = False  # See MovieBatchRequest's field of the same name.
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
-    targets: List[str] = []  # See MovieBatchRequest.targets -- series-level poster/logo only, never
-    # season-level (JellyfinClient has no season-level item resolution yet, same reason Quirk #69/#71
-    # deferred TV sends elsewhere).
+    targets: List[str] = []  # See MovieBatchRequest.targets -- covers both series- and season-level
+    # posters/logos (JellyfinClient gained real season-level item resolution in Quirk #100; the
+    # earlier "series-level only" limitation this comment used to describe is closed).
+    source_server_id: Optional[str] = None  # See MovieBatchRequest.source_server_id.
 
 
 # Legacy batch request - kept for backward compatibility

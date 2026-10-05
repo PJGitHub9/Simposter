@@ -27,6 +27,7 @@ from ..config import logger, settings, plex_headers, plex_session, load_presets,
 from ..schemas import MovieBatchRequest, TVShowBatchRequest, Movie
 from .. import database as db
 from .. import cache
+from ..media_server import get_client
 from .notifications import send_discord_notification, send_apprise_notification
 
 router = APIRouter()
@@ -493,6 +494,53 @@ def find_plex_item_with_retry(
     return None
 
 
+def find_media_server_item_by_external_id(
+    server_id: str,
+    tmdb_id: Optional[int],
+    tvdb_id: Optional[int],
+    media_type: str,  # "movie" | "tv"
+    library_id: str,
+) -> Optional[tuple]:
+    """Non-Plex counterpart to find_plex_movie_by_tmdb_id()/
+    find_plex_show_by_tvdb_id() above, for Phase 8b (webhook automation
+    without Plex). Resolves an item on a SPECIFIC Jellyfin/Emby server via
+    the already-built, already-verified MediaServerClient.
+    find_item_by_external_id() (Quirk #58/#98), instead of Plex's own raw-XML
+    GUID search -- there's no reason to reimplement matching logic here.
+
+    `library_id` is REQUIRED (not optional, unlike the two Plex resolvers'
+    whole-server search) -- MediaServerClient has no "search every library on
+    this server" equivalent, and Quirk #98 already established that an
+    unscoped lookup can resolve to the WRONG same-tmdb_id item when more than
+    one library on the server happens to have a title with that id (a
+    duplicate/4K library, or an untracked library sharing the server). The
+    webhook URL for a non-Plex server must always specify a library.
+
+    Returns (item_id, library_id) -- the same shape find_plex_movie_by_tmdb_id()/
+    find_plex_show_by_tvdb_id() return, so it composes with the existing
+    find_plex_item_with_retry() loop unmodified via a thin local closure
+    (see process_media_server_webhook_with_retry() below) rather than this
+    function needing find_plex_item_with_retry()'s exact (external_id,
+    library_id) 2-arg calling shape itself."""
+    if not library_id:
+        logger.warning("[WEBHOOK] Non-Plex webhook lookup requires a library_id (server=%s, media_type=%s) -- refusing to search unscoped", server_id, media_type)
+        return None
+    try:
+        client = get_client(server_id)
+        if not client:
+            logger.warning("[WEBHOOK] No enabled MediaServerClient for server_id=%s -- is it still configured in Settings -> Media Servers?", server_id)
+            return None
+        item_id = client.find_item_by_external_id(tmdb_id, tvdb_id, media_type, library_id)
+        if item_id:
+            logger.info("[WEBHOOK] Found %s item_id=%s on server=%s library=%s (tmdb=%s tvdb=%s)", media_type, item_id, server_id, library_id, tmdb_id, tvdb_id)
+            return (item_id, library_id)
+        logger.warning("[WEBHOOK] Could not find %s on server=%s library=%s (tmdb=%s tvdb=%s)", media_type, server_id, library_id, tmdb_id, tvdb_id)
+        return None
+    except Exception as e:
+        logger.error("[WEBHOOK] Error searching for %s on server=%s: %s", media_type, server_id, e)
+        return None
+
+
 def process_radarr_webhook_with_retry(
     tmdb_id: int,
     title: str,
@@ -633,7 +681,144 @@ def process_sonarr_webhook_with_retry(
     )
 
 
-def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None) -> None:
+def process_media_server_webhook_with_retry(
+    server_id: str,
+    media_type: str,  # "movie" | "tv"
+    tmdb_id: Optional[int],
+    tvdb_id: Optional[int],
+    title: str,
+    year: Optional[int],
+    template_id: str,
+    preset_id: str,
+    auto_send: bool,
+    library_id: str,
+    include_seasons: bool = False,
+    affected_seasons: Optional[List[int]] = None,
+):
+    """Phase 8b -- non-Plex counterpart to process_radarr_webhook_with_retry()/
+    process_sonarr_webhook_with_retry() above, for a webhook URL that
+    specified a non-Plex `server_id` (see radarr_webhook()/sonarr_webhook()'s
+    own `server_id` query param). Resolves the item on that SPECIFIC server
+    (`library_id` is REQUIRED, not optional -- see
+    find_media_server_item_by_external_id()'s own docstring for why there's
+    no whole-server-search equivalent to fall back to), pre-seeds a real
+    cache row for it, then hands off to the exact same
+    process_webhook_poster_generation() the Plex wrappers already use, just
+    with `server_id` passed through so it routes the render through
+    sync_render_to_linked_servers() (Quirk #106/#110/#132) instead of a
+    direct Plex POST.
+
+    Deliberately ONE function covering both media types (matching
+    process_webhook_poster_generation()'s own `is_tv`-branching shape),
+    not two near-duplicate functions the way the two Plex wrappers are
+    split -- the one genuinely different TV-only step (new-show detection,
+    a second series-poster-first call, mirroring
+    process_sonarr_webhook_with_retry()'s own logic exactly) is the only
+    real branch below; everything else is identical for movie/TV.
+
+    No label-based ignore-library check (_should_skip_webhook(), Plex-only --
+    JellyfinClient.remove_label()/add_label() are deliberate no-ops per
+    Quirk #59, so there's no label mechanism to key a skip off of for a
+    non-Plex item yet)."""
+    logger.info("[MEDIA_SERVER_WEBHOOK:%s] Starting delayed processing for: %s (%s) -- tmdb=%s tvdb=%s library=%s",
+                server_id, title, year, tmdb_id, tvdb_id, library_id)
+
+    def _find_func(_external_id_unused, lib_id):
+        # find_plex_item_with_retry() calls find_func(external_id, library_id)
+        # -- tmdb_id/tvdb_id are already bound via closure above, so the first
+        # positional arg here is intentionally unused.
+        return find_media_server_item_by_external_id(server_id, tmdb_id, tvdb_id, media_type, lib_id)
+
+    result = find_plex_item_with_retry(
+        find_func=_find_func,
+        external_id=(tvdb_id if media_type == "tv" else tmdb_id),
+        item_type=f"{media_type} (server={server_id})",
+        library_id=library_id,
+        initial_delay=30,
+        max_retries=5,
+        retry_delay=15,
+    )
+
+    if not result:
+        logger.error("[MEDIA_SERVER_WEBHOOK:%s] Could not find %s after retries: %s (tmdb=%s tvdb=%s)",
+                      server_id, media_type, title, tmdb_id, tvdb_id)
+        return
+
+    item_id, library_id = result
+
+    # New-show detection must happen BEFORE the cache pre-seed below, or
+    # every show would look "already cached" the instant it's seeded.
+    is_new_show = False
+    if media_type == "tv":
+        try:
+            cached_shows = db.get_cached_tv_shows(library_id=library_id)
+            show_in_cache = any(show.get("rating_key") == item_id for show in cached_shows)
+            is_new_show = not show_in_cache
+            if is_new_show:
+                logger.info("[MEDIA_SERVER_WEBHOOK:%s] Detected NEW show -- will generate series poster + season posters", server_id)
+        except Exception as e:
+            logger.warning("[MEDIA_SERVER_WEBHOOK:%s] Could not check cache for new show detection: %s", server_id, e)
+
+    # Pre-seed a real cache row -- title/year/tmdb_id/tvdb_id are already
+    # known from the webhook payload, so no extra metadata fetch is needed.
+    # This is what lets _process_single_movie()/_process_single_tv_show()'s
+    # own db.get_server_id_for_rating_key() check (Quirk #106) correctly
+    # recognize this item as belonging to `server_id` instead of silently
+    # defaulting to 'plex-1' for a rating_key it's never seen before. Uses
+    # the genuinely single-item-safe writers (Quirk #132's new upsert_media_
+    # server_*_single()) -- NEVER the bulk upsert_media_server_movies()/
+    # _tv_shows(), which would treat every OTHER already-cached item in this
+    # (server_id, library_id) pair as orphaned and delete it.
+    try:
+        seed = {"rating_key": item_id, "title": title, "year": year, "tmdb_id": tmdb_id, "tvdb_id": tvdb_id}
+        if media_type == "tv":
+            db.upsert_media_server_tv_show_single(server_id, library_id, seed)
+        else:
+            db.upsert_media_server_movie_single(server_id, library_id, seed)
+    except Exception as e:
+        logger.warning("[MEDIA_SERVER_WEBHOOK:%s] Failed to pre-seed cache for %s [%s]: %s -- continuing anyway", server_id, item_id, title, e)
+
+    if media_type == "tv":
+        if is_new_show and include_seasons:
+            logger.info("[MEDIA_SERVER_WEBHOOK:%s] Generating series poster for NEW show: %s", server_id, title)
+            process_webhook_poster_generation(
+                rating_key=item_id,
+                template_id=template_id,
+                preset_id=preset_id,
+                auto_send=auto_send,
+                auto_labels=[],
+                library_id=library_id,
+                is_tv=True,
+                include_seasons=False,  # Series poster only
+                affected_seasons=None,
+                server_id=server_id,
+            )
+        process_webhook_poster_generation(
+            rating_key=item_id,
+            template_id=template_id,
+            preset_id=preset_id,
+            auto_send=auto_send,
+            auto_labels=[],
+            library_id=library_id,
+            is_tv=True,
+            include_seasons=include_seasons,
+            affected_seasons=affected_seasons,
+            server_id=server_id,
+        )
+    else:
+        process_webhook_poster_generation(
+            rating_key=item_id,
+            template_id=template_id,
+            preset_id=preset_id,
+            auto_send=auto_send,
+            auto_labels=[],
+            library_id=library_id,
+            is_tv=False,
+            server_id=server_id,
+        )
+
+
+def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None) -> List[str]:
     """Phase 6 (webhooks) -- after a webhook-triggered Plex render+send
     succeeds, check whether the same title also exists on any OTHER server
     that's actually linked to this Plex library via a Library Group
@@ -702,9 +887,18 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
     plain display string, not a split title/year the way batch.py's callers
     do) -- acceptable, since the row still identifies the right item/server/
     template/preset, which is what actually matters for "did this sync
-    happen."""
+    happen."
+
+    Returns the list of server_ids actually synced to (empty list for a
+    no-op/every-failure run) -- added so the webhook's own per-item Discord/
+    Apprise notification (built right after this returns, in
+    process_webhook_poster_generation()) can say "Also synced to: Jellyfin"
+    instead of staying completely silent about a sync that happened in the
+    same request. Previously this function was pure fire-and-forget with no
+    return value at all."""
+    synced_server_ids: List[str] = []
     if not tmdb_id:
-        return
+        return synced_server_ids
     try:
         from ..config import _render_cache_path_by_tmdb, get_library_group_members
         from ..media_server import get_enabled_clients, PlexClient, ImageType
@@ -713,7 +907,7 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
 
         if not library_id:
             logger.debug("[WEBHOOK_SYNC] No library_id resolved for tmdb_id=%s [%s] -- cannot determine linked servers, skipping cross-server sync", tmdb_id, title_hint)
-            return
+            return synced_server_ids
         members = get_library_group_members("plex-1", str(library_id), find_media_type)
         # Keep each member's own library_id (not just server_id) -- see the
         # matching fix/comment in media_server_send.py's
@@ -724,11 +918,11 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
         allowed_servers = {sid: lid for sid, lid in (members or []) if sid != "plex-1"}
         if not allowed_servers:
             logger.debug("[WEBHOOK_SYNC] Plex library %s has no linked Library Group members -- skipping cross-server sync for tmdb_id=%s [%s]", library_id, tmdb_id, title_hint)
-            return
+            return synced_server_ids
 
         cache_path = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
         if not cache_path.exists():
-            return
+            return synced_server_ids
         image_bytes = cache_path.read_bytes()
 
         for client in get_enabled_clients():
@@ -769,10 +963,12 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                     )
                 except Exception as history_err:
                     logger.debug("[WEBHOOK_SYNC:%s] Failed to record history for item_id=%s: %s", client.server_id, item_id, history_err)
+                synced_server_ids.append(client.server_id)
             except Exception as e:
                 logger.warning("[WEBHOOK_SYNC:%s] Failed to sync poster for tmdb_id=%s [%s]: %s", client.server_id, tmdb_id, title_hint, e)
     except Exception as e:
         logger.debug("[WEBHOOK_SYNC] _sync_poster_to_other_servers failed for tmdb_id=%s [%s]: %s", tmdb_id, title_hint, e)
+    return synced_server_ids
 
 
 def process_webhook_poster_generation(
@@ -784,15 +980,33 @@ def process_webhook_poster_generation(
     library_id: Optional[str],
     is_tv: bool = False,
     include_seasons: bool = False,
-    affected_seasons: Optional[List[int]] = None
+    affected_seasons: Optional[List[int]] = None,
+    server_id: str = "plex-1",
 ):
     """
-    Background task to generate and send poster to Plex.
+    Background task to generate and send poster to Plex (or, since Phase 8b,
+    to a specific Jellyfin/Emby server instead -- see `server_id`).
     This runs asynchronously after the webhook returns a response.
 
     Args:
         affected_seasons: For TV shows, only process these specific seasons.
                          If None or empty, process all seasons (for new series).
+        server_id: Which configured server `rating_key` actually lives on and
+                   should be rendered/sent to. Defaults to "plex-1" -- every
+                   call site before Phase 8b implicitly assumed this, so the
+                   default reproduces that exact behavior byte-for-byte.
+                   `rating_key` for a non-"plex-1" server is NOT a Plex
+                   rating_key -- it's whatever find_media_server_item_by_
+                   external_id() resolved it to on that server. Several
+                   Plex-only steps below (the cache-resend fast path, direct
+                   Plex label add/remove) are skipped entirely for a non-Plex
+                   server_id -- there is no equivalent "resend" fast path for
+                   Jellyfin/Emby yet (Quirk #59: no label mechanism to key a
+                   resend-skip off of), and _process_single_movie()/
+                   _process_single_tv_show()'s own is_plex_item gating
+                   (Quirk #106) already correctly routes a non-Plex item
+                   through sync_render_to_linked_servers() instead of a
+                   direct Plex POST.
     """
     _wh_start = time.time()
     # Best-effort display title for log readability — a cheap local DB cache lookup,
@@ -809,8 +1023,12 @@ def process_webhook_poster_generation(
         # ------------------------------------------------------------------
         # Resend cached poster if the setting is "resend" and a cached
         # render exists for this item (i.e. it was previously sent by Simposter).
+        # Plex-only -- it POSTs directly to Plex's own .../posters endpoint and
+        # does Plex label add/remove, neither of which has a non-Plex
+        # equivalent built yet. A non-Plex server_id falls straight through
+        # to full generation below, same as if this setting were off.
         # ------------------------------------------------------------------
-        if auto_send:
+        if auto_send and server_id == "plex-1":
             try:
                 _ui = db.get_ui_settings()
                 if _ui.get("automation", {}).get("existingContentMode") == "resend":
@@ -905,6 +1123,15 @@ def process_webhook_poster_generation(
 
         options = preset.get("options", {})
 
+        # Non-Plex (Jellyfin/Emby) target: never a direct Plex send -- route
+        # through _process_single_movie()/_process_single_tv_show()'s existing
+        # is_plex_item-gated sync_render_to_linked_servers() path instead
+        # (Quirk #106/#110), the same mechanism the non-Plex half of Batch
+        # Edit's own "send to" picker already uses (Quirk #96). source_server_id
+        # (Quirk #132) is what lets that sync correctly resolve this item's own
+        # Library Group when `library_id` is itself a non-Plex-anchored library.
+        is_plex_target = server_id == "plex-1"
+
         if is_tv:
             # Create TV show batch request
             request = TVShowBatchRequest(
@@ -912,10 +1139,12 @@ def process_webhook_poster_generation(
                 template_id=template_id,
                 preset_id=preset_id,
                 options=options,
-                send_to_plex=auto_send,
+                send_to_plex=auto_send and is_plex_target,
                 save_locally=False,
-                labels=auto_labels,
+                labels=auto_labels if is_plex_target else [],
                 library_id=library_id,
+                source_server_id=server_id,
+                targets=[server_id] if (auto_send and not is_plex_target) else [],
                 include_seasons=include_seasons,
                 fallbackPosterAction=options.get("fallbackPosterAction"),
                 fallbackPosterTemplate=options.get("fallbackPosterTemplate"),
@@ -985,12 +1214,19 @@ def process_webhook_poster_generation(
                             db.remove_from_retry_queue(rating_key)
                 except Exception as q_err:
                     logger.debug("[WEBHOOK] TV retry queue update failed for %s [%s]: %s", rating_key, show_title, q_err)
-                # Update cache so the show appears in library view
-                try:
-                    logger.info("[WEBHOOK] Updating TV cache for %s [%s] (library_id=%s)", rating_key, show_title, library_id)
-                    _update_tv_cache(rating_key, library_id)
-                except Exception as cache_err:
-                    logger.warning("[WEBHOOK] Failed to update TV cache for %s [%s]: %s", rating_key, show_title, cache_err, exc_info=True)
+                # Update cache so the show appears in library view. Plex-only --
+                # it re-fetches metadata live from Plex using `rating_key` as a
+                # real Plex rating_key, which a non-Plex server_id's rating_key
+                # isn't. For a non-Plex target, process_media_server_webhook_
+                # with_retry() already seeded a correct cache row (title/year/
+                # tmdb_id/tvdb_id straight from the webhook payload) BEFORE this
+                # function ever ran, so there's nothing new to refresh here.
+                if is_plex_target:
+                    try:
+                        logger.info("[WEBHOOK] Updating TV cache for %s [%s] (library_id=%s)", rating_key, show_title, library_id)
+                        _update_tv_cache(rating_key, library_id)
+                    except Exception as cache_err:
+                        logger.warning("[WEBHOOK] Failed to update TV cache for %s [%s]: %s", rating_key, show_title, cache_err, exc_info=True)
                 sub_results = result.get("results", [])
                 # Phase 6c/Quirk #100 -- sync EVERY successfully-sent sub-result
                 # (the series AND any season) to any other enabled server
@@ -1006,7 +1242,17 @@ def process_webhook_poster_generation(
                 # server/season, never blocking the rest.
                 # Fully additive/best-effort, see _sync_poster_to_other_servers()'s
                 # own docstring for why this can never affect the Plex result above.
-                if auto_send:
+                # Plex-origin only for now (is_plex_target) -- _sync_poster_to_
+                # other_servers() has the IDENTICAL get_library_group_members()
+                # "plex-1" hardcode Quirk #132 just fixed in sync_render_to_
+                # linked_servers(), never fixed here too. A non-Plex origin's
+                # single resolved target already got the render directly via
+                # this request's own targets=[server_id] (Quirk #132/Phase 8b)
+                # -- syncing from a non-Plex origin to OTHER members of the same
+                # Library Group (a 3+-server group) is real, deferred follow-up
+                # work, not yet needed for the common 2-member case.
+                _tv_synced_server_ids: List[str] = []
+                if auto_send and is_plex_target:
                     try:
                         _sync_cached = db.get_cached_tv_shows()
                         _sync_info = next((s for s in _sync_cached if s.get("key") == rating_key or s.get("rating_key") == rating_key), None)
@@ -1019,11 +1265,14 @@ def process_webhook_poster_generation(
                         for _r in sub_results:
                             if _r.get("status") != "ok":
                                 continue
-                            _sync_poster_to_other_servers(
+                            _synced = _sync_poster_to_other_servers(
                                 _sync_tmdb_id, "tv-show", show_title, library_id=library_id,
                                 season_index=_r.get("season_index"), tvdb_id=_sync_tvdb_id,
                                 template_id=template_id, preset_id=preset_id,
                             )
+                            for _sid in _synced:
+                                if _sid not in _tv_synced_server_ids:
+                                    _tv_synced_server_ids.append(_sid)
                     except Exception as sync_err:
                         logger.debug("[WEBHOOK] TV cross-server sync failed for %s [%s]: %s", rating_key, show_title, sync_err)
                 # Only notify if at least one poster was actually created/sent.
@@ -1040,7 +1289,9 @@ def process_webhook_poster_generation(
                         preset_id=preset_id,
                         library_id=library_id,
                         source="webhook",
-                        action="sent_to_plex" if auto_send else "saved",
+                        action=("sent_to_plex" if is_plex_target else "sent_to_media_server") if auto_send else "saved",
+                        server_id=server_id,
+                        synced_server_ids=_tv_synced_server_ids,
                     )
                     try:
                         tv_poster_data = next((r.get("poster_data") for r in posters_created if r.get("poster_data")), None)
@@ -1064,10 +1315,12 @@ def process_webhook_poster_generation(
                 template_id=template_id,
                 preset_id=preset_id,
                 options=options,
-                send_to_plex=auto_send,
+                send_to_plex=auto_send and is_plex_target,
                 save_locally=False,
-                labels=auto_labels,
+                labels=auto_labels if is_plex_target else [],
                 library_id=library_id,
+                source_server_id=server_id,
+                targets=[server_id] if (auto_send and not is_plex_target) else [],
                 send_logos_to_plex=send_logos,
             )
 
@@ -1118,12 +1371,16 @@ def process_webhook_poster_generation(
                             db.remove_from_retry_queue(rating_key)
                 except Exception as q_err:
                     logger.debug("[WEBHOOK] Retry queue update failed for %s [%s]: %s", rating_key, movie_title, q_err)
-                # Update cache so the movie appears in library view
-                try:
-                    logger.info("[WEBHOOK] Updating movie cache for %s [%s] (library_id=%s)", rating_key, movie_title, library_id)
-                    _update_movie_cache(rating_key, library_id)
-                except Exception as cache_err:
-                    logger.warning("[WEBHOOK] Failed to update movie cache for %s [%s]: %s", rating_key, movie_title, cache_err, exc_info=True)
+                # Update cache so the movie appears in library view. Plex-only --
+                # see the identical comment on the TV branch's _update_tv_cache()
+                # call above for why a non-Plex server_id skips this (the cache
+                # row was already correctly seeded before this function ran).
+                if is_plex_target:
+                    try:
+                        logger.info("[WEBHOOK] Updating movie cache for %s [%s] (library_id=%s)", rating_key, movie_title, library_id)
+                        _update_movie_cache(rating_key, library_id)
+                    except Exception as cache_err:
+                        logger.warning("[WEBHOOK] Failed to update movie cache for %s [%s]: %s", rating_key, movie_title, cache_err, exc_info=True)
                 # Phase 6 (Quirk #71) -- sync the just-sent poster to any other
                 # enabled server (Jellyfin/Emby) that also has this title.
                 # Fully additive/best-effort, see _sync_poster_to_other_servers()'s
@@ -1133,11 +1390,14 @@ def process_webhook_poster_generation(
                 # (a fresh cache lookup, now that _update_movie_cache() above has
                 # just populated it) -- a small duplicated query, not worth
                 # restructuring the existing notification code to share.
-                if auto_send:
+                # Plex-origin only for now -- see the identical is_plex_target
+                # gate/comment on the TV branch's equivalent block above.
+                _movie_synced_server_ids: List[str] = []
+                if auto_send and is_plex_target:
                     try:
                         _sync_cached = db.get_cached_movies()
                         _sync_info = next((m for m in _sync_cached if m.get("key") == rating_key or m.get("rating_key") == rating_key), None)
-                        _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id, template_id=template_id, preset_id=preset_id)
+                        _movie_synced_server_ids = _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id, template_id=template_id, preset_id=preset_id)
                     except Exception as sync_err:
                         logger.debug("[WEBHOOK] Cross-server poster sync failed for %s [%s]: %s", rating_key, movie_title, sync_err)
                 # Send Discord notification (include poster image)
@@ -1154,7 +1414,9 @@ def process_webhook_poster_generation(
                         preset_id=preset_id,
                         library_id=library_id,
                         source="webhook",
-                        action="sent_to_plex" if auto_send else "saved",
+                        action=("sent_to_plex" if is_plex_target else "sent_to_media_server") if auto_send else "saved",
+                        server_id=server_id,
+                        synced_server_ids=_movie_synced_server_ids,
                     )
                     send_discord_notification(**_movie_notif_kwargs, poster_data=result.get("poster_data"))
                 except Exception as notif_err:
@@ -1190,7 +1452,17 @@ def radarr_webhook(
                     "Omitted (the default) searches every movie library and uses whichever "
                     "one has a match first -- ambiguous if the same title exists in more "
                     "than one library. Generated by the Webhook URL Generator in Settings -> "
-                    "Automation when a specific library is selected there.",
+                    "Automation when a specific library is selected there. REQUIRED (not "
+                    "optional) when `server_id` below names a non-Plex server.",
+    ),
+    server_id: Optional[str] = Query(
+        default=None,
+        description="Phase 8b: which configured media server (Settings -> Media Servers) "
+                    "this webhook's content actually lives on. Omitted or 'plex-1' (the "
+                    "default) reproduces the original Plex-only behavior exactly. Any other "
+                    "value routes the lookup/render/send through that Jellyfin/Emby server "
+                    "instead -- `library_id` above becomes required in that case, since "
+                    "there's no 'search every library on this server' equivalent.",
     ),
 ):
     """
@@ -1204,7 +1476,11 @@ def radarr_webhook(
     Query params:
     - test: If true, performs a dry run with detailed logging but no poster generation
     - library_id: Optional -- scope the Plex lookup to one specific movie library
+    - server_id: Optional (Phase 8b) -- target a specific non-Plex server instead of Plex
     """
+    is_plex_webhook = not server_id or server_id == "plex-1"
+    if not is_plex_webhook and not library_id:
+        raise HTTPException(status_code=400, detail="library_id is required when server_id names a non-Plex server")
     # Normalize template_id for backward compatibility
     template_id = _normalize_template_id(template_id)
 
@@ -1241,15 +1517,19 @@ def radarr_webhook(
             logger.info(f"[RADARR_WEBHOOK_TEST] Auto-send to Plex: {auto_send}")
             logger.info(f"[RADARR_WEBHOOK_TEST] Labels to apply: {auto_labels}")
 
-            # Try to find the movie in Plex
-            result = find_plex_movie_by_tmdb_id(tmdb_id, library_id)
+            # Try to find the movie on the target server (Plex, or a specific
+            # Jellyfin/Emby server per Phase 8b's server_id param)
+            if is_plex_webhook:
+                result = find_plex_movie_by_tmdb_id(tmdb_id, library_id)
+            else:
+                result = find_media_server_item_by_external_id(server_id, tmdb_id, None, "movie", library_id)
             if result:
                 rating_key, lib_id = result
-                logger.info(f"[RADARR_WEBHOOK_TEST] Found in Plex with rating_key: {rating_key}, library: {lib_id}")
+                logger.info(f"[RADARR_WEBHOOK_TEST] Found with rating_key: {rating_key}, library: {lib_id} (server={server_id or 'plex-1'})")
             else:
                 rating_key = None
                 lib_id = None
-                logger.warning(f"[RADARR_WEBHOOK_TEST] Movie NOT found in Plex library")
+                logger.warning(f"[RADARR_WEBHOOK_TEST] Movie NOT found (server={server_id or 'plex-1'})")
 
             return {
                 "status": "test_success",
@@ -1258,10 +1538,11 @@ def radarr_webhook(
                 "tmdb_id": tmdb_id,
                 "rating_key": rating_key,
                 "library_id": lib_id,
+                "server_id": server_id or "plex-1",
                 "template_id": template_id,
                 "preset_id": preset_id,
                 "auto_send": auto_send,
-                "labels": auto_labels,
+                "labels": auto_labels if is_plex_webhook else [],
                 "message": "Test mode - no poster generated"
             }
 
@@ -1276,30 +1557,47 @@ def radarr_webhook(
                 "tmdb_id": tmdb_id,
             }
 
-        # Queue background task with delay/retry logic
-        # This allows Plex time to import the file before we try to find it
-        background_tasks.add_task(
-            process_radarr_webhook_with_retry,
-            tmdb_id=tmdb_id,
-            title=title,
-            year=year,
-            template_id=template_id,
-            preset_id=preset_id,
-            auto_send=auto_send,
-            auto_labels=auto_labels,
-            library_id=library_id,
-        )
+        # Queue background task with delay/retry logic. This allows Plex (or,
+        # per Phase 8b, the target Jellyfin/Emby server) time to import the
+        # file before we try to find it.
+        if is_plex_webhook:
+            background_tasks.add_task(
+                process_radarr_webhook_with_retry,
+                tmdb_id=tmdb_id,
+                title=title,
+                year=year,
+                template_id=template_id,
+                preset_id=preset_id,
+                auto_send=auto_send,
+                auto_labels=auto_labels,
+                library_id=library_id,
+            )
+        else:
+            background_tasks.add_task(
+                process_media_server_webhook_with_retry,
+                server_id=server_id,
+                media_type="movie",
+                tmdb_id=tmdb_id,
+                tvdb_id=None,
+                title=title,
+                year=year,
+                template_id=template_id,
+                preset_id=preset_id,
+                auto_send=auto_send,
+                library_id=library_id,
+            )
 
         return {
             "status": "queued",
             "event_type": event_type,
             "title": title,
             "tmdb_id": tmdb_id,
+            "server_id": server_id or "plex-1",
             "template_id": template_id,
             "preset_id": preset_id,
             "auto_send": auto_send,
-            "labels": auto_labels,
-            "message": "Poster generation queued (will wait for Plex import)"
+            "labels": auto_labels if is_plex_webhook else [],
+            "message": "Poster generation queued (will wait for import)"
         }
 
     except Exception as e:
@@ -1324,7 +1622,16 @@ def sonarr_webhook(
                     "Omitted (the default) searches every TV library and uses whichever "
                     "one has a match first -- ambiguous if the same show exists in more "
                     "than one library. Generated by the Webhook URL Generator in Settings -> "
-                    "Automation when a specific library is selected there.",
+                    "Automation when a specific library is selected there. REQUIRED (not "
+                    "optional) when `server_id` below names a non-Plex server.",
+    ),
+    server_id: Optional[str] = Query(
+        default=None,
+        description="Phase 8b: which configured media server (Settings -> Media Servers) "
+                    "this webhook's content actually lives on. Omitted or 'plex-1' (the "
+                    "default) reproduces the original Plex-only behavior exactly. Any other "
+                    "value routes the lookup/render/send through that Jellyfin/Emby server "
+                    "instead -- `library_id` above becomes required in that case.",
     ),
     payload: Dict[str, Any] = Body(...)
 ):
@@ -1340,7 +1647,11 @@ def sonarr_webhook(
     - include_seasons: If True, generate posters for all seasons. If False, only series poster.
     - test: If true, performs a dry run with detailed logging but no poster generation
     - library_id: Optional -- scope the Plex lookup to one specific TV library
+    - server_id: Optional (Phase 8b) -- target a specific non-Plex server instead of Plex
     """
+    is_plex_webhook = not server_id or server_id == "plex-1"
+    if not is_plex_webhook and not library_id:
+        raise HTTPException(status_code=400, detail="library_id is required when server_id names a non-Plex server")
     # Normalize template_id for backward compatibility
     template_id = _normalize_template_id(template_id)
 
@@ -1389,15 +1700,19 @@ def sonarr_webhook(
             logger.info(f"[SONARR_WEBHOOK_TEST] Auto-send to Plex: {auto_send}")
             logger.info(f"[SONARR_WEBHOOK_TEST] Labels to apply: {auto_labels}")
 
-            # Try to find the show in Plex
-            result = find_plex_show_by_tvdb_id(tvdb_id, library_id)
+            # Try to find the show on the target server (Plex, or a specific
+            # Jellyfin/Emby server per Phase 8b's server_id param)
+            if is_plex_webhook:
+                result = find_plex_show_by_tvdb_id(tvdb_id, library_id)
+            else:
+                result = find_media_server_item_by_external_id(server_id, None, tvdb_id, "tv", library_id)
             if result:
                 rating_key, lib_id = result
-                logger.info(f"[SONARR_WEBHOOK_TEST] Found in Plex with rating_key: {rating_key}, library: {lib_id}")
+                logger.info(f"[SONARR_WEBHOOK_TEST] Found with rating_key: {rating_key}, library: {lib_id} (server={server_id or 'plex-1'})")
             else:
                 rating_key = None
                 lib_id = None
-                logger.warning(f"[SONARR_WEBHOOK_TEST] TV show NOT found in Plex library")
+                logger.warning(f"[SONARR_WEBHOOK_TEST] TV show NOT found (server={server_id or 'plex-1'})")
 
             return {
                 "status": "test_success",
@@ -1406,12 +1721,13 @@ def sonarr_webhook(
                 "tvdb_id": tvdb_id,
                 "rating_key": rating_key,
                 "library_id": lib_id,
+                "server_id": server_id or "plex-1",
                 "template_id": template_id,
                 "preset_id": preset_id,
                 "include_seasons": include_seasons,
                 "affected_seasons": sorted(affected_seasons) if affected_seasons else [],
                 "auto_send": auto_send,
-                "labels": auto_labels,
+                "labels": auto_labels if is_plex_webhook else [],
                 "message": "Test mode - no poster generated"
             }
 
@@ -1430,34 +1746,53 @@ def sonarr_webhook(
                 "affected_seasons": sorted(list(affected_seasons)),
             }
 
-        # Queue background task with delay/retry logic
-        # This allows Plex time to import the file before we try to find it
-        background_tasks.add_task(
-            process_sonarr_webhook_with_retry,
-            tvdb_id=tvdb_id,
-            title=title,
-            year=year,
-            template_id=template_id,
-            preset_id=preset_id,
-            auto_send=auto_send,
-            auto_labels=auto_labels,
-            include_seasons=include_seasons,
-            affected_seasons=list(affected_seasons) if affected_seasons else None,
-            library_id=library_id,
-        )
+        # Queue background task with delay/retry logic. This allows Plex (or,
+        # per Phase 8b, the target Jellyfin/Emby server) time to import the
+        # file before we try to find it.
+        if is_plex_webhook:
+            background_tasks.add_task(
+                process_sonarr_webhook_with_retry,
+                tvdb_id=tvdb_id,
+                title=title,
+                year=year,
+                template_id=template_id,
+                preset_id=preset_id,
+                auto_send=auto_send,
+                auto_labels=auto_labels,
+                include_seasons=include_seasons,
+                affected_seasons=list(affected_seasons) if affected_seasons else None,
+                library_id=library_id,
+            )
+        else:
+            background_tasks.add_task(
+                process_media_server_webhook_with_retry,
+                server_id=server_id,
+                media_type="tv",
+                tmdb_id=None,
+                tvdb_id=tvdb_id,
+                title=title,
+                year=year,
+                template_id=template_id,
+                preset_id=preset_id,
+                auto_send=auto_send,
+                library_id=library_id,
+                include_seasons=include_seasons,
+                affected_seasons=list(affected_seasons) if affected_seasons else None,
+            )
 
         return {
             "status": "queued",
             "event_type": event_type,
             "title": title,
             "tvdb_id": tvdb_id,
+            "server_id": server_id or "plex-1",
             "template_id": template_id,
             "preset_id": preset_id,
             "include_seasons": include_seasons,
             "affected_seasons": sorted(list(affected_seasons)),
             "auto_send": auto_send,
-            "labels": auto_labels,
-            "message": "Poster generation queued (will wait for Plex import)"
+            "labels": auto_labels if is_plex_webhook else [],
+            "message": "Poster generation queued (will wait for import)"
         }
 
     except Exception as e:

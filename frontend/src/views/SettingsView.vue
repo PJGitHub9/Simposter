@@ -894,7 +894,7 @@ const clearCache = () => {
   }
 }
 
-const scanLibrary = async (libraryId?: string) => {
+const scanLibrary = async (libraryId?: string, forceRefresh = false) => {
   if (scan.running.value || scan.checking.value) {
     saved.value = 'Scan already in progress'
     setTimeout(() => (saved.value = ''), 2000)
@@ -927,7 +927,8 @@ const scanLibrary = async (libraryId?: string) => {
         setTimeout(checkScanStatus, 5000)
       }
     }, 10000)
-    saved.value = libraryId ? `Rescanning library ${libraryId}...` : 'Rescanning all libraries...'
+    const actionLabel = forceRefresh ? 'Force-refreshing all art for' : 'Rescanning'
+    saved.value = libraryId ? `${actionLabel} library ${libraryId}...` : `${actionLabel} all libraries...`
     scan.visible.value = true
     scan.log.value = ['Starting rescan...']
     scan.progress.value = { processed: 0, total: 0 }
@@ -938,6 +939,10 @@ const scanLibrary = async (libraryId?: string) => {
     const apiBase = getApiBase()
     const url = new URL(`${apiBase}/api/scan-library`)
     if (libraryId) url.searchParams.set('library_id', libraryId)
+    // Default is now a fast, skip-if-cached scan (backend default changed to
+    // force_poster_refresh=False) -- this explicit flag is "Force Refresh All
+    // Art"'s own opt-in to the old always-redownload behavior.
+    if (forceRefresh) url.searchParams.set('force_poster_refresh', 'true')
     const res = await fetch(url.toString(), { method: 'POST' })
     if (!res.ok) {
       if (res.status === 409) {

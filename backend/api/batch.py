@@ -469,7 +469,8 @@ def _process_single_movie(
         # /library/metadata/{id}/posters produces a real, confusing failure (a
         # malformed-request connection drop, not a clean 404) that used to abort
         # the whole batch item. See CLAUDE.md Quirk #106.
-        is_plex_item = db.get_server_id_for_rating_key(rating_key) == "plex-1"
+        item_source_server_id = db.get_server_id_for_rating_key(rating_key)
+        is_plex_item = item_source_server_id == "plex-1"
 
         # A second checkpoint, not just the one at the very top of this
         # function -- an item whose worker thread picked it up BEFORE Stop
@@ -660,6 +661,10 @@ def _process_single_movie(
             from .save import encode_poster_for_plex
             payload, content_type = encode_poster_for_plex(img)
 
+        # Populated below if the multi-server sync block actually runs --
+        # read unconditionally into the result dict further down, so it must
+        # exist regardless of whether do_multiserver_send is true this item.
+        synced: List[Dict[str, str]] = []
         if do_multiserver_send and not skip_send_not_ideal:
             _update_batch_status({
                 "current_step": f"Sending to {', '.join(_server_type_label(t) for t in sync_targets)}",
@@ -682,6 +687,7 @@ def _process_single_movie(
                     poster_bytes=payload, poster_content_type=content_type,
                     logo_bytes=logo_bytes_for_sync, logo_content_type=logo_ct_for_sync,
                     title_hint=title_hint,
+                    source_server_id=getattr(req, 'source_server_id', None) or "plex-1",
                 )
                 if synced:
                     logger.info("[BATCH] Synced to linked server(s) %s for %s [%s]", [s["server_id"] for s in synced], rating_key, title_hint)
@@ -873,7 +879,14 @@ def _process_single_movie(
                 else "logo_fallback" if logo_fallback_used
                 else None
             ),
+            # Every non-Plex (and Quirk #110's merged-item Plex-via-sync) server
+            # this item was actually synced to -- read by the batch aggregator at
+            # the bottom of api_batch_movies()/api_batch_tv_shows() to build the
+            # final run summary's "Also synced to" notification field, which
+            # previously had no visibility into cross-server sync at all.
+            "synced_server_ids": [s["server_id"] for s in synced],
         }
+
         if save_path:
             result["save_path"] = str(save_path)
         # Include poster bytes for single-item notifications (webhook, auto_generate)
@@ -2016,6 +2029,10 @@ def _render_and_save_poster(
     if req.send_to_plex and not is_plex_item:
         sync_targets.append("plex-1")
     do_multiserver_send = bool(sync_targets)
+    # Populated below if the sync block actually runs -- read unconditionally
+    # into the result dict further down (see the matching movie-path comment
+    # in _process_single_movie()).
+    synced: List[Dict[str, str]] = []
     if skip_send_not_ideal:
         logger.info("[BATCH] Skipping Plex upload for %s — still needs_retry and send_only_if_ideal is set", display_title)
     elif req.send_to_plex or do_multiserver_send:
@@ -2050,6 +2067,7 @@ def _render_and_save_poster(
                 title_hint=display_title,
                 season_index=season_index,
                 tvdb_id=tvdb_id,
+                source_server_id=getattr(req, 'source_server_id', None) or "plex-1",
             )
             if synced:
                 logger.info("[BATCH] Synced to linked server(s) %s for %s", [s["server_id"] for s in synced], display_title)
@@ -2249,6 +2267,10 @@ def _render_and_save_poster(
             else None
         ),
     }
+    # See the matching movie-path comment in _process_single_movie() -- read by
+    # the batch aggregator to build the final run summary's "Also synced to"
+    # notification field.
+    result["synced_server_ids"] = [s["server_id"] for s in synced]
     if season_title:
         result["season"] = season_title
     # Needed by webhooks.py's cross-server sync (Phase 6c season-level follow-up)
@@ -2372,6 +2394,12 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
     cancelled_count = 0
     poster_fallback_count = 0
     logo_fallback_count = 0
+    # Union of every non-Plex server actually synced to across the WHOLE run
+    # (populated below from each item's own "synced_server_ids", Quirk #110/#112),
+    # fed into the final completion notification's "Also synced to" field --
+    # previously the end-of-run notification had zero visibility into
+    # multi-server sync at all.
+    batch_synced_server_ids: List[str] = []
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
@@ -2426,6 +2454,18 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                     cancelled_count += 1
                 else:
                     failed_count += 1
+                # Movie items carry synced_server_ids at the top level; TV items
+                # nest a list of per-season/series sub-results under "results"
+                # (_process_single_tv_show()'s own shape), each with its own
+                # synced_server_ids -- check both so a TV batch's sync isn't
+                # silently invisible to this aggregation.
+                for _sid in result.get("synced_server_ids") or []:
+                    if _sid not in batch_synced_server_ids:
+                        batch_synced_server_ids.append(_sid)
+                for _sub in result.get("results") or []:
+                    for _sid in _sub.get("synced_server_ids") or []:
+                        if _sid not in batch_synced_server_ids:
+                            batch_synced_server_ids.append(_sid)
                 # Enqueue for retry if ideal template conditions weren't met
                 if retry_enabled:
                     if result.get("needs_retry"):
@@ -2523,6 +2563,16 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
         "cancel_requested": False,
     })
 
+    # Was previously ALWAYS "sent_to_plex" below, regardless of whether this
+    # run actually targeted Plex at all -- a real, misleading bug for a
+    # Jellyfin/Emby-only batch (req.send_to_plex False, targets=[...] only),
+    # which would still have claimed "Sent to Plex" in every completion
+    # notification despite never touching Plex. `batch_synced_server_ids`
+    # (accumulated above from every item's own synced_server_ids) covers the
+    # non-Plex side independently via the "Also synced to" field, regardless
+    # of which action this resolves to.
+    batch_notif_action = "sent_to_plex" if req.send_to_plex else "saved"
+
     # Send Discord completion notification
     if discord_message_id:
         try:
@@ -2536,6 +2586,7 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                 source="batch",
                 poster_fallback_count=poster_fallback_count,
                 logo_fallback_count=logo_fallback_count,
+                synced_server_ids=batch_synced_server_ids,
             )
         except Exception as notif_err:
             logger.debug("[BATCH] Failed to complete Discord progress: %s", notif_err)
@@ -2548,7 +2599,9 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                 preset_id=req.preset_id or "",
                 success_count=success_count,
                 failed_count=failed_count,
-                source="batch"
+                source="batch",
+                action=batch_notif_action,
+                synced_server_ids=batch_synced_server_ids,
             )
         except Exception as notif_err:
             logger.debug("[BATCH] Failed to send Discord notification: %s", notif_err)
@@ -2561,10 +2614,11 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
             preset_id=req.preset_id or "",
             library_id=req.library_id,
             source="batch",
-            action="sent_to_plex",
+            action=batch_notif_action,
             count=total_count,
             success_count=success_count,
             failed_count=failed_count,
+            synced_server_ids=batch_synced_server_ids,
         )
     except Exception as notif_err:
         logger.debug("[BATCH] Failed to send Apprise notification: %s", notif_err)

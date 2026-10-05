@@ -897,34 +897,66 @@ class LocalAssetResendRequest(BaseModel):
 @router.post("/local-assets/resend")
 def api_local_assets_resend(req: LocalAssetResendRequest):
     """
-    Bulk-resend one or more saved local asset files straight to Plex (no re-render).
+    Bulk-resend one or more saved local asset files to the server each one was
+    originally saved for (Plex, or a linked Jellyfin/Emby member) — no re-render.
 
-    Each file's Plex rating_key is read from its own embedded metadata (added when
-    it was saved) — files saved before that metadata existed have no rating_key and
-    are reported back as skipped rather than guessed at.
+    Each file's rating_key is read from its own embedded metadata (added when it
+    was saved) — files saved before that metadata existed have no rating_key and
+    are reported back as skipped rather than guessed at. Which SERVER a given
+    rating_key belongs to is resolved per-file via db.get_server_id_for_rating_key()
+    (Quirk #65's established lookup, defaulting to 'plex-1' for any
+    pre-multi-server-saved file, reproducing this endpoint's original behavior
+    byte-for-byte for every such file). Phase 8c mechanical cleanup (see
+    api_render_cache_resend()'s identical has_plex_target pattern, Quirk #76) --
+    previously this endpoint unconditionally required Plex to be configured even
+    for a batch containing zero Plex-targeted files, which fully blocked bulk
+    resend on a Jellyfin-only install (or just a mixed-server Local Assets folder)
+    even for the non-Plex files in it.
     """
-    if not settings.PLEX_URL or not settings.PLEX_TOKEN:
-        raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set")
-
     from .. import database as db
 
-    results = []
+    # Resolve every file's target server BEFORE deciding whether Plex needs to be
+    # configured -- a two-pass design (vs. checking lazily inside the loop) so a
+    # missing Plex config is reported as one clear upfront error when it's
+    # actually needed, rather than buried per-item deep in a mixed-server batch.
+    file_infos: List[dict] = []
+    has_plex_target = False
     for rel_path in req.paths:
-        entry: dict = {"path": rel_path}
         try:
             file_path = _find_asset_under_roots(rel_path)
         except HTTPException:
+            file_infos.append({"path": rel_path, "file_path": None})
+            continue
+        metadata = _read_image_metadata(file_path)
+        rating_key = metadata.get("rating_key")
+        server_id = db.get_server_id_for_rating_key(rating_key) if rating_key else "plex-1"
+        if server_id == "plex-1":
+            has_plex_target = True
+        file_infos.append({
+            "path": rel_path, "file_path": file_path, "metadata": metadata,
+            "rating_key": rating_key, "server_id": server_id,
+        })
+
+    if has_plex_target and (not settings.PLEX_URL or not settings.PLEX_TOKEN):
+        raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set")
+
+    results = []
+    for info in file_infos:
+        entry: dict = {"path": info["path"]}
+        file_path = info.get("file_path")
+        if file_path is None:
             entry.update(status="error", reason="File not found")
             results.append(entry)
             continue
 
-        metadata = _read_image_metadata(file_path)
-        rating_key = metadata.get("rating_key")
+        rating_key = info["rating_key"]
         if not rating_key:
-            entry.update(status="skipped", reason="No Plex rating key saved with this file (saved before resend support was added)")
+            entry.update(status="skipped", reason="No rating key saved with this file (saved before resend support was added)")
             results.append(entry)
             continue
 
+        metadata = info["metadata"]
+        server_id = info["server_id"]
         entry["rating_key"] = rating_key
         entry["title"] = metadata.get("movie_title")
         is_tv = bool(metadata.get("is_tv"))
@@ -949,21 +981,44 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
                 img.save(buf, "JPEG", quality=98, subsampling=0)
                 payload, content_type = buf.getvalue(), "image/jpeg"
 
-            plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
-            plex_session.post(
-                plex_url,
-                headers={**plex_headers(), "Content-Type": content_type},
-                data=payload,
-                timeout=20,
-            ).raise_for_status()
+            if server_id == "plex-1":
+                plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
+                plex_session.post(
+                    plex_url,
+                    headers={**plex_headers(), "Content-Type": content_type},
+                    data=payload,
+                    timeout=20,
+                ).raise_for_status()
+            else:
+                # Deliberately calls the lower-level upload+verify primitive, not
+                # api_send_poster() -- that wrapper unconditionally re-encodes
+                # through encode_poster_for_plex() (Quirk #12's tiered PNG/JPEG
+                # logic), which would silently double-compress an already-JPEG
+                # saved file, contradicting this endpoint's own "zero extra
+                # generation loss" guarantee a few lines above. Calling
+                # _resolve_non_plex_client()/_upload_poster_and_verify() directly
+                # preserves the exact as-is bytes, matching the Plex branch's own
+                # as-is-resend behavior.
+                from .media_server_send import _resolve_non_plex_client, _upload_poster_and_verify, _cache_poster_after_upload
+                _, client = _resolve_non_plex_client(rating_key, server_id)
+                _upload_poster_and_verify(client, server_id, rating_key, payload, content_type)
+                _cache_poster_after_upload(rating_key, payload, content_type)
         except Exception as e:
             entry.update(status="error", reason=str(e))
             results.append(entry)
             continue
 
-        logger.info("[LOCAL_ASSETS] Resent %s (rating_key=%s) to Plex", rel_path, rating_key)
-        _remove_labels_for_key(rating_key, is_tv, metadata.get("library_id"), db)
-        _add_label_for_key(rating_key, is_tv, metadata.get("library_id"), db)
+        if server_id == "plex-1":
+            logger.info("[LOCAL_ASSETS] Resent %s (rating_key=%s) to Plex", info["path"], rating_key)
+            _remove_labels_for_key(rating_key, is_tv, metadata.get("library_id"), db)
+            _add_label_for_key(rating_key, is_tv, metadata.get("library_id"), db)
+        else:
+            # plex_remove_label()/plex_add_label() (inside the two helpers above)
+            # are genuinely Plex-only API calls with no non-Plex equivalent to
+            # route to (Quirk #59's deliberate no-op design for
+            # JellyfinClient.remove_label()/add_label()) -- correctly skipped
+            # entirely for a non-Plex target, not routed anywhere.
+            logger.info("[LOCAL_ASSETS] Resent %s (rating_key=%s) to %s", info["path"], rating_key, server_id)
         entry["status"] = "ok"
         results.append(entry)
 
