@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
+import { libraryInfo, libraryLabel } from '@/services/libraryLabel'
 
 interface HistoryRecord {
   id: number
@@ -47,16 +48,14 @@ const apiBase = getApiBase()
 const settings = useSettingsStore()
 const router = useRouter()
 
-const isTvLibrary = (libraryId: string | null): boolean => {
-  if (!libraryId) return false
-  return !!(settings.plex.value.tvShowLibraryMappings?.some((m: any) => m.id === libraryId))
-}
-
 const openItem = (rating_key: string, library_id: string | null, media_type?: string) => {
-  const isTV = media_type === 'tv' || (!media_type && isTvLibrary(library_id))
+  const info = libraryInfo(library_id)
+  const isTV = media_type === 'tv' || (!media_type && info?.mediaType === 'tv')
+  // Jellyfin/Emby libraries need ?server= too, or the grid queries Plex.
+  const server = info?.serverId && info.serverId !== 'plex-1' ? info.serverId : undefined
   router.push({
     path: isTV ? '/tv-shows' : '/movies',
-    query: { library: library_id || undefined, edit: rating_key },
+    query: { library: library_id || undefined, server, edit: rating_key },
   })
 }
 const records = ref<HistoryRecord[]>([])
@@ -116,23 +115,8 @@ const selectedServer = ref<string>('all')
 const titleSearch = ref<string>('')
 
 // Map library IDs to display names
-const getLibraryName = (libraryId: string | null): string => {
-  if (!libraryId) return '—'
-
-  // Check movie libraries
-  const movieLib = settings.plex.value.libraryMappings?.find(m => m.id === libraryId)
-  if (movieLib) {
-    return movieLib.displayName || movieLib.title || libraryId
-  }
-
-  // Check TV libraries
-  const tvLib = settings.plex.value.tvShowLibraryMappings?.find(m => m.id === libraryId)
-  if (tvLib) {
-    return tvLib.displayName || tvLib.title || libraryId
-  }
-
-  return libraryId
-}
+// Covers Plex mappings AND Jellyfin/Emby libraries (via Library Groups).
+const getLibraryName = (libraryId: string | null): string => libraryLabel(libraryId)
 
 const libraries = computed(() => {
   const libs = new Set<string>()

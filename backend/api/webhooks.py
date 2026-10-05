@@ -475,8 +475,10 @@ def find_plex_item_with_retry(
     Returns:
         Tuple of (rating_key, library_id) if found, None if not found after all retries
     """
-    # Initial delay to give Plex time to import the file
-    logger.info(f"[WEBHOOK] Waiting {initial_delay}s for Plex to import {item_type} (ID: {external_id})")
+    # Initial delay to give the media server (Plex, or Jellyfin/Emby per
+    # Phase 8b -- item_type carries "(server=...)" for those) time to import
+    # the file
+    logger.info(f"[WEBHOOK] Waiting {initial_delay}s for the media server to import {item_type} (ID: {external_id})")
     time.sleep(initial_delay)
 
     for attempt in range(max_retries + 1):

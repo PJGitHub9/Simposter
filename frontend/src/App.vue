@@ -22,6 +22,7 @@ import { useSettingsStore } from './stores/settings'
 import { useScanStore } from './stores/scan'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
+import { libraryInfo } from '@/services/libraryLabel'
 import { onboardingLaunchRequested, notifyOnboardingSaved } from '@/composables/useOnboardingLauncher'
 
 // Phase 8a -- a LibraryGroup with at least one member but NO Plex member represents a
@@ -230,6 +231,25 @@ const allLibrariesMovies = ref<{ libraryName: string; mediaType: string; movies:
 const allLibrariesTvShows = ref<{ libraryName: string; mediaType: string; shows: any[] }[]>([])
 const allLibrariesLoaded = ref(false)
 
+// Search groups for libraries that aren't Plex mappings (Jellyfin/Emby
+// libraries in a Library Group), labeled via the shared libraryInfo() helper.
+// Libraries not tracked anywhere are skipped, matching the Plex loop above.
+function nonPlexSearchGroups(
+  grouped: Map<string, any[]>,
+  mediaType: 'movie' | 'tv-show',
+  plexLibs: { id?: string | number }[],
+): { libraryName: string; mediaType: string; items: any[] }[] {
+  const plexIds = new Set(plexLibs.map(l => String(l.id || 'default')))
+  const out: { libraryName: string; mediaType: string; items: any[] }[] = []
+  for (const [libId, items] of grouped) {
+    if (plexIds.has(String(libId)) || !items.length) continue
+    const info = libraryInfo(libId)
+    if (!info || info.serverId === 'plex-1') continue
+    out.push({ libraryName: info.label, mediaType, items })
+  }
+  return out
+}
+
 // Fetch all movies and TV shows from all libraries for search
 const fetchAllLibrariesContent = async () => {
   const apiBase = getApiBase()
@@ -287,6 +307,9 @@ const fetchAllLibrariesContent = async () => {
           })
         }
       }
+      // Jellyfin/Emby libraries (in a Library Group, not a Plex mapping) --
+      // previously dropped from search entirely.
+      groups.push(...nonPlexSearchGroups(grouped, 'movie', movieLibs).map(g => ({ ...g, movies: g.items })))
 
       allLibrariesMovies.value = groups
     }
@@ -311,7 +334,7 @@ const fetchAllLibrariesContent = async () => {
         ? settings.plex.value.tvShowLibraryMappings
         : []
 
-      if (tvLibs.length > 0) {
+      {
         // Group shows by library_id
         const grouped = new Map<string, any[]>()
         for (const show of allShows) {
@@ -335,6 +358,7 @@ const fetchAllLibrariesContent = async () => {
             })
           }
         }
+        groups.push(...nonPlexSearchGroups(grouped, 'tv-show', tvLibs).map(g => ({ ...g, shows: g.items })))
 
         allLibrariesTvShows.value = groups
       }

@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
+import { libraryInfo } from '@/services/libraryLabel'
 
 type LocalAsset = {
   filename: string
@@ -70,20 +71,6 @@ const fetchLocalAssets = async () => {
   }
 }
 
-// Get all configured libraries (movie + TV show)
-const allLibraries = computed(() => {
-  const movieLibs = (settings.plex.value.libraryMappings || []).map(lib => ({
-    id: lib.id,
-    displayName: lib.displayName || lib.title || lib.id,
-    type: 'movie'
-  }))
-  const tvShowLibs = (settings.plex.value.tvShowLibraryMappings || []).map(lib => ({
-    id: lib.id,
-    displayName: lib.displayName || lib.title || lib.id,
-    type: 'tvshow'
-  }))
-  return [...movieLibs, ...tvShowLibs].filter(lib => lib.id)
-})
 
 // Get unique folders from assets
 const assetFolders = computed(() => {
@@ -144,9 +131,12 @@ const filteredAssets = computed(() => {
 
   // Filter by library (using embedded metadata when available)
   if (activeLibraryId.value) {
-    const selectedLibrary = allLibraries.value.find(lib => String(lib.id) === String(activeLibraryId.value))
+    // libraryInfo() covers Jellyfin/Emby libraries too -- a Plex-only lookup
+    // here found nothing for them, so the filter was skipped and every
+    // library's assets showed up together.
+    const selectedLibrary = libraryInfo(activeLibraryId.value)
     if (selectedLibrary) {
-      result = result.filter(asset => assetBelongsToLibrary(asset, selectedLibrary.id, selectedLibrary.displayName))
+      result = result.filter(asset => assetBelongsToLibrary(asset, activeLibraryId.value, selectedLibrary.label))
     }
   }
 
