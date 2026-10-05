@@ -442,9 +442,23 @@ def sync_render_to_linked_servers(
     # find_item_by_external_id() searched the whole server unscoped and
     # could resolve to the wrong same-tmdb_id item nondeterministically.
     allowed = {sid: lid for sid, lid in (linked or [])}
+    # The item's OWN library is always a valid target, group or no group.
+    # get_library_group_members() returns None for a single-member group (by
+    # design -- "nothing to merge" for the browsing grid), which made a
+    # Jellyfin-only group's own webhook/batch send silently deliver nowhere:
+    # it rendered fine, then had no allowed target. The group-scoping guard
+    # exists to stop syncs to OTHER, unlinked libraries -- the source library
+    # itself was never the risk.
+    if library_id and source_server_id:
+        allowed.setdefault(source_server_id, str(library_id))
     requested = {t for t in target_ids if t}
     to_sync = requested & allowed.keys()
     if not to_sync:
+        if requested:
+            logger.warning(
+                "[MEDIA_SERVER_SEND] Nothing sent for [%s]: requested %s, but only %s are linked to library %s",
+                title_hint, sorted(requested), sorted(allowed.keys()), library_id,
+            )
         return []
 
     synced: List[Dict[str, str]] = []

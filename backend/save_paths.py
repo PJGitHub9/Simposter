@@ -87,6 +87,22 @@ def resolve_library_label(library_id: Optional[str]) -> str:
                 label = m.get("displayName") or m.get("title") or mid
                 break
 
+        # Not a Plex library mapping -- e.g. a Jellyfin/Emby library (GUID id)
+        # in a Plex-less Library Group. Use the owning group's name, then the
+        # member's own library name, before ever falling back to the raw id
+        # (which for Jellyfin is an unreadable GUID, e.g. as a backup folder).
+        if not label:
+            try:
+                for g in (ui_settings or {}).get("libraryGroups", []) or []:
+                    for mem in g.get("members", []) or []:
+                        if str(mem.get("libraryId", "")) == str(lib_id):
+                            label = g.get("name") or mem.get("libraryName")
+                            break
+                    if label:
+                        break
+            except Exception:
+                pass
+
     label = label or str(lib_id or "default")
 
     # If the label looks like a path (e.g., "config/output/Movies"), use only the trailing segment

@@ -52,7 +52,20 @@ def _get_backup_dir(library_id: str, asset_type: str = "poster") -> Path:
 
     # Try new location (library name)
     library_name = resolve_library_label(library_id)
-    new_dir = backup_root / _sanitize_filename(library_name)
+    new_top = backup_root / _sanitize_filename(library_name)
+    # One-time migration: a library whose backup was created before it had a
+    # readable label (e.g. a Jellyfin library saved under its raw GUID) gets
+    # its whole folder renamed to the readable name, so old and new backups
+    # don't end up split across two folders.
+    old_top = backup_root / str(library_id)
+    if old_top != new_top and old_top.is_dir() and not new_top.exists() \
+            and not re.fullmatch(r"\d+", str(library_id)):
+        try:
+            old_top.rename(new_top)
+            logger.info("[BACKUP] Renamed backup folder %s -> %s", old_top.name, new_top.name)
+        except OSError as e:
+            logger.warning("[BACKUP] Could not rename backup folder %s: %s", old_top, e)
+    new_dir = new_top
     subdir = _ASSET_SUBDIRS.get(asset_type)
     if subdir:
         new_dir = new_dir / subdir
