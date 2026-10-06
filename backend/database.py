@@ -893,6 +893,25 @@ def init_database():
             )
         """)
 
+        # Media Mirror change detection: a sha256 of the RAW source image bytes
+        # last successfully copied to each target item, per asset type. A run
+        # compares the freshly-downloaded source bytes' hash against this and
+        # skips the (expensive) re-encode + upload when nothing changed. Keyed
+        # by target_rating_key too, so a target item that gets re-created under
+        # a new id is always copied again.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mirror_sync_state (
+                source_server_id TEXT NOT NULL,
+                source_rating_key TEXT NOT NULL,
+                asset_type TEXT NOT NULL,
+                target_server_id TEXT NOT NULL,
+                target_rating_key TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (source_server_id, source_rating_key, asset_type, target_server_id)
+            )
+        """)
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
 
@@ -1960,6 +1979,32 @@ def update_movie_square_art_url(rating_key: str, square_art_url: Optional[str]) 
             "UPDATE movie_cache SET square_art_url = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ?",
             (square_art_url, rating_key)
         )
+
+
+def get_mirror_sync_hashes(source_server_id: str, source_rating_key: str, asset_type: str) -> Dict[str, tuple]:
+    """{target_server_id: (target_rating_key, source_hash)} for one source item + asset type."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT target_server_id, target_rating_key, source_hash FROM mirror_sync_state "
+            "WHERE source_server_id = ? AND source_rating_key = ? AND asset_type = ?",
+            (source_server_id, str(source_rating_key), asset_type),
+        ).fetchall()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def record_mirror_sync(source_server_id: str, source_rating_key: str, asset_type: str,
+                       target_server_id: str, target_rating_key: str, source_hash: str) -> None:
+    """Remember that this source image (by hash) was copied to this target item."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO mirror_sync_state
+                (source_server_id, source_rating_key, asset_type, target_server_id, target_rating_key, source_hash, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(source_server_id, source_rating_key, asset_type, target_server_id) DO UPDATE SET
+                target_rating_key = excluded.target_rating_key,
+                source_hash = excluded.source_hash,
+                synced_at = CURRENT_TIMESTAMP
+        """, (source_server_id, str(source_rating_key), asset_type, target_server_id, str(target_rating_key), source_hash))
 
 
 def touch_tmdb_last_seen(media_type: str, tmdb_id: Optional[int], season_index: Optional[int] = None) -> None:
@@ -4058,6 +4103,64 @@ def clear_retry_queue_for_library(library_id: str) -> int:
         removed = cursor.rowcount
     logger.info("[RETRY] Cleared %d retry queue entries for library %s", removed, library_id)
     return removed
+
+
+def purge_server_cache(server_id: str) -> Dict[str, Any]:
+    """Delete every cache-layer DB row belonging to one media server -- used when
+    a server is removed in Settings → Media Servers. Covers movie/TV/collection
+    cache rows, their label-cache rows, the server's pending retry-queue entries
+    and any Media Mirror sync state where it was the source or a target.
+
+    Deliberately does NOT touch poster_history (History is kept as a record of
+    past activity, matching how removing a single library already works).
+
+    Returns {"rating_keys": [...], "counts": {...}} -- the rating keys are handed
+    back so the caller can delete the matching on-disk cache files. A key that is
+    still cached under a DIFFERENT server is excluded from that list, so a purge
+    can never delete another server's files (not a realistic collision -- Plex
+    keys are short digits, Jellyfin/Emby's are GUIDs -- but cheap to rule out).
+    """
+    counts: Dict[str, int] = {}
+    with get_db() as conn:
+        cursor = conn.cursor()
+        keys: set = set()
+        for table in ("movie_cache", "tv_cache", "collection_cache"):
+            cursor.execute(f"SELECT rating_key FROM {table} WHERE server_id = ?", (server_id,))
+            keys.update(r[0] for r in cursor.fetchall() if r[0])
+
+        shared: set = set()
+        if keys:
+            placeholders = ",".join("?" * len(keys))
+            for table in ("movie_cache", "tv_cache", "collection_cache"):
+                cursor.execute(
+                    f"SELECT rating_key FROM {table} WHERE server_id != ? AND rating_key IN ({placeholders})",
+                    (server_id, *keys),
+                )
+                shared.update(r[0] for r in cursor.fetchall())
+        own_keys = sorted(keys - shared)
+
+        for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue"):
+            cursor.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
+            counts[table] = cursor.rowcount
+
+        if own_keys:
+            placeholders = ",".join("?" * len(own_keys))
+            for table in ("label_cache", "tv_label_cache"):
+                cursor.execute(f"DELETE FROM {table} WHERE rating_key IN ({placeholders})", own_keys)
+                counts[table] = cursor.rowcount
+            # Retry rows aren't always tagged with their real server_id (the
+            # column defaults to 'plex-1'), so also match them by rating key.
+            cursor.execute(f"DELETE FROM poster_retry_queue WHERE rating_key IN ({placeholders})", own_keys)
+            counts["poster_retry_queue"] += cursor.rowcount
+
+        cursor.execute(
+            "DELETE FROM mirror_sync_state WHERE source_server_id = ? OR target_server_id = ?",
+            (server_id, server_id),
+        )
+        counts["mirror_sync_state"] = cursor.rowcount
+
+    logger.info("[MEDIA_SERVER] Purged DB cache for removed server %s: %s", server_id, counts)
+    return {"rating_keys": own_keys, "counts": counts}
 
 
 def get_pending_retry_items(max_attempts: int = 0) -> List[Dict[str, Any]]:

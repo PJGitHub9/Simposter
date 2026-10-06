@@ -258,6 +258,46 @@ def _fetch_and_cache_poster_from_media_server(rating_key: str, server_id: str) -
         return None
 
 
+def _prewarm_streaming_providers_async(items: List[dict], media_type: str) -> None:
+    """Warm the streaming-provider cache for newly scanned items, off the scan's
+    own thread.
+
+    This used to run inline, one TMDb call per new item, before the scan could
+    move on to collections -- with TMDb's client-side rate limit (40 req/10s,
+    a blocking sleep) a library whose items all counted as "new" (e.g. just
+    re-added) stalled the scan silently for minutes with the progress bar
+    frozen. It also ran even when no overlay used a streaming-platform badge,
+    i.e. pure wasted calls. Now it's skipped entirely unless a badge needs it,
+    and otherwise runs in a daemon thread -- a render that needs a provider
+    before this finishes simply fetches it on demand as before.
+    """
+    try:
+        overlay_region = None
+        for cfg in db.get_all_overlay_configs():
+            if any(e.get("type") == "streaming_platform_badge" for e in cfg.get("elements", [])):
+                overlay_region = cfg.get("streaming_region") or "US"
+                break
+    except Exception:
+        return
+    if not overlay_region:
+        return
+    tmdb_ids = [int(i["tmdb_id"]) for i in items if i.get("tmdb_id")]
+    if not tmdb_ids:
+        return
+
+    def _run():
+        from ..tmdb_client import get_watch_providers
+        for tmdb_id in tmdb_ids:
+            try:
+                get_watch_providers(tmdb_id, media_type, overlay_region)
+            except Exception:
+                pass  # best-effort only
+        logger.info("[SCAN] Pre-warmed streaming providers for %d %s item(s)", len(tmdb_ids), media_type)
+
+    import threading
+    threading.Thread(target=_run, name=f"streaming-prewarm-{media_type}", daemon=True).start()
+
+
 def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False, server_id_hint: Optional[str] = None) -> Optional[Path]:
     """
     Fetch poster from cache or Plex and store it. Returns cached file path or None.
@@ -1690,22 +1730,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 except Exception as e:
                     logger.error(f"[SCAN] Auto-generation failed for library {lib_id}: {e}")
 
-            # Pre-populate streaming provider cache for new movies (best-effort)
+            # Pre-populate streaming provider cache for new movies (best-effort, background)
             if new_movies:
-                try:
-                    from ..tmdb_client import get_watch_providers
-                    from .. import database as _db
-                    overlay_region = "US"
-                    for cfg in _db.get_all_overlay_configs():
-                        if any(e.get("type") == "streaming_platform_badge" for e in cfg.get("elements", [])):
-                            overlay_region = cfg.get("streaming_region") or "US"
-                            break
-                    for movie in new_movies:
-                        tmdb_id = movie.get("tmdb_id")
-                        if tmdb_id:
-                            get_watch_providers(int(tmdb_id), "movie", overlay_region)
-                except Exception:
-                    pass  # Never block scan for this
+                _prewarm_streaming_providers_async(new_movies, "movie")
 
         # Process TV shows per library. Parallelized across shows (was a fully
         # sequential one-show-at-a-time loop with up to 6 Plex requests per
@@ -1849,22 +1876,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 except Exception as e:
                     logger.error(f"[SCAN] Auto-generation failed for library {lib_id}: {e}")
 
-            # Pre-populate streaming provider cache for new TV shows (best-effort)
+            # Pre-populate streaming provider cache for new TV shows (best-effort, background)
             if new_shows:
-                try:
-                    from ..tmdb_client import get_watch_providers
-                    from .. import database as _db
-                    overlay_region = "US"
-                    for cfg in _db.get_all_overlay_configs():
-                        if any(e.get("type") == "streaming_platform_badge" for e in cfg.get("elements", [])):
-                            overlay_region = cfg.get("streaming_region") or "US"
-                            break
-                    for show in new_shows:
-                        tmdb_id = show.get("tmdb_id")
-                        if tmdb_id:
-                            get_watch_providers(int(tmdb_id), "tv", overlay_region)
-                except Exception:
-                    pass  # Never block scan for this
+                _prewarm_streaming_providers_async(new_shows, "tv")
 
         # Process collections per library
         coll_cache_by_lib = {}

@@ -57,15 +57,11 @@
             <span v-if="testConnection" class="test-result-inline" :class="{ ok: testConnection.startsWith('✓') }">{{ testConnection }}</span>
           </div>
           <p class="scan-hint">Which Plex libraries to track is managed in Settings → Libraries.</p>
-          <!-- Only shown while the primary connection isn't actually
-               configured yet (still blank/mid-add) -- an ALREADY-configured
-               primary connection stays non-removable (Quirk #79: 'plex-1' is
-               a structural anchor other Library Groups may depend on), but
-               there was previously no way to back out of an accidentally- or
-               curiosity-opened blank form at all, the user's own direct
-               report ("why cant i remove the blank plex server?"). -->
-          <div v-if="!primaryPlexConfigured" class="server-card-footer">
-            <button class="remove-btn-text" @click="cancelPrimaryPlex">
+          <!-- Removable like any other server. A configured primary connection
+               asks for confirmation first, since saving the removal also unlinks
+               its libraries from every group and purges its cached data. -->
+          <div class="server-card-footer">
+            <button class="remove-btn-text" @click="removePrimaryPlex">
               Remove Server
             </button>
           </div>
@@ -258,6 +254,12 @@ const emit = defineEmits<{
   'update:plexToken': [value: string]
   'test-connection': []
   save: []
+  // A configured server was removed (staged -- its cache is purged only once
+  // the parent's save succeeds).
+  'server-removed': [serverId: string]
+  // The primary Plex connection specifically was removed -- the parent also
+  // owns Plex's own library mappings, so it needs to clear those too.
+  'primary-plex-removed': []
 }>()
 
 const localPlexUrl = computed({
@@ -501,9 +503,56 @@ function addServer(type: 'plex' | 'jellyfin' | 'emby') {
   addFormOpen[type] = false
 }
 
+const REMOVE_WARNING =
+  'Its libraries will be unlinked from every library group, and once you click Save ' +
+  "Simposter will delete all of this server's cached posters, logos, backdrops and " +
+  'scan data. History and your saved poster files are kept.'
+
+// Drop every reference a library group holds to a removed server -- its
+// members, a "show posters from" preference pointing at it, and any Media
+// Mirror source/target -- so nothing is left pointing at a server that no
+// longer exists (which would otherwise surface as broken chips). Store-bound,
+// so it's saved by the same Save click as the removal itself.
+function stripServerFromGroups(id: string) {
+  settingsStore.libraryGroups.value = settingsStore.libraryGroups.value.map(g => {
+    const mirror = g.mirror
+      ? {
+          ...g.mirror,
+          targetServerIds: (g.mirror.targetServerIds || []).filter(t => t !== id),
+          ...(g.mirror.sourceServerId === id ? { sourceServerId: null, enabled: false } : {}),
+        }
+      : g.mirror
+    return {
+      ...g,
+      members: g.members.filter(m => m.serverId !== id),
+      preferredServerId: g.preferredServerId === id ? null : g.preferredServerId,
+      mirror,
+    }
+  })
+}
+
 function removeServer(id: string) {
+  const server = servers.value.find(s => s.id === id)
+  const name = server?.name || typeLabel(server?.type || '')
+  if (server?.url && !window.confirm(`Remove ${name}?\n\n${REMOVE_WARNING}`)) return
   servers.value = servers.value.filter(s => s.id !== id)
   delete testResults[id]
+  stripServerFromGroups(id)
+  emit('server-removed', id)
+}
+
+function removePrimaryPlex() {
+  // A still-blank, never-configured form: just collapse it, nothing to purge.
+  if (!primaryPlexConfigured.value) {
+    cancelPrimaryPlex()
+    return
+  }
+  const name = primaryPlexEntry.value?.name || 'Plex'
+  if (!window.confirm(`Remove ${name}?\n\n${REMOVE_WARNING}`)) return
+  cancelPrimaryPlex()
+  stripServerFromGroups('plex-1')
+  emit('primary-plex-removed')
+  emit('server-removed', 'plex-1')
 }
 
 // Saving now goes through the same shared save() every other Settings tab

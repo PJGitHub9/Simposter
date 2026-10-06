@@ -30,6 +30,7 @@ type MirrorGroup = {
       checked?: number
       updated?: number
       skipped?: number
+      unchanged?: number
       unmapped?: number
       failed?: number
       unmappedSample?: string[]
@@ -47,6 +48,7 @@ type MirrorGroup = {
       checked?: number
       updated?: number
       skipped?: number
+      unchanged?: number
       unmapped?: number
       failed?: number
       unmappedSample?: string[]
@@ -61,6 +63,7 @@ type RunStatus = {
   current?: string
   updated?: number
   skipped?: number
+  unchanged?: number
   unmapped?: number
   failed?: number
   error?: string | null
@@ -236,11 +239,14 @@ function applyConfigFromGroup() {
   enabled.value = !!mirror?.enabled
   sourceServerId.value = mirror?.sourceServerId || group.value?.members?.[0]?.serverId || ''
   targetServerIds.value = new Set((mirror?.targetServerIds || []).filter(Boolean))
-  assetTypes.value = new Set((mirror?.assetTypes && mirror.assetTypes.length) ? mirror.assetTypes : ['poster'])
+  // A saved EMPTY list is a real choice (collections-only mirroring) -- only
+  // fall back to the 'poster' default when the field was never saved at all.
+  // (Treating [] as "unset" re-ticked Posters after every save.)
+  assetTypes.value = new Set(Array.isArray(mirror?.assetTypes) ? mirror.assetTypes : ['poster'])
   scheduleEnabled.value = !!mirror?.scheduleEnabled
   scheduleCron.value = mirror?.scheduleCron || '0 3 * * 0'
   mirrorCollections.value = !isTV.value && !!mirror?.mirrorCollections
-  collectionAssetTypes.value = new Set((mirror?.collectionAssetTypes && mirror.collectionAssetTypes.length) ? mirror.collectionAssetTypes : ['poster'])
+  collectionAssetTypes.value = new Set(Array.isArray(mirror?.collectionAssetTypes) ? mirror.collectionAssetTypes : ['poster'])
 }
 
 async function fetchSchedule() {
@@ -378,41 +384,55 @@ function rowHasAnyMatch(entry: MirrorMappingEntry): boolean {
   return Array.from(targetServerIds.value).some(id => !!(entry.targets && entry.targets[id]))
 }
 
-// Client-side search/filter/sort for the two mapping tables, so finding one
-// specific item to send with its per-row Send button doesn't mean scrolling
-// a whole library. Separate state per table -- they list different things.
+// The mapping tables live behind tabs (Movies/TV Shows | Collections) with
+// one shared search/filter/sort toolbar and paging -- a whole library in one
+// endless table was hard to work with.
+type MappingTab = 'items' | 'collections'
 type MappingFilter = 'all' | 'mapped' | 'unmapped'
+const activeTab = ref<MappingTab>('items')
 const mappingSearch = ref('')
 const mappingFilter = ref<MappingFilter>('all')
 const mappingSort = ref<'title_asc' | 'title_desc'>('title_asc')
-const collectionSearch = ref('')
-const collectionFilter = ref<MappingFilter>('all')
-const collectionSort = ref<'title_asc' | 'title_desc'>('title_asc')
+const PAGE_SIZES = [25, 50, 100] as const
+const pageSize = ref<number>(50)
+const page = ref(1)
 
-function filterMapping(
-  entries: MirrorMappingEntry[],
-  search: string,
-  filter: MappingFilter,
-  sort: 'title_asc' | 'title_desc'
-): MirrorMappingEntry[] {
-  const q = search.trim().toLowerCase()
-  const out = entries.filter(e => {
+const showCollectionsTab = computed(() => !isTV.value && mirrorCollections.value)
+// Falls back to the main tab if Collections gets switched off while open.
+const currentTab = computed<MappingTab>(() =>
+  activeTab.value === 'collections' && showCollectionsTab.value ? 'collections' : 'items'
+)
+const isCollectionsTab = computed(() => currentTab.value === 'collections')
+const activeMapping = computed(() => (isCollectionsTab.value ? collectionMapping.value : mapping.value))
+const activeMappingLoading = computed(() =>
+  isCollectionsTab.value ? collectionMappingLoading.value : mappingLoading.value
+)
+const activeUnmappedCount = computed(() =>
+  isCollectionsTab.value ? unmappedCollectionCount.value : unmappedCount.value
+)
+
+const filteredMapping = computed(() => {
+  const q = mappingSearch.value.trim().toLowerCase()
+  const out = activeMapping.value.filter(e => {
     if (q && !(e.title || '').toLowerCase().includes(q)) return false
-    if (filter === 'mapped') return rowHasAnyMatch(e)
-    if (filter === 'unmapped') return !rowHasAnyMatch(e)
+    if (mappingFilter.value === 'mapped') return rowHasAnyMatch(e)
+    if (mappingFilter.value === 'unmapped') return !rowHasAnyMatch(e)
     return true
   })
   out.sort((a, b) => compareTitles(a.title || '', b.title || ''))
-  if (sort === 'title_desc') out.reverse()
+  if (mappingSort.value === 'title_desc') out.reverse()
   return out
-}
+})
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredMapping.value.length / pageSize.value)))
+const pagedMapping = computed(() => {
+  const start = (Math.min(page.value, totalPages.value) - 1) * pageSize.value
+  return filteredMapping.value.slice(start, start + pageSize.value)
+})
+watch([currentTab, mappingSearch, mappingFilter, mappingSort, pageSize], () => { page.value = 1 })
 
-const displayMapping = computed(() =>
-  filterMapping(mapping.value, mappingSearch.value, mappingFilter.value, mappingSort.value)
-)
-const displayCollectionMapping = computed(() =>
-  filterMapping(collectionMapping.value, collectionSearch.value, collectionFilter.value, collectionSort.value)
-)
+function refreshActiveMapping() {
+  return isCollectionsTab.value ? fetchCollectionMapping() : fetchMapping()
+}
 
 // Per-row manual "Send" (Quirk #123's follow-up) -- keyed by source_rating_key
 // so multiple rows can be in flight independently, matching the Set-ref
@@ -423,6 +443,7 @@ const sendResults = ref<Record<string, string>>({})
 function sendResultLabel(status: string): string {
   if (status === 'updated') return '✓ Sent'
   if (status === 'skipped') return '— Nothing to send'
+  if (status === 'unchanged') return '— Already up to date'
   if (status === 'unmapped') return '— No match'
   if (status === 'failed') return '✗ Failed'
   return '✗ Error'
@@ -489,13 +510,20 @@ async function pollRunStatus() {
   }
 }
 
+// Run Now normally only copies items whose source art changed since the last
+// run; this bypasses that and re-copies everything.
+const forceRecopy = ref(false)
+
 async function runNow() {
   starting.value = true
   try {
     const res = await fetch(`${apiBase}/api/media-mirror/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ server_id: serverId.value, library_id: libraryId.value, media_type: mediaType.value }),
+      body: JSON.stringify({
+        server_id: serverId.value, library_id: libraryId.value, media_type: mediaType.value,
+        force: forceRecopy.value,
+      }),
     })
     if (res.ok) {
       runStatus.value = { state: 'running', total: 0, processed: 0 }
@@ -552,7 +580,8 @@ onUnmounted(() => {
 
     <div class="section-note">
       Designate one linked server's library as "the truth" and copy its posters/logos/backdrops/square art
-      to one or more other linked servers in this group. Run manually below, or on a schedule (coming soon).
+      to one or more other linked servers in this group. Run manually below, or on a schedule. Only art that changed
+      since the last run is copied again.
     </div>
 
     <div v-if="loading" class="state-msg">Loading...</div>
@@ -658,7 +687,7 @@ onUnmounted(() => {
             </label>
             <div v-if="scheduleEnabled" class="schedule-config">
               <input v-model="scheduleCron" type="text" class="toolbar-select cron-input" placeholder="0 3 * * 0" />
-              <span class="help-text">Example: "0 3 * * 0" = Weekly, Sundays at 3 AM. Runs a full sync each time (not incremental).</span>
+              <span class="help-text">Example: "0 3 * * 0" = Weekly, Sundays at 3 AM. Each run only copies items whose source art changed since the last run.</span>
               <div v-if="nextRun" class="next-run-note">Next run: {{ formatLastRun(nextRun) }}</div>
             </div>
           </div>
@@ -675,16 +704,21 @@ onUnmounted(() => {
           >
             {{ starting ? 'Starting...' : (runStatus.state === 'running' ? 'Running...' : 'Run Now') }}
           </button>
+          <label class="checkbox-item force-toggle" title="Normally only items whose source art changed since the last run are copied.">
+            <input type="checkbox" v-model="forceRecopy" />
+            Re-copy everything
+          </label>
         </div>
 
         <div v-if="group.mirror?.lastRunAt" class="last-run-note">
           Last run: {{ formatLastRun(group.mirror.lastRunAt) }} —
           {{ group.mirror.lastRunStats?.updated ?? 0 }} updated,
-          {{ group.mirror.lastRunStats?.skipped ?? 0 }} unchanged,
+          {{ (group.mirror.lastRunStats?.unchanged ?? 0) + (group.mirror.lastRunStats?.skipped ?? 0) }} unchanged,
           {{ group.mirror.lastRunStats?.unmapped ?? 0 }} unmapped,
           {{ group.mirror.lastRunStats?.failed ?? 0 }} failed
           <template v-if="mirrorCollections && group.mirror?.lastRunCollectionStats">
             — collections: {{ group.mirror.lastRunCollectionStats.updated ?? 0 }} updated,
+            {{ (group.mirror.lastRunCollectionStats.unchanged ?? 0) + (group.mirror.lastRunCollectionStats.skipped ?? 0) }} unchanged,
             {{ group.mirror.lastRunCollectionStats.unmapped ?? 0 }} unmapped,
             {{ group.mirror.lastRunCollectionStats.failed ?? 0 }} failed
           </template>
@@ -711,26 +745,60 @@ onUnmounted(() => {
       <div class="section">
         <div class="section-header-inline">
           <h3>Confirm Mappings</h3>
-          <button class="secondary-small" :disabled="mappingLoading" @click="fetchMapping">
-            {{ mappingLoading ? 'Checking...' : 'Refresh Mapping' }}
+          <button class="secondary-small" :disabled="activeMappingLoading" @click="refreshActiveMapping">
+            {{ activeMappingLoading ? 'Checking...' : 'Refresh Mapping' }}
           </button>
         </div>
+
+        <div class="mapping-tabs">
+          <button
+            class="mapping-tab"
+            :class="{ active: currentTab === 'items' }"
+            @click="activeTab = 'items'"
+          >
+            {{ isTV ? 'TV Shows' : 'Movies' }} <span class="tab-count">{{ mapping.length }}</span>
+          </button>
+          <button
+            v-if="showCollectionsTab"
+            class="mapping-tab"
+            :class="{ active: currentTab === 'collections' }"
+            @click="activeTab = 'collections'"
+          >
+            Collections <span class="tab-count">{{ collectionMapping.length }}</span>
+          </button>
+        </div>
+
         <div class="section-description">
-          Confirms which items on the source server were matched to an item on each target server (by TMDb ID)
-          before anything is copied. An item with no match on a target is skipped during a run.
+          <template v-if="isCollectionsTab">
+            Collections are matched by NAME (not TMDb ID) across servers, since Jellyfin/Emby append "Collection" to
+            the end of a collection's name — e.g. Plex's "Marvel Cinematic Universe" matches Jellyfin's
+            "Marvel Cinematic Universe Collection" automatically.
+          </template>
+          <template v-else>
+            Which items on the source server were matched to an item on each target server (by TMDb ID). An item
+            with no match on a target is skipped during a run. Use Send on a row to copy just that one item now.
+          </template>
         </div>
 
         <div v-if="sourceServerId === '' || targetServerIds.size === 0" class="state-msg small">
           Pick a source and at least one target above to preview the mapping.
         </div>
-        <div v-else-if="mappingLoading" class="state-msg small">Checking mapping...</div>
-        <div v-else-if="mapping.length === 0" class="state-msg small">No items found on the source server.</div>
+        <div v-else-if="activeMappingLoading" class="state-msg small">Checking mapping...</div>
+        <div v-else-if="activeMapping.length === 0" class="state-msg small">
+          {{ isCollectionsTab ? 'No collections found on the source server.' : 'No items found on the source server.' }}
+        </div>
         <template v-else>
-          <div v-if="unmappedCount > 0" class="unmapped-warning">
-            ⚠ {{ unmappedCount }} item(s) have no match on any selected target server and will be skipped.
+          <div v-if="activeUnmappedCount > 0" class="unmapped-warning">
+            ⚠ {{ activeUnmappedCount }} {{ isCollectionsTab ? 'collection(s)' : 'item(s)' }} have no match on any
+            selected target server and will be skipped.
           </div>
           <div class="mapping-toolbar">
-            <input v-model="mappingSearch" type="text" class="search-input" placeholder="Search titles..." />
+            <input
+              v-model="mappingSearch"
+              type="text"
+              class="search-input"
+              :placeholder="isCollectionsTab ? 'Search collections...' : 'Search titles...'"
+            />
             <select v-model="mappingFilter" class="toolbar-select">
               <option value="all">All</option>
               <option value="mapped">Mapped</option>
@@ -740,124 +808,59 @@ onUnmounted(() => {
               <option value="title_asc">Title A–Z</option>
               <option value="title_desc">Title Z–A</option>
             </select>
-            <span class="mapping-count">{{ displayMapping.length }} of {{ mapping.length }}</span>
+            <span class="mapping-count">{{ filteredMapping.length }} of {{ activeMapping.length }}</span>
           </div>
-          <div v-if="displayMapping.length === 0" class="state-msg small">No items match this search/filter.</div>
-          <div v-else class="mapping-table-wrap">
-            <table class="mapping-table">
-              <thead>
-                <tr>
-                  <th>Title</th>
-                  <th v-for="id in Array.from(targetServerIds)" :key="id">
-                    {{ memberOptions.find(o => o.id === id)?.label || id }}
-                  </th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="entry in displayMapping" :key="entry.source_rating_key || entry.title || ''">
-                  <td>{{ entry.title }}<span v-if="entry.year" class="mapping-year"> ({{ entry.year }})</span></td>
-                  <td v-for="id in Array.from(targetServerIds)" :key="id">
-                    <span v-if="entry.targets && entry.targets[id]" class="mapped-ok">✓ Mapped</span>
-                    <span v-else class="mapped-missing">— No match</span>
-                  </td>
-                  <td class="mapping-send-cell">
-                    <button
-                      class="secondary-small"
-                      :disabled="!entry.source_rating_key || sendingKeys.has(entry.source_rating_key) || !rowHasAnyMatch(entry)"
-                      @click="sendItem(entry)"
-                    >
-                      {{ entry.source_rating_key && sendingKeys.has(entry.source_rating_key) ? 'Sending...' : 'Send' }}
-                    </button>
-                    <span
-                      v-if="entry.source_rating_key && sendResults[entry.source_rating_key]"
-                      class="send-result-inline"
-                      :class="{ 'send-result-ok': sendResults[entry.source_rating_key] === 'updated' }"
-                    >
-                      {{ sendResultLabel(sendResults[entry.source_rating_key] || '') }}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
-      </div>
-
-      <div v-if="mirrorCollections" class="section">
-        <div class="section-header-inline">
-          <h3>Confirm Collection Mappings</h3>
-          <button class="secondary-small" :disabled="collectionMappingLoading" @click="fetchCollectionMapping">
-            {{ collectionMappingLoading ? 'Checking...' : 'Refresh Mapping' }}
-          </button>
-        </div>
-        <div class="section-description">
-          Collections are matched by NAME (not TMDb ID) across servers, since Jellyfin/Emby append "Collection" to
-          the end of a collection's name — e.g. Plex's "Marvel Cinematic Universe" matches Jellyfin's
-          "Marvel Cinematic Universe Collection" automatically.
-        </div>
-
-        <div v-if="sourceServerId === '' || targetServerIds.size === 0" class="state-msg small">
-          Pick a source and at least one target above to preview the mapping.
-        </div>
-        <div v-else-if="collectionMappingLoading" class="state-msg small">Checking mapping...</div>
-        <div v-else-if="collectionMapping.length === 0" class="state-msg small">No collections found on the source server.</div>
-        <template v-else>
-          <div v-if="unmappedCollectionCount > 0" class="unmapped-warning">
-            ⚠ {{ unmappedCollectionCount }} collection(s) have no name match on any selected target server and will be skipped.
-          </div>
-          <div class="mapping-toolbar">
-            <input v-model="collectionSearch" type="text" class="search-input" placeholder="Search collections..." />
-            <select v-model="collectionFilter" class="toolbar-select">
-              <option value="all">All</option>
-              <option value="mapped">Mapped</option>
-              <option value="unmapped">No match</option>
-            </select>
-            <select v-model="collectionSort" class="toolbar-select">
-              <option value="title_asc">Title A–Z</option>
-              <option value="title_desc">Title Z–A</option>
-            </select>
-            <span class="mapping-count">{{ displayCollectionMapping.length }} of {{ collectionMapping.length }}</span>
-          </div>
-          <div v-if="displayCollectionMapping.length === 0" class="state-msg small">No collections match this search/filter.</div>
-          <div v-else class="mapping-table-wrap">
-            <table class="mapping-table">
-              <thead>
-                <tr>
-                  <th>Collection</th>
-                  <th v-for="id in Array.from(targetServerIds)" :key="id">
-                    {{ memberOptions.find(o => o.id === id)?.label || id }}
-                  </th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="entry in displayCollectionMapping" :key="entry.source_rating_key || entry.title || ''">
-                  <td>{{ entry.title }}<span v-if="entry.year" class="mapping-year"> ({{ entry.year }})</span></td>
-                  <td v-for="id in Array.from(targetServerIds)" :key="id">
-                    <span v-if="entry.targets && entry.targets[id]" class="mapped-ok">✓ Mapped</span>
-                    <span v-else class="mapped-missing">— No match</span>
-                  </td>
-                  <td class="mapping-send-cell">
-                    <button
-                      class="secondary-small"
-                      :disabled="!entry.source_rating_key || sendingKeys.has(entry.source_rating_key) || !rowHasAnyMatch(entry)"
-                      @click="sendItem(entry, 'collection')"
-                    >
-                      {{ entry.source_rating_key && sendingKeys.has(entry.source_rating_key) ? 'Sending...' : 'Send' }}
-                    </button>
-                    <span
-                      v-if="entry.source_rating_key && sendResults[entry.source_rating_key]"
-                      class="send-result-inline"
-                      :class="{ 'send-result-ok': sendResults[entry.source_rating_key] === 'updated' }"
-                    >
-                      {{ sendResultLabel(sendResults[entry.source_rating_key] || '') }}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <div v-if="filteredMapping.length === 0" class="state-msg small">Nothing matches this search/filter.</div>
+          <template v-else>
+            <div class="mapping-table-wrap">
+              <table class="mapping-table">
+                <thead>
+                  <tr>
+                    <th>{{ isCollectionsTab ? 'Collection' : 'Title' }}</th>
+                    <th v-for="id in Array.from(targetServerIds)" :key="id">
+                      {{ memberOptions.find(o => o.id === id)?.label || id }}
+                    </th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="entry in pagedMapping" :key="entry.source_rating_key || entry.title || ''">
+                    <td>{{ entry.title }}<span v-if="entry.year" class="mapping-year"> ({{ entry.year }})</span></td>
+                    <td v-for="id in Array.from(targetServerIds)" :key="id">
+                      <span v-if="entry.targets && entry.targets[id]" class="mapped-ok">✓ Mapped</span>
+                      <span v-else class="mapped-missing">— No match</span>
+                    </td>
+                    <td class="mapping-send-cell">
+                      <button
+                        class="secondary-small"
+                        :disabled="!entry.source_rating_key || sendingKeys.has(entry.source_rating_key) || !rowHasAnyMatch(entry)"
+                        @click="sendItem(entry, isCollectionsTab ? 'collection' : undefined)"
+                      >
+                        {{ entry.source_rating_key && sendingKeys.has(entry.source_rating_key) ? 'Sending...' : 'Send' }}
+                      </button>
+                      <span
+                        v-if="entry.source_rating_key && sendResults[entry.source_rating_key]"
+                        class="send-result-inline"
+                        :class="{ 'send-result-ok': sendResults[entry.source_rating_key] === 'updated' }"
+                      >
+                        {{ sendResultLabel(sendResults[entry.source_rating_key] || '') }}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="pagination-bar">
+              <button class="page-btn" :disabled="page <= 1" @click="page = 1">«</button>
+              <button class="page-btn" :disabled="page <= 1" @click="page--">‹ Prev</button>
+              <span class="page-indicator">Page {{ Math.min(page, totalPages) }} of {{ totalPages }}</span>
+              <button class="page-btn" :disabled="page >= totalPages" @click="page++">Next ›</button>
+              <button class="page-btn" :disabled="page >= totalPages" @click="page = totalPages">»</button>
+              <select v-model.number="pageSize" class="toolbar-select page-size-select">
+                <option v-for="n in PAGE_SIZES" :key="n" :value="n">{{ n }} / page</option>
+              </select>
+            </div>
+          </template>
         </template>
       </div>
     </template>
@@ -1206,6 +1209,88 @@ button.secondary-small:disabled {
 
 .mapping-table-wrap {
   overflow-x: auto;
+}
+
+.mapping-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 12px;
+}
+
+.mapping-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #a8b3cf;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.mapping-tab:hover {
+  color: #e6ecf5;
+}
+
+.mapping-tab.active {
+  color: #3dd6b7;
+  border-bottom-color: #3dd6b7;
+}
+
+.tab-count {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #a8b3cf;
+}
+
+.pagination-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.page-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9d1e0;
+  cursor: pointer;
+}
+
+.page-btn:hover:not(:disabled) {
+  border-color: rgba(61, 214, 183, 0.35);
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-indicator {
+  font-size: 12px;
+  color: #a8b3cf;
+  padding: 0 6px;
+}
+
+.page-size-select {
+  margin-left: 8px;
+}
+
+.force-toggle {
+  font-size: 12px;
+  color: #a8b3cf;
 }
 
 .mapping-table {

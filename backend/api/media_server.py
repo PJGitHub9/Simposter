@@ -11,6 +11,75 @@ from ..config import SECRET_MASK
 router = APIRouter(prefix="/media-server", tags=["media-server"])
 
 
+@router.delete("/{server_id}/cache")
+def api_purge_media_server_cache(server_id: str):
+    """Purge everything cached for a media server that's been removed in
+    Settings → Media Servers: its movie/TV/collection DB cache rows, label
+    cache, retry-queue entries, Media Mirror sync state, and the on-disk
+    poster/logo/backdrop/square-art files (plus thumbnails and the resend
+    render cache) for each of its items.
+
+    Called by the frontend only AFTER the settings save that removes the
+    server has succeeded, mirroring DELETE /api/library/{id}. Deliberately
+    leaves poster_history and the user's saved output files untouched.
+    """
+    from pathlib import Path
+    from .. import database as db
+    from ..config import (
+        logger, settings, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR,
+    )
+
+    if not server_id or "/" in server_id or "\\" in server_id:
+        raise HTTPException(status_code=400, detail="Invalid server id")
+
+    # Refuse to purge a server that's still configured -- this endpoint is only
+    # for cleaning up after a removal has actually been saved.
+    from ..media_server.registry import _load_media_servers
+    still_configured = any(
+        isinstance(s, dict) and s.get("id") == server_id
+        and (server_id != "plex-1" or bool(settings.PLEX_URL and settings.PLEX_TOKEN))
+        for s in _load_media_servers()
+    )
+    if still_configured:
+        raise HTTPException(status_code=409, detail=f"Server {server_id} is still configured -- remove it and save first")
+
+    try:
+        result = db.purge_server_cache(server_id)
+    except Exception as e:
+        logger.error("[MEDIA_SERVER] Failed to purge DB cache for %s: %s", server_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to purge cache: {e}")
+
+    cache_dirs = [Path(d) for d in (POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR)]
+    render_dir = Path(settings.CONFIG_DIR) / "cache" / "poster_renders"
+    removed_files = 0
+    for rk in result["rating_keys"]:
+        candidates = [render_dir / f"{rk}.jpg"]
+        for d in cache_dirs:
+            candidates.append(d / "thumbs" / f"{rk}.jpg")
+            for ext in ("jpg", "jpeg", "png", "webp"):
+                candidates.append(d / f"{rk}.{ext}")
+                candidates.append(d / f"tv_{rk}.{ext}")
+        for p in candidates:
+            try:
+                if p.is_file():
+                    p.unlink()
+                    removed_files += 1
+            except OSError as e:
+                logger.warning("[MEDIA_SERVER] Couldn't remove cached file %s: %s", p, e)
+
+    logger.info(
+        "[MEDIA_SERVER] Removed server %s: %d items, %d cache files deleted",
+        server_id, len(result["rating_keys"]), removed_files,
+    )
+    return {
+        "status": "ok",
+        "server_id": server_id,
+        "items_removed": len(result["rating_keys"]),
+        "cache_files_removed": removed_files,
+        "rows_removed": result["counts"],
+    }
+
+
 class MediaServerTestRequest(BaseModel):
     type: str  # "plex" | "jellyfin" | "emby"
     url: str

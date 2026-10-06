@@ -124,6 +124,20 @@ const savedTvShowLibraryIds = ref<Set<string>>(new Set())
 // succeeds, rather than firing immediately on Remove, so a removal isn't "final" until
 // you save, consistent with every other change on this page.
 const pendingLibraryCacheCleanup = ref<Set<string>>(new Set())
+// Media servers removed (with confirmation) in the Media Servers tab since the
+// last save -- their cached data is purged only once the save succeeds, same
+// "not final until saved" rule as library removal above.
+const pendingServerCachePurge = ref<Set<string>>(new Set())
+
+function onPrimaryPlexRemoved() {
+  // Plex's own library mappings live here (not in the store), so the tab
+  // can't clear them itself. Its library-group memberships were already
+  // stripped by MediaServersTab.
+  localLibraries.value = []
+  localTvShowLibraries.value = []
+  plexLibraries.value = []
+  testConnection.value = ''
+}
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 const localFanartApiKey = ref('')
@@ -723,24 +737,48 @@ const saveSettings = async () => {
     pendingLibraryCacheCleanup.value = new Set()
   }
 
+  if (!settings.error.value && pendingServerCachePurge.value.size > 0) {
+    const apiBase = getApiBase()
+    // A server removed and then re-added (same stable id) before saving is
+    // still configured -- skip it rather than purging a live server's cache
+    // (the backend also refuses this with a 409).
+    const stillConfigured = new Set(settings.mediaServers.value.map(s => s.id))
+    for (const serverId of pendingServerCachePurge.value) {
+      if (stillConfigured.has(serverId)) continue
+      try {
+        await fetch(`${apiBase}/api/media-server/${encodeURIComponent(serverId)}/cache`, { method: 'DELETE' })
+      } catch (e) {
+        console.error('[SETTINGS] Failed to purge cache for removed media server', serverId, e)
+      }
+    }
+    pendingServerCachePurge.value = new Set()
+  }
+
   saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
   savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
   savedTvShowLibraryIds.value = new Set(localTvShowLibraries.value.filter(l => l.id).map(l => String(l.id)))
 
-  // Auto-scan any newly-added library now that it's actually saved -- otherwise it'd sit
-  // there empty until the next scheduled scan or a manual click, which isn't obvious for
-  // a library you just added. Sequential (not Promise.all) since scanLibrary() guards
-  // against overlapping scans and would just reject a concurrent second call.
-  if (!settings.error.value && newlyAddedLibraryIds.length > 0) {
-    for (const libraryId of newlyAddedLibraryIds) {
-      await scanLibrary(libraryId)
-    }
-  }
-
+  // Mark the page saved BEFORE kicking off any auto-scan below. The scan of a
+  // large library can take minutes, and previously this baseline was only
+  // captured after it finished -- so the page kept showing "unsaved changes"
+  // the whole time, looking like the save needed a second click.
   watchersEnabled.value = false
   await nextTick()
   captureSettingsSnapshot()
+
+  // Auto-scan any newly-added library now that it's actually saved -- otherwise it'd sit
+  // there empty until the next scheduled scan or a manual click, which isn't obvious for
+  // a library you just added. Sequential (not Promise.all) since scanLibrary() guards
+  // against overlapping scans and would just reject a concurrent second call. Not
+  // awaited by saveSettings() itself: the global scan overlay tracks progress.
+  if (!settings.error.value && newlyAddedLibraryIds.length > 0) {
+    void (async () => {
+      for (const libraryId of newlyAddedLibraryIds) {
+        await scanLibrary(libraryId)
+      }
+    })()
+  }
 }
 
 const testPlexConnection = async () => {
@@ -1549,6 +1587,8 @@ onMounted(() => {
         @update:plexToken="localPlexToken = $event"
         @test-connection="testPlexConnection"
         @save="saveSettings"
+        @server-removed="pendingServerCachePurge.add($event)"
+        @primary-plex-removed="onPrimaryPlexRemoved"
       />
 
       <OutputTab

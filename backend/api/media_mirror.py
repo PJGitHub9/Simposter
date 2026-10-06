@@ -28,6 +28,7 @@ own "verify, don't guess" discipline (Quirk #100's explicit lesson) rather
 than shipping unverified drift-detection logic. Tracked as a fast follow-up,
 not a cut corner.
 """
+import hashlib
 import threading
 from io import BytesIO
 from typing import Any, Dict, List, Optional
@@ -181,10 +182,16 @@ def _download_and_normalize(source_client, source_rating_key: str, asset_type: s
     normalizes it through the same PIL functions every other send path in
     this app already uses (Quirk #69). Returns (bytes, content_type), or
     None if the source has no image of this type set."""
-    image_type = _ASSET_TYPE_MAP[asset_type]
-    raw = source_client.download_image(source_rating_key, image_type)
+    raw = source_client.download_image(source_rating_key, _ASSET_TYPE_MAP[asset_type])
     if not raw:
         return None
+    return _normalize(raw, asset_type, source_rating_key)
+
+
+def _normalize(raw: bytes, asset_type: str, source_rating_key: str = "?") -> Optional[tuple]:
+    """The normalize half of _download_and_normalize(), split out so a run can
+    hash the raw download first and skip this (CPU-heavy) step entirely for an
+    item whose source image hasn't changed since the last copy."""
     from .save import encode_poster_for_plex, normalize_logo_for_plex, normalize_backdrop_for_plex
     if asset_type == "poster":
         try:
@@ -204,6 +211,7 @@ def _download_and_normalize(source_client, source_rating_key: str, asset_type: s
 def _sync_one_item(
     source_client, target_clients: Dict[str, Any], entry: dict, asset_types: List[str],
     source_label: str, target_labels: Dict[str, str], is_collection: bool = False,
+    source_server_id: Optional[str] = None, force: bool = False,
 ) -> str:
     """Downloads+uploads every configured asset type for one mapping row to
     every one of its real (mapped) targets, logging one clean, human-readable
@@ -214,7 +222,9 @@ def _sync_one_item(
     loop below and the single-item manual "Send" endpoint, so both produce
     identical log lines and identical per-item outcomes. Returns
     "updated"/"skipped"/"unmapped"/"failed", matching _run_mirror()'s own
-    per-item stat buckets."""
+    per-item stat buckets, plus "unchanged" when every image was already
+    copied before and the source hasn't changed since (change detection --
+    skipped entirely when `force` is set, e.g. a manual per-item Send)."""
     title_display = _title_display(entry)
     real_targets = {t: rk for t, rk in entry.get("targets", {}).items() if rk and t in target_clients}
     if not real_targets:
@@ -223,18 +233,48 @@ def _sync_one_item(
     source_rating_key = entry.get("source_rating_key")
     item_touched = False
     item_failed = False
+    item_unchanged = False
     for asset_type in asset_types:
         try:
-            result = _download_and_normalize(source_client, source_rating_key, asset_type)
+            raw = source_client.download_image(source_rating_key, _ASSET_TYPE_MAP[asset_type])
         except Exception as e:
-            logger.warning("[MIRROR] Failed to fetch/normalize %s for '%s': %s", asset_type, title_display, e)
+            logger.warning("[MIRROR] Failed to fetch %s for '%s': %s", asset_type, title_display, e)
+            item_failed = True
+            continue
+        if not raw:
+            continue  # source has no image of this type -- nothing to mirror
+
+        # Change detection: compare the raw source bytes' hash with what was
+        # last copied to each target item. Only a byte-identical source image
+        # counts as unchanged -- a server returning different bytes for the
+        # same art just gets copied again, never wrongly skipped.
+        source_hash = hashlib.sha256(raw).hexdigest()
+        previous = {}
+        if source_server_id and not force:
+            try:
+                previous = db.get_mirror_sync_hashes(source_server_id, source_rating_key, asset_type)
+            except Exception as e:
+                logger.debug("[MIRROR] Could not read sync state for '%s': %s", title_display, e)
+        targets_needing = {
+            t: rk for t, rk in real_targets.items()
+            if previous.get(t) != (str(rk), source_hash)
+        }
+        if not targets_needing:
+            item_unchanged = True
+            continue
+
+        try:
+            result = _normalize(raw, asset_type, source_rating_key)
+        except Exception as e:
+            logger.warning("[MIRROR] Failed to normalize %s for '%s': %s", asset_type, title_display, e)
             item_failed = True
             continue
         if result is None:
-            continue  # source has no image of this type -- nothing to mirror
+            item_failed = True
+            continue
         image_bytes, content_type = result
         asset_label = _ASSET_TYPE_LABELS.get(asset_type, asset_type)
-        for target_id, target_rating_key in real_targets.items():
+        for target_id, target_rating_key in targets_needing.items():
             target_label = target_labels.get(target_id, target_id)
             try:
                 if asset_type == "poster":
@@ -257,6 +297,12 @@ def _sync_one_item(
                     )
                 item_touched = True
                 logger.info("[MIRROR] %s --> %s: %s - %s", source_label, target_label, asset_label, title_display)
+                if source_server_id:
+                    try:
+                        db.record_mirror_sync(source_server_id, source_rating_key, asset_type,
+                                              target_id, target_rating_key, source_hash)
+                    except Exception as e:
+                        logger.debug("[MIRROR] Could not record sync state for '%s': %s", title_display, e)
             except NotImplementedError:
                 # e.g. square_art has no Jellyfin/Emby equivalent (Quirk #59) -- a
                 # routine, expected skip for this one target, not a real failure.
@@ -273,14 +319,16 @@ def _sync_one_item(
         return "failed"
     if item_touched:
         return "updated"
+    if item_unchanged:
+        return "unchanged"
     return "skipped"
 
 
-def _run_mirror(server_id: str, library_id: str, media_type: str):
+def _run_mirror(server_id: str, library_id: str, media_type: str, force: bool = False):
     key = _status_key(server_id, library_id, media_type)
     _update_status(key, {
         "state": "running", "total": 0, "processed": 0, "current": "",
-        "updated": 0, "skipped": 0, "unmapped": 0, "failed": 0, "error": None,
+        "updated": 0, "skipped": 0, "unchanged": 0, "unmapped": 0, "failed": 0, "error": None,
     })
     try:
         group = get_library_group_for(server_id, library_id, media_type)
@@ -342,7 +390,7 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
         _update_status(key, {"total": total})
 
         def _run_pass(pass_mapping: List[dict], pass_asset_types: List[str], is_collection: bool, processed_offset: int):
-            upd = skp = unm = fail = 0
+            upd = skp = unm = fail = unch = 0
             titles: List[str] = []
             for idx, entry in enumerate(pass_mapping, start=1):
                 title_display = _title_display(entry)
@@ -350,7 +398,8 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
                     "processed": processed_offset + idx - 1,
                     "current": f"{title_display} (collection)" if is_collection else title_display,
                 })
-                status = _sync_one_item(source_client, target_clients, entry, pass_asset_types, source_label, target_labels, is_collection=is_collection)
+                status = _sync_one_item(source_client, target_clients, entry, pass_asset_types, source_label, target_labels,
+                                        is_collection=is_collection, source_server_id=source_server_id, force=force)
                 if status == "unmapped":
                     unm += 1
                     titles.append(title_display)
@@ -358,21 +407,24 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
                     fail += 1
                 elif status == "updated":
                     upd += 1
+                elif status == "unchanged":
+                    unch += 1
                 else:
                     skp += 1
-            return upd, skp, unm, fail, titles
+            return upd, skp, unm, fail, unch, titles
 
-        updated, skipped, unmapped, failed, unmapped_titles = _run_pass(mapping, asset_types, False, 0)
-        coll_updated = coll_skipped = coll_unmapped = coll_failed = 0
+        updated, skipped, unmapped, failed, unchanged, unmapped_titles = _run_pass(mapping, asset_types, False, 0)
+        coll_updated = coll_skipped = coll_unmapped = coll_failed = coll_unchanged = 0
         coll_unmapped_titles: List[str] = []
         if mirror_collections and collection_asset_types:
-            coll_updated, coll_skipped, coll_unmapped, coll_failed, coll_unmapped_titles = _run_pass(
+            coll_updated, coll_skipped, coll_unmapped, coll_failed, coll_unchanged, coll_unmapped_titles = _run_pass(
                 collection_mapping, collection_asset_types, True, len(mapping)
             )
 
         _update_status(key, {
             "processed": total, "state": "done",
             "updated": updated + coll_updated, "skipped": skipped + coll_skipped,
+            "unchanged": unchanged + coll_unchanged,
             "unmapped": unmapped + coll_unmapped, "failed": failed + coll_failed,
         })
 
@@ -387,13 +439,14 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
         # lastRunCollectionStats bucket holds the collections pass's own stats,
         # so neither silently blends into the other's historical interpretation.
         mirror["lastRunStats"] = {
-            "checked": len(mapping), "updated": updated, "skipped": skipped,
+            "checked": len(mapping), "updated": updated, "skipped": skipped, "unchanged": unchanged,
             "unmapped": unmapped, "failed": failed,
             "unmappedSample": unmapped_titles[:25],
         }
         if mirror_collections:
             mirror["lastRunCollectionStats"] = {
                 "checked": len(collection_mapping), "updated": coll_updated, "skipped": coll_skipped,
+                "unchanged": coll_unchanged,
                 "unmapped": coll_unmapped, "failed": coll_failed,
                 "unmappedSample": coll_unmapped_titles[:25],
             }
@@ -413,8 +466,8 @@ def _run_mirror(server_id: str, library_id: str, media_type: str):
                         unmapped + coll_unmapped, group.get("name") or library_id, ", ".join(all_unmapped_titles[:5]),
                         f" (+{len(all_unmapped_titles) - 5} more)" if len(all_unmapped_titles) > 5 else "")
 
-        logger.info("[MIRROR] Run complete for group '%s': %d updated, %d skipped, %d unmapped, %d failed%s",
-                    group.get("name") or library_id, updated + coll_updated, skipped + coll_skipped,
+        logger.info("[MIRROR] Run complete for group '%s': %d updated, %d unchanged, %d skipped, %d unmapped, %d failed%s",
+                    group.get("name") or library_id, updated + coll_updated, unchanged + coll_unchanged, skipped + coll_skipped,
                     unmapped + coll_unmapped, failed + coll_failed,
                     f" (incl. {coll_updated} collection update(s))" if mirror_collections else "")
     except Exception as e:
@@ -426,6 +479,9 @@ class MirrorRunRequest(BaseModel):
     server_id: str = "plex-1"
     library_id: str
     media_type: str
+    # Re-copy every item even if its source image hasn't changed since the
+    # last run (bypasses change detection).
+    force: bool = False
 
 
 @router.post("/run")
@@ -434,7 +490,7 @@ def api_run_mirror(req: MirrorRunRequest):
     with mirror_status_lock:
         if mirror_status.get(key, {}).get("state") == "running":
             raise HTTPException(409, "A mirror run is already in progress for this group")
-    thread = threading.Thread(target=_run_mirror, args=(req.server_id, req.library_id, req.media_type), daemon=True)
+    thread = threading.Thread(target=_run_mirror, args=(req.server_id, req.library_id, req.media_type, req.force), daemon=True)
     thread.start()
     return {"status": "started"}
 
@@ -498,6 +554,8 @@ def api_send_mirror_item(req: MirrorSendItemRequest):
     status = _sync_one_item(
         source_client, target_clients, entry, asset_types, source_label, target_labels,
         is_collection=is_collection_item,
+        # A manual Send always copies -- the user explicitly asked for it.
+        source_server_id=source_server_id, force=True,
     )
     return {"status": status, "title": _title_display(entry)}
 

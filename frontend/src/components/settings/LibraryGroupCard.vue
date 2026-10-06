@@ -46,11 +46,10 @@
           </template>
           <template v-else>
             <div class="add-linked-row">
-              <select v-model="pickedPlexKey" class="linked-add-select">
-                <option value="">Link a Plex library...</option>
+              <select v-model="pickedPlexKey" class="linked-add-select" @change="linkPlex">
+                <option value="">+ Link a Plex library...</option>
                 <option v-for="p in availablePlexLibraries" :key="p.key" :value="p.key">{{ p.title }} ({{ p.key }})</option>
               </select>
-              <button type="button" class="secondary-small" :disabled="!pickedPlexKey" @click="linkPlex">+ Add</button>
             </div>
             <p v-if="!availablePlexLibraries.length" class="server-row-empty">No unused Plex libraries of this type left to link.</p>
           </template>
@@ -78,14 +77,14 @@
       </div>
 
       <div class="add-linked-row">
-        <select v-model="pickedKey" class="linked-add-select">
-          <option value="">Link a library from another server...</option>
+        <select v-model="pickedKey" class="linked-add-select" @change="addPicked">
+          <option value="">+ Link a library from another server...</option>
           <option v-for="opt in availableToAdd" :key="`${opt.serverId}:${opt.libraryId}`" :value="`${opt.serverId}:${opt.libraryId}`">
             {{ serverDisplayLabel(opt.serverId) }} — {{ opt.libraryName }}
           </option>
         </select>
-        <button type="button" class="secondary-small" :disabled="!pickedKey" @click="addPicked">+ Add</button>
       </div>
+      <p class="link-hint">Picking a library links it immediately — click Save Changes to keep it.</p>
       <p v-if="!discovered.length" class="no-labels-hint">
         No other media servers configured yet, or none reachable — add one in Media Servers.
       </p>
@@ -801,17 +800,10 @@ function removeGroup() {
   color: #f05d7b;
 }
 
-button.secondary-small {
-  padding: 6px 12px;
-  font-size: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
+.link-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 0 12px 10px;
 }
-button.secondary-small:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); border-color: var(--accent); }
-button.secondary-small:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
