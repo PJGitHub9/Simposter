@@ -8,6 +8,7 @@
 // loads -- including other users' -- will show, not just this session's
 // client-side view).
 import { ref, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
@@ -29,6 +30,12 @@ export function useLibraryGroupPreference(mediaType: 'movie' | 'tv') {
   const settingsStore = useSettingsStore()
   const group = ref<GroupInfo | null>(null)
   const saving = ref(false)
+  // The page's own `?server=` (set for a Jellyfin/Emby-only library's tab) --
+  // the group is looked up by THAT server's library id. Was hardcoded to
+  // 'plex-1', so a Jellyfin-only library's group was never found and its
+  // "Show posters from" dropdown never appeared.
+  const route = useRoute()
+  const anchorServerId = () => (route.query.server as string) || 'plex-1'
 
   // Whether this group merges same-title items across its linked servers into
   // one card (Quirk #120's per-group toggle, Settings -> Libraries). Defaults
@@ -45,11 +52,12 @@ export function useLibraryGroupPreference(mediaType: 'movie' | 'tv') {
   //     server's items are shown at all, everything else dropped).
   const options = computed(() => {
     if (!group.value) return []
-    const others = group.value.members.filter(m => m.serverId !== 'plex-1')
-    const servers = [
-      { id: 'plex-1', label: mediaServerLabel('plex-1', settingsStore.mediaServers.value) },
-      ...others.map(m => ({ id: m.serverId, label: mediaServerLabel(m.serverId, settingsStore.mediaServers.value) })),
-    ]
+    // Plex first when it's actually in the group, then every other member
+    // (a Jellyfin/Emby-only group gets no phantom Plex option).
+    const ids: string[] = []
+    if (group.value.members.some(m => m.serverId === 'plex-1')) ids.push('plex-1')
+    for (const m of group.value.members) if (m.serverId && !ids.includes(m.serverId)) ids.push(m.serverId)
+    const servers = ids.map(id => ({ id, label: mediaServerLabel(id, settingsStore.mediaServers.value) }))
     if (mergeEnabled.value) return servers
     return [{ id: '', label: 'All' }, ...servers]
   })
@@ -63,7 +71,9 @@ export function useLibraryGroupPreference(mediaType: 'movie' | 'tv') {
   // to Plex-only, which is not what an unset filter is supposed to mean.
   const preferredServerId = computed(() => {
     if (!mergeEnabled.value) return group.value?.preferredServerId || ''
-    return group.value?.preferredServerId || 'plex-1'
+    // Unset: Plex wins when it's in the group, otherwise the first member --
+    // mirroring the backend's own merge fallback.
+    return group.value?.preferredServerId || options.value[0]?.id || 'plex-1'
   })
 
   async function load(libraryId: string) {
@@ -71,7 +81,7 @@ export function useLibraryGroupPreference(mediaType: 'movie' | 'tv') {
     if (!libraryId) return
     try {
       const res = await fetch(
-        `${apiBase}/api/media-server/library-group?server_id=plex-1&library_id=${encodeURIComponent(libraryId)}&media_type=${mediaType}`
+        `${apiBase}/api/media-server/library-group?server_id=${encodeURIComponent(anchorServerId())}&library_id=${encodeURIComponent(libraryId)}&media_type=${mediaType}`
       )
       if (res.ok) {
         const data = await res.json()
@@ -90,7 +100,7 @@ export function useLibraryGroupPreference(mediaType: 'movie' | 'tv') {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          server_id: 'plex-1',
+          server_id: anchorServerId(),
           library_id: libraryId,
           media_type: mediaType,
           preferred_server_id: serverId,

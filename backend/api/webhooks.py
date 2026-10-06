@@ -543,6 +543,99 @@ def find_media_server_item_by_external_id(
         return None
 
 
+def _nonplex_group_members(media_type: str) -> List[tuple]:
+    """Every (server_id, library_id) Jellyfin/Emby member of the user's Library
+    Groups for this media type, in group order, de-duplicated."""
+    out: List[tuple] = []
+    try:
+        groups = (db.get_ui_settings() or {}).get("libraryGroups") or []
+    except Exception:
+        return out
+    for g in groups:
+        if (g.get("mediaType") or "movie") != media_type:
+            continue
+        for m in g.get("members") or []:
+            pair = (m.get("serverId"), m.get("libraryId"))
+            if pair[0] and pair[1] and pair[0] != "plex-1" and pair not in out:
+                out.append(pair)
+    return out
+
+
+def _resolve_webhook_target(server_id: Optional[str], library_id: Optional[str], media_type: str, group_id: Optional[str] = None) -> tuple:
+    """Decide where a Radarr/Sonarr webhook's item should be looked up when the
+    URL doesn't name a non-Plex server explicitly.
+
+    Returns (kind, server_id, library_id, candidates):
+      - ("plex", "plex-1", library_id, None) -- the original Plex path.
+      - ("media_server", sid, lid, None) -- one specific Jellyfin/Emby library.
+      - ("media_server", None, None, [(sid, lid), ...]) -- search these in order.
+      - ("none", None, None, None) -- nothing configured that could hold it.
+
+    Webhook URLs created before Plex was removed (or that never named a
+    server) still work: a library_id belonging to a Jellyfin/Emby group
+    member is mapped to that member's server, and with no Plex configured at
+    all, every Jellyfin/Emby library in the user's Library Groups is
+    searched instead of an empty Plex URL.
+    """
+    if group_id:
+        # The Webhook URL Generator's normal mode: the URL names a Library
+        # Group. Plex member present (and Plex configured) -> the Plex path,
+        # which syncs to the group's other members, with the group's
+        # Jellyfin/Emby libraries as the fallback for a title Plex doesn't
+        # have (returned as `candidates`). Otherwise search the group's
+        # Jellyfin/Emby libraries directly; the render then reaches every
+        # member of the group. An unknown group_id (deleted since the URL
+        # was made) falls through to the default behavior below.
+        try:
+            groups = (db.get_ui_settings() or {}).get("libraryGroups") or []
+        except Exception:
+            groups = []
+        # Accept either the group's id or its name (case-insensitive, within
+        # this media type) -- the Webhook URL Generator uses the readable
+        # name whenever it's unique, so URLs look like ?group=4k-Movies.
+        group = next((g for g in groups if g.get("id") == group_id), None)
+        if group is None:
+            wanted = str(group_id).strip().lower()
+            named = [g for g in groups
+                     if (g.get("mediaType") or "movie") == media_type and str(g.get("name") or "").strip().lower() == wanted]
+            if len(named) == 1:
+                group = named[0]
+            elif len(named) > 1:
+                logger.warning("[WEBHOOK] More than one %s library group is named '%s' -- use the group id instead", media_type, group_id)
+        if group:
+            members = [(m.get("serverId"), m.get("libraryId")) for m in group.get("members") or [] if m.get("serverId") and m.get("libraryId")]
+            plex_member = next((lid for sid, lid in members if sid == "plex-1"), None)
+            others = [(sid, lid) for sid, lid in members if sid != "plex-1"]
+            if plex_member and settings.PLEX_URL and settings.PLEX_TOKEN:
+                return ("plex", "plex-1", plex_member, others or None)
+            if others:
+                return ("media_server", None, None, others)
+            return ("none", None, None, None)
+        logger.warning("[WEBHOOK] Library group %s from the webhook URL no longer exists -- using default lookup", group_id)
+    if server_id and server_id != "plex-1":
+        return ("media_server", server_id, library_id, None)
+    members = _nonplex_group_members(media_type)
+    if library_id:
+        owner = next((sid for sid, lid in members if str(lid) == str(library_id)), None)
+        if owner:
+            return ("media_server", owner, library_id, None)
+    if settings.PLEX_URL and settings.PLEX_TOKEN:
+        return ("plex", "plex-1", library_id, None)
+    if members:
+        return ("media_server", None, None, members)
+    return ("none", None, None, None)
+
+
+def _find_on_candidates(candidates: List[tuple], tmdb_id, tvdb_id, media_type: str) -> Optional[tuple]:
+    """Search several (server_id, library_id) pairs in order; returns
+    (item_id, library_id, server_id) for the first match."""
+    for sid, lid in candidates:
+        found = find_media_server_item_by_external_id(sid, tmdb_id, tvdb_id, media_type, lid)
+        if found:
+            return (found[0], found[1], sid)
+    return None
+
+
 def process_radarr_webhook_with_retry(
     tmdb_id: int,
     title: str,
@@ -552,6 +645,7 @@ def process_radarr_webhook_with_retry(
     auto_send: bool,
     auto_labels: List[str],
     library_id: Optional[str] = None,
+    fallback_candidates: Optional[List[tuple]] = None,
 ):
     """
     Background task for Radarr webhooks that waits for Plex import, then generates poster.
@@ -575,6 +669,16 @@ def process_radarr_webhook_with_retry(
     )
 
     if not result:
+        if fallback_candidates:
+            # Group webhook: Plex doesn't have it, but the group's Jellyfin/Emby
+            # libraries might (a title can exist on only one server).
+            logger.info(f"[RADARR_WEBHOOK] {title} not on Plex -- trying the group's other libraries")
+            process_media_server_webhook_with_retry(
+                server_id=None, media_type="movie", tmdb_id=tmdb_id, tvdb_id=None, title=title, year=year,
+                template_id=template_id, preset_id=preset_id, auto_send=auto_send, library_id=None,
+                candidates=fallback_candidates, initial_delay=0,
+            )
+            return
         logger.error(f"[RADARR_WEBHOOK] Could not find movie in Plex after retries: {title} (TMDb ID: {tmdb_id})")
         return
 
@@ -608,6 +712,7 @@ def process_sonarr_webhook_with_retry(
     include_seasons: bool,
     affected_seasons: Optional[List[int]] = None,
     library_id: Optional[str] = None,
+    fallback_candidates: Optional[List[tuple]] = None,
 ):
     """
     Background task for Sonarr webhooks that waits for Plex import, then generates poster.
@@ -631,6 +736,15 @@ def process_sonarr_webhook_with_retry(
     )
 
     if not result:
+        if fallback_candidates:
+            logger.info(f"[SONARR_WEBHOOK] {title} not on Plex -- trying the group's other libraries")
+            process_media_server_webhook_with_retry(
+                server_id=None, media_type="tv", tmdb_id=None, tvdb_id=tvdb_id, title=title, year=year,
+                template_id=template_id, preset_id=preset_id, auto_send=auto_send, library_id=None,
+                include_seasons=include_seasons, affected_seasons=affected_seasons,
+                candidates=fallback_candidates, initial_delay=0,
+            )
+            return
         logger.error(f"[SONARR_WEBHOOK] Could not find TV show in Plex after retries: {title} (TVDb ID: {tvdb_id})")
         return
 
@@ -684,7 +798,7 @@ def process_sonarr_webhook_with_retry(
 
 
 def process_media_server_webhook_with_retry(
-    server_id: str,
+    server_id: Optional[str],
     media_type: str,  # "movie" | "tv"
     tmdb_id: Optional[int],
     tvdb_id: Optional[int],
@@ -693,9 +807,11 @@ def process_media_server_webhook_with_retry(
     template_id: str,
     preset_id: str,
     auto_send: bool,
-    library_id: str,
+    library_id: Optional[str],
     include_seasons: bool = False,
     affected_seasons: Optional[List[int]] = None,
+    candidates: Optional[List[tuple]] = None,
+    initial_delay: int = 30,
 ):
     """Phase 8b -- non-Plex counterpart to process_radarr_webhook_with_retry()/
     process_sonarr_webhook_with_retry() above, for a webhook URL that
@@ -725,18 +841,29 @@ def process_media_server_webhook_with_retry(
     logger.info("[MEDIA_SERVER_WEBHOOK:%s] Starting delayed processing for: %s (%s) -- tmdb=%s tvdb=%s library=%s",
                 server_id, title, year, tmdb_id, tvdb_id, library_id)
 
+    # `candidates` (see _resolve_webhook_target()): the URL named no server
+    # and Plex isn't configured, so search every Jellyfin/Emby library in the
+    # user's Library Groups, in order, and use whichever has the item.
+    found_server = {"id": server_id}
+
     def _find_func(_external_id_unused, lib_id):
         # find_plex_item_with_retry() calls find_func(external_id, library_id)
         # -- tmdb_id/tvdb_id are already bound via closure above, so the first
         # positional arg here is intentionally unused.
+        if candidates:
+            hit = _find_on_candidates(candidates, tmdb_id, tvdb_id, media_type)
+            if hit:
+                found_server["id"] = hit[2]
+                return (hit[0], hit[1])
+            return None
         return find_media_server_item_by_external_id(server_id, tmdb_id, tvdb_id, media_type, lib_id)
 
     result = find_plex_item_with_retry(
         find_func=_find_func,
         external_id=(tvdb_id if media_type == "tv" else tmdb_id),
-        item_type=f"{media_type} (server={server_id})",
+        item_type=f"{media_type} (server={server_id or 'group libraries'})",
         library_id=library_id,
-        initial_delay=30,
+        initial_delay=initial_delay,
         max_retries=5,
         retry_delay=15,
     )
@@ -747,6 +874,7 @@ def process_media_server_webhook_with_retry(
         return
 
     item_id, library_id = result
+    server_id = found_server["id"]
 
     # New-show detection must happen BEFORE the cache pre-seed below, or
     # every show would look "already cached" the instant it's seeded.
@@ -1491,6 +1619,17 @@ def radarr_webhook(
                     "instead -- `library_id` above becomes required in that case, since "
                     "there's no 'search every library on this server' equivalent.",
     ),
+    group_id: Optional[str] = Query(
+        default=None,
+        description="A Library Group id (Settings -> Libraries). The item is looked up "
+                    "across the group's libraries and the poster is delivered to every "
+                    "library in the group. Takes priority over library_id/server_id.",
+    ),
+    group: Optional[str] = Query(
+        default=None,
+        description="Same as group_id, but by the group's name (case-insensitive) -- "
+                    "what the Webhook URL Generator produces, e.g. ?group=4k-Movies.",
+    ),
 ):
     """
     Handle Radarr webhook events for movie imports/upgrades.
@@ -1508,6 +1647,36 @@ def radarr_webhook(
     is_plex_webhook = not server_id or server_id == "plex-1"
     if not is_plex_webhook and not library_id:
         raise HTTPException(status_code=400, detail="library_id is required when server_id names a non-Plex server")
+    # A URL that names no server (or one created before Plex was removed)
+    # may still belong to a Jellyfin/Emby library -- see _resolve_webhook_target().
+    _target_kind, _resolved_server, _resolved_library, webhook_candidates = _resolve_webhook_target(server_id, library_id, "tv", group_id or group)
+    if _target_kind == "none":
+        logger.warning("[WEBHOOK] Ignoring webhook: no Plex server and no Jellyfin/Emby library groups are configured")
+        return {"status": "ignored", "reason": "No media server configured to look this item up on"}
+    plex_fallback = None
+    if _target_kind == "media_server":
+        is_plex_webhook = False
+        server_id, library_id = _resolved_server, _resolved_library
+    elif _target_kind == "plex" and (group_id or group):
+        # Group webhook with a Plex member: look up in that Plex library, with
+        # the group's Jellyfin/Emby libraries as the fallback.
+        library_id = _resolved_library
+        plex_fallback, webhook_candidates = webhook_candidates, None
+    # A URL that names no server (or one created before Plex was removed)
+    # may still belong to a Jellyfin/Emby library -- see _resolve_webhook_target().
+    _target_kind, _resolved_server, _resolved_library, webhook_candidates = _resolve_webhook_target(server_id, library_id, "movie", group_id or group)
+    if _target_kind == "none":
+        logger.warning("[WEBHOOK] Ignoring webhook: no Plex server and no Jellyfin/Emby library groups are configured")
+        return {"status": "ignored", "reason": "No media server configured to look this item up on"}
+    plex_fallback = None
+    if _target_kind == "media_server":
+        is_plex_webhook = False
+        server_id, library_id = _resolved_server, _resolved_library
+    elif _target_kind == "plex" and (group_id or group):
+        # Group webhook with a Plex member: look up in that Plex library, with
+        # the group's Jellyfin/Emby libraries as the fallback.
+        library_id = _resolved_library
+        plex_fallback, webhook_candidates = webhook_candidates, None
     # Normalize template_id for backward compatibility
     template_id = _normalize_template_id(template_id)
 
@@ -1548,8 +1717,18 @@ def radarr_webhook(
             # Jellyfin/Emby server per Phase 8b's server_id param)
             if is_plex_webhook:
                 result = find_plex_movie_by_tmdb_id(tmdb_id, library_id)
+                if not result and plex_fallback:
+                    _hit = _find_on_candidates(plex_fallback, tmdb_id, None, "movie")
+                    if _hit:
+                        result, server_id = (_hit[0], _hit[1]), _hit[2]
             else:
-                result = find_media_server_item_by_external_id(server_id, tmdb_id, None, "movie", library_id)
+                if webhook_candidates:
+                    _hit = _find_on_candidates(webhook_candidates, tmdb_id, None, "movie")
+                    result = (_hit[0], _hit[1]) if _hit else None
+                    if _hit:
+                        server_id = _hit[2]
+                else:
+                    result = find_media_server_item_by_external_id(server_id, tmdb_id, None, "movie", library_id)
             if result:
                 rating_key, lib_id = result
                 logger.info(f"[RADARR_WEBHOOK_TEST] Found with rating_key: {rating_key}, library: {lib_id} (server={server_id or 'plex-1'})")
@@ -1598,11 +1777,13 @@ def radarr_webhook(
                 auto_send=auto_send,
                 auto_labels=auto_labels,
                 library_id=library_id,
+                fallback_candidates=plex_fallback,
             )
         else:
             background_tasks.add_task(
                 process_media_server_webhook_with_retry,
                 server_id=server_id,
+                candidates=webhook_candidates,
                 media_type="movie",
                 tmdb_id=tmdb_id,
                 tvdb_id=None,
@@ -1659,6 +1840,17 @@ def sonarr_webhook(
                     "default) reproduces the original Plex-only behavior exactly. Any other "
                     "value routes the lookup/render/send through that Jellyfin/Emby server "
                     "instead -- `library_id` above becomes required in that case.",
+    ),
+    group_id: Optional[str] = Query(
+        default=None,
+        description="A Library Group id (Settings -> Libraries). The item is looked up "
+                    "across the group's libraries and the poster is delivered to every "
+                    "library in the group. Takes priority over library_id/server_id.",
+    ),
+    group: Optional[str] = Query(
+        default=None,
+        description="Same as group_id, but by the group's name (case-insensitive) -- "
+                    "what the Webhook URL Generator produces, e.g. ?group=4k-Movies.",
     ),
     payload: Dict[str, Any] = Body(...)
 ):
@@ -1731,8 +1923,18 @@ def sonarr_webhook(
             # Jellyfin/Emby server per Phase 8b's server_id param)
             if is_plex_webhook:
                 result = find_plex_show_by_tvdb_id(tvdb_id, library_id)
+                if not result and plex_fallback:
+                    _hit = _find_on_candidates(plex_fallback, None, tvdb_id, "tv")
+                    if _hit:
+                        result, server_id = (_hit[0], _hit[1]), _hit[2]
             else:
-                result = find_media_server_item_by_external_id(server_id, None, tvdb_id, "tv", library_id)
+                if webhook_candidates:
+                    _hit = _find_on_candidates(webhook_candidates, None, tvdb_id, "tv")
+                    result = (_hit[0], _hit[1]) if _hit else None
+                    if _hit:
+                        server_id = _hit[2]
+                else:
+                    result = find_media_server_item_by_external_id(server_id, None, tvdb_id, "tv", library_id)
             if result:
                 rating_key, lib_id = result
                 logger.info(f"[SONARR_WEBHOOK_TEST] Found with rating_key: {rating_key}, library: {lib_id} (server={server_id or 'plex-1'})")
@@ -1789,11 +1991,13 @@ def sonarr_webhook(
                 include_seasons=include_seasons,
                 affected_seasons=list(affected_seasons) if affected_seasons else None,
                 library_id=library_id,
+                fallback_candidates=plex_fallback,
             )
         else:
             background_tasks.add_task(
                 process_media_server_webhook_with_retry,
                 server_id=server_id,
+                candidates=webhook_candidates,
                 media_type="tv",
                 tmdb_id=None,
                 tvdb_id=tvdb_id,
