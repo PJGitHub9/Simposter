@@ -6,6 +6,7 @@ injection attacks and ensure data integrity.
 """
 
 import ipaddress
+import posixpath
 import re
 import socket
 from urllib.parse import urlparse
@@ -94,6 +95,24 @@ def check_ssrf_safe(url: str, strict: bool = False) -> Optional[str]:
     if not hostname:
         return "URL is missing a host"
 
+    # Normalize before the prefix check so a crafted "../" can't make an unsafe path
+    # (e.g. a cloud metadata path) masquerade as one of our own safe prefixes.
+    normalized_path = posixpath.normpath(parsed.path or "/")
+    is_safe_internal_path = normalized_path.startswith(_SAFE_INTERNAL_PATH_PREFIXES)
+
+    # This app's own known-safe serving paths are trusted regardless of what IP the
+    # hostname happens to resolve to. This matters on deployments (seedboxes, VPN
+    # tunnels, Docker networking quirks) where the app's own public-facing hostname
+    # can resolve -- from the backend's own network vantage point -- to a link-local
+    # address, which would otherwise unconditionally hit the always-blocked check
+    # below and incorrectly reject a request for a file this app itself just served
+    # (e.g. a freshly-uploaded poster/logo, reported as "upload shows in the UI but
+    # can't be selected" -- the very next /api/preview call rejects the uploaded
+    # file's own URL). Never applies in strict mode -- the external-URL image proxy
+    # has no legitimate reason to ever request one of these paths from a third party.
+    if not strict and is_safe_internal_path:
+        return None
+
     if _host_is_always_blocked(hostname):
         return "URL resolves to a blocked network range"
 
@@ -104,8 +123,7 @@ def check_ssrf_safe(url: str, strict: bool = False) -> Optional[str]:
         from ..config import settings
         plex_host = (urlparse(settings.PLEX_URL).hostname or "").lower()
         is_configured_plex = bool(plex_host) and hostname.lower() == plex_host
-        is_safe_internal_path = parsed.path.startswith(_SAFE_INTERNAL_PATH_PREFIXES)
-        if not (is_configured_plex or is_safe_internal_path):
+        if not is_configured_plex:
             return "Private/internal network URLs are not allowed for this host"
 
     return None

@@ -51,6 +51,17 @@ SECRET_FIELD_PATHS = (
     ("automation", "webhookSecret"),
 )
 
+# Headers to send when fetching an arbitrary, user-supplied external image URL
+# (a manually-entered poster/logo/backdrop URL, a TMDb/Fanart candidate, etc.).
+# requests' default User-Agent ("python-requests/x.x") is a well-known bot
+# signature that some image hosts' anti-hotlink/bot protection blocks outright
+# with a 403 -- confirmed directly against theposterdb.com (which sits behind
+# Cloudflare): the exact same URL returns 200 for a browser UA or even this
+# plain "Simposter/1.0" string, and 403 only for the unmodified requests
+# default. Not an attempt to impersonate a browser, just to avoid being
+# mistaken for a scraper purely because of an unset header.
+EXTERNAL_IMAGE_FETCH_HEADERS = {"User-Agent": "Simposter/1.0"}
+
 # Simple docker/container detection for better guidance when connecting to Plex
 def _running_in_container() -> bool:
     try:

@@ -9,6 +9,7 @@ import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
+import UploadPosterModal from './UploadPosterModal.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
 import { getApiBase } from '../../services/apiBase'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
@@ -168,12 +169,6 @@ const uploadPosterFile = async (file: File) => {
   }
 }
 
-const onPosterFileInput = (e: Event) => {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) uploadPosterFile(file)
-  ;(e.target as HTMLInputElement).value = ''
-}
-
 const onPosterDrop = (e: DragEvent) => {
   posterDropActive.value = false
   const file = e.dataTransfer?.files?.[0]
@@ -211,12 +206,6 @@ const uploadLogoFile = async (file: File) => {
   }
 }
 
-const onLogoFileInput = (e: Event) => {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) uploadLogoFile(file)
-  ;(e.target as HTMLInputElement).value = ''
-}
-
 const onLogoDrop = (e: DragEvent) => {
   logoDropActive.value = false
   const file = e.dataTransfer?.files?.[0]
@@ -228,6 +217,23 @@ const clearUploadedLogo = () => {
   if (selectedLogo.value && selectedLogo.value === uploadedLogoUrl.value) {
     selectedLogo.value = filteredLogos.value[0]?.url || null
   }
+}
+
+// Upload-choice modal (local file or remote URL) for both poster and logo —
+// replaces clicking the drop zone opening a native file dialog directly.
+// Dragging a file straight onto the zone still uploads immediately via
+// uploadPosterFile()/uploadLogoFile() above, unaffected by this.
+const showPosterUploadModal = ref(false)
+const showLogoUploadModal = ref(false)
+const onPosterUploaded = (url: string) => {
+  uploadedPosterUrl.value = url
+  selectedPoster.value = url
+  showPosterUploadModal.value = false
+}
+const onLogoUploaded = (url: string) => {
+  uploadedLogoUrl.value = url
+  selectedLogo.value = url
+  showLogoUploadModal.value = false
 }
 
 const showBoundingBox = ref(false)
@@ -1646,24 +1652,23 @@ watch(
               @dragover.prevent="posterDropActive = true"
               @dragleave="posterDropActive = false"
               @drop.prevent="onPosterDrop"
-              @click="!uploadedPosterUrl && ($refs.posterFileInput as HTMLInputElement)?.click()"
+              @click="!uploadedPosterUrl && (showPosterUploadModal = true)"
             >
               <template v-if="uploadedPosterUrl">
-                <img :src="uploadedPosterUrl" class="upload-preview" alt="Uploaded poster" />
+                <img :src="uploadedPosterUrl" class="upload-preview" alt="Uploaded poster" referrerpolicy="no-referrer" />
                 <div class="upload-overlay">
                   <button class="upload-reselect" @click.stop="selectedPoster = uploadedPosterUrl" :class="{ active: selectedPoster === uploadedPosterUrl }">Use this</button>
-                  <button class="upload-replace" @click.stop="($refs.posterFileInput as HTMLInputElement)?.click()">Replace</button>
+                  <button class="upload-replace" @click.stop="showPosterUploadModal = true">Replace</button>
                   <button class="upload-remove" @click.stop="clearUploadedPoster">✕</button>
                 </div>
               </template>
               <template v-else>
                 <div class="upload-prompt">
                   <span v-if="posterUploading">Uploading…</span>
-                  <span v-else>&#8679; Drop image or click to upload</span>
+                  <span v-else>📤 Upload Poster <small>(local file or URL — or drop an image here)</small></span>
                 </div>
               </template>
             </div>
-            <input ref="posterFileInput" type="file" accept="image/*" style="display:none" @change="onPosterFileInput" />
 
             <div class="thumb-strip">
               <div
@@ -1825,24 +1830,23 @@ watch(
                 @dragover.prevent="logoDropActive = true"
                 @dragleave="logoDropActive = false"
                 @drop.prevent="onLogoDrop"
-                @click="!uploadedLogoUrl && ($refs.logoFileInput as HTMLInputElement)?.click()"
+                @click="!uploadedLogoUrl && (showLogoUploadModal = true)"
               >
                 <template v-if="uploadedLogoUrl">
-                  <img :src="uploadedLogoUrl" class="upload-preview" alt="Uploaded logo" />
+                  <img :src="uploadedLogoUrl" class="upload-preview" alt="Uploaded logo" referrerpolicy="no-referrer" />
                   <div class="upload-overlay">
                     <button class="upload-reselect" @click.stop="selectedLogo = uploadedLogoUrl" :class="{ active: selectedLogo === uploadedLogoUrl }">Use this</button>
-                    <button class="upload-replace" @click.stop="($refs.logoFileInput as HTMLInputElement)?.click()">Replace</button>
+                    <button class="upload-replace" @click.stop="showLogoUploadModal = true">Replace</button>
                     <button class="upload-remove" @click.stop="clearUploadedLogo">✕</button>
                   </div>
                 </template>
                 <template v-else>
                   <div class="upload-prompt">
                     <span v-if="logoUploading">Uploading…</span>
-                    <span v-else>&#8679; Drop image or click to upload</span>
+                    <span v-else>📤 Upload Logo <small>(local file or URL — or drop an image here)</small></span>
                   </div>
                 </template>
               </div>
-              <input ref="logoFileInput" type="file" accept="image/*" style="display:none" @change="onLogoFileInput" />
 
               <div class="thumb-strip logo-strip">
                 <div
@@ -2188,7 +2192,7 @@ watch(
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else-if="selectedPoster" class="placeholder-state">
-              <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" />
+              <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" referrerpolicy="no-referrer" />
               <div class="placeholder-overlay">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
@@ -2230,6 +2234,19 @@ watch(
     :current-preset="selectedPreset"
     @close="showRetryQueueModal = false"
     @queued="onRetryQueued"
+  />
+
+  <UploadPosterModal
+    v-if="showPosterUploadModal"
+    kind="poster"
+    @close="showPosterUploadModal = false"
+    @uploaded="onPosterUploaded"
+  />
+  <UploadPosterModal
+    v-if="showLogoUploadModal"
+    kind="logo"
+    @close="showLogoUploadModal = false"
+    @uploaded="onLogoUploaded"
   />
 </template>
 
@@ -2539,6 +2556,12 @@ watch(
   font-size: 0.82rem;
   text-align: center;
   pointer-events: none;
+}
+.upload-prompt small {
+  display: block;
+  font-size: 0.72em;
+  opacity: 0.75;
+  margin-top: 2px;
 }
 
 .logo-strip {
