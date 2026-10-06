@@ -224,6 +224,15 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     unconditionally) and scan-linked's per-member loop below."""
     from .. import database as db
 
+    # Snapshot what this library already had cached, so genuinely new items
+    # can be handed to auto-generate below (the non-Plex counterpart of the
+    # Plex scan's own pre_scan_keys diff).
+    pre_scan_keys = {
+        r.get("rating_key")
+        for r in (db.get_cached_movies(library_id=library_id) if media_type == "movie" else db.get_cached_tv_shows(library_id=library_id))
+        if r.get("server_id") == server_id
+    }
+
     items = client.list_items(library_id, media_type)
     rows = [
         {"rating_key": i.id, "title": i.title, "year": i.year, "added_at": i.added_at, "tmdb_id": i.tmdb_id, "tvdb_id": i.tvdb_id}
@@ -251,11 +260,26 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     if items:
         _fetch_art_and_media_info_for_scan(items, media_type, client)
 
+    # Auto-generate posters for newly discovered items (background thread --
+    # see process_new_media_server_content()). Skipped on a library's very
+    # first scan (nothing cached beforehand): that's an initial import of
+    # existing content, not new arrivals, and treating it as "new" would try
+    # to re-render every poster in a freshly linked library at once.
+    new_items = [r for r in rows if r["rating_key"] not in pre_scan_keys] if pre_scan_keys else []
+    if new_items:
+        try:
+            from ..auto_generate import process_new_media_server_content_async
+            process_new_media_server_content_async(server_id, library_id, media_type, new_items)
+        except Exception as e:
+            from ..config import logger as _log
+            _log.warning("[MEDIA_SERVER_SCAN] Couldn't start auto-generation for %s library %s: %s", server_id, library_id, e)
+
     return {
         "library_id": library_id,
         "library_name": library_name,
         "media_type": media_type,
         "item_count": len(items),
+        "new_count": len(new_items),
         **counts,
     }
 

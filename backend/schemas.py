@@ -117,6 +117,12 @@ class PlexSettings(BaseModel):
     tvShowLibraryNames: List[str] = Field(default_factory=list)
     tvShowLibraryMappings: List[Dict[str, Any]] = Field(default_factory=list)
     sendLogosToPlex: bool = False
+    # Set automatically when the user removes Plex in Settings → Media Servers
+    # (a previously-saved URL is saved as empty). While true, PLEX_URL/PLEX_TOKEN
+    # environment variables are ignored, so a removed Plex can't silently come
+    # back on the next container restart. Cleared again as soon as a Plex URL
+    # is saved. Managed server-side -- the frontend never needs to send it.
+    ignoreEnvCredentials: bool = False
 
 
 class TMDBSettings(BaseModel):

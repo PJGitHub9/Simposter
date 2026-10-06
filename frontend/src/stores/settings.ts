@@ -355,7 +355,10 @@ async function loadSettings() {
   }
 }
 
-async function saveSettings() {
+// allowEmptyMediaServers: the user deliberately removed their last media
+// server(s) this save. The backend otherwise refuses an empty mediaServers
+// list when entries are already saved (a guard against accidental wipes).
+async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
   loading.value = true
   error.value = null
   try {
@@ -388,7 +391,8 @@ async function saveSettings() {
       notifications: { ...notifications.value },
       onboarding_completed: onboardingCompleted.value,
     }
-    const res = await fetch(`${apiBase}/api/ui-settings`, {
+    const query = opts.allowEmptyMediaServers ? '?allow_empty_media_servers=true' : ''
+    const res = await fetch(`${apiBase}/api/ui-settings${query}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)

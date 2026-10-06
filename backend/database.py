@@ -3604,9 +3604,15 @@ def copy_env_to_ui_settings():
             logger.debug("[DB] TMDB API key already configured, skipping ENV copy")
             return
     
-    env_mappings = [
+    # Plex removed in the UI (PlexSettings.ignoreEnvCredentials) -- never copy
+    # PLEX_URL/PLEX_TOKEN back in, or the removed Plex returns on restart.
+    _ignore_raw = ((existing_settings or {}).get("plex") or {}).get("ignoreEnvCredentials")
+    plex_env_ignored = _ignore_raw is True or str(_ignore_raw).strip().lower() in ("true", "1")
+    plex_env_mappings = [] if plex_env_ignored else [
         ("PLEX_URL", "plex.url"),
-        ("PLEX_TOKEN", "plex.token"), 
+        ("PLEX_TOKEN", "plex.token"),
+    ]
+    env_mappings = plex_env_mappings + [
         ("PLEX_MOVIE_LIBRARY_NAME", "plex.movieLibraryName"),
         ("PLEX_MOVIE_LIBRARY_NAMES", "plex.movieLibraryNames"),
         ("TMDB_API_KEY", "tmdb.apiKey"),

@@ -515,7 +515,14 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
         # CPU/network cost for a library that rarely changes wholesale between
         # runs. A genuine "re-sync everything" need is covered by the manual
         # "Force Refresh All Art" action (Settings -> Libraries) instead.
-        if library_ids:
+        from .config import settings as _cfg
+        plex_configured = bool(_cfg.PLEX_URL and _cfg.PLEX_TOKEN)
+        if not plex_configured:
+            # A Jellyfin/Emby-only install: there's no Plex library to scan --
+            # the standalone-group scan further down covers everything. Silent
+            # on purpose: not using Plex is a normal setup, not worth a log line.
+            pass
+        elif library_ids:
             # Scan each library individually
             for library_id in library_ids:
                 try:
@@ -626,14 +633,41 @@ def _scan_standalone_nonplex_groups() -> None:
     if not standalone_members:
         return
 
+    import time
+    from fastapi import HTTPException
+    from .api.movies import scan_status
+
+    def _wait_for_other_scan(max_wait_seconds: int = 1800) -> bool:
+        """A manual scan (Settings → Scan) can be running when the scheduled
+        job reaches this step -- api_scan_media_server() then refuses with a
+        409. Wait for it to finish instead of logging a failure and silently
+        skipping this library until the next scheduled run."""
+        waited = 0
+        while scan_status.get("state") == "running" and waited < max_wait_seconds:
+            time.sleep(10)
+            waited += 10
+        return scan_status.get("state") != "running"
+
     logger.info("[SCHEDULER] Scanning %d standalone Jellyfin/Emby library group member(s) with no Plex counterpart", len(standalone_members))
     for server_id, library_id, media_type in standalone_members:
-        try:
-            result = api_scan_media_server(server_id=server_id, library_id=library_id, media_type=media_type)
-            logger.info("[SCHEDULER] Standalone scan for %s library %s: %d item(s)", server_id, library_id,
-                        result.get("total_movies_found", 0) + result.get("total_shows_found", 0))
-        except Exception as e:
-            logger.error("[SCHEDULER] Standalone scan failed for %s library %s: %s", server_id, library_id, e)
+        for attempt in (1, 2):
+            try:
+                result = api_scan_media_server(server_id=server_id, library_id=library_id, media_type=media_type)
+                logger.info("[SCHEDULER] Standalone scan for %s library %s: %d item(s)", server_id, library_id,
+                            result.get("total_movies_found", 0) + result.get("total_shows_found", 0))
+                break
+            except HTTPException as e:
+                if e.status_code == 409 and attempt == 1 and _wait_for_other_scan():
+                    continue  # the other scan finished -- try this library again
+                if e.status_code == 409:
+                    logger.info("[SCHEDULER] Skipped %s library %s -- another scan was still running after waiting; it'll be picked up next run",
+                                server_id, library_id)
+                else:
+                    logger.error("[SCHEDULER] Standalone scan failed for %s library %s: %s", server_id, library_id, e.detail)
+                break
+            except Exception as e:
+                logger.error("[SCHEDULER] Standalone scan failed for %s library %s: %s", server_id, library_id, e)
+                break
 
 
 _retry_job_id = "poster_retry_job"

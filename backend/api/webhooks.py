@@ -984,10 +984,14 @@ def process_webhook_poster_generation(
     include_seasons: bool = False,
     affected_seasons: Optional[List[int]] = None,
     server_id: str = "plex-1",
+    source: str = "webhook",
 ):
     """
     Background task to generate and send poster to Plex (or, since Phase 8b,
     to a specific Jellyfin/Emby server instead -- see `server_id`).
+    Also reused by auto_generate.process_new_media_server_content() for
+    scan-discovered Jellyfin/Emby items, which passes source="auto_generate"
+    so History/notifications label them correctly.
     This runs asynchronously after the webhook returns a response.
 
     Args:
@@ -1055,7 +1059,7 @@ def process_webhook_poster_generation(
                                 template_id=template_id,
                                 preset_id=preset_id,
                                 action="resent_to_plex",
-                                source="webhook",
+                                source=source,
                                 poster_data=cached,
                             )
                         except Exception:
@@ -1134,6 +1138,27 @@ def process_webhook_poster_generation(
         # Library Group when `library_id` is itself a non-Plex-anchored library.
         is_plex_target = server_id == "plex-1"
 
+        # For a non-Plex origin, deliver to the origin server AND every other
+        # member of its Library Group (Plex included) in one go, via the
+        # batch pipeline's sync_render_to_linked_servers() -- which already
+        # resolves the group from any origin server (Quirk #132) and each
+        # member's own copy of the item by tmdb/tvdb id (members that don't
+        # have the item are skipped). Previously only the origin server got
+        # the poster, so a 3+-server group's other members were never
+        # updated by a Jellyfin/Emby-origin webhook or auto-generate. The
+        # Plex-origin path keeps using _sync_poster_to_other_servers() below.
+        nonplex_targets: List[str] = []
+        if auto_send and not is_plex_target:
+            nonplex_targets = [server_id]
+            if library_id:
+                try:
+                    from ..config import get_library_group_members
+                    for member_sid, _member_lib in get_library_group_members(server_id, str(library_id), "tv" if is_tv else "movie") or []:
+                        if member_sid and member_sid not in nonplex_targets:
+                            nonplex_targets.append(member_sid)
+                except Exception as grp_err:
+                    logger.debug("[WEBHOOK] Couldn't resolve library group for %s/%s: %s", server_id, library_id, grp_err)
+
         if is_tv:
             # Create TV show batch request
             request = TVShowBatchRequest(
@@ -1146,7 +1171,7 @@ def process_webhook_poster_generation(
                 labels=auto_labels if is_plex_target else [],
                 library_id=library_id,
                 source_server_id=server_id,
-                targets=[server_id] if (auto_send and not is_plex_target) else [],
+                targets=nonplex_targets,
                 include_seasons=include_seasons,
                 fallbackPosterAction=options.get("fallbackPosterAction"),
                 fallbackPosterTemplate=options.get("fallbackPosterTemplate"),
@@ -1186,7 +1211,7 @@ def process_webhook_poster_generation(
                 presets_data=presets_data,
                 season_poster_filter=season_poster_filter,
                 season_options=season_options,
-                source='webhook',
+                source=source,
                 affected_seasons=affected_seasons
             )
 
@@ -1290,7 +1315,7 @@ def process_webhook_poster_generation(
                         template_id=template_id,
                         preset_id=preset_id,
                         library_id=library_id,
-                        source="webhook",
+                        source=source,
                         action=("sent_to_plex" if is_plex_target else "sent_to_media_server") if auto_send else "saved",
                         server_id=server_id,
                         synced_server_ids=_tv_synced_server_ids,
@@ -1322,7 +1347,7 @@ def process_webhook_poster_generation(
                 labels=auto_labels if is_plex_target else [],
                 library_id=library_id,
                 source_server_id=server_id,
-                targets=[server_id] if (auto_send and not is_plex_target) else [],
+                targets=nonplex_targets,
                 send_logos_to_plex=send_logos,
             )
 
@@ -1346,7 +1371,7 @@ def process_webhook_poster_generation(
                 white_logo_fallback=white_logo_fallback,
                 language_pref=language_pref,
                 presets_data=presets_data,
-                source='webhook'
+                source=source
             )
 
             # Check result status - batch functions return "ok" on success
@@ -1415,7 +1440,7 @@ def process_webhook_poster_generation(
                         template_id=template_id,
                         preset_id=preset_id,
                         library_id=library_id,
-                        source="webhook",
+                        source=source,
                         action=("sent_to_plex" if is_plex_target else "sent_to_media_server") if auto_send else "saved",
                         server_id=server_id,
                         synced_server_ids=_movie_synced_server_ids,

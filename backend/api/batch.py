@@ -628,11 +628,12 @@ def _process_single_movie(
         logo_url_for_cache = logo_url
         # Non-Plex targets this batch item should ALSO sync to, on top of (or
         # instead of) send_to_plex -- purely additive, see schemas.py's
-        # MovieBatchRequest.targets docstring for the full design. 'plex-1'
-        # is filtered here defensively even though callers shouldn't send it
-        # as an *explicit* target -- it's added back in below, conditionally,
-        # for a real case that needs it (see sync_targets/Quirk #110).
-        other_targets = [t for t in (getattr(req, 'targets', None) or []) if t and t != "plex-1"]
+        # MovieBatchRequest.targets docstring for the full design. An explicit
+        # 'plex-1' target is dropped for a genuine Plex item (the direct upload
+        # below already covers it), but kept for a non-Plex item -- that's how
+        # a Jellyfin/Emby-origin webhook/auto-generate reaches the Plex member
+        # of its Library Group (resolved by tmdb_id in the sync below).
+        other_targets = [t for t in (getattr(req, 'targets', None) or []) if t and (t != "plex-1" or not is_plex_item)]
         # A merged item currently displayed under a non-Plex identity (e.g.
         # "Show posters from: Jellyfin" for a title that also exists on Plex)
         # has a rating_key that ISN'T Plex's own -- the direct-upload block
@@ -646,7 +647,7 @@ def _process_single_movie(
         # actually linked -> silently skipped" safety net every other target
         # already gets, Quirk #95/#96).
         sync_targets = list(other_targets)
-        if req.send_to_plex and not is_plex_item:
+        if req.send_to_plex and not is_plex_item and "plex-1" not in sync_targets:
             sync_targets.append("plex-1")
         do_multiserver_send = bool(sync_targets)
         if skip_send_not_ideal:
@@ -2016,7 +2017,7 @@ def _render_and_save_poster(
     # see MovieBatchRequest/TVShowBatchRequest.targets in schemas.py). Season
     # sync is genuinely supported now (Quirk #100) -- sync_render_to_linked_servers()
     # resolves the season on each linked server itself via find_season_by_index().
-    other_targets = [t for t in (getattr(req, 'targets', None) or []) if t and t != "plex-1"]
+    other_targets = [t for t in (getattr(req, 'targets', None) or []) if t and (t != "plex-1" or not is_plex_item)]
     # A merged item currently displayed under a non-Plex identity has a
     # rating_key that isn't Plex's own -- the direct-upload block below can
     # never reach Plex for it. Route that case through the same tmdb_id-based
@@ -2026,7 +2027,7 @@ def _render_and_save_poster(
     # the series and season cases. See the identical, fuller comment in
     # _process_single_movie() (Quirk #110) for the complete rationale.
     sync_targets = list(other_targets)
-    if req.send_to_plex and not is_plex_item:
+    if req.send_to_plex and not is_plex_item and "plex-1" not in sync_targets:
         sync_targets.append("plex-1")
     do_multiserver_send = bool(sync_targets)
     # Populated below if the sync block actually runs -- read unconditionally

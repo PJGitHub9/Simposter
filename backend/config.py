@@ -231,9 +231,13 @@ def _load_ui_settings_fallback():
         plex_libs_env = os.getenv("PLEX_MOVIE_LIBRARY_NAMES")
         tmdb_key_env = os.getenv("TMDB_API_KEY")
 
-        if plex_url_env:
+        # ...except Plex credentials the user has explicitly removed in the UI
+        # (PlexSettings.ignoreEnvCredentials) -- otherwise a removed Plex would
+        # silently come back on every container restart.
+        plex_env_ignored = bool(plex_data.get("ignoreEnvCredentials"))
+        if plex_url_env and not plex_env_ignored:
             settings.PLEX_URL = plex_url_env.rstrip("/")
-        if plex_token_env:
+        if plex_token_env and not plex_env_ignored:
             settings.PLEX_TOKEN = plex_token_env
         if plex_lib_env:
             settings.PLEX_MOVIE_LIBRARY_NAME = plex_lib_env

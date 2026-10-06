@@ -2,34 +2,47 @@
 Automatic poster generation for new content detected during library scans.
 """
 import logging
-import time
-import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 from . import database as db
 from .api.batch import process_single_movie_poster, process_single_tv_show_poster
 from .api.webhooks import _get_item_labels, _get_webhook_ignore_labels, _get_default_remove_labels, _webhook_cooldowns, _webhook_cooldown_lock, WEBHOOK_COOLDOWN_SECONDS
 from .api.notifications import send_apprise_notification, send_discord_notification
-from .config import settings, plex_session, plex_headers, load_render_cache, save_render_cache, plex_remove_label, plex_add_label, get_label_to_add
+from .config import settings, plex_session, plex_headers, load_render_cache, plex_remove_label, plex_add_label, get_label_to_add
 
 # Use the shared logger so logs appear in the main log
 logger = logging.getLogger("simposter")
 
 
-def _recently_handled_by_webhook(rating_key: str) -> bool:
-    """Return True if a webhook processed this rating_key recently (within the cooldown window)."""
+def _recently_handled_by_webhook(rating_key: str, tmdb_id: Optional[Any] = None, tvdb_id: Optional[Any] = None) -> bool:
+    """Return True if a webhook processed this item within the cooldown window.
+
+    Cooldown keys are colon-separated (webhooks.py): Radarr keys on the TMDb
+    id (`radarr:{tmdb_id}:{template}:{preset}`), Sonarr on the TVDB id
+    (`sonarr:{tvdb_id}:...`), Tautulli on the rating key
+    (`tautulli:{movie|tv}:{rating_key}:...`). Each id is compared EXACTLY
+    against its own segment. The old version looked Radarr/Sonarr keys up by
+    rating key (so it never matched a real webhook) and then fell back to a
+    substring check (`rating_key in key`), which could match an unrelated
+    item -- rating key "58" matched "radarr:5825:..." -- the same class of
+    bug as CLAUDE.md Quirk #25.
+    """
     import time as _time
+    rk = str(rating_key) if rating_key else None
+    tmdb = str(tmdb_id) if tmdb_id else None
+    tvdb = str(tvdb_id) if tvdb_id else None
+    now = _time.time()
     with _webhook_cooldown_lock:
-        last = _webhook_cooldowns.get(f"radarr:{rating_key}") or \
-               _webhook_cooldowns.get(f"sonarr:{rating_key}") or \
-               _webhook_cooldowns.get(rating_key)
-        # Also check any cooldown key that ends with the rating_key
-        if last is None:
-            for k, v in _webhook_cooldowns.items():
-                if rating_key in k:
-                    last = v
-                    break
-        if last and (_time.time() - last) < WEBHOOK_COOLDOWN_SECONDS:
-            return True
+        for key, last in _webhook_cooldowns.items():
+            if not last or (now - last) >= WEBHOOK_COOLDOWN_SECONDS:
+                continue
+            parts = str(key).split(":")
+            kind = parts[0] if parts else ""
+            if kind == "radarr" and tmdb and len(parts) > 1 and parts[1] == tmdb:
+                return True
+            if kind == "sonarr" and tvdb and len(parts) > 1 and parts[1] == tvdb:
+                return True
+            if kind == "tautulli" and rk and len(parts) > 2 and parts[2] == rk:
+                return True
     return False
 
 
@@ -436,156 +449,137 @@ def process_new_content_for_library(
     return results
 
 
-def check_recently_added(lookback_minutes: int = 20) -> Dict[str, Any]:
+def _resolve_auto_generate_config(group: Dict[str, Any], media_type: str, ui_settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Where a Library Group's auto-generate settings live depends on whether
+    it has a Plex member: a Plex-anchored group still keeps them on that Plex
+    library's own plex.libraryMappings/tvShowLibraryMappings entry (what the
+    Plex scan path above reads), a Plex-less group keeps them on the group
+    itself (LibraryGroup.autoGenerate*). Returns {template_id, preset_id} when
+    auto-generate is enabled and fully configured, else None."""
+    plex_member = next((m for m in group.get("members") or [] if m.get("serverId") == "plex-1"), None)
+    if plex_member:
+        key = "libraryMappings" if media_type == "movie" else "tvShowLibraryMappings"
+        mappings = (ui_settings.get("plex") or {}).get(key) or []
+        cfg = next((m for m in mappings if str(m.get("id", "")) == str(plex_member.get("libraryId"))), None) or {}
+    else:
+        cfg = group
+    if not cfg.get("autoGenerateEnabled"):
+        return None
+    template_id = cfg.get("autoGenerateTemplateId")
+    preset_id = cfg.get("autoGeneratePresetId")
+    if not (template_id and preset_id):
+        return None
+    return {"template_id": template_id, "preset_id": preset_id}
+
+
+def process_new_media_server_content(
+    server_id: str,
+    library_id: str,
+    media_type: str,
+    new_items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Auto-generate posters for items a Jellyfin/Emby library scan just
+    discovered -- the non-Plex counterpart of process_new_content_for_library().
+
+    Before this, auto-generation only ever ran at the end of a PLEX scan, so a
+    Jellyfin/Emby-only library got automatic posters solely from Radarr/Sonarr
+    webhooks, never from its own (manual or scheduled) scans.
+
+    Rendering + delivery reuses the exact webhook pipeline already built for
+    non-Plex targets (process_webhook_poster_generation(server_id=...), Phase
+    8b), so it gets the same sync-to-linked-servers, retry-queue, History and
+    notification behavior -- just labelled source="auto_generate".
+
+    For a group that ALSO has a Plex member, an item that Plex has too (same
+    tmdb_id/tvdb_id in the Plex member's library) is skipped: the Plex scan's
+    own auto-generate already renders it and syncs it to the linked servers,
+    so generating it again from the Jellyfin side would double the work and
+    could race the Plex render. Only items that exist on the non-Plex side
+    alone get generated here.
     """
-    Poll Plex for items added in the last `lookback_minutes` and auto-generate
-    posters for any that aren't already in the Simposter cache.
+    from .config import get_library_group_for
+    from .api.webhooks import process_webhook_poster_generation
 
-    Runs efficiently — only fetches recently added items, not the full library.
-    Called by the scheduler every 15 minutes so new content from any source
-    (not just Radarr/Sonarr) gets posters without a manual scan.
-    """
-    from .config import settings as config_settings, plex_session, plex_headers
-    from . import cache
-    from .schemas import Movie
-
-    results: Dict[str, Any] = {
-        "libraries_checked": 0,
-        "new_movies": 0,
-        "new_tv": 0,
-        "errors": [],
-    }
-
-    since_timestamp = int(time.time()) - (lookback_minutes * 60)
-
+    # "processed" = handed to the render pipeline; it logs/records its own
+    # per-item outcome (History, notifications), so success isn't re-counted here.
+    results = {"processed": 0, "failed": 0, "skipped": 0}
+    if not new_items:
+        return results
     try:
-        ui_settings = db.get_ui_settings()
-        if not ui_settings:
+        ui_settings = db.get_ui_settings() or {}
+        group = get_library_group_for(server_id, library_id, media_type)
+        if not group:
+            logger.debug("[AUTO_GEN] %s library %s isn't in a library group, skipping auto-generation", server_id, library_id)
+            return results
+        cfg = _resolve_auto_generate_config(group, media_type, ui_settings)
+        if not cfg:
+            logger.debug("[AUTO_GEN] Auto-generation not enabled for group %s", group.get("name") or group.get("id"))
             return results
 
-        plex_settings = ui_settings.get("plex", {})
+        plex_member = next((m for m in group.get("members") or [] if m.get("serverId") == "plex-1"), None)
+        on_plex: set = set()
+        if plex_member:
+            plex_lib = str(plex_member.get("libraryId"))
+            rows = db.get_cached_movies(library_id=plex_lib) if media_type == "movie" else db.get_cached_tv_shows(library_id=plex_lib)
+            for r in rows:
+                if r.get("server_id", "plex-1") != "plex-1":
+                    continue
+                if r.get("tmdb_id"):
+                    on_plex.add(("tmdb", str(r["tmdb_id"])))
+                if r.get("tvdb_id"):
+                    on_plex.add(("tvdb", str(r["tvdb_id"])))
 
-        # Collect all unique library IDs across movie and TV mappings
-        library_ids: set = set()
-        for mapping in plex_settings.get("libraryMappings", []):
-            if mapping.get("id"):
-                library_ids.add(str(mapping["id"]))
-        for mapping in plex_settings.get("tvShowLibraryMappings", []):
-            if mapping.get("id"):
-                library_ids.add(str(mapping["id"]))
-
-        if not library_ids:
-            logger.debug("[AUTO_GEN] No libraries configured, skipping recently added check")
-            return results
-
-        logger.debug("[AUTO_GEN] Checking for recently added items in %d libraries (since %ds ago)",
-                     len(library_ids), lookback_minutes * 60)
-
-        for library_id in library_ids:
-            results["libraries_checked"] += 1
-
-            # --- Movies (Plex type=1) ---
-            existing_movie_keys = {m.get("rating_key") for m in cache.get_cached_movies(library_id=library_id)}
-            new_movies: List[Dict[str, Any]] = []
-
+        logger.info("[AUTO_GEN] Processing %d new %s item(s) from %s library %s with %s:%s",
+                    len(new_items), media_type, server_id, library_id, cfg["template_id"], cfg["preset_id"])
+        for item in new_items:
+            rating_key = item.get("rating_key")
+            title = item.get("title") or rating_key
+            if not rating_key:
+                continue
+            if on_plex and (
+                (item.get("tmdb_id") and ("tmdb", str(item["tmdb_id"])) in on_plex)
+                or (item.get("tvdb_id") and ("tvdb", str(item["tvdb_id"])) in on_plex)
+            ):
+                results["skipped"] += 1
+                logger.info("[AUTO_GEN] Skipping %s on %s -- also on Plex, the Plex scan handles it", title, server_id)
+                continue
+            if _recently_handled_by_webhook(rating_key, item.get("tmdb_id"), item.get("tvdb_id")):
+                results["skipped"] += 1
+                logger.info("[AUTO_GEN] Skipping %s on %s -- recently processed by a webhook", title, server_id)
+                continue
+            results["processed"] += 1
             try:
-                url = (
-                    f"{config_settings.PLEX_URL}/library/sections/{library_id}/all"
-                    f"?type=1&addedAt>={since_timestamp}&sort=addedAt:desc"
-                    f"&X-Plex-Container-Size=100"
-                )
-                r = plex_session.get(url, headers=plex_headers(), timeout=10)
-                if r.ok:
-                    root = ET.fromstring(r.text)
-                    for video in root.findall(".//Video"):
-                        key = video.get("ratingKey")
-                        if not key or key in existing_movie_keys:
-                            continue
-                        if _recently_handled_by_webhook(key):
-                            logger.info("[AUTO_GEN] Skipping movie key=%s - recently processed by webhook", key)
-                            continue
-                        title = video.get("title", "Unknown")
-                        year = video.get("year")
-                        added_at = video.get("addedAt")
-                        # Add to cache so future scans don't re-process it
-                        cache.upsert_movie(Movie(
-                            key=key,
-                            title=title,
-                            year=int(year) if year else None,
-                            addedAt=int(added_at) if added_at else None,
-                            library_id=library_id,
-                        ))
-                        new_movies.append({
-                            "rating_key": key,
-                            "title": title,
-                            "year": int(year) if year else None,
-                        })
-                        logger.info("[AUTO_GEN] Recently added movie: %s (key=%s, library=%s)", title, key, library_id)
-            except Exception as e:
-                logger.warning("[AUTO_GEN] Error fetching recently added movies for library %s: %s", library_id, e)
-                results["errors"].append(str(e))
-
-            if new_movies:
-                results["new_movies"] += len(new_movies)
-                process_new_content_for_library(
-                    library_id=library_id,
-                    new_movies=new_movies,
-                    new_tv_shows=[],
+                process_webhook_poster_generation(
+                    rating_key=rating_key,
+                    template_id=cfg["template_id"],
+                    preset_id=cfg["preset_id"],
                     auto_send=True,
-                )
-
-            # --- TV Shows (Plex type=2) ---
-            existing_tv_keys = {s.get("rating_key") for s in cache.get_cached_tv_shows(library_id=library_id)}
-            new_tv: List[Dict[str, Any]] = []
-
-            try:
-                url_tv = (
-                    f"{config_settings.PLEX_URL}/library/sections/{library_id}/all"
-                    f"?type=2&addedAt>={since_timestamp}&sort=addedAt:desc"
-                    f"&X-Plex-Container-Size=100"
-                )
-                r_tv = plex_session.get(url_tv, headers=plex_headers(), timeout=10)
-                if r_tv.ok:
-                    root_tv = ET.fromstring(r_tv.text)
-                    for directory in root_tv.findall(".//Directory"):
-                        key = directory.get("ratingKey")
-                        if not key or key in existing_tv_keys:
-                            continue
-                        if _recently_handled_by_webhook(key):
-                            logger.info("[AUTO_GEN] Skipping TV show key=%s - recently processed by webhook", key)
-                            continue
-                        title = directory.get("title", "Unknown")
-                        year = directory.get("year")
-                        added_at = directory.get("addedAt")
-                        # Add to cache so future scans don't re-process it
-                        cache.upsert_tv_show({
-                            "key": key,
-                            "title": title,
-                            "year": int(year) if year else None,
-                            "addedAt": int(added_at) if added_at else None,
-                            "library_id": library_id,
-                        })
-                        new_tv.append({
-                            "rating_key": key,
-                            "title": title,
-                            "year": int(year) if year else None,
-                        })
-                        logger.info("[AUTO_GEN] Recently added TV show: %s (key=%s, library=%s)", title, key, library_id)
-            except Exception as e:
-                logger.warning("[AUTO_GEN] Error fetching recently added TV shows for library %s: %s", library_id, e)
-                results["errors"].append(str(e))
-
-            if new_tv:
-                results["new_tv"] += len(new_tv)
-                process_new_content_for_library(
+                    auto_labels=[],
                     library_id=library_id,
-                    new_movies=[],
-                    new_tv_shows=new_tv,
-                    auto_send=True,
+                    is_tv=(media_type == "tv"),
+                    include_seasons=(media_type == "tv"),
+                    server_id=server_id,
+                    source="auto_generate",
                 )
-
+            except Exception as e:
+                results["failed"] += 1
+                logger.error("[AUTO_GEN] Failed to generate poster for %s on %s: %s", title, server_id, e)
     except Exception as e:
-        logger.error("[AUTO_GEN] Unexpected error in check_recently_added: %s", e, exc_info=True)
-        results["errors"].append(str(e))
-
+        logger.error("[AUTO_GEN] Error processing new %s content for %s library %s: %s", media_type, server_id, library_id, e, exc_info=True)
+    logger.info("[AUTO_GEN] %s library %s auto-generation complete: %s", server_id, library_id, results)
     return results
+
+
+def process_new_media_server_content_async(server_id: str, library_id: str, media_type: str, new_items: List[Dict[str, Any]]) -> None:
+    """Runs process_new_media_server_content() in a background thread so the
+    scan that discovered the items (a manual Settings click, or the scheduled
+    job) returns promptly instead of blocking on every render."""
+    if not new_items:
+        return
+    import threading
+    threading.Thread(
+        target=process_new_media_server_content,
+        args=(server_id, library_id, media_type, list(new_items)),
+        name=f"auto-gen-{server_id}-{library_id}",
+        daemon=True,
+    ).start()

@@ -365,6 +365,9 @@ def _read_settings(include_env: bool = True) -> UISettings:
                     (tmdb_data.get("apiKey") and tmdb_data.get("apiKey") != "")
                 )
                 
+                if plex_data.get("ignoreEnvCredentials"):
+                    # Plex was removed in the UI -- don't resurrect it from env vars
+                    env_overrides.pop("plex", None)
                 if not has_configured_settings:
                     logger.debug("[UI_SETTINGS] Database appears empty, applying ENV overrides")
                     for nested_key, nested_values in env_overrides.items():
@@ -397,7 +400,7 @@ def api_ping():
 
 
 @router.post("/ui-settings")
-def save_ui_settings_endpoint(payload: UISettings):
+def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bool = False):
     try:
         # Merge defaults + current + incoming payload to avoid losing fields
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False)
@@ -436,6 +439,12 @@ def save_ui_settings_endpoint(payload: UISettings):
         # configured/enabled" even though every other part of the UI still showed
         # Plex as configured (libraryGroups, a separate setting, was untouched).
         for list_key in ("mediaServers", "libraryGroups"):
+            # The frontend sets allow_empty_media_servers only when the user
+            # actually removed server(s) this save -- removing the LAST one
+            # legitimately sends an empty list, which this guard would
+            # otherwise silently undo.
+            if list_key == "mediaServers" and allow_empty_media_servers:
+                continue
             incoming_list = incoming.get(list_key)
             current_list = current.get(list_key)
             if isinstance(current_list, list) and current_list and (not isinstance(incoming_list, list) or not incoming_list):
@@ -445,6 +454,20 @@ def save_ui_settings_endpoint(payload: UISettings):
                     list_key, len(current_list), "y" if len(current_list) == 1 else "ies",
                 )
                 merged[list_key] = current_list
+
+        # Track an explicit Plex removal (see PlexSettings.ignoreEnvCredentials).
+        # Computed here rather than trusted from the payload: the frontend
+        # rebuilds the plex object from scratch on every save and never sends it.
+        current_plex = current.get("plex") or {}
+        merged_plex = merged.get("plex") or {}
+        if (merged_plex.get("url") or "").strip():
+            merged_plex["ignoreEnvCredentials"] = False
+        elif (current_plex.get("url") or "").strip():
+            merged_plex["ignoreEnvCredentials"] = True
+            logger.info("[UI_SETTINGS] Plex removed -- PLEX_URL/PLEX_TOKEN environment variables will be ignored from now on")
+        else:
+            merged_plex["ignoreEnvCredentials"] = bool(current_plex.get("ignoreEnvCredentials"))
+        merged["plex"] = merged_plex
 
         merged = _normalize_plex_payload(merged)
         _apply_runtime_settings(merged)

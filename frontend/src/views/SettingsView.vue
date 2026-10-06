@@ -716,7 +716,7 @@ const saveSettings = async () => {
     }
   }
 
-  await settings.save()
+  await settings.save({ allowEmptyMediaServers: pendingServerCachePurge.value.size > 0 })
 
   if (!settings.error.value) {
     await updateScheduler()
