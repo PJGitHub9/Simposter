@@ -630,8 +630,8 @@ def scan_all_linked_plex_libraries(library_id: Optional[str] = None) -> dict:
         scan-linked for ANY of them, so a linked Jellyfin/Emby library never
         got refreshed at all when a user scanned that way -- a real,
         reported gap ("its also only scanning plex?").
-    (2) _scan_linked_libraries_for_scheduled_scan() (scheduler.py), which now
-        delegates here instead of duplicating this same iteration itself.
+    (2) the scheduled scan, indirectly -- it runs api_scan_library(), which
+        calls this, so linked libraries are scanned once per scheduled run.
     Reads `libraryGroups` fresh from the DB, the same way every other
     settings-reading helper in this app does. A no-op (empty result) for an
     install with no groups at all, or none linking a Jellyfin/Emby library --

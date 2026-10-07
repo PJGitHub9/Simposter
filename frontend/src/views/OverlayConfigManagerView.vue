@@ -2303,7 +2303,7 @@ onMounted(() => {
           <!-- Step 1: library list -->
           <template v-if="!previewSelectedLibrary">
             <div v-if="previewLibrariesLoading" class="search-empty">Loading libraries...</div>
-            <div v-else-if="previewLibraries.length === 0" class="search-empty">No libraries found. Check Plex connection in Settings.</div>
+            <div v-else-if="previewLibraries.length === 0" class="search-empty">No libraries found. Check your media servers in Settings.</div>
             <div v-else class="library-list">
               <button
                 v-for="lib in previewLibraries"

@@ -1,6 +1,6 @@
 # Getting Started
 
-This walks through installing Simposter, the first-launch setup wizard, generating your first poster, and a reference for every Settings tab. For webhook setup (Radarr/Sonarr/Tautulli), see [WEBHOOKS.md](WEBHOOKS.md). For templates, logos, badges, and Collections, see [COLLECTIONS_AND_POSTERS.md](COLLECTIONS_AND_POSTERS.md).
+This walks through installing Simposter, the first-launch setup wizard, generating your first poster, and a reference for every Settings tab. For connecting Plex, Jellyfin and/or Emby and linking their libraries, see [MEDIA_SERVERS.md](MEDIA_SERVERS.md). For webhook setup (Radarr/Sonarr/Tautulli), see [WEBHOOKS.md](WEBHOOKS.md). For templates, logos, badges, and Collections, see [COLLECTIONS_AND_POSTERS.md](COLLECTIONS_AND_POSTERS.md).
 
 ---
 
@@ -117,18 +117,19 @@ npm run dev
 
 ## First Launch: Setup Wizard
 
-The first time you open Simposter with no Plex connection configured, a guided wizard walks you through setup instead of dropping you on a blank Settings page:
+The first time you open Simposter with no media server configured, a guided wizard walks you through setup instead of dropping you on a blank Settings page:
 
 1. **Welcome**
-2. **Plex** — server URL and token
-3. **Libraries** — pick which Plex libraries to manage (movies and/or TV)
-4. **API Keys** — TMDb (required), TVDB and Fanart.tv (optional, each has a "Test" button that validates the key live). See [Collections & Posters](COLLECTIONS_AND_POSTERS.md#fanarttv-and-collections) for why a Fanart key specifically matters if you plan to make Collection posters.
-5. **Automation** — auto-send to Plex, labels to remove/apply, retry-until-template-met
-6. **Performance** — overlay cache, concurrent render workers
-7. **Notifications** — Discord webhook and/or Apprise URLs (70+ services)
-8. **Finish** — a set of starter presets is imported automatically (a few Uniform Logo looks and Kometa Creator presets, so Template Manager isn't empty on first run) and a library scan kicks off in the background
+2. **Servers** — which media servers you use: Plex, Jellyfin and/or Emby, in any combination
+3. **Connect** — the URL and credentials for each server you picked (a token for Plex, an API key for Jellyfin/Emby), with a Test button. At least one has to connect; any you skip can be added later in Settings → Media Servers.
+4. **Libraries** — pick which libraries to manage (movies and/or TV) from every server you connected. Libraries with the same name on different servers are put into one library group automatically.
+5. **API Keys** — TMDb (required), TVDB and Fanart.tv (optional, each has a "Test" button that validates the key live). See [Collections & Posters](COLLECTIONS_AND_POSTERS.md#fanarttv-and-collections) for why a Fanart key specifically matters if you plan to make Collection posters.
+6. **Automation** — auto-send, labels to remove/apply (Plex), retry-until-template-met, how often to scan for new content
+7. **Performance** — overlay cache, concurrent render workers
+8. **Notifications** — Discord webhook and/or Apprise URLs (70+ services)
+9. **Finish** — a set of starter presets is imported automatically (a few Uniform Logo looks and Kometa Creator presets, so Template Manager isn't empty on first run) and a library scan kicks off in the background
 
-You can change anything from this wizard later in **Settings** — none of it is one-shot, and Settings → Advanced has a **Run Startup Wizard** button if you want to go through it again (e.g. it was skipped, or you want to redo Plex/library setup). If you skip the wizard or delete a starter preset later, Template Manager's Import/Export section has an **Import Simposter defaults** button to pull the same starter presets back in on demand.
+You can change anything from this wizard later in **Settings** — none of it is one-shot, and Settings → Advanced has a **Run Startup Wizard** button if you want to go through it again (e.g. it was skipped, or you want to redo server/library setup). If you skip the wizard or delete a starter preset later, Template Manager's Import/Export section has an **Import Simposter defaults** button to pull the same starter presets back in on demand.
 
 ---
 
@@ -137,7 +138,7 @@ You can change anything from this wizard later in **Settings** — none of it is
 1. Open **Movies** or **TV Shows** and click a title
 2. Pick a template and preset in the editor panel that opens
 3. The preview updates live as you switch poster/logo source or adjust sliders
-4. **Save to disk** and/or **Send to Plex** when you're happy with it
+4. **Save to disk** and/or send it to your media server when you're happy with it (if the item is on more than one server, you can pick which ones get it)
 
 For batches instead of one at a time, see **Batch Processing** in [COLLECTIONS_AND_POSTERS.md](COLLECTIONS_AND_POSTERS.md).
 
@@ -148,12 +149,14 @@ For batches instead of one at a time, see **Batch Processing** in [COLLECTIONS_A
 | Tab | What's in it |
 |-----|--------------|
 | **General** | Theme, poster display density, deduplication, default sort, API key management |
-| **Libraries** | Plex connection, library mappings, auto-generate preset, webhook ignore labels, per-library default labels to remove, **Kometa Compatibility** (auto-checks "Overlay" for any library added from now on), add/remove libraries (removing purges that library's cache/DB rows, keeping History) |
+| **Libraries** | **Library groups** (link the same library across Plex/Jellyfin/Emby — see [MEDIA_SERVERS.md](MEDIA_SERVERS.md)), auto-generate preset per group, Merge items, webhook ignore labels, per-library default labels to remove, **Kometa Compatibility** (auto-checks "Overlay" for any library added from now on), add/remove libraries (removing purges that library's cache/DB rows, keeping History) |
+| **Media Servers** | Add, name, test and remove Plex, Jellyfin and Emby servers (removing one purges its cached data on save) |
 | **Output** | Save-location path templates (with Kometa-compatible presets, including a `{folder}` variable that matches Radarr/Sonarr's real on-disk folder names) for movies, TV shows, and collections; batch subfolder option; image format/quality |
 | **Automation** | Webhook URL generator, automatic poster generation (auto-send, retry queue, existing content mode, webhook secret), **Label to Add After Sending** (optional — tags an item after a poster's sent, so you can filter/smart-collection on what Simposter has touched), **Reuse Cached Poster For (days)** (optional — protects a hand-tuned poster from being silently regenerated if Radarr/Sonarr/a similar tool causes Plex to re-match the item under a new internal ID) |
 | **Performance** | Concurrent renders (up to 10 — see the tip below), overlay cache, API rate limits, cache management |
 | **Notifications** | Discord webhook and Apprise URLs, per-event toggles (batch / manual / webhook / auto-generate) |
 | **Advanced** | **Run Startup Wizard** button, API source priority order, database backup/restore |
+| **Cleanup** | Find and clear Simposter's own stale cache (reversible), compact Simposter's database, scheduled cleanup, and **Media Server Maintenance** for each of your servers |
 
 > **Tip:** if batch renders feel slow, try raising **Concurrent Rendering** in Performance — it's not capped at a low number the way some tools are. Going from 2 to ~8-9 workers has been measured cutting total batch time by more than half on real libraries, at the cost of each individual item taking a bit longer (worth it for the total time saved). Overlay cache should also stay on; it's the single biggest speed lever for the Uniform Logo template.
 
@@ -173,7 +176,7 @@ For batches instead of one at a time, see **Batch Processing** in [COLLECTIONS_A
 | `FANART_API_KEY` | Fanart.tv API key | `ijkl9012` |
 | `CONFIG_DIR` | Config directory path (Docker default: `/config`) | `/config` |
 
-For Docker, set these under `environment:` in `docker-compose.yml`. For local dev, put them in a `.env` file at the repo root (see [`.env.example`](../.env.example)). Env vars only seed a **fresh, unconfigured** database on first startup — once you've set something through the wizard or Settings, that saved value takes priority from then on, so changing/removing an env var later won't silently override what you've already configured in the UI.
+For Docker, set these under `environment:` in `docker-compose.yml`. For local dev, put them in a `.env` file at the repo root (see [`.env.example`](../.env.example)). Env vars only seed a **fresh, unconfigured** database on first startup — once you've set something through the wizard or Settings, that saved value takes priority from then on, so changing/removing an env var later won't silently override what you've already configured in the UI. If you remove Plex in Settings → Media Servers, `PLEX_URL`/`PLEX_TOKEN` are ignored from then on, so Plex doesn't come back on the next restart. Jellyfin/Emby servers are set up in the UI only (no env vars).
 
 ---
 

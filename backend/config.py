@@ -235,6 +235,19 @@ def _load_ui_settings_fallback():
         # (PlexSettings.ignoreEnvCredentials) -- otherwise a removed Plex would
         # silently come back on every container restart.
         plex_env_ignored = bool(plex_data.get("ignoreEnvCredentials"))
+        # The main Plex server switched off via its "Enabled" checkbox: Plex is
+        # off app-wide (saved URL/token kept), and env vars don't switch it back on.
+        _servers = data.get("mediaServers")
+        if isinstance(_servers, str):
+            try:
+                _servers = json.loads(_servers)
+            except ValueError:
+                _servers = []
+        _plex1 = next((s for s in (_servers or []) if isinstance(s, dict) and s.get("id") == "plex-1"), None)
+        if _plex1 is not None and _plex1.get("enabled") is False:
+            settings.PLEX_URL = ""
+            settings.PLEX_TOKEN = ""
+            plex_env_ignored = True
         if plex_url_env and not plex_env_ignored:
             settings.PLEX_URL = plex_url_env.rstrip("/")
         if plex_token_env and not plex_env_ignored:

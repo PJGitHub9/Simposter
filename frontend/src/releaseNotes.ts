@@ -10,6 +10,31 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.02',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Plex, Jellyfin and Emby are now treated the same throughout. The setup wizard connects all of your servers on one page, with the same steps for each.',
+          'Library groups (Settings → Libraries) show the libraries of every server in the same style, with one "+ Link a library..." picker covering all your servers.',
+          'Scheduled scans can be limited to chosen library groups, and each group is scanned on every server it includes. The setup wizard now offers a scan schedule even without Plex.',
+          'The main Plex server has an Enabled checkbox like your other servers. Untick it to switch Plex off without losing its settings.',
+          'The Media Servers page only labels a Plex server "Primary" when you have more than one.',
+          'New Media Servers guide in the docs, and the other docs now cover Jellyfin and Emby.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Scan buttons on Jellyfin/Emby-only groups stayed clickable during another scan and then failed with "A scan is already in progress".',
+          'Scheduled scans no longer scan each linked Jellyfin/Emby library twice.',
+          'Libraries from a second Plex server now show up on their library group.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.01',
     date: '2026-10-07',
     sections: [

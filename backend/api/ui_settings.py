@@ -184,6 +184,12 @@ def _apply_runtime_settings(merged: dict):
     tv_library_mappings = plex_data.get("tvShowLibraryMappings") or []
     url = plex_data.get("url") or ""
     token = plex_data.get("token") or ""
+    # The main Plex server's "Enabled" checkbox (Settings -> Media Servers) is its
+    # 'plex-1' mediaServers entry. Disabled = Plex is off app-wide (every Plex code
+    # path checks settings.PLEX_URL), while the saved URL/token are kept.
+    _plex1 = next((s for s in (merged.get("mediaServers") or []) if isinstance(s, dict) and s.get("id") == "plex-1"), None)
+    if _plex1 is not None and _plex1.get("enabled") is False:
+        url, token = "", ""
     names = plex_data.get("movieLibraryNames") or []
     if not names and plex_data.get("movieLibraryName"):
         names = [plex_data.get("movieLibraryName")]

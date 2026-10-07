@@ -293,8 +293,7 @@ const settingsStore = useSettingsStore()
 const maintenanceServers = computed((): MaintServer[] => {
   const servers = settingsStore.mediaServers.value
   const out: MaintServer[] = []
-  const plex = settingsStore.plex.value
-  if (plex.url && plex.token) out.push({ id: 'plex-1', type: 'plex', label: mediaServerLabel('plex-1', servers) })
+  if (settingsStore.plexActive.value) out.push({ id: 'plex-1', type: 'plex', label: mediaServerLabel('plex-1', servers) })
   for (const type of ['plex', 'jellyfin', 'emby'] as const) {
     for (const s of servers) {
       if (s.type !== type || s.id === 'plex-1' || s.enabled === false || !s.url) continue

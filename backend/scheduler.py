@@ -516,63 +516,53 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
         # runs. A genuine "re-sync everything" need is covered by the manual
         # "Force Refresh All Art" action (Settings -> Libraries) instead.
         from .config import settings as _cfg
+        from . import database as _db
         plex_configured = bool(_cfg.PLEX_URL and _cfg.PLEX_TOKEN)
-        if not plex_configured:
-            # A Jellyfin/Emby-only install: there's no Plex library to scan --
-            # the standalone-group scan further down covers everything. Silent
-            # on purpose: not using Plex is a normal setup, not worth a log line.
-            pass
-        elif library_ids:
-            # Scan each library individually
-            for library_id in library_ids:
+
+        # What to scan. Entries are either "group:<id>" (a Library Group --
+        # every server in it; what Settings -> Libraries saves now) or a bare
+        # Plex library id (selections saved before groups were selectable,
+        # still honored). Empty = everything on every server.
+        groups = (_db.get_ui_settings() or {}).get("libraryGroups") or []
+        selected_group_ids = {str(x)[6:] for x in (library_ids or []) if str(x).startswith("group:")}
+        legacy_plex_ids = [x for x in (library_ids or []) if not str(x).startswith("group:")]
+        if selected_group_ids:
+            scope_groups = [g for g in groups if g.get("id") in selected_group_ids]
+            plex_scope = [m.get("libraryId") for g in scope_groups for m in g.get("members") or []
+                          if m.get("serverId") == "plex-1" and m.get("libraryId")]
+            scan_all_plex = False
+        else:
+            scope_groups = groups
+            plex_scope = legacy_plex_ids
+            scan_all_plex = not legacy_plex_ids
+
+        # 1. Plex. A Plex scan also scans the Jellyfin/Emby libraries linked to
+        #    each scanned Plex library (api_scan_library() calls
+        #    scan_all_linked_plex_libraries() itself), so those aren't scanned
+        #    again below. Skipped silently when Plex isn't configured.
+        if plex_configured and (scan_all_plex or plex_scope):
+            for library_id in ([None] if scan_all_plex else plex_scope):
                 try:
                     result = api_scan_library(library_id=library_id, force_poster_refresh=False)
-                    logger.info("[SCHEDULER] Library scan completed for library_id=%s: %s movies, %s TV shows, %s collections",
-                               library_id, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
+                    logger.info("[SCHEDULER] Plex scan completed for %s in %.1fs: %s movies, %s TV shows, %s collections",
+                                library_id or "all libraries", time.time() - scan_start,
+                                result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
                 except HTTPException as e:
                     if e.status_code == 409:
-                        logger.warning("[SCHEDULER] Library scan already in progress for library_id=%s", library_id)
+                        logger.warning("[SCHEDULER] Plex scan already in progress (%s)", library_id or "all libraries")
                     else:
-                        logger.error("[SCHEDULER] Library scan failed for library_id=%s: %s", library_id, e.detail)
+                        logger.error("[SCHEDULER] Plex scan failed for %s: %s", library_id or "all libraries", e.detail)
                 except Exception as e:
-                    logger.error("[SCHEDULER] Failed to scan library_id=%s: %s", library_id, e)
-        else:
-            # Scan all libraries
-            try:
-                result = api_scan_library(library_id=None, force_poster_refresh=False)
-                elapsed = time.time() - scan_start
-                logger.info("[SCHEDULER] Library scan completed in %.1f seconds: %s movies, %s TV shows, %s collections",
-                           elapsed, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
-            except HTTPException as e:
-                if e.status_code == 409:
-                    logger.warning("[SCHEDULER] Library scan already in progress")
-                else:
-                    logger.error("[SCHEDULER] Library scan failed: %s", e.detail)
+                    logger.error("[SCHEDULER] Plex scan failed for %s: %s", library_id or "all libraries", e)
 
-        # Also refresh any linked Jellyfin/Emby libraries -- previously this
-        # scheduled job never touched them at all, even for a library fully
-        # linked via a Library Group (Quirk #62/#64). The manual "Scan" button
-        # already covers this (SettingsView.vue calls scan-linked right after
-        # a Plex scan succeeds, Quirk #66); this mirrors that same call from
-        # the scheduled path instead. Deliberately still ONE global schedule
-        # (per the user's explicit "keep it global for now, but make sure to
-        # include jellyfin/emby libraries") -- not a second per-server cron,
-        # just making the one existing schedule cover what's linked too.
+        # 2. Jellyfin/Emby libraries the Plex scan above didn't already cover:
+        #    groups with no Plex library, or every group when Plex isn't
+        #    configured. With a legacy Plex-only selection, all such groups are
+        #    still scanned, matching the old behavior.
         try:
-            _scan_linked_libraries_for_scheduled_scan()
+            _scan_standalone_nonplex_groups(scope_groups, plex_configured)
         except Exception as e:
-            logger.error("[SCHEDULER] Failed to scan linked Jellyfin/Emby libraries: %s", e, exc_info=True)
-
-        # Also scan any standalone Jellyfin/Emby-only groups (no Plex member
-        # at all) -- the one case the linked-libraries scan above can't reach,
-        # since it only ever walks outward from an already-scanned Plex
-        # library (see that function's own docstring). This is what makes
-        # "Enable scheduled scanning" actually cover Plex and/or Jellyfin
-        # and/or Emby, not just Plex-anchored/merged groups.
-        try:
-            _scan_standalone_nonplex_groups()
-        except Exception as e:
-            logger.error("[SCHEDULER] Failed to scan standalone Jellyfin/Emby-only groups: %s", e, exc_info=True)
+            logger.error("[SCHEDULER] Failed to scan Jellyfin/Emby libraries: %s", e, exc_info=True)
 
         logger.info("[SCHEDULER] ========== SCHEDULED SCAN FINISHED ==========")
 
@@ -580,54 +570,30 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
         logger.error("[SCHEDULER] Unexpected error during scheduled library scan: %s", e, exc_info=True)
 
 
-def _scan_linked_libraries_for_scheduled_scan() -> None:
-    """Scans every Jellyfin/Emby library linked (via a Library Group) to ANY
-    Plex library, regardless of whether that specific Plex library_id was
-    part of THIS scan's own library_ids scope -- simpler and more robust than
-    threading which Plex libraries were actually just scanned through to
-    here (the "scan all" branch above has no per-library result to key off
-    of), and scan-linked() itself is already a cheap no-op for any group with
-    nothing else to refresh. Delegates to scan_all_linked_plex_libraries()
-    (media_server.py) -- the same shared helper api_scan_library() now also
-    calls after a manual scan, so this no longer duplicates that iteration
-    itself (it used to, independently, before that shared helper existed)."""
-    from .api.media_server import scan_all_linked_plex_libraries
-
-    result = scan_all_linked_plex_libraries()
-    if result.get("scanned"):
-        logger.info("[SCHEDULER] Linked scan: %s", result["scanned"])
-    if result.get("errors"):
-        logger.warning("[SCHEDULER] Linked scan errors: %s", result["errors"])
-
-
-def _scan_standalone_nonplex_groups() -> None:
-    """Scans every Library Group that has NO Plex member at all (a genuinely
-    standalone Jellyfin/Emby-only group, created via Settings -> Libraries'
-    "+ New Group" with no Plex row linked -- Quirk #116). This is the one
-    case _scan_linked_libraries_for_scheduled_scan() above structurally can't
-    reach: it only ever walks from a Plex library outward to what's linked to
-    it, so a group with nothing Plex in it at all was silently never touched
-    by the scheduled job, even with "Enable scheduled scanning" checked --
-    the only way to refresh it was the group's own manual "Scan" button.
-    Reuses api_scan_media_server()'s already-scoped-per-library mode (Quirk
-    #66) -- the exact same call each member's own manual "Scan" button
-    already makes -- one call per member, not one call per whole server (a
-    server can have several groups, or several members within one group)."""
+def _scan_standalone_nonplex_groups(groups: Optional[list] = None, plex_configured: bool = True) -> None:
+    """Scans the Jellyfin/Emby libraries of `groups` (default: every Library
+    Group) that a Plex scan doesn't already cover: groups with no Plex member,
+    or every group's Jellyfin/Emby members when Plex isn't configured at all.
+    (A Plex scan scans the Jellyfin/Emby libraries linked to each Plex library
+    itself, via scan_all_linked_plex_libraries().) Reuses the same scoped
+    per-library scan each group's own "Scan" button makes."""
     from . import database as db
     from .api.media_server import api_scan_media_server
 
-    ui_settings = db.get_ui_settings() or {}
-    groups = ui_settings.get("libraryGroups") or []
+    if groups is None:
+        groups = (db.get_ui_settings() or {}).get("libraryGroups") or []
     standalone_members = []
     for group in groups:
         members = group.get("members") or []
-        if not members or any(m.get("serverId") == "plex-1" for m in members):
+        if not members:
+            continue
+        if plex_configured and any(m.get("serverId") == "plex-1" for m in members):
             continue
         media_type = "movie" if group.get("mediaType") == "movie" else "tv"
         for member in members:
             server_id = member.get("serverId")
             library_id = member.get("libraryId")
-            if server_id and library_id:
+            if server_id and library_id and server_id != "plex-1":
                 standalone_members.append((server_id, library_id, media_type))
 
     if not standalone_members:

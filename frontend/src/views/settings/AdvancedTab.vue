@@ -117,7 +117,7 @@ const moveApiDown = (api: string) => {
         <div class="preset-action-item">
           <div class="preset-info">
             <strong>Run Startup Wizard</strong>
-            <p>Walks through Plex connection, library selection, API keys, and starter presets again. Your existing settings aren't cleared — you'll just be stepping through the same screens.</p>
+            <p>Walks through media server connections, library selection, API keys, and starter presets again. Your existing settings aren't cleared — you'll just be stepping through the same screens.</p>
           </div>
           <button @click="launchOnboarding" class="secondary">
             Run Startup Wizard
@@ -229,7 +229,7 @@ const moveApiDown = (api: string) => {
     <div class="section info-section">
       <h3>What's Included in Database Export</h3>
       <ul class="included-list">
-        <li><strong>All Settings:</strong> UI settings, Plex connection, API keys, save locations, performance settings</li>
+        <li><strong>All Settings:</strong> UI settings, media server connections, API keys, save locations, performance settings</li>
         <li><strong>Template Presets:</strong> All custom presets with template options and season configurations</li>
         <li><strong>Scheduler Settings:</strong> Cron schedules and library scan configurations</li>
         <li><strong>Cache Data:</strong> Movie and TV show metadata cache (optional, can be excluded)</li>

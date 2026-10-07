@@ -101,6 +101,20 @@ This isn't a trigger in the same sense as the four above — it's a follow-up pa
 
 ---
 
+## Multiple Media Servers (Plex / Jellyfin / Emby)
+
+Library groups link the same library across servers. Every flow above works per group:
+
+- **Browsing**: the grid unions the group's libraries and merges the same title (TMDb/TVDB id; collections by name or a manual match) into one card.
+- **Sending**: the poster is rendered once, then uploaded to each chosen server, finding the item's copy on each by its external id.
+- **Webhooks**: a `group` URL looks the item up across the group's libraries (Plex first when present), then delivers to every member.
+- **Scans/auto-generate**: Jellyfin/Emby scans also detect new items and auto-generate posters for them; titles that Plex also has are handled from the Plex side.
+- **Media Mirror**: copies artwork from a source server to the group's other servers, skipping images that haven't changed.
+
+See [docs/MEDIA_SERVERS.md](docs/MEDIA_SERVERS.md) for the user-facing guide.
+
+---
+
 ## Collections & the Kometa Template
 
 Collections have no TMDb/TVDB entry of their own, so they skip the metadata-lookup and Plex-media-info steps every other item goes through. Two things distinguish their pipeline:

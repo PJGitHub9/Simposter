@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.7.02 (2026-10-07) — `dev-jellyfin` branch
+
+### Improvements
+- **Servers treated evenly** — Plex, Jellyfin and Emby are all just media servers:
+  - The setup wizard's separate "Connect your Plex server" and "Connect your media server(s)" steps are now one "Connect your servers" step with identical sections. You need at least one picked server to connect; untested ones are skipped. Its library step lists every server's libraries together, each tagged by server.
+  - Library group cards show every server's libraries as identical chips ("Server: Library" with ✕), with one shared "+ Link a library..." picker grouped by server.
+  - Help text and wording no longer frame Jellyfin/Emby as add-ons to Plex.
+- **Scheduled scans by library group** — Settings → Libraries' schedule picker lists library groups (saved as `group:<id>`) and scans each chosen group on every server it includes. Older Plex-only selections still work. The setup wizard offers a scan schedule without Plex too (it previously hid it).
+- **Main Plex server Enabled checkbox** — switches Plex off app-wide while keeping its URL/token, honored by the backend at startup and on save. The "Primary" badge only appears when a second Plex server exists.
+- **Docs** — new `docs/MEDIA_SERVERS.md`. README, Getting Started, Webhooks, the Collections guide, WORKFLOW and ARCHITECTURE now cover Jellyfin/Emby.
+
+### Bug Fixes
+- A Jellyfin/Emby-only group's Scan button didn't know about other scans, so it stayed clickable during Force Refresh All Art and then failed with "A scan is already in progress". Every group now has one Scan button that follows the shared scan status.
+- Scheduled scans ran the linked Jellyfin/Emby libraries' scan twice per run.
+- A library from a second Plex server could be linked to a group but was never displayed on it.
+
 ## v1.7.01 (2026-10-07) — `dev-jellyfin` branch
 
 ### New Features

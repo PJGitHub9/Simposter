@@ -27,49 +27,24 @@
       </template>
     </div>
 
-    <!-- Plex / Jellyfin / Emby all render as the same shape of row -- a chip
-         with an unlink button when linked, or a "not linked" + inline picker
-         when not. Plex is no longer required/special here (a group can be
-         Plex-only, Jellyfin-only, a mix, or -- while being built -- empty). -->
+    <!-- One row per server type (Plex, Jellyfin, Emby), all identical: a chip
+         per linked library ("Server name: Library") with an ✕ to unlink, or
+         "Not linked". One shared picker below adds a library from any server. -->
     <div class="linked-card">
-      <div v-if="showPlexRow" class="server-row">
-        <span class="server-type-badge plex">Plex</span>
+      <div v-for="row in serverRows" :key="row.type" class="server-row">
+        <span class="server-type-badge" :class="row.type">{{ row.label }}</span>
         <div class="server-row-body">
-          <template v-if="plexMember">
-            <span class="linked-member-chip">
-              {{ plexLibraryLabel }}
-              <button type="button" class="chip-remove" title="Unlink" @click="unlinkPlex">✕</button>
-            </span>
-            <p v-if="mapping && savedLibraryIds.has(String(mapping.id))" class="repoint-hint">
-              Removing this leaves its cached posters/labels orphaned (safe to clear later via Settings → Cleanup).
-            </p>
-          </template>
-          <template v-else>
-            <div class="add-linked-row">
-              <select v-model="pickedPlexKey" class="linked-add-select" @change="linkPlex">
-                <option value="">+ Link a Plex library...</option>
-                <option v-for="p in availablePlexLibraries" :key="p.key" :value="p.key">{{ p.title }} ({{ p.key }})</option>
-              </select>
-            </div>
-            <p v-if="!availablePlexLibraries.length" class="server-row-empty">No unused Plex libraries of this type left to link.</p>
-          </template>
-        </div>
-      </div>
-
-      <div v-for="g in otherMemberGroupsAlways" :key="g.type" class="server-row">
-        <span class="server-type-badge" :class="g.type">{{ g.label }}</span>
-        <div class="server-row-body">
-          <div v-if="g.members.length" class="linked-member-list">
+          <div v-if="row.members.length" class="linked-member-list">
             <span
-              v-for="m in g.members"
+              v-for="m in row.members"
               :key="`${m.serverId}:${m.libraryId}`"
               class="linked-member-chip"
-              :class="{ 'chip-broken': !serverExists(m.serverId) }"
-              :title="!serverExists(m.serverId) ? `This server (${m.serverId}) is no longer configured -- was it removed and re-added? Unlink and re-add it below.` : undefined"
+              :class="{ 'chip-broken': !memberAvailable(m) }"
+              :title="!memberAvailable(m) ? `This server (${m.serverId}) isn't configured or is disabled -- unlink it, or re-enable the server in Media Servers.` : undefined"
             >
-              {{ serverDisplayLabel(m.serverId) }}: {{ m.libraryName || m.libraryId }}
-              <span v-if="!serverExists(m.serverId)" class="chip-warning">⚠ not configured</span>
-              <button type="button" class="chip-remove" title="Unlink" @click="removeMember(m)">✕</button>
+              {{ serverDisplayLabel(m.serverId) }}: {{ memberLibraryName(m) }}
+              <span v-if="!memberAvailable(m)" class="chip-warning">⚠ not configured</span>
+              <button type="button" class="chip-remove" title="Unlink" @click="unlinkMember(m)">✕</button>
             </span>
           </div>
           <span v-else class="server-row-empty">Not linked</span>
@@ -78,15 +53,17 @@
 
       <div class="add-linked-row">
         <select v-model="pickedKey" class="linked-add-select" @change="addPicked">
-          <option value="">+ Link a library from another server...</option>
-          <option v-for="opt in availableToAdd" :key="`${opt.serverId}:${opt.libraryId}`" :value="`${opt.serverId}:${opt.libraryId}`">
-            {{ serverDisplayLabel(opt.serverId) }} — {{ opt.libraryName }}
-          </option>
+          <option value="">+ Link a library...</option>
+          <optgroup v-for="srv in pickerGroups" :key="srv.serverId" :label="srv.label">
+            <option v-for="o in srv.options" :key="`${o.serverId}:${o.libraryId}`" :value="`${o.serverId}:${o.libraryId}`">
+              {{ o.libraryName }}
+            </option>
+          </optgroup>
         </select>
       </div>
       <p class="link-hint">Picking a library links it immediately — click Save Changes to keep it.</p>
-      <p v-if="!discovered.length" class="no-labels-hint">
-        No other media servers configured yet, or none reachable — add one in Media Servers.
+      <p v-if="!pickerGroups.length && !group.members.length" class="no-labels-hint">
+        No media servers configured yet, or none reachable — add one in Settings → Media Servers.
       </p>
     </div>
 
@@ -160,23 +137,18 @@
     </div>
 
     <div class="library-actions">
+      <!-- One Scan button for every group, disabled while ANY scan is running
+           (one scan at a time, server-wide). A group with a main-Plex library
+           scans through the parent (Plex scan + its linked libraries); any
+           other group scans each of its libraries directly. -->
       <button
-        v-if="plexMember"
-        @click="emit('scan-plex')"
-        :disabled="scanCooldown || scanningLibraryId === mapping?.id"
+        v-if="hasAnyMember"
+        @click="plexMember ? emit('scan-plex') : scanNonPlex()"
+        :disabled="scanCooldown || anyScanRunning"
         class="scan-btn"
-        :title="`Scan ${group.name || plexLibraryLabel}`"
+        :title="anyScanRunning && !thisGroupScanning ? 'Another scan is running' : `Scan ${group.name || 'this group'}`"
       >
-        {{ scanningLibraryId === mapping?.id ? 'Scanning...' : 'Scan' }}
-      </button>
-      <button
-        v-else-if="hasAnyMember"
-        @click="scanNonPlex"
-        :disabled="scanningNonPlex"
-        class="scan-btn"
-        :title="`Scan ${group.name || 'this group'}`"
-      >
-        {{ scanningNonPlex ? 'Scanning...' : 'Scan' }}
+        {{ thisGroupScanning ? 'Scanning...' : 'Scan' }}
       </button>
       <button @click="removeGroup" class="remove-btn">Remove Group</button>
     </div>
@@ -283,43 +255,46 @@ function serverExists(serverId: string): boolean {
   return settingsStore.mediaServers.value.some(s => s.id === serverId)
 }
 
-// Whether Plex is actually connected right now (matches App.vue's own
-// identical plexConfigured check). A group's Plex row is shown when EITHER
-// Plex is configured (so it CAN be linked) OR the group already has a Plex
-// member (even if Plex has since been disconnected -- so the now-orphaned
-// link is still visible and can be unlinked, matching the existing
-// chip-broken/serverExists() handling for Jellyfin/Emby members below).
-// Previously always rendered unconditionally, showing a permanently-empty
-// "Link a Plex library..." row even on an install with no Plex configured
-// at all.
-const plexConfigured = computed(() => !!(settingsStore.plex.value.url && settingsStore.plex.value.token))
+// Plex is in use (URL + token, and its main server isn't switched off).
+const plexConfigured = computed(() => settingsStore.plexActive.value)
 const plexMember = computed<LibraryGroupMember | undefined>(() =>
   props.group.members.find(m => m.serverId === 'plex-1')
 )
-const showPlexRow = computed(() => plexConfigured.value || !!plexMember.value)
-const plexLibraryLabel = computed(() => {
-  if (!plexMember.value) return ''
-  const opt = props.plexLibraries.find(p => p.key === plexMember.value!.libraryId)
-  return opt ? `${opt.title} (${opt.key})` : (plexMember.value.libraryName || plexMember.value.libraryId)
-})
 
-const otherMembers = computed<LibraryGroupMember[]>(() =>
-  props.group.members.filter(m => m.serverId !== 'plex-1')
-)
-const otherMemberGroupDefs = [
+// One row per server type. A row shows when a server of that type is in use
+// (so a library CAN be linked) or the group already has a member of that type
+// (so an orphaned link stays visible and can be unlinked).
+const serverRowDefs = [
+  { type: 'plex', label: 'Plex' },
   { type: 'jellyfin', label: 'Jellyfin' },
   { type: 'emby', label: 'Emby' },
 ] as const
-// Same reasoning as showPlexRow above: only show a Jellyfin/Emby row when a
-// server of that type is actually configured (so it CAN be linked) OR the
-// group already has a member of that type (so an existing/orphaned link
-// stays visible and unlinkable). Previously always showed both rows
-// unconditionally, regardless of whether either type was ever configured.
-const otherMemberGroupsAlways = computed(() =>
-  otherMemberGroupDefs
-    .map(g => ({ ...g, members: otherMembers.value.filter(m => serverTypeFor(m.serverId) === g.type) }))
-    .filter(g => g.members.length > 0 || settingsStore.mediaServers.value.some(s => s.type === g.type && s.enabled))
+const serverRows = computed(() =>
+  serverRowDefs
+    .map(d => ({ ...d, members: props.group.members.filter(m => serverTypeFor(m.serverId) === d.type) }))
+    .filter(d =>
+      d.members.length > 0 ||
+      (d.type === 'plex' && plexConfigured.value) ||
+      settingsStore.mediaServers.value.some(s => s.type === d.type && s.id !== 'plex-1' && s.enabled !== false)
+    )
 )
+
+function memberAvailable(m: LibraryGroupMember): boolean {
+  return m.serverId === 'plex-1' ? plexConfigured.value : serverExists(m.serverId)
+}
+function memberLibraryName(m: LibraryGroupMember): string {
+  if (m.serverId === 'plex-1') {
+    const opt = props.plexLibraries.find(p => p.key === m.libraryId)
+    if (opt) return opt.title
+  }
+  return m.libraryName || m.libraryId
+}
+function unlinkMember(m: LibraryGroupMember) {
+  // The main Plex server's library also has a library-mapping entry the parent
+  // owns (auto-generate settings etc.), so its unlink goes through the parent.
+  if (m.serverId === 'plex-1') emit('unlink-plex')
+  else removeMember(m)
+}
 
 const availablePlexLibraries = computed(() =>
   props.plexLibraries
@@ -327,10 +302,8 @@ const availablePlexLibraries = computed(() =>
     .filter(p => !props.usedPlexLibraryIds.has(p.key))
 )
 
-const pickedPlexKey = ref('')
-function linkPlex() {
-  if (!pickedPlexKey.value) return
-  const opt = props.plexLibraries.find(p => p.key === pickedPlexKey.value)
+function linkPlex(key: string) {
+  const opt = props.plexLibraries.find(p => p.key === key)
   if (!opt) return
   groups.value = groups.value.map(g =>
     g.id === props.group.id
@@ -338,10 +311,6 @@ function linkPlex() {
       : g
   )
   emit('link-plex', opt.key, opt.title)
-  pickedPlexKey.value = ''
-}
-function unlinkPlex() {
-  emit('unlink-plex')
 }
 
 const availableToAdd = computed(() => {
@@ -359,10 +328,38 @@ const availableToAdd = computed(() => {
     })
 })
 
+// The shared picker: every server's unlinked libraries, grouped by server. A
+// group holds at most one library from the main Plex server.
+type PickerOption = { serverId: string; libraryId: string; libraryName: string }
+const pickerGroups = computed(() => {
+  const options: PickerOption[] = []
+  if (plexConfigured.value && !plexMember.value) {
+    for (const p of availablePlexLibraries.value) options.push({ serverId: 'plex-1', libraryId: p.key, libraryName: p.title })
+  }
+  for (const d of availableToAdd.value) options.push({ serverId: d.serverId, libraryId: d.libraryId, libraryName: d.libraryName })
+  const byServer: { serverId: string; label: string; options: PickerOption[] }[] = []
+  for (const o of options) {
+    let g = byServer.find(b => b.serverId === o.serverId)
+    if (!g) {
+      g = { serverId: o.serverId, label: serverDisplayLabel(o.serverId), options: [] }
+      byServer.push(g)
+    }
+    g.options.push(o)
+  }
+  return byServer
+})
+
 const pickedKey = ref('')
 function addPicked() {
   if (!pickedKey.value) return
-  const [serverId, libraryId] = pickedKey.value.split(':')
+  const sep = pickedKey.value.indexOf(':')
+  const serverId = pickedKey.value.slice(0, sep)
+  const libraryId = pickedKey.value.slice(sep + 1)
+  pickedKey.value = ''
+  if (serverId === 'plex-1') {
+    linkPlex(libraryId)
+    return
+  }
   const lib = props.discovered.find(d => d.serverId === serverId && d.libraryId === libraryId)
   if (!lib) return
   groups.value = groups.value.map(g =>
@@ -370,7 +367,6 @@ function addPicked() {
       ? { ...g, members: [...g.members, { serverId: lib.serverId, libraryId: lib.libraryId, libraryName: lib.libraryName }] }
       : g
   )
-  pickedKey.value = ''
 }
 
 function removeMember(member: LibraryGroupMember) {
@@ -495,8 +491,16 @@ function onPresetChange(value: string) {
 // original scanGroup()).
 const scanningNonPlex = ref(false)
 const scanError = ref('')
+// Any scan anywhere (the shared status the progress popup follows), or this
+// card's own scan between its per-library requests.
+const anyScanRunning = computed(() => scan.running.value || scan.checking.value || scanningNonPlex.value)
+const thisGroupScanning = computed(() =>
+  plexMember.value ? props.scanningLibraryId === props.mapping?.id && !!props.mapping?.id : scanningNonPlex.value
+)
 async function scanNonPlex() {
+  if (anyScanRunning.value) return
   scanningNonPlex.value = true
+  scan.running.value = true
   scanError.value = ''
   // Connects this scan to the SAME global scan-progress overlay the Plex
   // scan already uses (App.vue's startScanPolling() is triggered by this
@@ -511,6 +515,10 @@ async function scanNonPlex() {
   scan.current.value = ''
   try {
     for (const m of props.group.members) {
+      // Each request returns once that library's scan has finished, so this
+      // card knows when it's busy -- re-assert the shared flag per library in
+      // case the progress poller saw the gap between two and cleared it.
+      scan.running.value = true
       const params = new URLSearchParams({
         library_id: m.libraryId,
         media_type: props.mediaType,
@@ -525,6 +533,8 @@ async function scanNonPlex() {
   } catch (e) {
     scanError.value = e instanceof Error ? e.message : 'Scan failed'
   } finally {
+    // Every request has returned, so the scan is over either way.
+    scan.running.value = false
     scanningNonPlex.value = false
   }
 }

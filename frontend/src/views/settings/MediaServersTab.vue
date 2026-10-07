@@ -30,17 +30,17 @@
       <h3>{{ group.label }}</h3>
 
       <div class="server-list">
-        <!-- Primary Plex Connection -- the one auto-seeded 'plex-1' entry
-             every install already has. Styled identically to the cards
-             below (same badge/name/url/credential row shape) so Plex
-             doesn't look like a different kind of thing, just labeled
-             "Primary" since it's the connection actually used for
-             rendering/sending today and can't be removed. -->
+        <!-- The main Plex server ('plex-1'). Same card shape and controls as
+             every other server, including Enabled. Labelled "Primary" only when
+             a second Plex server exists, since only this one can be sent to. -->
         <div v-if="group.type === 'plex' && showPrimaryPlexForm" class="server-card">
           <div class="server-card-row">
             <span class="server-type-badge plex">PLEX</span>
             <input v-model="primaryPlexName" placeholder="Name (optional, e.g. Plex)" class="server-name-input" />
-            <span class="primary-badge">Primary</span>
+            <span v-if="hasExtraPlex" class="primary-badge" title="Simposter sends to this Plex server; additional Plex servers can be browsed but not sent to yet">Primary</span>
+            <label class="enabled-toggle">
+              <input type="checkbox" v-model="primaryPlexEnabled" /> Enabled
+            </label>
           </div>
           <div class="server-card-row">
             <input v-model="localPlexUrl" placeholder="http://localhost:32400" class="server-url-input" />
@@ -56,7 +56,7 @@
             </button>
             <span v-if="testConnection" class="test-result-inline" :class="{ ok: testConnection.startsWith('✓') }">{{ testConnection }}</span>
           </div>
-          <p class="scan-hint">Which Plex libraries to track is managed in Settings → Libraries.</p>
+          <p class="scan-hint">Choose which of this server's libraries to use in Settings → Libraries, by adding them to a library group.</p>
           <!-- Removable like any other server. A configured primary connection
                asks for confirmation first, since saving the removal also unlinks
                its libraries from every group and purges its cached data. -->
@@ -107,11 +107,7 @@
             Simposter currently only renders/sends through the primary Plex connection above —
             this entry can be tested and linked to a library for browsing, but won't receive sends yet.
           </p>
-          <p v-else class="scan-hint">
-            To browse this server's content in Simposter, link one of its libraries to a
-            Plex library in Settings → Libraries, then use that library's "Scan" button —
-            scanning happens per linked library, not for this whole server at once.
-          </p>
+          <p v-else class="scan-hint">Choose which of this server's libraries to use in Settings → Libraries, by adding them to a library group.</p>
           <!-- Moved to its own row at the bottom of the card, as plain text
                rather than an icon-only red ✕ -- the icon sat right next to
                Test Connection and read as ambiguous/alarming (the user's own
@@ -154,12 +150,12 @@
         class="secondary-small add-server-toggle"
         @click="addFormOpen[group.type] = true"
       >
-        + {{ group.type === 'plex' ? 'Add Another Plex Server' : `Add a ${group.label} Server` }}
+        + {{ group.type === 'plex' ? 'Add Another Plex Server' : `Add ${article(group.label)} ${group.label} Server` }}
       </button>
 
       <div v-else class="add-server-form">
         <div class="add-server-header">
-          <strong class="add-server-title">{{ group.type === 'plex' ? 'Add another Plex server' : `Add a ${group.label} server` }}</strong>
+          <strong class="add-server-title">{{ group.type === 'plex' ? 'Add another Plex server' : `Add ${article(group.label)} ${group.label} server` }}</strong>
           <button type="button" class="icon-btn" title="Cancel" @click="cancelAddServer(group.type)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -283,6 +279,27 @@ const servers = settingsStore.mediaServers
 // seeds it once Plex is already configured), typing a name creates a
 // minimal stub entry rather than silently doing nothing.
 const primaryPlexEntry = computed(() => servers.value.find(s => s.id === 'plex-1'))
+
+// Enabled checkbox for the main Plex server -- stored on its 'plex-1' entry
+// like every other server's. Unticked switches Plex off app-wide (the backend
+// treats it as not configured) while keeping the saved URL/token.
+const primaryPlexEnabled = computed({
+  get: () => primaryPlexEntry.value?.enabled !== false,
+  set: (val: boolean) => {
+    if (primaryPlexEntry.value) {
+      servers.value = servers.value.map(s => (s.id === 'plex-1' ? { ...s, enabled: val } : s))
+    } else {
+      servers.value = [...servers.value, { id: 'plex-1', type: 'plex', url: '', enabled: val }]
+    }
+  },
+})
+
+// "Primary" only means something once a second Plex server exists.
+const hasExtraPlex = computed(() => servers.value.some(s => s.type === 'plex' && s.id !== 'plex-1'))
+
+function article(word: string): string {
+  return /^[aeiou]/i.test(word) ? 'an' : 'a'
+}
 const primaryPlexName = computed({
   get: () => primaryPlexEntry.value?.name || '',
   set: (val: string) => {

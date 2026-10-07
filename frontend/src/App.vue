@@ -96,7 +96,7 @@ const resolveLibraryTarget = (libId: string): { library: string; server?: string
 
 const tabs = computed<MenuItem[]>(() => {
   // Check if Plex is configured
-  const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
+  const plexConfigured = settings.plexActive.value
   // Phase 8a -- a Jellyfin/Emby-only install (no Plex at all) is no longer locked out
   // of the app; it just has no Plex-derived tabs below. See onMounted()'s matching gate.
   const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
@@ -578,7 +578,7 @@ onMounted(async () => {
   // Check if any server is configured — show onboarding for new users. Phase 8a: an
   // install with only Jellyfin/Emby configured (no Plex) is no longer redirected to
   // Settings — matches the tabs computed's identical anyServerConfigured check above.
-  const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
+  const plexConfigured = settings.plexActive.value
   const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
   if (!settings.onboardingCompleted.value) {
     showOnboarding.value = true

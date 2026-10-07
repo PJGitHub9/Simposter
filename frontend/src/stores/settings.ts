@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { getApiBase } from '../services/apiBase'
 
 const apiBase = getApiBase()
@@ -209,6 +209,13 @@ const saveBatchInSubfolder = ref<boolean>(false)
 const saveToAssetFolderOnSend = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
 const mediaServers = ref<MediaServerEntry[]>([])
+// Plex is in use when it has a URL + token and its main server ('plex-1') isn't
+// switched off with the Enabled checkbox in Settings -> Media Servers -- the
+// same rule as Jellyfin/Emby, whose entries are skipped when disabled.
+const plexActive = computed(() =>
+  !!(plex.value.url && plex.value.token) &&
+  mediaServers.value.find(s => s.id === 'plex-1')?.enabled !== false
+)
 const libraryGroups = ref<LibraryGroup[]>([])
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
@@ -421,6 +428,7 @@ export function useSettingsStore() {
     defaultLabelsToRemove,
     defaultTvLabelsToRemove,
     plex,
+    plexActive,
     mediaServers,
     libraryGroups,
     tmdb,

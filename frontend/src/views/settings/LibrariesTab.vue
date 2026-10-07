@@ -115,7 +115,11 @@ const emit = defineEmits<{
 // than always showing them with just a "Plex only" text tag. The per-group
 // Plex/Emby link rows (LibraryGroupCard.vue) have their own identical,
 // independent check for the same reason.
-const plexConfigured = computed(() => !!(props.plexUrl && props.plexToken))
+// Plex has a URL + token and its main server isn't switched off (Settings -> Media Servers).
+const plexConfigured = computed(() =>
+  !!(props.plexUrl && props.plexToken) &&
+  settingsStore.mediaServers.value.find(s => s.id === 'plex-1')?.enabled !== false
+)
 // Whether ANY server (Plex, Jellyfin, or Emby) is configured -- matches
 // App.vue's identical anyServerConfigured check. Scheduled Scans is no
 // longer Plex-only (the scheduler now also covers linked AND standalone
@@ -340,19 +344,21 @@ const toggleIgnoreLabel = (libraryIdx: number, label: string, isTv: boolean) => 
   }
 }
 
-const toggleLibrarySelection = (libraryId: string) => {
-  const current = [...localSchedulerLibraryIds.value]
-  const index = current.indexOf(libraryId)
-  if (index > -1) {
-    current.splice(index, 1)
-  } else {
-    current.push(libraryId)
-  }
-  localSchedulerLibraryIds.value = current
+// The scan schedule picks library GROUPS ("group:<id>"), covering every server
+// in each group. Older saved selections were bare Plex library ids; a group is
+// shown as selected when its Plex library is in such a list, and the first
+// change rewrites the selection in the group form.
+const isLibrarySelected = (entryId: string) => {
+  if (localSchedulerLibraryIds.value.includes(entryId)) return true
+  const opt = availableLibrariesForScheduler.value.find(o => o.id === entryId)
+  return !!opt?.plexLibraryId && localSchedulerLibraryIds.value.includes(opt.plexLibraryId)
 }
 
-const isLibrarySelected = (libraryId: string) => {
-  return localSchedulerLibraryIds.value.includes(libraryId)
+const toggleLibrarySelection = (entryId: string) => {
+  const selected = new Set(availableLibrariesForScheduler.value.filter(o => isLibrarySelected(o.id)).map(o => o.id))
+  if (selected.has(entryId)) selected.delete(entryId)
+  else selected.add(entryId)
+  localSchedulerLibraryIds.value = [...selected]
 }
 
 // ── Unified Library Groups (replaces the old separate "Plex-anchored card" /
@@ -561,13 +567,16 @@ function onScanPlex(mediaType: 'movie' | 'tv', idx: number) {
   if (lib?.id) emit('scan-library', lib.id)
 }
 
-const availableLibrariesForScheduler = computed(() => {
-  const allLibs = [
-    ...props.libraries.map(l => ({ id: l.id, name: l.displayName || l.title || l.id, type: 'Movie' })),
-    ...props.tvShowLibraries.map(l => ({ id: l.id, name: l.displayName || l.title || l.id, type: 'TV' }))
-  ].filter(l => l.id)
-  return allLibs
-})
+const availableLibrariesForScheduler = computed(() =>
+  settingsStore.libraryGroups.value
+    .filter(g => g.members.length > 0)
+    .map(g => ({
+      id: `group:${g.id}`,
+      name: g.name || g.members[0]?.libraryName || g.id,
+      type: g.mediaType === 'tv' ? 'TV' : 'Movie',
+      plexLibraryId: g.members.find(m => m.serverId === 'plex-1')?.libraryId || '',
+    }))
+)
 
 const formatNextRunTime = (timestamp: string | null) => {
   if (!timestamp) return 'Not scheduled'
@@ -645,7 +654,7 @@ watch(
     <h2>Libraries</h2>
 
     <p class="plex-connection-hint">
-      Manage your Plex connection in <router-link to="/settings?tab=media-servers">Settings → Media Servers</router-link>.
+      Manage your media servers in <router-link to="/settings?tab=media-servers">Settings → Media Servers</router-link>.
     </p>
 
     <!-- Global Logo Settings -->
@@ -872,12 +881,9 @@ watch(
 
       <div v-if="localSchedulerEnabled" class="scheduler-config">
         <div class="library-selection">
-          <span class="label-text">Plex Libraries to Scan</span>
-          <span v-if="availableLibrariesForScheduler.length" class="help-text">
-            Select Plex libraries to scan automatically (leave all unchecked for all libraries). Any Jellyfin/Emby library linked to a group, or a standalone Jellyfin/Emby-only group, is always scanned too — no separate selection needed for those.
-          </span>
-          <span v-else class="help-text">
-            No Plex libraries configured — every linked and standalone Jellyfin/Emby library group is still scanned automatically on this schedule.
+          <span class="label-text">Libraries to Scan</span>
+          <span class="help-text">
+            Leave all unchecked to scan every library on every server. Tick groups to scan only those — each group is scanned on every server it includes.
           </span>
 
           <div class="library-checkboxes-horizontal">
