@@ -13,6 +13,7 @@ import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
 import UploadPosterModal from './UploadPosterModal.vue'
 import { getApiBase } from '../../services/apiBase'
+import { notifySendSummary } from '../../services/sendNotify'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
 
 // Simple debounce helper
@@ -2238,7 +2239,7 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
         server_id: 'plex-1',
         library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
       }
-      await render.send(targetMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, null)
+      await render.send(targetMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, null, false)
       return true
     } catch {
       return false
@@ -2253,7 +2254,7 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
     const res = await fetch(`${apiBase}/api/media-server/send-poster`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: true, server_id: serverId })
+      body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: true, server_id: serverId, notify: false })
     })
     return res.ok
   } catch {
@@ -2266,8 +2267,8 @@ async function sendLogoToServer(serverId: string, ratingKey: string): Promise<bo
   try {
     const endpoint = serverId === 'plex-1' ? '/api/plex/send-logo' : '/api/media-server/send-logo'
     const body: Record<string, unknown> = serverId === 'plex-1'
-      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: true }
-      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: true, server_id: serverId }
+      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: true, notify: false }
+      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: true, server_id: serverId, notify: false }
     const res = await fetch(`${apiBase}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2284,6 +2285,28 @@ async function sendLogoToServer(serverId: string, ratingKey: string): Promise<bo
 // intersection is empty (e.g. a season that never resolved a server_id the
 // modal's selection, built from the currently-viewed item, happened to
 // include), rather than silently sending to nothing for that item.
+// One notification for a whole send (every item, every server, poster and/or
+// logo) instead of one per upload -- see services/sendNotify.ts.
+function sendSummaryNotification(serverIds: Iterable<string>, assets: Set<string>, itemTitles: string[], imageData: string | null) {
+  const servers = Array.from(new Set(serverIds))
+  const onlySeries = itemTitles.length === 1 && itemTitles[0] === seasons.value.find(s => s.isSeries)?.title
+  const title = itemTitles.length && !onlySeries
+    ? `${props.movie.title} — ${itemTitles.join(', ')}`
+    : props.movie.title
+  const sentPoster = assets.has('poster')
+  void notifySendSummary({
+    ratingKey: props.movie.key,
+    serverIds: servers,
+    assets: ['poster', 'logo'].filter(a => assets.has(a)),
+    templateId: sentPoster ? selectedTemplate.value : '',
+    presetId: sentPoster ? selectedPreset.value : '',
+    libraryId: props.movie.library_id ?? null,
+    title,
+    year: props.movie.year ?? null,
+    imageData: sentPoster ? imageData : null,
+  })
+}
+
 function resolveSendTargetsFor(servers: LinkedServer[]): LinkedServer[] {
   if (servers.length === 0) return []
   const filtered = servers.filter(s => sendTargetIds.value.has(s.server_id))
@@ -2325,6 +2348,7 @@ const doSendLogoOnly = async () => {
       const targets = resolveSendTargets()
       const results = await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
       const okCount = results.filter(Boolean).length
+      sendSummaryNotification(targets.filter((_, i) => results[i]).map(t => t.server_id), new Set(['logo']), [], null)
       if (okCount === 0) throw new Error('Failed to send logo')
       success(okCount === targets.length ? 'Logo sent!' : `Logo sent to ${okCount}/${targets.length} server(s)`)
       await fetchExistingLogo()
@@ -2337,6 +2361,7 @@ const doSendLogoOnly = async () => {
         rating_key: props.movie.key,
         logo_url: logoUrl.value,
         is_tv: true,
+        library_id: props.movie.library_id ?? null,
       }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -2435,6 +2460,9 @@ const doSend = async () => {
       // changes (see CLAUDE.md Quirk #17's established boundary for this
       // class of fix).
       const pendingSends: Promise<{ title: string; ok: boolean }>[] = []
+      const notifyServers = new Set<string>()
+      const notifyAssets = new Set<string>()
+      let notifyImage: string | null = null
 
       for (const seasonKey of selectedSeasonKeys) {
         const season = seasons.value.find(s => s.key === seasonKey)
@@ -2478,11 +2506,16 @@ const doSend = async () => {
           const posterPromises = targets.map(t => sendPosterToServer(t.server_id, t.rating_key))
           const logoPromises = (sendLogo.value && logoUrl.value) ? targets.map(t => sendLogoToServer(t.server_id, t.rating_key)) : []
           const seasonTitle = season.title
+          const itemImage = lastPreview.value
           pendingSends.push((async () => {
             try {
               const results = await Promise.all(posterPromises)
               const okCount = results.filter(Boolean).length
-              if (logoPromises.length > 0) await Promise.all(logoPromises)
+              const logoResults = logoPromises.length > 0 ? await Promise.all(logoPromises) : []
+              targets.forEach((t, i) => {
+                if (results[i]) { notifyServers.add(t.server_id); notifyAssets.add('poster'); notifyImage = notifyImage || itemImage }
+                if (logoResults[i]) { notifyServers.add(t.server_id); notifyAssets.add('logo') }
+              })
               return { title: seasonTitle, ok: okCount > 0 }
             } catch (err) {
               console.error(`[SEND] ${seasonTitle} - Failed:`, err)
@@ -2500,6 +2533,7 @@ const doSend = async () => {
         if (r.ok) succeeded.push(r.title)
         else failed.push(r.title)
       }
+      sendSummaryNotification(notifyServers, notifyAssets, succeeded, notifyImage)
 
       // Restore original editing context, matching the Plex-only loop below.
       if (originalKey) {
@@ -2543,6 +2577,7 @@ const doSend = async () => {
     const originalSettings = getCurrentSettings()
     const originalPoster = selectedPoster.value
 
+    let plexNotifyImage: string | null = null
     // Send for each selected season
     for (const seasonKey of selectedSeasonKeys) {
       const season = seasons.value.find(s => s.key === seasonKey)
@@ -2559,9 +2594,10 @@ const doSend = async () => {
         // name -- see the identical fix/comment in doSave()'s equivalent line.
         const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title }
         const seasonIndex = season.isSeries ? null : season.index
-        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex)
+        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex, false)
 
         succeeded.push(season.title)
+        plexNotifyImage = plexNotifyImage || renderedPreviews.value.find(p => p.seasonKey === seasonKey)?.imageUrl || null
       } catch (err) {
         failed.push(season.title)
         console.error(`[SEND TO PLEX] ${season.title} - Failed:`, err)
@@ -2576,6 +2612,10 @@ const doSend = async () => {
       // Restore current season index to the original selection if possible
       const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
       if (origIdx >= 0) currentSeasonIndex.value = origIdx
+    }
+
+    if (succeeded.length > 0) {
+      sendSummaryNotification(['plex-1'], new Set(sendLogo.value && logoUrl.value ? ['poster', 'logo'] : ['poster']), succeeded, plexNotifyImage)
     }
 
     // Show results

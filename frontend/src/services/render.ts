@@ -121,7 +121,10 @@ export function useRenderService() {
     templateId?: string,
     presetId?: string,
     sendLogo?: boolean,
-    seasonIndex?: number | null
+    seasonIndex?: number | null,
+    // false when the caller sends one combined notification for the whole
+    // send itself (see services/sendNotify.ts) instead of one per upload
+    notify: boolean = true
   ) => {
     const payload: Record<string, unknown> = {
       ...basePayload(movie, bgUrl, logoUrl, templateId, presetId, options),
@@ -131,7 +134,8 @@ export function useRenderService() {
       // Needed so a "save to asset folder on send" render lands at the right path
       // (movie vs. show vs. a specific season) — see backend/save_paths.py.
       is_tv: movie.mediaType === 'tv-show',
-      season_index: seasonIndex ?? null
+      season_index: seasonIndex ?? null,
+      notify
     }
     if (labels?.length) {
       payload.labels = labels
@@ -146,6 +150,8 @@ export function useRenderService() {
             rating_key: movie.key,
             logo_url: logoUrl,
             is_tv: (movie as any).mediaType === 'tv-show',
+            library_id: movie.library_id ?? null,
+            notify,
           })
         })
       } catch { /* non-fatal */ }

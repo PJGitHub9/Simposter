@@ -11,6 +11,7 @@ import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
 import UploadPosterModal from './UploadPosterModal.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
+import { notifySendSummary } from '../../services/sendNotify'
 import { getApiBase } from '../../services/apiBase'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
 
@@ -1183,7 +1184,7 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
         server_id: 'plex-1',
         library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
       }
-      await render.send(targetMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false)
+      await render.send(targetMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, null, false)
       return true
     } catch {
       return false
@@ -1195,7 +1196,7 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
     const res = await fetch(`${apiBase}/api/media-server/send-poster`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: isTvShow })
+      body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: isTvShow, notify: false })
     })
     return res.ok
   } catch {
@@ -1208,8 +1209,8 @@ async function sendLogoToServer(serverId: string, ratingKey: string): Promise<bo
   try {
     const endpoint = serverId === 'plex-1' ? '/api/plex/send-logo' : '/api/media-server/send-logo'
     const body: Record<string, unknown> = serverId === 'plex-1'
-      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: false }
-      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: false }
+      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: false, notify: false, library_id: props.movie.library_id ?? null }
+      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: false, notify: false }
     const res = await fetch(`${apiBase}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1226,6 +1227,26 @@ async function sendLogoToServer(serverId: string, ratingKey: string): Promise<bo
 // exactly [the item's own server], reproducing the pre-multi-server
 // behavior byte-for-byte, since sendTargetIds defaults to every known
 // linked server and there's only ever one.
+// One notification for the whole send -- every server that took at least one
+// asset, and which assets went (see services/sendNotify.ts).
+function sendSummaryNotification(targets: LinkedServer[], posterOk: boolean[], logoOk: boolean[]) {
+  const serverIds = targets.filter((_, i) => posterOk[i] || logoOk[i]).map(t => t.server_id)
+  const assets: string[] = []
+  if (posterOk.some(Boolean)) assets.push('poster')
+  if (logoOk.some(Boolean)) assets.push('logo')
+  void notifySendSummary({
+    ratingKey: props.movie.key,
+    serverIds,
+    assets,
+    templateId: posterOk.some(Boolean) ? selectedTemplate.value : '',
+    presetId: posterOk.some(Boolean) ? selectedPreset.value : '',
+    libraryId: props.movie.library_id ?? null,
+    title: props.movie.title,
+    year: props.movie.year ?? null,
+    imageData: posterOk.some(Boolean) ? lastPreview.value : null,
+  })
+}
+
 function resolveSendTargets(): LinkedServer[] {
   const filtered = linkedServers.value.filter(s => sendTargetIds.value.has(s.server_id))
   return filtered.length > 0 ? filtered : linkedServers.value
@@ -1241,6 +1262,7 @@ const doSendLogoOnly = async () => {
     const targets = resolveSendTargets()
     const results = await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
     const okCount = results.filter(Boolean).length
+    sendSummaryNotification(targets, results.map(() => false), results)
     if (okCount === 0) throw new Error('Failed to send logo')
     success(okCount === targets.length ? 'Logo sent!' : `Logo sent to ${okCount}/${targets.length} server(s)`)
     await fetchExistingLogo()
@@ -1283,9 +1305,11 @@ const doSend = async () => {
     const okCount = results.filter(Boolean).length
     if (okCount === 0) throw new Error(targets.length > 1 ? 'Failed to send poster to any server' : 'Failed to send poster')
     success(okCount === targets.length ? 'Successfully sent poster!' : `Sent to ${okCount}/${targets.length} server(s)`)
+    let logoResults: boolean[] = targets.map(() => false)
     if (sendLogo.value && logoUrl.value) {
-      await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
+      logoResults = await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
     }
+    sendSummaryNotification(targets, results, logoResults)
     // Wait 600ms for the server(s) to process the upload, then refresh what's
     // currently being previewed and labels. The backend's send endpoints
     // already force-refresh their own poster cache as part of the send

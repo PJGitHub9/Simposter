@@ -10,6 +10,28 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.03',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Sending a poster and logo to several servers now produces one notification instead of one per upload. It lists every server it went to, which assets were sent, the library and the template/preset, with the poster attached.',
+          'The notification library filter now understands library groups: picking a library also covers the other libraries in its group, so Jellyfin/Emby sends are no longer filtered out.',
+          'Kometa presets no longer appear in the auto-generate preset list of a library group, since they only apply to collections.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Logo notifications from the editor showed "Unknown Library".',
+          'Docker: a fresh install could crash with "attempt to write a readonly database".',
+          'Picking an auto-generate preset for a group with a Plex library left the dropdown blank.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.02',
     date: '2026-10-07',
     sections: [

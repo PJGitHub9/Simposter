@@ -66,6 +66,7 @@ class MediaServerSendRequest(BaseModel):
     # on Plex". The caller (the TV editor's send picker) already knows which
     # server it's targeting and can pass it straight through.
     server_id: Optional[str] = None
+    notify: bool = True  # False when the editor sends one combined notification itself
 
 
 def _resolve_image_bytes(req: MediaServerSendRequest) -> tuple:
@@ -132,6 +133,65 @@ def _notify_manual_send(rating_key: str, server_id: str, asset_type: str) -> Non
         send_apprise_notification(**kwargs)
     except Exception as e:
         logger.debug("[MEDIA_SERVER_SEND:%s] Notification failed: %s", server_id, e)
+
+
+class SendSummaryNotifyRequest(BaseModel):
+    rating_key: str                    # the item as loaded in the editor
+    server_ids: List[str]              # every server the send reached
+    assets: List[str] = ["poster"]     # e.g. ["poster", "logo"]
+    template_id: str = ""
+    preset_id: str = ""
+    library_id: Optional[str] = None
+    title: Optional[str] = None
+    year: Optional[int] = None
+    image_data: Optional[str] = None   # base64 data URL to attach (the rendered poster)
+
+
+@router.post("/notify-send")
+def api_notify_send_summary(req: SendSummaryNotifyRequest):
+    """One Discord/Apprise notification for a whole editor send (poster and/or
+    logo to one or more servers), instead of one per upload. The editor sends
+    its uploads with notify=false, then calls this once with every server that
+    succeeded. Best-effort: a notification failure never fails anything."""
+    server_ids = [s for s in dict.fromkeys(req.server_ids) if s]
+    if not server_ids:
+        return {"status": "skipped"}
+    # Plex (when included) leads the "Action" line; the rest go in "Also synced to".
+    if "plex-1" in server_ids:
+        server_ids = ["plex-1"] + [s for s in server_ids if s != "plex-1"]
+    try:
+        from .. import database as db
+        from .notifications import send_discord_notification, send_apprise_notification
+        title, year = req.title, req.year
+        if not title:
+            title, cached_year = db.get_title_for_rating_key(req.rating_key)
+            year = year or cached_year
+        library_id = req.library_id or db.get_library_id_for_rating_key(req.rating_key)
+        poster_data = None
+        if req.image_data:
+            try:
+                encoded = req.image_data.split(",", 1)[1] if "," in req.image_data else req.image_data
+                poster_data = base64.b64decode(encoded)
+            except Exception:
+                poster_data = None
+        assets = [a for a in dict.fromkeys(req.assets) if a] or ["poster"]
+        kwargs = dict(
+            title=title or req.rating_key,
+            year=year,
+            template_id=req.template_id,
+            preset_id=req.preset_id,
+            library_id=library_id,
+            source="manual",
+            action="sent_to_media_server",
+            asset_type="+".join(assets),
+            server_id=server_ids[0],
+            synced_server_ids=server_ids[1:],
+        )
+        send_discord_notification(**kwargs, poster_data=poster_data)
+        send_apprise_notification(**kwargs, poster_data=poster_data)
+    except Exception as e:
+        logger.debug("[MEDIA_SERVER_SEND] Summary notification failed: %s", e)
+    return {"status": "ok"}
 
 
 @router.get("/resolve-season-item")
@@ -323,7 +383,8 @@ def api_send_poster(req: MediaServerSendRequest):
     # scanned/cached with its own title/library_id row (Quirk #100); a
     # season-resolved item_id is never individually cached, so looking it up
     # directly would always miss.
-    _notify_manual_send(req.rating_key, server_id, "poster")
+    if req.notify:
+        _notify_manual_send(req.rating_key, server_id, "poster")
     return {"status": "ok", "poster_url": new_poster_url, "item_id": item_id}
 
 
@@ -348,7 +409,8 @@ def api_send_logo(req: MediaServerSendRequest):
 
     logger.info("[MEDIA_SERVER_SEND:%s] Logo sent for item_id=%s%s", server_id, item_id,
                 f" (season {req.season_index} of series {req.rating_key})" if req.season_index is not None else "")
-    _notify_manual_send(req.rating_key, server_id, "logo")
+    if req.notify:
+        _notify_manual_send(req.rating_key, server_id, "logo")
     return {"status": "ok", "logo_url": new_logo_url, "item_id": item_id}
 
 

@@ -49,6 +49,28 @@ def _get_notification_settings() -> Dict[str, Any]:
         return {}
 
 
+def _library_passes_filter(notify_libraries: List[str], library_id: Optional[str]) -> bool:
+    """Library filter, group-aware. The filter list holds library ids picked in
+    Settings -> Notifications; a library passes when it's in the list OR any
+    library in its library group is. Without this, a send to a group's
+    Jellyfin/Emby library was dropped whenever only its Plex library (or the
+    other way round) had been picked, even though they're the same library."""
+    if not notify_libraries or not library_id:
+        return True
+    wanted = {str(x) for x in notify_libraries}
+    if str(library_id) in wanted:
+        return True
+    try:
+        ui_settings = db.get_ui_settings() or {}
+        for group in ui_settings.get("libraryGroups", []) or []:
+            ids = {str(m.get("libraryId")) for m in group.get("members", []) or []}
+            if str(library_id) in ids and ids & wanted:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> bool:
     """Check if an Apprise notification should be sent."""
     settings = _get_notification_settings()
@@ -71,8 +93,7 @@ def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> boo
         return False
 
     # Check library filter
-    notify_libraries = settings.get("appriseNotifyLibraries", [])
-    if notify_libraries and library_id and library_id not in notify_libraries:
+    if not _library_passes_filter(settings.get("appriseNotifyLibraries", []), library_id):
         return False
 
     return True
@@ -110,8 +131,7 @@ def _should_notify(source: str, library_id: Optional[str] = None) -> bool:
         return False
 
     # Check library filter
-    notify_libraries = settings.get("discordNotifyLibraries", [])
-    if notify_libraries and library_id and library_id not in notify_libraries:
+    if not _library_passes_filter(settings.get("discordNotifyLibraries", []), library_id):
         return False
 
     return True
@@ -213,11 +233,19 @@ def _get_asset_type_label(asset_type: str) -> Optional[str]:
     "poster" (the default) so existing poster notifications are unchanged --
     no "Asset" field is added to the embed/body unless something OTHER than a
     poster was sent, which is the whole point of this field existing."""
-    return {
+    labels = {
+        "poster": "\U0001F3AC Poster",
         "logo": "\U0001F5BC️ Logo",
         "backdrop": "\U0001F39E️ Backdrop",
         "square_art": "\U0001F533 Square Art",
-    }.get(asset_type)
+    }
+    # A combined send ("poster+logo") lists every asset, poster included.
+    parts = [p for p in (asset_type or "poster").split("+") if p]
+    if parts == ["poster"]:
+        return None
+    if len(parts) == 1:
+        return labels.get(parts[0])
+    return " + ".join(labels.get(p, p) for p in parts)
 
 
 def _get_synced_servers_label(synced_server_ids: Optional[List[str]]) -> Optional[str]:

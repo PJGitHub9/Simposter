@@ -6,6 +6,7 @@ import { usePresetService } from '../../services/presets'
 import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 import { getApiBase } from '../../services/apiBase'
+import { notifySendSummary } from '../../services/sendNotify'
 import { mediaServerLabel } from '../../services/mediaServerLabel'
 import SendToServerModal from './SendToServerModal.vue'
 
@@ -513,8 +514,8 @@ async function sendLogoToServer(serverId: string, ratingKey: string): Promise<bo
   try {
     const endpoint = serverId === 'plex-1' ? '/api/plex/send-logo' : '/api/media-server/send-logo'
     const body: Record<string, unknown> = serverId === 'plex-1'
-      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: false }
-      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: false }
+      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: false, notify: false, library_id: props.movie.library_id ?? null }
+      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: false, notify: false }
     const res = await fetch(`${apiBase}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -538,6 +539,7 @@ const doSendLogoOnly = async () => {
     const targets = resolveSendTargets()
     const results = await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
     const okCount = results.filter(Boolean).length
+    sendSummaryNotification([], [], targets.filter((_, i) => results[i]).map(t => t.server_id))
     if (okCount === 0) throw new Error('Failed to send logo')
     success(okCount === targets.length ? 'Logo sent!' : `Logo sent to ${okCount}/${targets.length} server(s)`)
     await fetchExistingLogo()
@@ -622,7 +624,26 @@ const doSave = async () => {
 // internal bundling (which only covers the Plex branch) -- keeps the
 // behavior uniform across every server type instead of silently dropping
 // the logo for a non-Plex target when the checkbox is checked.
-async function sendPosterToServer(serverId: string, ratingKey: string): Promise<boolean> {
+// One notification for the whole send (every server, poster and/or logo)
+// instead of one per upload -- see services/sendNotify.ts.
+function sendSummaryNotification(posterServers: string[], posterServersForImage: string[], logoServers: string[]) {
+  const assets: string[] = []
+  if (posterServers.length) assets.push('poster')
+  if (logoServers.length) assets.push('logo')
+  void notifySendSummary({
+    ratingKey: props.movie.key,
+    serverIds: [...posterServers, ...logoServers],
+    assets,
+    templateId: posterServers.length ? 'kometa' : '',
+    presetId: posterServers.length ? selectedPreset.value : '',
+    libraryId: props.movie.library_id ?? null,
+    title: props.movie.title,
+    year: props.movie.year ?? null,
+    imageData: posterServersForImage.length ? lastPreview.value : null,
+  })
+}
+
+async function sendPosterToServer(serverId: string, ratingKey: string, logoSentTo?: string[]): Promise<boolean> {
   let ok: boolean
   if (serverId === 'plex-1') {
     const targetMovie = {
@@ -632,7 +653,7 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
       library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
     }
     try {
-      const result = await render.send(targetMovie, '', logoUrl.value, optionsPayload.value, [], 'kometa', selectedPreset.value, false)
+      const result = await render.send(targetMovie, '', logoUrl.value, optionsPayload.value, [], 'kometa', selectedPreset.value, false, null, false)
       ok = !!result
     } catch {
       ok = false
@@ -643,7 +664,7 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
       const res = await fetch(`${apiBase}/api/media-server/send-poster`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: false }),
+        body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: false, notify: false }),
       })
       ok = res.ok
     } catch {
@@ -651,7 +672,7 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
     }
   }
   if (ok && sendLogo.value && logoUrl.value) {
-    await sendLogoToServer(serverId, ratingKey)
+    if (await sendLogoToServer(serverId, ratingKey)) logoSentTo?.push(serverId)
   }
   return ok
 }
@@ -660,8 +681,11 @@ const doSend = async () => {
   posterSending.value = true
   try {
     const targets = resolveSendTargets()
-    const results = await Promise.all(targets.map(t => sendPosterToServer(t.server_id, t.rating_key)))
+    const logoSentTo: string[] = []
+    const results = await Promise.all(targets.map(t => sendPosterToServer(t.server_id, t.rating_key, logoSentTo)))
     const okCount = results.filter(Boolean).length
+    const posterServers = targets.filter((_, i) => results[i]).map(t => t.server_id)
+    sendSummaryNotification(posterServers, posterServers, logoSentTo)
     if (okCount === 0) throw new Error('Failed to send poster')
     success(okCount === targets.length ? 'Poster sent!' : `Sent to ${okCount}/${targets.length} server(s)`)
     await new Promise((resolve) => setTimeout(resolve, 600))

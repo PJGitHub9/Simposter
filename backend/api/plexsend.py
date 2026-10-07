@@ -250,14 +250,15 @@ def api_plex_send(req: PlexSendRequest):
         source="manual",
         action="sent_to_plex",
     )
-    try:
-        send_discord_notification(**_notif_kwargs, poster_data=payload)
-    except Exception as notif_err:
-        logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
-    try:
-        send_apprise_notification(**_notif_kwargs, poster_data=payload)
-    except Exception as notif_err:
-        logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
+    if req.notify:
+        try:
+            send_discord_notification(**_notif_kwargs, poster_data=payload)
+        except Exception as notif_err:
+            logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
+        try:
+            send_apprise_notification(**_notif_kwargs, poster_data=payload)
+        except Exception as notif_err:
+            logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
 
     elapsed = time.time() - _send_start
     display_title = movie_details.get("title") or f"rating key {req.rating_key}"
@@ -348,14 +349,15 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
         library_id=req.library_id, source="manual", action="sent_to_plex",
         asset_type="logo",
     )
-    try:
-        send_discord_notification(**_notif_kwargs, poster_data=logo_bytes)
-    except Exception as notif_err:
-        logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
-    try:
-        send_apprise_notification(**_notif_kwargs, poster_data=logo_bytes)
-    except Exception as notif_err:
-        logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
+    if req.notify:
+        try:
+            send_discord_notification(**_notif_kwargs, poster_data=logo_bytes)
+        except Exception as notif_err:
+            logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
+        try:
+            send_apprise_notification(**_notif_kwargs, poster_data=logo_bytes)
+        except Exception as notif_err:
+            logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
 
     return {"status": "ok", "logo_url": new_logo_url}
 

@@ -361,6 +361,7 @@ class PlexLogoSendRequest(BaseModel):
     logo_data: Optional[str] = None  # base64 data URL (for uploads)
     is_tv: bool = False
     library_id: Optional[str] = None
+    notify: bool = True  # False when the editor sends one combined notification itself
 
 
 class PlexBackdropSendRequest(BaseModel):
@@ -396,6 +397,7 @@ class PlexSendRequest(BaseModel):
     is_tv: bool = False  # Needed for the "save to asset folder on send" template resolution
     is_collection: bool = False  # True when sending a Plex collection poster (uses /library/collections/ instead of /library/metadata/)
     season_index: Optional[int] = None  # Set when sending a specific season's poster
+    notify: bool = True  # False when the editor sends one combined notification itself
 
 
 class LabelsResponse(BaseModel):

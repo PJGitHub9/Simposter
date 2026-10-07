@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.7.03 (2026-10-07) — `dev-jellyfin` branch
+
+### Improvements
+- **One notification per editor send** — the movie, TV and Kometa editors now send each upload with `notify: false` and then call a new `POST /api/media-server/notify-send` once, so a poster + logo sent to Plex and Jellyfin produces a single Discord/Apprise notification (previously up to four). It shows "Sent to" the first server (Plex first when included), "Also synced to" the rest, "Asset: Poster + Logo", the library and template/preset, with the rendered poster attached. `PlexSendRequest`, `PlexLogoSendRequest` and `MediaServerSendRequest` gained `notify` (default `true`), so batch, webhook and other callers are unchanged.
+- **Group-aware notification library filter** — a library passes the Discord/Apprise library filter when it or any library in its library group is picked. Previously a Jellyfin/Emby send was dropped when only the group's Plex library was selected.
+- **Auto-generate presets** — Kometa (collections-only) presets are no longer offered in a library group's auto-generate preset list.
+
+### Bug Fixes
+- Logo sends from the editors didn't pass the library, so their notifications showed "Unknown Library".
+- Docker: the entrypoint now creates the settings folder and database before changing ownership, fixing "attempt to write a readonly database" on a fresh install (shipped in the v1.7.02 quick-fix build).
+- A group with a Plex library showed a blank auto-generate preset dropdown after picking a preset (shipped in the v1.7.02 quick-fix build).
+
 ## v1.7.02 (2026-10-07) — `dev-jellyfin` branch
 
 ### Improvements

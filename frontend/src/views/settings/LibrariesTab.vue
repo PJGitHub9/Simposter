@@ -606,6 +606,8 @@ const fetchPresets = async () => {
 const allPresets = computed(() => {
   const presets: Preset[] = []
   Object.entries(availablePresets.value).forEach(([templateId, templateData]) => {
+    // Kometa is a collections-only template; auto-generate renders movie/TV posters.
+    if (templateId === 'kometa') return
     const templatePresets = (templateData as any).presets
     if (Array.isArray(templatePresets)) {
       templatePresets.forEach(preset => {
