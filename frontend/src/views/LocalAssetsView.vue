@@ -72,30 +72,39 @@ const fetchLocalAssets = async () => {
 }
 
 
-// Get unique folders from assets
-const assetFolders = computed(() => {
-  const folders = new Set<string>()
-  localAssets.value.forEach(asset => {
-    if (asset.folder) folders.add(asset.folder)
-  })
-  return Array.from(folders).sort()
-})
 
-// Helper to check if an asset belongs to a library
-// Checks embedded metadata first, falls back to folder path matching
-const assetBelongsToLibrary = (asset: LocalAsset, libraryId: string | number, libraryDisplayName: string): boolean => {
-  const libIdStr = String(libraryId)
-  // Prefer embedded metadata (most reliable)
-  if (asset.library_id) {
-    return String(asset.library_id) === libIdStr
+// The library ids and names that count as "this library": the library itself,
+// plus every library in its library group. A file saved while editing a movie's
+// Jellyfin copy carries the Jellyfin library's id, so matching only the page's
+// own library id hid it on the group's Plex page (and vice versa).
+const libraryScope = (libraryId: string) => {
+  const ids = new Set<string>([libraryId])
+  const names = new Set<string>()
+  const info = libraryInfo(libraryId)
+  if (info?.label) names.add(info.label.toLowerCase())
+  for (const g of settings.libraryGroups.value || []) {
+    const members = g.members || []
+    if (!members.some(m => String(m.libraryId) === libraryId)) continue
+    if (g.name) names.add(g.name.toLowerCase())
+    for (const m of members) {
+      ids.add(String(m.libraryId))
+      if (m.libraryName) names.add(m.libraryName.toLowerCase())
+      const mInfo = libraryInfo(String(m.libraryId))
+      if (mInfo?.label) names.add(mInfo.label.toLowerCase())
+    }
   }
+  return { ids, names }
+}
 
-  // Fall back to folder-based matching for older assets without metadata
+// Checks embedded metadata first, falls back to the folder path for older
+// assets saved without metadata.
+const assetBelongsToLibrary = (asset: LocalAsset, scope: { ids: Set<string>; names: Set<string> }): boolean => {
+  if (asset.library_id) return scope.ids.has(String(asset.library_id))
   if (!asset.folder) return false
-  const folderLower = asset.folder.toLowerCase()
-  const libraryLower = (libraryDisplayName || '').toLowerCase()
-  // Check if folder is the library name or contains it as a path component
-  return folderLower === libraryLower || folderLower.includes(`/${libraryLower}`) || folderLower.includes(`\\${libraryLower}`)
+  // Match any folder in the path against a library name. The old check looked
+  // for "/<name>", so a folder at the start of the path ("Movies/Title") never
+  // matched.
+  return asset.folder.split(/[\\/]/).some(part => scope.names.has(part.toLowerCase()))
 }
 
 const getDisplayName = (asset: LocalAsset): string => {
@@ -115,9 +124,26 @@ const activeLibraryId = computed(() => {
   return settings.plex.value.movieLibraryName ? String(settings.plex.value.movieLibraryName) : ''
 })
 
+// Assets in the current library (before the search/folder filters)
+const libraryAssets = computed(() => {
+  if (!activeLibraryId.value || !libraryInfo(activeLibraryId.value)) return localAssets.value
+  const scope = libraryScope(activeLibraryId.value)
+  return localAssets.value.filter(asset => assetBelongsToLibrary(asset, scope))
+})
+
+// Folders of the assets in the current library (not every library), so the
+// dropdown never offers a folder whose files are all filtered out.
+const assetFolders = computed(() => {
+  const folders = new Set<string>()
+  libraryAssets.value.forEach(asset => {
+    if (asset.folder) folders.add(asset.folder)
+  })
+  return Array.from(folders).sort()
+})
+
 // Filter assets by search, folder, and library
 const filteredAssets = computed(() => {
-  let result = localAssets.value
+  let result = libraryAssets.value
 
   // Filter by search query
   if (assetSearchQuery.value.trim()) {
@@ -127,17 +153,6 @@ const filteredAssets = computed(() => {
       asset.filename.toLowerCase().includes(query) ||
       asset.folder.toLowerCase().includes(query)
     )
-  }
-
-  // Filter by library (using embedded metadata when available)
-  if (activeLibraryId.value) {
-    // libraryInfo() covers Jellyfin/Emby libraries too -- a Plex-only lookup
-    // here found nothing for them, so the filter was skipped and every
-    // library's assets showed up together.
-    const selectedLibrary = libraryInfo(activeLibraryId.value)
-    if (selectedLibrary) {
-      result = result.filter(asset => assetBelongsToLibrary(asset, activeLibraryId.value, selectedLibrary.label))
-    }
   }
 
   // Filter by folder
