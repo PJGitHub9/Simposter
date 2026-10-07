@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.01',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Collection matching: link collections with different names across servers (e.g. "MCU" on Plex and "Marvel Films" on Jellyfin), or split a wrong automatic match. Open it from the "Collection matching" button on the Collections page.',
+          'Media server maintenance: Settings → Cleanup now has a section for each of your media servers. Jellyfin servers can run their built-in cleanup tasks (optimize database, clean cache/transcode/log folders, clean the activity log) with last-run results and live progress.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Plex maintenance (Empty Trash, Clean Bundles, Optimize Database) now works for every Plex server you have added, not just the main one.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.0',
     date: '2026-10-07',
     sections: [

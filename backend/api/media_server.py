@@ -660,6 +660,113 @@ def scan_all_linked_plex_libraries(library_id: Optional[str] = None) -> dict:
     return {"scanned": all_scanned, "errors": all_errors}
 
 
+def _collection_matching_state(group: dict) -> dict:
+    """Everything the Collections page's "Collection matching" window needs:
+    each server's collections, and one row per collection on the anchor
+    server (Plex when it's in the group, else the first member) showing which
+    collection on every other server currently counts as the same one --
+    automatic title match or a manual override."""
+    from .. import database as db
+    from ..media_server import get_server_label
+
+    pairs = [(m.get("serverId"), m.get("libraryId")) for m in group.get("members") or [] if m.get("serverId") and m.get("libraryId")]
+    server_ids: list = []
+    for sid, _ in pairs:
+        if sid not in server_ids:
+            server_ids.append(sid)
+    anchor = "plex-1" if "plex-1" in server_ids else (server_ids[0] if server_ids else None)
+    overrides = group.get("collectionMatchOverrides") or {}
+
+    items = db.get_cached_collections_multi(pairs, merge_items=False) if pairs else []
+    by_server = {sid: [] for sid in server_ids}
+    keyed = []
+    for it in items:
+        sid = it.get("server_id") or "plex-1"
+        if sid not in by_server:
+            continue
+        by_server[sid].append({"rating_key": it.get("rating_key"), "title": it.get("title") or ""})
+        keyed.append((sid, it.get("rating_key"), db.collection_match_key(it, overrides)))
+    for sid in by_server:
+        by_server[sid].sort(key=lambda c: c["title"].lower())
+
+    rows = []
+    for c in by_server.get(anchor, []):
+        key = next(k for s, rk, k in keyed if s == anchor and rk == c["rating_key"])
+        partners = {}
+        overridden = f"{anchor}:{c['rating_key']}" in overrides
+        for sid in server_ids:
+            if sid == anchor:
+                continue
+            match = next((rk for s, rk, k in keyed if s == sid and k == key), None)
+            partners[sid] = match
+            if match and f"{sid}:{match}" in overrides:
+                overridden = True
+        rows.append({"rating_key": c["rating_key"], "title": c["title"], "partners": partners, "manual": overridden})
+
+    return {
+        "group": {"id": group.get("id"), "name": group.get("name")},
+        "anchor_server_id": anchor,
+        "servers": [{"server_id": sid, "label": get_server_label(sid)} for sid in server_ids],
+        "collections": by_server,
+        "rows": rows,
+    }
+
+
+@router.get("/collection-matching")
+def api_get_collection_matching(server_id: str, library_id: str):
+    """Collection matching for the movie Library Group that (server_id,
+    library_id) belongs to. Returns {"group": None} when it's in no group."""
+    from ..config import get_library_group_for
+    group = get_library_group_for(server_id, library_id, "movie")
+    if not group:
+        return {"group": None}
+    return _collection_matching_state(group)
+
+
+class CollectionMatchUpdate(BaseModel):
+    group_id: str
+    anchor_rating_key: str
+    # server_id -> the chosen collection's rating_key on that server, or None
+    # for "no matching collection on this server". Ignored when reset=True.
+    partners: dict = {}
+    reset: bool = False
+
+
+@router.post("/collection-matching")
+def api_set_collection_matching(payload: CollectionMatchUpdate):
+    """Set (or reset to automatic) one row of the matching window. All of a
+    row's choices share one manual key, so they merge with each other and
+    with nothing else; servers set to "none" are split off. Saved
+    immediately, like the grid's other live controls."""
+    from .. import database as db
+
+    groups = (db.get_ui_settings() or {}).get("libraryGroups") or []
+    group = next((g for g in groups if g.get("id") == payload.group_id), None)
+    if not group:
+        raise HTTPException(404, "Library group not found")
+    state_anchor = "plex-1" if any(m.get("serverId") == "plex-1" for m in group.get("members") or []) else \
+        next((m.get("serverId") for m in group.get("members") or [] if m.get("serverId")), None)
+    if not state_anchor:
+        raise HTTPException(400, "Library group has no members")
+
+    overrides = dict(group.get("collectionMatchOverrides") or {})
+    anchor_entry = f"{state_anchor}:{payload.anchor_rating_key}"
+    row_key = f"row:{anchor_entry}"
+    # Clear this row's previous choices before applying the new ones.
+    overrides = {k: v for k, v in overrides.items() if v != row_key and k != anchor_entry}
+    if not payload.reset:
+        overrides[anchor_entry] = row_key
+        member_servers = {m.get("serverId") for m in group.get("members") or []}
+        for sid, rk in (payload.partners or {}).items():
+            if rk and sid in member_servers and sid != state_anchor:
+                overrides[f"{sid}:{rk}"] = row_key
+
+    updated = db.set_library_group_collection_overrides(payload.group_id, overrides)
+    if not updated:
+        raise HTTPException(404, "Library group not found")
+    return _collection_matching_state(updated)
+
+
 @router.get("/library-group")
 def api_get_library_group(server_id: str, library_id: str, media_type: str):
     """Backs the Movies/TV grid toolbar's live "prefer" dropdown (Quirk #85) --

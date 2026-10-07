@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, reactive, watch, onBeforeUnmount } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 
 type ScanCategory = {
   id: string
@@ -269,43 +271,158 @@ async function loadScheduleStatus() {
 
 loadScheduleStatus()
 
-// --- Plex server maintenance -----------------------------------------------
+// --- Media server maintenance ----------------------------------------------
+// One subsection per configured server, titled with its own name: Plex servers
+// get Plex's three maintenance operations, Jellyfin/Emby servers get their
+// built-in cleanup tasks (whichever of the supported ones that server reports).
 
 type PlexActionState = 'idle' | 'running' | 'done' | 'error'
-const plexEmptyTrashState = ref<PlexActionState>('idle')
-const plexCleanBundlesState = ref<PlexActionState>('idle')
-const plexOptimizeState = ref<PlexActionState>('idle')
+type MaintServer = { id: string; type: 'plex' | 'jellyfin' | 'emby'; label: string }
+type MaintTask = {
+  key: string
+  name: string
+  description: string
+  state: string
+  progress?: number | null
+  last_run_end?: string | null
+  last_run_status?: string | null
+}
 
-// Three separate functions rather than one taking a ref parameter -- a ref
-// passed as a template-call argument arrives already unwrapped (Vue's
-// <script setup> auto-unwraps top-level refs in template expressions), so a
-// generic version can't actually write back to the right state ref.
-async function runPlexActionFor(endpoint: string, state: typeof plexEmptyTrashState) {
-  state.value = 'running'
+const settingsStore = useSettingsStore()
+
+const maintenanceServers = computed((): MaintServer[] => {
+  const servers = settingsStore.mediaServers.value
+  const out: MaintServer[] = []
+  const plex = settingsStore.plex.value
+  if (plex.url && plex.token) out.push({ id: 'plex-1', type: 'plex', label: mediaServerLabel('plex-1', servers) })
+  for (const type of ['plex', 'jellyfin', 'emby'] as const) {
+    for (const s of servers) {
+      if (s.type !== type || s.id === 'plex-1' || s.enabled === false || !s.url) continue
+      out.push({ id: s.id, type, label: mediaServerLabel(s.id, servers) })
+    }
+  }
+  return out
+})
+
+// Plex actions -- state keyed "serverId:action" (a string key, not a ref
+// passed from the template, which Vue would hand over already unwrapped).
+const plexActionState = reactive<Record<string, PlexActionState>>({})
+const PLEX_ACTIONS = [
+  { key: 'empty-trash', label: 'Empty Trash', doneLabel: 'Done', confirm: 'Empty trash for every library section on {name}?',
+    title: 'Empty Trash', text: "Empties the trash for every library section (items you've removed from Plex itself)." },
+  { key: 'clean-bundles', label: 'Clean Bundles', doneLabel: 'Started', confirm: "Start Clean Bundles on {name}?",
+    title: 'Clean Bundles', text: 'Removes unused metadata bundles Plex has left behind for items no longer in any library.' },
+  { key: 'optimize-db', label: 'Optimize Database', doneLabel: 'Started', confirm: "Start Optimize Database on {name}?",
+    title: 'Optimize Database', text: "Cleans up Plex's own database from unused or fragmented data." },
+]
+
+function plexState(serverId: string, action: string): PlexActionState {
+  return plexActionState[`${serverId}:${action}`] || 'idle'
+}
+
+async function runPlexAction(server: MaintServer, action: (typeof PLEX_ACTIONS)[number]) {
+  if (!confirm(action.confirm.replace('{name}', server.label))) return
+  const key = `${server.id}:${action.key}`
+  plexActionState[key] = 'running'
   try {
-    const res = await fetch(`${apiBase}/api/cleanup/plex/${endpoint}`, { method: 'POST' })
-    state.value = res.ok ? 'done' : 'error'
+    const res = await fetch(`${apiBase}/api/cleanup/plex/${action.key}?server_id=${encodeURIComponent(server.id)}`, { method: 'POST' })
+    plexActionState[key] = res.ok ? 'done' : 'error'
   } catch {
-    state.value = 'error'
+    plexActionState[key] = 'error'
   } finally {
-    setTimeout(() => { state.value = 'idle' }, 3000)
+    setTimeout(() => { plexActionState[key] = 'idle' }, 3000)
   }
 }
 
-function runPlexEmptyTrash() {
-  if (!confirm('Empty trash for every Plex library section?')) return
-  runPlexActionFor('empty-trash', plexEmptyTrashState)
+// Jellyfin/Emby tasks
+const serverTasks = reactive<Record<string, { loading: boolean; error: string; tasks: MaintTask[] }>>({})
+const taskStarting = reactive<Record<string, boolean>>({})
+let taskPollTimer: ReturnType<typeof setTimeout> | null = null
+
+async function loadServerTasks(serverId: string, quiet = false) {
+  // Re-read through the reactive object after creating the entry -- the
+  // assignment expression returns the plain object, and mutating that one
+  // wouldn't trigger a re-render (the page got stuck on "Loading tasks...").
+  if (!serverTasks[serverId]) serverTasks[serverId] = { loading: false, error: '', tasks: [] }
+  const entry = serverTasks[serverId]!
+  if (!quiet) entry.loading = true
+  try {
+    const res = await fetch(`${apiBase}/api/cleanup/media-server/${encodeURIComponent(serverId)}/tasks`)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body?.detail || `Couldn't load tasks (${res.status})`)
+    }
+    entry.tasks = (await res.json()).tasks || []
+    entry.error = ''
+  } catch (e) {
+    entry.error = e instanceof Error ? e.message : "Couldn't load tasks"
+  } finally {
+    entry.loading = false
+  }
 }
 
-function runPlexCleanBundles() {
-  if (!confirm("Start Plex's Clean Bundles operation?")) return
-  runPlexActionFor('clean-bundles', plexCleanBundlesState)
+function anyTaskRunning(): boolean {
+  return Object.values(serverTasks).some(e => e.tasks.some(t => t.state !== 'Idle'))
 }
 
-function runPlexOptimizeDb() {
-  if (!confirm("Start Plex's Optimize Database operation?")) return
-  runPlexActionFor('optimize-db', plexOptimizeState)
+// While anything is running, refresh every few seconds so progress and the
+// final result show up without a manual reload.
+function scheduleTaskPoll() {
+  if (taskPollTimer) clearTimeout(taskPollTimer)
+  taskPollTimer = setTimeout(async () => {
+    taskPollTimer = null
+    const ids = maintenanceServers.value.filter(s => s.type !== 'plex').map(s => s.id)
+    await Promise.all(ids.map(id => loadServerTasks(id, true)))
+    if (anyTaskRunning()) scheduleTaskPoll()
+  }, 3000)
 }
+
+async function runServerTask(server: MaintServer, task: MaintTask) {
+  if (!confirm(`Run "${task.name}" on ${server.label} now?`)) return
+  const key = `${server.id}:${task.key}`
+  taskStarting[key] = true
+  try {
+    const res = await fetch(`${apiBase}/api/cleanup/media-server/${encodeURIComponent(server.id)}/tasks/${encodeURIComponent(task.key)}/run`, { method: 'POST' })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      alert(body?.detail || `Couldn't start "${task.name}"`)
+    }
+  } catch {
+    alert(`Couldn't start "${task.name}"`)
+  } finally {
+    taskStarting[key] = false
+  }
+  await loadServerTasks(server.id, true)
+  scheduleTaskPoll()
+}
+
+function taskLastRun(task: MaintTask): string {
+  if (!task.last_run_end) return 'Never run'
+  const when = new Date(task.last_run_end)
+  const label = isNaN(when.getTime()) ? task.last_run_end : when.toLocaleString()
+  return `Last run ${label}${task.last_run_status ? ` — ${task.last_run_status}` : ''}`
+}
+
+function taskButtonLabel(serverId: string, task: MaintTask): string {
+  if (taskStarting[`${serverId}:${task.key}`]) return 'Starting...'
+  if (task.state === 'Running') return task.progress != null ? `Running ${Math.round(task.progress)}%` : 'Running...'
+  if (task.state === 'Cancelling') return 'Cancelling...'
+  return 'Run Now'
+}
+
+// Fetch each Jellyfin/Emby server's tasks as soon as it shows up in the list.
+// Not just on mount: the settings (and so the server list) may still be
+// loading when this tab first renders.
+watch(
+  () => maintenanceServers.value.filter(s => s.type !== 'plex').map(s => s.id),
+  (ids) => {
+    for (const id of ids) if (!serverTasks[id]) loadServerTasks(id)
+  },
+  { immediate: true }
+)
+onBeforeUnmount(() => {
+  if (taskPollTimer) clearTimeout(taskPollTimer)
+})
 
 // --- Simposter's own SQLite database (distinct from Plex's Optimize Database
 // above, which only ever touches Plex's own server-side DB) ------------------
@@ -554,56 +671,66 @@ async function runDbVacuum() {
     </div>
 
     <div class="section">
-      <h3>Plex Server Maintenance</h3>
+      <h3>Media Server Maintenance</h3>
       <p class="section-description">
-        These call Plex's own maintenance operations directly (the same ones Plex's Scheduled Tasks and tools like
-        ImageMaid use) -- unrelated to Simposter's own cache above.
+        Runs each media server's own built-in maintenance -- unrelated to Simposter's own cache above. These also run
+        on the server's own schedule; use these buttons if you don't want to wait.
       </p>
 
-      <div class="preset-actions">
-        <div class="preset-action-item">
-          <div class="preset-info">
-            <strong>Empty Trash</strong>
-            <p>Empties the trash for every Plex library section (items you've removed from Plex itself).</p>
-          </div>
-          <button
-            @click="runPlexEmptyTrash"
-            :disabled="plexEmptyTrashState === 'running'"
-            class="secondary"
-          >
-            {{ plexEmptyTrashState === 'running' ? 'Running...' : plexEmptyTrashState === 'done' ? 'Done' : plexEmptyTrashState === 'error' ? 'Failed' : 'Empty Trash' }}
-          </button>
-        </div>
-        <div class="preset-action-item">
-          <div class="preset-info">
-            <strong>Clean Bundles</strong>
-            <p>Removes unused metadata bundles Plex has left behind for items no longer in any library.</p>
-          </div>
-          <button
-            @click="runPlexCleanBundles"
-            :disabled="plexCleanBundlesState === 'running'"
-            class="secondary"
-          >
-            {{ plexCleanBundlesState === 'running' ? 'Running...' : plexCleanBundlesState === 'done' ? 'Started' : plexCleanBundlesState === 'error' ? 'Failed' : 'Clean Bundles' }}
-          </button>
-        </div>
-        <div class="preset-action-item">
-          <div class="preset-info">
-            <strong>Optimize Database</strong>
-            <p>Cleans up Plex's own database from unused or fragmented data.</p>
-          </div>
-          <button
-            @click="runPlexOptimizeDb"
-            :disabled="plexOptimizeState === 'running'"
-            class="secondary"
-          >
-            {{ plexOptimizeState === 'running' ? 'Running...' : plexOptimizeState === 'done' ? 'Started' : plexOptimizeState === 'error' ? 'Failed' : 'Optimize Database' }}
-          </button>
-        </div>
-      </div>
-      <p class="note">
-        These run on Plex's own schedule too (usually weekly) -- use these buttons if you don't want to wait for that.
+      <p v-if="maintenanceServers.length === 0" class="note">
+        No media servers configured yet -- add one in Settings &rarr; Media Servers.
       </p>
+
+      <div v-for="server in maintenanceServers" :key="server.id" class="server-maint">
+        <h4 class="server-maint-title">
+          <span class="server-type-pill" :class="server.type">{{ server.type }}</span>
+          {{ server.label }}
+        </h4>
+
+        <!-- Plex -->
+        <div v-if="server.type === 'plex'" class="preset-actions">
+          <div v-for="action in PLEX_ACTIONS" :key="action.key" class="preset-action-item">
+            <div class="preset-info">
+              <strong>{{ action.title }}</strong>
+              <p>{{ action.text }}</p>
+            </div>
+            <button
+              @click="runPlexAction(server, action)"
+              :disabled="plexState(server.id, action.key) === 'running'"
+              class="secondary"
+            >
+              {{ plexState(server.id, action.key) === 'running' ? 'Running...'
+                : plexState(server.id, action.key) === 'done' ? action.doneLabel
+                : plexState(server.id, action.key) === 'error' ? 'Failed' : action.label }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Jellyfin / Emby -->
+        <template v-else>
+          <p v-if="!serverTasks[server.id] || serverTasks[server.id]?.loading" class="note">Loading tasks...</p>
+          <p v-else-if="serverTasks[server.id]?.error" class="note error-note">{{ serverTasks[server.id]?.error }}</p>
+          <p v-else-if="!serverTasks[server.id]?.tasks.length" class="note">
+            This server doesn't report any of the supported maintenance tasks.
+          </p>
+          <div v-else class="preset-actions">
+            <div v-for="task in serverTasks[server.id]?.tasks || []" :key="task.key" class="preset-action-item">
+              <div class="preset-info">
+                <strong>{{ task.name }}</strong>
+                <p>{{ task.description }}</p>
+                <p class="task-last-run">{{ taskLastRun(task) }}</p>
+              </div>
+              <button
+                @click="runServerTask(server, task)"
+                :disabled="task.state !== 'Idle' || !!taskStarting[`${server.id}:${task.key}`]"
+                class="secondary"
+              >
+                {{ taskButtonLabel(server.id, task) }}
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
     </div>
 
     <div class="section coming-soon">
@@ -1044,5 +1171,39 @@ button.danger:hover:not(:disabled) {
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.server-maint {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.server-maint:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+.server-maint-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.server-type-pill {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.server-type-pill.plex { background: rgba(229, 160, 13, 0.15); color: #e5a00d; }
+.server-type-pill.jellyfin { background: rgba(170, 92, 195, 0.15); color: #aa5cc3; }
+.server-type-pill.emby { background: rgba(82, 181, 75, 0.15); color: #52b54b; }
+.task-last-run {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.error-note {
+  color: #f05d7b;
 }
 </style>

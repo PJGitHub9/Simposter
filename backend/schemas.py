@@ -315,6 +315,13 @@ class LibraryGroup(BaseModel):
                               # another kept separate. See CLAUDE.md's Jellyfin-integration
                               # Quirks.
     mirror: Optional[MediaMirrorConfig] = None
+    # Manual cross-server collection matching. Collections match across a
+    # group's servers by normalized title; this overrides that per collection.
+    # Keyed "serverId:ratingKey" -> a match key: collections sharing a key are
+    # treated as the same collection (merged card, send targets, Media Mirror),
+    # and a collection with its own unique key is split from its title match.
+    # Edited from the Collections page's "Collection matching" window.
+    collectionMatchOverrides: Dict[str, str] = Field(default_factory=dict)
 
 
 class UISettings(BaseModel):

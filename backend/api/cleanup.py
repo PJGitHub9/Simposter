@@ -460,13 +460,31 @@ def _require_plex():
         raise HTTPException(400, "PLEX_URL and PLEX_TOKEN must be set.")
 
 
+def _plex_target(server_id: str = "plex-1"):
+    """(base_url, headers) for a Plex server's maintenance calls. "plex-1" is
+    the primary connection (settings.PLEX_URL/PLEX_TOKEN); any other id is an
+    additional Plex entry from Settings -> Media Servers, which keeps its own
+    url/token on that entry."""
+    if not server_id or server_id == "plex-1":
+        _require_plex()
+        return settings.PLEX_URL.rstrip("/"), plex_headers()
+    from .. import database as _db
+    entry = next((s for s in (_db.get_ui_settings() or {}).get("mediaServers") or []
+                  if isinstance(s, dict) and s.get("id") == server_id), None)
+    if not entry or entry.get("type") != "plex":
+        raise HTTPException(404, f"No Plex server with id '{server_id}'")
+    if not entry.get("url") or not entry.get("token"):
+        raise HTTPException(400, f"Plex server '{server_id}' has no URL/token saved")
+    return entry["url"].rstrip("/"), {"X-Plex-Token": entry["token"], "Accept": "application/xml"}
+
+
 @router.post("/cleanup/plex/empty-trash")
-def api_cleanup_plex_empty_trash():
+def api_cleanup_plex_empty_trash(server_id: str = "plex-1"):
     """PUT /library/sections/{key}/emptyTrash for every library section -- Plex
     has no single server-wide emptyTrash call, only a per-section one."""
-    _require_plex()
+    base, headers = _plex_target(server_id)
     try:
-        r = plex_session.get(f"{settings.PLEX_URL}/library/sections", headers=plex_headers(), timeout=10)
+        r = plex_session.get(f"{base}/library/sections", headers=headers, timeout=10)
         r.raise_for_status()
         root = ET.fromstring(r.text)
         section_keys = [d.get("key") for d in root.findall(".//Directory") if d.get("key")]
@@ -476,34 +494,119 @@ def api_cleanup_plex_empty_trash():
     emptied = []
     for key in section_keys:
         try:
-            plex_session.put(f"{settings.PLEX_URL}/library/sections/{key}/emptyTrash", headers=plex_headers(), timeout=30)
+            plex_session.put(f"{base}/library/sections/{key}/emptyTrash", headers=headers, timeout=30)
             emptied.append(key)
         except Exception as e:
             logger.warning("[CLEANUP] Empty Trash failed for section %s: %s", key, e)
-    logger.info("[CLEANUP] Plex Empty Trash run for %d/%d sections", len(emptied), len(section_keys))
+    logger.info("[CLEANUP] Plex (%s) Empty Trash run for %d/%d sections", server_id, len(emptied), len(section_keys))
     return {"sections_emptied": len(emptied), "sections_total": len(section_keys)}
 
 
 @router.post("/cleanup/plex/clean-bundles")
-def api_cleanup_plex_clean_bundles():
-    _require_plex()
+def api_cleanup_plex_clean_bundles(server_id: str = "plex-1"):
+    base, headers = _plex_target(server_id)
     try:
-        plex_session.put(f"{settings.PLEX_URL}/library/clean/bundles?async=1", headers=plex_headers(), timeout=30)
+        plex_session.put(f"{base}/library/clean/bundles?async=1", headers=headers, timeout=30)
     except Exception as e:
         raise HTTPException(500, f"Failed to start Clean Bundles: {e}")
-    logger.info("[CLEANUP] Plex Clean Bundles started")
+    logger.info("[CLEANUP] Plex (%s) Clean Bundles started", server_id)
     return {"status": "started"}
 
 
 @router.post("/cleanup/plex/optimize-db")
-def api_cleanup_plex_optimize_db():
-    _require_plex()
+def api_cleanup_plex_optimize_db(server_id: str = "plex-1"):
+    base, headers = _plex_target(server_id)
     try:
-        plex_session.put(f"{settings.PLEX_URL}/library/optimize?async=1", headers=plex_headers(), timeout=30)
+        plex_session.put(f"{base}/library/optimize?async=1", headers=headers, timeout=30)
     except Exception as e:
         raise HTTPException(500, f"Failed to start Optimize DB: {e}")
-    logger.info("[CLEANUP] Plex Optimize DB started")
+    logger.info("[CLEANUP] Plex (%s) Optimize DB started", server_id)
     return {"status": "started"}
+
+
+# ---------------------------------------------------------------------------
+# Jellyfin/Emby server maintenance -- the server's own built-in scheduled
+# tasks, started via its API (GET /ScheduledTasks, POST
+# /ScheduledTasks/Running/{Id}). Task keys verified against a real Jellyfin
+# server's /ScheduledTasks listing. Only these routine cleanup tasks are
+# offered -- library scans, migrations and the vaguely named "User data
+# cleanup task" are deliberately left out. Matched by the task's stable Key
+# (its Id differs per install), and only tasks the server actually reports
+# are shown. Emby uses the same API, but its task keys haven't been checked
+# against a real Emby server.
+# ---------------------------------------------------------------------------
+
+MEDIA_SERVER_MAINTENANCE_TASKS = [
+    "OptimizeDatabaseTask",
+    "DeleteCacheFiles",
+    "DeleteTranscodeFiles",
+    "CleanLogFiles",
+    "CleanActivityLog",
+]
+
+
+def _jellyfin_like_client(server_id: str):
+    from ..media_server import get_client
+    from ..media_server.jellyfin_client import JellyfinClient
+    client = get_client(server_id)
+    if not client or not isinstance(client, JellyfinClient):
+        raise HTTPException(404, f"No enabled Jellyfin/Emby server with id '{server_id}'")
+    return client
+
+
+def _fetch_scheduled_tasks(client) -> list:
+    import requests as _requests
+    try:
+        r = _requests.get(f"{client.url}/ScheduledTasks", headers=client._headers(),
+                          params={"isHidden": "false"}, timeout=10)
+        r.raise_for_status()
+        return r.json() or []
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't read scheduled tasks from {client.server_id}: {e}")
+
+
+@router.get("/cleanup/media-server/{server_id}/tasks")
+def api_cleanup_media_server_tasks(server_id: str):
+    """The supported maintenance tasks on one Jellyfin/Emby server, in a fixed
+    order, with their current state and last result."""
+    client = _jellyfin_like_client(server_id)
+    by_key = {t.get("Key"): t for t in _fetch_scheduled_tasks(client)}
+    tasks = []
+    for key in MEDIA_SERVER_MAINTENANCE_TASKS:
+        t = by_key.get(key)
+        if not t:
+            continue
+        last = t.get("LastExecutionResult") or {}
+        tasks.append({
+            "key": key,
+            "name": t.get("Name") or key,
+            "description": t.get("Description") or "",
+            "state": t.get("State") or "Idle",
+            "progress": t.get("CurrentProgressPercentage"),
+            "last_run_end": last.get("EndTimeUtc"),
+            "last_run_status": last.get("Status"),
+        })
+    return {"server_id": server_id, "tasks": tasks}
+
+
+@router.post("/cleanup/media-server/{server_id}/tasks/{task_key}/run")
+def api_cleanup_media_server_run_task(server_id: str, task_key: str):
+    """Start one supported maintenance task now (asynchronous on the server --
+    poll the task list for its state)."""
+    if task_key not in MEDIA_SERVER_MAINTENANCE_TASKS:
+        raise HTTPException(400, f"'{task_key}' isn't a supported maintenance task")
+    client = _jellyfin_like_client(server_id)
+    task = next((t for t in _fetch_scheduled_tasks(client) if t.get("Key") == task_key), None)
+    if not task or not task.get("Id"):
+        raise HTTPException(404, f"Server {server_id} doesn't have the '{task_key}' task")
+    import requests as _requests
+    try:
+        r = _requests.post(f"{client.url}/ScheduledTasks/Running/{task['Id']}", headers=client._headers(), timeout=15)
+        r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(502, f"Failed to start '{task.get('Name') or task_key}' on {server_id}: {e}")
+    logger.info("[CLEANUP] Started %s maintenance task '%s'", server_id, task.get("Name") or task_key)
+    return {"status": "started", "name": task.get("Name") or task_key}
 
 
 # ---------------------------------------------------------------------------

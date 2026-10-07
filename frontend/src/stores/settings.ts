@@ -68,6 +68,7 @@ export type LibraryGroup = {
                                       // shows every server's copy as its own separate card
                                       // -- no also_on/other_servers populated either, since
                                       // nothing was collapsed to cross-reference.
+  collectionMatchOverrides?: Record<string, string>  // manual cross-server collection matches ("serverId:ratingKey" -> match key)
   mirror?: MediaMirrorConfig | null  // Media Mirror (Quirk #123) -- designates one member
                                       // as "the truth" and copies its posters/logos/etc to
                                       // one or more other members. Saved independently of

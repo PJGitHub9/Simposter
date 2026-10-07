@@ -2990,6 +2990,22 @@ def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict[str, Any]
     return [_tv_row_to_dict(row) for row in rows]
 
 
+def set_library_group_collection_overrides(group_id: str, overrides: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """Replaces one Library Group's collectionMatchOverrides and saves
+    immediately (the Collections page's matching window saves on its own,
+    like the grid's other live controls). Returns the updated group, or None
+    if no group has that id."""
+    settings_row = get_ui_settings() or {}
+    groups = settings_row.get("libraryGroups") or []
+    for group in groups:
+        if group.get("id") == group_id:
+            group["collectionMatchOverrides"] = {k: v for k, v in overrides.items() if k and v}
+            settings_row["libraryGroups"] = groups
+            save_ui_settings(settings_row)
+            return group
+    return None
+
+
 def set_library_group_preferred_server(server_id: str, library_id: str, media_type: str, preferred_server_id: str) -> Optional[Dict[str, Any]]:
     """Updates just one Library Group's `preferredServerId` in place and saves
     immediately -- backs the Movies/TV grid toolbar's live "prefer" dropdown
@@ -3167,7 +3183,21 @@ def get_tv_mirror_mapping(pairs: List[tuple], source_server_id: str, target_serv
     return _build_mirror_mapping(get_cached_tv_shows_multi(pairs, merge_items=False), source_server_id, target_server_ids)
 
 
-def _build_collection_mirror_mapping(items: List[Dict[str, Any]], source_server_id: str, target_server_ids: List[str]) -> List[Dict[str, Any]]:
+def collection_match_key(item: Dict[str, Any], overrides: Optional[Dict[str, str]] = None) -> str:
+    """The key two collections must share to count as the same collection
+    across a Library Group's servers: a manual override for this exact
+    collection ("serverId:ratingKey" in LibraryGroup.collectionMatchOverrides)
+    when one is set, otherwise the normalized title. Manual keys are prefixed
+    so they can never collide with a title key."""
+    from .config import normalize_collection_title
+    if overrides:
+        manual = overrides.get(f"{item.get('server_id') or 'plex-1'}:{item.get('rating_key')}")
+        if manual:
+            return f"~manual~{manual}"
+    return normalize_collection_title(item.get("title") or "")
+
+
+def _build_collection_mirror_mapping(items: List[Dict[str, Any]], source_server_id: str, target_server_ids: List[str], overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """Collections' own version of _build_mirror_mapping() above -- groups by
     NORMALIZED TITLE instead of tmdb_id, since a collection only gets a real
     cross-server identity (tmdb_collection_id) lazily, on first editor-open,
@@ -3177,11 +3207,9 @@ def _build_collection_mirror_mapping(items: List[Dict[str, Any]], source_server_
     the owning "movie" LibraryGroup (api_collections() resolves them that
     way, not a separate media_type), so this is called with the same
     (server_id, library_id) pairs a movie mirror mapping already uses."""
-    from .config import normalize_collection_title
-
     by_title: Dict[str, List[Dict[str, Any]]] = {}
     for item in items:
-        key = normalize_collection_title(item.get("title") or "")
+        key = collection_match_key(item, overrides)
         by_title.setdefault(key, []).append(item)
 
     mapping: List[Dict[str, Any]] = []
@@ -3203,10 +3231,11 @@ def _build_collection_mirror_mapping(items: List[Dict[str, Any]], source_server_
     return mapping
 
 
-def get_collection_mirror_mapping(pairs: List[tuple], source_server_id: str, target_server_ids: List[str]) -> List[Dict[str, Any]]:
+def get_collection_mirror_mapping(pairs: List[tuple], source_server_id: str, target_server_ids: List[str], overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """Media Mirror's Collections mapping (Quirk #123's follow-up) -- see
-    _build_collection_mirror_mapping()."""
-    return _build_collection_mirror_mapping(get_cached_collections_multi(pairs, merge_items=False), source_server_id, target_server_ids)
+    _build_collection_mirror_mapping(). `overrides`: the group's
+    collectionMatchOverrides."""
+    return _build_collection_mirror_mapping(get_cached_collections_multi(pairs, merge_items=False), source_server_id, target_server_ids, overrides)
 
 
 def get_cached_tv_show(rating_key: str) -> Optional[Dict[str, Any]]:
@@ -3404,7 +3433,7 @@ def get_cached_collections(library_id: Optional[str] = None) -> List[Dict[str, A
     return out
 
 
-def _dedupe_collections_by_title(collections: List[Dict[str, Any]], preferred_server_id: str = "plex-1") -> List[Dict[str, Any]]:
+def _dedupe_collections_by_title(collections: List[Dict[str, Any]], preferred_server_id: str = "plex-1", overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """Merges collections across linked servers by NORMALIZED title, since a
     collection only gets a real cross-server identity (tmdb_collection_id) on
     first editor-open, not at scan time -- unlike movies/TV, which already
@@ -3435,14 +3464,13 @@ def _dedupe_collections_by_title(collections: List[Dict[str, Any]], preferred_se
     _dedupe_by_tmdb_id() having built the identical field from the start --
     user-reported directly: a collection on both Plex and Jellyfin had no way
     to pick which server to send its poster to."""
-    # Lazy import -- config.py itself imports database.py at module load time
-    # (for settings persistence), so a top-level import here would be circular.
-    from .config import normalize_collection_title
-
+    # `overrides` (LibraryGroup.collectionMatchOverrides): manual matches set
+    # in the Collections page's "Collection matching" window -- see
+    # collection_match_key().
     groups: Dict[str, List[Dict[str, Any]]] = {}
     order: List[str] = []
     for c in collections:
-        key = normalize_collection_title(c.get("title") or "")
+        key = collection_match_key(c, overrides)
         if key not in groups:
             groups[key] = []
             order.append(key)
@@ -3469,7 +3497,7 @@ def _dedupe_collections_by_title(collections: List[Dict[str, Any]], preferred_se
     return out
 
 
-def get_cached_collections_multi(pairs: List[tuple], preferred_server_id: Optional[str] = None, merge_items: bool = True) -> List[Dict[str, Any]]:
+def get_cached_collections_multi(pairs: List[tuple], preferred_server_id: Optional[str] = None, merge_items: bool = True, overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     """Like get_cached_collections(), but for a Library Group spanning several
     (server_id, library_id) pairs (Quirk #62/#64) -- unions every pair's rows
     into one list, then (when `merge_items` is True, the default -- mirrors
@@ -3523,7 +3551,7 @@ def get_cached_collections_multi(pairs: List[tuple], preferred_server_id: Option
         if preferred_server_id:
             out = [item for item in out if item.get("server_id") == preferred_server_id]
         return out
-    return _dedupe_collections_by_title(out, preferred_server_id or "plex-1")
+    return _dedupe_collections_by_title(out, preferred_server_id or "plex-1", overrides)
 
 
 def get_collection_tmdb_id(rating_key: str) -> Optional[int]:

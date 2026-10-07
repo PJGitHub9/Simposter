@@ -723,9 +723,15 @@ def api_collections(force_refresh: bool = False, library_id: str = None, server_
     # now wired up for Collections too -- the merge-winner when merge_enabled,
     # or a genuine per-server filter when it isn't.
     preferred_server_id = get_library_group_preferred_server(server_id, library_id, "movie") if group_members else None
+    # Manual cross-server matches from the Collections page's "Collection
+    # matching" window (LibraryGroup.collectionMatchOverrides).
+    match_overrides = {}
+    if group_members:
+        from ..config import get_library_group_for
+        match_overrides = (get_library_group_for(server_id, library_id, "movie") or {}).get("collectionMatchOverrides") or {}
 
     if not force_refresh and _collections_cache_fresh(max_age_seconds=900, library_id=library_id):
-        cached = db.get_cached_collections_multi(group_members, preferred_server_id, merge_enabled) if group_members else cache.get_cached_collections(library_id=library_id)
+        cached = db.get_cached_collections_multi(group_members, preferred_server_id, merge_enabled, match_overrides) if group_members else cache.get_cached_collections(library_id=library_id)
         if cached:
             return [
                 {
@@ -767,7 +773,7 @@ def api_collections(force_refresh: bool = False, library_id: str = None, server_
                             }
                             for i in member_items
                         ])
-        merged = db.get_cached_collections_multi(group_members, preferred_server_id, merge_enabled)
+        merged = db.get_cached_collections_multi(group_members, preferred_server_id, merge_enabled, match_overrides)
         return [
             {
                 "key": c.get("rating_key"), "title": c.get("title"), "year": c.get("year"),

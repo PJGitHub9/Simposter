@@ -116,7 +116,7 @@ def _resolve_mapping(group: dict, media_type: str, source_server_id: str, target
     if not pairs:
         return []
     if media_type == "collection":
-        return db.get_collection_mirror_mapping(pairs, source_server_id, target_server_ids)
+        return db.get_collection_mirror_mapping(pairs, source_server_id, target_server_ids, group.get("collectionMatchOverrides") or {})
     fn = db.get_movie_mirror_mapping if media_type == "movie" else db.get_tv_mirror_mapping
     return fn(pairs, source_server_id, target_server_ids)
 

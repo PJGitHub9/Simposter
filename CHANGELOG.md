@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.01 (2026-10-07) — `dev-jellyfin` branch
+
+### New Features
+- **Collection matching** — a "Collection matching" window on the Collections page (shown when the library's group spans more than one server) overrides the automatic name-based matching of collections across servers: pick the matching collection on each server, choose "— none —" to split a wrong match, or reset a row to automatic. Saved per library group as `collectionMatchOverrides` and used everywhere collections are matched across servers: the merged Collections grid, the collection editors' send picker, and Media Mirror's collection mapping.
+- **Media Server Maintenance** (Settings → Cleanup) — one subsection per configured server, titled with its name. Jellyfin servers can run their built-in cleanup tasks (Optimize database, Clean Cache Directory, Clean Transcode Directory, Clean Log Directory, Clean Activity Log), showing each task's last run/result and live progress. Emby uses the same API but its task names are unverified.
+
+### Improvements
+- Plex maintenance actions now work for additional Plex servers (each uses its own saved URL/token), not only the primary connection.
+- Removed the outdated "Kometa Creator can't send to Jellyfin/Emby yet" note from the Collections page.
+
 ## v1.7.0 (2026-10-07) — `dev-jellyfin` branch — Jellyfin/Emby Support
 
 First full release of multi-server support (Plex, Jellyfin and/or Emby). Builds on the v1.6.2 beta; Plex is no longer required. Moving to 1.7 also fixes version ordering: `v1.6.2` compared as older than `v1.6.114`, because each part of a version number is compared as a whole number.

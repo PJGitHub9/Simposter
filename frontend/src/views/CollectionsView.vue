@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import MovieGrid from '../components/movies/MovieGrid.vue'
+import CollectionMatchingModal from '../components/CollectionMatchingModal.vue'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
@@ -130,6 +131,13 @@ const serverOptions = computed(() => {
 })
 
 const hasServerChoice = computed(() => serverOptions.value.length > 1)
+
+// "Collection matching" window -- only useful once this library's group
+// spans more than one server.
+const showMatching = ref(false)
+const canMatchCollections = computed(() =>
+  new Set((group.value?.members || []).map((m) => m.serverId)).size > 1
+)
 
 const preferredServerId = computed(() => {
   if (!mergeEnabled.value) return group.value?.preferredServerId || ''
@@ -271,7 +279,6 @@ watch(defaultLibraryId, (val, oldVal) => {
       <div>
         <p class="label">&#x1F4DA; Collections</p>
         <h2>{{ libraryLabel }}</h2>
-        <p class="collections-plex-note">Kometa Creator can't send to Jellyfin/Emby yet</p>
       </div>
       <div class="header-actions">
         <input
@@ -306,6 +313,14 @@ watch(defaultLibraryId, (val, oldVal) => {
             <option v-for="opt in serverOptions" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
           </select>
         </div>
+        <button
+          v-if="canMatchCollections"
+          class="refresh-btn"
+          title="Link collections with different names across servers, or split a wrong match"
+          @click="showMatching = true"
+        >
+          Collection matching
+        </button>
         <button @click="refreshCollections" class="refresh-btn" :disabled="loading">
           {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
         </button>
@@ -323,6 +338,14 @@ watch(defaultLibraryId, (val, oldVal) => {
       @select="handleSelect"
       @refresh="handleRefreshPoster"
       @resend-done="handleRefreshPoster"
+    />
+
+    <CollectionMatchingModal
+      v-if="showMatching && currentLibrary"
+      :server-id="currentServer"
+      :library-id="currentLibrary"
+      @close="showMatching = false"
+      @changed="fetchCollections()"
     />
 
     <Teleport to="body">
@@ -425,12 +448,6 @@ watch(defaultLibraryId, (val, oldVal) => {
 .toolbar-select option {
   background: #1a1d2e;
   color: #c9d1e0;
-}
-
-.collections-plex-note {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--muted);
 }
 
 .refresh-btn {
