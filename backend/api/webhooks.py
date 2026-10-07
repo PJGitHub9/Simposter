@@ -549,7 +549,11 @@ def _nonplex_group_members(media_type: str) -> List[tuple]:
     out: List[tuple] = []
     try:
         groups = (db.get_ui_settings() or {}).get("libraryGroups") or []
-    except Exception:
+    except Exception as e:
+        logger.warning("[WEBHOOK] Couldn't read library groups: %s", e)
+        return out
+    if not isinstance(groups, list):
+        logger.warning("[WEBHOOK] libraryGroups setting has unexpected type %s -- ignoring", type(groups).__name__)
         return out
     for g in groups:
         if (g.get("mediaType") or "movie") != media_type:
@@ -558,6 +562,27 @@ def _nonplex_group_members(media_type: str) -> List[tuple]:
             pair = (m.get("serverId"), m.get("libraryId"))
             if pair[0] and pair[1] and pair[0] != "plex-1" and pair not in out:
                 out.append(pair)
+    return out
+
+
+def _nonplex_server_libraries(media_type: str) -> List[tuple]:
+    """Fallback when no Library Group holds a Jellyfin/Emby library: ask every
+    enabled Jellyfin/Emby server for its libraries of this media type. Lets a
+    webhook find its item without any groups configured at all."""
+    out: List[tuple] = []
+    try:
+        from ..media_server import get_enabled_clients, PlexClient
+        clients = [c for c in get_enabled_clients() if not isinstance(c, PlexClient)]
+    except Exception as e:
+        logger.warning("[WEBHOOK] Couldn't load configured media servers: %s", e)
+        return out
+    for client in clients:
+        try:
+            for lib in client.list_libraries():
+                if lib.media_type == media_type and (client.server_id, lib.id) not in out:
+                    out.append((client.server_id, lib.id))
+        except Exception as e:
+            logger.warning("[WEBHOOK] Couldn't list libraries on %s: %s", client.server_id, e)
     return out
 
 
@@ -623,6 +648,24 @@ def _resolve_webhook_target(server_id: Optional[str], library_id: Optional[str],
         return ("plex", "plex-1", library_id, None)
     if members:
         return ("media_server", None, None, members)
+    server_libs = _nonplex_server_libraries(media_type)
+    if server_libs:
+        logger.info("[WEBHOOK] No %s library group found -- searching all %d %s librar%s on your Jellyfin/Emby server(s)",
+                    media_type, len(server_libs), media_type, "y" if len(server_libs) == 1 else "ies")
+        return ("media_server", None, None, server_libs)
+    try:
+        _ui = db.get_ui_settings() or {}
+        _groups = _ui.get("libraryGroups") or []
+        _servers = _ui.get("mediaServers") or []
+    except Exception:
+        _groups, _servers = [], []
+    logger.warning(
+        "[WEBHOOK] Nowhere to look this %s up: Plex isn't configured, %d library group(s) exist but none "
+        "has a %s Jellyfin/Emby library, and no enabled Jellyfin/Emby server returned a %s library "
+        "(media servers configured: %s)",
+        media_type, len(_groups) if isinstance(_groups, list) else 0, media_type, media_type,
+        ", ".join(f"{s.get('id')}({'on' if s.get('enabled', True) else 'off'})" for s in _servers if isinstance(s, dict)) or "none",
+    )
     return ("none", None, None, None)
 
 
@@ -1651,8 +1694,7 @@ def radarr_webhook(
     # may still belong to a Jellyfin/Emby library -- see _resolve_webhook_target().
     _target_kind, _resolved_server, _resolved_library, webhook_candidates = _resolve_webhook_target(server_id, library_id, "tv", group_id or group)
     if _target_kind == "none":
-        logger.warning("[WEBHOOK] Ignoring webhook: no Plex server and no Jellyfin/Emby library groups are configured")
-        return {"status": "ignored", "reason": "No media server configured to look this item up on"}
+        return {"status": "ignored", "reason": "No media server library found to look this item up on -- see the log for details"}
     plex_fallback = None
     if _target_kind == "media_server":
         is_plex_webhook = False
@@ -1666,8 +1708,7 @@ def radarr_webhook(
     # may still belong to a Jellyfin/Emby library -- see _resolve_webhook_target().
     _target_kind, _resolved_server, _resolved_library, webhook_candidates = _resolve_webhook_target(server_id, library_id, "movie", group_id or group)
     if _target_kind == "none":
-        logger.warning("[WEBHOOK] Ignoring webhook: no Plex server and no Jellyfin/Emby library groups are configured")
-        return {"status": "ignored", "reason": "No media server configured to look this item up on"}
+        return {"status": "ignored", "reason": "No media server library found to look this item up on -- see the log for details"}
     plex_fallback = None
     if _target_kind == "media_server":
         is_plex_webhook = False

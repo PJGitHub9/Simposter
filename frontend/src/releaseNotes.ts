@@ -10,6 +10,41 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.0',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Jellyfin and Emby support: connect Plex, Jellyfin and/or Emby in any combination — Plex is no longer required.',
+          'Library groups: link the same library across servers. Posters, logos and backdrops can be sent to every server in a group, and the same title on two servers shows as one card.',
+          'Collections now work with Jellyfin too, including a "Show posters from" switch and sending to more than one server.',
+          'Media Mirror: copy artwork from one server to the others in a group, by hand or on a schedule. Only changed images are re-copied.',
+          'Webhooks can target a library group by name — the Webhook URL Generator now lists your groups, and posters go to every library in the chosen group.',
+          'Automatic poster generation now works for Jellyfin/Emby libraries during scans, not just Plex.',
+          'New poster/logo upload window: choose a local file or paste an image URL, with a live preview.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Library and group names are shown instead of internal IDs in History, Local Assets, notifications and backups.',
+          'Removing a media server now cleans up all of its cached posters and scan data once you save.',
+          'Removing Plex now sticks, even if PLEX_URL/PLEX_TOKEN are set as environment variables.',
+          'Large library scans no longer stall after the movies step, and Save Changes registers on the first click.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Webhooks for a Jellyfin/Emby-only setup no longer try to reach a Plex server that is not configured.',
+          'Local poster/logo uploads no longer fail with "blocked network range" on some networks.',
+          'Kometa presets in Template Manager now preview as a collection instead of over a movie poster.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.6.2',
     date: '2026-09-30',
     sections: [

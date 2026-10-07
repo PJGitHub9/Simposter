@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.7.0 (2026-10-07) — `dev-jellyfin` branch — Jellyfin/Emby Support
+
+First full release of multi-server support (Plex, Jellyfin and/or Emby). Builds on the v1.6.2 beta; Plex is no longer required. Moving to 1.7 also fixes version ordering: `v1.6.2` compared as older than `v1.6.114`, because each part of a version number is compared as a whole number.
+
+### New Features
+- **Collections on Jellyfin/Emby** — linked servers' collections are scanned and merged (matched by name, ignoring a trailing "Collection"), with a "Show posters from" switch, search/filter/sort, and a multi-server send picker in both collection editors.
+- **Media Mirror** — copies artwork from a source server to the other members of a group; manual or scheduled, paginated mapping tables with Movies/TV and Collections tabs, and change detection so only changed images are re-copied ("Re-copy everything" forces a full pass).
+- **Webhooks by library group** — `?group=<name>` (or `group_id=`) looks the item up across the group's libraries and delivers to every library in it, falling back to the group's Jellyfin/Emby libraries if Plex doesn't have the title. The Webhook URL Generator now lists groups instead of individual server libraries.
+- **Webhooks without Plex** — a URL that names no server is resolved against your Jellyfin/Emby libraries (from your groups, or directly from the servers if there are none) instead of an unconfigured Plex.
+- **Jellyfin/Emby-origin webhooks and auto-generate reach every server in the group**, Plex included.
+- **Auto-generate on Jellyfin/Emby scans** — new items found by a Jellyfin/Emby scan (manual or scheduled) get posters automatically, using the group's settings. A library's first scan counts as an import, not new arrivals.
+- **Poster/logo upload window** — choose a local file or paste an image URL, with a live preview (from `webui-overhaul-dev` v1.6.111).
+- **Removing a media server purges its cache** — its cached posters/logos/backdrops/square art, thumbnails, scan rows, label cache, retry-queue entries and Media Mirror state are deleted after the save. History and saved poster files are kept.
+
+### Improvements
+- Library/group names instead of IDs in History, Local Assets, global search, notifications and backup folder names.
+- Removing Plex now persists across restarts even when `PLEX_URL`/`PLEX_TOKEN` env vars are set.
+- The primary Plex server can be removed from Settings → Media Servers like any other.
+- Linking a library to a group no longer needs a separate "+ Add" click.
+- Scheduled scans skip Plex quietly when it isn't configured, and wait for a manual scan to finish instead of failing.
+- The streaming-provider cache warm-up after a scan runs in the background and only when a streaming badge is in use.
+
+### Bug Fixes
+- Webhooks for a single-library group rendered but never delivered.
+- A scan with many new items stalled silently after the movies step (the progress bar froze).
+- Save Changes appeared to need two clicks when adding a library to a group (the page waited for the follow-up scan before marking itself saved).
+- Removing the last media server was silently undone on save.
+- The "recently handled by a webhook" check matched the wrong items (a substring match) and never matched real Radarr/Sonarr events.
+- "Show posters from" never appeared for a Jellyfin/Emby-only library.
+- Local poster/logo uploads could fail with "URL resolves to a blocked network range" (from `webui-overhaul-dev` v1.6.112).
+- Kometa presets in Template Manager previewed over a random movie poster.
+- Removed dead code: the never-scheduled `check_recently_added()` Plex poll.
+
 ## v1.6.2 (2026-09-30) — `dev-jellyfin` branch — Beta: Jellyfin/Emby Support
 
 **First versioned release of the Jellyfin/Emby multi-server work.** Everything below has been building up unversioned on this branch since the previous entry (v1.6.113/114) — see CLAUDE.md Quirks #56 onward for the full, detailed build history. This is a beta: multi-server support is genuinely usable, but has known gaps (see below) and hasn't had extensive real-world testing yet — please report anything that looks wrong.
