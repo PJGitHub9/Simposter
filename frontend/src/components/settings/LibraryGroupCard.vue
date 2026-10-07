@@ -464,6 +464,11 @@ function onAutoGenToggle(e: Event) {
 const presetValue = computed(() => {
   const tId = plexMember.value ? props.mapping?.autoGenerateTemplateId : props.group.autoGenerateTemplateId
   const pId = plexMember.value ? props.mapping?.autoGeneratePresetId : props.group.autoGeneratePresetId
+  // A main-Plex group's value comes from LibrariesTab's localLibraries, whose
+  // getter already hands back the combined "template:preset" form -- adding the
+  // template again produced "template:template:preset", which matches no option,
+  // so the dropdown went blank right after every pick.
+  if (pId && pId.includes(':')) return pId
   if (tId && pId) return `${tId}:${pId}`
   return pId || ''
 })
