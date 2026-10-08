@@ -273,6 +273,71 @@ def _get_synced_servers_label(synced_server_ids: Optional[List[str]]) -> Optiona
     return ", ".join(get_server_label(sid) for sid in seen)
 
 
+def _get_preset_label(template_id: Optional[str], preset_id: Optional[str]) -> str:
+    """The preset's display name (falls back to its id, then the template)."""
+    if preset_id:
+        if template_id:
+            try:
+                preset = db.get_preset(template_id, preset_id)
+                if preset and preset.get("name"):
+                    return str(preset["name"])
+            except Exception:
+                pass
+        return str(preset_id)
+    return template_id or "N/A"
+
+
+def _get_servers_label(action: str, server_id: Optional[str], synced_server_ids: Optional[List[str]]) -> Optional[str]:
+    """Every server this notification's poster reached: the primary send's
+    server (Plex for sent/resent_to_plex, `server_id` for a media-server
+    send) followed by any linked servers it was also synced to."""
+    ids: List[str] = []
+    if action in ("sent_to_plex", "resent_to_plex"):
+        ids.append("plex-1")
+    elif action == "sent_to_media_server" and server_id:
+        ids.append(server_id)
+    for sid in synced_server_ids or []:
+        if sid and sid not in ids:
+            ids.append(sid)
+    if not ids:
+        return None
+    from ..media_server import get_server_label
+    return ", ".join(get_server_label(sid) for sid in ids)
+
+
+def _get_short_action(action: str) -> str:
+    if action == "resent_to_plex":
+        return "Resent"
+    if action in ("sent_to_plex", "sent_to_media_server"):
+        return "Sent"
+    return "Saved locally"
+
+
+def _summary_fields(
+    library_id: Optional[str],
+    template_id: Optional[str],
+    preset_id: Optional[str],
+    action: str,
+    server_id: Optional[str],
+    synced_server_ids: Optional[List[str]],
+    asset_type: str = "poster",
+) -> List[tuple]:
+    """(name, value) pairs shared by every notification layout:
+    Library / Preset / Action(s) / Servers (+ Asset for non-poster sends)."""
+    fields = [
+        ("Library", _get_library_name(library_id)),
+        ("Preset", _get_preset_label(template_id, preset_id)),
+        ("Action", _get_short_action(action)),
+    ]
+    servers = _get_servers_label(action, server_id, synced_server_ids)
+    if servers:
+        fields.append(("Servers", servers))
+    asset_label = _get_asset_type_label(asset_type)
+    if asset_label:
+        fields.append(("Asset", asset_label))
+    return fields
+
+
 def send_discord_notification(
     title: str,
     year: Optional[int] = None,
@@ -337,42 +402,19 @@ def send_discord_notification(
             year_str = f" ({year})" if year else ""
             description = f"**{title}**{year_str}"
 
-        action_text = _get_action_text(action, server_id)
-
         embed = {
             "title": f"{emoji} {source_label} Complete",
             "description": description,
             "color": color,
             "fields": [
-                {
-                    "name": "Library",
-                    "value": library_name,
-                    "inline": True
-                },
-                {
-                    "name": "Template",
-                    "value": template_id or "N/A",
-                    "inline": True
-                },
-                {
-                    "name": "Action",
-                    "value": action_text,
-                    "inline": True
-                }
+                {"name": name, "value": value, "inline": True}
+                for name, value in _summary_fields(library_id, template_id, preset_id, action, server_id, synced_server_ids, asset_type)
             ],
             "footer": {
                 "text": "Simposter"
             },
             "timestamp": datetime.utcnow().isoformat()
         }
-
-        asset_label = _get_asset_type_label(asset_type)
-        if asset_label:
-            embed["fields"].append({"name": "Asset", "value": asset_label, "inline": True})
-
-        synced_label = _get_synced_servers_label(synced_server_ids)
-        if synced_label:
-            embed["fields"].append({"name": "Also synced to", "value": synced_label, "inline": True})
 
         # Add poster thumbnail - either from attached file or URL
         if poster_data:
@@ -456,12 +498,11 @@ def _build_notification_embed(
     asset_type: str = "poster",
     server_id: Optional[str] = None,
     synced_server_ids: Optional[List[str]] = None,
+    preset_id: Optional[str] = None,
 ) -> dict:
     """Build a Discord embed dict — shared between native Discord and Apprise Discord paths."""
     emoji = _get_source_emoji(source)
     source_label = _get_source_label(source)
-    library_name = _get_library_name(library_id)
-    action_text = _get_action_text(action, server_id)
 
     if failed_count > 0 and success_count == 0:
         color = 0xFF4757
@@ -483,21 +524,12 @@ def _build_notification_embed(
         "description": description,
         "color": color,
         "fields": [
-            {"name": "Library", "value": library_name, "inline": True},
-            {"name": "Template", "value": template_id or "N/A", "inline": True},
-            {"name": "Action", "value": action_text, "inline": True},
+            {"name": name, "value": value, "inline": True}
+            for name, value in _summary_fields(library_id, template_id, preset_id, action, server_id, synced_server_ids, asset_type)
         ],
         "footer": {"text": "Simposter"},
         "timestamp": datetime.utcnow().isoformat(),
     }
-
-    asset_label = _get_asset_type_label(asset_type)
-    if asset_label:
-        embed["fields"].append({"name": "Asset", "value": asset_label, "inline": True})
-
-    synced_label = _get_synced_servers_label(synced_server_ids)
-    if synced_label:
-        embed["fields"].append({"name": "Also synced to", "value": synced_label, "inline": True})
 
     if poster_data:
         embed["thumbnail"] = {"url": "attachment://poster.jpg"}
@@ -561,7 +593,7 @@ def send_apprise_notification(
             library_id=library_id, source=source, action=action,
             count=count, success_count=success_count, failed_count=failed_count,
             poster_data=poster_data, asset_type=asset_type, server_id=server_id,
-            synced_server_ids=synced_server_ids,
+            synced_server_ids=synced_server_ids, preset_id=preset_id,
         )
         for webhook_url in discord_urls:
             try:
@@ -605,16 +637,8 @@ def send_apprise_notification(
                 else:
                     year_str = f" ({year})" if year else ""
                     body = f"{title}{year_str}"
-                body += f"\nLibrary: {library_name}"
-                if template_id:
-                    body += f"\nTemplate: {template_id}"
-                body += f"\nAction: {action_text}"
-                asset_label = _get_asset_type_label(asset_type)
-                if asset_label:
-                    body += f"\nAsset: {asset_label}"
-                synced_label = _get_synced_servers_label(synced_server_ids)
-                if synced_label:
-                    body += f"\nAlso synced to: {synced_label}"
+                for name, value in _summary_fields(library_id, template_id, preset_id, action, server_id, synced_server_ids, asset_type):
+                    body += f"\n{name}: {value}"
 
                 result = ap.notify(title=notify_title, body=body)
                 if result:
@@ -685,7 +709,8 @@ def start_batch_progress_notification(
     library_id: Optional[str],
     template_id: str,
     total_count: int,
-    source: str = "batch"
+    source: str = "batch",
+    preset_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Send initial batch progress notification and return the message ID for updates.
@@ -717,8 +742,8 @@ def start_batch_progress_notification(
                     "inline": True
                 },
                 {
-                    "name": "Template",
-                    "value": template_id or "N/A",
+                    "name": "Preset",
+                    "value": _get_preset_label(template_id, preset_id),
                     "inline": True
                 },
                 {
@@ -767,6 +792,7 @@ def update_batch_progress_notification(
     poster_data: Optional[bytes] = None,
     poster_fallback_count: int = 0,
     logo_fallback_count: int = 0,
+    preset_id: Optional[str] = None,
 ) -> bool:
     """
     Update an existing batch progress notification.
@@ -804,8 +830,8 @@ def update_batch_progress_notification(
                     "inline": True
                 },
                 {
-                    "name": "Template",
-                    "value": template_id or "N/A",
+                    "name": "Preset",
+                    "value": _get_preset_label(template_id, preset_id),
                     "inline": True
                 },
                 {
@@ -888,6 +914,8 @@ def complete_batch_progress_notification(
     poster_fallback_count: int = 0,
     logo_fallback_count: int = 0,
     synced_server_ids: Optional[List[str]] = None,
+    preset_id: Optional[str] = None,
+    action: str = "sent_to_plex",
 ) -> bool:
     """
     Update batch progress notification with final completion status.
@@ -915,22 +943,10 @@ def complete_batch_progress_notification(
             description += f"\n**{failed_count}** failed"
 
         fields = [
-            {
-                "name": "Library",
-                "value": library_name,
-                "inline": True
-            },
-            {
-                "name": "Template",
-                "value": template_id or "N/A",
-                "inline": True
-            },
-            {
-                "name": "Total",
-                "value": str(total_count),
-                "inline": True
-            }
+            {"name": name, "value": value, "inline": True}
+            for name, value in _summary_fields(library_id, template_id, preset_id, action, None, synced_server_ids)
         ]
+        fields.append({"name": "Total", "value": str(total_count), "inline": True})
 
         # Show fallback counts if any were used
         if poster_fallback_count > 0 or logo_fallback_count > 0:
@@ -944,10 +960,6 @@ def complete_batch_progress_notification(
                 "value": " | ".join(fallback_parts),
                 "inline": True
             })
-
-        synced_label = _get_synced_servers_label(synced_server_ids)
-        if synced_label:
-            fields.append({"name": "Also synced to", "value": synced_label, "inline": True})
 
         embed = {
             "title": f"{emoji} {source_label} Complete",

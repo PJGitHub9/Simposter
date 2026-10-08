@@ -188,10 +188,13 @@ def _download_and_normalize(source_client, source_rating_key: str, asset_type: s
     return _normalize(raw, asset_type, source_rating_key)
 
 
-def _normalize(raw: bytes, asset_type: str, source_rating_key: str = "?") -> Optional[tuple]:
+def _normalize(raw: bytes, asset_type: str, source_rating_key: str = "?", for_plex: bool = True) -> Optional[tuple]:
     """The normalize half of _download_and_normalize(), split out so a run can
     hash the raw download first and skip this (CPU-heavy) step entirely for an
-    item whose source image hasn't changed since the last copy."""
+    item whose source image hasn't changed since the last copy.
+
+    `for_plex` only affects logging: the Plex size-limit warning is skipped
+    when none of the targets are Plex servers."""
     from .save import encode_poster_for_plex, normalize_logo_for_plex, normalize_backdrop_for_plex
     if asset_type == "poster":
         try:
@@ -200,12 +203,12 @@ def _normalize(raw: bytes, asset_type: str, source_rating_key: str = "?") -> Opt
         except Exception as e:
             logger.warning("[MIRROR] Could not decode source poster bytes for %s: %s", source_rating_key, e)
             return None
-        return encode_poster_for_plex(img)
+        return encode_poster_for_plex(img, for_plex=for_plex)
     if asset_type == "logo":
         return normalize_logo_for_plex(raw)
     # backdrop and square_art both get the same treatment -- Quirk #44's own
     # established reasoning ("the same kind of large photographic image").
-    return normalize_backdrop_for_plex(raw)
+    return normalize_backdrop_for_plex(raw, for_plex=for_plex)
 
 
 def _sync_one_item(
@@ -264,7 +267,10 @@ def _sync_one_item(
             continue
 
         try:
-            result = _normalize(raw, asset_type, source_rating_key)
+            result = _normalize(
+                raw, asset_type, source_rating_key,
+                for_plex=any(str(t).startswith("plex") for t in targets_needing),
+            )
         except Exception as e:
             logger.warning("[MIRROR] Failed to normalize %s for '%s': %s", asset_type, title_display, e)
             item_failed = True

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import SendToServerModal from '@/components/editor/SendToServerModal.vue'
+import { useAssetServerSend } from '@/composables/useAssetServerSend'
 
 type BackdropSource = {
   url: string
@@ -19,6 +21,8 @@ type BackdropItem = {
   tmdb_id?: number | null
   is_tv?: boolean
   server_id?: string | null
+  library_id?: string | number | null
+  other_servers?: { server_id: string; rating_key: string }[] | null
 }
 
 const props = defineProps<{ item: BackdropItem }>()
@@ -59,7 +63,16 @@ const dragOver = ref(false)
 
 const hasSelection = computed(() => !!(selectedUrl.value || uploadedData.value))
 // See EditorPane.vue's identical computed (Quirk #65/#67/#68).
-const isNonPlexItem = computed(() => !!props.item.server_id && props.item.server_id !== 'plex-1')
+// Every server this item lives on (its own plus linked copies). With more than
+// one, Send opens a picker; Plex targets use /api/plex/send-backdrop,
+// Jellyfin/Emby targets /api/media-server/send-backdrop.
+const { linkedServers, ownServerId, serverOptions, labelFor, sendTo } = useAssetServerSend(() => props.item, 'backdrop')
+const showSendModal = ref(false)
+const sentLabels = ref('')
+const sendButtonLabel = computed(() => {
+  if (linkedServers.value.length > 1) return 'Send…'
+  return ownServerId.value === 'plex-1' ? 'Send to Plex' : `Send to ${labelFor(ownServerId.value)}`
+})
 
 async function fetchAvailableBackdrops() {
   loadingBackdrops.value = true
@@ -130,52 +143,46 @@ function loadFile(file: File) {
   reader.readAsDataURL(file)
 }
 
-async function sendToPlexBackdrop() {
+function onSendClick() {
   if (!hasSelection.value) return
+  if (linkedServers.value.length > 1) showSendModal.value = true
+  else sendBackdrop([ownServerId.value])
+}
+
+function onSendModalConfirm(serverIds: string[]) {
+  showSendModal.value = false
+  sendBackdrop(serverIds)
+}
+
+async function sendBackdrop(serverIds: string[]) {
+  if (!hasSelection.value || !serverIds.length) return
   sending.value = true
   error.value = null
   success.value = false
   try {
-    // See EditorPane.vue's doSend()/Quirk #69 -- a Jellyfin/Emby item routes
-    // through the generic media-server send endpoint instead.
-    const endpoint = isNonPlexItem.value ? '/api/media-server/send-backdrop' : '/api/plex/send-backdrop'
-    const body: Record<string, unknown> = {
-      rating_key: props.item.key,
-      is_tv: props.item.is_tv ?? false,
+    const result = await sendTo(serverIds, { data: uploadedData.value, url: selectedUrl.value })
+    if (result.failed.length) {
+      error.value = result.failed.map(f => `${f.label}: ${f.message}`).join('; ')
     }
-    const dataKey = isNonPlexItem.value ? 'image_data' : 'art_data'
-    const urlKey = isNonPlexItem.value ? 'image_url' : 'art_url'
-    if (uploadedData.value) {
-      body[dataKey] = uploadedData.value
-    } else {
-      body[urlKey] = selectedUrl.value
-    }
-    const res = await fetch(`${apiBase}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      throw new Error(data.detail || `HTTP ${res.status}`)
-    }
-    const data = await res.json().catch(() => ({}))
+    if (!result.sent.length) return
+    sentLabels.value = result.sent.map(s => labelFor(s.serverId)).join(', ')
     success.value = true
-    const newArtUrl = data.art_url || selectedUrl.value
-    // Update this modal's own "Current Backdrop" display, not just the grid --
-    // emitting alone only ever reaches the grid's separate copy of the item.
-    sentArtUrl.value = newArtUrl
-    currentBackdropFailed.value = false
-    // Pass back the new cached art_url so the grid card updates too
-    emit('updated', newArtUrl)
-    setTimeout(() => emit('close'), 1200)
+    // The grid card shows the item's own server, so only that server's copy
+    // updates it (and this modal's "Current Backdrop").
+    const own = result.sent.find(s => s.serverId === ownServerId.value)
+    if (own) {
+      const newArtUrl = own.url || selectedUrl.value
+      sentArtUrl.value = newArtUrl
+      currentBackdropFailed.value = false
+      emit('updated', newArtUrl)
+    }
+    if (!result.failed.length) setTimeout(() => emit('close'), 1200)
   } catch (e: any) {
     error.value = e.message || 'Failed to send backdrop.'
   } finally {
     sending.value = false
   }
 }
-
 onMounted(fetchAvailableBackdrops)
 </script>
 
@@ -266,7 +273,7 @@ onMounted(fetchAvailableBackdrops)
 
         <!-- Error / Success -->
         <div v-if="error" class="feedback error">{{ error }}</div>
-        <div v-if="success" class="feedback success">{{ isNonPlexItem ? 'Backdrop sent successfully!' : 'Backdrop sent to Plex successfully!' }}</div>
+        <div v-if="success" class="feedback success">Backdrop sent to {{ sentLabels }}.</div>
       </div>
 
       <!-- Footer -->
@@ -275,17 +282,24 @@ onMounted(fetchAvailableBackdrops)
         <button
           class="btn-send"
           :disabled="!hasSelection || sending"
-          @click="sendToPlexBackdrop"
+          @click="onSendClick"
         >
           <svg v-if="sending" class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M21 12a9 9 0 11-6.219-8.56"/>
           </svg>
-          {{ sending ? 'Sending…' : (isNonPlexItem ? 'Send' : 'Send to Plex') }}
+          {{ sending ? 'Sending…' : sendButtonLabel }}
         </button>
       </div>
     </div>
   </div>
   </Teleport>
+  <SendToServerModal
+    v-if="showSendModal"
+    :options="serverOptions"
+    hint="Choose which server(s) to send this backdrop to."
+    @close="showSendModal = false"
+    @send="onSendModalConfirm"
+  />
 </template>
 
 <style scoped>

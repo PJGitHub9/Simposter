@@ -371,6 +371,7 @@ class PlexBackdropSendRequest(BaseModel):
     is_tv: bool = False
     is_collection: bool = False
     library_id: Optional[str] = None
+    notify: bool = True  # False when the editor sends one combined notification itself
 
 
 class PlexSquareArtSendRequest(BaseModel):

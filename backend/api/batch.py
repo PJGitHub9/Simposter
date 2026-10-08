@@ -2382,7 +2382,8 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
             library_id=req.library_id,
             template_id=req.template_id,
             total_count=total_count,
-            source="batch"
+            source="batch",
+            preset_id=req.preset_id,
         )
     except Exception as notif_err:
         logger.debug("[BATCH] Failed to start Discord progress: %s", notif_err)
@@ -2544,6 +2545,7 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                         source="batch",
                         poster_fallback_count=poster_fallback_count,
                         logo_fallback_count=logo_fallback_count,
+                        preset_id=req.preset_id,
                     )
                     last_discord_update = time.time()
                 except Exception as update_err:
@@ -2588,6 +2590,8 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
                 poster_fallback_count=poster_fallback_count,
                 logo_fallback_count=logo_fallback_count,
                 synced_server_ids=batch_synced_server_ids,
+                preset_id=req.preset_id,
+                action=batch_notif_action,
             )
         except Exception as notif_err:
             logger.debug("[BATCH] Failed to complete Discord progress: %s", notif_err)

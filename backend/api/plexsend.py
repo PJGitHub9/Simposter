@@ -451,14 +451,15 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
         library_id=req.library_id, source="manual", action="sent_to_plex",
         asset_type="backdrop",
     )
-    try:
-        send_discord_notification(**_notif_kwargs, poster_data=art_bytes)
-    except Exception as notif_err:
-        logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
-    try:
-        send_apprise_notification(**_notif_kwargs, poster_data=art_bytes)
-    except Exception as notif_err:
-        logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
+    if req.notify:
+        try:
+            send_discord_notification(**_notif_kwargs, poster_data=art_bytes)
+        except Exception as notif_err:
+            logger.debug("[PLEX] Failed to send Discord notification: %s", notif_err)
+        try:
+            send_apprise_notification(**_notif_kwargs, poster_data=art_bytes)
+        except Exception as notif_err:
+            logger.debug("[PLEX] Failed to send Apprise notification: %s", notif_err)
 
     return {"status": "ok", "art_url": new_art_url}
 
@@ -894,6 +895,10 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
 
 class LocalAssetResendRequest(BaseModel):
     paths: List[str]  # relative asset paths, as returned by GET /local-assets
+    # Which servers to send to. None = each file's own server only (the original
+    # behavior). Otherwise any server in the file's library group: the file's own
+    # server gets a direct upload, the others are matched by TMDb/TVDB id.
+    targets: Optional[List[str]] = None
 
 
 @router.post("/local-assets/resend")
@@ -932,11 +937,14 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
         metadata = _read_image_metadata(file_path)
         rating_key = metadata.get("rating_key")
         server_id = db.get_server_id_for_rating_key(rating_key) if rating_key else "plex-1"
-        if server_id == "plex-1":
+        send_own = req.targets is None or server_id in req.targets
+        others = [t for t in (req.targets or []) if t and t != server_id]
+        if send_own and server_id == "plex-1":
             has_plex_target = True
         file_infos.append({
             "path": rel_path, "file_path": file_path, "metadata": metadata,
             "rating_key": rating_key, "server_id": server_id,
+            "send_own": send_own, "others": others,
         })
 
     if has_plex_target and (not settings.PLEX_URL or not settings.PLEX_TOKEN):
@@ -983,7 +991,9 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
                 img.save(buf, "JPEG", quality=98, subsampling=0)
                 payload, content_type = buf.getvalue(), "image/jpeg"
 
-            if server_id == "plex-1":
+            if not info["send_own"]:
+                pass
+            elif server_id == "plex-1":
                 plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
                 plex_session.post(
                     plex_url,
@@ -1010,18 +1020,56 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
             results.append(entry)
             continue
 
-        if server_id == "plex-1":
+        sent_to: List[str] = []
+        if not info["send_own"]:
+            pass
+        elif server_id == "plex-1":
+            sent_to.append(server_id)
             logger.info("[LOCAL_ASSETS] Resent %s (rating_key=%s) to Plex", info["path"], rating_key)
             _remove_labels_for_key(rating_key, is_tv, metadata.get("library_id"), db)
             _add_label_for_key(rating_key, is_tv, metadata.get("library_id"), db)
         else:
+            sent_to.append(server_id)
             # plex_remove_label()/plex_add_label() (inside the two helpers above)
             # are genuinely Plex-only API calls with no non-Plex equivalent to
             # route to (Quirk #59's deliberate no-op design for
             # JellyfinClient.remove_label()/add_label()) -- correctly skipped
             # entirely for a non-Plex target, not routed anywhere.
             logger.info("[LOCAL_ASSETS] Resent %s (rating_key=%s) to %s", info["path"], rating_key, server_id)
-        entry["status"] = "ok"
+
+        # Other servers in the file's library group: find the same title there by
+        # TMDb/TVDB id and upload the same bytes (no re-encode).
+        not_reached: List[str] = []
+        if info["others"]:
+            tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+            if not tmdb_id and not tvdb_id:
+                # Season posters are saved under the season's own rating key,
+                # which isn't cached with an id -- only the show is.
+                not_reached = list(info["others"])
+            else:
+                from .media_server_send import sync_render_to_linked_servers
+                synced = sync_render_to_linked_servers(
+                    tmdb_id=tmdb_id,
+                    media_type="tv" if is_tv else "movie",
+                    library_id=metadata.get("library_id"),
+                    target_ids=info["others"],
+                    poster_bytes=payload,
+                    poster_content_type=content_type,
+                    title_hint=metadata.get("movie_title") or rating_key,
+                    tvdb_id=tvdb_id,
+                    source_server_id=server_id,
+                )
+                reached = {s["server_id"] for s in synced}
+                sent_to.extend(sorted(reached))
+                not_reached = [t for t in info["others"] if t not in reached]
+
+        entry["sent_to"] = sent_to
+        if not_reached:
+            entry["not_reached"] = not_reached
+        if sent_to:
+            entry["status"] = "ok"
+        else:
+            entry.update(status="error", reason="Not found on the selected server(s)")
         results.append(entry)
 
     succeeded = sum(1 for r in results if r["status"] == "ok")

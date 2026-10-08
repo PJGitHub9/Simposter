@@ -472,6 +472,88 @@ def _resolve_auto_generate_config(group: Dict[str, Any], media_type: str, ui_set
     return {"template_id": template_id, "preset_id": preset_id}
 
 
+def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str, item: Dict[str, Any], cfg: Optional[Dict[str, Any]]) -> bool:
+    """A new Jellyfin/Emby item that Plex also has: send it the poster Plex
+    last received (the render cached by tmdb id at every successful send).
+
+    Covers the webhook case where Radarr/Sonarr fired before this server had
+    imported the file -- the webhook's own cross-server sync found nothing to
+    upload to, and without this the item would never get the poster until a
+    manual send or Media Mirror run. Returns True if anything was uploaded."""
+    from .config import _render_cache_path_by_tmdb
+    from .media_server import get_client, ImageType
+
+    tmdb_id = item.get("tmdb_id")
+    rating_key = item.get("rating_key")
+    if not tmdb_id or not rating_key:
+        return False
+    cache_type = "tv-show" if media_type == "tv" else "movie"
+    client = get_client(server_id)
+    if client is None:
+        return False
+
+    targets = []  # (item_id, cache_path, season_index)
+    series_path = _render_cache_path_by_tmdb(cache_type, tmdb_id)
+    if series_path.exists():
+        targets.append((rating_key, series_path, None))
+    if media_type == "tv" and hasattr(client, "list_seasons"):
+        try:
+            for season in client.list_seasons(rating_key) or []:
+                idx = season.get("index")
+                if idx is None:
+                    continue
+                p = _render_cache_path_by_tmdb(cache_type, tmdb_id, int(idx))
+                if p.exists() and season.get("key"):
+                    targets.append((season["key"], p, int(idx)))
+        except Exception as e:
+            logger.debug("[AUTO_GEN] Couldn't list seasons for %s on %s: %s", item.get("title"), server_id, e)
+    if not targets:
+        return False
+
+    sent = False
+    for item_id, path, season_index in targets:
+        try:
+            data = path.read_bytes()
+            client.upload_image(item_id, ImageType.POSTER, data, "image/jpeg")
+            sent = True
+            if season_index is None:
+                # Refresh the grid's cached thumbnail for the movie/show itself.
+                try:
+                    from . import cache
+                    if media_type == "tv":
+                        from .api.tv_shows import _save_poster_cache, _poster_cache_url
+                        saved = _save_poster_cache(item_id, data, "image/jpeg")
+                        if saved:
+                            cache.update_tv_poster(item_id, _poster_cache_url(item_id, saved), library_id=str(library_id))
+                    else:
+                        from .api.movies import _save_poster_cache, _poster_cache_url
+                        saved = _save_poster_cache(item_id, data, "image/jpeg")
+                        if saved:
+                            cache.update_poster(item_id, _poster_cache_url(item_id, saved))
+                except Exception:
+                    pass
+            try:
+                db.record_poster_history(
+                    rating_key=item_id,
+                    library_id=str(library_id),
+                    title=item.get("title") or rating_key,
+                    year=item.get("year"),
+                    template_id=(cfg or {}).get("template_id"),
+                    preset_id=(cfg or {}).get("preset_id"),
+                    action="sent_to_media_server",
+                    source="auto_generate",
+                    poster_data=data,
+                    server_id=server_id,
+                )
+            except Exception:
+                pass
+            logger.info("[AUTO_GEN] Sent %s%s's Plex poster to %s (it wasn't on that server when the poster was made)",
+                        item.get("title"), f" season {season_index}" if season_index is not None else "", server_id)
+        except Exception as e:
+            logger.warning("[AUTO_GEN] Failed to send cached poster for %s to %s: %s", item.get("title"), server_id, e)
+    return sent
+
+
 def process_new_media_server_content(
     server_id: str,
     library_id: str,
@@ -512,9 +594,6 @@ def process_new_media_server_content(
             logger.debug("[AUTO_GEN] %s library %s isn't in a library group, skipping auto-generation", server_id, library_id)
             return results
         cfg = _resolve_auto_generate_config(group, media_type, ui_settings)
-        if not cfg:
-            logger.debug("[AUTO_GEN] Auto-generation not enabled for group %s", group.get("name") or group.get("id"))
-            return results
 
         plex_member = next((m for m in group.get("members") or [] if m.get("serverId") == "plex-1"), None)
         on_plex: set = set()
@@ -529,20 +608,41 @@ def process_new_media_server_content(
                 if r.get("tvdb_id"):
                     on_plex.add(("tvdb", str(r["tvdb_id"])))
 
-        logger.info("[AUTO_GEN] Processing %d new %s item(s) from %s library %s with %s:%s",
-                    len(new_items), media_type, server_id, library_id, cfg["template_id"], cfg["preset_id"])
-        for item in new_items:
-            rating_key = item.get("rating_key")
-            title = item.get("title") or rating_key
-            if not rating_key:
-                continue
-            if on_plex and (
+        def _is_on_plex(item: Dict[str, Any]) -> bool:
+            return bool(on_plex) and (
                 (item.get("tmdb_id") and ("tmdb", str(item["tmdb_id"])) in on_plex)
                 or (item.get("tvdb_id") and ("tvdb", str(item["tvdb_id"])) in on_plex)
-            ):
-                results["skipped"] += 1
-                logger.info("[AUTO_GEN] Skipping %s on %s -- also on Plex, the Plex scan handles it", title, server_id)
+            )
+
+        # Items Plex also has: Plex renders them, so this server just gets the
+        # poster Plex last received. Done whether or not auto-generate is on,
+        # since the poster already exists (e.g. a webhook rendered it before
+        # this server had imported the file).
+        remaining = []
+        for item in new_items:
+            if not item.get("rating_key"):
                 continue
+            if _is_on_plex(item):
+                results["skipped"] += 1
+                title = item.get("title") or item.get("rating_key")
+                if _deliver_cached_plex_render(server_id, library_id, media_type, item, cfg):
+                    results["delivered"] = results.get("delivered", 0) + 1
+                else:
+                    logger.info("[AUTO_GEN] Skipping %s on %s -- also on Plex, and Plex has no Simposter poster for it yet", title, server_id)
+                continue
+            remaining.append(item)
+
+        if not cfg:
+            logger.debug("[AUTO_GEN] Auto-generation not enabled for group %s", group.get("name") or group.get("id"))
+            return results
+        if not remaining:
+            return results
+
+        logger.info("[AUTO_GEN] Processing %d new %s item(s) from %s library %s with %s:%s",
+                    len(remaining), media_type, server_id, library_id, cfg["template_id"], cfg["preset_id"])
+        for item in remaining:
+            rating_key = item.get("rating_key")
+            title = item.get("title") or rating_key
             if _recently_handled_by_webhook(rating_key, item.get("tmdb_id"), item.get("tvdb_id")):
                 results["skipped"] += 1
                 logger.info("[AUTO_GEN] Skipping %s on %s -- recently processed by a webhook", title, server_id)

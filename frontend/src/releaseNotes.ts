@@ -10,6 +10,34 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.04',
+    date: '2026-10-08',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'The Logo and Backdrop editors can send to every server an item is on. With more than one, Send opens a picker so you can choose which servers get it.',
+          'Local Assets: resend a saved poster to any server in its library group, rename a file, and resize the thumbnails with a slider.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Notifications now read Library / Preset / Action / Servers, showing the preset name and every server the poster reached.',
+          'If Radarr/Sonarr fires before Jellyfin or Emby has imported the file, the poster is now sent to that server after its next library scan.',
+          'The "PNG exceeds Plex\'s upload size limit" warning no longer appears for Jellyfin/Emby-only uploads.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Every Sonarr webhook failed with "name \'plex_fallback\' is not defined".',
+          'Local Assets could hide a poster saved from a library group (for example, one saved while viewing the Jellyfin copy).',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.03',
     date: '2026-10-07',
     sections: [

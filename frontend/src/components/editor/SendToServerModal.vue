@@ -8,6 +8,7 @@ import { ref, watch } from 'vue'
 // server or all") so a user can pick e.g. two of three linked servers.
 const props = defineProps<{
   options: { server_id: string; label: string }[]
+  hint?: string
 }>()
 
 const emit = defineEmits<{
@@ -55,7 +56,7 @@ function confirm() {
     <div class="send-modal-backdrop" @click.self="emit('close')">
       <div class="send-modal">
         <h3>Send to Media Server</h3>
-        <p class="send-modal-hint">Choose which server(s) to send the current poster to.</p>
+        <p class="send-modal-hint">{{ hint || 'Choose which server(s) to send the current poster to.' }}</p>
         <div class="send-modal-list">
           <label v-for="opt in options" :key="opt.server_id" class="send-modal-option">
             <input type="checkbox" :checked="selected.has(opt.server_id)" @change="toggle(opt.server_id)" />
@@ -85,7 +86,7 @@ function confirm() {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 1100;
   padding: 20px;
 }
 

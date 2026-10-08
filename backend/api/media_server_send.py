@@ -367,7 +367,7 @@ def api_send_poster(req: MediaServerSendRequest):
     # normalize_logo_for_plex()/normalize_backdrop_for_plex() below) -- decode
     # first.
     img = Image.open(BytesIO(image_bytes))
-    image_bytes, content_type = encode_poster_for_plex(img)
+    image_bytes, content_type = encode_poster_for_plex(img, for_plex=False)
 
     try:
         _upload_poster_and_verify(client, server_id, item_id, image_bytes, content_type)
@@ -563,7 +563,7 @@ def api_send_backdrop(req: MediaServerSendRequest):
     image_bytes, content_type = _resolve_image_bytes(req)
 
     from .save import normalize_backdrop_for_plex
-    image_bytes, content_type = normalize_backdrop_for_plex(image_bytes, content_type)
+    image_bytes, content_type = normalize_backdrop_for_plex(image_bytes, content_type, for_plex=False)
 
     try:
         client.upload_image(req.rating_key, ImageType.BACKDROP, image_bytes, content_type)
@@ -592,5 +592,6 @@ def api_send_backdrop(req: MediaServerSendRequest):
     # (not a deliberate scope cut, see api_send_poster()/api_send_logo()'s
     # own notification calls and this module's docstring, which only
     # excludes square_art for a real reason -- Jellyfin has no equivalent).
-    _notify_manual_send(req.rating_key, server_id, "backdrop")
+    if req.notify:
+        _notify_manual_send(req.rating_key, server_id, "backdrop")
     return {"status": "ok", "art_url": new_art_url}

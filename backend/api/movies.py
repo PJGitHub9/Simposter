@@ -2150,3 +2150,44 @@ def api_local_assets_delete_bulk(req: LocalAssetBulkDeleteRequest):
 
     succeeded = sum(1 for r in results if r["status"] == "ok")
     return {"status": "ok", "succeeded": succeeded, "total": len(results), "results": results}
+
+
+class LocalAssetRenameRequest(BaseModel):
+    path: str      # relative asset path, as returned by GET /local-assets
+    new_name: str  # new file name only (no folders); the extension is kept if omitted
+
+
+@router.post("/local-assets/rename")
+def api_local_asset_rename(req: LocalAssetRenameRequest):
+    """Rename a saved asset file within its own folder. The image (and its
+    embedded library/rating-key metadata) is untouched, so it can still be
+    resent afterwards."""
+    file_path = _find_asset_under_roots(req.path)
+    output_root = next(r for r in _get_unique_asset_roots() if file_path.is_relative_to(r))
+
+    new_name = (req.new_name or "").strip()
+    if not new_name or new_name in (".", "..") or any(c in new_name for c in '/\\<>:"|?*\0'):
+        raise HTTPException(400, 'Enter a file name without folders or any of / \\ < > : " | ? *')
+    if any(ord(c) < 32 for c in new_name):
+        raise HTTPException(400, "File name contains invalid characters")
+    # Keep the original extension unless the user typed an image extension of their own.
+    image_exts = {".jpg", ".jpeg", ".png", ".webp"}
+    if Path(new_name).suffix.lower() not in image_exts:
+        new_name = f"{new_name}{file_path.suffix}"
+
+    target = file_path.with_name(new_name)
+    if target.resolve() == file_path.resolve():
+        return {"status": "ok", "path": req.path, "filename": file_path.name}
+    if target.exists():
+        raise HTTPException(409, f'A file named "{new_name}" already exists in this folder')
+
+    file_path.rename(target)
+    _image_metadata_cache.pop(str(file_path), None)
+    logger.info(f"[LOCAL_ASSETS] Renamed {file_path} -> {target.name}")
+    rel = target.relative_to(output_root)
+    return {
+        "status": "ok",
+        "path": str(rel),  # same form GET /local-assets returns
+        "filename": target.name,
+        "full_path": str(target),
+    }

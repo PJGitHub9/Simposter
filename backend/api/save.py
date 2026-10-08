@@ -46,7 +46,7 @@ def get_output_format_settings() -> dict:
 _PLEX_UPLOAD_SIZE_LIMIT = 9_500_000
 
 
-def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
+def encode_poster_for_plex(img: Image.Image, for_plex: bool = True) -> Tuple[bytes, str]:
     """Encode a freshly-rendered poster for upload to Plex's /posters endpoint.
 
     PNG (lossless) by default, regardless of the user's local save format
@@ -67,7 +67,11 @@ def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
     falls back to a high-quality JPEG, which reliably stays well under the limit
     (this is the one genuinely lossy step, unchanged from before, and unaffected
     by any of this — it's Plex's ~10MB upload cap that forces it, not the PNG
-    encode being fast or slow)."""
+    encode being fast or slow).
+
+    `for_plex=False` (a Jellyfin/Emby-only upload) only changes the log line
+    below: the size cap is Plex's, so the JPEG fallback is logged quietly
+    there. The encoded bytes are identical either way."""
     from .. import database as db
 
     jpg_quality = 95
@@ -93,10 +97,13 @@ def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
     if len(png_bytes_slow) <= _PLEX_UPLOAD_SIZE_LIMIT:
         return png_bytes_slow, "image/png"
 
-    logger.warning(
-        "[PLEX] Rendered PNG (%.1fMB even at max compression) exceeds Plex's upload size limit, falling back to JPEG",
-        len(png_bytes_slow) / 1_000_000,
-    )
+    if for_plex:
+        logger.warning(
+            "[PLEX] Rendered PNG (%.1fMB even at max compression) exceeds Plex's upload size limit, falling back to JPEG",
+            len(png_bytes_slow) / 1_000_000,
+        )
+    else:
+        logger.debug("[ENCODE] PNG is %.1fMB at max compression, using JPEG", len(png_bytes_slow) / 1_000_000)
     buf2 = BytesIO()
     rgb.save(buf2, "JPEG", quality=max(jpg_quality, 98), subsampling=0)
     return buf2.getvalue(), "image/jpeg"
@@ -124,7 +131,7 @@ def normalize_logo_for_plex(logo_bytes: bytes, fallback_content_type: str = "ima
         return logo_bytes, fallback_content_type
 
 
-def normalize_backdrop_for_plex(backdrop_bytes: bytes, fallback_content_type: str = "image/jpeg") -> Tuple[bytes, str]:
+def normalize_backdrop_for_plex(backdrop_bytes: bytes, fallback_content_type: str = "image/jpeg", for_plex: bool = True) -> Tuple[bytes, str]:
     """Normalize backdrop bytes through PIL before upload to Plex's /art endpoint.
 
     Unlike a logo (small, transparent), a backdrop is an opaque photographic image
@@ -134,7 +141,7 @@ def normalize_backdrop_for_plex(backdrop_bytes: bytes, fallback_content_type: st
     always-PNG approach, which would be the wrong tradeoff here."""
     try:
         img = Image.open(BytesIO(backdrop_bytes)).convert("RGB")
-        return encode_poster_for_plex(img)
+        return encode_poster_for_plex(img, for_plex=for_plex)
     except Exception as e:
         logger.warning("[PLEX] Failed to normalize backdrop image, uploading raw bytes instead: %s", e)
         return backdrop_bytes, fallback_content_type

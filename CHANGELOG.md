@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.7.04 (2026-10-08) — `dev-jellyfin` branch
+
+### New Features
+- **Multi-server Logo/Backdrop send** — `LogoEditorModal.vue`/`BackdropEditorModal.vue` send to the item's own server plus any linked copies (`other_servers`), via a new `useAssetServerSend` composable. With more than one server, Send opens `SendToServerModal.vue`. Uploads go out in parallel with `notify: false`, followed by one combined notification. `PlexBackdropSendRequest` gained `notify`, and `/api/media-server/send-backdrop` now honors it.
+- **Local Assets** — resend a saved poster to any server in its library group (`POST /api/local-assets/resend` gained `targets`), rename files (`POST /api/local-assets/rename`), and a thumbnail-size slider.
+
+### Improvements
+- **Notification layout** — Discord embeds, Apprise text and batch completion messages now show Library / Preset (the preset's display name) / Action (Sent, Resent, Saved locally) / Servers (every server reached) / Asset, replacing Template and "Also synced to".
+- **Late-importing servers** — when a Jellyfin/Emby scan finds a new item that Plex also has, it now uploads the poster Plex last received (series and cached seasons) instead of skipping it. This covers a Radarr/Sonarr webhook that fired before that server had imported the file. The webhook sync also logs when a target doesn't have the item yet.
+- **Quieter logs** — the "PNG exceeds Plex's upload size limit, falling back to JPEG" warning is logged at debug level for Jellyfin/Emby-only uploads (Media Mirror and the media-server send endpoints). Encoded output is unchanged.
+
+### Bug Fixes
+- Every Sonarr webhook failed with HTTP 500 (`name 'plex_fallback' is not defined`): its target-resolution block had been placed in the Radarr handler instead.
+- Local Assets' library filter hid posters saved under another library in the same group, and its no-metadata fallback never matched.
+
 ## v1.7.03 (2026-10-07) — `dev-jellyfin` branch
 
 ### Improvements

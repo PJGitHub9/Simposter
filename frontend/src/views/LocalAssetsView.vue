@@ -4,6 +4,8 @@ import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
 import { libraryInfo } from '@/services/libraryLabel'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
+import SendToServerModal from '@/components/editor/SendToServerModal.vue'
 
 type LocalAsset = {
   filename: string
@@ -26,6 +28,8 @@ type ResendResult = {
   title?: string
   status: 'ok' | 'skipped' | 'error'
   reason?: string
+  sent_to?: string[]
+  not_reached?: string[]
 }
 
 type DeleteResult = {
@@ -50,6 +54,25 @@ const resending = ref(false)
 const resendSummary = ref<string | null>(null)
 const bulkDeleting = ref(false)
 const bulkDeleteSummary = ref<string | null>(null)
+
+// Thumbnail size (grid column width), remembered per browser.
+const THUMB_KEY = 'simposter-local-assets-thumb-size'
+const readThumbSize = () => {
+  try {
+    const v = Number(localStorage.getItem(THUMB_KEY))
+    return v >= 120 && v <= 480 ? v : 220
+  } catch {
+    return 220
+  }
+}
+const thumbSize = ref(readThumbSize())
+const onThumbSizeChange = () => {
+  try {
+    localStorage.setItem(THUMB_KEY, String(thumbSize.value))
+  } catch {
+    // storage unavailable
+  }
+}
 
 const route = useRoute()
 const apiBase = getApiBase()
@@ -203,17 +226,60 @@ const clearSelection = () => {
   selectedPaths.value = new Set()
 }
 
-const bulkResend = async () => {
-  if (selectedPaths.value.size === 0) return
-  if (!window.confirm(`Resend ${selectedPaths.value.size} poster(s) to Plex?`)) return
+// Servers a saved poster can be resent to: every server in its library's
+// group (or just the library's own server when it isn't grouped).
+const serversForAsset = (asset: LocalAsset): string[] => {
+  if (!asset.library_id) return []
+  const id = String(asset.library_id)
+  for (const g of settings.libraryGroups.value || []) {
+    const members = g.members || []
+    if (members.some(m => String(m.libraryId) === id)) {
+      return Array.from(new Set(members.map(m => m.serverId).filter(Boolean)))
+    }
+  }
+  const own = libraryInfo(id)?.serverId
+  return own ? [own] : []
+}
 
+const resendPaths = ref<string[]>([])
+const showResendModal = ref(false)
+const resendOptions = computed(() => {
+  const ids = new Set<string>()
+  for (const path of resendPaths.value) {
+    const asset = localAssets.value.find(a => a.path === path)
+    if (asset && canResend(asset)) serversForAsset(asset).forEach(sid => ids.add(sid))
+  }
+  return Array.from(ids).map(sid => ({ server_id: sid, label: mediaServerLabel(sid, settings.mediaServers.value) }))
+})
+
+// Opens the server picker when there's a choice to make; with a single
+// possible server it sends straight away (after a confirm).
+const startResend = (paths: string[]) => {
+  if (paths.length === 0) return
+  resendPaths.value = paths
+  const options = resendOptions.value
+  if (options.length > 1) {
+    showResendModal.value = true
+    return
+  }
+  const label = options[0]?.label || 'its media server'
+  if (!window.confirm(`Resend ${paths.length} poster(s) to ${label}?`)) return
+  runResend(paths, options.length ? options.map(o => o.server_id) : null)
+}
+
+const onResendModalConfirm = (serverIds: string[]) => {
+  showResendModal.value = false
+  runResend(resendPaths.value, serverIds)
+}
+
+const runResend = async (paths: string[], targets: string[] | null) => {
   resending.value = true
   resendSummary.value = null
   try {
     const res = await fetch(`${apiBase}/api/local-assets/resend`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: Array.from(selectedPaths.value) })
+      body: JSON.stringify(targets ? { paths, targets } : { paths })
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
@@ -221,11 +287,13 @@ const bulkResend = async () => {
     const ok = results.filter(r => r.status === 'ok').length
     const skipped = results.filter(r => r.status === 'skipped').length
     const failed = results.filter(r => r.status === 'error').length
+    const partial = results.filter(r => r.status === 'ok' && r.not_reached?.length).length
     const parts = [`${ok} sent`]
+    if (partial) parts.push(`${partial} not found on every selected server`)
     if (skipped) parts.push(`${skipped} skipped`)
     if (failed) parts.push(`${failed} failed`)
     resendSummary.value = parts.join(', ')
-    clearSelection()
+    if (paths.length > 1) clearSelection()
   } catch (err: unknown) {
     resendSummary.value = `Failed: ${err instanceof Error ? err.message : 'Unknown error'}`
   } finally {
@@ -233,6 +301,8 @@ const bulkResend = async () => {
     setTimeout(() => { resendSummary.value = null }, 6000)
   }
 }
+
+const bulkResend = () => startResend(Array.from(selectedPaths.value))
 
 const bulkDelete = async () => {
   if (selectedPaths.value.size === 0) return
@@ -288,6 +358,57 @@ const openModal = (asset: LocalAsset) => {
 const closeModal = () => {
   showModal.value = false
   selectedAsset.value = null
+  renaming.value = false
+}
+
+// Rename (modal)
+const renaming = ref(false)
+const renameValue = ref('')
+const renameError = ref<string | null>(null)
+const renameSaving = ref(false)
+
+const startRename = () => {
+  if (!selectedAsset.value) return
+  const name = selectedAsset.value.filename
+  const dot = name.lastIndexOf('.')
+  renameValue.value = dot > 0 ? name.slice(0, dot) : name
+  renameError.value = null
+  renaming.value = true
+}
+
+const saveRename = async () => {
+  const asset = selectedAsset.value
+  if (!asset || !renameValue.value.trim()) return
+  renameSaving.value = true
+  renameError.value = null
+  try {
+    const res = await fetch(`${apiBase}/api/local-assets/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: asset.path, new_name: renameValue.value.trim() })
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.detail || `API error ${res.status}`)
+    const oldPath = asset.path
+    const listed = localAssets.value.find(a => a.path === oldPath)
+    for (const target of [asset, listed]) {
+      if (!target) continue
+      target.path = data.path
+      target.filename = data.filename
+      if (data.full_path) target.full_path = data.full_path
+    }
+    if (selectedPaths.value.has(oldPath)) {
+      const next = new Set(selectedPaths.value)
+      next.delete(oldPath)
+      next.add(data.path)
+      selectedPaths.value = next
+    }
+    renaming.value = false
+  } catch (err: unknown) {
+    renameError.value = err instanceof Error ? err.message : 'Rename failed'
+  } finally {
+    renameSaving.value = false
+  }
 }
 
 // Delete asset
@@ -359,6 +480,10 @@ onMounted(() => {
           {{ folder }}
         </option>
       </select>
+      <label class="thumb-size" title="Thumbnail size">
+        <span>Size</span>
+        <input type="range" min="120" max="480" step="20" v-model.number="thumbSize" @change="onThumbSizeChange" />
+      </label>
       <div class="asset-count">
         {{ filteredAssets.length }} {{ filteredAssets.length === 1 ? 'asset' : 'assets' }}
       </div>
@@ -372,7 +497,7 @@ onMounted(() => {
     <div v-if="selectedCount > 0" class="selection-bar">
       <span>{{ selectedCount }} selected</span>
       <button class="btn-resend-bulk" @click="bulkResend" :disabled="resending || bulkDeleting">
-        {{ resending ? 'Resending...' : `Resend ${selectedCount} to Plex` }}
+        {{ resending ? 'Resending...' : `Resend ${selectedCount}` }}
       </button>
       <button class="btn-delete-bulk" @click="bulkDelete" :disabled="resending || bulkDeleting">
         {{ bulkDeleting ? 'Deleting...' : `Delete ${selectedCount}` }}
@@ -399,7 +524,7 @@ onMounted(() => {
       <p class="empty-title">No local assets found</p>
       <p class="empty-hint">Saved posters will appear here</p>
     </div>
-    <div v-else class="assets-grid">
+    <div v-else class="assets-grid" :style="{ gridTemplateColumns: `repeat(auto-fill, minmax(${thumbSize}px, 1fr))` }">
       <div
         v-for="asset in filteredAssets"
         :key="asset.path"
@@ -480,6 +605,31 @@ onMounted(() => {
             <span v-else-if="selectedAsset.folder">•</span>
             <span v-else-if="selectedAsset.folder">📁 {{ selectedAsset.folder }}</span>
           </div>
+          <div v-if="renaming" class="rename-row">
+            <input
+              v-model="renameValue"
+              class="rename-input"
+              type="text"
+              @keyup.enter="saveRename"
+              @keyup.esc="renaming = false"
+            />
+            <button class="btn-modal-action" @click="saveRename" :disabled="renameSaving || !renameValue.trim()">
+              {{ renameSaving ? 'Saving...' : 'Save' }}
+            </button>
+            <button class="btn-modal-action secondary" @click="renaming = false" :disabled="renameSaving">Cancel</button>
+          </div>
+          <p v-if="renaming" class="rename-hint">The extension is kept. Kometa asset folders and "save to asset folder on send" expect the poster / SeasonNN names.</p>
+          <p v-if="renameError" class="rename-error">{{ renameError }}</p>
+          <div class="modal-actions">
+            <button
+              class="btn-modal-action"
+              @click="startResend([selectedAsset.path])"
+              :disabled="resending || !canResend(selectedAsset)"
+              :title="canResend(selectedAsset) ? 'Resend this poster to a media server' : 'Saved before resend support was added (no rating key in the file)'"
+            >
+              {{ resending ? 'Resending...' : 'Resend' }}
+            </button>
+            <button v-if="!renaming" class="btn-modal-action secondary" @click="startRename">Rename</button>
           <button class="btn-delete-modal" @click="deleteAsset(selectedAsset)" :disabled="deletingAsset">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18"/>
@@ -487,9 +637,18 @@ onMounted(() => {
             </svg>
             Delete
           </button>
+          </div>
+          <div v-if="resendSummary" class="resend-summary">{{ resendSummary }}</div>
         </div>
       </div>
     </div>
+
+    <SendToServerModal
+      v-if="showResendModal"
+      :options="resendOptions"
+      @close="showResendModal = false"
+      @send="onResendModalConfirm"
+    />
   </div>
 </template>
 
@@ -799,6 +958,51 @@ onMounted(() => {
   background: #2bc4a3;
   transform: translateY(-2px);
 }
+
+.thumb-size {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary, #9ca3af);
+  font-size: 0.85rem;
+}
+.thumb-size input { width: 110px; accent-color: var(--accent, #3dd6b7); }
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+.modal-actions .btn-delete-modal { margin-top: 0; }
+.btn-modal-action {
+  padding: 0.6rem 1.1rem;
+  background: var(--accent, #3dd6b7);
+  color: #0b0f14;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-modal-action.secondary {
+  background: transparent;
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border, #2a2f3e);
+}
+.btn-modal-action:disabled { opacity: 0.5; cursor: not-allowed; }
+.rename-row { display: flex; gap: 0.5rem; margin-top: 1rem; }
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+  background: var(--input-bg, #242933);
+  color: var(--text-primary, #fff);
+  border: 1px solid var(--border, #2a2f3e);
+  border-radius: 6px;
+}
+.rename-hint { margin: 0.4rem 0 0; font-size: 0.8rem; color: var(--text-secondary, #9ca3af); }
+.rename-error { margin: 0.4rem 0 0; font-size: 0.85rem; color: #ef4444; }
 
 .assets-grid {
   display: grid;

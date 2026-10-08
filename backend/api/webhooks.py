@@ -1104,9 +1104,14 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
             try:
                 series_item_id = client.find_item_by_external_id(tmdb_id, tvdb_id, find_media_type, library_id=allowed_servers.get(client.server_id))
                 if not series_item_id:
+                    # Usually the server hasn't imported the file yet. Its next
+                    # library scan delivers this cached render instead
+                    # (auto_generate.process_new_media_server_content).
+                    logger.info("[WEBHOOK_SYNC:%s] %s isn't on this server yet -- the poster will be sent after its next library scan", client.server_id, title_hint)
                     continue
                 item_id = series_item_id if season_index is None else client.find_season_by_index(series_item_id, season_index)
                 if not item_id:
+                    logger.info("[WEBHOOK_SYNC:%s] %s season %s isn't on this server yet -- skipped", client.server_id, title_hint, season_index)
                     continue
                 client.upload_image(item_id, ImageType.POSTER, image_bytes, "image/jpeg")
                 logger.info("[WEBHOOK_SYNC:%s] Synced poster for tmdb_id=%s [%s]%s -> item_id=%s", client.server_id, tmdb_id, title_hint,
@@ -1692,20 +1697,6 @@ def radarr_webhook(
         raise HTTPException(status_code=400, detail="library_id is required when server_id names a non-Plex server")
     # A URL that names no server (or one created before Plex was removed)
     # may still belong to a Jellyfin/Emby library -- see _resolve_webhook_target().
-    _target_kind, _resolved_server, _resolved_library, webhook_candidates = _resolve_webhook_target(server_id, library_id, "tv", group_id or group)
-    if _target_kind == "none":
-        return {"status": "ignored", "reason": "No media server library found to look this item up on -- see the log for details"}
-    plex_fallback = None
-    if _target_kind == "media_server":
-        is_plex_webhook = False
-        server_id, library_id = _resolved_server, _resolved_library
-    elif _target_kind == "plex" and (group_id or group):
-        # Group webhook with a Plex member: look up in that Plex library, with
-        # the group's Jellyfin/Emby libraries as the fallback.
-        library_id = _resolved_library
-        plex_fallback, webhook_candidates = webhook_candidates, None
-    # A URL that names no server (or one created before Plex was removed)
-    # may still belong to a Jellyfin/Emby library -- see _resolve_webhook_target().
     _target_kind, _resolved_server, _resolved_library, webhook_candidates = _resolve_webhook_target(server_id, library_id, "movie", group_id or group)
     if _target_kind == "none":
         return {"status": "ignored", "reason": "No media server library found to look this item up on -- see the log for details"}
@@ -1912,6 +1903,20 @@ def sonarr_webhook(
     is_plex_webhook = not server_id or server_id == "plex-1"
     if not is_plex_webhook and not library_id:
         raise HTTPException(status_code=400, detail="library_id is required when server_id names a non-Plex server")
+    # A URL that names no server (or one created before Plex was removed)
+    # may still belong to a Jellyfin/Emby library -- see _resolve_webhook_target().
+    _target_kind, _resolved_server, _resolved_library, webhook_candidates = _resolve_webhook_target(server_id, library_id, "tv", group_id or group)
+    if _target_kind == "none":
+        return {"status": "ignored", "reason": "No media server library found to look this item up on -- see the log for details"}
+    plex_fallback = None
+    if _target_kind == "media_server":
+        is_plex_webhook = False
+        server_id, library_id = _resolved_server, _resolved_library
+    elif _target_kind == "plex" and (group_id or group):
+        # Group webhook with a Plex member: look up in that Plex library, with
+        # the group's Jellyfin/Emby libraries as the fallback.
+        library_id = _resolved_library
+        plex_fallback, webhook_candidates = webhook_candidates, None
     # Normalize template_id for backward compatibility
     template_id = _normalize_template_id(template_id)
 
