@@ -3981,6 +3981,39 @@ def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
     }
 
 
+def get_last_plex_send_preset(media_type: str, tmdb_id: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The template/preset of the most recent poster sent to the Plex copy of
+    this TMDb id (movie or TV series), or None. Lets a cached Plex render that's
+    later delivered to Jellyfin/Emby record which preset it actually came from
+    (Quirk #151) instead of an empty Template/Preset in History."""
+    if not tmdb_id:
+        return None
+    table = "tv_cache" if media_type in ("tv", "tv-show") else "movie_cache"
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT rating_key FROM {table} WHERE tmdb_id = ? AND server_id = 'plex-1'",
+                (tmdb_id,),
+            )
+            keys = [r["rating_key"] for r in cursor.fetchall() if r["rating_key"]]
+            if not keys:
+                return None
+            placeholders = ",".join(["?"] * len(keys))
+            cursor.execute(
+                f"""SELECT template_id, preset_id FROM poster_history
+                    WHERE rating_key IN ({placeholders})
+                      AND action IN ('sent_to_plex', 'resent_to_plex')
+                      AND (template_id IS NOT NULL OR preset_id IS NOT NULL)
+                    ORDER BY datetime(created_at) DESC LIMIT 1""",
+                keys,
+            )
+            row = cursor.fetchone()
+            return {"template_id": row["template_id"], "preset_id": row["preset_id"]} if row else None
+    except Exception:
+        return None
+
+
 def get_poster_status(
     library_id: Optional[str] = None,
     rating_keys: Optional[List[str]] = None,

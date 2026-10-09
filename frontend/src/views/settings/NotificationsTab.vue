@@ -18,6 +18,7 @@ const props = defineProps<{
   discordNotifyManual: boolean
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
+  discordNotifyMediaMirror: boolean
   appriseEnabled: boolean
   appriseUrls: string[]
   appriseNotifyLibraries: string[]
@@ -25,6 +26,7 @@ const props = defineProps<{
   appriseNotifyManual: boolean
   appriseNotifyWebhook: boolean
   appriseNotifyAutoGenerate: boolean
+  appriseNotifyMediaMirror: boolean
   libraries: LibraryMapping[]
   tvShowLibraries: LibraryMapping[]
   unsavedChanges: boolean
@@ -38,6 +40,7 @@ const emit = defineEmits<{
   'update:discordNotifyManual': [value: boolean]
   'update:discordNotifyWebhook': [value: boolean]
   'update:discordNotifyAutoGenerate': [value: boolean]
+  'update:discordNotifyMediaMirror': [value: boolean]
   'update:appriseEnabled': [value: boolean]
   'update:appriseUrls': [value: string[]]
   'update:appriseNotifyLibraries': [value: string[]]
@@ -45,6 +48,7 @@ const emit = defineEmits<{
   'update:appriseNotifyManual': [value: boolean]
   'update:appriseNotifyWebhook': [value: boolean]
   'update:appriseNotifyAutoGenerate': [value: boolean]
+  'update:appriseNotifyMediaMirror': [value: boolean]
   'save': []
 }>()
 
@@ -84,6 +88,11 @@ const localDiscordNotifyAutoGenerate = computed({
   set: (val) => emit('update:discordNotifyAutoGenerate', val)
 })
 
+const localDiscordNotifyMediaMirror = computed({
+  get: () => props.discordNotifyMediaMirror,
+  set: (val) => emit('update:discordNotifyMediaMirror', val)
+})
+
 const localAppriseEnabled = computed({
   get: () => props.appriseEnabled,
   set: (val) => emit('update:appriseEnabled', val)
@@ -107,6 +116,11 @@ const localAppriseNotifyWebhook = computed({
 const localAppriseNotifyAutoGenerate = computed({
   get: () => props.appriseNotifyAutoGenerate,
   set: (val) => emit('update:appriseNotifyAutoGenerate', val)
+})
+
+const localAppriseNotifyMediaMirror = computed({
+  get: () => props.appriseNotifyMediaMirror,
+  set: (val) => emit('update:appriseNotifyMediaMirror', val)
 })
 
 const isAppriseLibrarySelected = (libraryId: string) => {
@@ -383,6 +397,14 @@ const testWebhook = async () => {
                 <span class="type-description">When library scans generate posters</span>
               </div>
             </label>
+
+            <label class="type-checkbox">
+              <input type="checkbox" v-model="localDiscordNotifyMediaMirror" />
+              <div class="type-content">
+                <span class="type-label">Media Mirror</span>
+                <span class="type-description">When a mirror run finishes (scheduled runs only when something changed)</span>
+              </div>
+            </label>
           </div>
         </div>
       </div>
@@ -524,6 +546,14 @@ const testWebhook = async () => {
               <div class="type-content">
                 <span class="type-label">Auto-Generate (Library Scan)</span>
                 <span class="type-description">When library scans generate posters</span>
+              </div>
+            </label>
+
+            <label class="type-checkbox">
+              <input type="checkbox" v-model="localAppriseNotifyMediaMirror" />
+              <div class="type-content">
+                <span class="type-label">Media Mirror</span>
+                <span class="type-description">When a mirror run finishes (scheduled runs only when something changed)</span>
               </div>
             </label>
           </div>

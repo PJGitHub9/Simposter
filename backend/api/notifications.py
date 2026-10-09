@@ -85,7 +85,8 @@ def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> boo
         "batch": "appriseNotifyBatch",
         "manual": "appriseNotifyManual",
         "webhook": "appriseNotifyWebhook",
-        "auto_generate": "appriseNotifyAutoGenerate"
+        "auto_generate": "appriseNotifyAutoGenerate",
+        "media_mirror": "appriseNotifyMediaMirror",
     }
 
     setting_key = source_map.get(source)
@@ -123,7 +124,8 @@ def _should_notify(source: str, library_id: Optional[str] = None) -> bool:
         "batch": "discordNotifyBatch",
         "manual": "discordNotifyManual",
         "webhook": "discordNotifyWebhook",
-        "auto_generate": "discordNotifyAutoGenerate"
+        "auto_generate": "discordNotifyAutoGenerate",
+        "media_mirror": "discordNotifyMediaMirror",
     }
 
     setting_key = source_map.get(source)
@@ -189,7 +191,8 @@ def _get_source_emoji(source: str) -> str:
         "batch": "\U0001F4E6",  # Package
         "manual": "\U0001F3A8",  # Artist palette
         "webhook": "\U0001F517",  # Link
-        "auto_generate": "\U0001F504"  # Arrows
+        "auto_generate": "\U0001F504",  # Arrows
+        "media_mirror": "\U0001FA9E",  # Mirror
     }.get(source, "\U0001F3AC")  # Clapper board default
 
 
@@ -199,7 +202,8 @@ def _get_source_label(source: str) -> str:
         "batch": "Batch Edit",
         "manual": "Manual Send",
         "webhook": "Webhook",
-        "auto_generate": "Auto-Generate"
+        "auto_generate": "Auto-Generate",
+        "media_mirror": "Media Mirror",
     }.get(source, source)
 
 
@@ -655,6 +659,138 @@ def send_apprise_notification(
             overall_ok = False
 
     return overall_ok
+
+
+_MIRROR_ASSET_LABELS = [
+    ("poster", "Posters"),
+    ("logo", "Logos"),
+    ("backdrop", "Backdrops"),
+    ("square_art", "Square Art"),
+]
+
+
+def _mirror_count_lines(counts: Dict[str, Dict[str, int]], prefix: str = "") -> List[tuple]:
+    """("Posters", "3/40 copied (37 unchanged)") pairs, one per asset type that
+    the run actually checked."""
+    lines = []
+    for key, label in _MIRROR_ASSET_LABELS:
+        c = counts.get(key)
+        if not c or not c.get("total"):
+            continue
+        value = f"{c.get('copied', 0)}/{c['total']} copied"
+        extras = []
+        if c.get("unchanged"):
+            extras.append(f"{c['unchanged']} unchanged")
+        if c.get("failed"):
+            extras.append(f"{c['failed']} failed")
+        if extras:
+            value += f" ({', '.join(extras)})"
+        lines.append((f"{prefix}{label}" if not prefix else f"{prefix}{label.lower()}", value))
+    return lines
+
+
+def send_media_mirror_notification(
+    group_name: str,
+    library_id: Optional[str],
+    source_server_id: Optional[str],
+    target_server_ids: List[str],
+    asset_counts: Dict[str, Dict[str, int]],
+    collection_counts: Dict[str, Dict[str, int]],
+    totals: Dict[str, int],
+    scheduled: bool = False,
+    error: Optional[str] = None,
+) -> None:
+    """Run summary for a Media Mirror run (Quirk #151): which servers, and per
+    asset type how many items were copied out of how many the source had.
+    Sent to Discord and/or Apprise, controlled by their own "Media Mirror"
+    toggles in Settings -> Notifications plus the usual library filter.
+
+    A scheduled run that copied nothing and had no failures is not announced
+    -- a nightly "nothing changed" message would just be noise. A manual run
+    always is, and a failed run always is."""
+    nothing_happened = not error and not totals.get("updated") and not totals.get("failed")
+    if scheduled and nothing_happened:
+        logger.debug("[MIRROR] Scheduled run changed nothing -- no notification")
+        return
+
+    send_discord = _should_notify("media_mirror", library_id)
+    send_apprise = _should_notify_apprise("media_mirror", library_id)
+    if not send_discord and not send_apprise:
+        return
+
+    from ..media_server import get_server_label
+    group_label = group_name or _get_library_name(library_id)
+    servers = None
+    if source_server_id:
+        targets = ", ".join(get_server_label(t) for t in target_server_ids) or "—"
+        servers = f"{get_server_label(source_server_id)} → {targets}"
+
+    fields: List[tuple] = [("Library", group_label)]
+    if servers:
+        fields.append(("Servers", servers))
+    if error:
+        description = f"Run failed: {error}"
+        color = 0xFF4757
+    else:
+        fields.extend(_mirror_count_lines(asset_counts))
+        fields.extend(_mirror_count_lines(collection_counts, prefix="Collection "))
+        if totals.get("unmapped"):
+            fields.append(("Unmapped", f"{totals['unmapped']} item(s) not found on a target"))
+        if totals.get("failed"):
+            description = f"Run finished with {totals['failed']} failed item(s)"
+            color = 0xFFA502
+        elif totals.get("updated"):
+            description = f"Run successful — {totals['updated']} of {totals.get('checked', 0)} item(s) updated"
+            color = 0x3DD6B7
+        else:
+            description = f"Run successful — nothing changed ({totals.get('checked', 0)} item(s) checked)"
+            color = 0x3DD6B7
+
+    title = f"\U0001FA9E {'Scheduled ' if scheduled else ''}Media Mirror Complete"
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "fields": [{"name": n, "value": v, "inline": True} for n, v in fields],
+        "footer": {"text": "Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    settings = _get_notification_settings()
+    if send_discord:
+        try:
+            resp = requests.post(settings.get("discordWebhookUrl", ""), json={"embeds": [embed]}, timeout=10)
+            if resp.status_code not in (200, 204):
+                logger.warning("[DISCORD] Media Mirror notification failed: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.error("[DISCORD] Media Mirror notification error: %s", e)
+
+    if send_apprise:
+        other_urls: List[str] = []
+        for url in settings.get("appriseUrls", []) or []:
+            if not url.strip():
+                continue
+            discord_webhook = _resolve_discord_webhook_url(url)
+            if discord_webhook:
+                try:
+                    resp = requests.post(discord_webhook, json={"embeds": [embed]}, timeout=10)
+                    if resp.status_code not in (200, 204):
+                        logger.warning("[APPRISE] Media Mirror Discord embed failed: HTTP %s", resp.status_code)
+                except Exception as e:
+                    logger.error("[APPRISE] Media Mirror Discord embed error: %s", e)
+            else:
+                other_urls.append(url.strip())
+        if other_urls:
+            try:
+                import apprise
+                ap = apprise.Apprise()
+                for url in other_urls:
+                    ap.add(url)
+                body = description + "".join(f"\n{n}: {v}" for n, v in fields)
+                if len(ap) > 0 and not ap.notify(title=f"{title} — Simposter", body=body):
+                    logger.warning("[APPRISE] One or more Apprise services failed (Media Mirror)")
+            except Exception as e:
+                logger.error("[APPRISE] Media Mirror notification error: %s", e)
 
 
 def send_batch_notification(

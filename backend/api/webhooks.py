@@ -991,7 +991,7 @@ def process_media_server_webhook_with_retry(
         )
 
 
-def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None) -> List[str]:
+def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None, year: Optional[int] = None, season_title: Optional[str] = None) -> List[str]:
     """Phase 6 (webhooks) -- after a webhook-triggered Plex render+send
     succeeds, check whether the same title also exists on any OTHER server
     that's actually linked to this Plex library via a Library Group
@@ -1060,7 +1060,9 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
     plain display string, not a split title/year the way batch.py's callers
     do) -- acceptable, since the row still identifies the right item/server/
     template/preset, which is what actually matters for "did this sync
-    happen."
+    happen." Update (Quirk #151): callers now pass `year` and, for a
+    season, `season_title`, so the row reads "Show - Season 1 (2015)" like
+    the matching Plex row instead of the bare show name with no year.
 
     Returns the list of server_ids actually synced to (empty list for a
     no-op/every-failure run) -- added so the webhook's own per-item Discord/
@@ -1127,11 +1129,15 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                 except Exception as cache_err:
                     logger.debug("[WEBHOOK_SYNC:%s] Failed to update local cache for item_id=%s: %s", client.server_id, item_id, cache_err)
                 try:
+                    history_title = title_hint
+                    if season_index is not None:
+                        _season_label = season_title or ("Specials" if season_index == 0 else f"Season {season_index}")
+                        history_title = f"{title_hint} - {_season_label}"
                     db.record_poster_history(
                         rating_key=item_id,
                         library_id=str(library_id or ""),
-                        title=title_hint,
-                        year=None,
+                        title=history_title,
+                        year=year,
                         template_id=template_id,
                         preset_id=preset_id,
                         action="sent_to_media_server",
@@ -1472,6 +1478,8 @@ def process_webhook_poster_generation(
                                 _sync_tmdb_id, "tv-show", show_title, library_id=library_id,
                                 season_index=_r.get("season_index"), tvdb_id=_sync_tvdb_id,
                                 template_id=template_id, preset_id=preset_id,
+                                year=_sync_info.get("year") if _sync_info else None,
+                                season_title=_r.get("season") if _r.get("season_index") is not None else None,
                             )
                             for _sid in _synced:
                                 if _sid not in _tv_synced_server_ids:
@@ -1600,7 +1608,7 @@ def process_webhook_poster_generation(
                     try:
                         _sync_cached = db.get_cached_movies()
                         _sync_info = next((m for m in _sync_cached if m.get("key") == rating_key or m.get("rating_key") == rating_key), None)
-                        _movie_synced_server_ids = _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id, template_id=template_id, preset_id=preset_id)
+                        _movie_synced_server_ids = _sync_poster_to_other_servers(_sync_info.get("tmdb_id") if _sync_info else None, "movie", movie_title, library_id=library_id, template_id=template_id, preset_id=preset_id, year=_sync_info.get("year") if _sync_info else None)
                     except Exception as sync_err:
                         logger.debug("[WEBHOOK] Cross-server poster sync failed for %s [%s]: %s", rating_key, movie_title, sync_err)
                 # Send Discord notification (include poster image)

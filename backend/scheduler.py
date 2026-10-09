@@ -462,7 +462,7 @@ def _run_scheduled_media_mirror(server_id: str, library_id: str, media_type: str
         from .api.media_mirror import _run_mirror
 
         logger.info("[SCHEDULER] ========== SCHEDULED MEDIA MIRROR TRIGGERED (%s/%s/%s) ==========", server_id, library_id, media_type)
-        _run_mirror(server_id, library_id, media_type)
+        _run_mirror(server_id, library_id, media_type, scheduled=True)
         logger.info("[SCHEDULER] ========== SCHEDULED MEDIA MIRROR FINISHED (%s/%s/%s) ==========", server_id, library_id, media_type)
     except Exception as e:
         logger.error("[SCHEDULER] Scheduled media mirror failed for %s/%s/%s: %s", server_id, library_id, media_type, e, exc_info=True)

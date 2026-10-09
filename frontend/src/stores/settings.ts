@@ -150,6 +150,7 @@ export type NotificationSettings = {
   discordNotifyManual: boolean
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
+  discordNotifyMediaMirror?: boolean
   appriseEnabled: boolean
   appriseUrls: string[]
   appriseNotifyLibraries: string[]
@@ -157,6 +158,7 @@ export type NotificationSettings = {
   appriseNotifyManual: boolean
   appriseNotifyWebhook: boolean
   appriseNotifyAutoGenerate: boolean
+  appriseNotifyMediaMirror?: boolean
 }
 
 export type UISettings = {
@@ -240,13 +242,15 @@ const notifications = ref<NotificationSettings>({
   discordNotifyManual: true,
   discordNotifyWebhook: true,
   discordNotifyAutoGenerate: true,
+  discordNotifyMediaMirror: true,
   appriseEnabled: false,
   appriseUrls: [],
   appriseNotifyLibraries: [],
   appriseNotifyBatch: true,
   appriseNotifyManual: true,
   appriseNotifyWebhook: true,
-  appriseNotifyAutoGenerate: true
+  appriseNotifyAutoGenerate: true,
+  appriseNotifyMediaMirror: true
 })
 
 async function loadSettings() {
@@ -346,13 +350,15 @@ async function loadSettings() {
       discordNotifyManual: data.notifications?.discordNotifyManual ?? true,
       discordNotifyWebhook: data.notifications?.discordNotifyWebhook ?? true,
       discordNotifyAutoGenerate: data.notifications?.discordNotifyAutoGenerate ?? true,
+      discordNotifyMediaMirror: data.notifications?.discordNotifyMediaMirror ?? true,
       appriseEnabled: data.notifications?.appriseEnabled ?? false,
       appriseUrls: data.notifications?.appriseUrls ?? [],
       appriseNotifyLibraries: data.notifications?.appriseNotifyLibraries ?? [],
       appriseNotifyBatch: data.notifications?.appriseNotifyBatch ?? true,
       appriseNotifyManual: data.notifications?.appriseNotifyManual ?? true,
       appriseNotifyWebhook: data.notifications?.appriseNotifyWebhook ?? true,
-      appriseNotifyAutoGenerate: data.notifications?.appriseNotifyAutoGenerate ?? true
+      appriseNotifyAutoGenerate: data.notifications?.appriseNotifyAutoGenerate ?? true,
+      appriseNotifyMediaMirror: data.notifications?.appriseNotifyMediaMirror ?? true
     }
 
   } catch (e: unknown) {

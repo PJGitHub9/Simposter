@@ -215,6 +215,7 @@ def _sync_one_item(
     source_client, target_clients: Dict[str, Any], entry: dict, asset_types: List[str],
     source_label: str, target_labels: Dict[str, str], is_collection: bool = False,
     source_server_id: Optional[str] = None, force: bool = False,
+    asset_counts: Optional[Dict[str, Dict[str, int]]] = None,
 ) -> str:
     """Downloads+uploads every configured asset type for one mapping row to
     every one of its real (mapped) targets, logging one clean, human-readable
@@ -227,8 +228,19 @@ def _sync_one_item(
     "updated"/"skipped"/"unmapped"/"failed", matching _run_mirror()'s own
     per-item stat buckets, plus "unchanged" when every image was already
     copied before and the source hasn't changed since (change detection --
-    skipped entirely when `force` is set, e.g. a manual per-item Send)."""
+    skipped entirely when `force` is set, e.g. a manual per-item Send).
+
+    `asset_counts`, when given, is filled per asset type with how many items
+    had that image on the source ("total"), got it copied to at least one
+    target ("copied"), were already up to date ("unchanged") or failed
+    ("failed") -- the run-complete notification's "Posters copied 3/40"
+    numbers (Quirk #151)."""
     title_display = _title_display(entry)
+
+    def _count(asset_type: str, field: str) -> None:
+        if asset_counts is not None:
+            bucket = asset_counts.setdefault(asset_type, {"total": 0, "copied": 0, "unchanged": 0, "failed": 0})
+            bucket[field] += 1
     real_targets = {t: rk for t, rk in entry.get("targets", {}).items() if rk and t in target_clients}
     if not real_targets:
         return "unmapped"
@@ -243,9 +255,12 @@ def _sync_one_item(
         except Exception as e:
             logger.warning("[MIRROR] Failed to fetch %s for '%s': %s", asset_type, title_display, e)
             item_failed = True
+            _count(asset_type, "total")
+            _count(asset_type, "failed")
             continue
         if not raw:
             continue  # source has no image of this type -- nothing to mirror
+        _count(asset_type, "total")
 
         # Change detection: compare the raw source bytes' hash with what was
         # last copied to each target item. Only a byte-identical source image
@@ -264,6 +279,7 @@ def _sync_one_item(
         }
         if not targets_needing:
             item_unchanged = True
+            _count(asset_type, "unchanged")
             continue
 
         try:
@@ -274,12 +290,16 @@ def _sync_one_item(
         except Exception as e:
             logger.warning("[MIRROR] Failed to normalize %s for '%s': %s", asset_type, title_display, e)
             item_failed = True
+            _count(asset_type, "failed")
             continue
         if result is None:
             item_failed = True
+            _count(asset_type, "failed")
             continue
         image_bytes, content_type = result
         asset_label = _ASSET_TYPE_LABELS.get(asset_type, asset_type)
+        asset_copied = False
+        asset_failed = False
         for target_id, target_rating_key in targets_needing.items():
             target_label = target_labels.get(target_id, target_id)
             try:
@@ -302,6 +322,7 @@ def _sync_one_item(
                         is_collection=is_collection,
                     )
                 item_touched = True
+                asset_copied = True
                 logger.info("[MIRROR] %s --> %s: %s - %s", source_label, target_label, asset_label, title_display)
                 if source_server_id:
                     try:
@@ -320,6 +341,11 @@ def _sync_one_item(
                     "[MIRROR] %s --> %s: %s - %s FAILED: %s", source_label, target_label, asset_label, title_display, e,
                 )
                 item_failed = True
+                asset_failed = True
+        if asset_copied:
+            _count(asset_type, "copied")
+        elif asset_failed:
+            _count(asset_type, "failed")
 
     if item_failed:
         return "failed"
@@ -330,8 +356,34 @@ def _sync_one_item(
     return "skipped"
 
 
-def _run_mirror(server_id: str, library_id: str, media_type: str, force: bool = False):
+def _notify_mirror_run(group: Optional[dict], library_id: str, source_server_id: Optional[str],
+                       target_server_ids: List[str], asset_counts: Dict[str, Dict[str, int]],
+                       collection_counts: Dict[str, Dict[str, int]], totals: Dict[str, int],
+                       scheduled: bool, error: Optional[str] = None) -> None:
+    """Best-effort run summary notification (Quirk #151) -- never lets a
+    notification problem affect the run itself."""
+    try:
+        from .notifications import send_media_mirror_notification
+        send_media_mirror_notification(
+            group_name=(group or {}).get("name") or "",
+            library_id=library_id,
+            source_server_id=source_server_id,
+            target_server_ids=target_server_ids,
+            asset_counts=asset_counts,
+            collection_counts=collection_counts,
+            totals=totals,
+            scheduled=scheduled,
+            error=error,
+        )
+    except Exception as e:
+        logger.debug("[MIRROR] Run notification failed: %s", e)
+
+
+def _run_mirror(server_id: str, library_id: str, media_type: str, force: bool = False, scheduled: bool = False):
     key = _status_key(server_id, library_id, media_type)
+    group = None
+    source_server_id = None
+    target_server_ids: List[str] = []
     _update_status(key, {
         "state": "running", "total": 0, "processed": 0, "current": "",
         "updated": 0, "skipped": 0, "unchanged": 0, "unmapped": 0, "failed": 0, "error": None,
@@ -395,8 +447,12 @@ def _run_mirror(server_id: str, library_id: str, media_type: str, force: bool = 
         total = len(mapping) + len(collection_mapping)
         _update_status(key, {"total": total})
 
+        asset_counts: Dict[str, Dict[str, int]] = {}
+        collection_counts: Dict[str, Dict[str, int]] = {}
+
         def _run_pass(pass_mapping: List[dict], pass_asset_types: List[str], is_collection: bool, processed_offset: int):
             upd = skp = unm = fail = unch = 0
+            counts = collection_counts if is_collection else asset_counts
             titles: List[str] = []
             for idx, entry in enumerate(pass_mapping, start=1):
                 title_display = _title_display(entry)
@@ -405,7 +461,8 @@ def _run_mirror(server_id: str, library_id: str, media_type: str, force: bool = 
                     "current": f"{title_display} (collection)" if is_collection else title_display,
                 })
                 status = _sync_one_item(source_client, target_clients, entry, pass_asset_types, source_label, target_labels,
-                                        is_collection=is_collection, source_server_id=source_server_id, force=force)
+                                        is_collection=is_collection, source_server_id=source_server_id, force=force,
+                                        asset_counts=counts)
                 if status == "unmapped":
                     unm += 1
                     titles.append(title_display)
@@ -458,14 +515,8 @@ def _run_mirror(server_id: str, library_id: str, media_type: str, force: bool = 
             }
         db.set_library_group_mirror_config(server_id, library_id, media_type, mirror)
 
-        # Deliberately NOT sending a notification for unmapped items on a manual
-        # run -- the user is already looking at this run's results in the UI, and
-        # the mapping-confirmation view surfaces the exact same information. A
-        # real notification (matching the user's explicit "skip and notify"
-        # choice) belongs on the SCHEDULED run instead, where nobody's watching --
-        # that's part of the scheduler follow-up, not this manual-run slice, so
-        # it can be built against the real notification-settings shape
-        # (ui_settings["notifications"], not guessed) rather than rushed here.
+        # The run summary (incl. the unmapped count) goes out as a notification
+        # at the end of this function -- see _notify_mirror_run() (Quirk #151).
         all_unmapped_titles = unmapped_titles + coll_unmapped_titles
         if all_unmapped_titles:
             logger.info("[MIRROR] %d unmapped item(s) in group '%s': %s%s",
@@ -476,9 +527,23 @@ def _run_mirror(server_id: str, library_id: str, media_type: str, force: bool = 
                     group.get("name") or library_id, updated + coll_updated, unchanged + coll_unchanged, skipped + coll_skipped,
                     unmapped + coll_unmapped, failed + coll_failed,
                     f" (incl. {coll_updated} collection update(s))" if mirror_collections else "")
+
+        _notify_mirror_run(
+            group, library_id, source_server_id, list(target_clients.keys()),
+            asset_counts, collection_counts,
+            {
+                "checked": total,
+                "updated": updated + coll_updated,
+                "unchanged": unchanged + coll_unchanged,
+                "unmapped": unmapped + coll_unmapped,
+                "failed": failed + coll_failed,
+            },
+            scheduled,
+        )
     except Exception as e:
         logger.error("[MIRROR] Run failed for %s: %s", key, e)
         _update_status(key, {"state": "error", "error": str(e)})
+        _notify_mirror_run(group, library_id, source_server_id, target_server_ids, {}, {}, {}, scheduled, error=str(e))
 
 
 class MirrorRunRequest(BaseModel):

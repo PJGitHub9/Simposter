@@ -510,6 +510,10 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
     if not targets:
         return False
 
+    # Which template/preset this render came from: the group's auto-generate
+    # config when there is one, else whatever Plex's copy was last sent with.
+    preset_info = cfg or db.get_last_plex_send_preset(media_type, tmdb_id) or {}
+
     sent = False
     for item_id, path, season_index in targets:
         try:
@@ -533,13 +537,16 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
                 except Exception:
                     pass
             try:
+                history_title = item.get("title") or rating_key
+                if season_index is not None:
+                    history_title = f"{history_title} - " + ("Specials" if season_index == 0 else f"Season {season_index}")
                 db.record_poster_history(
                     rating_key=item_id,
                     library_id=str(library_id),
-                    title=item.get("title") or rating_key,
+                    title=history_title,
                     year=item.get("year"),
-                    template_id=(cfg or {}).get("template_id"),
-                    preset_id=(cfg or {}).get("preset_id"),
+                    template_id=preset_info.get("template_id"),
+                    preset_id=preset_info.get("preset_id"),
                     action="sent_to_media_server",
                     source="auto_generate",
                     poster_data=data,

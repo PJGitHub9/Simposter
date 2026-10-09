@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.06 (2026-10-09) — `dev-jellyfin` branch
+
+### New Features
+- **Media Mirror notifications** — a Discord/Apprise summary when a mirror run finishes or fails: library, source → target servers, and per asset type how many items were copied out of how many the source had (e.g. "Posters: 3/40 copied (37 unchanged)"), plus collections and the unmapped count. Manual runs always notify; scheduled runs only when something was copied or failed. New "Media Mirror" toggle under both Discord and Apprise in Settings → Notifications (on by default).
+
+### Bug Fixes
+- **Season rows in History** — posters synced to Jellyfin/Emby by a Sonarr webhook were recorded with only the show name and no year. They now read "Show - Season N" (or "Specials") with the year, like the Plex rows. Same fix for posters delivered to a server after it imports the show, which also now record the preset Plex's copy was sent with instead of "—".
+
 ## v1.7.05 (2026-10-09) — `dev-jellyfin` branch
 
 ### Bug Fixes

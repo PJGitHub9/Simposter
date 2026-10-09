@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.06',
+    date: '2026-10-09',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Media Mirror now sends a Discord/Apprise summary when a run finishes: servers, and how many posters, logos, backdrops and collections were copied (e.g. "Posters: 3/40 copied"). Scheduled runs only notify when something changed or failed. Toggle it under Settings → Notifications.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'History showed Jellyfin season posters with only the show name. They now read "Show - Season N" with the year, matching the Plex rows.',
+          'Posters delivered to Jellyfin after it imported a show now record the preset in History instead of "—".',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.05',
     date: '2026-10-09',
     sections: [
