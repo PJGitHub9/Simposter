@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.07',
+    date: '2026-10-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Library scans (scheduled and manual) now pick up posters changed outside Simposter, e.g. by Kometa overlays, on Plex, Jellyfin and Emby. Only changed posters are re-downloaded, so scans stay fast and you no longer need "Force Refresh All Art" for this.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.06',
     date: '2026-10-09',
     sections: [

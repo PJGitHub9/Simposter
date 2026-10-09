@@ -340,6 +340,7 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
     from .movies import (
         fetch_and_cache_poster, fetch_and_cache_logo, fetch_and_cache_backdrop,
         _poster_cache_url as _movie_poster_cache_url, _logo_cache_url, _art_cache_url,
+        poster_changed_on_server, record_poster_version,
     )
 
     is_tv = media_type != "movie"
@@ -358,14 +359,22 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
     def _one(item) -> None:
         rating_key = item.id
         try:
+            # Re-download only when the server's poster version changed
+            # (ImageTags.Primary) -- Quirk #152.
+            version = getattr(item, "image_version", None)
+            refresh = poster_changed_on_server(rating_key, version)
+            if refresh:
+                logger.info("[MEDIA_SERVER_SCAN] Poster changed on server for %s — refreshing", rating_key)
             if is_tv:
-                poster_path = fetch_and_cache_tv_poster(rating_key)
+                poster_path = fetch_and_cache_tv_poster(rating_key, force_refresh=refresh)
                 if poster_path:
                     update_poster(rating_key, _tv_poster_cache_url(rating_key, poster_path), item.library_id or "default")
             else:
-                poster_path = fetch_and_cache_poster(rating_key)
+                poster_path = fetch_and_cache_poster(rating_key, force_refresh=refresh)
                 if poster_path:
                     update_poster(rating_key, _movie_poster_cache_url(rating_key, poster_path), item.library_id or "default")
+            if refresh and poster_path:
+                record_poster_version(rating_key, version)
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Poster fetch failed for %s: %s", rating_key, e)
         try:

@@ -47,7 +47,10 @@ def _get_plex_tv_shows(lib_ids: Optional[List[str]] = None) -> List[dict]:
                         "title": title,
                         "year": int(year) if year else None,
                         "addedAt": int(added_at) if added_at else None,
-                        "library_id": lib_id
+                        "library_id": lib_id,
+                        # Poster version (ends in an update timestamp) -- lets the
+                        # scan re-download only changed posters (Quirk #152).
+                        "thumb": directory.get("thumb"),
                     })
         except Exception as e:
             logger.error(f"Failed to fetch TV shows from library {lib_id}: {e}")

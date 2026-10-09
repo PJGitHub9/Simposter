@@ -298,6 +298,37 @@ def _prewarm_streaming_providers_async(items: List[dict], media_type: str) -> No
     threading.Thread(target=_run, name=f"streaming-prewarm-{media_type}", daemon=True).start()
 
 
+def _poster_version_file(rating_key: str) -> Path:
+    return Path(POSTER_CACHE_DIR) / f"{rating_key}.thumbver"
+
+
+def poster_changed_on_server(rating_key: str, version: Optional[str]) -> bool:
+    """True when Plex's current poster version (the `thumb` path, which ends in
+    an update timestamp) differs from the one recorded when we last cached it.
+    Lets a normal scan re-download only posters changed outside Simposter
+    (Kometa overlays, manual edits) without a full force refresh (Quirk #152).
+    The first time a version is seen it's just recorded, not treated as a
+    change, so upgrading doesn't trigger a one-off full re-download."""
+    if not version:
+        return False
+    f = _poster_version_file(rating_key)
+    try:
+        old = f.read_text().strip()
+    except OSError:
+        record_poster_version(rating_key, version)
+        return False
+    return old != version
+
+
+def record_poster_version(rating_key: str, version: Optional[str]) -> None:
+    if not version:
+        return
+    try:
+        _poster_version_file(rating_key).write_text(version)
+    except OSError:
+        pass
+
+
 def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False, server_id_hint: Optional[str] = None) -> Optional[Path]:
     """
     Fetch poster from cache or Plex and store it. Returns cached file path or None.
@@ -1526,6 +1557,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         movie_keys = [movie.key for movie in movies]
         bulk_labels = {}
         bulk_tmdb_ids = {}
+        bulk_thumb_versions = {}
         # Parallelized (was a fully sequential one-request-at-a-time loop) --
         # this is a lightweight XML metadata fetch, the same /library/metadata/{key}
         # request the poster-fetch phase below already makes concurrently at
@@ -1547,10 +1579,12 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     tag = label.get('tag', '').strip()
                     if tag:
                         labels_list.append(tag)
-                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text)
+                video = root.find(".//Video")
+                thumb_version = video.get("thumb") if video is not None else None
+                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text), thumb_version
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
-                return movie_key, [], None
+                return movie_key, [], None, None
 
         if movie_keys:
             try:
@@ -1559,9 +1593,10 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     label_futures = {executor.submit(_fetch_label_for_movie, key): key for key in movie_keys}
                     label_done = 0
                     for future in as_completed(label_futures):
-                        movie_key, labels_list, tmdb_id = future.result()
+                        movie_key, labels_list, tmdb_id, thumb_version = future.result()
                         bulk_labels[movie_key] = labels_list
                         bulk_tmdb_ids[movie_key] = tmdb_id
+                        bulk_thumb_versions[movie_key] = thumb_version
                         label_done += 1
                         # Without this, scan_status stayed unchanged (looking stalled)
                         # for the entire label-fetch phase.
@@ -1578,8 +1613,14 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
         def fetch_poster_for_movie(movie_key):
             try:
-                poster_path = fetch_and_cache_poster(movie_key, force_refresh=force_poster_refresh)
+                version = bulk_thumb_versions.get(movie_key)
+                refresh = force_poster_refresh or poster_changed_on_server(movie_key, version)
+                if refresh and not force_poster_refresh:
+                    logger.info("[SCAN] Poster changed in Plex for %s — refreshing", movie_key)
+                poster_path = fetch_and_cache_poster(movie_key, force_refresh=refresh)
                 if poster_path:
+                    if refresh:
+                        record_poster_version(movie_key, version)
                     return movie_key, _poster_cache_url(movie_key, poster_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch poster for movie {movie_key}: {e}")
@@ -1759,8 +1800,14 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
             poster_url = None
             try:
-                poster_path = fetch_and_cache_poster(key, force_refresh=force_poster_refresh)
+                version = show.get("thumb")
+                refresh = force_poster_refresh or poster_changed_on_server(key, version)
+                if refresh and not force_poster_refresh:
+                    logger.info("[SCAN] Poster changed in Plex for TV show %s — refreshing", key)
+                poster_path = fetch_and_cache_poster(key, force_refresh=refresh)
                 if poster_path:
+                    if refresh:
+                        record_poster_version(key, version)
                     poster_url = _poster_cache_url(key, poster_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch poster for TV show {key}: {e}")

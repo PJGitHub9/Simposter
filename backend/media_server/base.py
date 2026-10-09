@@ -50,6 +50,9 @@ class MediaItem:
                                      # real bug it fixes, documented in CLAUDE.md.
     library_id: Optional[str] = None
     file_path: Optional[str] = None
+    # Opaque poster version (Jellyfin/Emby ImageTags.Primary) -- changes when
+    # the poster changes, so a scan can re-download only changed posters.
+    image_version: Optional[str] = None
 
 
 @dataclass

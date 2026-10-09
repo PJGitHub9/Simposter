@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.7.07 (2026-10-09) — `dev-jellyfin` branch
+
+### Improvements
+- **Scans refresh posters changed on the server** — a normal scan used to skip every item that already had a cached poster, so posters changed by Kometa or by hand only showed after "Force Refresh All Art". The scan now compares each poster's version on the server (Plex's `thumb` timestamp, Jellyfin/Emby's `ImageTags.Primary`) with the one saved when it was cached, and re-downloads only the changed ones. No extra requests: the scan already reads these values. The first scan after updating just records the versions. Logos, backdrops, square art and collections aren't covered yet.
+
 ## v1.7.06 (2026-10-09) — `dev-jellyfin` branch
 
 ### New Features

@@ -158,6 +158,7 @@ class JellyfinClient(MediaServerClient):
                 added_at=_parse_jellyfin_datetime(item.get("DateCreated")),
                 library_id=library_id,
                 file_path=item.get("Path"),
+                image_version=(item.get("ImageTags") or {}).get("Primary"),
             ))
         return out
 
