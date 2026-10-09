@@ -109,6 +109,7 @@ export function useAssetServerSend(getItem: () => AssetSendItem, kind: AssetKind
         title: item.title,
         year: item.year ?? null,
         imageData: source.data || null,
+        imageUrl: source.url || null,
       })
     }
     return result

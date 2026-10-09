@@ -16,6 +16,7 @@ export interface SendSummary {
   title?: string
   year?: number | string | null
   imageData?: string | null
+  imageUrl?: string | null // used when there's no imageData (a picked TMDb/Fanart image)
 }
 
 export async function notifySendSummary(summary: SendSummary): Promise<void> {
@@ -34,6 +35,7 @@ export async function notifySendSummary(summary: SendSummary): Promise<void> {
         title: summary.title || null,
         year: Number(summary.year) || null,
         image_data: summary.imageData || null,
+        image_url: summary.imageData ? null : (summary.imageUrl || null),
       }),
     })
   } catch {

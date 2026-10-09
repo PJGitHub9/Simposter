@@ -324,11 +324,12 @@ def _summary_fields(
 ) -> List[tuple]:
     """(name, value) pairs shared by every notification layout:
     Library / Preset / Action(s) / Servers (+ Asset for non-poster sends)."""
-    fields = [
-        ("Library", _get_library_name(library_id)),
-        ("Preset", _get_preset_label(template_id, preset_id)),
-        ("Action", _get_short_action(action)),
-    ]
+    fields = [("Library", _get_library_name(library_id))]
+    # Logo/backdrop sends aren't rendered from a preset -- leave the field out
+    # rather than showing "N/A".
+    if preset_id or template_id:
+        fields.append(("Preset", _get_preset_label(template_id, preset_id)))
+    fields.append(("Action", _get_short_action(action)))
     servers = _get_servers_label(action, server_id, synced_server_ids)
     if servers:
         fields.append(("Servers", servers))

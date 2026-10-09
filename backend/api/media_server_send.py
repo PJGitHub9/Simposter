@@ -145,6 +145,7 @@ class SendSummaryNotifyRequest(BaseModel):
     title: Optional[str] = None
     year: Optional[int] = None
     image_data: Optional[str] = None   # base64 data URL to attach (the rendered poster)
+    image_url: Optional[str] = None    # or an external image URL (a picked TMDb/Fanart logo/backdrop)
 
 
 @router.post("/notify-send")
@@ -174,6 +175,17 @@ def api_notify_send_summary(req: SendSummaryNotifyRequest):
                 poster_data = base64.b64decode(encoded)
             except Exception:
                 poster_data = None
+        elif req.image_url:
+            # A logo/backdrop picked from TMDb/Fanart has no upload bytes, so
+            # fetch it for the notification thumbnail (best-effort, size-capped).
+            try:
+                from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
+                from ..middleware.validation import validate_url
+                r = requests.get(validate_url(req.image_url), timeout=10, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+                if r.ok and len(r.content) <= 8_000_000:
+                    poster_data = r.content
+            except Exception as e:
+                logger.debug("[MEDIA_SERVER_SEND] Could not fetch notification image: %s", e)
         assets = [a for a in dict.fromkeys(req.assets) if a] or ["poster"]
         kwargs = dict(
             title=title or req.rating_key,

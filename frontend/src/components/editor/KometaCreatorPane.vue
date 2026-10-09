@@ -640,6 +640,7 @@ function sendSummaryNotification(posterServers: string[], posterServersForImage:
     title: props.movie.title,
     year: props.movie.year ?? null,
     imageData: posterServersForImage.length ? lastPreview.value : null,
+    imageUrl: logoUrl.value || null, // logo-only send: show the logo
   })
 }
 

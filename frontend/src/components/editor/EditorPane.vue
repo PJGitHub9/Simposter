@@ -1244,6 +1244,7 @@ function sendSummaryNotification(targets: LinkedServer[], posterOk: boolean[], l
     title: props.movie.title,
     year: props.movie.year ?? null,
     imageData: posterOk.some(Boolean) ? lastPreview.value : null,
+    imageUrl: logoUrl.value || null, // logo-only send: show the logo
   })
 }
 

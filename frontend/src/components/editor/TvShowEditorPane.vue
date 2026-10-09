@@ -2304,6 +2304,7 @@ function sendSummaryNotification(serverIds: Iterable<string>, assets: Set<string
     title,
     year: props.movie.year ?? null,
     imageData: sentPoster ? imageData : null,
+    imageUrl: logoUrl.value || null, // logo-only send: show the logo
   })
 }
 

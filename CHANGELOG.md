@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.7.05 (2026-10-09) — `dev-jellyfin` branch
+
+### Bug Fixes
+- **Notification thumbnails for picked logos/backdrops** — a logo or backdrop chosen from TMDb/Fanart has no upload bytes, so its notification had no image. `POST /api/media-server/notify-send` gained `image_url` (used only when there's no `image_data`), fetched with the SSRF guard and capped at 8MB. The Logo/Backdrop editors and the movie, TV and Kometa editors' "Send Logo Only" pass it.
+- **"Preset: N/A"** — the Preset field is left out of notifications when no preset or template was used (logo/backdrop sends).
+
 ## v1.7.04 (2026-10-08) — `dev-jellyfin` branch
 
 ### New Features

@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.05',
+    date: '2026-10-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Notifications for a logo or backdrop picked from TMDb/Fanart had no thumbnail. The chosen image is now attached.',
+          'Logo and backdrop notifications showed "Preset: N/A". The Preset field is now left out when no preset was used.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.04',
     date: '2026-10-08',
     sections: [
