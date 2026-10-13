@@ -35,7 +35,8 @@ onMounted(() => {
   // exists for. Fresh installs (no lastSeen) skip this — onboarding already covers
   // the intro for them, they don't need a "look what you missed" tour of the past.
   if (lastSeen) {
-    const crossed = majorReleases.find(
+    // Newest milestone crossed wins, so someone jumping several milestones sees the latest tour.
+    const crossed = [...majorReleases].reverse().find(
       (m) => compareVersions(APP_VERSION, m.version) >= 0 && compareVersions(lastSeen, m.version) < 0
     )
     if (crossed) {
