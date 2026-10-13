@@ -826,7 +826,7 @@ def build_base_poster(
     # ------------- BASE POSTER -------------
     base = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
 
-    if options.get("canvas_mode") == "square":
+    if options.get("canvas_mode") in ("square", "thumb"):
         # Square Art: shift moves the crop window within the cover-resize's
         # slack, revealing more real source content -- there's genuinely more
         # slack to work with on a square canvas (a 2:3 poster covering a 1:1

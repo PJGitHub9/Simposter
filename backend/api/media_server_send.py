@@ -569,6 +569,43 @@ def sync_render_to_linked_servers(
     return synced
 
 
+@router.post("/send-thumb-art")
+def api_send_thumb_art(req: MediaServerSendRequest):
+    """Upload Thumb Art (Jellyfin/Emby's 16:9 "Thumb" image). Jellyfin/Emby only:
+    Plex has no such slot, and _resolve_non_plex_client() already rejects a Plex
+    item. Same shape as api_send_backdrop()."""
+    server_id, client = _resolve_non_plex_client(req.rating_key, req.server_id)
+    image_bytes, content_type = _resolve_image_bytes(req)
+
+    from .save import normalize_backdrop_for_plex
+    image_bytes, content_type = normalize_backdrop_for_plex(image_bytes, content_type, for_plex=False)
+
+    try:
+        client.upload_image(req.rating_key, ImageType.THUMB_ART, image_bytes, content_type)
+    except Exception as e:
+        logger.error("[MEDIA_SERVER_SEND:%s] Thumb art upload failed rating_key=%s: %s", server_id, req.rating_key, e)
+        # A 404 here means the server no longer has this item id -- typically
+        # Jellyfin re-imported the file under a new id since the last scan.
+        if getattr(getattr(e, "response", None), "status_code", None) == 404:
+            raise HTTPException(404, "This title isn't on the server under the id Simposter has (it was likely re-imported). Scan the library in Simposter, then try again.")
+        raise HTTPException(500, f"Failed to upload thumb art: {e}")
+
+    new_url = None
+    try:
+        from .movies import _save_thumb_art_cache, _thumb_art_cache_url, _thumb_art_thumbnail
+        saved = _save_thumb_art_cache(req.rating_key, image_bytes, content_type)
+        if saved:
+            _thumb_art_thumbnail(req.rating_key, saved)
+            new_url = _thumb_art_cache_url(req.rating_key, saved)
+    except Exception as e:
+        logger.debug("[MEDIA_SERVER_SEND:%s] Failed to update thumb art cache after upload: %s", server_id, e)
+
+    logger.info("[MEDIA_SERVER_SEND:%s] Thumb art sent for rating_key=%s", server_id, req.rating_key)
+    if req.notify:
+        _notify_manual_send(req.rating_key, server_id, "thumb_art")
+    return {"status": "ok", "thumb_art_url": new_url}
+
+
 @router.post("/send-backdrop")
 def api_send_backdrop(req: MediaServerSendRequest):
     server_id, client = _resolve_non_plex_client(req.rating_key, req.server_id)

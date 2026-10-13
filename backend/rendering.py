@@ -359,7 +359,7 @@ def render_with_overlay_cache(
             # content revealed); default canvas pastes at a raw pixel offset,
             # intentionally letting the black base canvas show through as a
             # border at larger shift values (Quirk #53).
-            if render_options.get("canvas_mode") == "square":
+            if render_options.get("canvas_mode") in ("square", "thumb"):
                 base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
                 canvas.paste(base, (0, 0))
             else:

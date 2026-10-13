@@ -18,6 +18,8 @@ from typing import Dict, Any, Tuple
 CANVAS_SIZES = {
     "default": (2000, 3000),
     "square": (2000, 2000),
+    # Jellyfin/Emby "Thumb" art: 16:9 landscape, same width as every other mode.
+    "thumb": (2000, 1125),
 }
 
 

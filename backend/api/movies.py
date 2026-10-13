@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from PIL import Image
 
 import requests
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata, normalize_collection_title
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, THUMB_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata, normalize_collection_title
 from .. import cache, database as db
 from .art_cache import make_art_cache
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
@@ -228,6 +228,13 @@ _art_cache_path, _art_cache_url, _save_art_cache, fetch_and_cache_backdrop, _art
 # lookup alone wasn't reliable there).
 _square_art_cache_path, _square_art_cache_url, _save_square_art_cache, fetch_and_cache_square_art, _square_art_thumbnail = make_art_cache(
     SQUARE_ART_CACHE_DIR, "square-art", "backgroundSquare", direct_endpoint="squareArt"
+)
+# Thumb Art: Jellyfin/Emby's 16:9 "Thumb" image. Plex has no such slot, so the
+# cache never queries Plex for it (plex_supported=False). Not stored in
+# movie_cache/tv_cache or fetched by scans -- the Thumb Art page loads each tile
+# on demand through api_thumb_art() below, which caches it on disk.
+_thumb_art_cache_path, _thumb_art_cache_url, _save_thumb_art_cache, fetch_and_cache_thumb_art, _thumb_art_thumbnail = make_art_cache(
+    THUMB_ART_CACHE_DIR, "thumb-art", "jellyfinThumb", plex_supported=False
 )
 
 
@@ -1433,6 +1440,32 @@ def api_square_art(rating_key: str, thumb: bool = False, force_refresh: bool = F
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return resp
     raise HTTPException(status_code=404, detail="Square art not found")
+
+
+@router.get("/thumb-art/{rating_key}")
+def api_thumb_art(rating_key: str, thumb: bool = False, force_refresh: bool = False, v: Optional[str] = None):
+    """Serve a Jellyfin/Emby item's Thumb Art (16:9 "Thumb" image), fetching and
+    caching it from the server the first time it's asked for (or on
+    force_refresh=1). `rating_key` must be the item's Jellyfin/Emby id; a Plex
+    item always 404s. `thumb=1` serves a small grid thumbnail.
+
+    The grid requests this without a version (`v`), so those responses are
+    revalidated rather than cached forever -- otherwise a newly sent Thumb Art
+    would never show up in the grid (the Quirk #114 trap). Only versioned URLs
+    (returned by a send) are marked immutable."""
+    cached = fetch_and_cache_thumb_art(rating_key, force_refresh=force_refresh)
+    if not cached:
+        raise HTTPException(status_code=404, detail="Thumb art not found")
+    cache_control = "public, max-age=31536000, immutable" if v else "no-cache"
+    if thumb:
+        thumb_path = _thumb_art_thumbnail(rating_key, cached)
+        if thumb_path:
+            resp = FileResponse(thumb_path)
+            resp.headers["Cache-Control"] = cache_control
+            return resp
+    resp = FileResponse(cached)
+    resp.headers["Cache-Control"] = cache_control
+    return resp
 
 
 @router.get("/movies/tmdb")

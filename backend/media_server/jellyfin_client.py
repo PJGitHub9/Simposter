@@ -55,6 +55,7 @@ _UPLOAD_IMAGE_TYPE = {
     ImageType.POSTER: "Primary",
     ImageType.BACKDROP: "Backdrop",
     ImageType.LOGO: "Logo",
+    ImageType.THUMB_ART: "Thumb",
     # SQUARE_ART deliberately absent -- no confirmed Jellyfin/Emby equivalent
     # exists (plan doc sec13 Q1). upload_image() raises explicitly rather than
     # guessing at an image type name.

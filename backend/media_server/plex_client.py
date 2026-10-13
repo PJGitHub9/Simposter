@@ -159,6 +159,8 @@ class PlexClient(MediaServerClient):
         if image_type == ImageType.LOGO:
             url = f"{settings.PLEX_URL}/library/metadata/{item_id}/clearLogos"
         else:
+            if image_type not in _UPLOAD_ENDPOINT:
+                raise NotImplementedError(f"Plex has no {image_type.value} image slot")
             endpoint = _UPLOAD_ENDPOINT[image_type]
             url = f"{settings.PLEX_URL}/library/{_media_segment(is_collection)}/{item_id}/{endpoint}"
 

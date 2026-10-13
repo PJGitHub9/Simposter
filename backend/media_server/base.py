@@ -19,6 +19,9 @@ class ImageType(str, Enum):
     BACKDROP = "backdrop"
     LOGO = "logo"
     SQUARE_ART = "square_art"  # no confirmed Jellyfin/Emby target yet -- plan doc sec13 Q1
+    # Jellyfin/Emby's "Thumb" image: a 16:9 landscape image (usually a backdrop
+    # with the title/logo on it). Plex has no equivalent, the mirror of SQUARE_ART.
+    THUMB_ART = "thumb_art"
 
 
 @dataclass

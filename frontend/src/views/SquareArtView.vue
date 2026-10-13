@@ -61,6 +61,12 @@ const nonPlexSelected = computed(() =>
   libraryGroupPref.preferredServerId.value !== ''
 )
 
+// Square Art is Plex-only; when the group also has a Jellyfin/Emby library, a
+// Plex icon in the header makes that obvious.
+const showPlexIcon = computed(() =>
+  (libraryGroupPref.group.value?.members || []).some((m: { serverId: string }) => m.serverId !== 'plex-1')
+)
+
 const withSquareArt = computed(() => items.value.filter((m) => m.square_art_url))
 const withoutSquareArt = computed(() => items.value.filter((m) => !m.square_art_url))
 
@@ -152,7 +158,7 @@ onMounted(() => {
 <template>
   <div class="square-art-view">
     <div class="page-header">
-      <h2>🔳 Square Art</h2>
+      <h2>🔳 Square Art<img v-if="showPlexIcon" src="/icons/plex.svg" class="header-server-icon" alt="Plex" title="Square Art is Plex-only" /></h2>
       <div class="header-actions">
         <div class="stats">
           <span class="stat-cached">{{ withSquareArt.length }} in Plex</span>
@@ -273,6 +279,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.header-server-icon {
+  width: 20px;
+  height: 20px;
+  margin-left: 8px;
+  vertical-align: -3px;
+}
 .square-art-view {
   display: flex;
   flex-direction: column;

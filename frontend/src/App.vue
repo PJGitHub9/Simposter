@@ -42,6 +42,16 @@ const groupMemberCount = (serverId: string, libraryId: string): number => {
   return group?.members?.length ?? 1
 }
 
+// Thumb Art is Jellyfin/Emby-only (Plex has no such slot) -- the mirror of Square
+// Art being Plex-only -- so its submenu entry only shows when the library's group
+// has a Jellyfin or Emby member.
+const groupHasNonPlexMember = (serverId: string, libraryId: string): boolean => {
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libraryId)
+  )
+  return (group?.members || []).some(m => m.serverId !== 'plex-1')
+}
+
 const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
   const groups = (settings.libraryGroups.value || []).filter(g =>
     g.mediaType === mediaType &&
@@ -57,6 +67,7 @@ const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
     ['collections', '\u{1F4DA} Collections'],
     ['logos', '\u{1F5BC}\uFE0F Logos'],
     ['backdrops', '\u{1F39E}\uFE0F Backdrops'],
+    ['thumb-art', '\u{1F304} Thumb Art'],
     ['media-mirror', '\u{1FA9E} Media Mirror'],
     ['assets', '\u{1F4C1} Local Assets'],
     ['backup', '\u{1F4E6} Backup / Restore'],
@@ -65,6 +76,7 @@ const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
     ['tv-batch', '\u{270F}\uFE0F Batch Edit'],
     ['tv-logos', '\u{1F5BC}\uFE0F Logos'],
     ['tv-backdrops', '\u{1F39E}\uFE0F Backdrops'],
+    ['tv-thumb-art', '\u{1F304} Thumb Art'],
     ['tv-media-mirror', '\u{1FA9E} Media Mirror'],
     ['tv-assets', '\u{1F4C1} Local Assets'],
     ['tv-backup', '\u{1F4E6} Backup / Restore'],
@@ -135,6 +147,7 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
       { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
+      ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
       ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
@@ -153,6 +166,7 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `tv-backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
       { key: `tv-square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
+      ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `tv-thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
       ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `tv-media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
       { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
@@ -482,13 +496,13 @@ const activeTab = computed<TabKey>(() => {
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
     return `tv-shows-${firstTvLib?.id || 'default'}`
   }
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art' || route.name === 'media-mirror') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art' || route.name === 'thumb-art' || route.name === 'media-mirror') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art' || route.name === 'tv-media-mirror') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art' || route.name === 'tv-thumb-art' || route.name === 'tv-media-mirror') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -508,6 +522,8 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'tv-backdrops') return `tv-backdrops-${libQuery || 'default'}`
   if (route.name === 'square-art') return `square-art-${libQuery || 'default'}`
   if (route.name === 'tv-square-art') return `tv-square-art-${libQuery || 'default'}`
+  if (route.name === 'thumb-art') return `thumb-art-${libQuery || 'default'}`
+  if (route.name === 'tv-thumb-art') return `tv-thumb-art-${libQuery || 'default'}`
   if (route.name === 'media-mirror') return `media-mirror-${libQuery || 'default'}`
   if (route.name === 'tv-media-mirror') return `tv-media-mirror-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
@@ -907,6 +923,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'backdrops', query: target })
     } else if (submenuKey.startsWith('square-art-')) {
       router.push({ name: 'square-art', query: target })
+    } else if (submenuKey.startsWith('thumb-art-')) {
+      router.push({ name: 'thumb-art', query: target })
     } else if (submenuKey.startsWith('media-mirror-')) {
       router.push({ name: 'media-mirror', query: target })
     } else if (submenuKey.startsWith('assets-')) {
@@ -925,6 +943,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'tv-backdrops', query: target })
     } else if (submenuKey.startsWith('tv-square-art-')) {
       router.push({ name: 'tv-square-art', query: target })
+    } else if (submenuKey.startsWith('tv-thumb-art-')) {
+      router.push({ name: 'tv-thumb-art', query: target })
     } else if (submenuKey.startsWith('tv-media-mirror-')) {
       router.push({ name: 'tv-media-mirror', query: target })
     } else if (submenuKey.startsWith('tv-assets-')) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.08 (2026-10-13) — `dev-jellyfin` branch
+
+### New Features
+- **Thumb Art (Jellyfin/Emby)** — a new Thumb Art page for Jellyfin/Emby's 16:9 `Thumb` image, listed in a library's menu only when its group has a Jellyfin or Emby library. It lists the titles that exist on Jellyfin/Emby. The editor renders your template/preset on a 2000×1125 canvas (`canvas_mode: "thumb"`) from a TMDb/Fanart backdrop and logo, with backdrop position and logo size sliders, and sends to Jellyfin/Emby's Thumb slot (`POST /api/media-server/send-thumb-art`) or saves `thumb.jpg` to disk. Tiles load on demand from `GET /api/thumb-art/{id}` and are cached on disk; Thumb Art isn't part of library scans. Plex has no Thumb slot.
+
+### Improvements
+- **Server icons on Square Art / Thumb Art** — Square Art shows a Plex icon in its header when the library's group also has Jellyfin/Emby; Thumb Art shows the Jellyfin and/or Emby icon.
+
 ## v1.7.07 (2026-10-09) — `dev-jellyfin` branch
 
 ### Improvements

@@ -242,6 +242,7 @@ def _get_asset_type_label(asset_type: str) -> Optional[str]:
         "logo": "\U0001F5BC️ Logo",
         "backdrop": "\U0001F39E️ Backdrop",
         "square_art": "\U0001F533 Square Art",
+        "thumb_art": "\U0001F304 Thumb Art",
     }
     # A combined send ("poster+logo") lists every asset, poster included.
     parts = [p for p in (asset_type or "poster").split("+") if p]

@@ -42,6 +42,7 @@ _SAFE_INTERNAL_PATH_PREFIXES = (
                          # live bug (nothing currently feeds a /api/square-art/ URL back into another
                          # render the way Quirk #42 found for /api/logo/), but the exact same latent
                          # gap that Quirk explicitly warned future code shouldn't have to rediscover.
+    "/api/thumb-art/",  # Jellyfin/Emby Thumb Art cache (art_cache.py), same trust class as /api/square-art/
     "/api/local-assets/",
     "/library/metadata/",  # Plex's own API — reached only via the resolved-host check below
 )

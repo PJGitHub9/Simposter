@@ -19,10 +19,13 @@ _PLEX_TYPE_TO_IMAGE_TYPE = {
     "clearLogo": "logo",
     "art": "backdrop",
     "backgroundSquare": "square_art",
+    # Not a real Plex type -- Thumb Art is Jellyfin/Emby only (plex_supported=False).
+    "jellyfinThumb": "thumb_art",
 }
 
 
-def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, direct_endpoint: Optional[str] = None):
+def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, direct_endpoint: Optional[str] = None,
+                   plex_supported: bool = True):
     """Returns (cache_path, cache_url, save_cache, fetch_and_cache, get_or_create_thumbnail) for one asset type.
 
     cache_dir: on-disk directory (e.g. LOGO_CACHE_DIR, ART_CACHE_DIR)
@@ -95,6 +98,10 @@ def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, dire
             except Exception as e:
                 logger.debug("[ART_CACHE:%s] Non-Plex fetch failed for %s (server=%s): %s", plex_image_type, rating_key, server_id, e)
                 return None
+
+        if not plex_supported:
+            # e.g. Thumb Art: Plex has no such slot, so never query Plex for it.
+            return None
 
         if direct_endpoint:
             try:

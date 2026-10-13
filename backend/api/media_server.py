@@ -26,7 +26,7 @@ def api_purge_media_server_cache(server_id: str):
     from pathlib import Path
     from .. import database as db
     from ..config import (
-        logger, settings, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR,
+        logger, settings, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, THUMB_ART_CACHE_DIR,
     )
 
     if not server_id or "/" in server_id or "\\" in server_id:
@@ -49,7 +49,7 @@ def api_purge_media_server_cache(server_id: str):
         logger.error("[MEDIA_SERVER] Failed to purge DB cache for %s: %s", server_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to purge cache: {e}")
 
-    cache_dirs = [Path(d) for d in (POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR)]
+    cache_dirs = [Path(d) for d in (POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, THUMB_ART_CACHE_DIR)]
     render_dir = Path(settings.CONFIG_DIR) / "cache" / "poster_renders"
     removed_files = 0
     for rk in result["rating_keys"]:

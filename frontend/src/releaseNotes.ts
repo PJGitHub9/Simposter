@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.08',
+    date: '2026-10-13',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Thumb Art for Jellyfin and Emby: a new Thumb Art page (in a library\'s menu when its group has a Jellyfin or Emby library) for the 16:9 "Thumb" image those servers show in thumbnail views. Make one from a backdrop with your template/preset, adjust the backdrop position and logo size, then send it to the title\'s Jellyfin/Emby copies or save it to disk. Plex has no Thumb slot, so it\'s Jellyfin/Emby only.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Square Art shows a Plex icon in its header when the library is linked to Jellyfin or Emby, and Thumb Art shows the Jellyfin/Emby icon, so it\'s clear which server each one is for.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.07',
     date: '2026-10-09',
     sections: [

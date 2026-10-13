@@ -87,6 +87,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # single page at max Poster Density before this.
             "/api/backdrop": 1500,
             "/api/square-art": 1500,
+            "/api/thumb-art": 1500,
 
             # Moderate operations
             "/api/tmdb": 40,  # Match TMDB's own limit

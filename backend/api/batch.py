@@ -891,7 +891,7 @@ def _process_single_movie(
         if save_path:
             result["save_path"] = str(save_path)
         # Include poster bytes for single-item notifications (webhook, auto_generate)
-        if source in ("webhook", "auto_generate") and req.send_to_plex and payload:
+        if source in ("webhook", "auto_generate") and (req.send_to_plex or do_multiserver_send) and payload:
             result["poster_data"] = payload
 
         _update_batch_status({
@@ -2284,7 +2284,7 @@ def _render_and_save_poster(
     if save_path:
         result["save_path"] = str(save_path)
     # Include poster bytes for single-item notifications (webhook, auto_generate)
-    if source in ("webhook", "auto_generate") and req.send_to_plex and payload:
+    if source in ("webhook", "auto_generate") and (req.send_to_plex or do_multiserver_send) and payload:
         result["poster_data"] = payload
 
     return result

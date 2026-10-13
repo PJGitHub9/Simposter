@@ -279,6 +279,7 @@ POSTER_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "posters")
 LOGO_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "logos")
 ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "backdrops")
 SQUARE_ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "square_art")
+THUMB_ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "thumb_art")
 HISTORY_THUMBNAIL_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "history_thumbnails")
 
 # Load from ui_settings.json if environment variables weren't provided
@@ -310,6 +311,7 @@ Path(POSTER_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(LOGO_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(SQUARE_ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+Path(THUMB_ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(HISTORY_THUMBNAIL_DIR).mkdir(parents=True, exist_ok=True)
 
 # Migrate legacy log locations into the dedicated config/logs folder
