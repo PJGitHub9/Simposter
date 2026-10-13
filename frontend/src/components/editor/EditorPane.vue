@@ -9,6 +9,7 @@ import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
+import ImagePickerModal from './ImagePickerModal.vue'
 import UploadPosterModal from './UploadPosterModal.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
 import { notifySendSummary } from '../../services/sendNotify'
@@ -105,6 +106,16 @@ const sendButtonLabel = computed(() => {
 
 const tmdbId = ref<number | null>(null)
 const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
+// Backdrops offered as poster backgrounds. Editor-only: which list is shown, and the
+// per-background zoom/pan below, are never saved into a preset.
+const backdrops = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
+const candidateKind = ref<'posters' | 'backdrops'>('posters')
+const showImagePicker = ref(false)
+// Separate from posterFilter on purpose: posterFilter is a preset field that Batch Edit
+// uses to auto-pick posters; the backdrop filter is editor-only.
+const backdropFilter = ref<'all' | 'textless' | 'text'>('all')
+const matchesTextFilter = (p: { has_text?: boolean; language?: string }, f: 'all' | 'textless' | 'text') =>
+  f === 'textless' ? p.has_text === false || !p.language : f === 'text' ? p.has_text === true : true
 const logos = ref<{ url: string; thumb?: string; color?: string; language?: string; source?: string; type?: string }[]>([])
 const labels = ref<string[]>([])
 const selectedLabels = ref<Set<string>>(new Set())
@@ -507,6 +518,14 @@ const boundingBoxStyle = computed(() => {
 })
 
 const filteredPosters = computed(() => {
+  if (candidateKind.value === 'backdrops') {
+    return backdrops.value.filter((p) => {
+      if (!matchesTextFilter(p, backdropFilter.value)) return false
+      const src = (p.source || 'tmdb').toLowerCase()
+      if (src === 'fanart') return showFanartPosters.value
+      return showTmdbPosters.value
+    })
+  }
   let items = posters.value
   if (posterFilter.value === 'textless') {
     items = items.filter((p) => p.has_text === false || !p.language)
@@ -576,8 +595,10 @@ const filteredLogos = computed(() => {
 })
 
 const optionsPayload = computed(() => ({
-  poster_zoom: options.value.posterZoom / 100,
+  // bgZoom/bgShiftX are editor-only adjustments for the chosen background (not preset fields)
+  poster_zoom: (options.value.posterZoom / 100) * (bgZoom.value / 100),
   poster_shift_y: options.value.posterShiftY / 100,
+  poster_shift_x: bgShiftX.value / 100,
   matte_height_ratio: options.value.matteHeight / 100,
   fade_height_ratio: options.value.fadeHeight / 100,
   top_matte_height_ratio: options.value.topMatteHeight / 100,
@@ -634,6 +655,26 @@ const optionsPayload = computed(() => ({
 }))
 
 const bgUrl = computed(() => selectedPoster.value || '')
+
+// Zoom (%) and horizontal pan (%) for the current background, remembered per image so
+// switching between candidates keeps each one's framing. Editor-only: sent with
+// preview/save/send, never written to a preset.
+const bgAdjust = ref<Record<string, { zoom: number; shiftX: number }>>({})
+// Zoom/pan are only offered (and only applied) when the background is a backdrop.
+const isBackdropBg = computed(() => !!bgUrl.value && backdrops.value.some((b) => b.url === bgUrl.value))
+const bgZoom = computed<number>({
+  get: () => (isBackdropBg.value ? bgAdjust.value[bgUrl.value]?.zoom ?? 100 : 100),
+  set: (v) => { bgAdjust.value = { ...bgAdjust.value, [bgUrl.value]: { zoom: Number(v) || 100, shiftX: bgShiftX.value } } },
+})
+const bgShiftX = computed<number>({
+  get: () => (isBackdropBg.value ? bgAdjust.value[bgUrl.value]?.shiftX ?? 0 : 0),
+  set: (v) => { bgAdjust.value = { ...bgAdjust.value, [bgUrl.value]: { zoom: bgZoom.value, shiftX: Number(v) || 0 } } },
+})
+const resetBgAdjust = () => {
+  const next = { ...bgAdjust.value }
+  delete next[bgUrl.value]
+  bgAdjust.value = next
+}
 const logoUrl = computed(() => (logoMode.value === 'none' ? '' : selectedLogo.value || ''))
 
 const reloadPreset = async () => {
@@ -918,6 +959,8 @@ const applyPosterFilter = () => {
 
 const fetchTmdbAssets = async () => {
   posters.value = []
+  backdrops.value = []
+  bgAdjust.value = {}
   logos.value = []
   selectedPoster.value = null
   selectedLogo.value = null
@@ -946,6 +989,7 @@ const fetchTmdbAssets = async () => {
       const imgs = await imgRes.json()
       const fanart = await fanartRes.json()
       posters.value = imgs.posters || []
+      backdrops.value = imgs.backdrops || []
       logos.value = fanart.logos || []
       applyPosterFilter()
       applyLogoPreference()
@@ -972,6 +1016,7 @@ const fetchTmdbAssets = async () => {
     const imgRes = await fetch(imagesEndpoint)
     const imgs = await imgRes.json()
     posters.value = imgs.posters || []
+    backdrops.value = imgs.backdrops || []
     logos.value = imgs.logos || []
     applyPosterFilter()
     applyLogoPreference()
@@ -1541,6 +1586,7 @@ watch(
   [
     bgUrl,
     logoUrl,
+    bgAdjust,
     options,
     posterFilter,
     logoPreference,
@@ -1644,6 +1690,13 @@ watch(
             <!-- Poster source -->
             <div class="sub-section-title" style="margin-top: 0">Source</div>
             <label class="field-label">
+              Images
+              <select v-model="candidateKind">
+                <option value="posters">Posters</option>
+                <option value="backdrops">Backdrops ({{ backdrops.length }})</option>
+              </select>
+            </label>
+            <label class="field-label" v-if="candidateKind === 'posters'">
               Filter
               <select v-model="posterFilter">
                 <option value="all">All Posters</option>
@@ -1651,8 +1704,16 @@ watch(
                 <option value="text">With Text</option>
               </select>
             </label>
+            <label class="field-label" v-else>
+              Filter
+              <select v-model="backdropFilter">
+                <option value="all">All Backdrops</option>
+                <option value="textless">Textless Only</option>
+                <option value="text">With Text</option>
+              </select>
+            </label>
             <div class="inline-controls">
-              <label class="inline-field" v-if="posterFilter !== 'textless'">
+              <label class="inline-field" v-if="candidateKind === 'posters' && posterFilter !== 'textless'">
                 <span>Language</span>
                 <select v-model="posterLanguageFilter">
                   <option value="all">All</option>
@@ -1700,13 +1761,28 @@ watch(
                 v-for="p in filteredPosters"
                 :key="p.url"
                 class="thumb poster-thumb"
-                :class="{ active: selectedPoster === p.url }"
+                :class="{ active: selectedPoster === p.url, 'backdrop-thumb': candidateKind === 'backdrops' }"
                 @click="selectedPoster = p.url"
               >
                 <img :src="p.thumb || p.url" alt="" />
                 <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
               </div>
             </div>
+            <button
+              v-if="filteredPosters.length"
+              type="button"
+              class="view-all-btn"
+              @click="showImagePicker = true"
+            >View all {{ candidateKind === 'backdrops' ? 'backdrops' : 'posters' }} ({{ filteredPosters.length }})</button>
+            <ImagePickerModal
+              v-if="showImagePicker"
+              :title="candidateKind === 'backdrops' ? 'Backdrops' : 'Posters'"
+              :images="filteredPosters"
+              :selected="selectedPoster"
+              :wide="candidateKind === 'backdrops'"
+              @select="(url) => (selectedPoster = url)"
+              @close="showImagePicker = false"
+            />
 
             <!-- Poster adjustments -->
             <div class="sub-section-title">Position</div>
@@ -1717,6 +1793,26 @@ watch(
                 <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
               </div>
             </div>
+            <template v-if="isBackdropBg">
+            <div class="slider">
+              <label>Zoom %</label>
+              <div class="slider-row">
+                <input v-model.number="bgZoom" type="range" min="25" max="300" />
+                <input v-model.number="bgZoom" type="number" min="25" max="300" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Pan Left/Right %</label>
+              <div class="slider-row">
+                <input v-model.number="bgShiftX" type="range" min="-50" max="50" />
+                <input v-model.number="bgShiftX" type="number" min="-50" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="bg-adjust-note">
+              Zoom and pan apply to this backdrop only and aren't saved to presets.
+              <button v-if="bgZoom !== 100 || bgShiftX !== 0" type="button" class="bg-adjust-reset" @click="resetBgAdjust">Reset</button>
+            </div>
+            </template>
 
             <div class="sub-section-title">Top Fade</div>
             <div class="slider">
@@ -2517,6 +2613,45 @@ watch(
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.poster-thumb.backdrop-thumb {
+  width: 160px;
+  height: 90px;
+}
+
+.view-all-btn {
+  margin: 6px 0 4px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: transparent;
+  color: var(--accent, #3dd6b7);
+  cursor: pointer;
+}
+
+.view-all-btn:hover {
+  background: rgba(61, 214, 183, 0.08);
+}
+
+.bg-adjust-note {
+  font-size: 11px;
+  color: var(--muted, #8a93a6);
+  margin: 2px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bg-adjust-reset {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 /* Custom poster/logo upload zone */

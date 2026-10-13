@@ -351,6 +351,7 @@ def render_with_overlay_cache(
             canvas_w, canvas_h = resolve_canvas_size(render_options)
             poster_zoom = float(render_options.get("poster_zoom", 1.0))
             poster_shift_y = float(render_options.get("poster_shift_y", 0.0))
+            poster_shift_x = max(-0.5, min(0.5, float(render_options.get("poster_shift_x", 0.0))))
 
             canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
 
@@ -360,10 +361,10 @@ def render_with_overlay_cache(
             # intentionally letting the black base canvas show through as a
             # border at larger shift values (Quirk #53).
             if render_options.get("canvas_mode") in ("square", "thumb"):
-                base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
+                base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y, shift_x=poster_shift_x)
                 canvas.paste(base, (0, 0))
             else:
-                base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom)
+                base = _resize_cover(bg, canvas_w, canvas_h, zoom=poster_zoom, shift_x=poster_shift_x)
                 shift_px = int(poster_shift_y * canvas_h)
                 canvas.paste(base, (0, shift_px))
 

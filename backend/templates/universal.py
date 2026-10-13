@@ -22,6 +22,7 @@ def _resize_cover(
     target_h: int,
     zoom: float = 1.0,
     shift_y: float = 0.0,
+    shift_x: float = 0.0,
 ) -> Image.Image:
     """
     Resize to fully cover the target canvas (like CSS background-size: cover),
@@ -55,7 +56,13 @@ def _resize_cover(
     new_h = int(h * scale)
     resized = img.resize((new_w, new_h), Image.LANCZOS)
 
-    x = max(0, (new_w - target_w) // 2)
+    # shift_x (-0.5..0.5) moves the crop window within the horizontal slack the
+    # same way shift_y does vertically. Positive moves the image RIGHT (the crop
+    # window moves toward the source's left edge). Mostly useful for a wide
+    # backdrop used as a poster background, where most of the width is cropped.
+    max_x_offset = max(0, new_w - target_w)
+    x = int(max_x_offset * (0.5 - shift_x))
+    x = max(0, min(x, max_x_offset))
 
     max_y_offset = max(0, new_h - target_h)
     center_y = max_y_offset // 2
@@ -64,7 +71,17 @@ def _resize_cover(
     # toward the source's top edge, revealing more of what was above it.
     y = center_y - int(shift_y * max_y_offset)
     y = max(0, min(y, max_y_offset))
-    return resized.crop((x, y, x + target_w, y + target_h))
+
+    if new_w >= target_w and new_h >= target_h:
+        return resized.crop((x, y, x + target_w, y + target_h))
+
+    # Zoomed out below "cover" (zoom < 1): the image no longer fills the canvas
+    # on at least one axis. Center it on black on that axis rather than letting
+    # crop() pin it to the top-left corner.
+    cropped = resized.crop((x, y, x + min(new_w, target_w), y + min(new_h, target_h)))
+    out = Image.new(resized.mode, (target_w, target_h))
+    out.paste(cropped, ((target_w - cropped.width) // 2, (target_h - cropped.height) // 2))
+    return out
 
 
 def _add_vignette(img: Image.Image, strength: float) -> Image.Image:
@@ -797,6 +814,7 @@ def build_base_poster(
     # ------------- OPTIONS -------------
     poster_zoom = float(options.get("poster_zoom", 1.0))          # 1.0 = normal
     poster_shift_y = float(options.get("poster_shift_y", 0.0))    # -0.5..0.5
+    poster_shift_x = float(options.get("poster_shift_x", 0.0))    # -0.5..0.5, manual editor only
 
     matte_height_ratio = float(options.get("matte_height_ratio", 0.0))  # 0..0.5
     fade_height_ratio = float(options.get("fade_height_ratio", 0.0))    # 0..0.5
@@ -813,6 +831,7 @@ def build_base_poster(
 
     poster_zoom = max(poster_zoom, 0.1)
     poster_shift_y = clamp(poster_shift_y, -0.5, 0.5)
+    poster_shift_x = clamp(poster_shift_x, -0.5, 0.5)
 
     matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
     fade_height_ratio = clamp(fade_height_ratio, 0.0, 1.0)
@@ -831,14 +850,14 @@ def build_base_poster(
         # slack, revealing more real source content -- there's genuinely more
         # slack to work with on a square canvas (a 2:3 poster covering a 1:1
         # canvas), and no black-border look is wanted here (Quirk #43/#44).
-        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
+        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y, shift_x=poster_shift_x)
         base.paste(poster, (0, 0))
     else:
         # Default 2:3 canvas: shift is a raw pixel paste-offset onto the black
         # base canvas, not a crop-window move -- at larger values this can move
         # the poster off-frame and let the black canvas show through as a
         # border, which is the intended, user-relied-on look here (Quirk #53).
-        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom)
+        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_x=poster_shift_x)
         shift_px = int(poster_shift_y * canvas_h)
         base.paste(poster, (0, shift_px))
 

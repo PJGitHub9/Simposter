@@ -11,6 +11,7 @@ import TextOverlayPanel from './TextOverlayPanel.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
+import ImagePickerModal from './ImagePickerModal.vue'
 import UploadPosterModal from './UploadPosterModal.vue'
 import { getApiBase } from '../../services/apiBase'
 import { notifySendSummary } from '../../services/sendNotify'
@@ -64,6 +65,15 @@ const existingLogo = ref<string | null>(null)
 const logoRefreshKey = ref(0)
 
 const posterFilter = ref<'all' | 'textless' | 'text'>('all')
+// Backdrops offered as poster backgrounds (show-level, shared by every season).
+// Editor-only: which list is shown and the per-image zoom/pan are never saved to a preset.
+const candidateKind = ref<'posters' | 'backdrops'>('posters')
+const showImagePicker = ref(false)
+// Separate from posterFilter on purpose: posterFilter is a preset field that Batch Edit
+// uses to auto-pick posters; the backdrop filter is editor-only.
+const backdropFilter = ref<'all' | 'textless' | 'text'>('all')
+const matchesTextFilter = (p: { has_text?: boolean; language?: string }, f: 'all' | 'textless' | 'text') =>
+  f === 'textless' ? p.has_text === false || !p.language : f === 'text' ? p.has_text === true : true
 const posterLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
 const showTmdbPosters = ref(true)
 const showFanartPosters = ref(true)
@@ -1024,6 +1034,15 @@ const posterCounts = computed(() => {
 })
 
 const filteredPosters = computed(() => {
+  if (candidateKind.value === 'backdrops') {
+    return (showLevelAssets.value.backdrops || []).filter((p: any) => {
+      if (!matchesTextFilter(p, backdropFilter.value)) return false
+      const src = (p.source || 'tmdb').toLowerCase()
+      if (src === 'fanart') return showFanartPosters.value
+      if (src === 'tvdb') return showTvdbPosters.value
+      return showTmdbPosters.value
+    })
+  }
   let items = posters.value
   if (posterFilter.value === 'textless') {
     // Treat posters with no language or has_text=false as textless
@@ -1188,6 +1207,33 @@ const optionsPayload = computed(() => {
 })
 
 const bgUrl = computed(() => selectedPoster.value || '')
+
+// Zoom (%) and horizontal pan (%) per background image, editor-only (not preset fields).
+// Applied at each render call with THAT render's own background -- not baked into
+// optionsPayload, which is copied into other seasons' renders.
+const bgAdjust = ref<Record<string, { zoom: number; shiftX: number }>>({})
+// Zoom/pan are only offered (and only applied) when the background is a backdrop.
+const isBackdropUrl = (url: string | null | undefined) =>
+  !!url && (showLevelAssets.value.backdrops || []).some((b: any) => b.url === url)
+const isBackdropBg = computed(() => isBackdropUrl(bgUrl.value))
+const bgZoom = computed<number>({
+  get: () => (isBackdropBg.value ? bgAdjust.value[bgUrl.value]?.zoom ?? 100 : 100),
+  set: (v) => { bgAdjust.value = { ...bgAdjust.value, [bgUrl.value]: { zoom: Number(v) || 100, shiftX: bgShiftX.value } } },
+})
+const bgShiftX = computed<number>({
+  get: () => (isBackdropBg.value ? bgAdjust.value[bgUrl.value]?.shiftX ?? 0 : 0),
+  set: (v) => { bgAdjust.value = { ...bgAdjust.value, [bgUrl.value]: { zoom: bgZoom.value, shiftX: Number(v) || 0 } } },
+})
+const resetBgAdjust = () => {
+  const next = { ...bgAdjust.value }
+  delete next[bgUrl.value]
+  bgAdjust.value = next
+}
+const withBgAdjust = <T extends Record<string, any>>(opts: T, url: string | null | undefined): T => {
+  const adj = url && isBackdropUrl(url) ? bgAdjust.value[url] : undefined
+  if (!adj) return opts
+  return { ...opts, poster_zoom: (Number(opts.poster_zoom) || 1) * (adj.zoom / 100), poster_shift_x: adj.shiftX / 100 }
+}
 const logoUrl = computed(() => (logoMode.value === 'none' ? '' : selectedLogo.value || ''))
 
 const reloadPreset = async () => {
@@ -1443,6 +1489,7 @@ const fetchTmdbAssets = async () => {
   logos.value = []
   selectedPoster.value = null
   selectedLogo.value = null
+  bgAdjust.value = {}
   seasonAssetsCache.value = {}
   showLevelAssets.value = { posters: [], logos: [], backdrops: [] }
   try {
@@ -1793,6 +1840,7 @@ const doPreview = async (skipBackgroundRender = false) => {
   }
 
   // Generate cache key based on captured settings
+  Object.assign(capturedOptionsPayload, withBgAdjust({ ...capturedOptionsPayload }, capturedBgUrl))
   const cacheKey = season ? `${season.key}_${capturedBgUrl}_${capturedLogoUrl}_${JSON.stringify(capturedOptionsPayload)}` : ''
 
   // Check if we have a cached render for these exact settings
@@ -1979,6 +2027,8 @@ const renderAllSelectedSeasons = async () => {
     }
 
     const seasonLogoUrl = cachedSettings?.selectedLogo || currentLogoUrl
+
+    seasonOptions = withBgAdjust(seasonOptions, seasonBgUrl)
 
     // Generate cache key
     const cacheKey = `${seasonKey}_${seasonBgUrl}_${seasonLogoUrl}_${JSON.stringify(seasonOptions)}`
@@ -2196,7 +2246,7 @@ const doSave = async () => {
       seasonMovie,
       seasonBgUrl,
       seasonLogoUrl,
-      seasonOptions,
+      withBgAdjust(seasonOptions, seasonBgUrl),
       currentTemplate,
       currentPreset,
       libraryId,
@@ -2239,7 +2289,7 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
         server_id: 'plex-1',
         library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
       }
-      await render.send(targetMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, null, false)
+      await render.send(targetMovie, bgUrl.value, logoUrl.value, withBgAdjust(optionsPayload.value, bgUrl.value), Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, null, false)
       return true
     } catch {
       return false
@@ -2595,7 +2645,7 @@ const doSend = async () => {
         // name -- see the identical fix/comment in doSave()'s equivalent line.
         const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title }
         const seasonIndex = season.isSeries ? null : season.index
-        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex, false)
+        await render.send(seasonMovie, bgUrl.value, logoUrl.value, withBgAdjust(optionsPayload.value, bgUrl.value), Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex, false)
 
         succeeded.push(season.title)
         plexNotifyImage = plexNotifyImage || renderedPreviews.value.find(p => p.seasonKey === seasonKey)?.imageUrl || null
@@ -3177,6 +3227,7 @@ watch(
   [
     bgUrl,
     logoUrl,
+    bgAdjust,
     options,
     posterFilter,
     logoPreference,
@@ -3338,6 +3389,13 @@ watch(tmdbId, () => {
           <div v-show="sectionOpen.poster" class="acc-body">
             <div class="sub-section-title" style="margin-top: 0">Source</div>
             <label class="field-label">
+              Images
+              <select v-model="candidateKind">
+                <option value="posters">Posters</option>
+                <option value="backdrops">Backdrops ({{ (showLevelAssets.backdrops || []).length }})</option>
+              </select>
+            </label>
+            <label class="field-label" v-if="candidateKind === 'posters'">
               Filter
               <select v-model="posterFilter">
                 <option value="all">All Posters</option>
@@ -3345,8 +3403,16 @@ watch(tmdbId, () => {
                 <option value="text">With Text</option>
               </select>
             </label>
+            <label class="field-label" v-else>
+              Filter
+              <select v-model="backdropFilter">
+                <option value="all">All Backdrops</option>
+                <option value="textless">Textless Only</option>
+                <option value="text">With Text</option>
+              </select>
+            </label>
             <div class="inline-controls">
-              <label class="inline-field" v-if="posterFilter !== 'textless'">
+              <label class="inline-field" v-if="candidateKind === 'posters' && posterFilter !== 'textless'">
                 <span>Language</span>
                 <select v-model="posterLanguageFilter">
                   <option value="all">All</option>
@@ -3399,13 +3465,28 @@ watch(tmdbId, () => {
                 v-for="p in filteredPosters"
                 :key="p.url"
                 class="thumb poster-thumb"
-                :class="{ active: selectedPoster === p.url }"
+                :class="{ active: selectedPoster === p.url, 'backdrop-thumb': candidateKind === 'backdrops' }"
                 @click="selectedPoster = p.url"
               >
                 <img :src="p.thumb || p.url" alt="" />
                 <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
               </div>
             </div>
+            <button
+              v-if="filteredPosters.length"
+              type="button"
+              class="view-all-btn"
+              @click="showImagePicker = true"
+            >View all {{ candidateKind === 'backdrops' ? 'backdrops' : 'posters' }} ({{ filteredPosters.length }})</button>
+            <ImagePickerModal
+              v-if="showImagePicker"
+              :title="candidateKind === 'backdrops' ? 'Backdrops' : 'Posters'"
+              :images="filteredPosters"
+              :selected="selectedPoster"
+              :wide="candidateKind === 'backdrops'"
+              @select="(url) => (selectedPoster = url)"
+              @close="showImagePicker = false"
+            />
 
             <div class="sub-section-title">Position</div>
             <div class="slider">
@@ -3415,6 +3496,26 @@ watch(tmdbId, () => {
                 <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
               </div>
             </div>
+            <template v-if="isBackdropBg">
+            <div class="slider">
+              <label>Zoom %</label>
+              <div class="slider-row">
+                <input v-model.number="bgZoom" type="range" min="25" max="300" />
+                <input v-model.number="bgZoom" type="number" min="25" max="300" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Pan Left/Right %</label>
+              <div class="slider-row">
+                <input v-model.number="bgShiftX" type="range" min="-50" max="50" />
+                <input v-model.number="bgShiftX" type="number" min="-50" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="bg-adjust-note">
+              Zoom and pan apply to this backdrop only and are not saved to presets.
+              <button v-if="bgZoom !== 100 || bgShiftX !== 0" type="button" class="bg-adjust-reset" @click="resetBgAdjust">Reset</button>
+            </div>
+            </template>
 
             <div class="sub-section-title">Top Fade</div>
             <div class="slider">
@@ -4382,6 +4483,45 @@ watch(tmdbId, () => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.poster-thumb.backdrop-thumb {
+  width: 160px;
+  height: 90px;
+}
+
+.view-all-btn {
+  margin: 6px 0 4px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: transparent;
+  color: var(--accent, #3dd6b7);
+  cursor: pointer;
+}
+
+.view-all-btn:hover {
+  background: rgba(61, 214, 183, 0.08);
+}
+
+.bg-adjust-note {
+  font-size: 11px;
+  color: var(--muted, #8a93a6);
+  margin: 2px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bg-adjust-reset {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 .logo-strip {
