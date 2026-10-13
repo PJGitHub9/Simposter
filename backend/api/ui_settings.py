@@ -34,6 +34,42 @@ def _restore_unchanged_secrets(incoming: dict, current: dict) -> dict:
             incoming_section[field] = (current.get(section) or {}).get(field, "")
     return incoming
 
+
+# mediaServers is a list of entries, each carrying its own credential (token
+# for Plex, apiKey for Jellyfin/Emby) -- SECRET_FIELD_PATHS above only models
+# a fixed category.field shape, not a list of arbitrary entries, so this gets
+# its own small mask/restore pair rather than forcing that mechanism to
+# handle a shape it wasn't built for. Same security guarantee either way:
+# never return a real credential from GET, never let the mask placeholder
+# clobber a real stored value on save.
+def _mask_media_server_secrets(data: dict) -> dict:
+    servers = data.get("mediaServers")
+    if not isinstance(servers, list):
+        return data
+    masked = dict(data)
+    masked["mediaServers"] = [
+        {**s, "token": SECRET_MASK} if isinstance(s, dict) and s.get("token") else
+        ({**s, "apiKey": SECRET_MASK} if isinstance(s, dict) and s.get("apiKey") else s)
+        for s in servers
+    ]
+    return masked
+
+
+def _restore_unchanged_media_server_secrets(incoming: dict, current: dict) -> dict:
+    incoming_servers = incoming.get("mediaServers")
+    if not isinstance(incoming_servers, list):
+        return incoming
+    current_by_id = {s.get("id"): s for s in (current.get("mediaServers") or []) if isinstance(s, dict)}
+    for entry in incoming_servers:
+        if not isinstance(entry, dict):
+            continue
+        existing = current_by_id.get(entry.get("id")) or {}
+        if entry.get("token") == SECRET_MASK:
+            entry["token"] = existing.get("token", "")
+        if entry.get("apiKey") == SECRET_MASK:
+            entry["apiKey"] = existing.get("apiKey", "")
+    return incoming
+
 # Legacy file paths for migration check
 _settings_file = Path(settings.SETTINGS_DIR) / "ui_settings.json"
 _legacy_settings_file = Path(settings.CONFIG_DIR) / "ui_settings.json"
@@ -148,6 +184,12 @@ def _apply_runtime_settings(merged: dict):
     tv_library_mappings = plex_data.get("tvShowLibraryMappings") or []
     url = plex_data.get("url") or ""
     token = plex_data.get("token") or ""
+    # The main Plex server's "Enabled" checkbox (Settings -> Media Servers) is its
+    # 'plex-1' mediaServers entry. Disabled = Plex is off app-wide (every Plex code
+    # path checks settings.PLEX_URL), while the saved URL/token are kept.
+    _plex1 = next((s for s in (merged.get("mediaServers") or []) if isinstance(s, dict) and s.get("id") == "plex-1"), None)
+    if _plex1 is not None and _plex1.get("enabled") is False:
+        url, token = "", ""
     names = plex_data.get("movieLibraryNames") or []
     if not names and plex_data.get("movieLibraryName"):
         names = [plex_data.get("movieLibraryName")]
@@ -329,6 +371,9 @@ def _read_settings(include_env: bool = True) -> UISettings:
                     (tmdb_data.get("apiKey") and tmdb_data.get("apiKey") != "")
                 )
                 
+                if plex_data.get("ignoreEnvCredentials"):
+                    # Plex was removed in the UI -- don't resurrect it from env vars
+                    env_overrides.pop("plex", None)
                 if not has_configured_settings:
                     logger.debug("[UI_SETTINGS] Database appears empty, applying ENV overrides")
                     for nested_key, nested_values in env_overrides.items():
@@ -349,7 +394,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
 def get_ui_settings():
     settings_obj = _read_settings()
     data = settings_obj.model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False)
-    return JSONResponse(content=_mask_secrets(data))
+    return JSONResponse(content=_mask_media_server_secrets(_mask_secrets(data)))
 
 @router.get("/ping")
 def api_ping():
@@ -361,7 +406,7 @@ def api_ping():
 
 
 @router.post("/ui-settings")
-def save_ui_settings_endpoint(payload: UISettings):
+def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bool = False):
     try:
         # Merge defaults + current + incoming payload to avoid losing fields
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False, exclude_unset=False)
@@ -375,6 +420,7 @@ def save_ui_settings_endpoint(payload: UISettings):
         # secret field still holds that placeholder, the user didn't change it, so keep
         # the real stored value rather than clobbering it with the literal placeholder.
         incoming = _restore_unchanged_secrets(incoming, current)
+        incoming = _restore_unchanged_media_server_secrets(incoming, current)
         merged = {**defaults, **current, **incoming}
         for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {
@@ -382,6 +428,52 @@ def save_ui_settings_endpoint(payload: UISettings):
                 **current.get(nested_key, {}),
                 **incoming.get(nested_key, {}),
             }
+        # mediaServers/libraryGroups are top-level LIST fields, unlike the dict-shaped
+        # keys above -- {**current, **incoming} means `incoming`'s value wins outright
+        # whenever the key is present, with no protection at all against an incoming
+        # payload that's empty/incomplete for a reason unrelated to the user actually
+        # wanting to clear it (a stale in-memory store on the sending tab, a request
+        # racing an in-flight load, etc.). Both are bound directly to the frontend
+        # store with no local staging ref (Quirk #79/#119), so every real settings
+        # save is supposed to echo back the CURRENT full list -- an empty incoming
+        # list when the DB already has real entries is far more likely a bug on the
+        # sending side than a deliberate "remove every server/group" action, and this
+        # app has already been burned twice by exactly this shape of silent-wipe bug
+        # (Quirk #60's original missing-field case, Quirk #62's libraryGroups case).
+        # Reported live: a real mediaServers wipe from an unrelated settings save left
+        # Media Mirror's "Run Now" failing with "Source server 'plex-1' is not
+        # configured/enabled" even though every other part of the UI still showed
+        # Plex as configured (libraryGroups, a separate setting, was untouched).
+        for list_key in ("mediaServers", "libraryGroups"):
+            # The frontend sets allow_empty_media_servers only when the user
+            # actually removed server(s) this save -- removing the LAST one
+            # legitimately sends an empty list, which this guard would
+            # otherwise silently undo.
+            if list_key == "mediaServers" and allow_empty_media_servers:
+                continue
+            incoming_list = incoming.get(list_key)
+            current_list = current.get(list_key)
+            if isinstance(current_list, list) and current_list and (not isinstance(incoming_list, list) or not incoming_list):
+                logger.warning(
+                    "[UI_SETTINGS] Incoming '%s' was empty/missing but %d already-saved entr%s existed -- "
+                    "keeping the existing entries instead of silently wiping them",
+                    list_key, len(current_list), "y" if len(current_list) == 1 else "ies",
+                )
+                merged[list_key] = current_list
+
+        # Track an explicit Plex removal (see PlexSettings.ignoreEnvCredentials).
+        # Computed here rather than trusted from the payload: the frontend
+        # rebuilds the plex object from scratch on every save and never sends it.
+        current_plex = current.get("plex") or {}
+        merged_plex = merged.get("plex") or {}
+        if (merged_plex.get("url") or "").strip():
+            merged_plex["ignoreEnvCredentials"] = False
+        elif (current_plex.get("url") or "").strip():
+            merged_plex["ignoreEnvCredentials"] = True
+            logger.info("[UI_SETTINGS] Plex removed -- PLEX_URL/PLEX_TOKEN environment variables will be ignored from now on")
+        else:
+            merged_plex["ignoreEnvCredentials"] = bool(current_plex.get("ignoreEnvCredentials"))
+        merged["plex"] = merged_plex
 
         merged = _normalize_plex_payload(merged)
         _apply_runtime_settings(merged)
@@ -443,7 +535,7 @@ def save_ui_settings_endpoint(payload: UISettings):
         env_overrides = _env_overrides()
         for nested_key, nested_values in env_overrides.items():
             merged_with_env[nested_key] = {**merged_with_env.get(nested_key, {}), **nested_values}
-        return _mask_secrets(merged_with_env)
+        return _mask_media_server_secrets(_mask_secrets(merged_with_env))
     except Exception as e:
         logger.error(f"[UI_SETTINGS] Failed to save settings: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")

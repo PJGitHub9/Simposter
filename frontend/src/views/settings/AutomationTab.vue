@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { copyToClipboard } from '@/services/clipboard'
+import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 
 interface Preset {
   id: string
@@ -108,15 +110,68 @@ onMounted(() => {
 })
 
 const webhookType = ref<'radarr' | 'sonarr' | 'tautulli'>('radarr')
-const webhookTemplate = ref('universal')
+// 'universal' was never a real template_id (backend/templates/universal.py
+// is a shared rendering-utility module, not a template -- the two real ids
+// are 'uniformlogo' and 'kometa') -- with no option matching this default,
+// the Template <select> below rendered permanently blank until the user
+// touched it themselves. Defaults to 'uniformlogo' now, the only template
+// that ever makes sense here: Radarr/Sonarr/Tautulli webhooks always
+// generate movie/TV posters, never collections, so 'kometa' (collections-
+// only, per this app's own Testing Checklist precedent for the Retry Queue
+// picker) is excluded from webhookTemplates below rather than offered.
+const webhookTemplate = ref('uniformlogo')
 const webhookPreset = ref('default')
 const webhookIncludeSeasons = ref(true)
 const webhookEventTypes = ref('added,watched')
 const copiedWebhook = ref(false)
 
-const webhookTemplates = computed(() => {
-  return Object.keys(availablePresets.value)
+// The webhook's target is a Library Group (Settings -> Libraries), not an
+// individual server library: a group's whole point is "these libraries are
+// the same content", so a webhook for it looks the item up across the
+// group's libraries and delivers the poster to every one of them (see
+// _resolve_webhook_target()'s group_id handling in webhooks.py). '' = no
+// group -- the backend's default lookup (Plex's libraries when Plex is
+// configured, otherwise every Jellyfin/Emby library in your groups).
+// Tautulli handles both media types in one webhook, so it isn't offered a
+// picker here.
+const settingsStore = useSettingsStore()
+const webhookGroupId = ref('')
+
+interface WebhookGroupOption {
+  id: string
+  label: string
+  destinations: string[]
+}
+const webhookGroupOptions = computed((): WebhookGroupOption[] => {
+  const mediaType = webhookType.value === 'sonarr' ? 'tv' : 'movie'
+  return settingsStore.libraryGroups.value
+    .filter(g => g.mediaType === mediaType && g.members.length > 0)
+    .map(g => ({
+      id: g.id,
+      label: g.name || g.members[0]?.libraryName || g.id,
+      destinations: g.members.map(m =>
+        `${mediaServerLabel(m.serverId, settingsStore.mediaServers.value)}: ${m.libraryName || m.libraryId}`
+      ),
+    }))
 })
+const selectedWebhookGroup = computed(() =>
+  webhookGroupOptions.value.find(o => o.id === webhookGroupId.value)
+)
+// A group picked for Radarr doesn't exist under Sonarr (and vice versa).
+watch(webhookType, () => { webhookGroupId.value = '' })
+
+
+const webhookTemplates = computed(() => {
+  return Object.keys(availablePresets.value).filter(t => t !== 'kometa')
+})
+// availablePresets loads asynchronously (onMounted fetch) -- once the real
+// list is in, make sure webhookTemplate actually points at something valid
+// rather than staying on its initial default if that default ever drifts.
+watch(webhookTemplates, (templates) => {
+  if (templates.length > 0 && !templates.includes(webhookTemplate.value)) {
+    webhookTemplate.value = templates.includes('uniformlogo') ? 'uniformlogo' : templates[0]!
+  }
+}, { immediate: true })
 
 const webhookPresets = computed((): Preset[] => {
   const templateData = availablePresets.value[webhookTemplate.value]
@@ -127,11 +182,24 @@ const webhookPresets = computed((): Preset[] => {
 
 const generatedWebhookUrl = computed(() => {
   const baseUrl = window.location.origin.replace(':5173', ':8003') // Replace frontend port with API port
+  // Readable ?group=<name> when the name is unique for this media type
+  // (the backend matches it case-insensitively); the long internal id only
+  // when two groups share a name. Note: renaming the group changes the URL.
+  let extraSuffix = ''
+  const g = selectedWebhookGroup.value
+  if (g) {
+    const sameName = webhookGroupOptions.value.filter(o => o.label.trim().toLowerCase() === g.label.trim().toLowerCase())
+    extraSuffix = sameName.length === 1
+      ? `group=${encodeURIComponent(g.label.trim())}`
+      : `group_id=${encodeURIComponent(g.id)}`
+  }
 
   if (webhookType.value === 'radarr') {
-    return `${baseUrl}/api/webhook/radarr/${webhookTemplate.value}/${webhookPreset.value}`
+    const base = `${baseUrl}/api/webhook/radarr/${webhookTemplate.value}/${webhookPreset.value}`
+    return extraSuffix ? `${base}?${extraSuffix}` : base
   } else if (webhookType.value === 'sonarr') {
-    return `${baseUrl}/api/webhook/sonarr/${webhookTemplate.value}/${webhookPreset.value}?include_seasons=${webhookIncludeSeasons.value}`
+    const base = `${baseUrl}/api/webhook/sonarr/${webhookTemplate.value}/${webhookPreset.value}?include_seasons=${webhookIncludeSeasons.value}`
+    return extraSuffix ? `${base}&${extraSuffix}` : base
   } else if (webhookType.value === 'tautulli') {
     return `${baseUrl}/api/webhook/tautulli?template_id=${webhookTemplate.value}&preset_id=${webhookPreset.value}&event_types=${webhookEventTypes.value}`
   }
@@ -299,11 +367,16 @@ const webhookInstructions = computed(() => {
 
           <label>
             <span class="label-text">Template</span>
-            <select v-model="webhookTemplate">
+            <!-- Only ever offered as a real choice once a 2nd non-Kometa
+                 template exists -- today there's exactly one (uniformlogo),
+                 so a one-item dropdown would just be clutter with nothing
+                 to actually choose. -->
+            <select v-if="webhookTemplates.length > 1" v-model="webhookTemplate">
               <option v-for="template in webhookTemplates" :key="template" :value="template">
                 {{ template }}
               </option>
             </select>
+            <div v-else class="webhook-static-field">{{ webhookTemplate }}</div>
           </label>
 
           <label>
@@ -314,6 +387,25 @@ const webhookInstructions = computed(() => {
               </option>
             </select>
           </label>
+
+          <!-- Radarr/Sonarr only -- Tautulli covers both media types in one
+               webhook, so a single group picker doesn't map to it. -->
+          <label v-if="webhookType === 'radarr' || webhookType === 'sonarr'">
+            <span class="label-text">Library group</span>
+            <select v-model="webhookGroupId">
+              <option value="">Any (search all libraries)</option>
+              <option v-for="g in webhookGroupOptions" :key="g.id" :value="g.id">{{ g.label }}</option>
+            </select>
+            <span class="help-text">
+              Posters from this webhook go to every library in the chosen group.
+              Manage groups in Settings &rarr; Libraries. Renaming a group changes
+              its webhook URL, so update it in Radarr/Sonarr afterwards.
+            </span>
+          </label>
+
+          <div v-if="(webhookType === 'radarr' || webhookType === 'sonarr') && selectedWebhookGroup" class="webhook-cross-server-note">
+            <strong>Delivers to:</strong> {{ selectedWebhookGroup.destinations.join(', ') }}
+          </div>
 
           <!-- Sonarr-specific option -->
           <label v-if="webhookType === 'sonarr'" class="checkbox-label">
@@ -481,6 +573,18 @@ input[type="number"] {
   font-size: 14px;
 }
 
+.webhook-static-field {
+  width: 100%;
+  max-width: 400px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-muted);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
 select:focus,
 input:focus {
   outline: none;
@@ -498,6 +602,23 @@ input:focus {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
+}
+
+.webhook-cross-server-note {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  line-height: 1.5;
+}
+
+.webhook-cross-server-note strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-right: 6px;
 }
 
 .webhook-url-output {

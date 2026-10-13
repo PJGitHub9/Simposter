@@ -81,6 +81,31 @@ def init_scheduler(restore_from_settings: bool = True):
             else:
                 logger.info("[SCHEDULER] Poster retry is disabled in settings")
 
+            # Restore every Library Group's own scheduled media mirror job
+            # (Quirk #123's scheduler follow-up) -- genuinely per-group, not
+            # a single global on/off the way scan/cleanup/retry are above,
+            # since MediaMirrorConfig.scheduleEnabled/scheduleCron live on
+            # each group's own `mirror` config.
+            library_groups = settings_dict.get("libraryGroups") or []
+            restored_mirror_count = 0
+            for group in library_groups:
+                mirror = (group or {}).get("mirror") or {}
+                if not mirror.get("enabled") or not mirror.get("scheduleEnabled"):
+                    continue
+                cron_expr = mirror.get("scheduleCron")
+                members = group.get("members") or []
+                if not cron_expr or not members:
+                    continue
+                # Any one real member identifies this group server-side
+                # (get_library_group_for() matches on ANY member, not
+                # specifically the first) -- the job itself always runs the
+                # group's OWN saved source/targets, not this particular pair.
+                first_member = members[0]
+                if schedule_media_mirror(first_member.get("serverId"), first_member.get("libraryId"), group.get("mediaType"), cron_expr):
+                    restored_mirror_count += 1
+            if restored_mirror_count:
+                logger.info("[SCHEDULER] Restored %d scheduled media mirror job(s)", restored_mirror_count)
+
         except Exception as e:
             logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e, exc_info=True)
 
@@ -344,6 +369,105 @@ def get_cleanup_schedule() -> Optional[dict]:
     }
 
 
+def _media_mirror_job_id(server_id: str, library_id: str, media_type: str) -> str:
+    return f"media_mirror_{server_id}_{library_id}_{media_type}"
+
+
+def schedule_media_mirror(server_id: str, library_id: str, media_type: str, cron_expression: str) -> bool:
+    """Schedules a recurring Media Mirror sync for one Library Group (Quirk
+    #123's scheduler follow-up). Unlike scan/cleanup/retry above (one single
+    global job each), this is genuinely per-group -- MediaMirrorConfig's
+    scheduleEnabled/scheduleCron live on the owning group's own `mirror`
+    config, not a global setting, so each group that opts in gets its own
+    independent APScheduler job, keyed by (server_id, library_id, media_type)
+    the same way mirror_status/_status_key() already are in api/media_mirror.py.
+    Runs a full sync every time it fires -- true incremental change-detection
+    (only re-copying items whose source image actually changed since the last
+    run) is still deliberately deferred, per Quirk #123's own original scope
+    note: it needs a verified per-item "has this changed" signal (Plex's
+    thumb/art path version suffix, Jellyfin's ImageTags hash) that hasn't
+    been checked against a real server yet. A full sync on a schedule is
+    always correct, just not bandwidth-optimal for a large library re-run
+    often -- a real, useful default, not a placeholder."""
+    if _scheduler is None:
+        logger.error("[SCHEDULER] Scheduler not initialized, call init_scheduler() first")
+        return False
+    try:
+        trigger = _build_cron_trigger(cron_expression)
+        if trigger is None:
+            return False
+
+        job_id = _media_mirror_job_id(server_id, library_id, media_type)
+        if _scheduler.get_job(job_id):
+            _scheduler.remove_job(job_id)
+            logger.info("[SCHEDULER] Removed existing media mirror job for %s/%s/%s", server_id, library_id, media_type)
+
+        _scheduler.add_job(
+            func=_run_scheduled_media_mirror,
+            trigger=trigger,
+            id=job_id,
+            name=f"Media Mirror ({server_id}/{library_id}/{media_type})",
+            args=[server_id, library_id, media_type],
+            replace_existing=True,
+        )
+
+        logger.info("[SCHEDULER] Scheduled media mirror for %s/%s/%s with cron: %s", server_id, library_id, media_type, cron_expression)
+        next_run = _scheduler.get_job(job_id).next_run_time
+        logger.info("[SCHEDULER] Next media mirror run for %s/%s/%s: %s", server_id, library_id, media_type, next_run)
+        return True
+
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to schedule media mirror for %s/%s/%s: %s", server_id, library_id, media_type, e)
+        return False
+
+
+def cancel_media_mirror(server_id: str, library_id: str, media_type: str) -> bool:
+    """Cancel one group's scheduled media mirror job, if any."""
+    if _scheduler is None:
+        return False
+    try:
+        job_id = _media_mirror_job_id(server_id, library_id, media_type)
+        if _scheduler.get_job(job_id):
+            _scheduler.remove_job(job_id)
+            logger.info("[SCHEDULER] Cancelled media mirror job for %s/%s/%s", server_id, library_id, media_type)
+            return True
+        return False
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to cancel media mirror for %s/%s/%s: %s", server_id, library_id, media_type, e)
+        return False
+
+
+def get_media_mirror_schedule(server_id: str, library_id: str, media_type: str) -> Optional[dict]:
+    """Get information about one group's current media mirror schedule."""
+    if _scheduler is None:
+        return None
+    job = _scheduler.get_job(_media_mirror_job_id(server_id, library_id, media_type))
+    if job is None:
+        return None
+    return {
+        "job_id": job.id,
+        "name": job.name,
+        "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+        "trigger": str(job.trigger),
+    }
+
+
+def _run_scheduled_media_mirror(server_id: str, library_id: str, media_type: str):
+    """Internal function the scheduler calls for one group's scheduled mirror
+    run. A failure here is logged and swallowed, not raised -- matching
+    _run_cleanup()/_run_library_scan() below, a bad run must never crash the
+    scheduler thread or take down any other scheduled job (including another
+    group's own mirror schedule)."""
+    try:
+        from .api.media_mirror import _run_mirror
+
+        logger.info("[SCHEDULER] ========== SCHEDULED MEDIA MIRROR TRIGGERED (%s/%s/%s) ==========", server_id, library_id, media_type)
+        _run_mirror(server_id, library_id, media_type, scheduled=True)
+        logger.info("[SCHEDULER] ========== SCHEDULED MEDIA MIRROR FINISHED (%s/%s/%s) ==========", server_id, library_id, media_type)
+    except Exception as e:
+        logger.error("[SCHEDULER] Scheduled media mirror failed for %s/%s/%s: %s", server_id, library_id, media_type, e, exc_info=True)
+
+
 def _run_cleanup(categories: List[str], history_days: int = 180):
     """Internal function the scheduler calls -- scans, then moves every matched
     candidate in `categories` to the cleanup trash (never permanently deletes;
@@ -383,39 +507,133 @@ def _run_library_scan(library_ids: Optional[List[str]] = None):
         logger.info("[SCHEDULER] Starting scheduled library scan at %s (library_ids=%s)",
                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"), library_ids or "all")
 
-        # Call the scan function directly with force_poster_refresh=True
-        # This ensures posters are re-downloaded from Plex during scheduled scans
-        if library_ids:
-            # Scan each library individually
-            for library_id in library_ids:
+        # force_poster_refresh=False (changed from True) -- a routine scheduled
+        # scan's job is catching new/removed content, not re-verifying every
+        # unchanged item's art against Plex every single run. Forcing a full
+        # re-download+re-encode of every poster/logo/backdrop/square_art on
+        # every scheduled run (often nightly) was real, repeated, avoidable
+        # CPU/network cost for a library that rarely changes wholesale between
+        # runs. A genuine "re-sync everything" need is covered by the manual
+        # "Force Refresh All Art" action (Settings -> Libraries) instead.
+        from .config import settings as _cfg
+        from . import database as _db
+        plex_configured = bool(_cfg.PLEX_URL and _cfg.PLEX_TOKEN)
+
+        # What to scan. Entries are either "group:<id>" (a Library Group --
+        # every server in it; what Settings -> Libraries saves now) or a bare
+        # Plex library id (selections saved before groups were selectable,
+        # still honored). Empty = everything on every server.
+        groups = (_db.get_ui_settings() or {}).get("libraryGroups") or []
+        selected_group_ids = {str(x)[6:] for x in (library_ids or []) if str(x).startswith("group:")}
+        legacy_plex_ids = [x for x in (library_ids or []) if not str(x).startswith("group:")]
+        if selected_group_ids:
+            scope_groups = [g for g in groups if g.get("id") in selected_group_ids]
+            plex_scope = [m.get("libraryId") for g in scope_groups for m in g.get("members") or []
+                          if m.get("serverId") == "plex-1" and m.get("libraryId")]
+            scan_all_plex = False
+        else:
+            scope_groups = groups
+            plex_scope = legacy_plex_ids
+            scan_all_plex = not legacy_plex_ids
+
+        # 1. Plex. A Plex scan also scans the Jellyfin/Emby libraries linked to
+        #    each scanned Plex library (api_scan_library() calls
+        #    scan_all_linked_plex_libraries() itself), so those aren't scanned
+        #    again below. Skipped silently when Plex isn't configured.
+        if plex_configured and (scan_all_plex or plex_scope):
+            for library_id in ([None] if scan_all_plex else plex_scope):
                 try:
-                    result = api_scan_library(library_id=library_id, force_poster_refresh=True)
-                    logger.info("[SCHEDULER] Library scan completed for library_id=%s: %s movies, %s TV shows, %s collections",
-                               library_id, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
+                    result = api_scan_library(library_id=library_id, force_poster_refresh=False)
+                    logger.info("[SCHEDULER] Plex scan completed for %s in %.1fs: %s movies, %s TV shows, %s collections",
+                                library_id or "all libraries", time.time() - scan_start,
+                                result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
                 except HTTPException as e:
                     if e.status_code == 409:
-                        logger.warning("[SCHEDULER] Library scan already in progress for library_id=%s", library_id)
+                        logger.warning("[SCHEDULER] Plex scan already in progress (%s)", library_id or "all libraries")
                     else:
-                        logger.error("[SCHEDULER] Library scan failed for library_id=%s: %s", library_id, e.detail)
+                        logger.error("[SCHEDULER] Plex scan failed for %s: %s", library_id or "all libraries", e.detail)
                 except Exception as e:
-                    logger.error("[SCHEDULER] Failed to scan library_id=%s: %s", library_id, e)
-        else:
-            # Scan all libraries
-            try:
-                result = api_scan_library(library_id=None, force_poster_refresh=True)
-                elapsed = time.time() - scan_start
-                logger.info("[SCHEDULER] Library scan completed in %.1f seconds: %s movies, %s TV shows, %s collections",
-                           elapsed, result.get("movies_count", 0), result.get("tv_shows_count", 0), result.get("collections_count", 0))
-            except HTTPException as e:
-                if e.status_code == 409:
-                    logger.warning("[SCHEDULER] Library scan already in progress")
-                else:
-                    logger.error("[SCHEDULER] Library scan failed: %s", e.detail)
+                    logger.error("[SCHEDULER] Plex scan failed for %s: %s", library_id or "all libraries", e)
+
+        # 2. Jellyfin/Emby libraries the Plex scan above didn't already cover:
+        #    groups with no Plex library, or every group when Plex isn't
+        #    configured. With a legacy Plex-only selection, all such groups are
+        #    still scanned, matching the old behavior.
+        try:
+            _scan_standalone_nonplex_groups(scope_groups, plex_configured)
+        except Exception as e:
+            logger.error("[SCHEDULER] Failed to scan Jellyfin/Emby libraries: %s", e, exc_info=True)
 
         logger.info("[SCHEDULER] ========== SCHEDULED SCAN FINISHED ==========")
 
     except Exception as e:
         logger.error("[SCHEDULER] Unexpected error during scheduled library scan: %s", e, exc_info=True)
+
+
+def _scan_standalone_nonplex_groups(groups: Optional[list] = None, plex_configured: bool = True) -> None:
+    """Scans the Jellyfin/Emby libraries of `groups` (default: every Library
+    Group) that a Plex scan doesn't already cover: groups with no Plex member,
+    or every group's Jellyfin/Emby members when Plex isn't configured at all.
+    (A Plex scan scans the Jellyfin/Emby libraries linked to each Plex library
+    itself, via scan_all_linked_plex_libraries().) Reuses the same scoped
+    per-library scan each group's own "Scan" button makes."""
+    from . import database as db
+    from .api.media_server import api_scan_media_server
+
+    if groups is None:
+        groups = (db.get_ui_settings() or {}).get("libraryGroups") or []
+    standalone_members = []
+    for group in groups:
+        members = group.get("members") or []
+        if not members:
+            continue
+        if plex_configured and any(m.get("serverId") == "plex-1" for m in members):
+            continue
+        media_type = "movie" if group.get("mediaType") == "movie" else "tv"
+        for member in members:
+            server_id = member.get("serverId")
+            library_id = member.get("libraryId")
+            if server_id and library_id and server_id != "plex-1":
+                standalone_members.append((server_id, library_id, media_type))
+
+    if not standalone_members:
+        return
+
+    import time
+    from fastapi import HTTPException
+    from .api.movies import scan_status
+
+    def _wait_for_other_scan(max_wait_seconds: int = 1800) -> bool:
+        """A manual scan (Settings → Scan) can be running when the scheduled
+        job reaches this step -- api_scan_media_server() then refuses with a
+        409. Wait for it to finish instead of logging a failure and silently
+        skipping this library until the next scheduled run."""
+        waited = 0
+        while scan_status.get("state") == "running" and waited < max_wait_seconds:
+            time.sleep(10)
+            waited += 10
+        return scan_status.get("state") != "running"
+
+    logger.info("[SCHEDULER] Scanning %d standalone Jellyfin/Emby library group member(s) with no Plex counterpart", len(standalone_members))
+    for server_id, library_id, media_type in standalone_members:
+        for attempt in (1, 2):
+            try:
+                result = api_scan_media_server(server_id=server_id, library_id=library_id, media_type=media_type)
+                logger.info("[SCHEDULER] Standalone scan for %s library %s: %d item(s)", server_id, library_id,
+                            result.get("total_movies_found", 0) + result.get("total_shows_found", 0))
+                break
+            except HTTPException as e:
+                if e.status_code == 409 and attempt == 1 and _wait_for_other_scan():
+                    continue  # the other scan finished -- try this library again
+                if e.status_code == 409:
+                    logger.info("[SCHEDULER] Skipped %s library %s -- another scan was still running after waiting; it'll be picked up next run",
+                                server_id, library_id)
+                else:
+                    logger.error("[SCHEDULER] Standalone scan failed for %s library %s: %s", server_id, library_id, e.detail)
+                break
+            except Exception as e:
+                logger.error("[SCHEDULER] Standalone scan failed for %s library %s: %s", server_id, library_id, e)
+                break
 
 
 _retry_job_id = "poster_retry_job"

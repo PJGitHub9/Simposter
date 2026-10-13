@@ -10,8 +10,11 @@ import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
+import SendToServerModal from './SendToServerModal.vue'
 import UploadPosterModal from './UploadPosterModal.vue'
 import { getApiBase } from '../../services/apiBase'
+import { notifySendSummary } from '../../services/sendNotify'
+import { mediaServerLabel } from '../../services/mediaServerLabel'
 
 // Simple debounce helper
 function debounce<T extends (...args: any[]) => any>(fn: T, delay: number): (...args: Parameters<T>) => void {
@@ -29,6 +32,26 @@ const { movies: globalMovies, setMoviePoster } = useMovies()
 const route = useRoute()
 
 const apiBase = getApiBase()
+
+// See EditorPane.vue's identical computed for the full reasoning -- a
+// Jellyfin/Emby-sourced show (server_id !== 'plex-1') has no real Plex
+// rating_key for /api/plex/send to look up, so a merged item's OTHER
+// linked server(s) are what doSend() actually targets for it instead
+// (getLinkedServersForItem(), see doSend()'s own comment).
+const isNonPlexItem = computed(() => !!props.movie.server_id && props.movie.server_id !== 'plex-1')
+// `showServerPreviewToggle`/`showMultiServerSend` are declared further down
+// (after `selectedPosterType`/`selectedSeasons`, which these depend on) --
+// safe to reference here since computed() getters are lazy and never
+// actually run until the whole module's top-level script has finished
+// executing (i.e. well after every const below is initialized).
+const currentPosterLabel = computed(() => {
+  if (showServerPreviewToggle.value) return `Current Poster (${serverTypeLabel(viewingServerId.value)})`
+  return isNonPlexItem.value ? 'Current Poster' : 'Current Plex Poster'
+})
+const currentLogoLabel = computed(() => {
+  if (showServerPreviewToggle.value) return `Current Logo (${serverTypeLabel(viewingServerId.value)})`
+  return isNonPlexItem.value ? 'Current Logo' : 'Current Plex Logo'
+})
 
 const tmdbId = ref<number | null>(null)
 const tvdbId = ref<number | null>(null)
@@ -201,6 +224,140 @@ type PosterType = 'series' | 'season'
 const selectedPosterType = computed<PosterType>(() => {
   const season = currentSeason.value
   return season && !season.isSeries ? 'season' : 'series'
+})
+
+// ── Multi-server preview + send — series AND season (Phase 6c + Quirk #100) ─
+// Originally shipped series-only (Phase 6c), on the wrongly-unverified
+// assumption that Jellyfin has no season-level item resolution at all --
+// corrected the same session after the user pushed back and a live check
+// against a real Jellyfin server confirmed season items ARE individually
+// addressable (see MediaServerClient.find_season_by_index()'s own docstring,
+// CLAUDE.md Quirk #100). `other_servers` (Quirk #67's dedup output) is still
+// only ever populated at the SHOW level though -- a season's own item id on
+// each linked server has to be resolved on demand via a new backend
+// endpoint (GET /api/media-server/resolve-season-item), cached per season
+// key so switching back to an already-resolved season doesn't re-fetch.
+type LinkedServer = { server_id: string; rating_key: string }
+const seasonLinkedServersCache = ref<Record<string, LinkedServer[]>>({})
+async function resolveSeasonLinkedServers(seasonKey: string, seasonIndex: number) {
+  if (seasonLinkedServersCache.value[seasonKey]) return
+  const others = props.movie.other_servers || []
+  if (!others.length) {
+    seasonLinkedServersCache.value = { ...seasonLinkedServersCache.value, [seasonKey]: [] }
+    return
+  }
+  const resolved: LinkedServer[] = []
+  await Promise.all(others.map(async (s) => {
+    try {
+      const url = `${apiBase}/api/media-server/resolve-season-item?server_id=${encodeURIComponent(s.server_id)}&series_item_id=${encodeURIComponent(s.rating_key)}&season_index=${seasonIndex}`
+      const res = await fetch(url)
+      if (res.ok) {
+        const data = await res.json()
+        if (data.item_id) resolved.push({ server_id: s.server_id, rating_key: data.item_id })
+      }
+    } catch { /* ignore -- that server just won't appear as an option for this season */ }
+  }))
+  seasonLinkedServersCache.value = { ...seasonLinkedServersCache.value, [seasonKey]: resolved }
+}
+// Kicks off resolution the moment a season with potential linked servers is
+// focused, so the ‹ › toggle/send picker are ready (or correctly absent) by
+// the time the user looks at the preview area, not after an extra click.
+watch(currentSeason, (season) => {
+  if (season && !season.isSeries && (props.movie.other_servers || []).length > 0) {
+    resolveSeasonLinkedServers(season.key, season.index)
+  }
+}, { immediate: true })
+
+// Series-level linked servers, unconditional -- `other_servers` is always
+// show-level regardless of which season is focused. Used directly whenever
+// viewing the series, and separately by fetchExistingLogo() below (logos
+// are always series-level in this app's model, by design -- season posters
+// don't have their own separate logo concept -- so logo preview needs the
+// SERIES' cross-server mapping even while a season poster is focused).
+const seriesLinkedServers = computed<LinkedServer[]>(() => {
+  const current: LinkedServer = { server_id: props.movie.server_id || 'plex-1', rating_key: props.movie.key }
+  const others = (props.movie.other_servers || []).map(s => ({ server_id: s.server_id, rating_key: s.rating_key }))
+  return [current, ...others]
+})
+const linkedServers = computed<LinkedServer[]>(() => {
+  const season = currentSeason.value
+  if (season && !season.isSeries) {
+    // The season's OWN item id on the show's home server is just its own
+    // key (already correct, no resolution needed -- it lives on whichever
+    // server the show itself is on). Any OTHER linked server's copy of this
+    // season comes from the async resolution above.
+    const current: LinkedServer = { server_id: props.movie.server_id || 'plex-1', rating_key: season.key }
+    return [current, ...(seasonLinkedServersCache.value[season.key] || [])]
+  }
+  return seriesLinkedServers.value
+})
+function serverTypeLabel(serverId: string): string {
+  return mediaServerLabel(serverId, settings.mediaServers.value)
+}
+// Preview toggle (‹ ›) is available whenever the currently-focused season/
+// series actually has more than one resolved server -- for a season, this
+// can briefly be false while resolution is still in flight (the toggle
+// simply appears a moment later once it resolves, rather than needing a
+// separate loading state).
+const showServerPreviewToggle = computed(() => linkedServers.value.length > 1)
+// Purely a display concern now, not a gate on whether sending is allowed --
+// shown whenever the currently-viewed season/series has more than one
+// resolved server, so the "which server(s)" picker/label makes sense to
+// look at. Used to also require selectedSeasons.size === 1 (a sole
+// selection matching the current view), which blocked sending altogether
+// whenever series+season (or several seasons) were selected together on a
+// non-Plex show -- user-reported directly: "cant send when both
+// season/series is selected." doSend()/doSendLogoOnly() no longer depend on
+// this for whether the send itself can proceed (they now branch on
+// isNonPlexItem and loop over every selected item, each resolving its own
+// servers via getLinkedServersForItem()) -- only on whether a specific-
+// server-vs-"all" choice is worth surfacing for the item currently in view.
+const showMultiServerSend = computed(() => linkedServers.value.length > 1)
+
+const viewingServerId = ref(props.movie.server_id || 'plex-1')
+watch(() => props.movie.key, () => { viewingServerId.value = props.movie.server_id || 'plex-1' })
+// Switching seasons can leave viewingServerId pointed at a server that
+// hasn't resolved (or doesn't exist) for the NEW season -- reset back to
+// the show's own home server rather than silently showing a stale/empty
+// preview for a server that no longer applies here.
+watch(currentSeason, () => { viewingServerId.value = props.movie.server_id || 'plex-1' })
+const viewingRatingKey = computed(() =>
+  linkedServers.value.find(s => s.server_id === viewingServerId.value)?.rating_key || currentSeason.value?.key || props.movie.key
+)
+// True whenever the poster/logo currently being fetched is the item's own
+// home-server copy (series or season alike) -- gates whether
+// fetchExistingPoster()/fetchExistingLogo() are allowed to write into the
+// shared cross-component poster cache (grid thumbnails must never flip just
+// because a linked server's art is being previewed here) -- mirrors
+// EditorPane.vue's identical `isOwnServer` guard.
+const isOwnServerView = computed(() => viewingServerId.value === (props.movie.server_id || 'plex-1'))
+function cycleViewingServer(direction: 1 | -1) {
+  const ids = linkedServers.value.map(s => s.server_id)
+  const idx = ids.indexOf(viewingServerId.value)
+  viewingServerId.value = ids[(idx + direction + ids.length) % ids.length]!
+}
+// Replaces the old single-string sendTarget ('all' or one specific
+// server_id) with a real multi-select set, driven by SendToServerModal.vue
+// -- the inline dropdown + separate checkbox + button row this used to be
+// felt cluttered (user-reported directly). Defaults to every currently-
+// known linked server, matching the old 'all' default exactly, so a
+// Send Logo Only click (which never opens the modal) still reaches every
+// linked server by default without the user having to pick anything first.
+const sendTargetIds = ref<Set<string>>(new Set())
+watch(linkedServers, (servers) => {
+  const validIds = new Set(servers.map(s => s.server_id))
+  const stillValid = Array.from(sendTargetIds.value).filter(id => validIds.has(id))
+  if (stillValid.length === 0) {
+    sendTargetIds.value = validIds
+  } else {
+    sendTargetIds.value = new Set(stillValid)
+  }
+}, { immediate: true })
+const showSendModal = ref(false)
+const sendModalOptions = computed(() => linkedServers.value.map(s => ({ server_id: s.server_id, label: serverTypeLabel(s.server_id) })))
+const sendButtonLabel = computed(() => {
+  if (!showMultiServerSend.value) return isNonPlexItem.value ? 'Send Poster' : 'Send to Plex'
+  return 'Send to Media Server'
 })
 
 // Rendered preview carousel
@@ -1463,14 +1620,21 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
     const refreshFlag = typeof forceRefresh === 'boolean'
       ? forceRefresh
       : (forceRefresh instanceof Event ? true : false)
-    
-    // Use current season key if available, otherwise use series key
-    const targetKey = currentSeason.value?.key || props.movie.key
-    
-    const res = await fetch(`${apiBase}/api/movie/${targetKey}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
+
+    // Multi-server-aware for both series and season now (Quirk #100) --
+    // viewingRatingKey resolves correctly either way, reducing to the
+    // season's/series' own key (an exact no-op) for any show with no
+    // resolved linked servers, same as before season support existed.
+    const targetKey = viewingRatingKey.value
+
+    // A season's own rating_key is never individually scanned/cached (only
+    // the series-level item is), so the backend's rating_key -> server_id
+    // DB lookup can't resolve it and silently defaults to Plex -- passing
+    // the server we already know we're viewing sidesteps that entirely.
+    const res = await fetch(`${apiBase}/api/movie/${targetKey}/poster?meta=1&server_id=${encodeURIComponent(viewingServerId.value)}${refreshFlag ? '&force_refresh=1' : ''}`)
     if (!res.ok) {
       existingPoster.value = null
-      updateGlobalPosterCache(targetKey, null)
+      if (isOwnServerView.value) updateGlobalPosterCache(targetKey, null)
       posterRefreshKey.value += 1
       return
     }
@@ -1480,28 +1644,37 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
       existingPoster.value = data.url.startsWith('http')
         ? data.url
         : `${apiBase}${data.url}`
-      updateGlobalPosterCache(targetKey, existingPoster.value)
-
-      // Update the thumbnail for the target season/series in the left list
-      seasons.value = seasons.value.map(s => s.key === targetKey ? { ...s, thumb: existingPoster.value || s.thumb } : s)
+      if (isOwnServerView.value) {
+        updateGlobalPosterCache(targetKey, existingPoster.value)
+        // Update the thumbnail for the target season/series in the left list
+        seasons.value = seasons.value.map(s => s.key === targetKey ? { ...s, thumb: existingPoster.value || s.thumb } : s)
+      }
     } else {
       existingPoster.value = null
-      updateGlobalPosterCache(targetKey, null)
+      if (isOwnServerView.value) updateGlobalPosterCache(targetKey, null)
     }
     // Force re-render by toggling key
     posterRefreshKey.value += 1
   } catch (err) {
     console.error('Failed to fetch existing poster:', err)
     existingPoster.value = null
-    updateGlobalPosterCache(props.movie.key, null)
+    if (isOwnServerView.value) updateGlobalPosterCache(props.movie.key, null)
     posterRefreshKey.value += 1
   }
 }
 
 const fetchExistingLogo = async (forceRefresh = false) => {
   try {
+    // Always resolves against the SERIES' own linked-server mapping,
+    // regardless of whether a season is currently focused -- logos are
+    // series-level only in this app's model (Quirk #99's original note,
+    // still true), so a season poster being previewed on a linked server
+    // doesn't change which logo/server this fetches. viewingServerId still
+    // applies -- previewing the series logo on a different linked server
+    // works the same while a season is focused as while the series is.
+    const targetKey = seriesLinkedServers.value.find(s => s.server_id === viewingServerId.value)?.rating_key || props.movie.key
     const params = `${forceRefresh ? 'force_refresh=1&' : ''}v=${Date.now()}`
-    const url = `${apiBase}/api/logo/${props.movie.key}?${params}`
+    const url = `${apiBase}/api/logo/${targetKey}?${params}`
     const res = await fetch(url)
     existingLogo.value = res.ok ? url : null
     logoRefreshKey.value += 1
@@ -1509,6 +1682,15 @@ const fetchExistingLogo = async (forceRefresh = false) => {
     existingLogo.value = null
   }
 }
+
+// Switching which linked server's poster/logo is being previewed re-fetches
+// both against that server's own rating_key -- works for series or season
+// alike now (Quirk #100); showServerPreviewToggle already gates the ‹ › UI
+// itself, so this only ever fires from a user action that's actually visible.
+watch(viewingServerId, () => {
+  fetchExistingPoster()
+  fetchExistingLogo()
+})
 
 const toggleLabel = (label: string) => {
   const set = new Set(selectedLabels.value)
@@ -2031,6 +2213,123 @@ const doSave = async () => {
 
 const sendLogo = ref((settings.plex.value as any).sendLogosToPlex ?? false)
 const logoSending = ref(false)
+// Nothing previously reflected send-in-progress for the poster Send button --
+// `loading` (render.loading) only ever gets set by render.preview()/save()/
+// send()'s own post() wrapper, never by the raw fetch() calls
+// sendPosterToServer()/sendLogoToServer() make for a non-Plex target, so
+// during a Jellyfin/Emby send the button gave zero visual feedback at all.
+// User-reported directly: "the 'send to server' button doesnt indicate when
+// something is being sent." Set around the whole of doSend() below,
+// covering both the non-Plex loop and the existing Plex-only season loop.
+const posterSending = ref(false)
+
+// Series-level-only multi-server send helpers (Phase 6c) -- direct port of
+// EditorPane.vue's identical functions (Quirk #69/#75). Plex still goes
+// through render.send() (a genuine server-side re-render); Jellyfin/Emby
+// reuse the already-rendered client preview, matching that established
+// pattern rather than building a second render pipeline for a non-Plex
+// destination.
+async function sendPosterToServer(serverId: string, ratingKey: string): Promise<boolean> {
+  if (serverId === 'plex-1') {
+    if (!bgUrl.value) return false
+    try {
+      const targetMovie = {
+        ...props.movie,
+        key: ratingKey,
+        server_id: 'plex-1',
+        library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
+      }
+      await render.send(targetMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, null, false)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (!lastPreview.value) return false
+  try {
+    // server_id is required for a season item id -- it's never individually
+    // cached with its own server_id row (only the series-level item is), so
+    // the backend's rating_key -> server_id lookup would otherwise always
+    // misresolve it to 'plex-1' and reject the send outright.
+    const res = await fetch(`${apiBase}/api/media-server/send-poster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: true, server_id: serverId, notify: false })
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+async function sendLogoToServer(serverId: string, ratingKey: string): Promise<boolean> {
+  if (!logoUrl.value) return false
+  try {
+    const endpoint = serverId === 'plex-1' ? '/api/plex/send-logo' : '/api/media-server/send-logo'
+    const body: Record<string, unknown> = serverId === 'plex-1'
+      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: true, notify: false }
+      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: true, server_id: serverId, notify: false }
+    const res = await fetch(`${apiBase}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+// Filters to whichever server_ids the SendToServerModal selection named --
+// falls back to every server this specific item actually resolved when the
+// intersection is empty (e.g. a season that never resolved a server_id the
+// modal's selection, built from the currently-viewed item, happened to
+// include), rather than silently sending to nothing for that item.
+// One notification for a whole send (every item, every server, poster and/or
+// logo) instead of one per upload -- see services/sendNotify.ts.
+function sendSummaryNotification(serverIds: Iterable<string>, assets: Set<string>, itemTitles: string[], imageData: string | null) {
+  const servers = Array.from(new Set(serverIds))
+  const onlySeries = itemTitles.length === 1 && itemTitles[0] === seasons.value.find(s => s.isSeries)?.title
+  const title = itemTitles.length && !onlySeries
+    ? `${props.movie.title} — ${itemTitles.join(', ')}`
+    : props.movie.title
+  const sentPoster = assets.has('poster')
+  void notifySendSummary({
+    ratingKey: props.movie.key,
+    serverIds: servers,
+    assets: ['poster', 'logo'].filter(a => assets.has(a)),
+    templateId: sentPoster ? selectedTemplate.value : '',
+    presetId: sentPoster ? selectedPreset.value : '',
+    libraryId: props.movie.library_id ?? null,
+    title,
+    year: props.movie.year ?? null,
+    imageData: sentPoster ? imageData : null,
+    imageUrl: logoUrl.value || null, // logo-only send: show the logo
+  })
+}
+
+function resolveSendTargetsFor(servers: LinkedServer[]): LinkedServer[] {
+  if (servers.length === 0) return []
+  const filtered = servers.filter(s => sendTargetIds.value.has(s.server_id))
+  return filtered.length > 0 ? filtered : servers
+}
+
+function resolveSendTargets(): LinkedServer[] {
+  return resolveSendTargetsFor(linkedServers.value)
+}
+
+// Resolves whichever item (series or a specific season) is actually being
+// sent to its own linked-server targets -- a season's via
+// resolveSeasonLinkedServers() (async, cached per season key), the series'
+// via the already-unconditional seriesLinkedServers computed. Needed so the
+// non-Plex send loop below (doSend()) can resolve each SELECTED item's own
+// servers, not just whichever one happens to be currently focused/viewed.
+async function getLinkedServersForItem(season: Season): Promise<LinkedServer[]> {
+  if (season.isSeries) return seriesLinkedServers.value
+  await resolveSeasonLinkedServers(season.key, season.index)
+  const home: LinkedServer = { server_id: props.movie.server_id || 'plex-1', rating_key: season.key }
+  return [home, ...(seasonLinkedServersCache.value[season.key] || [])]
+}
 
 const doSendLogoOnly = async () => {
   if (!logoUrl.value) {
@@ -2039,6 +2338,23 @@ const doSendLogoOnly = async () => {
   }
   logoSending.value = true
   try {
+    // isNonPlexItem, not showMultiServerSend -- the latter is now purely a
+    // "does the picker dropdown make sense to show" display concern
+    // (linkedServers.length > 1), and would be false for a non-Plex show
+    // with no OTHER linked server, wrongly falling through to the
+    // Plex-only /api/plex/send-logo call below for an item that was never
+    // on Plex to begin with. sendPosterToServer()/sendLogoToServer() handle
+    // a single-target (send-to-its-own-home-server) case just fine.
+    if (isNonPlexItem.value) {
+      const targets = resolveSendTargets()
+      const results = await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
+      const okCount = results.filter(Boolean).length
+      sendSummaryNotification(targets.filter((_, i) => results[i]).map(t => t.server_id), new Set(['logo']), [], null)
+      if (okCount === 0) throw new Error('Failed to send logo')
+      success(okCount === targets.length ? 'Logo sent!' : `Logo sent to ${okCount}/${targets.length} server(s)`)
+      await fetchExistingLogo()
+      return
+    }
     const res = await fetch(`${apiBase}/api/plex/send-logo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2046,6 +2362,7 @@ const doSendLogoOnly = async () => {
         rating_key: props.movie.key,
         logo_url: logoUrl.value,
         is_tv: true,
+        library_id: props.movie.library_id ?? null,
       }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -2059,8 +2376,186 @@ const doSendLogoOnly = async () => {
   }
 }
 
+// Only opens the picker modal when there's an actual choice to make
+// (linkedServers.length > 1) -- the overwhelming common case, a plain Plex
+// item or an unlinked Jellyfin/Emby item, sends immediately with no extra
+// click, same as before this redesign.
+function onSendClick() {
+  if (showMultiServerSend.value) {
+    showSendModal.value = true
+    return
+  }
+  doSend()
+}
+function onSendModalConfirm(serverIds: string[]) {
+  sendTargetIds.value = new Set(serverIds)
+  showSendModal.value = false
+  doSend()
+}
+
 const doSend = async () => {
   if (!bgUrl.value) return
+
+  // Every selected season/series on a non-Plex-sourced show needs the
+  // multi-server send path, no matter how many are selected -- the
+  // Plex-only season loop below always calls render.send(), which
+  // unconditionally POSTs to /api/plex/send and would fail for every item
+  // here, since isNonPlexItem is a show-level property (every season lives
+  // on the same server as its show; there's no per-season Plex/non-Plex
+  // split to make). This used to only run when showMultiServerSend was true
+  // (exactly one item selected AND currently viewed), which is why sending
+  // series+season together was blocked outright -- reported directly:
+  // "for some reason i cant send when both season/series is selected."
+  // Fixed by looping here instead of gating on a single-selection check:
+  // each item resolves its OWN linked-server targets via
+  // getLinkedServersForItem() (a season's via resolveSeasonLinkedServers(),
+  // the series' via the unconditional seriesLinkedServers), so the loop
+  // itself needs no further per-item branching.
+  if (isNonPlexItem.value) {
+    const selectedSeasonKeys = Array.from(selectedSeasons.value)
+    if (selectedSeasonKeys.length === 0) {
+      notifyError('No seasons selected')
+      return
+    }
+    posterSending.value = true
+    const succeeded: string[] = []
+    const failed: string[] = []
+
+    // Preserve the currently-focused item so it can be restored once the
+    // loop finishes, matching the Plex-only loop below.
+    saveCurrentSettings()
+    const originalKey = currentTargetKey.value
+    const originalSettings = getCurrentSettings()
+    const originalPoster = selectedPoster.value
+
+    try {
+      // Context-switching (fetchImagesForCurrentSeason/restoreSettingsForKey)
+      // has to stay sequential -- it mutates the shared bgUrl/optionsPayload/
+      // logoUrl/lastPreview refs every item's send reads from, so two items
+      // switching at once would corrupt each other (the exact class of bug
+      // this file's own doSend() already fixed once, see the comment above).
+      // But the actual network round trips (render+upload for Plex, upload
+      // for Jellyfin/Emby) don't need to wait on each other AT ALL once an
+      // item's values are captured -- and previously they did, because each
+      // item's sendPosterToServer()/sendLogoToServer() calls were awaited
+      // before the loop moved on to the next item's context switch. That
+      // made a 2-item send take roughly the SUM of each item's send time
+      // (~6s + ~14s = ~20s in a real user-reported log) instead of close to
+      // the slower item's own time alone. User-reported: "i feel like it
+      // takes a long time to render/send."
+      //
+      // Fix: still switch context one item at a time, but INVOKE (not
+      // await) each item's poster/logo send calls the moment its context is
+      // ready, then immediately move on to the next item's context switch.
+      // This is safe specifically because sendPosterToServer()/
+      // sendLogoToServer() both read every live ref they need (bgUrl,
+      // logoUrl, optionsPayload, etc.) SYNCHRONOUSLY at the moment they're
+      // called -- before their own first `await` -- so calling them here,
+      // synchronously, right after this item's context switch and before
+      // the next one's, captures this item's values correctly regardless of
+      // when the resulting promise actually settles. Every item's pending
+      // work is collected into `pendingSends` and awaited together at the
+      // very end, so the actual render/upload time for a multi-item send is
+      // now bounded by the single slowest item, not their sum -- pure I/O
+      // concurrency, nothing about what gets rendered or how it's encoded
+      // changes (see CLAUDE.md Quirk #17's established boundary for this
+      // class of fix).
+      const pendingSends: Promise<{ title: string; ok: boolean }>[] = []
+      const notifyServers = new Set<string>()
+      const notifyAssets = new Set<string>()
+      let notifyImage: string | null = null
+
+      for (const seasonKey of selectedSeasonKeys) {
+        const season = seasons.value.find(s => s.key === seasonKey)
+        if (!season) continue
+        try {
+          // Switch editing context to THIS item before doing anything else --
+          // without this, every item in the loop reused whatever was still
+          // sitting in bgUrl/optionsPayload/lastPreview from whichever
+          // season was last focused when Send was clicked, so every target
+          // silently got the SAME (wrong) image. User-reported directly:
+          // "it sent the season poster to the series poster."
+          const idxInSelected = Array.from(selectedSeasons.value).findIndex(k => k === seasonKey)
+          if (idxInSelected >= 0) currentSeasonIndex.value = idxInSelected
+          await fetchImagesForCurrentSeason()
+          await restoreSettingsForKey(seasonKey)
+
+          // Reuse an already-rendered preview for this item when one exists
+          // (the common case -- selecting a season already triggers a
+          // background render via renderAllSelectedSeasons()) instead of
+          // paying for a redundant re-render; only render fresh here if
+          // nothing's cached yet for it.
+          const cachedImage = renderedPreviews.value.find(p => p.seasonKey === seasonKey)?.imageUrl
+          if (cachedImage) {
+            lastPreview.value = cachedImage
+          } else {
+            await doPreview(true)
+          }
+
+          const itemLinkedServers = await getLinkedServersForItem(season)
+          const targets = resolveSendTargetsFor(itemLinkedServers)
+          if (targets.length === 0) {
+            failed.push(season.title)
+            continue
+          }
+
+          // Both of these .map() calls invoke sendPosterToServer()/
+          // sendLogoToServer() immediately (synchronously) -- this is the
+          // capture point for this item's bgUrl/logoUrl/optionsPayload/
+          // lastPreview, happening before the loop's next iteration can
+          // switch context again.
+          const posterPromises = targets.map(t => sendPosterToServer(t.server_id, t.rating_key))
+          const logoPromises = (sendLogo.value && logoUrl.value) ? targets.map(t => sendLogoToServer(t.server_id, t.rating_key)) : []
+          const seasonTitle = season.title
+          const itemImage = lastPreview.value
+          pendingSends.push((async () => {
+            try {
+              const results = await Promise.all(posterPromises)
+              const okCount = results.filter(Boolean).length
+              const logoResults = logoPromises.length > 0 ? await Promise.all(logoPromises) : []
+              targets.forEach((t, i) => {
+                if (results[i]) { notifyServers.add(t.server_id); notifyAssets.add('poster'); notifyImage = notifyImage || itemImage }
+                if (logoResults[i]) { notifyServers.add(t.server_id); notifyAssets.add('logo') }
+              })
+              return { title: seasonTitle, ok: okCount > 0 }
+            } catch (err) {
+              console.error(`[SEND] ${seasonTitle} - Failed:`, err)
+              return { title: seasonTitle, ok: false }
+            }
+          })())
+        } catch (err) {
+          failed.push(season.title)
+          console.error(`[SEND] ${season.title} - Failed:`, err)
+        }
+      }
+
+      const settled = await Promise.all(pendingSends)
+      for (const r of settled) {
+        if (r.ok) succeeded.push(r.title)
+        else failed.push(r.title)
+      }
+      sendSummaryNotification(notifyServers, notifyAssets, succeeded, notifyImage)
+
+      // Restore original editing context, matching the Plex-only loop below.
+      if (originalKey) {
+        settingsCache.value[originalKey] = originalSettings
+        if (originalPoster) selectedPosterCache.value[originalKey] = originalPoster
+        await restoreSettingsForKey(originalKey)
+        const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
+        if (origIdx >= 0) currentSeasonIndex.value = origIdx
+      }
+
+      if (succeeded.length > 0) success(`Successfully sent ${succeeded.length} poster(s): ${succeeded.join(', ')}`)
+      if (failed.length > 0) notifyError(`Failed to send ${failed.length} poster(s): ${failed.join(', ')}`)
+      await new Promise(resolve => setTimeout(resolve, 600))
+      await fetchExistingPoster()
+      await fetchExistingLogo()
+      await fetchLabels()
+    } finally {
+      posterSending.value = false
+    }
+    return
+  }
 
   // Get selected seasons or use the movie itself if no seasons
   const selectedSeasonKeys = Array.from(selectedSeasons.value)
@@ -2070,6 +2565,7 @@ const doSend = async () => {
     return
   }
 
+  posterSending.value = true
   const succeeded: string[] = []
   const failed: string[] = []
 
@@ -2082,6 +2578,7 @@ const doSend = async () => {
     const originalSettings = getCurrentSettings()
     const originalPoster = selectedPoster.value
 
+    let plexNotifyImage: string | null = null
     // Send for each selected season
     for (const seasonKey of selectedSeasonKeys) {
       const season = seasons.value.find(s => s.key === seasonKey)
@@ -2098,9 +2595,10 @@ const doSend = async () => {
         // name -- see the identical fix/comment in doSave()'s equivalent line.
         const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title }
         const seasonIndex = season.isSeries ? null : season.index
-        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex)
+        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex, false)
 
         succeeded.push(season.title)
+        plexNotifyImage = plexNotifyImage || renderedPreviews.value.find(p => p.seasonKey === seasonKey)?.imageUrl || null
       } catch (err) {
         failed.push(season.title)
         console.error(`[SEND TO PLEX] ${season.title} - Failed:`, err)
@@ -2115,6 +2613,10 @@ const doSend = async () => {
       // Restore current season index to the original selection if possible
       const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
       if (origIdx >= 0) currentSeasonIndex.value = origIdx
+    }
+
+    if (succeeded.length > 0) {
+      sendSummaryNotification(['plex-1'], new Set(sendLogo.value && logoUrl.value ? ['poster', 'logo'] : ['poster']), succeeded, plexNotifyImage)
     }
 
     // Show results
@@ -2139,6 +2641,8 @@ const doSend = async () => {
     const message = err instanceof Error ? err.message : 'Failed to send posters to Plex'
     notifyError(message)
     console.error('[SEND TO PLEX] Fatal error:', err)
+  } finally {
+    posterSending.value = false
   }
 }
 
@@ -3407,8 +3911,13 @@ watch(tmdbId, () => {
     <div class="preview-pane">
       <div class="preview-inner">
         <div class="preview-existing">
+          <div v-if="showServerPreviewToggle" class="server-toggle-row">
+            <button class="server-toggle-btn" title="Previous server" @click="cycleViewingServer(-1)">‹</button>
+            <span class="server-toggle-label">{{ serverTypeLabel(viewingServerId) }}</span>
+            <button class="server-toggle-btn" title="Next server" @click="cycleViewingServer(1)">›</button>
+          </div>
           <div class="preview-label">
-            Current Plex Poster
+            {{ currentPosterLabel }}
             <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
@@ -3421,8 +3930,8 @@ watch(tmdbId, () => {
           <div v-else class="empty-preview">No poster</div>
 
           <div class="preview-label" style="margin-top: 14px;">
-            Current Plex Logo
-            <button class="refresh-btn" title="Fetch logo from Plex" @click="fetchExistingLogo(true)">
+            {{ currentLogoLabel }}
+            <button class="refresh-btn" title="Fetch logo" @click="fetchExistingLogo(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
@@ -3444,26 +3953,34 @@ watch(tmdbId, () => {
 
         <div class="preview-content-wrapper">
           <div class="preview-main">
-          <div class="preview-label">
-            <div class="preview-title-row">
-              <span>Preview</span>
+          <div class="preview-header-row">
+            <div class="preview-label">
+              <div class="preview-title-row">
+                <span>Preview</span>
+              </div>
+              <div v-if="currentSeason" class="current-season-label">{{ currentSeason.title }}</div>
+              <span v-if="loading" class="status-badge">Rendering...</span>
+              <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
             </div>
-            <div v-if="currentSeason" class="current-season-label">{{ currentSeason.title }}</div>
-            <span v-if="loading" class="status-badge">Rendering...</span>
-            <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
-            <div class="preview-actions float-right">
-              <label class="send-logo-toggle" title="Also send the selected logo to Plex">
-                <input type="checkbox" v-model="sendLogo" />
-                <span>Send logo</span>
-              </label>
-              <button title="Send Logo to Plex" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+            <div class="preview-actions">
+              <button title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-                <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo' }}</span>
+                <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo Only' }}</span>
               </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
-              <button title="Send to Plex" class="btn-plex btn-inline" :disabled="loading" @click="doSend">📺 <span class="btn-label">Send to Plex</span></button>
+              <button :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending" @click="onSendClick">
+                <svg v-if="posterSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                <span v-else>📺</span>
+                <span class="btn-label">{{ posterSending ? 'Sending...' : sendButtonLabel }}</span>
+              </button>
             </div>
           </div>
+          <SendToServerModal
+            v-if="showSendModal"
+            :options="sendModalOptions"
+            @close="showSendModal = false"
+            @send="onSendModalConfirm"
+          />
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else-if="selectedPoster" class="placeholder-state">
@@ -4106,10 +4623,6 @@ watch(tmdbId, () => {
   gap: 10px;
 }
 
-.float-right {
-  margin-left: auto;
-}
-
 .btn-primary,
 .btn-secondary {
   width: 100%;
@@ -4144,27 +4657,42 @@ watch(tmdbId, () => {
   border-color: rgba(255, 255, 255, 0.15);
 }
 
-.send-logo-toggle {
-  display: inline-flex;
+/* Multi-server preview toggle (Phase 6c) -- Vue's scoped styles don't cross
+   component boundaries, so this needs its own copy here rather than
+   relying on EditorPane.vue's identical rule (see CLAUDE.md Quirk #86's
+   "borrowed but never defined" class of bug). The inline send-target
+   <select>/send-logo checkbox this section used to also style were both
+   replaced by SendToServerModal.vue's own picker -- see that component's
+   own <style> block. */
+.server-toggle-row {
+  display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #a8b3cf;
-  cursor: pointer;
-  user-select: none;
-  padding: 4px 8px;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.server-toggle-btn {
+  width: 22px;
+  height: 22px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  transition: all 0.15s;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #c9d1e0;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.send-logo-toggle:has(input:checked) {
-  color: #eef2ff;
-  border-color: rgba(61, 214, 183, 0.35);
+.server-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
-.send-logo-toggle input {
-  margin: 0;
-  accent-color: var(--accent, #3dd6b7);
+.server-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a8b3cf;
+  min-width: 60px;
 }
 
 /* Override to ensure .btn-plex color wins when combined with btn-secondary */
@@ -4179,12 +4707,40 @@ watch(tmdbId, () => {
   box-shadow: 0 8px 22px rgba(255, 112, 67, 0.18);
 }
 
+/* Wraps .preview-label + .preview-actions as two independently-wrappable
+   flex children, instead of .preview-actions being nested INSIDE
+   .preview-label (the old float-right/margin-left:auto approach) with no
+   flex-wrap anywhere in the chain -- that's what let the toolbar's
+   ever-growing action group (now with the Quirk #100 send-target select on
+   top of everything already there) silently overflow/clip instead of
+   dropping to its own line.
+   width:100% is load-bearing, not decoration: .preview-main (this row's
+   parent) is a column flex container with align-items:center, not the
+   flexbox default of stretch -- without an explicit width, this row
+   shrink-wraps to its own content instead of being constrained to the
+   parent's actual width, so flex-wrap has no real boundary to wrap
+   against and the row just grows past the visible edge instead of
+   dropping to a second line. This is why the flex-wrap-only version of
+   this fix still showed cut-off buttons. */
+.preview-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+}
+
 /* Inline buttons for preview area */
 .preview-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   justify-content: flex-end;
+  min-width: 0;
 }
 .btn-inline {
   padding: 8px 12px;
@@ -4213,7 +4769,8 @@ watch(tmdbId, () => {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.btn-send-logo .spin {
+.btn-send-logo .spin,
+.btn-plex .spin {
   animation: spin-logo 0.9s linear infinite;
 }
 @keyframes spin-logo {
@@ -4578,10 +5135,21 @@ button:disabled {
   font-weight: 500;
 }
 
+/* align-items/justify-content deliberately flex-start, not center: this
+   pane's content (the toolbar + a full 2000x3000-ish rendered poster) is
+   routinely taller than the visible pane, and overflow:auto combined with
+   *centered* flex alignment is a known CSS trap -- the browser computes the
+   scrollable range around the centered position, so the top of an oversized
+   child (here, the toolbar row) gets clipped with no way to scroll up to
+   it. This is why every fix to .preview-header-row's own width/wrapping
+   never visibly changed anything -- the row was never actually broken,
+   it was just permanently scrolled out of view above the pane's reachable
+   scroll area. flex-start lets content start at the pane's own top-left and
+   flow downward, fully reachable by the pane's normal scrollbar. */
 .preview-pane {
   background: rgba(10, 12, 18, 0.6);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 12px;
   overflow: auto;

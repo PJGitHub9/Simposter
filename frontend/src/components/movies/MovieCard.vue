@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import ResendPreviewModal from './ResendPreviewModal.vue'
 
@@ -10,10 +10,64 @@ const props = defineProps<{
   poster?: string | null
   status?: string
   ratingKey?: string
+  // The rating_key the cached render bytes actually live under, resolved by
+  // MovieGrid.vue -- may differ from `ratingKey` (the currently-displayed
+  // server's key) once a merged item's preferred-server toggle no longer
+  // matches whichever server the poster was originally rendered/sent under.
+  // Falls back to `ratingKey` itself when unset (every pre-multi-server
+  // card, where the two are always the same value anyway).
+  cacheRatingKey?: string | null
   edition?: string | null
   hasCachedPoster?: boolean
   isTV?: boolean
+  serverId?: string | null
+  alsoOn?: string[] | null
+  otherServers?: { server_id: string; rating_key: string }[] | null
 }>()
+
+// This card's own server plus every other linked server (Quirk #75's
+// {server_id, rating_key} pairs) -- what the resend picker offers, and what
+// doResend() below maps a picker selection back to an actual rating_key for.
+const linkedServers = computed(() => {
+  const home = { server_id: props.serverId || 'plex-1', rating_key: props.ratingKey || '' }
+  return [home, ...(props.otherServers || [])]
+})
+
+// Server ids are always "{type}-{...}" (see MediaServersTab.vue's addServer()),
+// so the type is derivable without needing the full mediaServers list passed
+// down through the grid -- 'plex-1' is the only id that doesn't follow a
+// "-<timestamp>" shape, still splits to "plex" correctly either way.
+function serverTypeFor(id: string): string {
+  return id.split('-')[0] || id
+}
+
+// Always includes the card's own server (Plex included) plus every server
+// the same title was also found on (Quirk #67's `alsoOn`) -- previously only
+// showed a badge for a NON-Plex server, which meant a plain Plex-only card
+// showed nothing at all and a merged card only showed the "other" server,
+// never confirming Plex was also one of them. The user's own reasoning:
+// "this could be because there could be an item thats in jellyfin only, or
+// plex only. the icons really help distinguish it" -- so every card now
+// always shows at least one icon, identifying every server it actually
+// lives on, not just the non-default ones.
+const serverBadges = computed(() => {
+  const badges: string[] = [serverTypeFor(props.serverId || 'plex-1')]
+  for (const id of props.alsoOn || []) badges.push(serverTypeFor(id))
+  return [...new Set(badges)]
+})
+
+function displayServerLabel(type: string): string {
+  return type === 'jellyfin' ? 'Jellyfin' : type === 'emby' ? 'Emby' : type === 'plex' ? 'Plex' : type
+}
+
+// Real official brand marks (simple-icons, MIT-licensed for exactly this kind
+// of identification use), not hand-drawn approximations -- static files under
+// frontend/public/icons/, colored to each brand's own accent at fetch time
+// (see the icons/ files themselves), served like any other frontend/public
+// asset (Quirk #39's fix already makes the built app serve these correctly).
+function serverIconSrc(type: string): string {
+  return `/icons/${type}.svg`
+}
 
 const emit = defineEmits<{
   (e: 'select'): void
@@ -33,15 +87,29 @@ function cancelPreview() {
   resendState.value = 'idle'
 }
 
-async function doResend(includeSeasons: boolean) {
+async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
   if (!props.ratingKey) return
   resendState.value = 'loading'
   try {
     const apiBase = getApiBase()
-    const res = await fetch(`${apiBase}/api/render-cache/${props.ratingKey}/resend`, {
+    // Map the modal's selected server_ids back to {server_id, rating_key}
+    // targets -- omitted (undefined) whenever nothing was explicitly picked
+    // (the single-server, non-linked case), so the backend falls through to
+    // its own default (resend to whichever server this rating_key actually
+    // belongs to) rather than sending an empty targets list.
+    const targets = targetServerIds.length
+      ? linkedServers.value.filter(s => targetServerIds.includes(s.server_id))
+      : undefined
+    // /resend looks the cached bytes up by the URL-path rating_key -- must be
+    // whichever key the cache actually lives under (cacheRatingKey), not
+    // necessarily this card's currently-displayed ratingKey (see MovieGrid.vue's
+    // cacheSourceKey()). Falls back to ratingKey for any pre-multi-server card,
+    // where the two are always identical.
+    const cacheKey = props.cacheRatingKey || props.ratingKey
+    const res = await fetch(`${apiBase}/api/render-cache/${cacheKey}/resend`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ include_seasons: includeSeasons, is_tv: props.isTV ?? false }),
+      body: JSON.stringify({ include_seasons: includeSeasons, is_tv: props.isTV ?? false, targets }),
     })
     if (!res.ok) throw new Error(await res.text())
     resendState.value = 'done'
@@ -101,8 +169,20 @@ async function doResend(includeSeasons: boolean) {
     </div>
     <div class="meta">
       <p class="title">{{ title }}</p>
-      <p v-if="edition" class="edition">{{ edition }}</p>
-      <p class="muted">{{ year }}</p>
+      <p class="edition" :class="{ 'edition-empty': !edition }">{{ edition || ' ' }}</p>
+      <div class="meta-row">
+        <p class="muted">{{ year }}</p>
+        <div v-if="serverBadges.length" class="server-icons" :title="`Also on: ${serverBadges.map(displayServerLabel).join(', ')}`">
+          <img
+            v-for="s in serverBadges"
+            :key="s"
+            :src="serverIconSrc(s)"
+            :alt="displayServerLabel(s)"
+            :title="displayServerLabel(s)"
+            class="server-icon"
+          />
+        </div>
+      </div>
     </div>
   </article>
 
@@ -113,8 +193,10 @@ async function doResend(includeSeasons: boolean) {
     <ResendPreviewModal
       :is-open="resendState === 'previewing'"
       :rating-key="ratingKey || ''"
+      :cache-rating-key="cacheRatingKey"
       :title="title"
       :is-tv="isTV ?? false"
+      :linked-servers="linkedServers"
       @close="cancelPreview"
       @confirm="doResend"
     />
@@ -150,6 +232,31 @@ async function doResend(includeSeasons: boolean) {
   position: relative;
   overflow: hidden;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* --- server icons (below the poster, next to the year) -- deliberately NOT
+   an overlay on the thumb anymore (see CLAUDE.md's multi-server Quirks):
+   the user asked for identification without blocking the artwork, so this
+   sits in the text metadata row instead of on top of the image. Real
+   official brand marks (frontend/public/icons/, simple-icons-sourced --
+   see serverIconSrc() above), not hand-drawn shapes. --- */
+.meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.server-icons {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.server-icon {
+  display: block;
+  width: 13px;
+  height: 13px;
 }
 
 /* --- refresh button (top-right) --- */
@@ -261,6 +368,11 @@ async function doResend(includeSeasons: boolean) {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  /* Always reserves 2 lines' worth of height, even for a 1-line title --
+     otherwise a shorter title left .meta-row (year + server icons) sitting
+     at a different vertical offset card-to-card, which is exactly what the
+     user flagged as icons looking misaligned across the grid. */
+  min-height: calc(1.3em * 2);
 }
 
 .edition {
@@ -271,6 +383,14 @@ async function doResend(includeSeasons: boolean) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Always rendered (a non-breaking space when there's no real edition, see
+     the template) so this line's height is reserved on every card -- same
+     alignment reasoning as .title's min-height above. */
+  line-height: 1.4;
+}
+
+.edition-empty {
+  visibility: hidden;
 }
 
 .muted {

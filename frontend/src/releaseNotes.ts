@@ -10,37 +10,264 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
-    version: 'v1.6.112',
-    date: '2026-10-02',
+    version: 'v1.7.08',
+    date: '2026-10-13',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Thumb Art for Jellyfin and Emby: a new Thumb Art page (in a library\'s menu when its group has a Jellyfin or Emby library) for the 16:9 "Thumb" image those servers show in thumbnail views. Make one from a backdrop with your template/preset, adjust the backdrop position and logo size, then send it to the title\'s Jellyfin/Emby copies or save it to disk. Plex has no Thumb slot, so it\'s Jellyfin/Emby only.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Square Art shows a Plex icon in its header when the library is linked to Jellyfin or Emby, and Thumb Art shows the Jellyfin/Emby icon, so it\'s clear which server each one is for.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.07',
+    date: '2026-10-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Library scans (scheduled and manual) now pick up posters changed outside Simposter, e.g. by Kometa overlays, on Plex, Jellyfin and Emby. Only changed posters are re-downloaded, so scans stay fast and you no longer need "Force Refresh All Art" for this.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.06',
+    date: '2026-10-09',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Media Mirror now sends a Discord/Apprise summary when a run finishes: servers, and how many posters, logos, backdrops and collections were copied (e.g. "Posters: 3/40 copied"). Scheduled runs only notify when something changed or failed. Toggle it under Settings → Notifications.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'History showed Jellyfin season posters with only the show name. They now read "Show - Season N" with the year, matching the Plex rows.',
+          'Posters delivered to Jellyfin after it imported a show now record the preset in History instead of "—".',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.05',
+    date: '2026-10-09',
     sections: [
       {
         title: 'Bug Fixes',
         items: [
-          'Fixed a local poster/logo upload being rejected ("URL resolves to a blocked network range") right after uploading, on some deployments (notably seedboxes) where the backend\'s DNS resolution of its own public address could land on a link-local IP. The upload itself always worked — only the very next preview/render step was incorrectly blocking the file it had just served.',
+          'Notifications for a logo or backdrop picked from TMDb/Fanart had no thumbnail. The chosen image is now attached.',
+          'Logo and backdrop notifications showed "Preset: N/A". The Preset field is now left out when no preset was used.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.04',
+    date: '2026-10-08',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'The Logo and Backdrop editors can send to every server an item is on. With more than one, Send opens a picker so you can choose which servers get it.',
+          'Local Assets: resend a saved poster to any server in its library group, rename a file, and resize the thumbnails with a slider.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Notifications now read Library / Preset / Action / Servers, showing the preset name and every server the poster reached.',
+          'If Radarr/Sonarr fires before Jellyfin or Emby has imported the file, the poster is now sent to that server after its next library scan.',
+          'The "PNG exceeds Plex\'s upload size limit" warning no longer appears for Jellyfin/Emby-only uploads.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Every Sonarr webhook failed with "name \'plex_fallback\' is not defined".',
+          'Local Assets could hide a poster saved from a library group (for example, one saved while viewing the Jellyfin copy).',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.03',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Sending a poster and logo to several servers now produces one notification instead of one per upload. It lists every server it went to, which assets were sent, the library and the template/preset, with the poster attached.',
+          'The notification library filter now understands library groups: picking a library also covers the other libraries in its group, so Jellyfin/Emby sends are no longer filtered out.',
+          'Kometa presets no longer appear in the auto-generate preset list of a library group, since they only apply to collections.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Logo notifications from the editor showed "Unknown Library".',
+          'Docker: a fresh install could crash with "attempt to write a readonly database".',
+          'Picking an auto-generate preset for a group with a Plex library left the dropdown blank.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.02',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Plex, Jellyfin and Emby are now treated the same throughout. The setup wizard connects all of your servers on one page, with the same steps for each.',
+          'Library groups (Settings → Libraries) show the libraries of every server in the same style, with one "+ Link a library..." picker covering all your servers.',
+          'Scheduled scans can be limited to chosen library groups, and each group is scanned on every server it includes. The setup wizard now offers a scan schedule even without Plex.',
+          'The main Plex server has an Enabled checkbox like your other servers. Untick it to switch Plex off without losing its settings.',
+          'The Media Servers page only labels a Plex server "Primary" when you have more than one.',
+          'New Media Servers guide in the docs, and the other docs now cover Jellyfin and Emby.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Scan buttons on Jellyfin/Emby-only groups stayed clickable during another scan and then failed with "A scan is already in progress".',
+          'Scheduled scans no longer scan each linked Jellyfin/Emby library twice.',
+          'Libraries from a second Plex server now show up on their library group.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.01',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Collection matching: link collections with different names across servers (e.g. "MCU" on Plex and "Marvel Films" on Jellyfin), or split a wrong automatic match. Open it from the "Collection matching" button on the Collections page.',
+          'Media server maintenance: Settings → Cleanup now has a section for each of your media servers. Jellyfin servers can run their built-in cleanup tasks (optimize database, clean cache/transcode/log folders, clean the activity log) with last-run results and live progress.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Plex maintenance (Empty Trash, Clean Bundles, Optimize Database) now works for every Plex server you have added, not just the main one.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.0',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Jellyfin and Emby support: connect Plex, Jellyfin and/or Emby in any combination — Plex is no longer required.',
+          'Library groups: link the same library across servers. Posters, logos and backdrops can be sent to every server in a group, and the same title on two servers shows as one card.',
+          'Collections now work with Jellyfin too, including a "Show posters from" switch and sending to more than one server.',
+          'Media Mirror: copy artwork from one server to the others in a group, by hand or on a schedule. Only changed images are re-copied.',
+          'Webhooks can target a library group by name — the Webhook URL Generator now lists your groups, and posters go to every library in the chosen group.',
+          'Automatic poster generation now works for Jellyfin/Emby libraries during scans, not just Plex.',
+          'New poster/logo upload window: choose a local file or paste an image URL, with a live preview.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Library and group names are shown instead of internal IDs in History, Local Assets, notifications and backups.',
+          'Removing a media server now cleans up all of its cached posters and scan data once you save.',
+          'Removing Plex now sticks, even if PLEX_URL/PLEX_TOKEN are set as environment variables.',
+          'Large library scans no longer stall after the movies step, and Save Changes registers on the first click.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Webhooks for a Jellyfin/Emby-only setup no longer try to reach a Plex server that is not configured.',
+          'Local poster/logo uploads no longer fail with "blocked network range" on some networks.',
+          'Kometa presets in Template Manager now preview as a collection instead of over a movie poster.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.2',
+    date: '2026-09-30',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Beta version of Jellyfin/Emby support implemented — connect one or more media servers, link libraries into shared groups, browse merged content, and send posters/logos/backdrops across servers. Still in beta: please report any issues you run into.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.114',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Settings → Media Servers: add, enable, test, and remove Plex/Jellyfin/Emby connections through the UI. Early groundwork for upcoming Jellyfin/Emby support — nothing else in the app uses these servers yet.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.113',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal backend addition (no user-facing change yet): a Jellyfin/Emby implementation of the new media-server abstraction, plus temporary developer endpoints to test it against a real instance. Groundwork for upcoming Jellyfin/Emby support — nothing in the app uses this yet.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.112',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal backend addition (no user-facing change): a new abstraction layer for talking to a media server, with the first implementation wrapping existing Plex code. Nothing in the app uses it yet — groundwork for upcoming Jellyfin/Emby support.',
         ]
       }
     ]
   },
   {
     version: 'v1.6.111',
-    date: '2026-10-02',
+    date: '2026-09-23',
     sections: [
       {
-        title: 'New Features',
+        title: 'Improvements',
         items: [
-          'Poster/logo upload redesigned: click "Upload Poster"/"Upload Logo" to open a modal with two options — upload a local file, or paste a direct image URL (with a live preview before you commit to it). Dragging a file straight onto the zone still works as a shortcut.',
+          'Internal database groundwork (no user-facing change): every cache table now tracks which configured media server a row belongs to, preparing for upcoming Jellyfin/Emby support. Existing installs are unaffected — nothing changes until a second server is actually added.',
         ]
       }
     ]
   },
   {
     version: 'v1.6.110',
-    date: '2026-09-26',
+    date: '2026-09-23',
     sections: [
       {
         title: 'Improvements',
         items: [
-          'Sorting by title now ignores a leading "The"/"A"/"An" — "The Matrix" sorts under M, "A Bug\'s Life" under B — matching how Plex/Kodi/iTunes libraries already sort (GitHub issue #70). Applies everywhere title-sorting exists: Movies, TV Shows, Logos, Backdrops, Square Art, and both Batch Edit pages.',
+          'Internal refactor (no user-facing change): consolidated 4 duplicated places that fetch Plex metadata for overlay badges into one shared function, plus removed a redundant metadata fetch in Save. Groundwork for upcoming Jellyfin support.',
         ]
       }
     ]

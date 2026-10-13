@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
 import { useTvShows } from '../composables/useTvShows'
+import { useLibraryGroupPreference } from '../composables/useLibraryGroupPreference'
 import { getApiBase } from '@/services/apiBase'
 import { compareTitles } from '@/services/sortTitle'
 
@@ -17,6 +18,9 @@ type TvShow = {
   tmdb_id?: number
   tvdb_id?: number
   edition?: string | null
+  server_id?: string | null
+  also_on?: string[] | null
+  other_servers?: { server_id: string; rating_key: string }[] | null
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
@@ -28,6 +32,23 @@ const labelInFlight = new Set<string>()
 const tvShowsLoaded = tvShowsLoadedFlag
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || 'default')
+// Phase 8a -- see MoviesView.vue's identical computed for the full reasoning.
+const currentServer = computed(() => (route.query.server as string) || '')
+// Labels are a Plex-only concept (Quirk #59/#93) -- see MoviesView.vue's
+// identical computed for the full reasoning.
+const currentGroupHasPlex = computed(() => {
+  if (!currentServer.value || currentServer.value === 'plex-1') return true
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === currentServer.value && m.libraryId === currentLibrary.value)
+  )
+  return !!group?.members?.some(m => m.serverId === 'plex-1')
+})
+const libraryGroupPref = useLibraryGroupPreference('tv')
+async function onPreferredServerChange(serverId: string) {
+  if (!currentLibrary.value || currentLibrary.value === 'default') return
+  const ok = await libraryGroupPref.setPreferred(currentLibrary.value, serverId)
+  if (ok) await fetchTvShows()
+}
 const POSTER_CACHE_KEY = computed(() => `simposter-tv-poster-cache-${currentLibrary.value}`)
 const LABELS_CACHE_KEY = computed(() => `simposter-tv-labels-cache-${currentLibrary.value}`)
 const TVSHOWS_CACHE_KEY = computed(() => `simposter-tv-shows-cache-${currentLibrary.value}`)
@@ -200,6 +221,7 @@ watch(currentLibrary, () => {
     fetchPosters(paged.value)
     fetchLabels(paged.value)
   })
+  libraryGroupPref.load(currentLibrary.value !== 'default' ? currentLibrary.value : '')
 })
 
 const props = defineProps<{
@@ -333,7 +355,10 @@ const fetchTvShows = async () => {
   error.value = null
   try {
     // Always fetch to ensure we have the correct library's data
-    const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+    const tvShowsParams = new URLSearchParams()
+    if (currentLibrary.value) tvShowsParams.set('library_id', currentLibrary.value)
+    if (currentServer.value) tvShowsParams.set('server_id', currentServer.value)
+    const res = await fetch(`${apiBase}/api/tv-shows${tvShowsParams.toString() ? '?' + tvShowsParams.toString() : ''}`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = (await res.json()) as (TvShow & { labels?: string[] })[]
     // Seed caches from server data when available
@@ -513,6 +538,7 @@ onMounted(async () => {
   await fetchPosters(paged.value)
   await fetchLabels(paged.value)
   fetchCachedKeys()
+  libraryGroupPref.load(currentLibrary.value !== 'default' ? currentLibrary.value : '')
 })
 </script>
 
@@ -535,11 +561,26 @@ onMounted(async () => {
             <option value="desc">{{ sortBy === 'title' ? 'Z-A' : 'Newest First' }}</option>
           </select>
         </div>
-        <div class="control-group">
+        <div v-if="currentGroupHasPlex" class="control-group">
           <label for="label-select">Filter by Label:</label>
           <select id="label-select" v-model="filterLabel" class="control-select">
             <option value="">All Labels</option>
             <option v-for="label in allLabels" :key="label" :value="label">{{ label }}</option>
+          </select>
+        </div>
+        <!-- Only shown for a library actually linked to another server via a
+             Library Group (Quirk #62/#64) -- see the matching comment in
+             MoviesView.vue (Quirk #85). -->
+        <div v-if="libraryGroupPref.hasChoice.value" class="control-group">
+          <label for="prefer-server-select">Show posters from:</label>
+          <select
+            id="prefer-server-select"
+            :value="libraryGroupPref.preferredServerId.value"
+            class="control-select"
+            :disabled="libraryGroupPref.saving.value"
+            @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
           </select>
         </div>
         <label class="filter-check" :class="{ active: filterCached }" title="Show only items Simposter has previously generated a poster for (saved renders)">

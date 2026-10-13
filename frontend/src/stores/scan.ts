@@ -69,8 +69,26 @@ export function useScanStore() {
         total: status.total || 0,
       }
       current.value = isDone ? '' : status.current || ''
+      // The backend's /api/scan-progress response has never actually included
+      // a "log" field (ScanStatus.log above was aspirational) -- this branch
+      // was consequently dead for every real poll. The "X/Y (Z%) {message}"
+      // line shown in the overlay's log list was only ever built by
+      // SettingsView.vue's OWN separate, hand-rolled polling loop, which
+      // constructed it from the same processed/total/current fields already
+      // available here -- meaning it only ever updated while SettingsView.vue
+      // itself stayed mounted. The moment a user navigated away mid-scan
+      // (onBeforeRouteLeave stops that component's own poller), the overlay
+      // -- correctly still visible everywhere via this shared store -- froze
+      // at whatever the last update happened to be, even though the scan was
+      // still genuinely progressing server-side. Centralizing the same line
+      // construction here means ANY caller of applyStatus() (including
+      // App.vue's own always-mounted poller, wired up below to take over
+      // regardless of which page started the scan) keeps it live.
       if (status.log && Array.isArray(status.log)) {
         log.value = status.log
+      } else if (isRunning && progress.value.total) {
+        const pct = Math.min(100, Math.round((progress.value.processed / progress.value.total) * 100))
+        log.value = [`${progress.value.processed}/${progress.value.total} (${pct}%) ${current.value}`]
       }
       checking.value = false
       if (showCompletion) {

@@ -10,3 +10,24 @@ export const onboardingLaunchRequested = ref(0)
 export function launchOnboarding() {
   onboardingLaunchRequested.value++
 }
+
+// Reverse direction of the above: the wizard (OnboardingModal.vue) saves
+// directly to the shared Pinia settings store (plex/automation/libraryGroups/
+// mediaServers, etc. -- see its markOnboardingDone()), bypassing
+// SettingsView.vue's own local staging refs and "last saved" snapshot
+// entirely. If SettingsView.vue was already mounted when the wizard ran (the
+// "Run Startup Wizard" re-run case, Settings -> Advanced), it never finds out
+// the store just changed out from under it -- its own watchers correctly
+// detect a diff against its now-stale snapshot and flag the page as having
+// unsaved changes, even though everything was already saved by the wizard.
+// A real, reported bug: finishing the wizard/QuickStartGuide would then
+// immediately hit SettingsView.vue's "You have unsaved changes, are you sure
+// you want to leave?" confirm the moment the user tried to navigate anywhere.
+// A counter (not a boolean) for the same reason onboardingLaunchRequested
+// above is one -- repeated wizard runs in one session must each register as
+// a change, even if SettingsView.vue already reacted to an earlier one.
+export const onboardingJustSaved = ref(0)
+
+export function notifyOnboardingSaved() {
+  onboardingJustSaved.value++
+}

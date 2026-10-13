@@ -93,7 +93,25 @@ for env_path in env_candidates:
 #  Settings (loads .env properly)
 # ===============================
 class Settings(BaseSettings):
-    PLEX_URL: str = "http://localhost:32400"
+    # Empty by default, not a placeholder like "http://localhost:32400" --
+    # this class-level default only ever kicks in when no PLEX_URL env var is
+    # set at all, and _default_ui_settings() (ui_settings.py) copies whatever
+    # this evaluates to straight into a fresh install's "not yet configured"
+    # settings response. A non-empty placeholder there looked exactly like a
+    # real, user-provided value everywhere else in the app that checks
+    # `if settings.PLEX_URL` to mean "Plex is configured" -- including once it
+    # got saved into the DB as a real settings row by the very first save (an
+    # onboarding "Skip Plex" run included), permanently making a genuinely
+    # never-configured install look configured. This default was never
+    # load-bearing for docker-compose.yml (which never sets this env var) or
+    # the documented .env.example convenience flow (that sets a REAL env var,
+    # picked up independently via os.getenv() in _env_overrides() below,
+    # regardless of this class default) -- verified before removing it. Two
+    # other places in this codebase (ui_settings.py, database.py) already
+    # special-cased the literal "http://localhost:32400" string as "not
+    # really configured" for exactly this reason; fixing it here instead
+    # closes the root cause rather than needing a third special case.
+    PLEX_URL: str = ""
     PLEX_TOKEN: str = ""
     PLEX_MOVIE_LIBRARY_NAME: str = ""
     PLEX_MOVIE_LIBRARY_NAMES: List[str] = []
@@ -213,9 +231,26 @@ def _load_ui_settings_fallback():
         plex_libs_env = os.getenv("PLEX_MOVIE_LIBRARY_NAMES")
         tmdb_key_env = os.getenv("TMDB_API_KEY")
 
-        if plex_url_env:
+        # ...except Plex credentials the user has explicitly removed in the UI
+        # (PlexSettings.ignoreEnvCredentials) -- otherwise a removed Plex would
+        # silently come back on every container restart.
+        plex_env_ignored = bool(plex_data.get("ignoreEnvCredentials"))
+        # The main Plex server switched off via its "Enabled" checkbox: Plex is
+        # off app-wide (saved URL/token kept), and env vars don't switch it back on.
+        _servers = data.get("mediaServers")
+        if isinstance(_servers, str):
+            try:
+                _servers = json.loads(_servers)
+            except ValueError:
+                _servers = []
+        _plex1 = next((s for s in (_servers or []) if isinstance(s, dict) and s.get("id") == "plex-1"), None)
+        if _plex1 is not None and _plex1.get("enabled") is False:
+            settings.PLEX_URL = ""
+            settings.PLEX_TOKEN = ""
+            plex_env_ignored = True
+        if plex_url_env and not plex_env_ignored:
             settings.PLEX_URL = plex_url_env.rstrip("/")
-        if plex_token_env:
+        if plex_token_env and not plex_env_ignored:
             settings.PLEX_TOKEN = plex_token_env
         if plex_lib_env:
             settings.PLEX_MOVIE_LIBRARY_NAME = plex_lib_env
@@ -244,6 +279,7 @@ POSTER_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "posters")
 LOGO_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "logos")
 ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "backdrops")
 SQUARE_ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "square_art")
+THUMB_ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "thumb_art")
 HISTORY_THUMBNAIL_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "history_thumbnails")
 
 # Load from ui_settings.json if environment variables weren't provided
@@ -275,6 +311,7 @@ Path(POSTER_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(LOGO_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(SQUARE_ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+Path(THUMB_ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(HISTORY_THUMBNAIL_DIR).mkdir(parents=True, exist_ok=True)
 
 # Migrate legacy log locations into the dedicated config/logs folder
@@ -315,13 +352,30 @@ class RedactingFormatter(logging.Formatter):
             redacted = redacted.replace(settings.TMDB_API_KEY, settings.TMDB_API_KEY[:4] + "***REDACTED***")
         return redacted
 
+# High-frequency UI progress-polling endpoints (batch/scan/backup progress bars,
+# polled every 200ms-3s while an operation runs) add zero diagnostic value to the
+# access log and drown out everything else in it -- dropped entirely below,
+# regardless of configured LOG_LEVEL, rather than just downgraded to DEBUG.
+_NOISY_POLL_PATHS = (
+    "/api/batch-progress",
+    "/api/backup/progress",
+    "/api/scan-progress",
+)
+
 class APILogDowngradeFilter(logging.Filter):
-    """Force uvicorn access logs to DEBUG level so they don't spam INFO."""
+    """Force uvicorn access logs to DEBUG level so they don't spam INFO,
+    and drop known high-frequency polling requests entirely."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name.startswith("uvicorn"):
             record.levelname = "DEBUG"
             record.levelno = logging.DEBUG
+            try:
+                msg = record.getMessage()
+            except Exception:
+                msg = ""
+            if any(p in msg for p in _NOISY_POLL_PATHS):
+                return False
         return True
 
 logger = logging.getLogger("simposter")
@@ -783,6 +837,77 @@ def get_plex_media_info(rating_key: str) -> Dict[str, str]:
         return {}
 
 
+def inject_plex_media_metadata(
+    render_options: Dict[str, Any],
+    rating_key: Optional[str],
+    *,
+    tmdb_id: Optional[Any] = None,
+    is_tv: Optional[bool] = None,
+    plex_xml_text: Optional[str] = None,
+    log_prefix: str = "",
+) -> Dict[str, Any]:
+    """Fetch Plex media info (resolution/codec/audio/edition) for *rating_key*
+    and merge it into render_options["metadata"], plus inject tmdb_id/media_type
+    for studio/streaming-platform badge resolution.
+
+    This is the single consolidated version of a pattern that used to be
+    duplicated, nearly byte-for-byte, across preview.py, batch.py (x2), save.py,
+    and plexsend.py — see CLAUDE.md Quirk #56. (overlay_config.py's
+    /overlay-preview-metadata endpoint calls get_plex_media_info()/
+    get_movie_tmdb_id() too, but builds a standalone response dict rather than
+    injecting into render options, so it's a different consumer of those two
+    primitives, not a copy of this pattern — deliberately left untouched.)
+
+    Callers that already know tmdb_id/is_tv (batch.py, preview.py always do)
+    should pass them to skip an extra Plex fetch. Callers that already have the
+    raw metadata XML in hand (plexsend.py, from its own title/year lookup)
+    should pass plex_xml_text to derive tmdb_id/is_tv from it instead of
+    re-fetching. If neither is given but rating_key is, this fetches metadata
+    once and derives both from it (save.py's case — this also replaces that
+    call site's own redundant second fetch-and-parse for the same purpose).
+
+    Mutates render_options in place and returns it for convenient chaining.
+    """
+    if not rating_key:
+        return render_options
+
+    plex_media = get_plex_media_info(rating_key)
+    if plex_media:
+        existing_meta = render_options.get("metadata") or {}
+        render_options["metadata"] = {**existing_meta, **plex_media}
+        logger.info("%sInjected Plex media info for rating_key=%s: %s", log_prefix, rating_key, plex_media)
+
+    resolved_tmdb_id = tmdb_id
+    resolved_is_tv = is_tv
+
+    if resolved_tmdb_id is None or resolved_is_tv is None:
+        xml_text = plex_xml_text
+        if xml_text is None:
+            try:
+                r = plex_session.get(f"{settings.PLEX_URL}/library/metadata/{rating_key}", headers=plex_headers(), timeout=5)
+                if r.ok:
+                    xml_text = r.text
+            except Exception as e:
+                logger.debug("%sFailed to fetch metadata for tmdb_id/is_tv: %s", log_prefix, e)
+
+        if xml_text:
+            if resolved_tmdb_id is None:
+                resolved_tmdb_id = extract_tmdb_id_from_metadata(xml_text)
+            if resolved_is_tv is None:
+                try:
+                    resolved_is_tv = ET.fromstring(xml_text).find(".//Directory") is not None
+                except ET.ParseError:
+                    resolved_is_tv = None
+
+    if resolved_tmdb_id:
+        render_options.setdefault("metadata", {})
+        render_options["metadata"]["tmdb_id"] = resolved_tmdb_id
+        render_options["metadata"]["media_type"] = "tv" if resolved_is_tv else "movie"
+        logger.info("%sInjected tmdb_id=%s media_type=%s for studio/streaming badge resolution", log_prefix, resolved_tmdb_id, render_options["metadata"]["media_type"])
+
+    return render_options
+
+
 def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
 
@@ -957,7 +1082,23 @@ def get_media_folder_name(rating_key: str, is_tv: bool = False) -> Optional[str]
     a resolved {folder} instead of always falling back to {title}.
 
     Behavior for movies is byte-identical to calling get_movie_folder_name()
-    directly (this just forwards to it) -- no change to existing behavior."""
+    directly (this just forwards to it) -- no change to existing behavior.
+
+    Server-aware at THIS single entry point rather than requiring every
+    caller to check first: get_show_folder_name()/get_movie_folder_name()
+    are both unconditionally Plex-only (a live Plex metadata fetch), always
+    doomed for a Jellyfin/Emby-sourced rating_key. Several callers (batch.py's
+    two closures) already guard this themselves at the call site, but that
+    pattern doesn't scale -- save.py's own direct call had no such guard and
+    silently paid for a doomed fetch on every "Save to Disk" of a Jellyfin
+    item whenever Plex happened to be configured-but-unreachable. Checking
+    once, here, protects every current and future caller uniformly."""
+    try:
+        from . import database as db
+        if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+            return None
+    except Exception:
+        pass  # DB not available yet or lookup failed -- fall through to the original behavior
     if is_tv:
         return get_show_folder_name(rating_key)
     return get_movie_folder_name(rating_key)
@@ -1306,3 +1447,88 @@ def get_reuse_cached_poster_days() -> float:
         return float(val or 0)
     except Exception:
         return 0.0
+
+
+def normalize_collection_title(name: str) -> str:
+    """Strips a trailing " Collection" (case-insensitive) and lowercases/trims
+    for fuzzy-matching a collection's name across servers/sources. Extracted
+    from movies.py's _best_collection_match() (originally built to match a
+    plain Plex collection title against TMDb's own "X Collection"-suffixed
+    search results) into a shared, module-level function so database.py's
+    cross-server collection dedup (get_cached_collections_multi(), Quirk
+    #130's follow-up) can reuse the identical normalization instead of a
+    second, driftable copy. User-reported directly, confirming the same
+    pattern applies a second place: "i think jellyfin adds 'collection' to
+    the end of the collection name whereas plex doesnt" -- e.g. Plex's "Marvel
+    Cinematic Universe" vs. Jellyfin's "Marvel Cinematic Universe Collection"
+    for what is, in the real world, the exact same collection."""
+    n = (name or "").strip().lower()
+    if n.endswith(" collection"):
+        n = n[: -len(" collection")]
+    return n.strip()
+
+
+def get_library_group_for(server_id: str, library_id: str, media_type: str) -> Optional[dict]:
+    """Finds and returns the whole LibraryGroup a (server_id, library_id) pair
+    belongs to (Quirk #62/#64), or None if it's in no group at all. The shared
+    lookup behind get_library_group_members()/get_library_group_preferred_server()
+    below -- both just pick a different field off the same group, so this is
+    the one place that actually reads `libraryGroups`."""
+    try:
+        from . import database as db
+        ui = db.get_ui_settings() or {}
+        groups = ui.get("libraryGroups") or []
+        for group in groups:
+            if group.get("mediaType") != media_type:
+                continue
+            members = group.get("members") or []
+            if any(m.get("serverId") == server_id and m.get("libraryId") == str(library_id) for m in members):
+                return group
+        return None
+    except Exception as e:
+        logger.debug("[LIBRARY_GROUP] Failed to resolve group for %s/%s (%s): %s", server_id, library_id, media_type, e)
+        return None
+
+
+def get_library_group_members(server_id: str, library_id: str, media_type: str) -> Optional[List[tuple]]:
+    """Given a (server_id, library_id) pair (a Plex library_id in every real
+    caller today), returns every member of its LibraryGroup as a
+    (server_id, library_id) tuple list -- including the pair passed in -- IF
+    that group has more than one member (i.e. it's actually linked to
+    another server's library). Returns None when there's no group, or the
+    group only has this one member -- meaning "nothing to merge, use the
+    normal single-library query" -- so every caller's existing single-library
+    code path is unaffected unless a real link exists."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return None
+    members = group.get("members") or []
+    if len(members) <= 1:
+        return None
+    return [(m.get("serverId"), m.get("libraryId")) for m in members]
+
+
+def get_library_group_preferred_server(server_id: str, library_id: str, media_type: str) -> Optional[str]:
+    """The specific group's own preferredServerId (Quirk #82's per-group
+    picker, replacing the old single global automation.preferredPosterServer
+    setting) -- None when the group has none set (or there's no group at
+    all), in which case database.py's _dedupe_by_tmdb_id() falls back to its
+    own default (Plex if present, else most-recently-updated)."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return None
+    return group.get("preferredServerId") or None
+
+
+def get_library_group_merge_enabled(server_id: str, library_id: str, media_type: str) -> bool:
+    """The specific group's own mergeItems setting (Quirk #119's follow-up --
+    the user asked for a real per-group choice between "1 poster per item"
+    (merged, the original default) and showing each linked server's copy as
+    its own card). Defaults to True (merge) when there's no group at all, or
+    the group predates this field and has no explicit value -- matching the
+    behavior every existing install already had before this setting existed,
+    so this is a strict no-op unless a group is explicitly opted out."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return True
+    return group.get("mergeItems", True) is not False

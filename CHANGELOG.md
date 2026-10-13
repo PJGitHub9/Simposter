@@ -1,20 +1,178 @@
 # Changelog
 
-## v1.6.112 (2026-10-02)
-### Bug Fixes
-- **Fixed a local poster/logo upload being rejected by `/api/preview` right after uploading, on some deployments (seedboxes in particular)** — the error was `"URL resolves to a blocked network range"`. Root cause: `check_ssrf_safe()` (`backend/middleware/validation.py`) has an "always blocked" bucket for link-local/cloud-metadata IP ranges (`169.254.0.0/16`, `0.0.0.0/8`, `fe80::/10`) that was checked with **zero exceptions**, even for this app's own known-safe serving paths like `/api/uploaded/...`. On deployments where the backend's own DNS resolution of its public-facing hostname can land on a link-local address (seedbox VPN tunnels, Docker bridge quirks, a failed lookup falling back to an APIPA address), the uploaded file's own URL got hard-rejected the moment it was handed back for rendering — even though the upload and serve endpoints both worked fine. Fixed by moving the safe-internal-path exception ahead of the network-range checks (non-strict callers only; the stricter external-URL image proxy is unaffected), with the path run through `posixpath.normpath()` first so a `../`-crafted path can't fake its way past the check. Confirmed the gap directly (mocked DNS resolution to a link-local address against a real `/api/uploaded/...` URL) before and after the fix, including a dedicated test for the traversal guard itself.
+## v1.7.08 (2026-10-13) — `dev-jellyfin` branch
 
-## v1.6.111 (2026-10-02)
 ### New Features
-- **Poster/logo upload redesigned as a button + modal** (`UploadPosterModal.vue`, shared by `EditorPane.vue` and `TvShowEditorPane.vue`) — clicking "Upload Poster"/"Upload Logo" now opens a choice between **Upload Local File** (unchanged: drag-and-drop or click-to-browse, `POST /api/upload/background`) and **Enter URL** (paste a direct image link, with a live, debounced preview that confirms it actually loads before you commit). Dragging a file straight onto the zone still uploads immediately as a shortcut, bypassing the modal. Every upload failure (an unrecognized file type, a server error) now shows a real inline error message instead of failing with only a `console.error` and no visible symptom — the most likely cause of prior "upload isn't working" reports.
+- **Thumb Art (Jellyfin/Emby)** — a new Thumb Art page for Jellyfin/Emby's 16:9 `Thumb` image, listed in a library's menu only when its group has a Jellyfin or Emby library. It lists the titles that exist on Jellyfin/Emby. The editor renders your template/preset on a 2000×1125 canvas (`canvas_mode: "thumb"`) from a TMDb/Fanart backdrop and logo, with backdrop position and logo size sliders, and sends to Jellyfin/Emby's Thumb slot (`POST /api/media-server/send-thumb-art`) or saves `thumb.jpg` to disk. Tiles load on demand from `GET /api/thumb-art/{id}` and are cached on disk; Thumb Art isn't part of library scans. Plex has no Thumb slot.
+
+### Improvements
+- **Server icons on Square Art / Thumb Art** — Square Art shows a Plex icon in its header when the library's group also has Jellyfin/Emby; Thumb Art shows the Jellyfin and/or Emby icon.
+
+## v1.7.07 (2026-10-09) — `dev-jellyfin` branch
+
+### Improvements
+- **Scans refresh posters changed on the server** — a normal scan used to skip every item that already had a cached poster, so posters changed by Kometa or by hand only showed after "Force Refresh All Art". The scan now compares each poster's version on the server (Plex's `thumb` timestamp, Jellyfin/Emby's `ImageTags.Primary`) with the one saved when it was cached, and re-downloads only the changed ones. No extra requests: the scan already reads these values. The first scan after updating just records the versions. Logos, backdrops, square art and collections aren't covered yet.
+
+## v1.7.06 (2026-10-09) — `dev-jellyfin` branch
+
+### New Features
+- **Media Mirror notifications** — a Discord/Apprise summary when a mirror run finishes or fails: library, source → target servers, and per asset type how many items were copied out of how many the source had (e.g. "Posters: 3/40 copied (37 unchanged)"), plus collections and the unmapped count. Manual runs always notify; scheduled runs only when something was copied or failed. New "Media Mirror" toggle under both Discord and Apprise in Settings → Notifications (on by default).
 
 ### Bug Fixes
-- **Entering a poster/logo URL from some sites (e.g. ThePosterDB) silently failed to load — two independent causes, both fixed.** (1) `rendering.py`'s `_download_image()` and the three raw logo/backdrop/square-art downloads in `plexsend.py` sent no headers at all, so `requests`' default User-Agent (`python-requests/x.x`) — a well-known bot signature — got blocked outright by sites with Cloudflare-style bot protection. Confirmed directly: the exact same URL returns `200` for a browser UA or even a plain custom string, `403` only for the unmodified `requests` default. Fixed by sending a real identifying User-Agent (`Simposter/1.0`, now a shared `EXTERNAL_IMAGE_FETCH_HEADERS` constant in `config.py`, also consolidating an existing duplicate of the same header in `universal.py`'s badge-image fetcher) on every external image fetch. (2) Separately, the *browser's own* live preview in the new upload modal was still blocked after that fix — the same class of site also rejects a cross-origin `Referer` header (standard anti-hotlinking), and a browser automatically attaches the app's own origin as the Referer when loading an `<img>` pointed at another site. Confirmed directly: same URL, browser UA, but an external Referer → `403`; no Referer at all → `200`. Fixed by adding `referrerpolicy="no-referrer"` to every `<img>` in both editors that can display a raw external URL (the modal's preview, the uploaded-poster/logo zone previews, and the main selected-poster placeholder) — harmless for same-origin local uploads, and closes this off everywhere it could recur, not just the one spot that was reported.
+- **Season rows in History** — posters synced to Jellyfin/Emby by a Sonarr webhook were recorded with only the show name and no year. They now read "Show - Season N" (or "Specials") with the year, like the Plex rows. Same fix for posters delivered to a server after it imports the show, which also now record the preset Plex's copy was sent with instead of "—".
 
-## v1.6.110 (2026-09-26)
+## v1.7.05 (2026-10-09) — `dev-jellyfin` branch
+
+### Bug Fixes
+- **Notification thumbnails for picked logos/backdrops** — a logo or backdrop chosen from TMDb/Fanart has no upload bytes, so its notification had no image. `POST /api/media-server/notify-send` gained `image_url` (used only when there's no `image_data`), fetched with the SSRF guard and capped at 8MB. The Logo/Backdrop editors and the movie, TV and Kometa editors' "Send Logo Only" pass it.
+- **"Preset: N/A"** — the Preset field is left out of notifications when no preset or template was used (logo/backdrop sends).
+
+## v1.7.04 (2026-10-08) — `dev-jellyfin` branch
+
+### New Features
+- **Multi-server Logo/Backdrop send** — `LogoEditorModal.vue`/`BackdropEditorModal.vue` send to the item's own server plus any linked copies (`other_servers`), via a new `useAssetServerSend` composable. With more than one server, Send opens `SendToServerModal.vue`. Uploads go out in parallel with `notify: false`, followed by one combined notification. `PlexBackdropSendRequest` gained `notify`, and `/api/media-server/send-backdrop` now honors it.
+- **Local Assets** — resend a saved poster to any server in its library group (`POST /api/local-assets/resend` gained `targets`), rename files (`POST /api/local-assets/rename`), and a thumbnail-size slider.
+
 ### Improvements
-- **Sorting by title now ignores a leading "The"/"A"/"An"** (GitHub issue #70) — "The Matrix" sorts under M, "A Bug's Life" under B, "An American Werewolf in London" under A, matching the convention Plex/Kodi/iTunes/etc. libraries already use for title sorting. Titles that only happen to start with those letters as a real word (e.g. "Theory of Everything", "Athena") are correctly left alone — the regex requires a trailing space after the article, so only a genuine leading article word is stripped, and only the first word is ever removed.
-- **Sorting was confirmed entirely client-side** (no backend changes needed) but was independently duplicated across 7 live views with three different naming conventions for the sort-order value (`title`+separate `asc`/`desc`; combined `title_asc`/`title_desc`; combined `title-asc`/`title-desc`) and zero shared helper. Added one new shared function instead of patching each comparator ad hoc: `frontend/src/services/sortTitle.ts` (`sortableTitle()`/`compareTitles()`), wired into `MoviesView.vue`, `TvShowsView.vue`, `LogosView.vue`, `BackdropsView.vue`, `SquareArtView.vue`, `BatchEditView.vue`, and `TvBatchEditView.vue`. `BatchEditModal.vue` has the identical old-style comparator but is confirmed dead code (not imported anywhere in the app) — deliberately left untouched rather than wiring up unreferenced code.
+- **Notification layout** — Discord embeds, Apprise text and batch completion messages now show Library / Preset (the preset's display name) / Action (Sent, Resent, Saved locally) / Servers (every server reached) / Asset, replacing Template and "Also synced to".
+- **Late-importing servers** — when a Jellyfin/Emby scan finds a new item that Plex also has, it now uploads the poster Plex last received (series and cached seasons) instead of skipping it. This covers a Radarr/Sonarr webhook that fired before that server had imported the file. The webhook sync also logs when a target doesn't have the item yet.
+- **Quieter logs** — the "PNG exceeds Plex's upload size limit, falling back to JPEG" warning is logged at debug level for Jellyfin/Emby-only uploads (Media Mirror and the media-server send endpoints). Encoded output is unchanged.
+
+### Bug Fixes
+- Every Sonarr webhook failed with HTTP 500 (`name 'plex_fallback' is not defined`): its target-resolution block had been placed in the Radarr handler instead.
+- Local Assets' library filter hid posters saved under another library in the same group, and its no-metadata fallback never matched.
+
+## v1.7.03 (2026-10-07) — `dev-jellyfin` branch
+
+### Improvements
+- **One notification per editor send** — the movie, TV and Kometa editors now send each upload with `notify: false` and then call a new `POST /api/media-server/notify-send` once, so a poster + logo sent to Plex and Jellyfin produces a single Discord/Apprise notification (previously up to four). It shows "Sent to" the first server (Plex first when included), "Also synced to" the rest, "Asset: Poster + Logo", the library and template/preset, with the rendered poster attached. `PlexSendRequest`, `PlexLogoSendRequest` and `MediaServerSendRequest` gained `notify` (default `true`), so batch, webhook and other callers are unchanged.
+- **Group-aware notification library filter** — a library passes the Discord/Apprise library filter when it or any library in its library group is picked. Previously a Jellyfin/Emby send was dropped when only the group's Plex library was selected.
+- **Auto-generate presets** — Kometa (collections-only) presets are no longer offered in a library group's auto-generate preset list.
+
+### Bug Fixes
+- Logo sends from the editors didn't pass the library, so their notifications showed "Unknown Library".
+- Docker: the entrypoint now creates the settings folder and database before changing ownership, fixing "attempt to write a readonly database" on a fresh install (shipped in the v1.7.02 quick-fix build).
+- A group with a Plex library showed a blank auto-generate preset dropdown after picking a preset (shipped in the v1.7.02 quick-fix build).
+
+## v1.7.02 (2026-10-07) — `dev-jellyfin` branch
+
+### Improvements
+- **Servers treated evenly** — Plex, Jellyfin and Emby are all just media servers:
+  - The setup wizard's separate "Connect your Plex server" and "Connect your media server(s)" steps are now one "Connect your servers" step with identical sections. You need at least one picked server to connect; untested ones are skipped. Its library step lists every server's libraries together, each tagged by server.
+  - Library group cards show every server's libraries as identical chips ("Server: Library" with ✕), with one shared "+ Link a library..." picker grouped by server.
+  - Help text and wording no longer frame Jellyfin/Emby as add-ons to Plex.
+- **Scheduled scans by library group** — Settings → Libraries' schedule picker lists library groups (saved as `group:<id>`) and scans each chosen group on every server it includes. Older Plex-only selections still work. The setup wizard offers a scan schedule without Plex too (it previously hid it).
+- **Main Plex server Enabled checkbox** — switches Plex off app-wide while keeping its URL/token, honored by the backend at startup and on save. The "Primary" badge only appears when a second Plex server exists.
+- **Docs** — new `docs/MEDIA_SERVERS.md`. README, Getting Started, Webhooks, the Collections guide, WORKFLOW and ARCHITECTURE now cover Jellyfin/Emby.
+
+### Bug Fixes
+- A Jellyfin/Emby-only group's Scan button didn't know about other scans, so it stayed clickable during Force Refresh All Art and then failed with "A scan is already in progress". Every group now has one Scan button that follows the shared scan status.
+- Scheduled scans ran the linked Jellyfin/Emby libraries' scan twice per run.
+- A library from a second Plex server could be linked to a group but was never displayed on it.
+
+## v1.7.01 (2026-10-07) — `dev-jellyfin` branch
+
+### New Features
+- **Collection matching** — a "Collection matching" window on the Collections page (shown when the library's group spans more than one server) overrides the automatic name-based matching of collections across servers: pick the matching collection on each server, choose "— none —" to split a wrong match, or reset a row to automatic. Saved per library group as `collectionMatchOverrides` and used everywhere collections are matched across servers: the merged Collections grid, the collection editors' send picker, and Media Mirror's collection mapping.
+- **Media Server Maintenance** (Settings → Cleanup) — one subsection per configured server, titled with its name. Jellyfin servers can run their built-in cleanup tasks (Optimize database, Clean Cache Directory, Clean Transcode Directory, Clean Log Directory, Clean Activity Log), showing each task's last run/result and live progress. Emby uses the same API but its task names are unverified.
+
+### Improvements
+- Plex maintenance actions now work for additional Plex servers (each uses its own saved URL/token), not only the primary connection.
+- Removed the outdated "Kometa Creator can't send to Jellyfin/Emby yet" note from the Collections page.
+
+## v1.7.0 (2026-10-07) — `dev-jellyfin` branch — Jellyfin/Emby Support
+
+First full release of multi-server support (Plex, Jellyfin and/or Emby). Builds on the v1.6.2 beta; Plex is no longer required. Moving to 1.7 also fixes version ordering: `v1.6.2` compared as older than `v1.6.114`, because each part of a version number is compared as a whole number.
+
+### New Features
+- **Collections on Jellyfin/Emby** — linked servers' collections are scanned and merged (matched by name, ignoring a trailing "Collection"), with a "Show posters from" switch, search/filter/sort, and a multi-server send picker in both collection editors.
+- **Media Mirror** — copies artwork from a source server to the other members of a group; manual or scheduled, paginated mapping tables with Movies/TV and Collections tabs, and change detection so only changed images are re-copied ("Re-copy everything" forces a full pass).
+- **Webhooks by library group** — `?group=<name>` (or `group_id=`) looks the item up across the group's libraries and delivers to every library in it, falling back to the group's Jellyfin/Emby libraries if Plex doesn't have the title. The Webhook URL Generator now lists groups instead of individual server libraries.
+- **Webhooks without Plex** — a URL that names no server is resolved against your Jellyfin/Emby libraries (from your groups, or directly from the servers if there are none) instead of an unconfigured Plex.
+- **Jellyfin/Emby-origin webhooks and auto-generate reach every server in the group**, Plex included.
+- **Auto-generate on Jellyfin/Emby scans** — new items found by a Jellyfin/Emby scan (manual or scheduled) get posters automatically, using the group's settings. A library's first scan counts as an import, not new arrivals.
+- **Poster/logo upload window** — choose a local file or paste an image URL, with a live preview (from `webui-overhaul-dev` v1.6.111).
+- **Removing a media server purges its cache** — its cached posters/logos/backdrops/square art, thumbnails, scan rows, label cache, retry-queue entries and Media Mirror state are deleted after the save. History and saved poster files are kept.
+
+### Improvements
+- Library/group names instead of IDs in History, Local Assets, global search, notifications and backup folder names.
+- Removing Plex now persists across restarts even when `PLEX_URL`/`PLEX_TOKEN` env vars are set.
+- The primary Plex server can be removed from Settings → Media Servers like any other.
+- Linking a library to a group no longer needs a separate "+ Add" click.
+- Scheduled scans skip Plex quietly when it isn't configured, and wait for a manual scan to finish instead of failing.
+- The streaming-provider cache warm-up after a scan runs in the background and only when a streaming badge is in use.
+
+### Bug Fixes
+- Webhooks for a single-library group rendered but never delivered.
+- A scan with many new items stalled silently after the movies step (the progress bar froze).
+- Save Changes appeared to need two clicks when adding a library to a group (the page waited for the follow-up scan before marking itself saved).
+- Removing the last media server was silently undone on save.
+- The "recently handled by a webhook" check matched the wrong items (a substring match) and never matched real Radarr/Sonarr events.
+- "Show posters from" never appeared for a Jellyfin/Emby-only library.
+- Local poster/logo uploads could fail with "URL resolves to a blocked network range" (from `webui-overhaul-dev` v1.6.112).
+- Kometa presets in Template Manager previewed over a random movie poster.
+- Removed dead code: the never-scheduled `check_recently_added()` Plex poll.
+
+## v1.6.2 (2026-09-30) — `dev-jellyfin` branch — Beta: Jellyfin/Emby Support
+
+**First versioned release of the Jellyfin/Emby multi-server work.** Everything below has been building up unversioned on this branch since the previous entry (v1.6.113/114) — see CLAUDE.md Quirks #56 onward for the full, detailed build history. This is a beta: multi-server support is genuinely usable, but has known gaps (see below) and hasn't had extensive real-world testing yet — please report anything that looks wrong.
+
+### New Features
+- **Connect one or more media servers** — Plex, Jellyfin, and/or Emby, any combination, all at once (Settings → Media Servers). An install can now run Plex-only (unchanged from before), Jellyfin/Emby-only (no Plex required at all), or any mix.
+- **Library Groups** (Settings → Libraries) — link the same logical library across servers (e.g. Plex "Movies" + Jellyfin "Movies") into one group. A group can have any combination of members, including just a single Jellyfin/Emby library with no Plex at all.
+- **Merged browsing** — the same movie/show found on more than one linked server shows as a single card by default (toggle per-library via "Show posters from," or per-group via "Merge items" in Settings → Libraries).
+- **Multi-server send** — the manual editor, the grid's resend button, and Batch Edit can all send posters/logos/backdrops to Plex and/or Jellyfin/Emby, including for a merged item reaching its counterpart on another server.
+- **Media Mirror** — designate one linked server's library as "the truth" and copy its posters/logos/backdrops/square art to other linked servers, either manually ("Run Now") or on a schedule.
+- **Scheduled Scans** now cover Plex and/or Jellyfin and/or Emby — a single global schedule scans configured Plex libraries, every linked Jellyfin/Emby library, and every standalone Jellyfin/Emby-only group.
+- **Scan All Libraries / a single library's "Scan" button** now both correctly scan any linked Jellyfin/Emby library too, not just the Plex side.
+
+### Known Limitations (beta)
+- Webhook-triggered automation (Radarr/Sonarr/Tautulli) and the "recently added" auto-generate poll are still Plex-first-class — a webhook-triggered poster does sync to linked servers afterward, but the initial trigger itself still needs a Plex-anchored library.
+- Discord/Apprise notifications are not yet fully multi-server aware.
+- TV season-level sends to Jellyfin/Emby are supported; some edge cases around season resolution are still being verified against real servers.
+- Labels (removal after sending, Kometa compatibility) remain a Plex-only concept — Jellyfin/Emby have no equivalent mechanism.
+
+### Bug Fixes (this release)
+- A genuinely standalone Jellyfin/Emby-only library group was never covered by "Scan All Libraries" or the scheduled scan — only libraries linked to a Plex library were. Both now cover every linked and standalone group.
+- The "Rescanning library..." overlay could freeze mid-scan if you navigated away from Settings — the polling that kept it updated was tied to that page's own lifecycle instead of the overlay's actual global visibility. It now updates correctly regardless of which page you're on.
+- Linking a Plex library into an existing Library Group from Settings → Libraries could silently create a duplicate/incorrect entry instead of joining the group you picked it from, due to a race between two places independently writing the same data. Fixed to a single, correct writer.
+- Testing a Plex connection no longer auto-populates every discovered library as "tracked" — library tracking now only ever happens through the explicit per-group linking picker, matching the "pick what you want tracked" model the rest of Settings → Libraries already uses.
+- Onboarding re-runs (Settings → Advanced → "Run Startup Wizard") no longer auto-create or auto-scan Library Groups — that now only happens on a genuine first-time setup; a re-run only touches what you explicitly edit and save.
+
+## v1.6.114 (2026-09-23) — `dev-jellyfin` branch
+### New Features
+- **Settings → Media Servers**: a new tab to add, enable, test-connect, and remove Plex/Jellyfin/Emby entries in the `mediaServers` setting through the actual UI, replacing the direct-SQL workaround the Phase 3 debug endpoints required.
+- **New permanent endpoint `POST /api/media-server/test-connection`** backs the tab's Test Connection buttons — validates a server before it's saved.
+
+### Bug Fixes
+- **Found and fixed a real data-loss bug before it could ship**: `mediaServers` had no corresponding field on the `UISettings` Pydantic model, and the settings save path fully rebuilds the `settings` table from that model on every save — meaning saving *any* unrelated setting (a theme change, anything) would have silently deleted the `mediaServers` entry the first time it happened. Added the missing schema field; verified directly that a seeded `mediaServers` value now survives an unrelated settings save.
+- Plex/Jellyfin/Emby credentials in `mediaServers` now get the same never-leaked-in-GET, never-clobbered-by-the-mask-placeholder-on-save treatment every other secret field already gets, via dedicated masking logic for the list shape.
+
+See CLAUDE.md Quirk #60 for the full detail.
+
+## v1.6.113 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added `JellyfinClient`** (`backend/media_server/jellyfin_client.py`) — Phase 3 of the Jellyfin-integration plan, the first non-Plex `MediaServerClient` implementation. Also serves Emby via an `is_emby` flag rather than a separate class see CLAUDE.md Quirk #59 for exactly what's confirmed vs. still needs real-instance verification.
+- **Added temporary diagnostic endpoints** (`/api/media-server-debug/...`) so `JellyfinClient` can be tested directly against a real Jellyfin server before the rest of the app is wired through it (Phase 4) and before a real Settings UI exists to configure one (Phase 5). Not intended as permanent API surface.
+- `ImageType.SQUARE_ART` and label add/remove are deliberate no-ops for Jellyfin/Emby (no confirmed mechanism exists for either — see plan doc §13/§10), rather than guessed-at implementations.
+
+## v1.6.112 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added a `MediaServerClient` abstraction (`backend/media_server/`)** — Phase 2 of the Jellyfin-integration plan. `PlexClient` is the first real implementation, built as a pure-addition delegation layer over Simposter's existing, already-tested Plex code rather than an extract-and-replace refactor — nothing in the running app calls into it yet, so this carries zero regression risk. Verified against mocked Plex responses to confirm it reproduces the app's exact existing endpoint behavior (collection-aware poster uploads, logo uploads always metadata-routed, exact TMDb-GUID matching).
+- See CLAUDE.md Quirk #58 for the full detail, including a known, deliberate limitation (only correctly represents the single globally-configured Plex server for now) and the plan for `JellyfinClient` next.
+
+## v1.6.111 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added `server_id` (default `'plex-1'`) to `movie_cache`, `tv_cache`, `collection_cache`, `poster_history`, and `poster_retry_queue`** — Phase 1 of the Jellyfin-integration plan, the database groundwork for the multi-server model. Purely additive: every existing row/query on an upgrading install behaves identically, verified directly against real pre-migration databases (including one with actual data in it), not just a clean-schema check.
+- **Seeded a `mediaServers` setting for existing installs** — one auto-migrated entry (`{id: "plex-1", type: "plex", url, token, enabled: true}`) built from the install's existing `plex.url`/`plex.token`, using the same "existing vs. fresh install" seed pattern already established for `onboarding_completed`/`scheduler.cleanupEnabled`. Not yet exposed through Settings — this is DB groundwork only, nothing reads it yet.
+- **Deliberately did not change any table's primary key** to a composite `(server_id, rating_key)`, despite that being the plan doc's original literal design — SQLite has no in-place way to do that short of a full table rebuild, which is real risk for a theoretical benefit (a Plex rating_key and a Jellyfin/Emby item GUID essentially can't collide as strings). See CLAUDE.md Quirk #57 for the full reasoning.
+- See CLAUDE.md Quirk #57 for the complete detail, including every verification scenario tested.
+
+## v1.6.110 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Consolidated 4 duplicated Plex-metadata-injection call sites into one shared function**, `inject_plex_media_metadata()` (`backend/config.py`). `preview.py`, `batch.py` (×2 — movie and TV/season paths), `save.py`, and `plexsend.py` had all independently accumulated the same "fetch Plex media info, merge into `options['metadata']`, also inject `tmdb_id`/`media_type`" logic. No user-facing behavior change — verified directly against 5 mocked scenarios covering every call site's exact prior behavior, not just an import check.
+- **`save.py` no longer does a redundant second Plex metadata fetch just to re-derive `is_tv`** — that value was already available on the request (`SaveRequest.is_tv`) and simply never read; now passed straight through instead.
+- This is Phase 0 of the Jellyfin-integration plan (see `ai_repo/simposter/jellyfin-upgrade-plan.md`) — a prerequisite so a future `MediaServerClient`/`JellyfinClient` abstraction has one seam to generalize instead of several scattered copies. See CLAUDE.md Quirk #56 for the full detail, including one site (`overlay_config.py`) that turned out on closer read *not* to be a real duplicate and was deliberately left alone.
 
 ## v1.6.109 (2026-09-23)
 ### Improvements
@@ -110,7 +268,7 @@ See the new CLAUDE.md Quirk #48 for the full root-cause writeup.
 
 ## v1.6.98 (2026-09-19)
 ### New Features
-- **Square Art can now Send to Plex.** Initially shipped save-to-disk only after concluding Plex had no square-art upload slot — the user pushed back twice, citing real usage in Poster Tools/Posterizarr. First-pass research (Fanart.tv resource types, Plex's local-media-assets docs) still came up short; the actual proof came from `python-plexapi`'s real source (`SquareArtMixin` in `plexapi/mixins/resources.py`, fetched directly from GitHub): Plex has a genuinely separate, dedicated slot — `POST /library/metadata/{ratingKey}/squareArts` (image type `backgroundSquare`), fully distinct from both the regular poster (`/posters`) and background/art (`/arts`). New `POST /api/plex/send-square-art` (`backend/api/plexsend.py`, new `PlexSquareArtSendRequest` schema) mirrors the existing backdrop-send endpoint's shape (resolve bytes from `art_data`/`art_url`, normalize via the same `normalize_backdrop_for_plex()`, upload) targeting this new path. `SquareArtModal.vue` gained a "Send to Plex" button alongside Save to Disk — since the slot is genuinely separate, sending square art can never overwrite the item's actual poster or backdrop, which had been the whole reason it was held back.
+- **Square Art can now Send to Plex.** Initially shipped save-to-disk only after concluding Plex had no square-art upload slot — the user pushed back twice. First-pass research (Fanart.tv resource types, Plex's local-media-assets docs) still came up short; the actual proof came from `python-plexapi`'s real source (`SquareArtMixin` in `plexapi/mixins/resources.py`, fetched directly from GitHub): Plex has a genuinely separate, dedicated slot — `POST /library/metadata/{ratingKey}/squareArts` (image type `backgroundSquare`), fully distinct from both the regular poster (`/posters`) and background/art (`/arts`). New `POST /api/plex/send-square-art` (`backend/api/plexsend.py`, new `PlexSquareArtSendRequest` schema) mirrors the existing backdrop-send endpoint's shape (resolve bytes from `art_data`/`art_url`, normalize via the same `normalize_backdrop_for_plex()`, upload) targeting this new path. `SquareArtModal.vue` gained a "Send to Plex" button alongside Save to Disk — since the slot is genuinely separate, sending square art can never overwrite the item's actual poster or backdrop, which had been the whole reason it was held back.
 - **Backdrop's upload endpoint simplified while confirming the above**: the same `python-plexapi` source confirms `ArtMixin.uploadArt()` only ever POSTs to `/library/metadata/{ratingKey}/arts` (plural) — no singular `/art` write path exists at all. The v1.6.95 dual-attempt fallback (`/arts` then `/art`) was a reasonable hedge without firm evidence at the time; now removed in favor of the single confirmed-correct path. This also fully explains the original dropped-SSL-connection failure: `/art` (singular) was never a real Plex write route to begin with.
 
 ### Bug Fixes

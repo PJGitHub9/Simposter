@@ -81,6 +81,10 @@ A dedicated creator modeled directly on **[bullmoose00](https://github.com/bullm
 
 Both creators support Save Location and Send-to-Plex, same as movies/TV.
 
+### Collections across servers
+
+Collections work the same on Plex, Jellyfin and Emby, and both creators can send to any server that has the collection. When a library group spans several servers, the same collection on each is matched by name (a trailing "Collection" is ignored) and shown as one card, with a **Show from** switch and a server filter. For collections whose names don't match, use **Collection matching** on the Collections page — see [MEDIA_SERVERS.md](MEDIA_SERVERS.md#collections-across-servers).
+
 ### Fanart.tv and Collections
 
 This is the one non-obvious part: TMDb has **no artwork endpoint for Collections at all** — but Fanart.tv's contributor community tags franchise-wide logos under the TMDb collection's own ID (inside its regular movie-artwork namespace). Both creators fetch this automatically. **Without a Fanart.tv API key, Collection posters have no automatic logo source** — you'd be uploading every collection logo by hand. Set one in Settings → General or during onboarding; it's free at [fanart.tv/get-an-api-key](https://fanart.tv/get-an-api-key/).

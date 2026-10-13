@@ -513,22 +513,50 @@ const clearSelectedPreviewMovie = () => {
   previewError.value = ''
 }
 
+// Kometa presets are collection templates -- they have no photo background
+// (a flat color/texture canvas from the preset's own options), so previewing
+// one over a random movie poster was misleading. Sample a collection's title
+// for {title} text instead; the logo is the preset's own saved one, if any.
+const collectionTitles = ref<string[]>([])
+const fetchCollectionTitles = async () => {
+  if (collectionTitles.value.length) return
+  try {
+    const res = await fetch(`${apiBase}/api/collections`)
+    if (res.ok) {
+      const data = await res.json()
+      collectionTitles.value = Array.isArray(data) ? data.map((c: { title?: string }) => c.title || '').filter(Boolean) : []
+    }
+  } catch { /* ignore -- falls back to a generic title */ }
+}
+
 const previewPreset = async (templateId: string, preset: Preset) => {
-  const movie = resolvePreviewMovie()
-  if (!movie) { previewError.value = 'No movies available to preview'; return }
+  const isKometa = templateId === 'kometa'
+  let movie: { key: string; title: string } | null
+  if (isKometa) {
+    await fetchCollectionTitles()
+    const titles = collectionTitles.value
+    const title = titles.length ? titles[Math.floor(Math.random() * titles.length)] || 'Sample Collection' : 'Sample Collection'
+    movie = { key: '', title }
+  } else {
+    movie = resolvePreviewMovie()
+    if (!movie) { previewError.value = 'No movies available to preview'; return }
+  }
   previewMovie.value = movie
   previewTemplate.value = { templateId, presetName: preset.name || preset.id }
   previewUrl.value = ''
   previewLoading.value = true
   previewError.value = ''
+  const kometaLogo = isKometa && typeof preset.options?.kometa_logo_url === 'string' && preset.options.kometa_logo_url
+    ? (preset.options.kometa_logo_url.startsWith('/') ? `${apiBase}${preset.options.kometa_logo_url}` : preset.options.kometa_logo_url)
+    : null
   try {
     const res = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         template_id: templateId,
-        background_url: `${apiBase}/api/movie/${movie.key}/poster`,
-        logo_url: null,
+        background_url: isKometa ? '' : `${apiBase}/api/movie/${movie.key}/poster`,
+        logo_url: kometaLogo,
         options: preset.options || {},
         preset_id: preset.id,
         movie_title: movie.title,

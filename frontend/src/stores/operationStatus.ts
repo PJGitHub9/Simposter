@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 
 export type OperationType = 'scan' | 'batch' | 'backup' | null
-export type OperationState = 'idle' | 'running' | 'done' | 'error'
+export type OperationState = 'idle' | 'running' | 'done' | 'error' | 'cancelled'
 
 export type StatusData = {
   type: OperationType
@@ -61,6 +61,7 @@ export function useOperationStatus() {
       const isRunning = status.state === 'running'
       const isDone = status.state === 'done'
       const isError = status.state === 'error'
+      const isCancelled = status.state === 'cancelled'
 
       // Cancel hide timer when a new run starts
       if (isRunning && hideTimer) {
@@ -68,14 +69,14 @@ export function useOperationStatus() {
         hideTimer = null
       }
 
-      state.value = status.state || 'idle'
+      state.value = (status.state as OperationState) || 'idle'
       type.value = operationType
 
       if (isRunning) {
         activeRunStarted.value = true
       }
 
-      const showCompletion = (isDone || isError) && activeRunStarted.value
+      const showCompletion = (isDone || isError || isCancelled) && activeRunStarted.value
 
       // Keep overlay visible while running, or briefly after completion
       visible.value = isRunning || showCompletion

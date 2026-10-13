@@ -155,6 +155,18 @@ This document explains how Simposter starts, how the backend and frontend intera
 
 ---
 
+### Media servers (`backend/media_server/`)
+
+Every Plex/Jellyfin/Emby call that isn't legacy Plex-only code goes through a `MediaServerClient` (`base.py`): `PlexClient` and `JellyfinClient` (which also serves Emby) implement library listing, item lookup by TMDb/TVDB id, season resolution, and image download/upload. `registry.py`'s `get_client(server_id)` builds one from the `mediaServers` setting. Cached rows (`movie_cache`, `tv_cache`, `collection_cache`, history, retry queue) carry a `server_id`; library groups (`libraryGroups` setting) link libraries across servers.
+
+Related routers:
+- `media_server.py` — server tests, library discovery, per-library scans, library-group preferences, collection matching, cache purge for a removed server
+- `media_server_send.py` — sending posters/logos/backdrops to Jellyfin/Emby, and syncing a render to a group's other servers
+- `media_mirror.py` — Media Mirror config, mappings, runs and schedules
+- `cleanup.py` — Simposter cache cleanup, plus Plex maintenance and Jellyfin/Emby scheduled tasks
+
+---
+
 ## Rendering Flow
 
 ### 1. Preview Rendering

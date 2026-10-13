@@ -1,6 +1,6 @@
 # <img src=".github/icon-512.png" alt="Simposter logo" width="50" height="50"> Simposter
 
-> **Template-based poster generation for Plex** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
+> **Template-based poster generation for Plex, Jellyfin and Emby** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
 
 ![Simposter UI](https://github.com/user-attachments/assets/fa22c97f-ad8c-4a7e-b6ef-1aaa3d7a5022)
 
@@ -8,13 +8,16 @@
 
 ## Features
 
-- **Live-preview poster editor** for movies, TV shows (per-season, independent artwork/logo/text), and **Plex Collections** (two dedicated creators, including a Kometa-style one)
+- **Live-preview poster editor** for movies, TV shows (per-season, independent artwork/logo/text), and **Collections** (two dedicated creators, including a Kometa-style one)
+- **Plex, Jellyfin and Emby** — use any combination (Plex not required), link the same library across servers, and send artwork to several servers at once
+- **Media Mirror** — keep posters, logos and backdrops in sync from one server to the others, on demand or on a schedule
 - **Multi-source artwork** — TMDb, TVDB, Fanart.tv, with configurable priority and fallback rules
 - **Overlay badges** — resolution, codec, audio, edition, studio, streaming platform, custom images, text
 - **Batch edit** — apply a preset across your whole library in one run, with live progress
-- **Webhooks** — Radarr, Sonarr, and Tautulli, auto-generate on import
+- **Webhooks** — Radarr, Sonarr, and Tautulli, auto-generate on import (target a whole library group across servers)
 - **Scheduled scans** and a **smart retry queue** for hands-off automation
-- **Guided setup wizard** on first launch — Plex, API keys, libraries, automation, all in one flow
+- **Guided setup wizard** on first launch — media servers, API keys, libraries, automation, all in one flow
+- **Cleanup tools** — clear Simposter's own stale cache, and run each media server's built-in maintenance
 - **6 themes**, Discord/Apprise notifications, full History audit log with hover previews
 
 Full breakdown of all of this in the docs below.
@@ -29,7 +32,7 @@ cd Simposter
 docker-compose up -d --build
 ```
 
-Open `http://localhost:8003` — a setup wizard walks you through Plex/API keys/libraries from there. No manual config file editing required.
+Open `http://localhost:8003` — a setup wizard walks you through your media servers, API keys and libraries from there. No manual config file editing required.
 
 **Updating:** `git pull && docker-compose up -d --build` — your data lives in the bind-mounted `./config` folder, untouched by rebuilds.
 
@@ -42,7 +45,8 @@ Prefer not to build locally? Pre-built images are published to [ghcr.io/pjgithub
 | Doc | What's in it |
 |-----|--------------|
 | **[Getting Started](docs/GETTING_STARTED.md)** | Install (Docker/local dev), the setup wizard, your first poster, Settings reference, environment variables |
-| **[Collections & Poster Guide](docs/COLLECTIONS_AND_POSTERS.md)** | Templates/presets, logos, overlay badges, batch processing, the smart retry queue, and Plex Collections (including why a Fanart.tv key matters) |
+| **[Media Servers](docs/MEDIA_SERVERS.md)** | Plex, Jellyfin and Emby: connecting servers, library groups, merged browsing, multi-server sending, Media Mirror, collection matching, server maintenance |
+| **[Collections & Poster Guide](docs/COLLECTIONS_AND_POSTERS.md)** | Templates/presets, logos, overlay badges, batch processing, the smart retry queue, and Collections (including why a Fanart.tv key matters) |
 | **[Webhooks](docs/WEBHOOKS.md)** | Radarr, Sonarr, and Tautulli setup, payload examples, dry-run testing |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Technical architecture, API routers, rendering pipeline (for contributors) |
 | **[WORKFLOW.md](WORKFLOW.md)** | How a poster request flows end-to-end for each trigger type |

@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { getApiBase } from '../services/apiBase'
 
 const apiBase = getApiBase()
@@ -12,6 +12,68 @@ export type LibraryMapping = {
   autoGenerateEnabled?: boolean
   autoGeneratePresetId?: string | null
   autoGenerateTemplateId?: string | null
+}
+
+export type MediaServerEntry = {
+  id: string
+  type: 'plex' | 'jellyfin' | 'emby'
+  name?: string    // user-supplied display label, e.g. "jellyfin-main" -- falls back to
+                    // a generic type label everywhere it's shown when unset/blank
+  url: string
+  token?: string   // Plex
+  apiKey?: string  // Jellyfin/Emby
+  enabled: boolean
+}
+
+export type LibraryGroupMember = {
+  serverId: string
+  libraryId: string
+  libraryName?: string
+}
+
+export type MediaMirrorConfig = {
+  enabled?: boolean
+  sourceServerId?: string | null
+  targetServerIds?: string[]
+  assetTypes?: string[]
+  scheduleEnabled?: boolean
+  scheduleCron?: string | null
+  lastRunAt?: string | null
+  lastRunStats?: {
+    checked?: number
+    updated?: number
+    skipped?: number
+    unmapped?: number
+    failed?: number
+    unmappedSample?: string[]
+  } | null
+}
+
+export type LibraryGroup = {
+  id: string
+  name: string
+  mediaType: 'movie' | 'tv'
+  members: LibraryGroupMember[]
+  autoGenerateEnabled?: boolean
+  autoGeneratePresetId?: string | null
+  autoGenerateTemplateId?: string | null
+  labelsToRemove?: string[]
+  preferredServerId?: string | null  // Which member's row wins when this group's merged
+                                      // grid finds the same title on more than one server
+                                      // (backend's _dedupe_by_tmdb_id()) -- replaces the
+                                      // old global automation.preferredPosterServer.
+  mergeItems?: boolean               // True (default) collapses a title present on more
+                                      // than one linked server into a single card (the
+                                      // behavior preferredServerId above governs). False
+                                      // shows every server's copy as its own separate card
+                                      // -- no also_on/other_servers populated either, since
+                                      // nothing was collapsed to cross-reference.
+  collectionMatchOverrides?: Record<string, string>  // manual cross-server collection matches ("serverId:ratingKey" -> match key)
+  mirror?: MediaMirrorConfig | null  // Media Mirror (Quirk #123) -- designates one member
+                                      // as "the truth" and copies its posters/logos/etc to
+                                      // one or more other members. Saved independently of
+                                      // this page's own store save cycle -- MediaMirrorView
+                                      // POSTs it directly to /api/media-mirror/config.
 }
 
 export type PlexSettings = {
@@ -77,6 +139,7 @@ export type AutomationSettings = {
   retryMaxAttempts?: number
   kometaCompatibility?: boolean
   reuseCachedPosterDays?: number
+  preferredPosterServer?: string
 }
 
 export type NotificationSettings = {
@@ -87,6 +150,7 @@ export type NotificationSettings = {
   discordNotifyManual: boolean
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
+  discordNotifyMediaMirror?: boolean
   appriseEnabled: boolean
   appriseUrls: string[]
   appriseNotifyLibraries: string[]
@@ -94,6 +158,7 @@ export type NotificationSettings = {
   appriseNotifyManual: boolean
   appriseNotifyWebhook: boolean
   appriseNotifyAutoGenerate: boolean
+  appriseNotifyMediaMirror?: boolean
 }
 
 export type UISettings = {
@@ -122,6 +187,8 @@ export type UISettings = {
   automation?: AutomationSettings
   notifications?: NotificationSettings
   onboarding_completed?: boolean
+  mediaServers?: MediaServerEntry[]
+  libraryGroups?: LibraryGroup[]
 }
 
 const onboardingCompleted = ref(false)
@@ -143,6 +210,15 @@ const tvShowSaveMode = ref<string>('flat')
 const saveBatchInSubfolder = ref<boolean>(false)
 const saveToAssetFolderOnSend = ref<boolean>(false)
 const plex = ref<PlexSettings>({ url: '', token: '', movieLibraryName: '', movieLibraryNames: [], libraryMappings: [], tvShowLibraryName: '', tvShowLibraryNames: [], tvShowLibraryMappings: [] })
+const mediaServers = ref<MediaServerEntry[]>([])
+// Plex is in use when it has a URL + token and its main server ('plex-1') isn't
+// switched off with the Enabled checkbox in Settings -> Media Servers -- the
+// same rule as Jellyfin/Emby, whose entries are skipped when disabled.
+const plexActive = computed(() =>
+  !!(plex.value.url && plex.value.token) &&
+  mediaServers.value.find(s => s.id === 'plex-1')?.enabled !== false
+)
+const libraryGroups = ref<LibraryGroup[]>([])
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
@@ -157,7 +233,7 @@ const scheduler = ref<SchedulerSettings>({
   enabled: false, cronExpression: '0 1 * * *', libraryId: null, libraryIds: [],
   cleanupEnabled: false, cleanupCronExpression: '0 3 * * 0', cleanupCategories: [...DEFAULT_CLEANUP_CATEGORIES], cleanupHistoryDays: 180,
 })
-const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', labelToAdd: '', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0, kometaCompatibility: false, reuseCachedPosterDays: 0 })
+const automation = ref<AutomationSettings>({ webhookAutoSend: true, webhookAutoLabels: 'Simposter', labelToAdd: '', webhookAlwaysRegenerateSeason: false, webhookSecret: '', existingContentMode: 'regenerate', retryUntilTemplateMet: false, retryIntervalHours: 24, retryMaxAttempts: 0, kometaCompatibility: false, reuseCachedPosterDays: 0, preferredPosterServer: 'plex-1' })
 const notifications = ref<NotificationSettings>({
   discordEnabled: false,
   discordWebhookUrl: '',
@@ -166,13 +242,15 @@ const notifications = ref<NotificationSettings>({
   discordNotifyManual: true,
   discordNotifyWebhook: true,
   discordNotifyAutoGenerate: true,
+  discordNotifyMediaMirror: true,
   appriseEnabled: false,
   appriseUrls: [],
   appriseNotifyLibraries: [],
   appriseNotifyBatch: true,
   appriseNotifyManual: true,
   appriseNotifyWebhook: true,
-  appriseNotifyAutoGenerate: true
+  appriseNotifyAutoGenerate: true,
+  appriseNotifyMediaMirror: true
 })
 
 async function loadSettings() {
@@ -221,6 +299,8 @@ async function loadSettings() {
       tvShowLibraryMappings: data.plex?.tvShowLibraryMappings ?? [],
       sendLogosToPlex: data.plex?.sendLogosToPlex ?? false
     }
+    mediaServers.value = data.mediaServers ?? []
+    libraryGroups.value = data.libraryGroups ?? []
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }
     fanart.value = { apiKey: data.fanart?.apiKey ?? '' }
@@ -260,6 +340,7 @@ async function loadSettings() {
       retryIntervalHours: data.automation?.retryIntervalHours ?? 24,
       retryMaxAttempts: data.automation?.retryMaxAttempts ?? 0,
       reuseCachedPosterDays: data.automation?.reuseCachedPosterDays ?? 0,
+      preferredPosterServer: data.automation?.preferredPosterServer ?? 'plex-1',
     }
     notifications.value = {
       discordEnabled: data.notifications?.discordEnabled ?? false,
@@ -269,13 +350,15 @@ async function loadSettings() {
       discordNotifyManual: data.notifications?.discordNotifyManual ?? true,
       discordNotifyWebhook: data.notifications?.discordNotifyWebhook ?? true,
       discordNotifyAutoGenerate: data.notifications?.discordNotifyAutoGenerate ?? true,
+      discordNotifyMediaMirror: data.notifications?.discordNotifyMediaMirror ?? true,
       appriseEnabled: data.notifications?.appriseEnabled ?? false,
       appriseUrls: data.notifications?.appriseUrls ?? [],
       appriseNotifyLibraries: data.notifications?.appriseNotifyLibraries ?? [],
       appriseNotifyBatch: data.notifications?.appriseNotifyBatch ?? true,
       appriseNotifyManual: data.notifications?.appriseNotifyManual ?? true,
       appriseNotifyWebhook: data.notifications?.appriseNotifyWebhook ?? true,
-      appriseNotifyAutoGenerate: data.notifications?.appriseNotifyAutoGenerate ?? true
+      appriseNotifyAutoGenerate: data.notifications?.appriseNotifyAutoGenerate ?? true,
+      appriseNotifyMediaMirror: data.notifications?.appriseNotifyMediaMirror ?? true
     }
 
   } catch (e: unknown) {
@@ -286,7 +369,10 @@ async function loadSettings() {
   }
 }
 
-async function saveSettings() {
+// allowEmptyMediaServers: the user deliberately removed their last media
+// server(s) this save. The backend otherwise refuses an empty mediaServers
+// list when entries are already saved (a guard against accidental wipes).
+async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
   loading.value = true
   error.value = null
   try {
@@ -306,6 +392,8 @@ async function saveSettings() {
       saveBatchInSubfolder: saveBatchInSubfolder.value,
       saveToAssetFolderOnSend: saveToAssetFolderOnSend.value,
       plex: { ...plex.value },
+      mediaServers: mediaServers.value.map(s => ({ ...s })),
+      libraryGroups: libraryGroups.value.map(g => ({ ...g, members: g.members.map(m => ({ ...m })) })),
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
       fanart: { ...fanart.value },
@@ -317,7 +405,8 @@ async function saveSettings() {
       notifications: { ...notifications.value },
       onboarding_completed: onboardingCompleted.value,
     }
-    const res = await fetch(`${apiBase}/api/ui-settings`, {
+    const query = opts.allowEmptyMediaServers ? '?allow_empty_media_servers=true' : ''
+    const res = await fetch(`${apiBase}/api/ui-settings${query}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -345,6 +434,9 @@ export function useSettingsStore() {
     defaultLabelsToRemove,
     defaultTvLabelsToRemove,
     plex,
+    plexActive,
+    mediaServers,
+    libraryGroups,
     tmdb,
     tvdb,
     fanart,

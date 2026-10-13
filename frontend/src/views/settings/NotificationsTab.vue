@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 
 interface LibraryMapping {
   id: string
@@ -16,6 +18,7 @@ const props = defineProps<{
   discordNotifyManual: boolean
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
+  discordNotifyMediaMirror: boolean
   appriseEnabled: boolean
   appriseUrls: string[]
   appriseNotifyLibraries: string[]
@@ -23,6 +26,7 @@ const props = defineProps<{
   appriseNotifyManual: boolean
   appriseNotifyWebhook: boolean
   appriseNotifyAutoGenerate: boolean
+  appriseNotifyMediaMirror: boolean
   libraries: LibraryMapping[]
   tvShowLibraries: LibraryMapping[]
   unsavedChanges: boolean
@@ -36,6 +40,7 @@ const emit = defineEmits<{
   'update:discordNotifyManual': [value: boolean]
   'update:discordNotifyWebhook': [value: boolean]
   'update:discordNotifyAutoGenerate': [value: boolean]
+  'update:discordNotifyMediaMirror': [value: boolean]
   'update:appriseEnabled': [value: boolean]
   'update:appriseUrls': [value: string[]]
   'update:appriseNotifyLibraries': [value: string[]]
@@ -43,6 +48,7 @@ const emit = defineEmits<{
   'update:appriseNotifyManual': [value: boolean]
   'update:appriseNotifyWebhook': [value: boolean]
   'update:appriseNotifyAutoGenerate': [value: boolean]
+  'update:appriseNotifyMediaMirror': [value: boolean]
   'save': []
 }>()
 
@@ -82,6 +88,11 @@ const localDiscordNotifyAutoGenerate = computed({
   set: (val) => emit('update:discordNotifyAutoGenerate', val)
 })
 
+const localDiscordNotifyMediaMirror = computed({
+  get: () => props.discordNotifyMediaMirror,
+  set: (val) => emit('update:discordNotifyMediaMirror', val)
+})
+
 const localAppriseEnabled = computed({
   get: () => props.appriseEnabled,
   set: (val) => emit('update:appriseEnabled', val)
@@ -105,6 +116,11 @@ const localAppriseNotifyWebhook = computed({
 const localAppriseNotifyAutoGenerate = computed({
   get: () => props.appriseNotifyAutoGenerate,
   set: (val) => emit('update:appriseNotifyAutoGenerate', val)
+})
+
+const localAppriseNotifyMediaMirror = computed({
+  get: () => props.appriseNotifyMediaMirror,
+  set: (val) => emit('update:appriseNotifyMediaMirror', val)
 })
 
 const isAppriseLibrarySelected = (libraryId: string) => {
@@ -176,6 +192,8 @@ const testApprise = async () => {
   }
 }
 
+const settingsStore = useSettingsStore()
+
 // Combine all libraries for display
 const allLibraries = computed(() => {
   const movieLibs = props.libraries.map(lib => ({
@@ -188,7 +206,26 @@ const allLibraries = computed(() => {
     type: 'tv' as const,
     label: `${lib.displayName || lib.title || lib.id} (TV)`
   }))
-  return [...movieLibs, ...tvLibs]
+  // Jellyfin/Emby libraries live only in Library Groups, not the Plex
+  // mappings above. Without them here they could never be ticked -- and once
+  // ANY library was ticked, the backend's filter blocked every notification
+  // for them.
+  const plexIds = new Set([...movieLibs, ...tvLibs].map(l => String(l.id)))
+  const otherLibs: { id: string; type: 'movie' | 'tv'; label: string }[] = []
+  for (const g of settingsStore.libraryGroups.value || []) {
+    for (const m of g.members || []) {
+      if (m.serverId === 'plex-1' || !m.libraryId || plexIds.has(String(m.libraryId))) continue
+      plexIds.add(String(m.libraryId))
+      const tv = g.mediaType === 'tv'
+      const name = g.name || m.libraryName || m.libraryId
+      otherLibs.push({
+        id: String(m.libraryId),
+        type: tv ? 'tv' : 'movie',
+        label: `${name} (${mediaServerLabel(m.serverId, settingsStore.mediaServers.value)}${tv ? ', TV' : ''})`,
+      })
+    }
+  }
+  return [...movieLibs, ...tvLibs, ...otherLibs]
 })
 
 const isLibrarySelected = (libraryId: string) => {
@@ -360,6 +397,14 @@ const testWebhook = async () => {
                 <span class="type-description">When library scans generate posters</span>
               </div>
             </label>
+
+            <label class="type-checkbox">
+              <input type="checkbox" v-model="localDiscordNotifyMediaMirror" />
+              <div class="type-content">
+                <span class="type-label">Media Mirror</span>
+                <span class="type-description">When a mirror run finishes (scheduled runs only when something changed)</span>
+              </div>
+            </label>
           </div>
         </div>
       </div>
@@ -501,6 +546,14 @@ const testWebhook = async () => {
               <div class="type-content">
                 <span class="type-label">Auto-Generate (Library Scan)</span>
                 <span class="type-description">When library scans generate posters</span>
+              </div>
+            </label>
+
+            <label class="type-checkbox">
+              <input type="checkbox" v-model="localAppriseNotifyMediaMirror" />
+              <div class="type-content">
+                <span class="type-label">Media Mirror</span>
+                <span class="type-description">When a mirror run finishes (scheduled runs only when something changed)</span>
               </div>
             </label>
           </div>

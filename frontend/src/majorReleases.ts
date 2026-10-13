@@ -118,4 +118,51 @@ export const majorReleases: MajorRelease[] = [
       },
     ],
   },
+  {
+    version: 'v1.7.0',
+    title: 'Jellyfin & Emby Support',
+    intro: "Simposter now works with Jellyfin and Emby as well as Plex — use any one of them, or several at once. Here's the highlight reel; the full changelog is still one click away below.",
+    highlights: [
+      {
+        icon: '🖥️',
+        title: 'Plex, Jellyfin and Emby',
+        description: 'Add any mix of servers in Settings → Media Servers, test the connection, and give each one a name. Plex is no longer required — a Jellyfin-only or Emby-only setup works on its own.',
+      },
+      {
+        icon: '🔗',
+        title: 'Library groups',
+        description: 'Group the same library across servers (for example Plex "Movies" + Jellyfin "Movies") in Settings → Libraries. A group shares one set of settings, scans together, and can show each title once or once per server.',
+      },
+      {
+        icon: '📤',
+        title: 'Send to any server',
+        description: 'The editors, Batch Edit, resend and Local Assets let you pick which servers get a poster, logo or backdrop — with one notification per send. Server icons on each card show where a title lives.',
+      },
+      {
+        icon: '🪞',
+        title: 'Media Mirror',
+        description: 'Copy posters, logos, backdrops and collection art from one server to the others in a group, on demand or on a schedule. Only changed images are copied again.',
+      },
+      {
+        icon: '🪝',
+        title: 'Webhooks and auto-generate everywhere',
+        description: 'Radarr/Sonarr webhooks can target a library group by name, and new items found by a Jellyfin or Emby scan get posters automatically, just like Plex.',
+      },
+      {
+        icon: '🌄',
+        title: 'Thumb Art for Jellyfin & Emby',
+        description: "A new page for Jellyfin/Emby's 16:9 Thumb image — the counterpart to Plex's Square Art — built from your existing templates.",
+      },
+      {
+        icon: '📚',
+        title: 'Collections, backups and cleanup across servers',
+        description: 'Jellyfin collections show up next to Plex ones (with manual matching when names differ), Backup/Restore works on Jellyfin, and Cleanup can run each server\'s own maintenance tasks.',
+      },
+      {
+        icon: '🔄',
+        title: 'Scans that keep up',
+        description: 'Library scans are much faster and now pick up posters changed outside Simposter (for example by Kometa) without a force refresh.',
+      },
+    ],
+  },
 ]

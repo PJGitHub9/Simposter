@@ -10,7 +10,7 @@ All three URLs are also generated for you in **Settings → Automation** — you
 
 **Webhook secret** (optional, recommended if Simposter is reachable from outside your LAN): set one in **Settings → Automation → Webhook Secret**. Once set, every webhook call must include it, either as a query param (`?secret=yoursecret`, works with all three below) or an `X-Webhook-Secret` header (if the sending app supports custom headers). Leaving it unset preserves the old trusted-network behavior — no secret required.
 
-**Ignore labels**: in **Settings → Libraries → Webhook Ignore Labels**, list Plex labels that should skip automatic poster generation entirely (e.g. `Custom`, `NoOverlay`) — useful for titles you've hand-tuned and don't want a webhook silently overwriting. Case-insensitive, applies to all three webhook sources.
+**Ignore labels** *(Plex only)*: in **Settings → Libraries → Webhook Ignore Labels**, list Plex labels that should skip automatic poster generation entirely (e.g. `Custom`, `NoOverlay`) — useful for titles you've hand-tuned and don't want a webhook silently overwriting. Case-insensitive, applies to all three webhook sources.
 
 **Existing content mode** (**Settings → Automation**): controls what happens when a webhook fires for something that already has a poster.
 - `Regenerate` *(default)* — always creates a fresh poster
@@ -19,6 +19,22 @@ All three URLs are also generated for you in **Settings → Automation** — you
 **Smart retry**: if a webhook-triggered render doesn't meet the ideal template conditions (no clearlogo found, no textless poster available), the item is queued and retried automatically on the interval configured in Settings → Automation, instead of leaving a permanently-imperfect poster. See **Smart Retry Queue** in [COLLECTIONS_AND_POSTERS.md](COLLECTIONS_AND_POSTERS.md).
 
 **Label to Add After Sending** (**Settings → Automation**, optional): if set, every item a webhook successfully sends a poster for also gets tagged with this label — handy for filtering/smart-collections on what Simposter has touched. Separate from the per-library "Default Labels to Remove" above.
+
+---
+
+## Library groups
+
+Point Radarr/Sonarr at a **library group** — the recommended setup with any server, and the way to reach more than one server — see [MEDIA_SERVERS.md](MEDIA_SERVERS.md#library-groups). In **Settings → Automation**, pick the group in the generator's **Library group** dropdown; the URL gets a `group` parameter with the group's name:
+
+```
+http://your-server:8003/api/webhook/radarr/uniformlogo/default?group=Movies
+```
+
+- The item is looked up across the group's libraries, and the poster goes to **every library in the group**.
+- The group's libraries are searched in order (Plex first when the group has one) until one has the title.
+- The name is matched ignoring upper/lower case, among groups of the right type (movie groups for Radarr, TV groups for Sonarr). Renaming a group changes its URL, so update it in Radarr/Sonarr afterwards.
+
+Without a group, a webhook searches all your libraries: Plex's when Plex is configured, otherwise every Jellyfin/Emby library (from your library groups, or directly from the servers if you have none). A group URL is the more predictable choice.
 
 ---
 
@@ -35,7 +51,7 @@ Template and preset are part of the URL path, not query params — e.g. `.../api
 - **Method:** POST
 - **URL:** the path above (add `?secret=yoursecret` if you've set a webhook secret)
 
-Radarr sends its own fixed payload shape (no template configuration needed on Radarr's side) — Simposter reads `movie.tmdbId`, `movie.title`, `movie.year` from it and looks up the matching Plex item by TMDb ID. The match is exact, not a substring check — a webhook for TMDb ID `58` won't accidentally match an unrelated item whose ID happens to start with those digits (e.g. `5825`).
+Radarr sends its own fixed payload shape (no template configuration needed on Radarr's side) — Simposter reads `movie.tmdbId`, `movie.title`, `movie.year` from it and looks up the matching item by TMDb ID. The match is exact, not a substring check — a webhook for TMDb ID `58` won't accidentally match an unrelated item whose ID happens to start with those digits (e.g. `5825`).
 
 **Test/dry-run:** append `?test=true` to the URL (the base Radarr URL has no other query params, so this is the first one — `&test=true` only if you're also passing `?secret=...`, in which case it becomes `&test=true` after that). Logs the event and what *would* happen, without generating or sending a poster.
 
@@ -56,7 +72,7 @@ http://your-server:8003/api/webhook/sonarr/{template_id}/{preset_id}
 Optional query param:
 - `include_seasons` (default `true`) — when true, generates posters for all seasons in addition to the series poster; set to `false` for series-poster-only.
 
-Matches the Plex show by TVDb ID (exact match). A newly-added show generates both the series poster and every season poster in one run; an episode import for an existing show only regenerates the affected season.
+Matches the show by TVDb ID (exact match). A newly-added show generates both the series poster and every season poster in one run; an episode import for an existing show only regenerates the affected season.
 
 **Test/dry-run:** append `?test=true` (or `&test=true` if you're already passing `?secret=...` or `?include_seasons=...`).
 
@@ -122,5 +138,6 @@ This is a general troubleshooting checklist — two of the steps below use test 
    ```
    Use `?test=true` if it's the first query param on the URL, or `&test=true` if you're already passing `secret`/`include_seasons`/`template_id` — see each section above for the exact join character for that source.
 3. Check **Settings → Logs** — every real (non-test) webhook call is also logged with the media title and how long it took (`[RADARR_WEBHOOK]`/`[SONARR_WEBHOOK]`/`[TAUTULLI_WEBHOOK]` prefixes), so you can confirm it arrived even without appending `test=true`.
-4. Confirm the item isn't hitting a Webhook Ignore Label.
-5. If you've set a webhook secret, double check it's actually being sent — a mismatched or missing secret is a silent rejection (403), not an error dialog.
+4. Confirm the item isn't hitting a Webhook Ignore Label (Plex only).
+5. Check the log line about where Simposter searched — if it says there was nowhere to look, check that your library group is saved in Settings → Libraries and the server is enabled in Settings → Media Servers.
+6. If you've set a webhook secret, double check it's actually being sent — a mismatched or missing secret is a silent rejection (403), not an error dialog.

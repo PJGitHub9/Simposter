@@ -374,6 +374,17 @@ def init_database():
         if "square_art_url" not in cols:
             cursor.execute("ALTER TABLE movie_cache ADD COLUMN square_art_url TEXT")
             logger.info("[DB] Added 'square_art_url' column to movie_cache")
+        if "server_id" not in cols:
+            # Which configured media server (see the mediaServers setting) this
+            # cached row came from -- 'plex-1' for every existing row, since this
+            # app was Plex-only before this column existed. Not yet a composite
+            # PK with rating_key: a real collision between a Plex rating_key and
+            # a Jellyfin/Emby item GUID is not realistic (completely different ID
+            # formats), so this stays a plain indexed column rather than forcing
+            # a destructive SQLite table-rebuild migration for a risk that isn't
+            # real. See CLAUDE.md Quirk #57.
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN server_id TEXT NOT NULL DEFAULT 'plex-1'")
+            logger.info("[DB] Added 'server_id' column to movie_cache")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_movie_cache_updated
@@ -394,6 +405,10 @@ def init_database():
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_movie_cache_composite
             ON movie_cache(library_id, rating_key)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_movie_cache_server
+            ON movie_cache(server_id, rating_key)
         """)
 
         # Cache table for Plex TV shows (metadata + labels/poster/tmdb + seasons)
@@ -444,6 +459,11 @@ def init_database():
         if "square_art_url" not in tv_cols:
             cursor.execute("ALTER TABLE tv_cache ADD COLUMN square_art_url TEXT")
             logger.info("[DB] Added 'square_art_url' column to tv_cache")
+        if "server_id" not in tv_cols:
+            # See the matching movie_cache 'server_id' migration comment above --
+            # same reasoning, same default, same non-PK design (CLAUDE.md Quirk #57).
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN server_id TEXT NOT NULL DEFAULT 'plex-1'")
+            logger.info("[DB] Added 'server_id' column to tv_cache")
 
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_tv_cache_updated
@@ -469,6 +489,10 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_tv_cache_composite
             ON tv_cache(library_id, rating_key)
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tv_cache_server
+            ON tv_cache(server_id, rating_key)
+        """)
 
         # Cache table for Plex collections
         cursor.execute("""
@@ -492,6 +516,9 @@ def init_database():
             # opening the Simposter Creator for the same collection again doesn't
             # repeat that search — see get_collection_tmdb_id()/set_collection_tmdb_id().
             cursor.execute("ALTER TABLE collection_cache ADD COLUMN tmdb_collection_id INTEGER")
+        if "server_id" not in coll_cols:
+            # See the matching movie_cache 'server_id' migration comment (CLAUDE.md Quirk #57).
+            cursor.execute("ALTER TABLE collection_cache ADD COLUMN server_id TEXT NOT NULL DEFAULT 'plex-1'")
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_collection_cache_updated
             ON collection_cache(updated_at)
@@ -596,6 +623,10 @@ def init_database():
         if "error_message" not in history_cols:
             cursor.execute("ALTER TABLE poster_history ADD COLUMN error_message TEXT")
             logger.info("[DB] Added 'error_message' column to poster_history table")
+        if "server_id" not in history_cols:
+            # See the matching movie_cache 'server_id' migration comment (CLAUDE.md Quirk #57).
+            cursor.execute("ALTER TABLE poster_history ADD COLUMN server_id TEXT NOT NULL DEFAULT 'plex-1'")
+            logger.info("[DB] Added 'server_id' column to poster_history table")
 
         # Migration: Consolidate 'default' and 'universal' templates into 'uniformlogo'
         # Convert logo_scale/logo_offset to bounding box zones
@@ -824,6 +855,12 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_retry_queue_status
             ON poster_retry_queue(status)
         """)
+        cursor.execute("PRAGMA table_info(poster_retry_queue)")
+        retry_cols = [row["name"] for row in cursor.fetchall()]
+        if "server_id" not in retry_cols:
+            # See the matching movie_cache 'server_id' migration comment (CLAUDE.md Quirk #57).
+            cursor.execute("ALTER TABLE poster_retry_queue ADD COLUMN server_id TEXT NOT NULL DEFAULT 'plex-1'")
+            logger.info("[DB] Added 'server_id' column to poster_retry_queue")
 
         # One-time cleanup for DBs created before "abandoned" retry items were deleted
         # outright instead of just marked -- see scheduler.py's _run_poster_retry(). A
@@ -853,6 +890,25 @@ def init_database():
                 season_index INTEGER NOT NULL DEFAULT -1,
                 last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (media_type, tmdb_id, season_index)
+            )
+        """)
+
+        # Media Mirror change detection: a sha256 of the RAW source image bytes
+        # last successfully copied to each target item, per asset type. A run
+        # compares the freshly-downloaded source bytes' hash against this and
+        # skips the (expensive) re-encode + upload when nothing changed. Keyed
+        # by target_rating_key too, so a target item that gets re-created under
+        # a new id is always copied again.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mirror_sync_state (
+                source_server_id TEXT NOT NULL,
+                source_rating_key TEXT NOT NULL,
+                asset_type TEXT NOT NULL,
+                target_server_id TEXT NOT NULL,
+                target_rating_key TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (source_server_id, source_rating_key, asset_type, target_server_id)
             )
         """)
 
@@ -930,6 +986,172 @@ def init_database():
                     logger.info("[DB] Existing install detected -- defaulted scheduled cleanup to enabled (weekly)")
         except Exception as cleanup_default_err:
             logger.warning(f"[DB] Could not default scheduled cleanup for existing install: {cleanup_default_err}")
+
+        # Seed the mediaServers list (the multi-server model -- see
+        # ai_repo/simposter/jellyfin-upgrade-plan.md, CLAUDE.md Quirk #57) for an
+        # existing install: its single Plex config becomes exactly one
+        # auto-migrated entry with id 'plex-1', matching the server_id default
+        # every cached row above already carries -- so nothing changes
+        # behaviorally, existing installs just now have a mediaServers[] list
+        # of one, ready for a Jellyfin/Emby entry to be added alongside it
+        # later. Reuses the exact same "already configured" signal and
+        # once-only insert pattern as onboarding_completed/cleanupEnabled above
+        # -- a fresh install (no plex.url yet) gets nothing here; it'll be
+        # seeded once the user actually configures a server through onboarding
+        # or Settings (future phase, not yet wired up as of this seed).
+        try:
+            existing_media_servers = cursor.execute(
+                "SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1"
+            ).fetchone()
+            if existing_media_servers is None:
+                plex_url_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'plex.url' OR key = 'url' AND category = 'plex' LIMIT 1"
+                ).fetchone()
+                plex_token_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'plex.token' OR key = 'token' AND category = 'plex' LIMIT 1"
+                ).fetchone()
+                already_configured = bool(plex_url_row and plex_url_row["value"] and plex_url_row["value"].strip())
+                if already_configured:
+                    servers = [{
+                        "id": "plex-1",
+                        "type": "plex",
+                        "url": plex_url_row["value"],
+                        "token": (plex_token_row["value"] if plex_token_row else "") or "",
+                        "enabled": True,
+                    }]
+                    cursor.execute("""
+                        INSERT INTO settings (key, value, category)
+                        VALUES ('mediaServers', ?, NULL)
+                        ON CONFLICT(key) DO NOTHING
+                    """, (json.dumps(servers),))
+                    conn.commit()
+                    logger.info("[DB] Seeded mediaServers with one auto-migrated Plex entry (id=plex-1)")
+        except Exception as media_servers_err:
+            logger.warning(f"[DB] Could not seed mediaServers: {media_servers_err}")
+
+        # Scrub the plex-1 mediaServers entry's url/token fields -- confirmed dead
+        # data (verified directly by reading PlexClient/registry.py, not assumed):
+        # the migration seed above writes a real url/token into that entry once, but
+        # nothing anywhere ever reads them back out again -- PlexClient's every real
+        # method always uses settings.PLEX_URL/PLEX_TOKEN directly (Quirk #58's own
+        # documented limitation), never self.url/self.token, and the Settings UI's
+        # primary Plex card writes edits straight into settings.plex, never back into
+        # this entry (Quirk #79). Left in place, these fields are actively
+        # misleading -- they look like a live value but silently go stale the moment
+        # a user edits their real Plex URL/token anywhere else, forever, since
+        # nothing ever refreshes them. Idempotent (a no-op once already cleaned) --
+        # matches the retry-queue abandoned-row DELETE precedent (Quirk #24), no
+        # separate has-run flag needed.
+        try:
+            row = cursor.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+            if row and row["value"]:
+                servers = json.loads(row["value"])
+                changed = False
+                for entry in servers:
+                    if entry.get("id") == "plex-1" and entry.get("type") == "plex":
+                        if entry.get("url"):
+                            entry["url"] = ""
+                            changed = True
+                        if "token" in entry:
+                            del entry["token"]
+                            changed = True
+                if changed:
+                    cursor.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'mediaServers'",
+                        (json.dumps(servers),)
+                    )
+                    conn.commit()
+                    logger.info("[DB] Cleared unused url/token from the plex-1 mediaServers entry (dead data, never read -- see CLAUDE.md)")
+        except Exception as scrub_err:
+            logger.warning(f"[DB] Could not scrub plex-1 mediaServers entry: {scrub_err}")
+
+        # Seed libraryGroups by converting each existing Plex libraryMappings /
+        # tvShowLibraryMappings entry into a single-member LibraryGroup (server_id
+        # 'plex-1', matching the mediaServers seed above) -- purely additive: the
+        # original plex.libraryMappings/tvShowLibraryMappings settings are left
+        # completely untouched by this migration, since existing consumer code
+        # (auto-generate, webhooks, the Libraries settings tab) still reads those
+        # directly and isn't being rewired to libraryGroups in this pass. This
+        # only gives every existing single-server install a ready-made group per
+        # library, so adding a second server's library to the same logical group
+        # later is just editing that group's members, not starting from scratch.
+        # Same once-only, never-overwrite pattern as onboarding_completed/
+        # cleanupEnabled/mediaServers above.
+        try:
+            existing_library_groups = cursor.execute(
+                "SELECT value FROM settings WHERE key = 'libraryGroups' LIMIT 1"
+            ).fetchone()
+            if existing_library_groups is None:
+                movie_mappings_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'plex.libraryMappings' LIMIT 1"
+                ).fetchone()
+                tv_mappings_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'plex.tvShowLibraryMappings' LIMIT 1"
+                ).fetchone()
+                labels_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'defaultLabelsToRemove' LIMIT 1"
+                ).fetchone()
+                tv_labels_row = cursor.execute(
+                    "SELECT value FROM settings WHERE key = 'defaultTvLabelsToRemove' LIMIT 1"
+                ).fetchone()
+
+                def _labels_for(raw_value, lib_id):
+                    if not raw_value:
+                        return []
+                    try:
+                        parsed = json.loads(raw_value)
+                    except (json.JSONDecodeError, TypeError):
+                        return []
+                    if isinstance(parsed, dict):
+                        return parsed.get(str(lib_id)) or []
+                    if isinstance(parsed, list):
+                        return parsed
+                    return []
+
+                def _groups_from_mappings(raw_value, media_type, labels_raw):
+                    groups = []
+                    if not raw_value:
+                        return groups
+                    try:
+                        mappings = json.loads(raw_value)
+                    except (json.JSONDecodeError, TypeError):
+                        return groups
+                    if not isinstance(mappings, list):
+                        return groups
+                    for m in mappings:
+                        if not isinstance(m, dict) or not m.get("id"):
+                            continue
+                        lib_id = str(m["id"])
+                        lib_name = m.get("displayName") or m.get("title") or lib_id
+                        groups.append({
+                            "id": f"group-{media_type}-{lib_id}",
+                            "name": lib_name,
+                            "mediaType": media_type,
+                            "members": [{
+                                "serverId": "plex-1",
+                                "libraryId": lib_id,
+                                "libraryName": lib_name,
+                            }],
+                            "autoGenerateEnabled": bool(m.get("autoGenerateEnabled", False)),
+                            "autoGeneratePresetId": m.get("autoGeneratePresetId"),
+                            "autoGenerateTemplateId": m.get("autoGenerateTemplateId"),
+                            "labelsToRemove": _labels_for(labels_raw, lib_id),
+                        })
+                    return groups
+
+                all_groups = (
+                    _groups_from_mappings(movie_mappings_row["value"] if movie_mappings_row else None, "movie", labels_row["value"] if labels_row else None)
+                    + _groups_from_mappings(tv_mappings_row["value"] if tv_mappings_row else None, "tv", tv_labels_row["value"] if tv_labels_row else None)
+                )
+                cursor.execute("""
+                    INSERT INTO settings (key, value, category)
+                    VALUES ('libraryGroups', ?, NULL)
+                    ON CONFLICT(key) DO NOTHING
+                """, (json.dumps(all_groups),))
+                conn.commit()
+                logger.info(f"[DB] Seeded libraryGroups with {len(all_groups)} auto-migrated single-member group(s) from existing Plex library mappings")
+        except Exception as library_groups_err:
+            logger.warning(f"[DB] Could not seed libraryGroups: {library_groups_err}")
     except Exception as e:
         logger.error(f"[DB] Initialization/migration failed: {e}")
         conn.rollback()
@@ -1759,6 +1981,32 @@ def update_movie_square_art_url(rating_key: str, square_art_url: Optional[str]) 
         )
 
 
+def get_mirror_sync_hashes(source_server_id: str, source_rating_key: str, asset_type: str) -> Dict[str, tuple]:
+    """{target_server_id: (target_rating_key, source_hash)} for one source item + asset type."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT target_server_id, target_rating_key, source_hash FROM mirror_sync_state "
+            "WHERE source_server_id = ? AND source_rating_key = ? AND asset_type = ?",
+            (source_server_id, str(source_rating_key), asset_type),
+        ).fetchall()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def record_mirror_sync(source_server_id: str, source_rating_key: str, asset_type: str,
+                       target_server_id: str, target_rating_key: str, source_hash: str) -> None:
+    """Remember that this source image (by hash) was copied to this target item."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO mirror_sync_state
+                (source_server_id, source_rating_key, asset_type, target_server_id, target_rating_key, source_hash, synced_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(source_server_id, source_rating_key, asset_type, target_server_id) DO UPDATE SET
+                target_rating_key = excluded.target_rating_key,
+                source_hash = excluded.source_hash,
+                synced_at = CURRENT_TIMESTAMP
+        """, (source_server_id, str(source_rating_key), asset_type, target_server_id, str(target_rating_key), source_hash))
+
+
 def touch_tmdb_last_seen(media_type: str, tmdb_id: Optional[int], season_index: Optional[int] = None) -> None:
     """Mark a TMDb-identified title as confirmed present in the library right now.
 
@@ -1902,6 +2150,14 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
     Replace cache entries to match the provided movies list.
     Each movie dict should include rating_key, title, year, added_at, tmdb_id?, poster_url?, labels?.
     Also removes orphaned poster files and label cache entries.
+
+    Plex-only -- see upsert_media_server_movies() for the equivalent used by
+    Jellyfin/Emby. Orphan detection/deletion is scoped to server_id='plex-1'
+    explicitly (not just library_id) so this can never delete a non-Plex
+    row that happens to share the same library_id string as a Plex library
+    -- confirmed as a real, reproducible bug during Jellyfin-integration
+    testing before this scoping was added, not a theoretical concern. See
+    CLAUDE.md Quirk #61.
     """
     keys = [m["rating_key"] for m in movies]
     with get_db() as conn:
@@ -1911,11 +2167,11 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
         if keys:
             cursor.execute(f"""
                 SELECT rating_key FROM movie_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = 'plex-1' AND library_id = ?
             """, keys + [library_id])
             orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
         else:
-            cursor.execute("SELECT rating_key FROM movie_cache WHERE library_id = ?", (library_id,))
+            cursor.execute("SELECT rating_key FROM movie_cache WHERE server_id = 'plex-1' AND library_id = ?", (library_id,))
             orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
 
         for m in movies:
@@ -1958,7 +2214,7 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
         if keys:
             cursor.execute(f"""
                 DELETE FROM movie_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = 'plex-1' AND library_id = ?
             """, keys + [library_id])
 
         # Also delete from label_cache (Plex labels cache)
@@ -1974,47 +2230,206 @@ def bulk_refresh_cache(movies: List[Dict[str, Any]], library_id: str = "default"
         logger.info("[DB] Cleaned up %d orphaned movie entries and posters for library %s", len(orphaned_keys), library_id)
 
 
+def _coerce_added_at(value) -> Optional[int]:
+    """`movie_cache`/`tv_cache.added_at` is meant to always hold Unix epoch
+    seconds (Plex's own `addedAt` XML attribute convention -- see
+    Movie.addedAt: Optional[int] in schemas.py). Jellyfin's `DateCreated` is
+    an ISO 8601 string with .NET-style variable-precision fractional seconds
+    (e.g. "2026-06-29T22:27:37.1150226Z") -- JellyfinClient.list_items() now
+    converts this to epoch seconds before it's ever written, but this
+    defensive read-side coercion also protects any row written before that
+    fix, and any future server type that isn't as careful. Never raises --
+    an unparseable value returns None rather than letting a bad addedAt
+    crash the whole /api/movies or /api/tv-shows response (Pydantic's
+    Optional[int] response-model validation has no tolerance for a string
+    it can't parse as an int)."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        if value.lstrip("-").isdigit():
+            return int(value)
+        try:
+            from datetime import datetime, timezone
+            s = value.rstrip("Z")
+            if "." in s:
+                main, frac = s.split(".", 1)
+                s = f"{main}.{(frac + '000000')[:6]}"
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+_MOVIE_CACHE_SELECT_COLUMNS = "rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition, server_id"
+
+
+def _movie_row_to_dict(row) -> Dict[str, Any]:
+    try:
+        labels = json.loads(row["labels_json"]) if row["labels_json"] else []
+    except json.JSONDecodeError:
+        labels = []
+    return {
+        "rating_key": row["rating_key"],
+        "title": row["title"],
+        "year": row["year"],
+        "addedAt": _coerce_added_at(row["added_at"]),
+        "tmdb_id": row["tmdb_id"],
+        "poster_url": row["poster_url"],
+        "logo_url": row["logo_url"] if "logo_url" in row.keys() else None,
+        "art_url": row["art_url"] if "art_url" in row.keys() else None,
+        "square_art_url": row["square_art_url"] if "square_art_url" in row.keys() else None,
+        "labels": labels,
+        "updated_at": row["updated_at"],
+        "library_id": row["library_id"] if "library_id" in row.keys() else None,
+        "edition": row["edition"] if "edition" in row.keys() else None,
+        "server_id": row["server_id"] if "server_id" in row.keys() else None,
+    }
+
+
 def get_cached_movies(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return cached movies with labels/poster/tmdb if known. Optionally filter by library."""
+    """Return cached movies with labels/poster/tmdb if known. Optionally filter by library.
+
+    Deliberately does NOT filter by server_id -- every existing caller assumes
+    Plex, and a real Plex/Jellyfin library_id collision is not realistic (Plex
+    ids are short digits, Jellyfin's are GUIDs) -- see Quirk #57/#61/#64. For a
+    Library Group spanning multiple (server_id, library_id) pairs, use
+    get_cached_movies_multi() instead."""
     with get_db() as conn:
         cursor = conn.cursor()
         if library_id:
-            cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition
+            cursor.execute(f"""
+                SELECT {_MOVIE_CACHE_SELECT_COLUMNS}
                 FROM movie_cache
                 WHERE library_id = ?
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """, (library_id,))
         else:
-            cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, updated_at, library_id, edition
+            cursor.execute(f"""
+                SELECT {_MOVIE_CACHE_SELECT_COLUMNS}
                 FROM movie_cache
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """)
         rows = cursor.fetchall()
 
-    out: List[Dict[str, Any]] = []
-    for row in rows:
-        try:
-            labels = json.loads(row["labels_json"]) if row["labels_json"] else []
-        except json.JSONDecodeError:
-            labels = []
-        out.append({
-            "rating_key": row["rating_key"],
-            "title": row["title"],
-            "year": row["year"],
-            "addedAt": row["added_at"],
-            "tmdb_id": row["tmdb_id"],
-            "poster_url": row["poster_url"],
-            "logo_url": row["logo_url"] if "logo_url" in row.keys() else None,
-            "art_url": row["art_url"] if "art_url" in row.keys() else None,
-            "square_art_url": row["square_art_url"] if "square_art_url" in row.keys() else None,
-            "labels": labels,
-            "updated_at": row["updated_at"],
-            "library_id": row["library_id"] if "library_id" in row.keys() else None,
-            "edition": row["edition"] if "edition" in row.keys() else None,
-        })
-    return out
+    return [_movie_row_to_dict(row) for row in rows]
+
+
+def _dedupe_by_tmdb_id(items: List[Dict[str, Any]], preferred_server_id: str = "plex-1") -> List[Dict[str, Any]]:
+    """When a Library Group union (get_cached_movies_multi()/_tv_shows_multi())
+    returns the same title present on more than one linked server, this
+    collapses each tmdb_id group down to a single displayed item instead of
+    showing one card per server -- the real fix for the "duplicate cards"
+    artifact linking two servers with overlapping libraries would otherwise
+    produce. **Rule**: prefer the row matching `preferred_server_id` when one
+    exists in the group, otherwise keep whichever row sorts first (already
+    most-recently-updated, per the caller's own ORDER BY). `preferred_server_id`
+    defaults to `'plex-1'` -- matching this function's original hardcoded
+    behavior exactly, so any caller that doesn't pass a real per-group
+    `preferredServerId` (config.py's get_library_group_preferred_server(),
+    e.g. a future direct call, or a test) still gets today's sensible
+    default, not an undefined one. The
+    dropped duplicates' server_ids are preserved on the kept row as
+    `also_on`, so a per-item badge can still show "also available on
+    Jellyfin" even though only one card renders. **Also preserved**: a
+    richer `other_servers` list (`[{server_id, rating_key}, ...]`) for the
+    same dropped duplicates -- `also_on` alone (just server_id strings) is
+    enough for a badge, but the manual editor's per-server "Current
+    Poster/Logo" preview toggle and multi-server send picker need each other
+    server's own rating_key too, to actually fetch/send against it (see
+    CLAUDE.md's Phase 4b editor-parity Quirk). Items with no tmdb_id (can't
+    be matched to anything) are never touched -- kept exactly as-is, one card
+    each, matching pre-dedup behavior."""
+    by_tmdb: Dict[Any, List[Dict[str, Any]]] = {}
+    no_tmdb: List[Dict[str, Any]] = []
+    order: List[Any] = []
+    for item in items:
+        tmdb_id = item.get("tmdb_id")
+        if not tmdb_id:
+            item["also_on"] = []
+            item["other_servers"] = []
+            no_tmdb.append(item)
+            continue
+        if tmdb_id not in by_tmdb:
+            by_tmdb[tmdb_id] = []
+            order.append(tmdb_id)
+        by_tmdb[tmdb_id].append(item)
+
+    deduped: List[Dict[str, Any]] = []
+    for tmdb_id in order:
+        group = by_tmdb[tmdb_id]
+        if len(group) == 1:
+            group[0]["also_on"] = []
+            group[0]["other_servers"] = []
+            deduped.append(group[0])
+            continue
+        winner = next((g for g in group if g.get("server_id") == preferred_server_id), group[0])
+        others = [g for g in group if g is not winner and g.get("server_id")]
+        winner["also_on"] = [g["server_id"] for g in others]
+        winner["other_servers"] = [
+            {"server_id": g["server_id"], "rating_key": g.get("rating_key")}
+            for g in others if g.get("rating_key")
+        ]
+        deduped.append(winner)
+
+    return no_tmdb + deduped
+
+
+def get_cached_movies_multi(pairs: List[tuple], preferred_server_id: Optional[str] = None, merge_items: bool = True) -> List[Dict[str, Any]]:
+    """Like get_cached_movies(), but for a Library Group spanning several
+    (server_id, library_id) pairs (Quirk #62/#64) -- unions every pair's rows
+    into one list, then (when `merge_items` is True, the default) de-duplicates
+    by tmdb_id (_dedupe_by_tmdb_id()) so the same movie present on more than
+    one linked server shows as one card, not several. `preferred_server_id` is
+    the caller's already-resolved choice for THIS specific group (config.py's
+    get_library_group_preferred_server(), or None when the group has no
+    override set) -- this function itself has no settings lookup of its own
+    anymore; a single global preference used to live here (Quirk #74's
+    automation.preferredPosterServer) but was replaced by a per-group one
+    (schemas.py's LibraryGroup.preferredServerId), since one global choice
+    wasn't granular enough once an install has more than one linked group at
+    once.
+
+    `preferred_server_id` has TWO different meanings depending on
+    `merge_items`, matching the same one stored field's dual role in the
+    frontend's "Show posters from" dropdown (Quirk #121):
+      - merge_items=True (the default): the merge-WINNER. Falls back to
+        'plex-1' when unset, matching this function's original hardcoded
+        behavior -- see _dedupe_by_tmdb_id().
+      - merge_items=False (LibraryGroup.mergeItems, Quirk #120): a FILTER.
+        None/empty means "all" (every linked server's copy shows as its own
+        card, unfiltered -- the original no-merge behavior). A real
+        server_id means "only this server's items" -- every other linked
+        server's copy of that same union is dropped entirely before
+        returning, with no also_on/other_servers populated either way
+        (there's nothing to cross-reference once nothing was ever unioned
+        for display)."""
+    if not pairs:
+        return []
+    with get_db() as conn:
+        cursor = conn.cursor()
+        where_clause = " OR ".join(["(server_id = ? AND library_id = ?)"] * len(pairs))
+        params: List[Any] = []
+        for server_id, library_id in pairs:
+            params.extend([server_id, library_id])
+        cursor.execute(f"""
+            SELECT {_MOVIE_CACHE_SELECT_COLUMNS}
+            FROM movie_cache
+            WHERE {where_clause}
+            ORDER BY COALESCE(updated_at, added_at) DESC
+        """, params)
+        rows = cursor.fetchall()
+
+    items = [_movie_row_to_dict(row) for row in rows]
+    if not merge_items:
+        if preferred_server_id:
+            items = [item for item in items if item.get("server_id") == preferred_server_id]
+        return items
+    return _dedupe_by_tmdb_id(items, preferred_server_id or "plex-1")
 
 
 def get_movie_cache_stats(library_id: Optional[str] = None) -> Dict[str, Any]:
@@ -2030,11 +2445,17 @@ def get_movie_cache_stats(library_id: Optional[str] = None) -> Dict[str, Any]:
 
 
 def clear_movie_cache(library_id: Optional[str] = None) -> None:
-    """Delete rows from movie_cache. If library_id provided, only clear that library."""
+    """Delete rows from movie_cache. If library_id provided, only clear that
+    library -- currently only ever called for a Plex library ("remove this
+    library" flow, Quirk #33), so scoped to server_id='plex-1' whenever a
+    library_id is given, for the same cross-server library_id-collision
+    reason as bulk_refresh_cache() (Quirk #61). No library_id (the full
+    "clear all cache" admin action) deliberately still clears every server's
+    rows -- that's a genuine full reset, not a single-library operation."""
     with get_db() as conn:
         cursor = conn.cursor()
         if library_id:
-            cursor.execute("DELETE FROM movie_cache WHERE library_id = ?", (library_id,))
+            cursor.execute("DELETE FROM movie_cache WHERE server_id = 'plex-1' AND library_id = ?", (library_id,))
             logger.info("[DB] Cleared movie_cache for library %s", library_id)
         else:
             cursor.execute("DELETE FROM movie_cache")
@@ -2189,6 +2610,10 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
     """
     Replace cache entries to match the provided TV shows list.
     Also removes orphaned poster files and label cache entries.
+
+    Plex-only -- see upsert_media_server_tv_shows() for Jellyfin/Emby. Same
+    server_id='plex-1' orphan-scoping fix as bulk_refresh_cache() above, for
+    the same reason -- see CLAUDE.md Quirk #61.
     """
     keys = [m["rating_key"] for m in shows]
     with get_db() as conn:
@@ -2198,11 +2623,11 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
         if keys:
             cursor.execute(f"""
                 SELECT rating_key FROM tv_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = 'plex-1' AND library_id = ?
             """, keys + [library_id])
             orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
         else:
-            cursor.execute("SELECT rating_key FROM tv_cache WHERE library_id = ?", (library_id,))
+            cursor.execute("SELECT rating_key FROM tv_cache WHERE server_id = 'plex-1' AND library_id = ?", (library_id,))
             orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
 
         for m in shows:
@@ -2253,7 +2678,7 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
         if keys:
             cursor.execute(f"""
                 DELETE FROM tv_cache
-                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND library_id = ?
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = 'plex-1' AND library_id = ?
             """, keys + [library_id])
 
         # Also delete from tv_label_cache (Plex labels cache for TV shows)
@@ -2269,52 +2694,548 @@ def bulk_refresh_tv_cache(shows: List[Dict[str, Any]], library_id: str = "defaul
         logger.info("[DB] Cleaned up %d orphaned TV show entries and posters for library %s", len(orphaned_keys), library_id)
 
 
+def upsert_media_server_movies(server_id: str, library_id: str, movies: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Like bulk_refresh_cache() above, but for a non-Plex server (Jellyfin/
+    Emby) -- deliberately a SEPARATE function, not a shared one, so scanning
+    a new server type can never risk the existing, working Plex scan path
+    (bulk_refresh_cache() has no server_id parameter at all; every row it
+    writes silently gets the 'plex-1' column default -- calling it for
+    Jellyfin data would mislabel it). Explicit about server_id on every
+    write, and orphan cleanup is scoped to (server_id, library_id) so it can
+    never touch another server's or another library's rows. See CLAUDE.md
+    Quirk #61.
+
+    No poster/logo/backdrop/square_art fetching here -- that's separate,
+    later work (mirroring fetch_and_cache_poster()'s pattern via
+    JellyfinClient.download_image()). This just establishes the library
+    membership itself. No on-disk cache-file cleanup either (nothing this
+    function writes creates cache files yet)."""
+    keys = [m["rating_key"] for m in movies]
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM movie_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = ? AND library_id = ?
+            """, keys + [server_id, library_id])
+        else:
+            cursor.execute(
+                "SELECT rating_key FROM movie_cache WHERE server_id = ? AND library_id = ?",
+                (server_id, library_id),
+            )
+        orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
+        inserted = 0
+        updated = 0
+        for m in movies:
+            cursor.execute("SELECT 1 FROM movie_cache WHERE rating_key = ?", (m["rating_key"],))
+            existed = cursor.fetchone() is not None
+            cursor.execute("""
+                INSERT INTO movie_cache (rating_key, server_id, title, year, added_at, tmdb_id, tvdb_id, labels_json, updated_at, library_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                ON CONFLICT(rating_key) DO UPDATE SET
+                    server_id = excluded.server_id,
+                    title = excluded.title,
+                    year = excluded.year,
+                    added_at = excluded.added_at,
+                    tmdb_id = COALESCE(excluded.tmdb_id, movie_cache.tmdb_id),
+                    tvdb_id = COALESCE(excluded.tvdb_id, movie_cache.tvdb_id),
+                    library_id = excluded.library_id,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                m["rating_key"], server_id, m["title"], m.get("year"), m.get("added_at"),
+                m.get("tmdb_id"), m.get("tvdb_id"), json.dumps(m.get("labels") or []), library_id,
+            ))
+            updated += 1 if existed else 0
+            inserted += 0 if existed else 1
+
+        if keys:
+            cursor.execute(f"""
+                DELETE FROM movie_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = ? AND library_id = ?
+            """, keys + [server_id, library_id])
+
+    logger.info("[DB] Media server '%s' library '%s': %d movies upserted (%d new, %d updated), %d removed",
+                server_id, library_id, len(movies), inserted, updated, len(orphaned_keys))
+    return {"inserted": inserted, "updated": updated, "removed": len(orphaned_keys)}
+
+
+def upsert_media_server_collections(server_id: str, library_id: str, collections: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Collection mirror of upsert_media_server_movies() above -- same
+    reasoning, same deliberate separation from bulk_refresh_collection_cache()
+    (which stays hardcoded to server_id='plex-1' per its own docstring and
+    Quirk #61's precedent, so a Jellyfin BoxSet row is never at risk from a
+    routine Plex collection scan sharing the same library_id string). Each
+    item dict: {rating_key, title, year, added_at, poster_url}."""
+    keys = [c["rating_key"] for c in collections]
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM collection_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = ? AND library_id = ?
+            """, keys + [server_id, library_id])
+        else:
+            cursor.execute(
+                "SELECT rating_key FROM collection_cache WHERE server_id = ? AND library_id = ?",
+                (server_id, library_id),
+            )
+        orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
+        inserted = 0
+        updated = 0
+        for c in collections:
+            cursor.execute("SELECT 1 FROM collection_cache WHERE rating_key = ?", (c["rating_key"],))
+            existed = cursor.fetchone() is not None
+            cursor.execute("""
+                INSERT INTO collection_cache (rating_key, server_id, title, year, added_at, poster_url, updated_at, library_id)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                ON CONFLICT(rating_key) DO UPDATE SET
+                    server_id = excluded.server_id,
+                    title = excluded.title,
+                    year = excluded.year,
+                    added_at = excluded.added_at,
+                    poster_url = COALESCE(excluded.poster_url, collection_cache.poster_url),
+                    library_id = excluded.library_id,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                c["rating_key"], server_id, c["title"], c.get("year"), c.get("added_at"),
+                c.get("poster_url"), library_id,
+            ))
+            updated += 1 if existed else 0
+            inserted += 0 if existed else 1
+
+        if keys:
+            cursor.execute(f"""
+                DELETE FROM collection_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = ? AND library_id = ?
+            """, keys + [server_id, library_id])
+
+    logger.info("[DB] Media server '%s' library '%s': %d collections upserted (%d new, %d updated), %d removed",
+                server_id, library_id, len(collections), inserted, updated, len(orphaned_keys))
+    return {"inserted": inserted, "updated": updated, "removed": len(orphaned_keys)}
+
+
+def upsert_media_server_tv_shows(server_id: str, library_id: str, shows: List[Dict[str, Any]]) -> Dict[str, int]:
+    """TV-show mirror of upsert_media_server_movies() above -- same reasoning,
+    same deliberate separation from bulk_refresh_tv_cache()."""
+    keys = [m["rating_key"] for m in shows]
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        if keys:
+            cursor.execute(f"""
+                SELECT rating_key FROM tv_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = ? AND library_id = ?
+            """, keys + [server_id, library_id])
+        else:
+            cursor.execute(
+                "SELECT rating_key FROM tv_cache WHERE server_id = ? AND library_id = ?",
+                (server_id, library_id),
+            )
+        orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
+
+        inserted = 0
+        updated = 0
+        for m in shows:
+            cursor.execute("SELECT 1 FROM tv_cache WHERE rating_key = ?", (m["rating_key"],))
+            existed = cursor.fetchone() is not None
+            cursor.execute("""
+                INSERT INTO tv_cache (rating_key, server_id, title, year, added_at, tmdb_id, tvdb_id, labels_json, updated_at, library_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                ON CONFLICT(rating_key) DO UPDATE SET
+                    server_id = excluded.server_id,
+                    title = excluded.title,
+                    year = excluded.year,
+                    added_at = excluded.added_at,
+                    tmdb_id = COALESCE(excluded.tmdb_id, tv_cache.tmdb_id),
+                    tvdb_id = COALESCE(excluded.tvdb_id, tv_cache.tvdb_id),
+                    library_id = excluded.library_id,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                m["rating_key"], server_id, m["title"], m.get("year"), m.get("added_at"),
+                m.get("tmdb_id"), m.get("tvdb_id"), json.dumps(m.get("labels") or []), library_id,
+            ))
+            updated += 1 if existed else 0
+            inserted += 0 if existed else 1
+
+        if keys:
+            cursor.execute(f"""
+                DELETE FROM tv_cache
+                WHERE rating_key NOT IN ({",".join("?" for _ in keys)}) AND server_id = ? AND library_id = ?
+            """, keys + [server_id, library_id])
+
+    logger.info("[DB] Media server '%s' library '%s': %d TV shows upserted (%d new, %d updated), %d removed",
+                server_id, library_id, len(shows), inserted, updated, len(orphaned_keys))
+    return {"inserted": inserted, "updated": updated, "removed": len(orphaned_keys)}
+
+
+def upsert_media_server_movie_single(server_id: str, library_id: str, movie: Dict[str, Any]) -> None:
+    """Single-item, NON-destructive counterpart to upsert_media_server_movies()
+    above -- a genuine INSERT...ON CONFLICT upsert with NO orphan-cleanup
+    DELETE at all. Calling the bulk function with just one item would treat
+    every OTHER already-cached row in that (server_id, library_id) pair as
+    orphaned and delete it -- it's built for a full-library scan, not a
+    single-item write. Built for Phase 8b's webhook pipeline: a Radarr/
+    Sonarr-equivalent webhook resolving a brand-new Jellyfin/Emby item needs
+    a real cache row (so db.get_server_id_for_rating_key() resolves it
+    correctly for the render that follows, and so it shows up in the
+    library grid) without touching anything else already cached for that
+    library. `movie`: {rating_key, title, year, added_at, tmdb_id, tvdb_id}
+    -- title/year/tmdb_id/tvdb_id are typically already known from the
+    webhook payload itself (Radarr always includes them), so this almost
+    never needs a live metadata fetch just to populate the row."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO movie_cache (rating_key, server_id, title, year, added_at, tmdb_id, tvdb_id, labels_json, updated_at, library_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(rating_key) DO UPDATE SET
+                server_id = excluded.server_id,
+                title = excluded.title,
+                year = excluded.year,
+                added_at = COALESCE(excluded.added_at, movie_cache.added_at),
+                tmdb_id = COALESCE(excluded.tmdb_id, movie_cache.tmdb_id),
+                tvdb_id = COALESCE(excluded.tvdb_id, movie_cache.tvdb_id),
+                library_id = excluded.library_id,
+                updated_at = CURRENT_TIMESTAMP
+        """, (
+            movie["rating_key"], server_id, movie["title"], movie.get("year"), movie.get("added_at"),
+            movie.get("tmdb_id"), movie.get("tvdb_id"), json.dumps(movie.get("labels") or []), library_id,
+        ))
+    logger.info("[DB] Media server '%s' library '%s': single movie upserted (rating_key=%s)", server_id, library_id, movie["rating_key"])
+
+
+def upsert_media_server_tv_show_single(server_id: str, library_id: str, show: Dict[str, Any]) -> None:
+    """TV-show mirror of upsert_media_server_movie_single() above -- same
+    reasoning, same deliberate separation from upsert_media_server_tv_shows()'s
+    destructive orphan-cleanup. `show`: {rating_key, title, year, added_at,
+    tmdb_id, tvdb_id}."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO tv_cache (rating_key, server_id, title, year, added_at, tmdb_id, tvdb_id, labels_json, updated_at, library_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(rating_key) DO UPDATE SET
+                server_id = excluded.server_id,
+                title = excluded.title,
+                year = excluded.year,
+                added_at = COALESCE(excluded.added_at, tv_cache.added_at),
+                tmdb_id = COALESCE(excluded.tmdb_id, tv_cache.tmdb_id),
+                tvdb_id = COALESCE(excluded.tvdb_id, tv_cache.tvdb_id),
+                library_id = excluded.library_id,
+                updated_at = CURRENT_TIMESTAMP
+        """, (
+            show["rating_key"], server_id, show["title"], show.get("year"), show.get("added_at"),
+            show.get("tmdb_id"), show.get("tvdb_id"), json.dumps(show.get("labels") or []), library_id,
+        ))
+    logger.info("[DB] Media server '%s' library '%s': single TV show upserted (rating_key=%s)", server_id, library_id, show["rating_key"])
+
+
+_TV_CACHE_SELECT_COLUMNS = "rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition, server_id"
+
+
+def _tv_row_to_dict(row) -> Dict[str, Any]:
+    try:
+        labels = json.loads(row["labels_json"]) if row["labels_json"] else []
+    except json.JSONDecodeError:
+        labels = []
+    try:
+        seasons = json.loads(row["seasons_json"]) if row["seasons_json"] else []
+    except json.JSONDecodeError:
+        seasons = []
+    return {
+        "rating_key": row["rating_key"],
+        "title": row["title"],
+        "year": row["year"],
+        "addedAt": _coerce_added_at(row["added_at"]),
+        "tmdb_id": row["tmdb_id"],
+        "tvdb_id": row["tvdb_id"] if "tvdb_id" in row.keys() else None,
+        "poster_url": row["poster_url"],
+        "logo_url": row["logo_url"] if "logo_url" in row.keys() else None,
+        "art_url": row["art_url"] if "art_url" in row.keys() else None,
+        "square_art_url": row["square_art_url"] if "square_art_url" in row.keys() else None,
+        "labels": labels,
+        "seasons": seasons,
+        "updated_at": row["updated_at"],
+        "library_id": row["library_id"] if "library_id" in row.keys() else None,
+        "edition": row["edition"] if "edition" in row.keys() else None,
+        "server_id": row["server_id"] if "server_id" in row.keys() else None,
+    }
+
+
 def get_cached_tv_shows(library_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """See get_cached_movies()'s docstring -- identical server_id-agnostic
+    single-library behavior; use get_cached_tv_shows_multi() for a Library
+    Group spanning several (server_id, library_id) pairs."""
     with get_db() as conn:
         cursor = conn.cursor()
         if library_id:
-            cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition
+            cursor.execute(f"""
+                SELECT {_TV_CACHE_SELECT_COLUMNS}
                 FROM tv_cache
                 WHERE library_id = ?
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """, (library_id,))
         else:
-            cursor.execute("""
-                SELECT rating_key, title, year, added_at, tmdb_id, tvdb_id, poster_url, logo_url, art_url, square_art_url, labels_json, seasons_json, updated_at, library_id, edition
+            cursor.execute(f"""
+                SELECT {_TV_CACHE_SELECT_COLUMNS}
                 FROM tv_cache
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """)
         rows = cursor.fetchall()
 
-    out: List[Dict[str, Any]] = []
-    for row in rows:
-        try:
-            labels = json.loads(row["labels_json"]) if row["labels_json"] else []
-        except json.JSONDecodeError:
-            labels = []
-        try:
-            seasons = json.loads(row["seasons_json"]) if row["seasons_json"] else []
-        except json.JSONDecodeError:
-            seasons = []
-        out.append({
-            "rating_key": row["rating_key"],
-            "title": row["title"],
-            "year": row["year"],
-            "addedAt": row["added_at"],
-            "tmdb_id": row["tmdb_id"],
-            "tvdb_id": row["tvdb_id"] if "tvdb_id" in row.keys() else None,
-            "poster_url": row["poster_url"],
-            "logo_url": row["logo_url"] if "logo_url" in row.keys() else None,
-            "art_url": row["art_url"] if "art_url" in row.keys() else None,
-            "square_art_url": row["square_art_url"] if "square_art_url" in row.keys() else None,
-            "labels": labels,
-            "seasons": seasons,
-            "updated_at": row["updated_at"],
-            "library_id": row["library_id"] if "library_id" in row.keys() else None,
-            "edition": row["edition"] if "edition" in row.keys() else None,
+    return [_tv_row_to_dict(row) for row in rows]
+
+
+def set_library_group_collection_overrides(group_id: str, overrides: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """Replaces one Library Group's collectionMatchOverrides and saves
+    immediately (the Collections page's matching window saves on its own,
+    like the grid's other live controls). Returns the updated group, or None
+    if no group has that id."""
+    settings_row = get_ui_settings() or {}
+    groups = settings_row.get("libraryGroups") or []
+    for group in groups:
+        if group.get("id") == group_id:
+            group["collectionMatchOverrides"] = {k: v for k, v in overrides.items() if k and v}
+            settings_row["libraryGroups"] = groups
+            save_ui_settings(settings_row)
+            return group
+    return None
+
+
+def set_library_group_preferred_server(server_id: str, library_id: str, media_type: str, preferred_server_id: str) -> Optional[Dict[str, Any]]:
+    """Updates just one Library Group's `preferredServerId` in place and saves
+    immediately -- backs the Movies/TV grid toolbar's live "prefer" dropdown
+    (Quirk #85), which persists on every change like the page's other
+    controls, unlike every other Library Group field (name, auto-generate,
+    labels), which is only edited via Settings -> Libraries and saved on that
+    page's own Save button. Returns the updated group dict, or None if no
+    group matches the given (server_id, library_id, media_type)."""
+    settings_row = get_ui_settings() or {}
+    groups = settings_row.get("libraryGroups") or []
+    updated_group = None
+    for group in groups:
+        if group.get("mediaType") != media_type:
+            continue
+        members = group.get("members") or []
+        if any(m.get("serverId") == server_id and m.get("libraryId") == str(library_id) for m in members):
+            group["preferredServerId"] = preferred_server_id
+            updated_group = group
+            break
+    if updated_group is None:
+        return None
+    settings_row["libraryGroups"] = groups
+    save_ui_settings(settings_row)
+    return updated_group
+
+
+def set_library_group_merge_items(server_id: str, library_id: str, media_type: str, merge_items: bool) -> Optional[Dict[str, Any]]:
+    """Updates just one Library Group's `mergeItems` in place and saves
+    immediately -- same "identify the group, mutate one field, save now"
+    pattern as set_library_group_preferred_server() above, applied to the
+    Merge Items checkbox (Quirk #120/#121) instead of gating it behind
+    Settings' own Save button. Added specifically so toggling it can never be
+    lost by navigating away without clicking Save, or by the confirm-leave
+    dialog being dismissed the wrong way -- the checkbox now behaves exactly
+    like its sibling "Show posters from" control. Returns the updated group
+    dict, or None if no group matches the given (server_id, library_id,
+    media_type)."""
+    settings_row = get_ui_settings() or {}
+    groups = settings_row.get("libraryGroups") or []
+    updated_group = None
+    for group in groups:
+        if group.get("mediaType") != media_type:
+            continue
+        members = group.get("members") or []
+        if any(m.get("serverId") == server_id and m.get("libraryId") == str(library_id) for m in members):
+            group["mergeItems"] = merge_items
+            updated_group = group
+            break
+    if updated_group is None:
+        return None
+    settings_row["libraryGroups"] = groups
+    save_ui_settings(settings_row)
+    return updated_group
+
+
+def set_library_group_mirror_config(server_id: str, library_id: str, media_type: str, mirror_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Updates just one Library Group's `mirror` config in place and saves
+    immediately (Quirk #123's Media Mirror feature) -- same "identify the
+    group via a (server_id, library_id, media_type) triple, mutate one
+    field, save now" pattern as set_library_group_preferred_server() above,
+    since Media Mirror is edited from its own dedicated view (routed the
+    same way Logos/Backdrops/Square Art already are), not gated behind
+    Settings' own Save button. `mirror_config` replaces the group's whole
+    `mirror` dict wholesale (the frontend always sends the complete object,
+    matching this project's established settings-save convention -- Quirk
+    #84's own round-trip test caught a bare-partial-payload bug from
+    assuming otherwise). Returns the updated group dict, or None if no group
+    matches."""
+    settings_row = get_ui_settings() or {}
+    groups = settings_row.get("libraryGroups") or []
+    updated_group = None
+    for group in groups:
+        if group.get("mediaType") != media_type:
+            continue
+        members = group.get("members") or []
+        if any(m.get("serverId") == server_id and m.get("libraryId") == str(library_id) for m in members):
+            group["mirror"] = mirror_config
+            updated_group = group
+            break
+    if updated_group is None:
+        return None
+    settings_row["libraryGroups"] = groups
+    save_ui_settings(settings_row)
+    return updated_group
+
+
+def get_cached_tv_shows_multi(pairs: List[tuple], preferred_server_id: Optional[str] = None, merge_items: bool = True) -> List[Dict[str, Any]]:
+    """TV mirror of get_cached_movies_multi() -- see its docstring and
+    _dedupe_by_tmdb_id()'s for the Library Group union + de-duplication
+    behavior, the `preferred_server_id` parameter's own docstring for the
+    dual merge-winner/filter meaning it has depending on `merge_items`
+    (Quirk #121), and `merge_items` for the per-group opt-out of the dedup
+    step entirely."""
+    if not pairs:
+        return []
+    with get_db() as conn:
+        cursor = conn.cursor()
+        where_clause = " OR ".join(["(server_id = ? AND library_id = ?)"] * len(pairs))
+        params: List[Any] = []
+        for server_id, library_id in pairs:
+            params.extend([server_id, library_id])
+        cursor.execute(f"""
+            SELECT {_TV_CACHE_SELECT_COLUMNS}
+            FROM tv_cache
+            WHERE {where_clause}
+            ORDER BY COALESCE(updated_at, added_at) DESC
+        """, params)
+        rows = cursor.fetchall()
+
+    items = [_tv_row_to_dict(row) for row in rows]
+    if not merge_items:
+        if preferred_server_id:
+            items = [item for item in items if item.get("server_id") == preferred_server_id]
+        return items
+    return _dedupe_by_tmdb_id(items, preferred_server_id or "plex-1")
+
+
+def _build_mirror_mapping(items: List[Dict[str, Any]], source_server_id: str, target_server_ids: List[str]) -> List[Dict[str, Any]]:
+    """Groups a Library Group's raw (unmerged, cached) items by tmdb_id and
+    resolves, for each item present on the mirror's source server, which
+    rating_key (if any) represents the same title on each configured target
+    server -- the "confirm mappings" data Media Mirror's UI shows directly
+    (Quirk #123). Only items actually present on `source_server_id` are
+    included; a title that exists on a target but not the source isn't this
+    mirror's concern (nothing to copy FROM). An item with no tmdb_id at all
+    can never resolve to anything on another server (matching this app's
+    other tmdb_id-matching features, Quirk #67/#120) and is still reported,
+    with every target left unmapped, so it's visible as needing attention
+    rather than silently dropped from the mapping view entirely."""
+    by_tmdb: Dict[Any, List[Dict[str, Any]]] = {}
+    no_tmdb_from_source: List[Dict[str, Any]] = []
+    for item in items:
+        tmdb_id = item.get("tmdb_id")
+        if not tmdb_id:
+            if item.get("server_id") == source_server_id:
+                no_tmdb_from_source.append(item)
+            continue
+        by_tmdb.setdefault(tmdb_id, []).append(item)
+
+    mapping: List[Dict[str, Any]] = []
+    for tmdb_id, group in by_tmdb.items():
+        source_item = next((g for g in group if g.get("server_id") == source_server_id), None)
+        if not source_item:
+            continue
+        targets: Dict[str, Optional[str]] = {}
+        for target_id in target_server_ids:
+            match = next((g for g in group if g.get("server_id") == target_id), None)
+            targets[target_id] = match.get("rating_key") if match else None
+        mapping.append({
+            "tmdb_id": tmdb_id,
+            "source_rating_key": source_item.get("rating_key"),
+            "title": source_item.get("title"),
+            "year": source_item.get("year"),
+            "targets": targets,
         })
-    return out
+
+    for item in no_tmdb_from_source:
+        mapping.append({
+            "tmdb_id": None,
+            "source_rating_key": item.get("rating_key"),
+            "title": item.get("title"),
+            "year": item.get("year"),
+            "targets": {t: None for t in target_server_ids},
+        })
+    return mapping
+
+
+def get_movie_mirror_mapping(pairs: List[tuple], source_server_id: str, target_server_ids: List[str]) -> List[Dict[str, Any]]:
+    """Media Mirror's movie mapping (Quirk #123) -- see _build_mirror_mapping()."""
+    return _build_mirror_mapping(get_cached_movies_multi(pairs, merge_items=False), source_server_id, target_server_ids)
+
+
+def get_tv_mirror_mapping(pairs: List[tuple], source_server_id: str, target_server_ids: List[str]) -> List[Dict[str, Any]]:
+    """Media Mirror's TV mapping (Quirk #123) -- see _build_mirror_mapping()."""
+    return _build_mirror_mapping(get_cached_tv_shows_multi(pairs, merge_items=False), source_server_id, target_server_ids)
+
+
+def collection_match_key(item: Dict[str, Any], overrides: Optional[Dict[str, str]] = None) -> str:
+    """The key two collections must share to count as the same collection
+    across a Library Group's servers: a manual override for this exact
+    collection ("serverId:ratingKey" in LibraryGroup.collectionMatchOverrides)
+    when one is set, otherwise the normalized title. Manual keys are prefixed
+    so they can never collide with a title key."""
+    from .config import normalize_collection_title
+    if overrides:
+        manual = overrides.get(f"{item.get('server_id') or 'plex-1'}:{item.get('rating_key')}")
+        if manual:
+            return f"~manual~{manual}"
+    return normalize_collection_title(item.get("title") or "")
+
+
+def _build_collection_mirror_mapping(items: List[Dict[str, Any]], source_server_id: str, target_server_ids: List[str], overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """Collections' own version of _build_mirror_mapping() above -- groups by
+    NORMALIZED TITLE instead of tmdb_id, since a collection only gets a real
+    cross-server identity (tmdb_collection_id) lazily, on first editor-open,
+    not at scan time (same reasoning as _dedupe_collections_by_title(), which
+    this mirrors). User directly asked for collections to be added to Media
+    Mirror right after the title-matching fix shipped. Collections ride on
+    the owning "movie" LibraryGroup (api_collections() resolves them that
+    way, not a separate media_type), so this is called with the same
+    (server_id, library_id) pairs a movie mirror mapping already uses."""
+    by_title: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        key = collection_match_key(item, overrides)
+        by_title.setdefault(key, []).append(item)
+
+    mapping: List[Dict[str, Any]] = []
+    for group in by_title.values():
+        source_item = next((g for g in group if g.get("server_id") == source_server_id), None)
+        if not source_item:
+            continue
+        targets: Dict[str, Optional[str]] = {}
+        for target_id in target_server_ids:
+            match = next((g for g in group if g.get("server_id") == target_id), None)
+            targets[target_id] = match.get("rating_key") if match else None
+        mapping.append({
+            "tmdb_id": None,
+            "source_rating_key": source_item.get("rating_key"),
+            "title": source_item.get("title"),
+            "year": source_item.get("year"),
+            "targets": targets,
+        })
+    return mapping
+
+
+def get_collection_mirror_mapping(pairs: List[tuple], source_server_id: str, target_server_ids: List[str], overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """Media Mirror's Collections mapping (Quirk #123's follow-up) -- see
+    _build_collection_mirror_mapping(). `overrides`: the group's
+    collectionMatchOverrides."""
+    return _build_collection_mirror_mapping(get_cached_collections_multi(pairs, merge_items=False), source_server_id, target_server_ids, overrides)
 
 
 def get_cached_tv_show(rating_key: str) -> Optional[Dict[str, Any]]:
@@ -2340,7 +3261,7 @@ def get_cached_tv_show(rating_key: str) -> Optional[Dict[str, Any]]:
         "rating_key": row["rating_key"],
         "title": row["title"],
         "year": row["year"],
-        "addedAt": row["added_at"],
+        "addedAt": _coerce_added_at(row["added_at"]),
         "tmdb_id": row["tmdb_id"],
         "tvdb_id": row["tvdb_id"] if "tvdb_id" in row.keys() else None,
         "poster_url": row["poster_url"],
@@ -2364,10 +3285,12 @@ def get_tv_cache_stats(library_id: Optional[str] = None) -> Dict[str, Any]:
 
 
 def clear_tv_cache(library_id: Optional[str] = None) -> None:
+    """See clear_movie_cache() above for the server_id='plex-1' scoping
+    rationale when library_id is given (Quirk #61)."""
     with get_db() as conn:
         cursor = conn.cursor()
         if library_id:
-            cursor.execute("DELETE FROM tv_cache WHERE library_id = ?", (library_id,))
+            cursor.execute("DELETE FROM tv_cache WHERE server_id = 'plex-1' AND library_id = ?", (library_id,))
             logger.info("[DB] Cleared tv_cache for library %s", library_id)
         else:
             cursor.execute("DELETE FROM tv_cache")
@@ -2405,6 +3328,12 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
     """
     Replace cache entries to match the provided collections list.
     Also removes orphaned poster files.
+
+    Plex-only -- orphan detection/deletion scoped to server_id='plex-1' for
+    the same reason as bulk_refresh_cache()/bulk_refresh_tv_cache() above
+    (a Jellyfin/Emby BoxSet collection row, if that's ever built, must never
+    be at risk from a Plex collection scan sharing the same library_id
+    string). See CLAUDE.md Quirk #61.
     """
     # Defensively skip any entry with no rating_key — a prior bug (fixed) briefly
     # let a shape-mismatched caller write rows with rating_key=NULL here. Since
@@ -2423,11 +3352,11 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
         if keys:
             cursor.execute(f"""
                 SELECT rating_key FROM collection_cache
-                WHERE (rating_key IS NULL OR rating_key NOT IN ({",".join("?" for _ in keys)})) AND library_id = ?
+                WHERE (rating_key IS NULL OR rating_key NOT IN ({",".join("?" for _ in keys)})) AND server_id = 'plex-1' AND library_id = ?
             """, keys + [library_id])
             orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
         else:
-            cursor.execute("SELECT rating_key FROM collection_cache WHERE library_id = ?", (library_id,))
+            cursor.execute("SELECT rating_key FROM collection_cache WHERE server_id = 'plex-1' AND library_id = ?", (library_id,))
             orphaned_keys = [row["rating_key"] for row in cursor.fetchall()]
 
         for c in collections:
@@ -2458,7 +3387,7 @@ def bulk_refresh_collection_cache(collections: List[Dict[str, Any]], library_id:
         if keys:
             cursor.execute(f"""
                 DELETE FROM collection_cache
-                WHERE (rating_key IS NULL OR rating_key NOT IN ({",".join("?" for _ in keys)})) AND library_id = ?
+                WHERE (rating_key IS NULL OR rating_key NOT IN ({",".join("?" for _ in keys)})) AND server_id = 'plex-1' AND library_id = ?
             """, keys + [library_id])
 
     # Clean up orphaned poster files on disk
@@ -2472,14 +3401,14 @@ def get_cached_collections(library_id: Optional[str] = None) -> List[Dict[str, A
         cursor = conn.cursor()
         if library_id:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, poster_url, updated_at, library_id
+                SELECT rating_key, title, year, added_at, poster_url, updated_at, library_id, server_id
                 FROM collection_cache
                 WHERE library_id = ?
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """, (library_id,))
         else:
             cursor.execute("""
-                SELECT rating_key, title, year, added_at, poster_url, updated_at, library_id
+                SELECT rating_key, title, year, added_at, poster_url, updated_at, library_id, server_id
                 FROM collection_cache
                 ORDER BY COALESCE(updated_at, added_at) DESC
             """)
@@ -2491,12 +3420,138 @@ def get_cached_collections(library_id: Optional[str] = None) -> List[Dict[str, A
             "rating_key": row["rating_key"],
             "title": row["title"],
             "year": row["year"],
-            "addedAt": row["added_at"],
+            "addedAt": _coerce_added_at(row["added_at"]),
             "poster_url": row["poster_url"],
             "updated_at": row["updated_at"],
             "library_id": row["library_id"],
+            # Present since Quirk #57's schema migration, but never previously
+            # selected/returned here -- added so a Jellyfin-sourced collection
+            # row (new, this pass) can be told apart from a Plex one by any
+            # caller, matching every other cached-item type's own output shape.
+            "server_id": row["server_id"] if "server_id" in row.keys() else "plex-1",
         })
     return out
+
+
+def _dedupe_collections_by_title(collections: List[Dict[str, Any]], preferred_server_id: str = "plex-1", overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """Merges collections across linked servers by NORMALIZED title, since a
+    collection only gets a real cross-server identity (tmdb_collection_id) on
+    first editor-open, not at scan time -- unlike movies/TV, which already
+    have tmdb_id from the scan itself. User-reported directly, confirming
+    exactly the naming mismatch this needs to handle: "i think jellyfin adds
+    'collection' to the end of the collection name whereas plex doesnt" --
+    e.g. Plex's "Marvel Cinematic Universe" vs. Jellyfin's "Marvel Cinematic
+    Universe Collection" for the same real-world collection. Uses
+    config.normalize_collection_title() (shared with movies.py's
+    _best_collection_match(), built for the identical TMDb-suffix pattern).
+
+    `preferred_server_id` mirrors _dedupe_by_tmdb_id()'s own parameter
+    (Quirk #74/#84/#121) -- prefer the row matching it when one exists in the
+    group, falling back to whichever row sorts first (already
+    most-recently-updated per the caller's own ORDER BY) when the preferred
+    server isn't in this particular group. Defaults to "plex-1", matching
+    this function's original hardcoded behavior exactly, so a caller that
+    doesn't resolve a real per-group preference still gets today's sensible
+    default. Dropped duplicates' server_ids are recorded on the winner's
+    `also_on` field (display-only, matching movies/TV's own `also_on`), AND
+    on a richer `other_servers` list (`[{server_id, rating_key}, ...]`) --
+    `also_on` alone is enough for a badge, but the manual editor's per-server
+    "Current Poster" preview toggle and multi-server send picker (the same
+    generic EditorPane.vue logic movies/collections already share, Quirk #75/
+    #128 -- it reads `other_servers` with no mediaType special-casing at all)
+    need each other server's own rating_key too, to actually send against it.
+    Was missing entirely until now, despite movies/TV's own
+    _dedupe_by_tmdb_id() having built the identical field from the start --
+    user-reported directly: a collection on both Plex and Jellyfin had no way
+    to pick which server to send its poster to."""
+    # `overrides` (LibraryGroup.collectionMatchOverrides): manual matches set
+    # in the Collections page's "Collection matching" window -- see
+    # collection_match_key().
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[str] = []
+    for c in collections:
+        key = collection_match_key(c, overrides)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(c)
+
+    out: List[Dict[str, Any]] = []
+    for key in order:
+        group = groups[key]
+        if len(group) == 1:
+            single = dict(group[0])
+            single["also_on"] = []
+            single["other_servers"] = []
+            out.append(single)
+            continue
+        winner = next((c for c in group if c.get("server_id") == preferred_server_id), group[0])
+        others = [c for c in group if c is not winner and c.get("server_id")]
+        merged = dict(winner)
+        merged["also_on"] = [c.get("server_id") for c in others]
+        merged["other_servers"] = [
+            {"server_id": c["server_id"], "rating_key": c.get("rating_key")}
+            for c in others if c.get("rating_key")
+        ]
+        out.append(merged)
+    return out
+
+
+def get_cached_collections_multi(pairs: List[tuple], preferred_server_id: Optional[str] = None, merge_items: bool = True, overrides: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """Like get_cached_collections(), but for a Library Group spanning several
+    (server_id, library_id) pairs (Quirk #62/#64) -- unions every pair's rows
+    into one list, then (when `merge_items` is True, the default -- mirrors
+    get_cached_movies_multi()'s own `merge_items` convention, Quirk #120/#121,
+    resolved the identical way via get_library_group_merge_enabled()) merges
+    same-collection rows across servers by normalized title via
+    _dedupe_collections_by_title(). Was missing entirely until now:
+    api_collections() (movies.py) only ever queried ONE server at a time
+    (defaulting to Plex), so a Plex-anchored group's Collections page never
+    showed a linked Jellyfin member's collections even after Quirk #130's
+    scan fix correctly populated them -- the scan worked, the display never
+    looked at what it wrote. User-reported directly: "i ran a scan on my
+    'movies' group. jellyfin collections didnt show up." Title-based (not
+    tmdb_id-based like movies/TV) specifically because a collection only gets
+    a tmdb_collection_id resolved lazily, one-time, on first editor-open
+    (api_collection_tmdb()), so most rows have none at scan time -- see
+    _dedupe_collections_by_title()'s own docstring for the full reasoning.
+
+    `preferred_server_id` mirrors get_cached_movies_multi()'s own parameter
+    and its dual merge-winner/filter meaning (Quirk #121), resolved by the
+    caller via config.get_library_group_preferred_server() -- same "Show
+    collections from" dropdown the Movies/TV grids already have, now wired
+    up for Collections too."""
+    if not pairs:
+        return []
+    with get_db() as conn:
+        cursor = conn.cursor()
+        placeholders = " OR ".join(["(server_id = ? AND library_id = ?)"] * len(pairs))
+        params: List[Any] = [v for pair in pairs for v in pair]
+        cursor.execute(f"""
+            SELECT rating_key, title, year, added_at, poster_url, updated_at, library_id, server_id
+            FROM collection_cache
+            WHERE {placeholders}
+            ORDER BY COALESCE(updated_at, added_at) DESC
+        """, params)
+        rows = cursor.fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        out.append({
+            "rating_key": row["rating_key"],
+            "title": row["title"],
+            "year": row["year"],
+            "addedAt": _coerce_added_at(row["added_at"]),
+            "poster_url": row["poster_url"],
+            "updated_at": row["updated_at"],
+            "library_id": row["library_id"],
+            "server_id": row["server_id"] if "server_id" in row.keys() else "plex-1",
+        })
+    if not merge_items:
+        if preferred_server_id:
+            out = [item for item in out if item.get("server_id") == preferred_server_id]
+        return out
+    return _dedupe_collections_by_title(out, preferred_server_id or "plex-1", overrides)
 
 
 def get_collection_tmdb_id(rating_key: str) -> Optional[int]:
@@ -2533,10 +3588,12 @@ def get_collection_cache_stats(library_id: Optional[str] = None) -> Dict[str, An
 
 
 def clear_collection_cache(library_id: Optional[str] = None) -> None:
+    """See clear_movie_cache() above for the server_id='plex-1' scoping
+    rationale when library_id is given (Quirk #61)."""
     with get_db() as conn:
         cursor = conn.cursor()
         if library_id:
-            cursor.execute("DELETE FROM collection_cache WHERE library_id = ?", (library_id,))
+            cursor.execute("DELETE FROM collection_cache WHERE server_id = 'plex-1' AND library_id = ?", (library_id,))
             logger.info("[DB] Cleared collection_cache for library %s", library_id)
         else:
             cursor.execute("DELETE FROM collection_cache")
@@ -2575,9 +3632,15 @@ def copy_env_to_ui_settings():
             logger.debug("[DB] TMDB API key already configured, skipping ENV copy")
             return
     
-    env_mappings = [
+    # Plex removed in the UI (PlexSettings.ignoreEnvCredentials) -- never copy
+    # PLEX_URL/PLEX_TOKEN back in, or the removed Plex returns on restart.
+    _ignore_raw = ((existing_settings or {}).get("plex") or {}).get("ignoreEnvCredentials")
+    plex_env_ignored = _ignore_raw is True or str(_ignore_raw).strip().lower() in ("true", "1")
+    plex_env_mappings = [] if plex_env_ignored else [
         ("PLEX_URL", "plex.url"),
-        ("PLEX_TOKEN", "plex.token"), 
+        ("PLEX_TOKEN", "plex.token"),
+    ]
+    env_mappings = plex_env_mappings + [
         ("PLEX_MOVIE_LIBRARY_NAME", "plex.movieLibraryName"),
         ("PLEX_MOVIE_LIBRARY_NAMES", "plex.movieLibraryNames"),
         ("TMDB_API_KEY", "tmdb.apiKey"),
@@ -2648,6 +3711,83 @@ def get_title_for_rating_key(rating_key: str) -> tuple:
     return None, None
 
 
+def get_library_id_for_rating_key(rating_key: str) -> Optional[str]:
+    """Return the cached library_id for a rating_key from movie_cache or
+    tv_cache. Mirrors get_title_for_rating_key()'s exact lookup shape as a
+    separate function rather than widening that one's return signature --
+    it already has 14 existing callers all unpacking exactly (title, year),
+    and this app's own established convention (Quirk #60) is a small,
+    narrowly-scoped addition over a risky shared-signature change. Used by
+    media_server_send.py's manual Send-to-Jellyfin/Emby notification (which
+    otherwise has no library_id at all to pass to _should_notify()'s
+    per-library filter) -- falls back to None (no filter applied) if not
+    cached, which is a safe default."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT library_id FROM movie_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT library_id FROM tv_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+            ).fetchone()
+    return row["library_id"] if row and row["library_id"] else None
+
+
+def get_server_id_for_rating_key(rating_key: str) -> str:
+    """Which configured media server (Quirk #57's `mediaServers` model) a
+    rating_key/item id belongs to -- checked against movie_cache/tv_cache/
+    collection_cache in that order. Defaults to 'plex-1' when not found
+    (matches every pre-multi-server assumption already baked into this app --
+    a rating_key that isn't cached anywhere yet is far more likely to be a
+    Plex item mid-scan than anything else, and 'plex-1' is always a safe
+    fallback since every existing single-server install has exactly that
+    server_id on every real row). Used by fetch_and_cache_poster()/
+    art_cache.py's fetch_and_cache() to route an asset fetch to the right
+    MediaServerClient instead of always assuming Plex."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT server_id FROM movie_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT server_id FROM tv_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+            ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT server_id FROM collection_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+            ).fetchone()
+    if row and row["server_id"]:
+        return row["server_id"]
+    return "plex-1"
+
+
+def get_ids_for_rating_key(rating_key: str) -> tuple:
+    """Return (tmdb_id, tvdb_id) for a rating_key from movie_cache/tv_cache,
+    whichever known cache columns exist (movie_cache has no tvdb_id column
+    read here needed by its own endpoint, but sharing one function for both
+    is simpler than two near-identical ones). (None, None) if not cached.
+
+    Used by api_movie_tmdb()/api_tv_show_tmdb() as the non-Plex fallback --
+    those two endpoints are otherwise Plex-only (a direct
+    /library/metadata/{rating_key} fetch), which always fails for a
+    Jellyfin/Emby item id, silently starving the manual editor of any
+    poster/logo candidates to show (EditorPane.vue bails out entirely once
+    tmdb_id comes back null). The tmdb_id/tvdb_id are already known from
+    whatever scan/merge cached this row in the first place -- no live fetch
+    needed for a non-Plex item."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT tmdb_id, NULL as tvdb_id FROM movie_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT tmdb_id, tvdb_id FROM tv_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
+            ).fetchone()
+    if row:
+        return row["tmdb_id"], row["tvdb_id"]
+    return None, None
+
+
 def record_poster_history(
     rating_key: str,
     library_id: Optional[str],
@@ -2667,6 +3807,7 @@ def record_poster_history(
     poster_data: Optional[bytes] = None,
     status: str = 'success',
     error_message: Optional[str] = None,
+    server_id: str = 'plex-1',
 ) -> None:
     """Record a poster-related action for tracking, including fallback information."""
     from .config import HISTORY_THUMBNAIL_DIR
@@ -2708,8 +3849,8 @@ def record_poster_history(
             (rating_key, library_id, title, year, template_id, preset_id, action, save_path, source,
              poster_fallback_used, poster_fallback_template, poster_fallback_preset,
              logo_fallback_used, logo_fallback_template, logo_fallback_preset, thumbnail_path,
-             status, error_message, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             status, error_message, server_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 rating_key,
@@ -2730,6 +3871,7 @@ def record_poster_history(
                 thumbnail_path,
                 status,
                 error_message,
+                server_id,
             ),
         )
 
@@ -2786,6 +3928,18 @@ def get_poster_history(
             "logo_fallback_used": bool(row["logo_fallback_used"]) if "logo_fallback_used" in row_keys else False,
             "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
             "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
+            # These three are genuine columns (status/error_message have existed
+            # since early on; server_id since Quirk #57) that were written by
+            # record_poster_history() but never actually read back here -- the
+            # frontend's HistoryRecord interface/template already expected
+            # status/error_message (a failed row's error text never showed up
+            # in the list, only if fetched by id individually), and server_id
+            # is needed to tell a Plex-history row apart from a Jellyfin/Emby
+            # one now that multi-server sync can write either (Quirk #96/#110's
+            # "History not showing it" gap).
+            "status": row["status"] if "status" in row_keys else "success",
+            "error_message": row["error_message"] if "error_message" in row_keys else None,
+            "server_id": row["server_id"] if "server_id" in row_keys else "plex-1",
             "created_at": row["created_at"],
         })
     return out
@@ -2820,8 +3974,44 @@ def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
         "logo_fallback_template": row["logo_fallback_template"] if "logo_fallback_template" in row_keys else None,
         "logo_fallback_preset": row["logo_fallback_preset"] if "logo_fallback_preset" in row_keys else None,
         "thumbnail_path": row["thumbnail_path"] if "thumbnail_path" in row_keys else None,
+        "status": row["status"] if "status" in row_keys else "success",
+        "error_message": row["error_message"] if "error_message" in row_keys else None,
+        "server_id": row["server_id"] if "server_id" in row_keys else "plex-1",
         "created_at": row["created_at"],
     }
+
+
+def get_last_plex_send_preset(media_type: str, tmdb_id: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The template/preset of the most recent poster sent to the Plex copy of
+    this TMDb id (movie or TV series), or None. Lets a cached Plex render that's
+    later delivered to Jellyfin/Emby record which preset it actually came from
+    (Quirk #151) instead of an empty Template/Preset in History."""
+    if not tmdb_id:
+        return None
+    table = "tv_cache" if media_type in ("tv", "tv-show") else "movie_cache"
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT rating_key FROM {table} WHERE tmdb_id = ? AND server_id = 'plex-1'",
+                (tmdb_id,),
+            )
+            keys = [r["rating_key"] for r in cursor.fetchall() if r["rating_key"]]
+            if not keys:
+                return None
+            placeholders = ",".join(["?"] * len(keys))
+            cursor.execute(
+                f"""SELECT template_id, preset_id FROM poster_history
+                    WHERE rating_key IN ({placeholders})
+                      AND action IN ('sent_to_plex', 'resent_to_plex')
+                      AND (template_id IS NOT NULL OR preset_id IS NOT NULL)
+                    ORDER BY datetime(created_at) DESC LIMIT 1""",
+                keys,
+            )
+            row = cursor.fetchone()
+            return {"template_id": row["template_id"], "preset_id": row["preset_id"]} if row else None
+    except Exception:
+        return None
 
 
 def get_poster_status(
@@ -2844,7 +4034,7 @@ def get_poster_status(
     where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
     query = f"""
-        SELECT rating_key, action, template_id, preset_id, created_at
+        SELECT rating_key, action, template_id, preset_id, created_at, server_id
         FROM poster_history
         {where_clause}
         ORDER BY datetime(created_at) DESC
@@ -2856,12 +4046,14 @@ def get_poster_status(
         cursor.execute(query, params)
         rows = cursor.fetchall()
 
+    row_keys = rows[0].keys() if rows else []
     for row in rows:
         rating_key = row["rating_key"]
         action = row["action"]
         created_at = row["created_at"]
         template_id = row["template_id"]
         preset_id = row["preset_id"]
+        server_id = row["server_id"] if "server_id" in row_keys else "plex-1"
 
         if rating_key not in result:
             result[rating_key] = {
@@ -2869,12 +4061,23 @@ def get_poster_status(
                 "saved": None,
             }
 
-        # Record the first (latest) occurrence for each action
-        if action == "sent_to_plex" and result[rating_key]["sent"] is None:
+        # Record the first (latest) occurrence for each action.
+        # 'resent_to_plex' and 'sent_to_media_server' (Quirk #114) both
+        # genuinely mean "this item's poster was sent somewhere" just as much
+        # as 'sent_to_plex' does -- excluding either left the Batch Edit
+        # grid's "Sent"/"Not sent" pill permanently blind to any item
+        # resent from Local Assets, or delivered via the multi-server sync
+        # path (which 'sent_to_media_server' covers unconditionally,
+        # including a Plex delivery that went through sync rather than the
+        # direct upload, Quirk #110 -- exactly the case that made "Fallout"/
+        # "The Grand Tour" show "Not sent" despite a real, successful,
+        # verified send moments earlier).
+        if action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server") and result[rating_key]["sent"] is None:
             result[rating_key]["sent"] = {
                 "template_id": template_id,
                 "preset_id": preset_id,
                 "created_at": created_at,
+                "server_id": server_id,
             }
         elif action == "saved_local" and result[rating_key]["saved"] is None:
             result[rating_key]["saved"] = {
@@ -2967,6 +4170,64 @@ def clear_retry_queue_for_library(library_id: str) -> int:
         removed = cursor.rowcount
     logger.info("[RETRY] Cleared %d retry queue entries for library %s", removed, library_id)
     return removed
+
+
+def purge_server_cache(server_id: str) -> Dict[str, Any]:
+    """Delete every cache-layer DB row belonging to one media server -- used when
+    a server is removed in Settings → Media Servers. Covers movie/TV/collection
+    cache rows, their label-cache rows, the server's pending retry-queue entries
+    and any Media Mirror sync state where it was the source or a target.
+
+    Deliberately does NOT touch poster_history (History is kept as a record of
+    past activity, matching how removing a single library already works).
+
+    Returns {"rating_keys": [...], "counts": {...}} -- the rating keys are handed
+    back so the caller can delete the matching on-disk cache files. A key that is
+    still cached under a DIFFERENT server is excluded from that list, so a purge
+    can never delete another server's files (not a realistic collision -- Plex
+    keys are short digits, Jellyfin/Emby's are GUIDs -- but cheap to rule out).
+    """
+    counts: Dict[str, int] = {}
+    with get_db() as conn:
+        cursor = conn.cursor()
+        keys: set = set()
+        for table in ("movie_cache", "tv_cache", "collection_cache"):
+            cursor.execute(f"SELECT rating_key FROM {table} WHERE server_id = ?", (server_id,))
+            keys.update(r[0] for r in cursor.fetchall() if r[0])
+
+        shared: set = set()
+        if keys:
+            placeholders = ",".join("?" * len(keys))
+            for table in ("movie_cache", "tv_cache", "collection_cache"):
+                cursor.execute(
+                    f"SELECT rating_key FROM {table} WHERE server_id != ? AND rating_key IN ({placeholders})",
+                    (server_id, *keys),
+                )
+                shared.update(r[0] for r in cursor.fetchall())
+        own_keys = sorted(keys - shared)
+
+        for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue"):
+            cursor.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
+            counts[table] = cursor.rowcount
+
+        if own_keys:
+            placeholders = ",".join("?" * len(own_keys))
+            for table in ("label_cache", "tv_label_cache"):
+                cursor.execute(f"DELETE FROM {table} WHERE rating_key IN ({placeholders})", own_keys)
+                counts[table] = cursor.rowcount
+            # Retry rows aren't always tagged with their real server_id (the
+            # column defaults to 'plex-1'), so also match them by rating key.
+            cursor.execute(f"DELETE FROM poster_retry_queue WHERE rating_key IN ({placeholders})", own_keys)
+            counts["poster_retry_queue"] += cursor.rowcount
+
+        cursor.execute(
+            "DELETE FROM mirror_sync_state WHERE source_server_id = ? OR target_server_id = ?",
+            (server_id, server_id),
+        )
+        counts["mirror_sync_state"] = cursor.rowcount
+
+    logger.info("[MEDIA_SERVER] Purged DB cache for removed server %s: %s", server_id, counts)
+    return {"rating_keys": own_keys, "counts": counts}
 
 
 def get_pending_retry_items(max_attempts: int = 0) -> List[Dict[str, Any]]:
