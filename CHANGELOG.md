@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.7.10 (2026-10-14) — `webui-overhaul-dev` branch
+
+### New Features
+- **Manual editor refresh** — both editors' left panel is now tabbed (Image / Logo / Text / Extras) with the preset bar pinned at the top and Preview pinned at the bottom. Less-used settings are collapsible groups (`EditorCard.vue`) showing a one-line summary when closed; open/closed state and the active tab are remembered. Sliders render on one line, Images/Filter and Logo Mode/Style share rows, per-source counts sit on the TMDb/Fanart/TVDB checkboxes, and the upload drop zones became an Upload button (an uploaded image is the first thumbnail; dropping a file on the thumbnails still works). Labels to remove are pinned above Preview on every tab.
+- **Separate logo and text bounding boxes** — Custom Text always fits its own box (`text_box_*`), separate from the logo box (`uniform_logo_*`), each with its own preview outline. One-time migrations (`text_box_split`, `text_box_always`, recorded in a new `applied_migrations` table) give every Uniform Logo preset config an explicit text box that renders the same as before. Kometa presets are untouched.
+- **Backdrops as poster backgrounds** — an Images switch (Posters/Backdrops) in the editors, a backdrop text filter, editor-only zoom and left/right pan (`poster_shift_x`), and a "View all" picker for posters and backdrops.
+
+### Bug Fixes
+- **Season config reset on save** — Save Preset and Save As no longer overwrite a preset's season config with the defaults (No Logo); a saved season config is marked `season_saved` so an identical-to-series season isn't treated as unset.
+
+### Improvements
+- **Starter presets** — text shadow is off in all imported Simposter defaults; simposter-main's season text uses Comfortaa-Medium with letter spacing 0.
+
 ## v1.7.08 (2026-10-13) — `dev-jellyfin` branch
 
 ### New Features

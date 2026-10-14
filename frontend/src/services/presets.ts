@@ -51,6 +51,14 @@ export function usePresetService() {
       shadow_blur: 0,
       letter_spacing: 1,
       position_y: 0.85,
+      // Custom Text sits in its own box: a full-width band near the bottom.
+      text_bbox_enabled: true,
+      text_box_max_w: 1800,
+      text_box_max_h: 600,
+      text_box_offset_x: 0.5,
+      text_box_offset_y: 0.85,
+      text_box_h_align: 'center',
+      text_box_v_align: 'center',
     }
   }
 
@@ -60,11 +68,12 @@ export function usePresetService() {
     error.value = null
     try {
       const baseOptions = options ?? presets.value.find((p) => p.id === selectedPreset.value)?.options ?? {}
+      // No season_options: the backend keeps the preset's saved season config. Sending the
+      // derived defaults here used to reset the season poster on every series/movie save.
       const payload = {
         template_id: selectedTemplate.value,
         preset_id: selectedPreset.value,
-        options: baseOptions,
-        season_options: deriveSeasonOptions(baseOptions)
+        options: baseOptions
       }
       const res = await fetch(`${apiBase}/api/presets/save`, {
         method: 'POST',
@@ -81,19 +90,28 @@ export function usePresetService() {
     }
   }
 
-  const savePresetAs = async (presetId: string, options?: PresetOptions) => {
+  // seasonOptions: the new preset's season config (a full option set). When omitted, the
+  // source preset's saved season differences are carried over on top of the new base, or the
+  // standard season defaults are used if the source has none.
+  const savePresetAs = async (presetId: string, options?: PresetOptions, seasonOptions?: PresetOptions) => {
     const targetId = presetId.trim()
     if (!targetId) return
 
     loading.value = true
     error.value = null
     try {
-      const baseOptions = options ?? presets.value.find((p) => p.id === selectedPreset.value)?.options ?? {}
+      const source = presets.value.find((p) => p.id === selectedPreset.value)
+      const baseOptions = options ?? source?.options ?? {}
+      const sourceSeason = (source?.season_options || {}) as Record<string, any>
+      const season = seasonOptions
+        ?? (Object.keys(sourceSeason).length
+          ? ({ ...(baseOptions as Record<string, any>), ...sourceSeason } as PresetOptions)
+          : deriveSeasonOptions(baseOptions))
       const payload = {
         template_id: selectedTemplate.value || 'uniformlogo',
         preset_id: targetId,
         options: baseOptions,
-        season_options: deriveSeasonOptions(baseOptions)
+        season_options: season
       }
       const res = await fetch(`${apiBase}/api/presets/save`, {
         method: 'POST',

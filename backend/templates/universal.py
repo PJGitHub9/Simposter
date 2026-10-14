@@ -505,15 +505,23 @@ def _render_text_overlay(
     stroke_width = int(options.get("stroke_width", 4))
     stroke_color = _hex_to_rgb(options.get("stroke_color", "#000000"))
 
-    # Bounding box option — when enabled, font_size auto-shrinks (down to a floor)
-    # until the wrapped text block fits inside the *same* box the uniformlogo
-    # template reserves for the logo (uniform_logo_max_w/h + offset_x/y), instead
-    # of overflowing. Deliberately reuses the logo's box rather than adding a
-    # separate set of size/position options — the two are never both in that spot
-    # at once (logo vs. text-instead-of-logo, e.g. season posters with logo_mode
-    # 'none'), so one box definition serves both.
-    bbox_enabled = bool(options.get("text_bbox_enabled", False))
+    # Text box — font_size auto-shrinks (down to a floor) until the wrapped text block
+    # fits inside the text's own box (text_box_*), separate from the logo's box
+    # (uniform_logo_*). Uniform Logo presets always carry text_box_* (the editors write
+    # them, and the 'text_box_always' migration added them to older presets), so the box
+    # is always on there. Options with neither text_box_* nor text_bbox_enabled (Kometa
+    # presets, or an old export imported later) keep the old full-width layout at
+    # position_y; an old export with text_bbox_enabled falls back to the logo box.
+    bbox_enabled = bool(options.get("text_bbox_enabled", False)) or any(
+        options.get(f"text_box_{n}") is not None
+        for n in ("max_w", "max_h", "offset_x", "offset_y", "h_align", "v_align")
+    )
     bbox_min_font_size = int(options.get("text_bbox_min_font_size", 20))
+    def _box_opt(name: str, default):
+        val = options.get(f"text_box_{name}")
+        if val is not None:
+            return val
+        return options.get(f"uniform_logo_{name}", default)
 
     # Replace template variables
     movie_title = str(options.get("movie_title", ""))
@@ -546,10 +554,10 @@ def _render_text_overlay(
     margin_left = 100
     margin_right = 100
     if bbox_enabled:
-        max_text_width = int(options.get("uniform_logo_max_w", 600))
-        box_h = int(options.get("uniform_logo_max_h", 240))
-        box_cx = W * float(options.get("uniform_logo_offset_x", 0.5))
-        box_cy = H * float(options.get("uniform_logo_offset_y", 0.78))
+        max_text_width = int(_box_opt("max_w", 600))
+        box_h = int(_box_opt("max_h", 240))
+        box_cx = W * float(_box_opt("offset_x", 0.5))
+        box_cy = H * float(_box_opt("offset_y", 0.78))
     else:
         max_text_width = W - margin_left - margin_right
         box_cx = W / 2
@@ -666,8 +674,8 @@ def _render_text_overlay(
     # justifies individual lines within that block's own width, same as it always has.
     anchor_cx, anchor_cy, anchor_width = box_cx, box_cy, max_text_width
     if bbox_enabled:
-        h_align = str(options.get("uniform_logo_h_align", "center"))
-        v_align = str(options.get("uniform_logo_v_align", "center"))
+        h_align = str(_box_opt("h_align", "center"))
+        v_align = str(_box_opt("v_align", "center"))
         box_top = box_cy - box_h / 2
         box_bottom = box_cy + box_h / 2
         box_left_edge = box_cx - max_text_width / 2

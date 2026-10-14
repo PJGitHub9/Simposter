@@ -131,6 +131,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "logo_mode": "first",
                     "logoSource": "tmdb_fanart",
                     "kometa_logo_url": "https://raw.githubusercontent.com/Kometa-Team/Defaults-Image-Creation/main/create_defaults/logos_chart/Plex.png",
+                    "shadow_enabled": False,
                 },
                 "season_options": {
                     "custom_text": "{season}",
@@ -171,6 +172,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "logo_mode": "first",
                     "logoSource": "tmdb_fanart",
                     "kometa_logo_url": "https://raw.githubusercontent.com/Kometa-Team/Defaults-Image-Creation/main/create_defaults/logos_chart/Plex.png",
+                    "shadow_enabled": False,
                 },
                 "season_options": {
                     "custom_text": "{season}",
@@ -225,7 +227,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "letter_spacing": 2,
                     "line_height": 1.2,
                     "position_y": 0.75,
-                    "shadow_enabled": True,
+                    "shadow_enabled": False,
                     "shadow_blur": 10,
                     "shadow_offset_x": 0,
                     "shadow_offset_y": 4,
@@ -246,8 +248,9 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "logo_mode": "none",
                     "text_overlay_enabled": True,
                     "custom_text": "{season}",
+                    "font_family": "Comfortaa-Medium",
                     "font_size": 150,
-                    "letter_spacing": 1,
+                    "letter_spacing": 0,
                     "position_y": 0.85,
                     "shadow_enabled": False,
                     "shadow_blur": 0,
@@ -318,6 +321,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "letter_spacing": 1,
                     "position_y": 0.85,
                     "shadow_blur": 0,
+                    "shadow_enabled": False,
                 },
             },
             {
@@ -345,6 +349,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "logo_preference": "first",
                     "logo_mode": "none",
                     "logo_hex": "#ffffff",
+                    "shadow_enabled": False,
                 },
                 "season_options": {
                     "text_overlay_enabled": True,
@@ -382,6 +387,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                     "logo_preference": "first",
                     "logo_mode": "none",
                     "logo_hex": "#ffffff",
+                    "shadow_enabled": False,
                 },
                 "season_options": {
                     "poster_filter": "textless",
@@ -640,7 +646,7 @@ def api_save_season_options(req: dict = Body(...)):
         # Store only what differs from the base options — the editor sends a complete
         # options blob here, but persisting it verbatim would duplicate ~45 fields that
         # are almost always identical to the series preset.
-        season_diff = db.diff_season_options(current["options"], season_options)
+        season_diff = db.mark_season_saved(db.diff_season_options(current["options"], season_options))
 
         # Update only season_options_json in the database
         with db.get_db() as conn:

@@ -7,6 +7,7 @@ import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
+import EditorCard from './EditorCard.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
 import ImagePickerModal from './ImagePickerModal.vue'
@@ -306,7 +307,49 @@ const shadowOpacity = ref(80)
 const strokeEnabled = ref(false)
 const strokeWidth = ref(4)
 const strokeColor = ref('#000000')
-const textBboxEnabled = ref(false)
+// Custom Text always fits its own box now; kept as a ref for the saved option/season tracking.
+const textBboxEnabled = ref(true)
+// Custom Text's own bounding box (text_box_*), separate from the logo box (uniform_logo_*).
+// A preset saved before the two were split has no text_box_* values; each one falls back
+// to the logo box, which is also how the backend renders it.
+type TextBox = {
+  maxW: number
+  maxH: number
+  offsetX: number
+  offsetY: number
+  hAlign: 'left' | 'center' | 'right'
+  vAlign: 'top' | 'center' | 'bottom'
+}
+const defaultTextBox = (): TextBox => ({ maxW: 500, maxH: 200, offsetX: 50, offsetY: 78, hAlign: 'center', vAlign: 'center' })
+const textBox = ref<TextBox>(defaultTextBox())
+const textBoxPayloadFrom = (tb: TextBox) => ({
+  text_box_max_w: tb.maxW,
+  text_box_max_h: tb.maxH,
+  text_box_offset_x: tb.offsetX / 100,
+  text_box_offset_y: tb.offsetY / 100,
+  text_box_h_align: tb.hAlign,
+  text_box_v_align: tb.vAlign
+})
+const textBoxPayload = () => textBoxPayloadFrom(textBox.value)
+function loadTextBox(o: Record<string, any>) {
+  const tb = defaultTextBox()
+  const hasTextBox = ['max_w', 'max_h', 'offset_x', 'offset_y', 'h_align', 'v_align'].some((n) => o[`text_box_${n}`] != null)
+  if (!hasTextBox && !o.text_bbox_enabled) {
+    // A preset from before the text box: full-width text at its old vertical position,
+    // the same box the backend migration gives it.
+    const y = typeof o.position_y === 'number' ? o.position_y : 0.75
+    textBox.value = { maxW: 1800, maxH: 2800, offsetX: 50, offsetY: Math.round(y * 100), hAlign: 'center', vAlign: 'center' }
+    return
+  }
+  const pick = (name: string) => o[`text_box_${name}`] ?? o[`uniform_logo_${name}`]
+  if (pick('max_w')) tb.maxW = Number(pick('max_w'))
+  if (pick('max_h')) tb.maxH = Number(pick('max_h'))
+  if (typeof pick('offset_x') === 'number') tb.offsetX = Math.round(pick('offset_x') * 100)
+  if (typeof pick('offset_y') === 'number') tb.offsetY = Math.round(pick('offset_y') * 100)
+  if (typeof pick('h_align') === 'string') tb.hAlign = pick('h_align') as TextBox['hAlign']
+  if (typeof pick('v_align') === 'string') tb.vAlign = pick('v_align') as TextBox['vAlign']
+  textBox.value = tb
+}
 const availableFonts = ref<string[]>([])
 
 // Overlay configs
@@ -344,9 +387,26 @@ const sectionOpen = ref({
   boundingBox: false,
   overlay: false,
 })
-const toggleSection = (key: keyof typeof sectionOpen.value) => {
-  sectionOpen.value[key] = !sectionOpen.value[key]
+// Left-panel tabs. The chosen tab is remembered across items and both editors.
+type EditorTab = 'image' | 'logo' | 'text' | 'extras'
+const editorTabs: { id: EditorTab; label: string }[] = [
+  { id: 'image', label: 'Image' },
+  { id: 'logo', label: 'Logo' },
+  { id: 'text', label: 'Text' },
+  { id: 'extras', label: 'Extras' },
+]
+const EDITOR_TAB_KEY = 'simposter-editor-tab'
+const readEditorTab = (): EditorTab => {
+  try {
+    const v = localStorage.getItem(EDITOR_TAB_KEY)
+    if (v === 'image' || v === 'logo' || v === 'text' || v === 'extras') return v
+  } catch { /* ignore */ }
+  return 'image'
 }
+const activeTab = ref<EditorTab>(readEditorTab())
+watch(activeTab, (v) => {
+  try { localStorage.setItem(EDITOR_TAB_KEY, v) } catch { /* ignore */ }
+})
 
 // State persistence
 const EDITOR_STATE_KEY = 'simposter_editor_state'
@@ -390,7 +450,8 @@ const saveEditorStateImmediate = () => {
         strokeEnabled: strokeEnabled.value,
         strokeWidth: strokeWidth.value,
         strokeColor: strokeColor.value,
-        bboxEnabled: textBboxEnabled.value
+        bboxEnabled: textBboxEnabled.value,
+        textBox: textBox.value
       }
     }
     localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(state))
@@ -470,14 +531,15 @@ const loadEditorState = () => {
       strokeEnabled.value = state.textOverlay.strokeEnabled ?? false
       strokeWidth.value = state.textOverlay.strokeWidth ?? 4
       strokeColor.value = state.textOverlay.strokeColor ?? '#000000'
-      textBboxEnabled.value = state.textOverlay.bboxEnabled ?? false
+      textBboxEnabled.value = true
+      if (state.textOverlay.textBox) textBox.value = { ...defaultTextBox(), ...state.textOverlay.textBox }
     }
   } catch (e) {
     console.warn('Failed to load editor state:', e)
   }
 }
 
-const boundingBoxStyle = computed(() => {
+function previewBoxStyle(maxW: number, maxH: number, offsetXPct: number, offsetYPct: number) {
   if (!previewImgRef.value || !showBoundingBox.value || !isUniformLogo.value) return {}
 
   const img = previewImgRef.value
@@ -493,17 +555,14 @@ const boundingBoxStyle = computed(() => {
   const scaleX = imgWidth / naturalWidth
   const scaleY = imgHeight / naturalHeight
 
-  // Calculate bounding box dimensions in pixels (from backend perspective)
-  const maxW = options.value.uniformLogoMaxW
-  const maxH = options.value.uniformLogoMaxH
 
   // Scale the box dimensions to match the preview
   const boxWidth = maxW * scaleX
   const boxHeight = maxH * scaleY
 
   // Position offsets (percentages from backend)
-  const offsetX = options.value.uniformLogoOffsetX / 100
-  const offsetY = options.value.uniformLogoOffsetY / 100
+  const offsetX = offsetXPct / 100
+  const offsetY = offsetYPct / 100
 
   // Position (centered on offset point, adjusted for image offset within container)
   const left = img.offsetLeft + (imgWidth * offsetX) - (boxWidth / 2)
@@ -515,7 +574,29 @@ const boundingBoxStyle = computed(() => {
     left: `${left}px`,
     top: `${top}px`
   }
-})
+}
+
+const boundingBoxStyle = computed(() =>
+  previewBoxStyle(options.value.uniformLogoMaxW, options.value.uniformLogoMaxH, options.value.uniformLogoOffsetX, options.value.uniformLogoOffsetY)
+)
+const showTextBoxOutline = computed(() => textOverlayEnabled.value)
+const textBoxStyle = computed(() =>
+  showTextBoxOutline.value
+    ? previewBoxStyle(textBox.value.maxW, textBox.value.maxH, textBox.value.offsetX, textBox.value.offsetY)
+    : {}
+)
+
+// Per-source counts shown on the TMDb/Fanart/TVDB checkboxes
+const countBySource = (items: { source?: string }[]) => {
+  const c = { tmdb: 0, fanart: 0, tvdb: 0 } as Record<'tmdb' | 'fanart' | 'tvdb', number>
+  for (const i of items) {
+    const s = (i.source || 'tmdb').toLowerCase() as 'tmdb' | 'fanart' | 'tvdb'
+    if (s in c) c[s]++
+  }
+  return c
+}
+const imageSourceCounts = computed(() => countBySource(candidateKind.value === 'backdrops' ? backdrops.value : posters.value))
+const logoSourceCounts = computed(() => countBySource(logos.value))
 
 const filteredPosters = computed(() => {
   if (candidateKind.value === 'backdrops') {
@@ -650,6 +731,7 @@ const optionsPayload = computed(() => ({
   stroke_width: strokeWidth.value,
   stroke_color: strokeColor.value,
   text_bbox_enabled: textBboxEnabled.value,
+  ...textBoxPayload(),
   overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
   overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
 }))
@@ -703,7 +785,8 @@ const reloadPreset = async () => {
     strokeEnabled.value = false
     strokeWidth.value = 4
     strokeColor.value = '#000000'
-    textBboxEnabled.value = false
+    textBboxEnabled.value = true
+    textBox.value = defaultTextBox()
     options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
     options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
     options.value.matteHeight = Math.round((Number(o.matte_height_ratio) || 0) * 100)
@@ -766,7 +849,8 @@ const reloadPreset = async () => {
     if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
     if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
     if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
-    textBboxEnabled.value = !!o.text_bbox_enabled
+    textBboxEnabled.value = true
+    loadTextBox(o)
 
     applyPosterFilter()
     applyLogoPreference()
@@ -835,6 +919,7 @@ const saveCurrentPreset = async () => {
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
+    ...textBoxPayload(),
     overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
     overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
@@ -919,6 +1004,7 @@ const saveAsNewPreset = async () => {
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
+    ...textBoxPayload(),
     overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
     overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
   }
@@ -1454,7 +1540,8 @@ watch([
   strokeEnabled,
   strokeWidth,
   strokeColor,
-  textBboxEnabled
+  textBboxEnabled,
+  textBox
 ], () => {
   saveEditorState()
 }, { deep: true })
@@ -1507,7 +1594,8 @@ const applyPresetOptions = (id: string) => {
   strokeEnabled.value = false
   strokeWidth.value = 4
   strokeColor.value = '#000000'
-  textBboxEnabled.value = false
+  textBboxEnabled.value = true
+  textBox.value = defaultTextBox()
 
   options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
@@ -1571,7 +1659,8 @@ const applyPresetOptions = (id: string) => {
   if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
   if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
   if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
-  textBboxEnabled.value = !!o.text_bbox_enabled
+  textBboxEnabled.value = true
+  loadTextBox(o)
 
   applyPosterFilter()
   applyLogoPreference()
@@ -1614,7 +1703,8 @@ watch(
     strokeEnabled,
     strokeWidth,
     strokeColor,
-    textBboxEnabled
+    textBboxEnabled,
+    textBox
   ],
   () => {
     if (previewTimer) clearTimeout(previewTimer)
@@ -1639,56 +1729,53 @@ watch(
 
       <div class="controls-scroll">
 
-        <!-- 1. Preset -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('template')">
-            <span>Preset</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.template }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.template" class="acc-body">
-            <div class="preset-row">
-              <label class="field-label preset-select">
-                Preset
-                <select v-model="selectedPreset">
-                  <option v-if="presetLoading">Loading…</option>
-                  <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
-                </select>
-              </label>
-              <button class="reload-preset-btn" @click="reloadPreset" title="Reload preset values">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="23 4 23 10 17 10" />
-                  <polyline points="1 20 1 14 7 14" />
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                </svg>
-              </button>
-              <button class="save-preset-btn" @click="saveCurrentPreset" title="Save current settings to preset">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                  <polyline points="17 21 17 13 7 13 7 21"/>
-                  <polyline points="7 3 7 8 15 8"/>
-                </svg>
-              </button>
-            </div>
-            <div class="preset-row new-preset-row">
-              <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
-              <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
-            </div>
+        <div class="preset-bar">
+          <div class="preset-row">
+            <label class="field-label preset-select">
+              Preset
+              <select v-model="selectedPreset">
+                <option v-if="presetLoading">Loading…</option>
+                <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+              </select>
+            </label>
+            <button class="reload-preset-btn" @click="reloadPreset" title="Reload preset values">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10" />
+                <polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+            <button class="save-preset-btn" @click="saveCurrentPreset" title="Save current settings to preset">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </button>
+          </div>
+          <div class="preset-row new-preset-row">
+            <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
+            <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
           </div>
         </div>
 
-        <!-- 2. Poster -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('poster')">
-            <span>Poster</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.poster }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+        <div class="editor-tabs" role="tablist">
+          <button
+            v-for="tab in editorTabs"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.id"
+            :class="['editor-tab', { active: activeTab === tab.id }]"
+            @click="activeTab = tab.id"
+          >
+            {{ tab.label }}
+            <span v-if="tab.id === 'text' && textOverlayEnabled" class="editor-tab-dot" title="Custom Text is on"></span>
           </button>
-          <div v-show="sectionOpen.poster" class="acc-body">
-            <!-- Poster source -->
-            <div class="sub-section-title" style="margin-top: 0">Source</div>
+        </div>
+
+        <div v-show="activeTab === 'image'" class="tab-panel">
+          <div class="field-row">
             <label class="field-label">
               Images
               <select v-model="candidateKind">
@@ -1712,80 +1799,72 @@ watch(
                 <option value="text">With Text</option>
               </select>
             </label>
-            <div class="inline-controls">
-              <label class="inline-field" v-if="candidateKind === 'posters' && posterFilter !== 'textless'">
-                <span>Language</span>
-                <select v-model="posterLanguageFilter">
-                  <option value="all">All</option>
-                  <option value="en">English</option>
-                  <option value="with_lang">With language tag</option>
-                </select>
-              </label>
-              <label class="inline-field checkbox">
-                <input type="checkbox" v-model="showTmdbPosters" />
-                <span>TMDb</span>
-              </label>
-              <label class="inline-field checkbox">
-                <input type="checkbox" v-model="showFanartPosters" />
-                <span>Fanart</span>
-              </label>
-            </div>
-            <div class="sub-section-title">Upload &amp; Selection</div>
-            <!-- Custom upload -->
+          </div>
+          <div class="inline-controls">
+            <label class="inline-field" v-if="candidateKind === 'posters' && posterFilter !== 'textless'">
+              <span>Language</span>
+              <select v-model="posterLanguageFilter">
+                <option value="all">All</option>
+                <option value="en">English</option>
+                <option value="with_lang">With language tag</option>
+              </select>
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showTmdbPosters" />
+              <span>TMDb <span class="src-count">{{ imageSourceCounts.tmdb }}</span></span>
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showFanartPosters" />
+              <span>Fanart <span class="src-count">{{ imageSourceCounts.fanart }}</span></span>
+            </label>
+          </div>
+          <div
+            class="thumb-strip"
+            :class="{ 'drag-over': posterDropActive }"
+            @dragover.prevent="posterDropActive = true"
+            @dragleave="posterDropActive = false"
+            @drop.prevent="onPosterDrop"
+          >
             <div
-              class="poster-upload-zone"
-              :class="{ 'drag-over': posterDropActive, 'has-upload': !!uploadedPosterUrl }"
-              @dragover.prevent="posterDropActive = true"
-              @dragleave="posterDropActive = false"
-              @drop.prevent="onPosterDrop"
-              @click="!uploadedPosterUrl && (showPosterUploadModal = true)"
+              v-if="uploadedPosterUrl"
+              class="thumb poster-thumb"
+              :class="{ active: selectedPoster === uploadedPosterUrl }"
+              title="Your uploaded image"
+              @click="selectedPoster = uploadedPosterUrl"
             >
-              <template v-if="uploadedPosterUrl">
-                <img :src="uploadedPosterUrl" class="upload-preview" alt="Uploaded poster" referrerpolicy="no-referrer" />
-                <div class="upload-overlay">
-                  <button class="upload-reselect" @click.stop="selectedPoster = uploadedPosterUrl" :class="{ active: selectedPoster === uploadedPosterUrl }">Use this</button>
-                  <button class="upload-replace" @click.stop="showPosterUploadModal = true">Replace</button>
-                  <button class="upload-remove" @click.stop="clearUploadedPoster">✕</button>
-                </div>
-              </template>
-              <template v-else>
-                <div class="upload-prompt">
-                  <span v-if="posterUploading">Uploading…</span>
-                  <span v-else>📤 Upload Poster <small>(local file or URL — or drop an image here)</small></span>
-                </div>
-              </template>
+              <img :src="uploadedPosterUrl" alt="" referrerpolicy="no-referrer" />
+              <div class="source-badge">UPLOAD</div>
+              <button type="button" class="thumb-remove" title="Remove upload" @click.stop="clearUploadedPoster">✕</button>
             </div>
-
-            <div class="thumb-strip">
-              <div
-                v-for="p in filteredPosters"
-                :key="p.url"
-                class="thumb poster-thumb"
-                :class="{ active: selectedPoster === p.url, 'backdrop-thumb': candidateKind === 'backdrops' }"
-                @click="selectedPoster = p.url"
-              >
-                <img :src="p.thumb || p.url" alt="" />
-                <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
-              </div>
+            <div
+              v-for="p in filteredPosters"
+              :key="p.url"
+              class="thumb poster-thumb"
+              :class="{ active: selectedPoster === p.url, 'backdrop-thumb': candidateKind === 'backdrops' }"
+              @click="selectedPoster = p.url"
+            >
+              <img :src="p.thumb || p.url" alt="" />
+              <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
             </div>
-            <button
-              v-if="filteredPosters.length"
-              type="button"
-              class="view-all-btn"
-              @click="showImagePicker = true"
-            >View all {{ candidateKind === 'backdrops' ? 'backdrops' : 'posters' }} ({{ filteredPosters.length }})</button>
-            <ImagePickerModal
-              v-if="showImagePicker"
-              :title="candidateKind === 'backdrops' ? 'Backdrops' : 'Posters'"
-              :images="filteredPosters"
-              :selected="selectedPoster"
-              :wide="candidateKind === 'backdrops'"
-              @select="(url) => (selectedPoster = url)"
-              @close="showImagePicker = false"
-            />
+          </div>
+          <div class="asset-actions">
+            <button v-if="filteredPosters.length" type="button" class="view-all-btn" @click="showImagePicker = true">View all {{ candidateKind === 'backdrops' ? 'backdrops' : 'posters' }} ({{ filteredPosters.length }})</button>
+            <button type="button" class="view-all-btn" :disabled="posterUploading" title="Upload a local file or enter a URL. You can also drop an image on the thumbnails." @click="showPosterUploadModal = true">
+              {{ posterUploading ? 'Uploading…' : (uploadedPosterUrl ? '📤 Replace upload' : '📤 Upload') }}
+            </button>
+          </div>
+          <ImagePickerModal
+            v-if="showImagePicker"
+            :title="candidateKind === 'backdrops' ? 'Backdrops' : 'Posters'"
+            :images="filteredPosters"
+            :selected="selectedPoster"
+            :wide="candidateKind === 'backdrops'"
+            @select="(url) => (selectedPoster = url)"
+            @close="showImagePicker = false"
+          />
 
-            <!-- Poster adjustments -->
-            <div class="sub-section-title">Position</div>
+
+          <EditorCard :summary="`Shift ${options.posterShiftY}%` + (isBackdropBg ? ` · zoom ${bgZoom}%` : '')" title="Position &amp; zoom">
             <div class="slider">
               <label>Poster Shift Y %</label>
               <div class="slider-row">
@@ -1814,7 +1893,9 @@ watch(
             </div>
             </template>
 
-            <div class="sub-section-title">Top Fade</div>
+
+          </EditorCard>
+          <EditorCard :summary="`${options.topMatteHeight}% matte · ${options.topFadeHeight}% fade`" title="Top fade">
             <div class="slider">
               <label>Top Matte Height %</label>
               <div class="slider-row">
@@ -1830,7 +1911,9 @@ watch(
               </div>
             </div>
 
-            <div class="sub-section-title">Bottom Fade</div>
+
+          </EditorCard>
+          <EditorCard :summary="`${options.matteHeight}% matte · ${options.fadeHeight}% fade`" title="Bottom fade">
             <div class="slider">
               <label>Bottom Matte Height %</label>
               <div class="slider-row">
@@ -1846,7 +1929,9 @@ watch(
               </div>
             </div>
 
-            <div class="sub-section-title">Effects</div>
+
+          </EditorCard>
+          <EditorCard :summary="`Vignette ${options.vignette} · grain ${options.grain}`" title="Vignette &amp; grain">
             <div class="slider">
               <label>Vignette</label>
               <div class="slider-row">
@@ -1861,20 +1946,11 @@ watch(
                 <input v-model.number="options.grain" type="number" min="0" max="60" class="slider-num" />
               </div>
             </div>
-          </div>
+          </EditorCard>
         </div>
 
-        <!-- 3. Logo -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('logo')">
-            <span>Logo</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.logo }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.logo" class="acc-body">
-            <!-- Logo mode + color (preset-level — used by batch & webhook) -->
-            <div class="sub-section-title" style="margin-top: 0">Preset / Batch / Webhook</div>
+        <div v-show="activeTab === 'logo'" class="tab-panel">
+          <div class="field-row">
             <label class="field-label">
               Logo Mode
               <select v-model="logoMode">
@@ -1884,238 +1960,111 @@ watch(
                 <option value="none">No Logo</option>
               </select>
             </label>
+            <label v-if="!isLogoNone" class="field-label">
+              Logo Style
+              <select v-model="logoPreference">
+                <option value="first">First Available</option>
+                <option value="white">White Logos</option>
+                <option value="color">Colored Logos</option>
+              </select>
+            </label>
             <label v-if="logoMode === 'hex'" class="field-label">
               Logo Color
               <input v-model="logoHex" type="color" />
             </label>
+          </div>
 
-            <div class="sub-section-title">Preview Logo (Manual Selection)</div>
+          <div class="sub-section-title">Choose Logo (this item)</div>
 
-            <!-- Logo source + thumbnails -->
-            <template v-if="!isLogoNone">
-              <template v-if="props.movie.mediaType === 'collection'">
-                <p class="muted-text" v-if="logos.length">
-                  Showing {{ logos.length }} franchise logo{{ logos.length === 1 ? '' : 's' }} from Fanart.tv, or import one from a specific movie below.
-                </p>
-                <label class="field-label">
-                  Import Logo From Movie {{ logos.length ? '(overrides the list above)' : '' }}
-                  <select
-                    v-model="selectedCollectionMovieKey"
-                    @change="importLogoFromMovie(selectedCollectionMovieKey)"
-                  >
-                    <option :value="null">Select a movie in this collection…</option>
-                    <option v-for="m in collectionMovies" :key="m.key" :value="m.key">
-                      {{ m.title }}{{ m.year ? ` (${m.year})` : '' }}
-                    </option>
-                  </select>
-                </label>
-                <p class="muted-text" v-if="loadingCollectionLogo">Loading logo options…</p>
-                <p class="muted-text" v-else-if="!logos.length && collectionMovies.length === 0">No movies found in this collection.</p>
-                <p class="muted-text" v-else-if="!logos.length">No franchise logo found on Fanart.tv for this collection — try importing one from a movie instead.</p>
-              </template>
+          <template v-if="!isLogoNone">
+            <template v-if="props.movie.mediaType === 'collection'">
+              <p class="muted-text" v-if="logos.length">
+                Showing {{ logos.length }} franchise logo{{ logos.length === 1 ? '' : 's' }} from Fanart.tv, or import one from a specific movie below.
+              </p>
               <label class="field-label">
-                Logo Style
-                <select v-model="logoPreference">
-                  <option value="first">First Available</option>
-                  <option value="white">White Logos</option>
-                  <option value="color">Colored Logos</option>
+                Import Logo From Movie {{ logos.length ? '(overrides the list above)' : '' }}
+                <select
+                  v-model="selectedCollectionMovieKey"
+                  @change="importLogoFromMovie(selectedCollectionMovieKey)"
+                >
+                  <option :value="null">Select a movie in this collection…</option>
+                  <option v-for="m in collectionMovies" :key="m.key" :value="m.key">
+                    {{ m.title }}{{ m.year ? ` (${m.year})` : '' }}
+                  </option>
                 </select>
               </label>
-              <div class="inline-controls">
-                <label class="inline-field">
-                  <span>Language</span>
-                  <select v-model="logoLanguageFilter">
-                    <option value="all">All</option>
-                    <option value="en">English</option>
-                    <option value="with_lang">With language tag</option>
-                  </select>
-                </label>
-                <label class="inline-field">
-                  <span>Clearart</span>
-                  <input type="checkbox" v-model="showClearArt" />
-                </label>
-                <label class="inline-field checkbox">
-                  <input type="checkbox" v-model="showTmdbLogos" />
-                  <span>TMDb</span>
-                </label>
-                <label class="inline-field checkbox">
-                  <input type="checkbox" v-model="showFanartLogos" />
-                  <span>Fanart</span>
-                </label>
-              </div>
-
-              <!-- Custom upload -->
-              <div
-                class="logo-upload-zone"
-                :class="{ 'drag-over': logoDropActive, 'has-upload': !!uploadedLogoUrl }"
-                @dragover.prevent="logoDropActive = true"
-                @dragleave="logoDropActive = false"
-                @drop.prevent="onLogoDrop"
-                @click="!uploadedLogoUrl && (showLogoUploadModal = true)"
-              >
-                <template v-if="uploadedLogoUrl">
-                  <img :src="uploadedLogoUrl" class="upload-preview" alt="Uploaded logo" referrerpolicy="no-referrer" />
-                  <div class="upload-overlay">
-                    <button class="upload-reselect" @click.stop="selectedLogo = uploadedLogoUrl" :class="{ active: selectedLogo === uploadedLogoUrl }">Use this</button>
-                    <button class="upload-replace" @click.stop="showLogoUploadModal = true">Replace</button>
-                    <button class="upload-remove" @click.stop="clearUploadedLogo">✕</button>
-                  </div>
-                </template>
-                <template v-else>
-                  <div class="upload-prompt">
-                    <span v-if="logoUploading">Uploading…</span>
-                    <span v-else>📤 Upload Logo <small>(local file or URL — or drop an image here)</small></span>
-                  </div>
-                </template>
-              </div>
-
-              <div class="thumb-strip logo-strip">
-                <div
-                  v-for="l in filteredLogos"
-                  :key="l.url"
-                  class="thumb logo-thumb"
-                  :class="{ active: selectedLogo === l.url }"
-                  @click="selectedLogo = l.url"
-                >
-                  <img :src="logoThumbSrc(l)" alt="" @error="onLogoThumbError(l)" />
-                  <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
-                  <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
-                </div>
-                <button class="no-logo-btn" :class="{ active: isLogoNone }" @click="logoMode = 'none'">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-                  </svg>
-                  <span>No Logo</span>
-                </button>
-              </div>
+              <p class="muted-text" v-if="loadingCollectionLogo">Loading logo options…</p>
+              <p class="muted-text" v-else-if="!logos.length && collectionMovies.length === 0">No movies found in this collection.</p>
+              <p class="muted-text" v-else-if="!logos.length">No franchise logo found on Fanart.tv for this collection — try importing one from a movie instead.</p>
             </template>
-
-            <!-- Drop Shadow: Uniform Logo templates only — box geometry for the logo itself
-                 lives in the separate "Bounding Box" section (shared with Custom Text), but the
-                 shadow effect only ever applies to the logo, so it lives here instead. -->
-            <template v-if="isUniformLogo">
-              <div class="sub-section-title">Drop Shadow</div>
-              <label class="checkbox-label">
-                <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
-                <span>Drop shadow</span>
+            <div class="inline-controls">
+              <label class="inline-field">
+                <span>Language</span>
+                <select v-model="logoLanguageFilter">
+                  <option value="all">All</option>
+                  <option value="en">English</option>
+                  <option value="with_lang">With language tag</option>
+                </select>
               </label>
-              <template v-if="options.uniformLogoShadowEnabled">
-                <div class="slider">
-                  <label>Shadow Color</label>
-                  <input v-model="options.uniformLogoShadowColor" type="color" />
-                </div>
-                <div class="slider">
-                  <label>Opacity (%)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Angle (°)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowAngle" type="range" min="-180" max="180" />
-                    <input v-model.number="options.uniformLogoShadowAngle" type="number" min="-180" max="180" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Distance (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowDistance" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoShadowDistance" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Size / Blur (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
-                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
-                  </div>
-                </div>
-              </template>
-            </template>
-
-            <!-- Position & Size only applies to non-Uniform-Logo templates now — Uniform Logo
-                 geometry moved to its own "Bounding Box" section, since that box is shared
-                 between Logo and Custom Text, not a Logo-only concept. -->
-              <template v-if="!isUniformLogo">
-                <div class="sub-section-title">Position &amp; Size</div>
-                <div class="slider">
-                  <label>Logo Scale %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.logoScale" type="range" min="20" max="120" />
-                    <input v-model.number="options.logoScale" type="number" min="20" max="120" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Logo Position %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.logoOffset" type="range" min="0" max="100" />
-                    <input v-model.number="options.logoOffset" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-              </template>
-          </div>
-        </div>
-
-        <!-- 4. Custom Text -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('text')">
-            <span>Custom Text</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.text }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.text" class="acc-body">
-            <TextOverlayPanel
-              v-model:enabled="textOverlayEnabled"
-              v-model:customText="customText"
-              v-model:fontFamily="fontFamily"
-              v-model:fontSize="fontSize"
-              v-model:fontWeight="fontWeight"
-              v-model:textColor="textColor"
-              v-model:textAlign="textAlign"
-              v-model:textTransform="textTransform"
-              v-model:letterSpacing="letterSpacing"
-              v-model:lineHeight="lineHeight"
-              v-model:positionY="positionY"
-              v-model:shadowEnabled="shadowEnabled"
-              v-model:shadowBlur="shadowBlur"
-              v-model:shadowOffsetX="shadowOffsetX"
-              v-model:shadowOffsetY="shadowOffsetY"
-              v-model:shadowColor="shadowColor"
-              v-model:shadowOpacity="shadowOpacity"
-              v-model:strokeEnabled="strokeEnabled"
-              v-model:strokeWidth="strokeWidth"
-              v-model:strokeColor="strokeColor"
-              :availableFonts="availableFonts"
-            />
-          </div>
-        </div>
-
-        <!-- 5. Bounding Box (Uniform Logo templates only) -->
-        <div v-if="isUniformLogo" class="acc-section">
-          <button class="acc-header" @click="toggleSection('boundingBox')">
-            <span>Bounding Box</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.boundingBox }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.boundingBox" class="acc-body">
-            <div class="field-hint" style="margin-bottom: 12px;">
-              This box defines where the logo sits. Custom Text can optionally fit itself inside
-              the same box instead of overflowing — handy when Logo Mode is "No Logo" and text
-              takes its place.
+              <label class="inline-field">
+                <span>Clearart</span>
+                <input type="checkbox" v-model="showClearArt" />
+              </label>
+              <label class="inline-field checkbox">
+                <input type="checkbox" v-model="showTmdbLogos" />
+                <span>TMDb <span class="src-count">{{ logoSourceCounts.tmdb }}</span></span>
+              </label>
+              <label class="inline-field checkbox">
+                <input type="checkbox" v-model="showFanartLogos" />
+                <span>Fanart <span class="src-count">{{ logoSourceCounts.fanart }}</span></span>
+              </label>
             </div>
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="showBoundingBox" />
-              <span>Show bounding box on preview</span>
-            </label>
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="textBboxEnabled" />
-              <span>Restrict Custom Text to this box</span>
-            </label>
+
+            <div
+              class="thumb-strip logo-strip"
+              :class="{ 'drag-over': logoDropActive }"
+              @dragover.prevent="logoDropActive = true"
+              @dragleave="logoDropActive = false"
+              @drop.prevent="onLogoDrop"
+            >
+              <div
+                v-if="uploadedLogoUrl"
+                class="thumb logo-thumb"
+                :class="{ active: selectedLogo === uploadedLogoUrl }"
+                title="Your uploaded logo"
+                @click="selectedLogo = uploadedLogoUrl"
+              >
+                <img :src="uploadedLogoUrl" alt="" referrerpolicy="no-referrer" />
+                <div class="source-badge">UPLOAD</div>
+                <button type="button" class="thumb-remove" title="Remove upload" @click.stop="clearUploadedLogo">✕</button>
+              </div>
+              <div
+                v-for="l in filteredLogos"
+                :key="l.url"
+                class="thumb logo-thumb"
+                :class="{ active: selectedLogo === l.url }"
+                @click="selectedLogo = l.url"
+              >
+                <img :src="logoThumbSrc(l)" alt="" @error="onLogoThumbError(l)" />
+                <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
+                <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
+              </div>
+              <button class="no-logo-btn" :class="{ active: isLogoNone }" @click="logoMode = 'none'">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                </svg>
+                <span>No Logo</span>
+              </button>
+            </div>
+            <div class="asset-actions">
+              <button type="button" class="view-all-btn" :disabled="logoUploading" title="Upload a local file or enter a URL. You can also drop an image on the logos." @click="showLogoUploadModal = true">
+                {{ logoUploading ? 'Uploading…' : (uploadedLogoUrl ? '📤 Replace upload' : '📤 Upload') }}
+              </button>
+            </div>
+          </template>
+          <EditorCard v-if="isUniformLogo" title="Logo box" :summary="`${options.uniformLogoMaxW}×${options.uniformLogoMaxH} at ${options.uniformLogoOffsetX}%, ${options.uniformLogoOffsetY}%`">
+            <div class="field-hint" style="margin-bottom: 8px;">The logo is scaled to fit this box (yellow outline on the preview).</div>
             <div class="slider">
               <label>Max Width (px)</label>
               <div class="slider-row">
@@ -2166,18 +2115,162 @@ watch(
                 >{{ opt }}</button>
               </div>
             </div>
-          </div>
+
+            <label class="checkbox-label show-boxes-toggle">
+              <input type="checkbox" v-model="showBoundingBox" />
+              <span>Show boxes on preview</span>
+            </label>
+          </EditorCard>
+          <EditorCard v-if="!isUniformLogo" title="Position &amp; size" :summary="`Scale ${options.logoScale}% · ${options.logoOffset}%`">
+            <div class="slider">
+              <label>Logo Scale %</label>
+              <div class="slider-row">
+                <input v-model.number="options.logoScale" type="range" min="20" max="120" />
+                <input v-model.number="options.logoScale" type="number" min="20" max="120" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Logo Position %</label>
+              <div class="slider-row">
+                <input v-model.number="options.logoOffset" type="range" min="0" max="100" />
+                <input v-model.number="options.logoOffset" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+
+          </EditorCard>
+          <EditorCard v-if="isUniformLogo" title="Drop shadow" :summary="options.uniformLogoShadowEnabled ? 'On' : 'Off'">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
+              <span>Drop shadow</span>
+            </label>
+            <template v-if="options.uniformLogoShadowEnabled">
+              <div class="slider">
+                <label>Shadow Color</label>
+                <input v-model="options.uniformLogoShadowColor" type="color" />
+              </div>
+              <div class="slider">
+                <label>Opacity (%)</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
+                  <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Angle (°)</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowAngle" type="range" min="-180" max="180" />
+                  <input v-model.number="options.uniformLogoShadowAngle" type="number" min="-180" max="180" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Distance (px)</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowDistance" type="range" min="0" max="100" />
+                  <input v-model.number="options.uniformLogoShadowDistance" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Size / Blur (px)</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
+                  <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
+                </div>
+              </div>
+            </template>
+
+          </EditorCard>
         </div>
 
-        <!-- 6. Overlay & Border -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('overlay')">
-            <span>Overlay &amp; Border</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.overlay }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.overlay" class="acc-body">
+        <div v-show="activeTab === 'text'" class="tab-panel">
+          <TextOverlayPanel
+            v-model:enabled="textOverlayEnabled"
+            v-model:customText="customText"
+            v-model:fontFamily="fontFamily"
+            v-model:fontSize="fontSize"
+            v-model:fontWeight="fontWeight"
+            v-model:textColor="textColor"
+            v-model:textAlign="textAlign"
+            v-model:textTransform="textTransform"
+            v-model:letterSpacing="letterSpacing"
+            v-model:lineHeight="lineHeight"
+            v-model:positionY="positionY"
+            v-model:shadowEnabled="shadowEnabled"
+            v-model:shadowBlur="shadowBlur"
+            v-model:shadowOffsetX="shadowOffsetX"
+            v-model:shadowOffsetY="shadowOffsetY"
+            v-model:shadowColor="shadowColor"
+            v-model:shadowOpacity="shadowOpacity"
+            v-model:strokeEnabled="strokeEnabled"
+            v-model:strokeWidth="strokeWidth"
+            v-model:strokeColor="strokeColor"
+            :availableFonts="availableFonts"
+            :hidePosition="isUniformLogo"
+          >
+            <EditorCard v-if="isUniformLogo" title="Text box" :default-open="true" :summary="`${textBox.maxW}×${textBox.maxH} at ${textBox.offsetX}%, ${textBox.offsetY}%`">
+              <div class="field-hint" style="margin-bottom: 8px;">
+                Custom Text always sits in this box (blue outline on the preview) and shrinks to fit it. It's separate from the logo box.
+              </div>
+              <div class="slider">
+                <label>Max Width (px)</label>
+                <div class="slider-row">
+                  <input v-model.number="textBox.maxW" type="range" min="50" max="1800" />
+                  <input v-model.number="textBox.maxW" type="number" min="50" max="1800" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Max Height (px)</label>
+                <div class="slider-row">
+                  <input v-model.number="textBox.maxH" type="range" min="50" max="2800" />
+                  <input v-model.number="textBox.maxH" type="number" min="50" max="2800" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Box X %</label>
+                <div class="slider-row">
+                  <input v-model.number="textBox.offsetX" type="range" min="0" max="100" />
+                  <input v-model.number="textBox.offsetX" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Box Y %</label>
+                <div class="slider-row">
+                  <input v-model.number="textBox.offsetY" type="range" min="0" max="100" />
+                  <input v-model.number="textBox.offsetY" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Horizontal Align</label>
+                <div class="align-btn-group">
+                  <button
+                    v-for="opt in (['left', 'center', 'right'] as const)"
+                    :key="opt"
+                    :class="['align-btn', { active: textBox.hAlign === opt }]"
+                    @click="textBox.hAlign = opt"
+                  >{{ opt }}</button>
+                </div>
+              </div>
+              <div class="slider">
+                <label>Vertical Align</label>
+                <div class="align-btn-group">
+                  <button
+                    v-for="opt in (['top', 'center', 'bottom'] as const)"
+                    :key="opt"
+                    :class="['align-btn', { active: textBox.vAlign === opt }]"
+                    @click="textBox.vAlign = opt"
+                  >{{ opt }}</button>
+                </div>
+              </div>
+
+              <label class="checkbox-label show-boxes-toggle">
+                <input type="checkbox" v-model="showBoundingBox" />
+                <span>Show boxes on preview</span>
+              </label>
+            </EditorCard>
+          </TextOverlayPanel>
+        </div>
+
+        <div v-show="activeTab === 'extras'" class="tab-panel">
+          <EditorCard title="Border" :default-open="true" :summary="options.borderEnabled ? `${options.borderThickness}px` : 'Off'">
             <div class="slider">
               <label class="checkbox-label">
                 <input v-model="options.borderEnabled" type="checkbox" />
@@ -2195,10 +2288,10 @@ watch(
               <label>Border Color</label>
               <input v-model="options.borderColor" type="color" />
             </div>
-
+          </EditorCard>
+          <EditorCard v-if="overlayConfigs.length > 0" title="Overlay configs" :default-open="true" :summary="options.overlayConfigIds.length ? `${options.overlayConfigIds.length} on` : 'None'">
             <div v-if="overlayConfigs.length > 0" class="slider">
-              <label>Overlay Configs</label>
-              <div class="overlay-config-checkboxes">
+                            <div class="overlay-config-checkboxes">
                 <div v-for="cfg in overlayConfigs" :key="cfg.id" class="overlay-config-item">
                   <label class="checkbox-label">
                     <input
@@ -2219,20 +2312,24 @@ watch(
                 </div>
               </div>
             </div>
-
-            <div class="sub-section-title" style="margin-top: 12px">Labels to Remove</div>
-            <div class="label-chips">
-              <label v-for="l in labels" :key="l" class="chip">
-                <input type="checkbox" :checked="selectedLabels.has(l)" @change="toggleLabel(l)" />
-                <span>{{ l }}</span>
-              </label>
-              <p v-if="!labels.length" class="muted-text">No labels found</p>
-            </div>
-          </div>
+          </EditorCard>
         </div>
 
         <!-- Actions -->
         <div class="acc-actions">
+          <div class="pinned-labels">
+            <div class="pinned-labels-title">
+              Labels to remove on send
+              <span v-if="selectedLabels.size" class="pinned-labels-count">{{ selectedLabels.size }} selected</span>
+            </div>
+            <div v-if="labels.length" class="label-chips">
+              <label v-for="l in labels" :key="l" class="chip" :class="{ checked: selectedLabels.has(l) }">
+                <input type="checkbox" :checked="selectedLabels.has(l)" @change="toggleLabel(l)" />
+                <span>{{ l }}</span>
+              </label>
+            </div>
+            <p v-else class="muted-text">No labels on this item</p>
+          </div>
           <button class="btn-primary" :disabled="loading" @click="doPreview">Preview</button>
           <span v-if="error" class="error-text">{{ error }}</span>
         </div>
@@ -2339,6 +2436,7 @@ watch(
 
             <!-- Bounding Box (Uniform Logo template) — same box for logo placement and text-bbox mode -->
             <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
+            <div v-if="isUniformLogo && showBoundingBox && lastPreview && showTextBoxOutline" class="bounding-box text-box-outline" :style="textBoxStyle"></div>
           </div>
         </div>
       </div>
@@ -2654,74 +2752,60 @@ watch(
   cursor: pointer;
 }
 
-/* Custom poster/logo upload zone */
-.poster-upload-zone, .logo-upload-zone {
-  position: relative;
-  border: 1.5px dashed var(--border, #2a2f3e);
-  border-radius: 8px;
-  height: 80px;
+.asset-actions {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
-  overflow: hidden;
-  margin-bottom: 6px;
-}
-.poster-upload-zone:hover, .poster-upload-zone.drag-over,
-.logo-upload-zone:hover, .logo-upload-zone.drag-over {
-  border-color: rgba(61, 214, 183, 0.6);
-  background: rgba(61, 214, 183, 0.05);
-}
-.poster-upload-zone.has-upload, .logo-upload-zone.has-upload {
-  height: 130px;
-  cursor: default;
-}
-.upload-preview {
-  height: 100%;
-  width: auto;
-  object-fit: contain;
-  display: block;
-}
-.upload-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(0,0,0,0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-wrap: wrap;
   gap: 6px;
-  opacity: 0;
-  transition: opacity 0.15s;
+  margin: 0 0 10px;
 }
-.poster-upload-zone.has-upload:hover .upload-overlay,
-.logo-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
-.upload-reselect, .upload-replace, .upload-remove {
-  border: 1px solid rgba(255,255,255,0.3);
-  background: rgba(255,255,255,0.15);
+.asset-actions .view-all-btn {
+  margin: 0;
+}
+.thumb-strip.drag-over {
+  outline: 1.5px dashed rgba(61, 214, 183, 0.7);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.thumb-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 100, 100, 0.5);
+  background: rgba(0, 0, 0, 0.7);
   color: #fff;
-  border-radius: 5px;
-  padding: 4px 8px;
-  font-size: 0.75rem;
+  font-size: 10px;
+  line-height: 1;
   cursor: pointer;
-  font-family: inherit;
-  transition: background 0.15s;
 }
-.upload-reselect:hover, .upload-replace:hover { background: rgba(61,214,183,0.35); }
-.upload-reselect.active { border-color: #3dd6b7; color: #3dd6b7; }
-.upload-remove { border-color: rgba(255,100,100,0.4); }
-.upload-remove:hover { background: rgba(255,100,100,0.3); }
-.upload-prompt {
-  color: var(--text-secondary, #9aa4b5);
-  font-size: 0.82rem;
-  text-align: center;
-  pointer-events: none;
+.thumb-remove:hover {
+  background: rgba(255, 100, 100, 0.5);
 }
-.upload-prompt small {
-  display: block;
-  font-size: 0.72em;
-  opacity: 0.75;
-  margin-top: 2px;
+.src-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Compact sliders: label, bar and number on one line */
+.slider:has(> .slider-row) {
+  display: grid;
+  grid-template-columns: minmax(0, 38%) minmax(0, 1fr) 56px;
+  align-items: center;
+  column-gap: 8px;
+  margin-bottom: 8px;
+}
+.slider:has(> .slider-row) > label {
+  margin-bottom: 0;
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+.slider:has(> .slider-row) > .slider-row {
+  display: contents;
+}
+.slider:has(> .slider-row) .slider-num {
+  padding: 4px;
 }
 
 .logo-strip {
@@ -3362,6 +3446,129 @@ button:disabled {
   pointer-events: none;
 }
 
+.bounding-box.text-box-outline {
+  border-color: rgba(0, 220, 255, 0.85);
+}
+
+.text-box-settings {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  border-left: 2px solid rgba(0, 220, 255, 0.6);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.show-boxes-toggle {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pinned-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pinned-labels-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pinned-labels-count {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--accent);
+}
+
+.pinned-labels .label-chips {
+  max-height: 72px;
+  overflow-y: auto;
+}
+
+.chip.checked {
+  border-color: rgba(61, 214, 183, 0.5);
+  background: rgba(61, 214, 183, 0.1);
+}
+
+/* Pinned preset bar + tabs */
+.preset-bar {
+  padding: 14px 0 6px;
+}
+
+.preset-bar .preset-row + .preset-row {
+  margin-top: 8px;
+}
+
+.editor-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin: 8px -18px 0;
+  padding: 8px 18px;
+  background: rgba(17, 20, 30, 0.98);
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-tab {
+  position: relative;
+  padding: 8px 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: #a8b8e0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.editor-tab:hover {
+  color: #eef2ff;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.editor-tab.active {
+  color: var(--accent);
+  background: rgba(61, 214, 183, 0.1);
+  border-color: rgba(61, 214, 183, 0.35);
+}
+
+.editor-tab-dot {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.tab-panel {
+  padding-top: 6px;
+}
+
+.tab-panel > .sub-section-title:first-child {
+  margin-top: 6px;
+}
+
 /* Accordion */
 .acc-section {
   border-bottom: 1px solid var(--border);
@@ -3408,7 +3615,13 @@ button:disabled {
 }
 
 .acc-actions {
-  padding: 16px 0 20px;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin: 12px -18px 0;
+  padding: 12px 18px 16px;
+  background: rgba(17, 20, 30, 0.98);
+  border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 10px;

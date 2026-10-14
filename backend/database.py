@@ -302,6 +302,7 @@ def init_database():
                         "shadow_blur": 0,
                         "letter_spacing": 1,
                         "position_y": 0.85,
+                        **SEASON_DEFAULT_TEXT_BOX,
                     }
                     season_diff = diff_season_options(base_opts, season_defaults)
                     cursor.execute(
@@ -321,6 +322,41 @@ def init_database():
                         )
             except Exception as backfill_err:
                 logger.warning("[DB] Failed to backfill season_options_json for preset %s: %s", row["id"], backfill_err)
+
+        # One-time migrations that must never re-run. Not stored in the settings
+        # table: every settings save rebuilds that table from UISettings (Quirk #60).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS applied_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        for mig_name, mig_fn in (
+            ("text_box_split", split_text_box_options),
+            ("text_box_always", always_text_box_options),
+        ):
+            if cursor.execute(
+                "SELECT 1 FROM applied_migrations WHERE name = ?", (mig_name,)
+            ).fetchone():
+                continue
+            migrated = 0
+            for row in cursor.execute(
+                "SELECT id, options_json, season_options_json FROM presets WHERE template_id = 'uniformlogo'"
+            ).fetchall():
+                try:
+                    base = json.loads(row["options_json"] or "{}")
+                    season = json.loads(row["season_options_json"] or "{}")
+                    new_base, new_season = mig_fn(base, season)
+                    if new_base != base or new_season != season:
+                        cursor.execute(
+                            "UPDATE presets SET options_json = ?, season_options_json = ? WHERE id = ?",
+                            (json.dumps(new_base), json.dumps(new_season), row["id"]),
+                        )
+                        migrated += 1
+                except Exception as mig_err:
+                    logger.warning("[DB] %s failed for preset %s: %s", mig_name, row["id"], mig_err)
+            cursor.execute("INSERT INTO applied_migrations (name) VALUES (?)", (mig_name,))
+            logger.info("[DB] Migration %s updated %d preset(s)", mig_name, migrated)
 
         # Create indexes for better query performance
         cursor.execute("""
@@ -1410,6 +1446,93 @@ def resolve_season_options(options: Dict[str, Any], season_options: Optional[Dic
     return {**(options or {}), **(season_options or {})}
 
 
+# Marks a season config the user actually saved. A season identical to the series diffs to
+# {}, which used to look exactly like "never configured", so the editor and the startup
+# backfill both re-applied the season defaults (No Logo, {season} text) on top of it.
+SEASON_SAVED_KEY = "season_saved"
+
+
+def mark_season_saved(season_diff: Dict[str, Any]) -> Dict[str, Any]:
+    return {**(season_diff or {}), SEASON_SAVED_KEY: True}
+
+
+_TEXT_BOX_FIELDS = (
+    ("max_w", 600), ("max_h", 240), ("offset_x", 0.5), ("offset_y", 0.78),
+    ("h_align", "center"), ("v_align", "center"),
+)
+
+
+def split_text_box_options(base: Dict[str, Any], season: Dict[str, Any]):
+    """Give Custom Text its own bounding box in a preset saved when text shared the logo's.
+
+    Before the split, "Restrict Custom Text to this box" fitted the text into the logo box
+    (uniform_logo_*). Wherever that was on (base options, or the season config), copy the
+    logo box that config actually used into text_box_*, so the preset renders the same.
+    Run once per database (the applied_migrations 'text_box_split' row), never again: a
+    later season edit can legitimately leave the season with a logo-box override and no
+    text_box_* keys of its own.
+    """
+    base = dict(base or {})
+    season = dict(season or {})
+    base.pop("text_bbox_separate", None)
+    season.pop("text_bbox_separate", None)
+
+    def has_text_box(d):
+        return any(f"text_box_{n}" in d for n, _ in _TEXT_BOX_FIELDS)
+
+    def copy_logo_box(src):
+        return {f"text_box_{n}": src.get(f"uniform_logo_{n}", default) for n, default in _TEXT_BOX_FIELDS}
+
+    if base.get("text_bbox_enabled") and not has_text_box(base):
+        base.update(copy_logo_box(base))
+
+    resolved = {**base, **season}
+    if resolved.get("text_bbox_enabled") and not has_text_box(season):
+        season_moves_logo_box = any(f"uniform_logo_{n}" in season for n, _ in _TEXT_BOX_FIELDS)
+        if season_moves_logo_box or not has_text_box(base):
+            season.update(copy_logo_box(resolved))
+
+    return base, diff_season_options(base, season)
+
+
+# Text box that reproduces the old full-width text layout (no box): wrapped to the
+# canvas width minus the 100px margins, centred at position_y, never shrunk.
+def _full_width_text_box(position_y: float) -> Dict[str, Any]:
+    return {
+        "text_box_max_w": 1800, "text_box_max_h": 2800,
+        "text_box_offset_x": 0.5, "text_box_offset_y": position_y,
+        "text_box_h_align": "center", "text_box_v_align": "center",
+    }
+
+
+SEASON_DEFAULT_TEXT_BOX = {"text_bbox_enabled": True, **_full_width_text_box(0.85), "text_box_max_h": 600}
+
+
+def always_text_box_options(base: Dict[str, Any], season: Dict[str, Any]):
+    """Give every config of a Uniform Logo preset an explicit text box (text_box_*).
+
+    Custom Text now always fits a box. For each config, write the box that reproduces how it
+    rendered before: the box it already fitted into (its text_box_* or, failing that, the
+    logo box) when text_bbox_enabled was on, otherwise a full-width box at position_y.
+    Run once per database (applied_migrations 'text_box_always').
+    """
+    base = dict(base or {})
+    season = dict(season or {})
+
+    def rendered_box(d):
+        if d.get("text_bbox_enabled"):
+            return {
+                f"text_box_{n}": d.get(f"text_box_{n}", d.get(f"uniform_logo_{n}", default))
+                for n, default in _TEXT_BOX_FIELDS
+            }
+        return _full_width_text_box(float(d.get("position_y", 0.75)))
+
+    resolved = {**base, **season}
+    new_base = {**base, **rendered_box(base), "text_bbox_enabled": True}
+    new_season = {**season, **rendered_box(resolved), "text_bbox_enabled": True}
+    return new_base, diff_season_options(new_base, new_season)
+
+
 def diff_season_options(options: Dict[str, Any], season_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Reduce season_options to only the fields that actually differ from options.
 
@@ -1498,7 +1621,7 @@ def save_preset(template_id: str, preset_id: str, name: str, options: Dict[str, 
         if season_options is not None:
             # Caller explicitly provided season_options — store only what differs from
             # options, regardless of whether the caller sent a full copy or a diff already.
-            season_json = json.dumps(diff_season_options(options, season_options))
+            season_json = json.dumps(mark_season_saved(diff_season_options(options, season_options)))
             cursor.execute("""
                 INSERT INTO presets (id, template_id, name, options_json, season_options_json, updated_at)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)

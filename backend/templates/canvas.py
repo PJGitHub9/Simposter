@@ -35,7 +35,7 @@ def resolve_canvas_size(options: Dict[str, Any] | None) -> Tuple[int, int]:
 # anchored (canvas_w never changes, so they need no scaling); font sizes are
 # width-driven wrap / auto-shrink-to-fit under text_bbox_enabled, so they inherit
 # the uniform_logo_max_h fix for free rather than needing their own entry.
-HEIGHT_ANCHORED_OPTION_KEYS = ("uniform_logo_max_h", "kometa_logo_offset_y")
+HEIGHT_ANCHORED_OPTION_KEYS = ("uniform_logo_max_h", "text_box_max_h", "kometa_logo_offset_y")
 
 
 def scale_options_for_canvas(options: Dict[str, Any] | None) -> Dict[str, Any]:

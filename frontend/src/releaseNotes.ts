@@ -10,6 +10,33 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.10',
+    date: '2026-10-14',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Refreshed manual editor: the left panel now has Image, Logo, Text and Extras tabs, with the preset bar pinned at the top and the Preview button at the bottom. Less-used settings (fades, drop shadow, boxes, font, outline) sit in small collapsible groups that show their current values when closed. Sliders take one line each, related dropdowns share a row, and the upload box is now a small Upload button next to "View all".',
+          'Labels to remove are now pinned above the Preview button on every tab, so they\'re always in view before you send.',
+          'Two bounding boxes: the logo and Custom Text each have their own box (yellow and blue outlines on the preview). Custom Text always sits in its box and shrinks to fit it. Existing presets are converted automatically and render the same as before.',
+          'Backdrops as poster backgrounds: switch the Images dropdown to Backdrops, filter them by text/textless, and zoom or pan a backdrop in the editor. "View all" opens every poster or backdrop in a larger picker.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Saving a preset (or Save As) no longer resets its season poster settings to "No Logo".',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Imported Simposter starter presets have text shadow turned off, and simposter-main\'s season text uses Comfortaa-Medium with no extra letter spacing.',
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.08',
     date: '2026-10-13',
     sections: [
