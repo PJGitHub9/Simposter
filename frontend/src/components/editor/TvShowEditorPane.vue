@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, nextTick } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import type { MovieInput } from '../../services/types'
 import { useRenderService } from '../../services/render'
@@ -9,6 +9,7 @@ import { useSettingsStore } from '../../stores/settings'
 import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
 import EditorCard from './EditorCard.vue'
+import PreviewOverlay from './PreviewOverlay.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
 import SendToServerModal from './SendToServerModal.vue'
@@ -198,6 +199,25 @@ const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
 const showBoundingBox = ref(false)
 const previewImgRef = ref<HTMLImageElement | null>(null)
+
+// Preview status: true when settings changed after the shown render.
+const previewDirty = ref(false)
+let previewChangeSeq = 0
+
+// Collapsible "Current poster/logo" column, remembered across sessions.
+const CURRENT_COLLAPSED_KEY = 'simposter-editor-current-collapsed'
+const currentCollapsed = ref((() => {
+  try { return localStorage.getItem(CURRENT_COLLAPSED_KEY) === '1' } catch { return false }
+})())
+watch(currentCollapsed, (v) => {
+  try { localStorage.setItem(CURRENT_COLLAPSED_KEY, v ? '1' : '0') } catch { /* storage unavailable */ }
+})
+
+// "More actions" menu next to the send buttons.
+const moreMenuOpen = ref(false)
+const closeMoreMenu = () => { moreMenuOpen.value = false }
+onMounted(() => window.addEventListener('click', closeMoreMenu))
+onBeforeUnmount(() => window.removeEventListener('click', closeMoreMenu))
 const posterRefreshKey = ref(0)
 
 // TV Show Season Management
@@ -1046,60 +1066,22 @@ const loadEditorState = () => {
   }
 }
 
-function previewBoxStyle(maxW: number, maxH: number, offsetXPct: number, offsetYPct: number) {
-  if (!previewImgRef.value || !showBoundingBox.value || !isUniformLogo.value) return {}
-
-  const img = previewImgRef.value
-  const container = img.parentElement as HTMLElement | null
-  if (!container) return {}
-
-  const imgRect = img.getBoundingClientRect()
-  const containerRect = container.getBoundingClientRect()
-
-  const imgWidth = imgRect.width
-  const imgHeight = imgRect.height
-
-  if (!imgWidth || !imgHeight) return {}
-
-  // Get the actual rendered poster dimensions (2000x3000 typical)
-  // The preview is scaled down, so we need to calculate scale factor
-  const naturalWidth = img.naturalWidth || 2000
-  const naturalHeight = img.naturalHeight || 3000
-  const scaleX = imgWidth / naturalWidth
-  const scaleY = imgHeight / naturalHeight
-
-
-  // Scale the box dimensions to match the preview
-  const boxWidth = maxW * scaleX
-  const boxHeight = maxH * scaleY
-
-  // Position offsets (percentages from backend)
-  const offsetX = offsetXPct / 100
-  const offsetY = offsetYPct / 100
-
-  // Position (centered on offset point) relative to container
-  const imageOffsetLeft = imgRect.left - containerRect.left
-  const imageOffsetTop = imgRect.top - containerRect.top
-  const left = imageOffsetLeft + (imgWidth * offsetX) - (boxWidth / 2)
-  const top = imageOffsetTop + (imgHeight * offsetY) - (boxHeight / 2)
-
-  return {
-    width: `${boxWidth}px`,
-    height: `${boxHeight}px`,
-    left: `${left}px`,
-    top: `${top}px`
-  }
+// Logo box as the preview overlay sees it; dragging it on the preview writes back here.
+const logoBoxValue = computed(() => ({
+  maxW: options.value.uniformLogoMaxW,
+  maxH: options.value.uniformLogoMaxH,
+  offsetX: options.value.uniformLogoOffsetX,
+  offsetY: options.value.uniformLogoOffsetY
+}))
+const setLogoBox = (b: { maxW: number; maxH: number; offsetX: number; offsetY: number }) => {
+  options.value.uniformLogoMaxW = b.maxW
+  options.value.uniformLogoMaxH = b.maxH
+  options.value.uniformLogoOffsetX = b.offsetX
+  options.value.uniformLogoOffsetY = b.offsetY
 }
-
-const boundingBoxStyle = computed(() =>
-  previewBoxStyle(options.value.uniformLogoMaxW, options.value.uniformLogoMaxH, options.value.uniformLogoOffsetX, options.value.uniformLogoOffsetY)
-)
-const showTextBoxOutline = computed(() => textOverlayEnabled.value)
-const textBoxStyle = computed(() =>
-  showTextBoxOutline.value
-    ? previewBoxStyle(textBox.value.maxW, textBox.value.maxH, textBox.value.offsetX, textBox.value.offsetY)
-    : {}
-)
+const setTextBox = (b: { maxW: number; maxH: number; offsetX: number; offsetY: number }) => {
+  textBox.value = { ...textBox.value, ...b }
+}
 
 // Per-source counts shown on the TMDb/Fanart/TVDB checkboxes
 const countBySource = (items: { source?: string }[]) => {
@@ -1825,6 +1807,7 @@ const toggleLabel = (label: string) => {
 }
 
 const doPreview = async (skipBackgroundRender = false) => {
+  const capturedChangeSeq = previewChangeSeq
   if (!bgUrl.value) return
   // Cache current settings before rendering
   saveCurrentSettings()
@@ -1925,6 +1908,7 @@ const doPreview = async (skipBackgroundRender = false) => {
   // Check if we have a cached render for these exact settings
   if (cacheKey && renderedPreviewCache.value[cacheKey]) {
     lastPreview.value = renderedPreviewCache.value[cacheKey]
+    if (previewChangeSeq === capturedChangeSeq) previewDirty.value = false
     return
   }
 
@@ -1962,6 +1946,7 @@ const doPreview = async (skipBackgroundRender = false) => {
         const idx = renderedPreviews.value.findIndex(p => p.seasonKey === season.key)
         activePreviewIndex.value = idx >= 0 ? idx : renderedPreviews.value.length - 1
         lastPreview.value = imageUrl
+        if (previewChangeSeq === capturedChangeSeq) previewDirty.value = false
       }
     }
   }
@@ -3345,8 +3330,11 @@ watch(
   ],
   () => {
     if (suppressAutoPreview) {
+      previewDirty.value = false
       return // Don't auto-preview when switching to rendered preview
     }
+    previewChangeSeq++
+    previewDirty.value = true
     if (previewTimer) clearTimeout(previewTimer)
     previewTimer = setTimeout(() => {
       doPreview()
@@ -3796,11 +3784,6 @@ watch(tmdbId, () => {
                 >{{ opt }}</button>
               </div>
             </div>
-
-            <label class="checkbox-label show-boxes-toggle">
-              <input type="checkbox" v-model="showBoundingBox" />
-              <span>Show boxes on preview</span>
-            </label>
           </EditorCard>
           <EditorCard v-if="!isUniformLogo" title="Position &amp; size" :summary="`Scale ${options.logoScale}% · ${options.logoOffset}%`">
             <div class="slider">
@@ -3941,11 +3924,6 @@ watch(tmdbId, () => {
                   >{{ opt }}</button>
                 </div>
               </div>
-
-              <label class="checkbox-label show-boxes-toggle">
-                <input type="checkbox" v-model="showBoundingBox" />
-                <span>Show boxes on preview</span>
-              </label>
             </EditorCard>
           </TextOverlayPanel>
         </div>
@@ -4107,7 +4085,9 @@ watch(tmdbId, () => {
 
     <div class="preview-pane">
       <div class="preview-inner">
-        <div class="preview-existing">
+        <button v-if="currentCollapsed" type="button" class="current-expand" title="Show the current poster and logo" @click="currentCollapsed = false">Current ›</button>
+        <div v-else class="preview-existing">
+          <button type="button" class="current-collapse" title="Hide this column" @click="currentCollapsed = true">‹ Hide</button>
           <div v-if="showServerPreviewToggle" class="server-toggle-row">
             <button class="server-toggle-btn" title="Previous server" @click="cycleViewingServer(-1)">‹</button>
             <span class="server-toggle-label">{{ serverTypeLabel(viewingServerId) }}</span>
@@ -4140,12 +4120,6 @@ watch(tmdbId, () => {
             <img v-if="existingLogo" :key="logoRefreshKey" :src="existingLogo" alt="Existing logo" class="existing-logo-img" />
             <div v-else class="empty-preview small">No logo</div>
           </div>
-
-          <button
-            title="Queue this show to automatically retry with a template/preset of your choice once a textless poster is available (applies to the whole show, not just this season)"
-            class="btn-inline btn-retry-queue"
-            @click="showRetryQueueModal = true"
-          >⏳ <span class="btn-label">Add to Retry Queue</span></button>
         </div>
 
         <div class="preview-content-wrapper">
@@ -4157,7 +4131,8 @@ watch(tmdbId, () => {
               </div>
               <div v-if="currentSeason" class="current-season-label">{{ currentSeason.title }}</div>
               <span v-if="loading" class="status-badge">Rendering...</span>
-              <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
+              <span v-else-if="lastPreview && previewDirty" class="status-badge stale" title="Settings changed since this render. It re-renders on its own after a moment; click Preview if it does not.">Not up to date</span>
+              <span v-else-if="lastPreview" class="status-badge success">Up to date</span>
             </div>
             <div class="preview-actions">
               <button title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
@@ -4170,6 +4145,12 @@ watch(tmdbId, () => {
                 <span v-else>📺</span>
                 <span class="btn-label">{{ posterSending ? 'Sending...' : sendButtonLabel }}</span>
               </button>
+              <div class="more-menu" @click.stop>
+                <button type="button" class="btn-inline btn-more" title="More actions" @click="moreMenuOpen = !moreMenuOpen">⋯</button>
+                <div v-if="moreMenuOpen" class="more-dropdown">
+                  <button type="button" title="Queue this show to retry automatically with a template/preset of your choice once a textless poster is available (applies to the whole show)" @click="moreMenuOpen = false; showRetryQueueModal = true">⏳ Add to Retry Queue</button>
+                </div>
+              </div>
             </div>
           </div>
           <SendToServerModal
@@ -4205,9 +4186,16 @@ watch(tmdbId, () => {
               <p>Rendering...</p>
             </div>
 
-            <!-- Bounding Box (Uniform Logo template) — same box for logo placement and text-bbox mode -->
-            <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
-            <div v-if="isUniformLogo && showBoundingBox && lastPreview && showTextBoxOutline" class="bounding-box text-box-outline" :style="textBoxStyle"></div>
+            <PreviewOverlay
+              v-if="lastPreview"
+              v-model:show-boxes="showBoundingBox"
+              :img="previewImgRef"
+              :can-show-boxes="isUniformLogo"
+              :logo-box="isUniformLogo ? logoBoxValue : null"
+              :text-box="isUniformLogo && textOverlayEnabled ? textBox : null"
+              @update:logo-box="setLogoBox"
+              @update:text-box="setTextBox"
+            />
           </div>
 
           </div>
@@ -5443,6 +5431,86 @@ button:disabled {
   color: #3dd6b7;
 }
 
+.status-badge.stale {
+  background: rgba(255, 184, 77, 0.15);
+  color: #ffb84d;
+}
+
+.current-collapse {
+  display: block;
+  margin: 0 auto 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.current-collapse:hover,
+.current-expand:hover {
+  color: #eef2ff;
+  border-color: rgba(61, 214, 183, 0.35);
+}
+
+.current-expand {
+  writing-mode: vertical-rl;
+  padding: 10px 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.more-menu {
+  position: relative;
+}
+
+.btn-more {
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9d1e0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-weight: 700;
+}
+
+.btn-more:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.more-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 190px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #141824;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  z-index: 30;
+}
+
+.more-dropdown button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #dce6ff;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.more-dropdown button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
 .existing-logo-area {
   width: 160px;
   background: #0a0b12;
@@ -5453,20 +5521,6 @@ button:disabled {
   justify-content: center;
   min-height: 48px;
   box-sizing: border-box;
-}
-
-.btn-retry-queue {
-  margin-top: 14px;
-  width: 160px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #c9d1e0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.btn-retry-queue:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: rgba(61, 214, 183, 0.35);
-  color: #eef2ff;
 }
 
 .existing-logo-img {
@@ -5610,16 +5664,6 @@ button:disabled {
   }
 }
 
-.bounding-box {
-  position: absolute;
-  border: 2px dashed rgba(255, 255, 0, 0.8);
-  pointer-events: none;
-}
-
-.bounding-box.text-box-outline {
-  border-color: rgba(0, 220, 255, 0.85);
-}
-
 .text-box-settings {
   margin: 8px 0 14px;
   padding: 10px 12px;
@@ -5632,12 +5676,6 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 10px;
-}
-
-.show-boxes-toggle {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .pinned-labels {
@@ -6086,7 +6124,8 @@ button:disabled {
     align-items: center;
   }
 
-  .preview-existing {
+  .preview-existing,
+  .current-expand {
     display: none;
   }
 

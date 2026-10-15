@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.11 (2026-10-15) — `webui-overhaul-dev` branch
+
+### New Features
+- **Preview overlay** — new `PreviewOverlay.vue` in both editors: a corner toolbar (Boxes, Guides), logo/text boxes drawn on the preview that can be dragged to move or resized from a corner handle (writes back to the same settings as the sliders), and center lines plus a 5% safe-area guide. Replaces the "Show boxes on preview" checkboxes in the Logo/Text tabs.
+- **Preview status** — "Rendering..." / "Not up to date" / "Up to date"; the stale state is set when settings change after the shown render.
+- **Tidier preview column** — the Current poster/logo column can be collapsed (remembered), and Add to Retry Queue moved into a ⋯ menu after the Send button.
+
+### Bug Fixes
+- **Unmerged library on first load** — the root URL redirected to `/movies` with no `?library=`, so the page loaded every movie library without library-group merging (duplicate Plex/Jellyfin cards, no "Show posters from" dropdown) while the sidebar highlighted the first tab. Library pages opened without a library now switch to the first tab of that kind.
+
 ## v1.7.10 (2026-10-14) — `webui-overhaul-dev` branch
 
 ### New Features

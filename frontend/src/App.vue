@@ -489,6 +489,29 @@ const resolveTabSuffix = (libQuery: string, serverQuery: string): string => {
   return group ? `group-${group.id}` : libQuery
 }
 
+// A library page opened without ?library= (e.g. the root URL redirects to a bare
+// /movies) used to load EVERY library of that type, unmerged, while the sidebar
+// highlighted the first tab. Fill in that first tab's library so the page matches
+// the sidebar and the library group's merge applies.
+const MOVIE_LIBRARY_ROUTES = new Set(['movies', 'batch-edit', 'collections', 'logos', 'backdrops', 'square-art', 'thumb-art', 'media-mirror', 'local-assets'])
+const TV_LIBRARY_ROUTES = new Set(['tv-shows', 'tv-batch-edit', 'tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art', 'tv-media-mirror', 'tv-local-assets'])
+watch(
+  [() => route.name, () => route.query.library, () => settings.loaded.value, tabs],
+  () => {
+    if (!settings.loaded.value || route.query.library) return
+    const name = String(route.name || '')
+    let prefix: string | null = null
+    if (MOVIE_LIBRARY_ROUTES.has(name)) prefix = 'movies-'
+    else if (TV_LIBRARY_ROUTES.has(name)) prefix = 'tv-shows-'
+    else if (name === 'backup') prefix = route.query.type === 'tv-show' ? 'tv-shows-' : 'movies-'
+    if (!prefix) return
+    const first = tabs.value.find(t => t.key.startsWith(prefix as string))
+    if (!first) return
+    router.replace({ name: route.name as string, query: { ...route.query, ...resolveLibraryTarget(first.key.slice(prefix.length)) } })
+  },
+  { immediate: true }
+)
+
 const activeTab = computed<TabKey>(() => {
   const libQuery = resolveTabSuffix((route.query.library as string) || '', (route.query.server as string) || '')
   if (route.name === 'backup' && (route.query.type as string) === 'tv-show') {

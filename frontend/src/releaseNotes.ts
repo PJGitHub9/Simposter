@@ -10,6 +10,27 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.11',
+    date: '2026-10-15',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Editor preview toolbar: show the logo and text boxes right on the preview, then drag a box to move it or drag its corner to resize it.',
+          'Guides on the preview: center lines and a safe-area margin to help line things up.',
+          'The preview status now says Not up to date when settings changed after the last render.',
+          'The Current poster/logo column can be hidden, and Add to Retry Queue moved into a menu next to the Send button.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Opening Simposter at its base address no longer shows every movie library at once with Plex and Jellyfin copies as separate cards; it opens the first library, merged as expected.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.10',
     date: '2026-10-14',
     sections: [
