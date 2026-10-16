@@ -1249,8 +1249,8 @@ const optionsPayload = computed(() => {
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
     ...textBoxPayload(),
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   // Only include season_text/season_number if they're not empty (for seasons, not series)
@@ -1364,8 +1364,8 @@ const saveCurrentPreset = async () => {
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
     ...textBoxPayload(),
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   // When editing season options, we need to save to season_options_json
@@ -1476,8 +1476,8 @@ const saveAsNewPreset = async () => {
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
     ...textBoxPayload(),
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   // "Save As" from a season tab keeps the preset's two configs apart: the new preset's series
@@ -1891,8 +1891,8 @@ const doPreview = async (skipBackgroundRender = false) => {
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
     ...textBoxPayload(),
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   // Only include season_text/season_number if they're not empty (for seasons, not series)

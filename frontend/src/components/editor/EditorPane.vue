@@ -722,8 +722,8 @@ const optionsPayload = computed(() => ({
   stroke_color: strokeColor.value,
   text_bbox_enabled: textBboxEnabled.value,
   ...textBoxPayload(),
-  overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-  overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+  overlay_config_ids: [...options.value.overlayConfigIds],
+  overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
 }))
 
 const bgUrl = computed(() => selectedPoster.value || '')
@@ -910,8 +910,8 @@ const saveCurrentPreset = async () => {
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
     ...textBoxPayload(),
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   await presetService.savePreset(backendOptions)
@@ -995,8 +995,8 @@ const saveAsNewPreset = async () => {
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
     ...textBoxPayload(),
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   await presetService.savePresetAs(slugified, backendOptions)

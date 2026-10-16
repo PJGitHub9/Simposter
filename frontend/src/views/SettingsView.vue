@@ -1196,34 +1196,34 @@ const handleDbExport = async () => {
 
 const handleDbImport = async () => {
   if (!dbImportText.value.trim()) {
-    saved.value = 'Paste database JSON to import'
+    saved.value = 'Choose a backup file to import'
     setTimeout(() => (saved.value = ''), 2000)
     return
   }
-  if (!window.confirm('⚠️ This will completely replace your current database. Are you sure?')) {
+  if (!window.confirm('⚠️ This replaces your current settings, presets and overlay configs. Continue?')) {
     return
   }
   dbImporting.value = true
   try {
-    const json = JSON.parse(dbImportText.value)
     const apiBase = getApiBase()
     const res = await fetch(`${apiBase}/api/database/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(json)
+      body: dbImportText.value
     })
-    if (!res.ok) throw new Error(`API error ${res.status}`)
-    saved.value = 'Database imported successfully! Reloading...'
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data?.detail || `API error ${res.status}`)
+    saved.value = `Restored ${data.presets ?? 0} presets and ${data.overlay_configs ?? 0} overlay configs. Reloading...`
     showDbImportModal.value = false
     dbImportText.value = ''
     setTimeout(() => {
       window.location.reload()
     }, 2000)
   } catch (e) {
-    saved.value = `Import failed: ${e instanceof Error ? e.message : 'Invalid JSON'}`
+    saved.value = `Import failed: ${e instanceof Error ? e.message : 'Unknown error'}`
   } finally {
     dbImporting.value = false
-    setTimeout(() => (saved.value = ''), 2500)
+    setTimeout(() => (saved.value = ''), 4000)
   }
 }
 

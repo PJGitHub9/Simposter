@@ -1,5 +1,6 @@
 # backend/api/presets.py
 from pathlib import Path
+from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 
 from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger
@@ -440,16 +441,45 @@ def api_presets_default_template():
     return result
 
 
+def _attach_overlays(export: dict, raw_entries: list) -> dict:
+    """Add the overlay configs (and their asset files) the exported presets use,
+    under "_overlays", so the presets render the same after importing elsewhere."""
+    from ..overlay_bundle import bundle_for_presets
+    bundle = bundle_for_presets(raw_entries)
+    if bundle:
+        export["_overlays"] = bundle
+    return export
+
+
+def _selected_presets(keys: Optional[list]) -> dict:
+    """All presets, or only the given [{template_id, preset_id}] ones."""
+    data = db.get_all_presets()
+    if not keys:
+        return data
+    wanted = {(str(k.get("template_id")), str(k.get("preset_id"))) for k in keys if isinstance(k, dict)}
+    out: dict = {}
+    for template_id, tdata in data.items():
+        picked = [p for p in tdata.get("presets", []) if (template_id, str(p.get("id"))) in wanted]
+        if picked:
+            out[template_id] = {"presets": picked}
+    return out
+
+
+def _full_export(data: dict) -> dict:
+    raw_entries = [p for tdata in data.values() for p in tdata.get("presets", [])]
+    export: dict = {}
+    for template_id, tdata in data.items():
+        # Strip internal IDs — export is name+options only
+        export[template_id] = {"presets": [{k: v for k, v in p.items() if k != "id"} for p in tdata.get("presets", [])]}
+    return _attach_overlays(export, raw_entries)
+
+
 @router.get("/presets/export")
 def api_presets_export():
-    """Export all presets — IDs are internal and excluded; import generates fresh ones."""
+    """Export all presets — IDs are internal and excluded; import generates fresh ones.
+    Overlay configs the presets use are included under "_overlays"."""
     try:
-        data = db.get_all_presets()
-        # Strip internal IDs — export is name+options only
-        for tdata in data.values():
-            for preset in tdata.get("presets", []):
-                preset.pop("id", None)
-        return data
+        return _full_export(db.get_all_presets())
     except Exception as e:
         logger.error(f"[PRESETS] Error exporting presets: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export presets: {e}")
@@ -485,32 +515,48 @@ def _compact_options(opts: dict) -> dict:
     return {k: v for k, v in opts.items() if _PRESET_DEFAULTS.get(k, "__missing__") != v}
 
 
+def _compact_export(data: dict) -> dict:
+    raw_entries = [p for tdata in data.values() for p in tdata.get("presets", [])]
+    compact: dict = {}
+    for template_id, tdata in data.items():
+        compact_presets = []
+        for preset in tdata.get("presets", []):
+            raw_options = preset.get("options", {})
+            opts = _compact_options(raw_options)
+            # Diff against the raw (uncompacted) options, not the global defaults — a
+            # season field's fallback is "inherit from this preset's options" via
+            # resolve_season_options(), not "fall back to the factory default," so it
+            # must not be stripped just because it happens to equal _PRESET_DEFAULTS.
+            season_diff = db.diff_season_options(raw_options, preset.get("season_options") or {})
+            # id is intentionally omitted — import will generate a fresh one to avoid conflicts
+            entry: dict = {"name": preset["name"], "options": opts}
+            if season_diff:
+                entry["season_options"] = season_diff
+            compact_presets.append(entry)
+        compact[template_id] = {"presets": compact_presets}
+    return _attach_overlays(compact, raw_entries)
+
+
 @router.get("/presets/export-compact")
 def api_presets_export_compact():
     """Export presets for sharing — defaults stripped from options, internal IDs omitted,
     season_options reduced to only the fields that differ from options."""
     try:
-        data = db.get_all_presets()
-        compact: dict = {}
-        for template_id, tdata in data.items():
-            compact_presets = []
-            for preset in tdata.get("presets", []):
-                raw_options = preset.get("options", {})
-                opts = _compact_options(raw_options)
-                # Diff against the raw (uncompacted) options, not the global defaults — a
-                # season field's fallback is "inherit from this preset's options" via
-                # resolve_season_options(), not "fall back to the factory default," so it
-                # must not be stripped just because it happens to equal _PRESET_DEFAULTS.
-                season_diff = db.diff_season_options(raw_options, preset.get("season_options") or {})
-                # id is intentionally omitted — import will generate a fresh one to avoid conflicts
-                entry: dict = {"name": preset["name"], "options": opts}
-                if season_diff:
-                    entry["season_options"] = season_diff
-                compact_presets.append(entry)
-            compact[template_id] = {"presets": compact_presets}
-        return compact
+        return _compact_export(db.get_all_presets())
     except Exception as e:
         logger.error(f"[PRESETS] Error exporting compact presets: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to export: {e}")
+
+
+@router.post("/presets/export-selected")
+def api_presets_export_selected(req: dict = Body(...)):
+    """Export only the given presets ({"keys": [{template_id, preset_id}], "compact": bool}),
+    with the overlay configs they use."""
+    try:
+        data = _selected_presets(req.get("keys") or [])
+        return _compact_export(data) if req.get("compact") else _full_export(data)
+    except Exception as e:
+        logger.error(f"[PRESETS] Error exporting selected presets: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export: {e}")
 
 
@@ -523,6 +569,25 @@ async def api_presets_import(payload: dict = Body(...)):
     try:
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+        payload = dict(payload)
+        overlays = payload.pop("_overlays", None)
+        restored_overlays = 0
+        if isinstance(overlays, dict):
+            from ..overlay_bundle import restore_bundle, remap_options
+            remap = restore_bundle(overlays, replace=False)
+            restored_overlays = len(overlays.get("configs") or [])
+            if remap:
+                for tpl_data in payload.values():
+                    if not isinstance(tpl_data, dict):
+                        continue
+                    for preset in tpl_data.get("presets", []) or []:
+                        if isinstance(preset, dict):
+                            preset["options"] = remap_options(preset.get("options") or {}, remap)
+                            if preset.get("season_options"):
+                                preset["season_options"] = remap_options(preset["season_options"], remap)
+        # Drop any other non-template keys (future metadata like "_simposter").
+        payload = {k: v for k, v in payload.items() if not str(k).startswith("_")}
 
         db.merge_presets(payload)
         logger.info("[PRESETS] Imported and merged presets from JSON")
@@ -568,7 +633,7 @@ async def api_presets_import(payload: dict = Body(...)):
         except Exception as overlay_batch_err:
             logger.warning(f"[PRESETS] Overlay cache generation for imported presets failed: {overlay_batch_err}")
 
-        return {"message": "Presets imported and merged"}
+        return {"message": "Presets imported and merged", "overlay_configs": restored_overlays}
     except HTTPException:
         raise
     except Exception as e:

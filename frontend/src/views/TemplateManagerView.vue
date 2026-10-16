@@ -248,24 +248,74 @@ const savePresetFallback = async () => {
   }
 }
 
-const stripId = (preset: Preset) => {
-  const { id: _id, ...rest } = preset
-  return rest
+// Selected presets are exported by the backend so the overlay configs they use
+// (and those configs' badge images) come along under "_overlays".
+const handleExportSelected = async () => {
+  const keys = [...selectedPresets.value]
+    .map((key) => {
+      const [template_id, preset_id] = key.split('::')
+      return { template_id, preset_id }
+    })
+    .filter((k) => k.template_id && k.preset_id)
+  if (keys.length === 0) { handleExportAll(); return }
+  exporting.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/presets/export-selected`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys })
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    importText.value = JSON.stringify(await res.json(), null, 2)
+    showImportExport.value = true
+  } catch (e) {
+    showError(e instanceof Error ? e.message : 'Export failed')
+  } finally {
+    exporting.value = false
+  }
 }
 
-const handleExportSelected = () => {
-  const map: TemplatePresets = {}
-  selectedPresets.value.forEach((key) => {
-    const [tpl, pid] = key.split('::')
-    if (!tpl || !pid) return
-    const preset = presets.value[tpl]?.presets.find((p) => p.id === pid)
-    if (!preset) return
-    if (!map[tpl]) map[tpl] = { presets: [] }
-    map[tpl].presets.push(stripId(preset) as Preset)
-  })
-  if (Object.keys(map).length === 0) { handleExportAll(); return }
-  importText.value = JSON.stringify(map, null, 2)
-  showImportExport.value = true
+// How many overlay configs/images the JSON currently in the box carries.
+const importOverlayInfo = computed(() => {
+  if (!importText.value.trim()) return ''
+  try {
+    const d = JSON.parse(importText.value)
+    const o = d && d._overlays
+    if (!o) return ''
+    const c = (o.configs || []).length
+    const a = (o.assets || []).length
+    return `Includes ${c} overlay config${c === 1 ? '' : 's'} and ${a} overlay image${a === 1 ? '' : 's'}.`
+  } catch {
+    return ''
+  }
+})
+
+const downloadImportText = () => {
+  if (!importText.value.trim()) return
+  const blob = new Blob([importText.value], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `simposter-presets-${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+const presetFileInput = ref<HTMLInputElement | null>(null)
+const onPresetFile = async (e: Event) => {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    const text = await file.text()
+    JSON.parse(text)
+    importText.value = text
+    showImportExport.value = true
+  } catch {
+    showError('Could not read this file as JSON')
+  } finally {
+    input.value = ''
+  }
 }
 
 const toggleSelected = (tplId: string, presetId: string) => {
@@ -391,8 +441,11 @@ const handleImport = async () => {
       body: JSON.stringify(json)
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json().catch(() => ({}))
     importText.value = ''
     await fetchPresets()
+    const n = data?.overlay_configs || 0
+    showSuccess(n ? `Presets imported, with ${n} overlay config${n === 1 ? '' : 's'}` : 'Presets imported')
   } catch (e) {
     showError(e instanceof Error ? e.message : 'Invalid JSON')
   } finally {
@@ -855,7 +908,7 @@ onMounted(async () => {
           <button class="section-toggle" @click="showImportExport = !showImportExport">
             <div class="toggle-left">
               <h3>Import / Export</h3>
-              <span class="help">Backup or transfer presets as JSON</span>
+              <span class="help">Backup or transfer presets as JSON. Overlay configs a preset uses, and their images, are included.</span>
             </div>
             <svg class="acc-chevron" :class="{ open: showImportExport }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="6 9 12 15 18 9" />
@@ -868,11 +921,15 @@ onMounted(async () => {
               rows="8"
               class="import-box"
             ></textarea>
+            <p v-if="importOverlayInfo" class="help overlay-info">{{ importOverlayInfo }}</p>
             <div class="actions" style="justify-content:flex-start;">
               <button class="primary" @click="handleImport" :disabled="importing || !importText.trim()">
                 {{ importing ? 'Importing…' : 'Import JSON' }}
               </button>
               <button class="secondary" @click="importText = ''" :disabled="!importText.trim()">Clear</button>
+              <button class="secondary" @click="downloadImportText" :disabled="!importText.trim()" title="Save the JSON in the box as a file">Download file</button>
+              <button class="secondary" @click="presetFileInput?.click()" title="Load a preset JSON file into the box">Open file…</button>
+              <input ref="presetFileInput" type="file" accept=".json,application/json" style="display: none" @change="onPresetFile" />
               <button class="secondary" @click="handleCopyCompact" :disabled="copyingCompact" title="Strip defaults and copy minified JSON to clipboard for sharing">
                 {{ copyingCompact ? 'Copying…' : 'Copy compact' }}
               </button>
@@ -1137,6 +1194,7 @@ onMounted(async () => {
   font-size: 0.85rem;
 }
 .help.small { display: block; font-size: 0.8rem; margin-top: 4px; }
+.help.overlay-info { display: block; margin: 6px 0 0; color: #3dd6b7; }
 
 .grid {
   display: grid;

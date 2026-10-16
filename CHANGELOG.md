@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.7.12 (2026-10-16) — `webui-overhaul-dev` branch
+
+### New Features
+- **Preset exports carry their overlays** — Export all, Export selected (now `POST /api/presets/export-selected`) and Copy compact include an `_overlays` block: the overlay configs the presets use and their asset files (base64). Import recreates them; an identical existing config is reused, a different one with the same id is saved under a new id and the presets are repointed, and an asset file is never overwritten by a different one with the same name. Template Manager gained Download file / Open file. Shared code lives in `backend/overlay_bundle.py`.
+- **Full database backup** — Settings → Advanced export now includes settings, presets, overlay configs and overlay assets (format `simposter-db-backup` v2); media-server keys are left out unless "include API keys" is ticked. Import takes a file, keeps current keys the backup doesn't have, clears the overlay effect cache, and applies settings and schedules without a restart. Caches, history and the retry queue aren't included.
+
+### Bug Fixes
+- **Database export/import never worked** — they queried preset columns that don't exist (`template_options`, `is_default`) and a nonexistent `templates` table.
+- **Clearing overlays on save** — saving a preset with no overlays selected kept its previous overlays, because the empty list was sent as `undefined` and the backend merges with the stored options. The editors now always send the lists.
+
 ## v1.7.11 (2026-10-15) — `webui-overhaul-dev` branch
 
 ### New Features

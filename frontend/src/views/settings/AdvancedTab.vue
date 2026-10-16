@@ -42,6 +42,65 @@ const localDbImportText = computed({
   set: (val) => emit('update:dbImportText', val)
 })
 
+// Backup file picked in the import modal
+const dbImportFileName = ref('')
+const dbImportFileError = ref('')
+const dbImportSummary = computed(() => {
+  if (!localDbImportText.value.trim()) return ''
+  try {
+    const d = JSON.parse(localDbImportText.value)
+    if (!d || typeof d !== 'object' || !d.settings || !Array.isArray(d.presets)) return ''
+    const parts = [
+      `${Object.keys(d.settings).length} settings`,
+      `${d.presets.length} presets`
+    ]
+    if (d.overlays) {
+      parts.push(`${(d.overlays.configs || []).length} overlay configs`)
+      parts.push(`${(d.overlays.assets || []).length} overlay images`)
+    }
+    const when = d.exported_at ? ` from ${new Date(d.exported_at).toLocaleString()}` : ''
+    const version = d.app_version ? ` (${d.app_version})` : ''
+    const keys = d.secrets_included ? '' : '. No API keys in this file; your current ones are kept.'
+    return `Backup${when}${version}: ${parts.join(', ')}${keys}`
+  } catch {
+    return ''
+  }
+})
+
+const onDbImportFile = async (e: Event) => {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  dbImportFileError.value = ''
+  if (!file) return
+  dbImportFileName.value = file.name
+  try {
+    const text = await file.text()
+    let d: unknown
+    try {
+      d = JSON.parse(text)
+    } catch {
+      throw new Error('Could not read this file as JSON')
+    }
+    const obj = d as { settings?: unknown; presets?: unknown }
+    if (!obj || typeof obj !== 'object' || !obj.settings || !Array.isArray(obj.presets)) {
+      throw new Error('This file is not a Simposter database backup')
+    }
+    localDbImportText.value = text
+  } catch (err) {
+    localDbImportText.value = ''
+    dbImportFileError.value = err instanceof Error ? err.message : 'Could not read this file'
+  } finally {
+    input.value = ''
+  }
+}
+
+const closeDbImport = () => {
+  localShowDbImportModal.value = false
+  localDbImportText.value = ''
+  dbImportFileName.value = ''
+  dbImportFileError.value = ''
+}
+
 const localApiOrder = computed({
   get: () => props.apiOrder,
   set: (val) => emit('update:apiOrder', val)
@@ -183,7 +242,7 @@ const moveApiDown = (api: string) => {
     <div class="section">
       <h3>Database Backup</h3>
       <p class="section-description">
-        Export and import your complete Simposter database. Includes all settings, presets, templates, and configurations.
+        Export and import your Simposter settings, presets and overlay configs (with their badge images) as one JSON file.
       </p>
 
       <div class="preset-actions">
@@ -193,13 +252,13 @@ const moveApiDown = (api: string) => {
             <p>Download complete database backup as a JSON file for backup or migration</p>
             <label class="checkbox-label" style="margin-top: 8px;">
               <input type="checkbox" v-model="localDbExportIncludeSecrets" />
-              <span>Include API keys and tokens (Plex token, TMDb/TVDB/Fanart keys, webhook secret)</span>
+              <span>Include API keys and tokens (Plex token, Jellyfin/Emby keys, TMDb/TVDB/Fanart keys, webhook secret)</span>
             </label>
             <p class="help-text" v-if="localDbExportIncludeSecrets">
               The exported file will contain your credentials in plain text — store it securely.
             </p>
             <p class="help-text" v-else>
-              Credentials will be left out of the export; you'll need to re-enter them after restoring.
+              Credentials will be left out of the export. Restoring it on this install keeps your current keys; on a new install you'll need to re-enter them.
             </p>
           </div>
           <button
@@ -229,10 +288,10 @@ const moveApiDown = (api: string) => {
     <div class="section info-section">
       <h3>What's Included in Database Export</h3>
       <ul class="included-list">
-        <li><strong>All Settings:</strong> UI settings, media server connections, API keys, save locations, performance settings</li>
-        <li><strong>Template Presets:</strong> All custom presets with template options and season configurations</li>
-        <li><strong>Scheduler Settings:</strong> Cron schedules and library scan configurations</li>
-        <li><strong>Cache Data:</strong> Movie and TV show metadata cache (optional, can be excluded)</li>
+        <li><strong>All Settings:</strong> media server connections, library groups, save locations, automation, notifications and schedules (API keys only if you tick the box)</li>
+        <li><strong>Template Presets:</strong> every preset, including season settings</li>
+        <li><strong>Overlay Configs:</strong> every overlay config and the badge images it uses</li>
+        <li><strong>Not included:</strong> poster/logo caches, history and the retry queue. Run a library scan after restoring to rebuild the caches.</li>
       </ul>
       <div class="note">
         <strong>⚠️ Warning:</strong> Importing a database will completely replace your current configuration.
@@ -241,31 +300,30 @@ const moveApiDown = (api: string) => {
     </div>
 
     <!-- Import Modal -->
-    <div v-if="localShowDbImportModal" class="modal-overlay" @click.self="localShowDbImportModal = false">
+    <div v-if="localShowDbImportModal" class="modal-overlay" @click.self="!dbImporting && closeDbImport()">
       <div class="modal">
         <div class="modal-header">
           <h3>Import Database</h3>
-          <button class="close-btn" @click="localShowDbImportModal = false">×</button>
+          <button class="close-btn" :disabled="dbImporting" @click="closeDbImport">×</button>
         </div>
 
         <div class="modal-body">
           <p class="modal-description">
-            ⚠️ <strong>Warning:</strong> This will completely replace your current database. Make sure you have a backup first!
-          </p>
-          <p class="modal-description">
-            Paste the JSON content from your database export file below.
+            ⚠️ <strong>Warning:</strong> This replaces your current settings, presets and overlay configs. Export a backup first if you might want them back.
           </p>
 
-          <textarea
-            v-model="localDbImportText"
-            placeholder="Paste database JSON here..."
-            rows="15"
-          ></textarea>
+          <label class="file-pick">
+            <input type="file" accept=".json,application/json" @change="onDbImportFile" />
+            <span class="file-pick-btn">Choose backup file…</span>
+            <span class="file-pick-name">{{ dbImportFileName || 'No file selected' }}</span>
+          </label>
+          <p v-if="dbImportFileError" class="file-error">{{ dbImportFileError }}</p>
+          <p v-else-if="dbImportSummary" class="file-summary">{{ dbImportSummary }}</p>
         </div>
 
         <div class="modal-actions">
           <button
-            @click="localShowDbImportModal = false"
+            @click="closeDbImport"
             class="secondary"
             :disabled="dbImporting"
           >
@@ -274,7 +332,7 @@ const moveApiDown = (api: string) => {
           <button
             @click="emit('import-db')"
             class="primary"
-            :disabled="dbImporting || !localDbImportText.trim()"
+            :disabled="dbImporting || !dbImportSummary"
           >
             {{ dbImporting ? 'Importing...' : 'Import Database' }}
           </button>
@@ -461,6 +519,54 @@ h3 {
   flex: 1;
 }
 
+.file-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 6px;
+  cursor: pointer;
+}
+
+.file-pick input[type='file'] {
+  display: none;
+}
+
+.file-pick-btn {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary, #eef2ff);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.file-pick:hover .file-pick-btn {
+  border-color: rgba(61, 214, 183, 0.5);
+}
+
+.file-pick-name {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-summary {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #3dd6b7;
+}
+
+.file-error {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #ff6b6b;
+}
+
 .modal-description {
   color: var(--text-muted);
   font-size: 14px;
@@ -468,23 +574,7 @@ h3 {
   line-height: 1.5;
 }
 
-textarea {
-  width: 100%;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-family: 'Courier New', monospace;
-  resize: vertical;
-  min-height: 300px;
-}
 
-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
 
 .modal-actions {
   display: flex;

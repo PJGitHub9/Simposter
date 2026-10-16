@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.7.12',
+    date: '2026-10-16',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Preset export now includes the overlay configs a preset uses and their badge images, so the preset looks the same when imported on another Simposter. Export selected presets, all presets or a compact copy, then use Download file or Open file in Template Manager.',
+          'Database backup now covers your settings, presets, overlay configs and badge images. Restore by choosing the backup file; API keys left out of the backup keep their current values.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Database backup export and import (Settings, Advanced) failed every time; both work again.',
+          'Clearing every overlay in the editor and saving the preset now removes them; before, the preset kept its old overlays.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.11',
     date: '2026-10-15',
     sections: [
