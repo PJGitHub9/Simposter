@@ -138,6 +138,16 @@ class FanartSettings(BaseModel):
     apiKey: str = ""
 
 
+class MDBListSettings(BaseModel):
+    apiKey: str = ""
+    # Which MDBList rating fills the overlay fields audience_rating / critic_rating
+    # (0-10 scale, like Kometa's). Sources: imdb, tmdb, trakt, tomatoes,
+    # tomatoesaudience, metacritic, metacriticuser, letterboxd, myanimelist, score.
+    audienceRatingSource: str = "imdb"
+    criticRatingSource: str = "tomatoes"
+    cacheDays: int = 7  # how long ratings and lists are reused before refetching
+
+
 class ImageQualitySettings(BaseModel):
     outputFormat: str = "jpg"  # jpg, png, webp
     jpgQuality: int = 95
@@ -221,6 +231,7 @@ class NotificationSettings(BaseModel):
     discordNotifyWebhook: bool = True
     discordNotifyAutoGenerate: bool = True
     discordNotifyMediaMirror: bool = True
+    discordNotifyOverlayRefresh: bool = True
     appriseEnabled: bool = False
     appriseUrls: List[str] = Field(default_factory=list)
     appriseNotifyLibraries: List[str] = Field(default_factory=list)
@@ -229,6 +240,7 @@ class NotificationSettings(BaseModel):
     appriseNotifyWebhook: bool = True
     appriseNotifyAutoGenerate: bool = True
     appriseNotifyMediaMirror: bool = True
+    appriseNotifyOverlayRefresh: bool = True
 
 
 class LibraryGroupMember(BaseModel):
@@ -280,6 +292,18 @@ class MediaMirrorConfig(BaseModel):
     lastRunCollectionStats: Optional[dict] = None
 
 
+class OverlayRefreshConfig(BaseModel):
+    """Scheduled overlay refresh for one Library Group (Quirk #166): re-checks
+    every poster Simposter sent with overlays and re-renders the ones whose
+    overlay would now come out differently. Edited only from the group's
+    Overlay Refresh page; Settings saves keep the stored value."""
+    enabled: bool = False
+    scheduleCron: Optional[str] = None
+    plexLabel: str = "Simposter-Overlay"  # added to Plex items that get an overlay; "" = none
+    lastRunAt: Optional[str] = None
+    lastRunStats: Optional[dict] = None
+
+
 class LibraryGroup(BaseModel):
     """A user-defined set of libraries across different media servers that
     represent 'the same logical library' -- e.g. Plex 'Movies' + Jellyfin
@@ -317,6 +341,7 @@ class LibraryGroup(BaseModel):
                               # another kept separate. See CLAUDE.md's Jellyfin-integration
                               # Quirks.
     mirror: Optional[MediaMirrorConfig] = None
+    overlayRefresh: Optional[OverlayRefreshConfig] = None
     # Manual cross-server collection matching. Collections match across a
     # group's servers by normalized title; this overrides that per collection.
     # Keyed "serverId:ratingKey" -> a match key: collections sharing a key are
@@ -347,6 +372,7 @@ class UISettings(BaseModel):
     tmdb: TMDBSettings = Field(default_factory=TMDBSettings)
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)
     fanart: FanartSettings = Field(default_factory=FanartSettings)
+    mdblist: MDBListSettings = Field(default_factory=MDBListSettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
@@ -526,12 +552,39 @@ class OverlayElement(BaseModel):
     slug_aliases: Optional[Dict[str, str]] = None  # Maps TMDb slug -> canonical asset slug (e.g., {"cj-enm-studios": "cj-entertainment-studios"})
     text_align: Optional[str] = None  # "left" | "center" | "right" (default: "center")
 
+    # --- Overlay engine v2 (backend/overlay_engine.py); all optional ---
+    name: Optional[str] = None  # Element name, used by suppress
+    group: Optional[str] = None  # Only the highest-weight element of a group renders
+    weight: Optional[float] = None
+    suppress: Optional[List[str]] = None  # Names of elements hidden when this one renders
+    conditions: Optional[List[Dict[str, Any]]] = None  # [{"field", "op", "value"}], all must pass
+    placement: Optional[str] = None  # "kometa" = align/offset placement below; default = position_x/y
+    horizontal_align: Optional[str] = None  # left | center | right
+    vertical_align: Optional[str] = None  # top | center | bottom
+    horizontal_offset: Optional[Union[int, float, str]] = None  # Kometa 1000x1500 units, or "10%"
+    vertical_offset: Optional[Union[int, float, str]] = None
+    back_color: Optional[str] = None  # #RRGGBB or #RRGGBBAA
+    back_width: Optional[float] = None
+    back_height: Optional[float] = None
+    back_radius: Optional[float] = None
+    back_padding: Optional[float] = None
+    back_align: Optional[str] = None  # where content sits inside the back box (default center)
+    back_line_color: Optional[str] = None
+    back_line_width: Optional[float] = None
+    url: Optional[str] = None  # External image for a kometa-placed element
+    font_path: Optional[str] = None  # Font file, relative to the config dir
+    stroke_width: Optional[float] = None
+    stroke_color: Optional[str] = None
+    box_only: Optional[bool] = None  # Kometa "backdrop": draw only the back box
+
 
 class OverlayConfigSaveRequest(BaseModel):
     id: str
     name: str
     elements: List[OverlayElement]
     streaming_region: str = "US"  # ISO 3166-1 alpha-2 region for TMDb watch provider lookups
+    # Conditions for the whole overlay: when any fails, none of its layers draw.
+    conditions: Optional[List[Dict[str, Any]]] = None
 
 
 class OverlayConfigDeleteRequest(BaseModel):

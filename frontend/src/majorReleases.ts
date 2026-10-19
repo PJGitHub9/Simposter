@@ -165,4 +165,46 @@ export const majorReleases: MajorRelease[] = [
       },
     ],
   },
+  {
+    version: 'v1.8.0',
+    title: 'Overlays, rebuilt',
+    intro: "This update is mostly about overlays: what you can put on a poster, when it shows, and how easy it is to build. Here's the short version; the full changelog is one click away below.",
+    highlights: [
+      {
+        icon: '🧱',
+        title: 'A friendlier overlay editor',
+        description: 'Layers listed top-down, Look / Position / Show when tabs for each one, grouped settings, warnings when a layer would show nothing, and a preview that can compare several posters at once.',
+      },
+      {
+        icon: '🎯',
+        title: 'Show when',
+        description: 'Put a layer, or a whole overlay, only on the posters that match: 4K only, Atmos only, remux files, highly rated movies, items on an MDBList list, and more.',
+      },
+      {
+        icon: '🏷️',
+        title: 'Badge sets',
+        description: "Group badges that shouldn't appear together, like 4K, 1080p and 720p, and only the first match is drawn.",
+      },
+      {
+        icon: '⭐',
+        title: 'Ratings on posters',
+        description: 'With an MDBList API key, show IMDb, Rotten Tomatoes, Metacritic and other ratings as text or use them in conditions.',
+      },
+      {
+        icon: '📥',
+        title: 'Kometa import',
+        description: 'Bring in your Kometa overlay files; Simposter maps what it can and tells you what it skipped.',
+      },
+      {
+        icon: '🔁',
+        title: 'Overlay Refresh',
+        description: 'Keep posters up to date when their overlay would change, e.g. a movie upgraded to 4K, on a schedule per library.',
+      },
+      {
+        icon: '🔔',
+        title: 'Branch-aware updates',
+        description: 'The version badge now shows updates for the branch you run, and tells you when that branch was merged and where to move.',
+      },
+    ],
+  },
 ]

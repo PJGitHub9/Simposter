@@ -288,7 +288,9 @@ class JellyfinClient(MediaServerClient):
         for stream in item.get("MediaStreams") or []:
             stream_type = stream.get("Type")
             if stream_type == "Video" and video_resolution is None:
-                w = item.get("Width")
+                # Width is on the video stream; the item-level Width is only
+                # returned when requested, so check the stream first.
+                w = stream.get("Width") or item.get("Width")
                 video_resolution = self._classify_resolution(w) if w else None
                 video_codec = (stream.get("Codec") or "").lower() or None
             elif stream_type == "Audio" and audio_codec is None:

@@ -48,6 +48,7 @@ SECRET_FIELD_PATHS = (
     ("tmdb", "apiKey"),
     ("tvdb", "apiKey"),
     ("fanart", "apiKey"),
+    ("mdblist", "apiKey"),
     ("automation", "webhookSecret"),
 )
 
@@ -122,6 +123,7 @@ class Settings(BaseSettings):
     TVDB_API_KEY: str = ""
     TVDB_PIN: str = ""
     FANART_API_KEY: str = ""
+    MDBLIST_API_KEY: str = ""
 
     OUTPUT_ROOT: str = ""
     CONFIG_DIR: str = "./config"
@@ -801,7 +803,14 @@ def get_plex_media_info(rating_key: str) -> Dict[str, str]:
     except Exception:
         pass  # DB not available yet or import error
 
-    # 2. Fetch from Plex and cache the result
+    # 2. Fetch from Plex and cache the result (only for a Plex item; a
+    #    Jellyfin/Emby item's media info comes from its scan)
+    try:
+        from . import database as db
+        if not settings.PLEX_URL or db.get_server_id_for_rating_key(str(rating_key)) != "plex-1":
+            return {}
+    except Exception:
+        pass
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=6)
@@ -871,6 +880,10 @@ def inject_plex_media_metadata(
     if not rating_key:
         return render_options
 
+    # The overlay engine looks up this item's stored file paths by rating_key
+    # (filename conditions, Kometa's filepath.regex).
+    render_options["metadata"] = {**(render_options.get("metadata") or {}), "rating_key": str(rating_key)}
+
     plex_media = get_plex_media_info(rating_key)
     if plex_media:
         existing_meta = render_options.get("metadata") or {}
@@ -880,7 +893,24 @@ def inject_plex_media_metadata(
     resolved_tmdb_id = tmdb_id
     resolved_is_tv = is_tv
 
-    if resolved_tmdb_id is None or resolved_is_tv is None:
+    # A Jellyfin/Emby item (or no Plex at all): the ids are already in the scan
+    # cache, and a Plex lookup would only fail.
+    if (resolved_tmdb_id is None or resolved_is_tv is None) and plex_xml_text is None:
+        try:
+            from . import database as db
+            if not settings.PLEX_URL or db.get_server_id_for_rating_key(str(rating_key)) != "plex-1":
+                cached_tmdb, _cached_tvdb = db.get_ids_for_rating_key(str(rating_key))
+                if resolved_tmdb_id is None and cached_tmdb:
+                    resolved_tmdb_id = cached_tmdb
+                if resolved_is_tv is None:
+                    with db.get_db() as conn:
+                        resolved_is_tv = conn.execute(
+                            "SELECT 1 FROM tv_cache WHERE rating_key = ? LIMIT 1", (str(rating_key),)
+                        ).fetchone() is not None
+        except Exception as e:
+            logger.debug("%sCached id lookup failed for %s: %s", log_prefix, rating_key, e)
+
+    if (resolved_tmdb_id is None or resolved_is_tv is None) and settings.PLEX_URL:
         xml_text = plex_xml_text
         if xml_text is None:
             try:
@@ -981,6 +1011,26 @@ def extract_folder_name_from_metadata(xml_text: str) -> Optional[str]:
     if len(segments) >= 4:
         return segments[-2]
     return None
+
+
+def extract_media_paths_from_metadata(xml_text: str) -> List[str]:
+    """Every media file path in a Plex /library/metadata/{key} response.
+
+    Movies: one <Part file> per version (a movie with 4K + 1080p copies has two).
+    Shows: no <Part> at this level, so the show folder(s) from <Location path>.
+    Used by overlay conditions that match on the file name (Kometa's
+    filepath.regex). Returns [] on any parse failure."""
+    if not xml_text or xml_text.startswith("<html"):
+        return []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    paths = [p.get("file") for p in root.findall(".//Part") if p.get("file")]
+    if not paths:
+        paths = [loc.get("path") for loc in root.findall(".//Location") if loc.get("path")]
+    seen = set()
+    return [p for p in paths if not (p in seen or seen.add(p))]
 
 
 def get_movie_folder_name(rating_key: str) -> Optional[str]:

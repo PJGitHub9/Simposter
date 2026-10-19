@@ -25,6 +25,10 @@ interface VersionInfo {
   update_available: boolean
   latest_version: string | null
   update_url: string | null
+  /** active | merged | retired | missing | unknown (from GitHub, see backend/api/version_info.py) */
+  branch_status?: string
+  branch_move_to?: string | null
+  branch_message?: string | null
 }
 
 const MAINTAINED_TAGS = ['latest', 'webui-overhaul-dev']
@@ -242,10 +246,31 @@ const displayVersion = computed(() => {
 })
 
 const versionTitle = computed(() => {
-  if (versionInfo.value?.update_available) {
-    return `Update available: ${versionInfo.value.latest_version}\nClick to view changelog`
+  const v = versionInfo.value
+  if (v?.update_available) {
+    const where = v.branch ? ` on ${v.branch}` : ''
+    const how = v.docker_tag ? `Pull the "${v.docker_tag}" image to update.` : 'Pull the latest code to update.'
+    return `Update available${where}: ${v.latest_version}\n${how}\nClick to view changelog`
   }
   return 'View changelog'
+})
+
+/** The running branch was merged, retired or deleted on GitHub: say where to go instead. */
+const branchNotice = computed(() => {
+  const v = versionInfo.value
+  if (!v || !['merged', 'retired', 'missing'].includes(v.branch_status || '')) return null
+  const target = v.branch_move_to || 'main'
+  const why = v.branch_status === 'merged'
+    ? `"${v.branch}" has been merged into "${target}".`
+    : v.branch_status === 'retired'
+      ? `"${v.branch}" is no longer maintained.`
+      : `"${v.branch}" no longer exists on GitHub.`
+  const latest = v.latest_version ? ` "${target}" is at ${v.latest_version}.` : ''
+  return {
+    label: `Move to ${target}`,
+    url: v.update_url || '',
+    title: `${why}${v.branch_message ? ' ' + v.branch_message : ''}${latest}\nSwitch to "${target}" to keep getting updates.`,
+  }
 })
 
 const isUnsupportedTag = computed(() => {
@@ -360,6 +385,14 @@ onUnmounted(() => {
           {{ displayVersion }}
           <span v-if="versionInfo?.update_available" class="update-dot"></span>
         </button>
+        <a
+          v-if="branchNotice"
+          class="branch-notice-badge"
+          :href="branchNotice.url || undefined"
+          target="_blank"
+          rel="noopener"
+          :title="branchNotice.title"
+        >↪ {{ branchNotice.label }}</a>
         <div
           v-for="s in allServerStatuses"
           :key="s.key"
@@ -504,6 +537,22 @@ onUnmounted(() => {
   0%, 100% { border-color: rgba(239, 68, 68, 0.45); }
   50% { border-color: rgba(239, 68, 68, 0.85); }
 }
+
+.branch-notice-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.branch-notice-badge:hover { background: rgba(251, 191, 36, 0.25); color: #f59e0b; }
 
 .version-badge {
   font-size: 12px;

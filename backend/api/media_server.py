@@ -243,6 +243,16 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     else:
         counts = db.upsert_media_server_tv_shows(server_id, library_id, rows)
 
+    # Media file path (a show's folder for TV), for overlay file-name conditions.
+    try:
+        db.set_file_paths(
+            {i.id: ([i.file_path] if i.file_path else []) for i in items},
+            is_tv=(media_type != "movie"),
+        )
+    except Exception as e:
+        from ..config import logger
+        logger.debug("[MEDIA_SERVER_SCAN] Failed to store file paths for %s: %s", library_id, e)
+
     # Fetch poster/logo/backdrop art + video/audio media info for every
     # scanned item -- deliberately a SECOND pass, after the identity rows
     # above already exist (fetch_and_cache_poster()/etc route to the right

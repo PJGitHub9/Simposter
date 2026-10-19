@@ -65,7 +65,8 @@ def api_save_overlay_config(req: OverlayConfigSaveRequest):
     """Save or update an overlay configuration."""
     try:
         elements = [elem.model_dump() for elem in req.elements]
-        db.save_overlay_config(req.id, req.name, elements, streaming_region=req.streaming_region)
+        db.save_overlay_config(req.id, req.name, elements, streaming_region=req.streaming_region,
+                               conditions=req.conditions)
         return {"status": "ok", "id": req.id}
     except Exception as e:
         logger.error(f"[OVERLAY] Error saving overlay config {req.id}: {e}")
@@ -352,50 +353,91 @@ def api_overlay_preview_metadata(
     rating_key: str,
     config_id: Optional[str] = None,
     media_type: str = "movie",
+    ratings: bool = False,
+    lists: Optional[str] = None,
+    badge_types: Optional[str] = None,
 ):
     """Return Plex media metadata for a given rating_key for use in the overlay config preview.
 
     If config_id is provided, also resolves streaming_platform and studio via the same
     TMDb pre-pass that apply_overlay_config uses, so item-mode preview reflects real values.
+
+    The editor also says what its current, possibly unsaved, layers use (ratings=1,
+    lists=comma-separated list URLs, badge_types=comma-separated element types), so
+    the preview doesn't wait for a save before fetching that data.
     """
     try:
         from ..config import get_plex_media_info, get_movie_tmdb_id
         info = get_plex_media_info(rating_key) or {}
 
-        if config_id:
+        saved_cfg = db.get_overlay_config(config_id) if config_id else None
+        extra_types = {t.strip() for t in (badge_types or "").split(",") if t.strip()}
+        if saved_cfg or extra_types:
             try:
-                cfg = db.get_overlay_config(config_id)
-                if cfg:
-                    element_types = {e.get("type") for e in cfg.get("elements", [])}
-                    tmdb_id = get_movie_tmdb_id(rating_key)
+                cfg = saved_cfg or {}
+                element_types = {e.get("type") for e in cfg.get("elements", [])} | extra_types
+                tmdb_id = get_movie_tmdb_id(rating_key) if element_types & {"streaming_platform_badge", "studio_badge"} else None
 
-                    if tmdb_id and "streaming_platform_badge" in element_types:
-                        try:
-                            from ..tmdb_client import get_watch_providers, normalize_provider_name
-                            region = cfg.get("streaming_region") or "US"
-                            providers = get_watch_providers(tmdb_id, media_type, region)
-                            if providers:
-                                slug = normalize_provider_name(providers[0].get("provider_name", ""))
-                                if slug:
-                                    info["streaming_platform"] = slug
-                        except Exception as sp_err:
-                            logger.debug(f"[OVERLAY] Preview streaming platform error: {sp_err}")
-
-                    if tmdb_id and "studio_badge" in element_types:
-                        try:
-                            from ..tmdb_client import get_studio_name, get_studio_company_id
-                            slug = get_studio_name(tmdb_id, media_type)
+                if tmdb_id and "streaming_platform_badge" in element_types:
+                    try:
+                        from ..tmdb_client import get_watch_providers, normalize_provider_name
+                        region = cfg.get("streaming_region") or "US"
+                        providers = get_watch_providers(tmdb_id, media_type, region)
+                        if providers:
+                            slug = normalize_provider_name(providers[0].get("provider_name", ""))
                             if slug:
-                                info["studio"] = slug
-                            cid = get_studio_company_id(tmdb_id, media_type)
-                            if cid is not None:
-                                info["studio_company_id"] = str(cid)
-                        except Exception as st_err:
-                            logger.debug(f"[OVERLAY] Preview studio error: {st_err}")
+                                info["streaming_platform"] = slug
+                    except Exception as sp_err:
+                        logger.debug(f"[OVERLAY] Preview streaming platform error: {sp_err}")
+
+                if tmdb_id and "studio_badge" in element_types:
+                    try:
+                        from ..tmdb_client import get_studio_name, get_studio_company_id
+                        slug = get_studio_name(tmdb_id, media_type)
+                        if slug:
+                            info["studio"] = slug
+                        cid = get_studio_company_id(tmdb_id, media_type)
+                        if cid is not None:
+                            info["studio_company_id"] = str(cid)
+                    except Exception as st_err:
+                        logger.debug(f"[OVERLAY] Preview studio error: {st_err}")
             except Exception as pre_err:
                 logger.debug(f"[OVERLAY] Preview pre-pass error: {pre_err}")
 
-        return {"metadata": info}
+        # Labels and file paths for previewing element conditions (overlay engine v2).
+        labels: list = []
+        file_paths: list = []
+        try:
+            labels = (db.get_tv_labels(rating_key) if media_type == "tv" else db.get_movie_labels(rating_key)) or []
+            file_paths = db.get_file_paths(rating_key)
+        except Exception:
+            pass
+        # MDBList ratings and list membership, only when this config uses them.
+        lists_out: list = []
+        extra_lists = [u.strip() for u in (lists or "").split(",") if u.strip()]
+        if saved_cfg or ratings or extra_lists:
+            try:
+                from .. import overlay_engine
+                elements = [e for e in (saved_cfg or {}).get("elements", []) if isinstance(e, dict)]
+                # Stand-in layers for what the unsaved editor uses.
+                if ratings:
+                    elements.append({"type": "text_label", "text": "{audience_rating}"})
+                if extra_lists:
+                    elements.append({"type": "text_label", "conditions": [{"field": "list", "op": "in", "value": extra_lists}]})
+                needs = overlay_engine.needed_data(elements)
+                if needs["ratings"] or needs["lists"]:
+                    tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+                    ctx = overlay_engine.build_context(
+                        {"rating_key": rating_key, "tmdb_id": tmdb_id, "tvdb_id": tvdb_id, "media_type": media_type},
+                        elements=elements,
+                    )
+                    for key in ctx:
+                        if key.endswith("_rating") and ctx[key] is not None and key not in info:
+                            info[key] = ctx[key]
+                    lists_out = ctx.get("lists") or []
+            except Exception as mdb_err:
+                logger.debug(f"[OVERLAY] Preview MDBList error: {mdb_err}")
+        return {"metadata": info, "labels": labels, "file_paths": file_paths, "lists": lists_out}
     except Exception as e:
         logger.warning(f"[OVERLAY] Failed to fetch preview metadata for {rating_key}: {e}")
         return {"metadata": {}}

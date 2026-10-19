@@ -69,6 +69,7 @@ const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
     ['backdrops', '\u{1F39E}\uFE0F Backdrops'],
     ['thumb-art', '\u{1F304} Thumb Art'],
     ['media-mirror', '\u{1FA9E} Media Mirror'],
+    ['overlay-refresh', '\u{1F501} Overlay Refresh'],
     ['assets', '\u{1F4C1} Local Assets'],
     ['backup', '\u{1F4E6} Backup / Restore'],
   ]
@@ -78,6 +79,7 @@ const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
     ['tv-backdrops', '\u{1F39E}\uFE0F Backdrops'],
     ['tv-thumb-art', '\u{1F304} Thumb Art'],
     ['tv-media-mirror', '\u{1FA9E} Media Mirror'],
+    ['tv-overlay-refresh', '\u{1F501} Overlay Refresh'],
     ['tv-assets', '\u{1F4C1} Local Assets'],
     ['tv-backup', '\u{1F4E6} Backup / Restore'],
   ]
@@ -149,6 +151,7 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
       ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
       ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
+      { key: `overlay-refresh-${lib.id || idx}`, label: '\u{1F501} Overlay Refresh' },
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -168,6 +171,7 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `tv-square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
       ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `tv-thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
       ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `tv-media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
+      { key: `tv-overlay-refresh-${lib.id || idx}`, label: '\u{1F501} Overlay Refresh' },
       { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -179,7 +183,7 @@ const tabs = computed<MenuItem[]>(() => {
     ...tvShowTabs,
     ...nonPlexGroupTabs('tv'),
     { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
-    { key: 'overlay-config-manager', label: '\u{1F4D0} Overlay Config' },
+    { key: 'overlay-config-manager', label: '\u{1F4D0} Overlays' },
     { key: 'history', label: '\u{1F4CB} History' },
     { key: 'settings', label: '\u{2699}\uFE0F Settings' },
     { key: 'logs', label: '\u{1F4DD} Logs' }
@@ -493,8 +497,8 @@ const resolveTabSuffix = (libQuery: string, serverQuery: string): string => {
 // /movies) used to load EVERY library of that type, unmerged, while the sidebar
 // highlighted the first tab. Fill in that first tab's library so the page matches
 // the sidebar and the library group's merge applies.
-const MOVIE_LIBRARY_ROUTES = new Set(['movies', 'batch-edit', 'collections', 'logos', 'backdrops', 'square-art', 'thumb-art', 'media-mirror', 'local-assets'])
-const TV_LIBRARY_ROUTES = new Set(['tv-shows', 'tv-batch-edit', 'tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art', 'tv-media-mirror', 'tv-local-assets'])
+const MOVIE_LIBRARY_ROUTES = new Set(['movies', 'batch-edit', 'collections', 'logos', 'backdrops', 'square-art', 'thumb-art', 'media-mirror', 'overlay-refresh', 'local-assets'])
+const TV_LIBRARY_ROUTES = new Set(['tv-shows', 'tv-batch-edit', 'tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art', 'tv-media-mirror', 'tv-overlay-refresh', 'tv-local-assets'])
 watch(
   [() => route.name, () => route.query.library, () => settings.loaded.value, tabs],
   () => {
@@ -519,13 +523,13 @@ const activeTab = computed<TabKey>(() => {
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
     return `tv-shows-${firstTvLib?.id || 'default'}`
   }
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art' || route.name === 'thumb-art' || route.name === 'media-mirror') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art' || route.name === 'thumb-art' || route.name === 'media-mirror' || route.name === 'overlay-refresh') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art' || route.name === 'tv-thumb-art' || route.name === 'tv-media-mirror') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art' || route.name === 'tv-thumb-art' || route.name === 'tv-media-mirror' || route.name === 'tv-overlay-refresh') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -549,6 +553,8 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'tv-thumb-art') return `tv-thumb-art-${libQuery || 'default'}`
   if (route.name === 'media-mirror') return `media-mirror-${libQuery || 'default'}`
   if (route.name === 'tv-media-mirror') return `tv-media-mirror-${libQuery || 'default'}`
+  if (route.name === 'overlay-refresh') return `overlay-refresh-${libQuery || 'default'}`
+  if (route.name === 'tv-overlay-refresh') return `tv-overlay-refresh-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
   if (route.name === 'backup') {
@@ -950,6 +956,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'thumb-art', query: target })
     } else if (submenuKey.startsWith('media-mirror-')) {
       router.push({ name: 'media-mirror', query: target })
+    } else if (submenuKey.startsWith('overlay-refresh-')) {
+      router.push({ name: 'overlay-refresh', query: target })
     } else if (submenuKey.startsWith('assets-')) {
       router.push({ name: 'local-assets', query: target })
     } else if (submenuKey.startsWith('backup-')) {
@@ -970,6 +978,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       router.push({ name: 'tv-thumb-art', query: target })
     } else if (submenuKey.startsWith('tv-media-mirror-')) {
       router.push({ name: 'tv-media-mirror', query: target })
+    } else if (submenuKey.startsWith('tv-overlay-refresh-')) {
+      router.push({ name: 'tv-overlay-refresh', query: target })
     } else if (submenuKey.startsWith('tv-assets-')) {
       router.push({ name: 'tv-local-assets', query: target })
     } else if (submenuKey.startsWith('tv-backup-')) {

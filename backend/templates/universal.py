@@ -1036,32 +1036,21 @@ def render_universal(
 # Overlay Rendering
 # ============================================================
 
-def apply_overlay_config(
-    canvas: Image.Image,
+def _prepare_overlays(
     preset_id: Optional[str],
     template_id: str,
-    metadata: Optional[Dict[str, Any]] = None,
-    overlay_config_ids: Optional[list] = None
-) -> Image.Image:
-    """
-    Apply overlay configurations to the canvas.
-
-    Overlay configs come from two sources (both are applied, deduped):
-    1. The preset's linked overlay_config_id (legacy single-link)
-    2. Explicit overlay_config_ids passed in render options (multi-select)
-
-    Args:
-        canvas: The base poster image
-        preset_id: The preset ID (to look up overlay_config_id)
-        template_id: The template ID
-        metadata: Optional metadata dict with fields like video_resolution, audio_codec, labels, etc.
-        overlay_config_ids: Optional list of overlay config IDs to apply directly
-
-    Returns:
-        Canvas with overlays applied
-    """
+    metadata: Optional[Dict[str, Any]],
+    overlay_config_ids: Optional[list],
+    log: bool = True,
+):
+    """Resolve which overlay elements apply to this item. Returns
+    (meta, ctx, selected); ctx is None when there are no configs at all.
+    Shared by apply_overlay_config() and overlay_summary(), so the refresh
+    check and the real render always agree on what an item's overlay has."""
     from .. import database as db
     from ..config import logger
+
+    meta = metadata if metadata is not None else {}
 
     # Collect all config IDs to apply (deduped, ordered)
     config_ids: list[str] = []
@@ -1087,11 +1076,9 @@ def apply_overlay_config(
                 seen.add(cid)
 
     if not config_ids:
-        logger.info("[OVERLAY] No overlay config IDs to apply (preset_id=%s, explicit_ids=%s)", preset_id, overlay_config_ids)
-        return canvas
-
-    # Log available metadata for overlay rendering
-    meta = metadata or {}
+        if log:
+            logger.info("[OVERLAY] No overlay config IDs to apply (preset_id=%s, explicit_ids=%s)", preset_id, overlay_config_ids)
+        return meta, None, []
 
     # Pre-pass: resolve streaming platform and studio if any config needs them
     tmdb_id = meta.get("tmdb_id")
@@ -1146,14 +1133,16 @@ def apply_overlay_config(
             except Exception as cfg_err:
                 logger.debug("[OVERLAY] Pre-pass config error for %s: %s", cid, cfg_err)
 
-    logger.info("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
+    if log:
+        logger.info("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
 
-    # Convert to RGBA for overlay compositing
-    if canvas.mode != "RGBA":
-        canvas = canvas.convert("RGBA")
-
-    W, H = canvas.size
-
+    # Gather every element from every config first, so one selection pass can
+    # apply conditions, group/weight and suppress across all of them (Kometa's
+    # groups span overlay files). Elements without those keys pass straight
+    # through, in their original order.
+    all_elements: list = []
+    # Whole-overlay conditions, checked once the context is built: [(conditions, elements)]
+    gated: list = []
     for config_id in config_ids:
         try:
             overlay_config = db.get_overlay_config(config_id)
@@ -1163,22 +1152,161 @@ def apply_overlay_config(
 
             elements = overlay_config.get("elements", [])
             if not elements:
-                logger.info(f"[OVERLAY] Overlay config '{overlay_config['name']}' has no elements, skipping")
+                if log:
+                    logger.info(f"[OVERLAY] Overlay config '{overlay_config['name']}' has no elements, skipping")
                 continue
 
             element_types = [e.get("type", "unknown") for e in elements]
-            logger.info(f"[OVERLAY] Applying overlay config '{overlay_config['name']}' with {len(elements)} elements: {element_types}")
-
-            for element in elements:
-                try:
-                    canvas = _apply_overlay_element(canvas, element, W, H, meta)
-                except Exception as elem_err:
-                    logger.error(f"[OVERLAY] Failed to apply element {element.get('type')}: {elem_err}")
-
+            if log:
+                logger.info(f"[OVERLAY] Applying overlay config '{overlay_config['name']}' with {len(elements)} elements: {element_types}")
+            config_elements = [e for e in elements if isinstance(e, dict)]
+            all_elements.extend(config_elements)
+            if overlay_config.get("conditions"):
+                gated.append((overlay_config["conditions"], config_elements))
         except Exception as e:
-            logger.error(f"[OVERLAY] Failed to apply overlay config {config_id}: {e}")
+            logger.error(f"[OVERLAY] Failed to load overlay config {config_id}: {e}")
+
+    from .. import overlay_engine
+    # Stand-ins so data the whole-overlay conditions use (ratings, lists, file paths) gets loaded.
+    ctx = overlay_engine.build_context(meta, elements=all_elements + [{"conditions": conds} for conds, _ in gated])
+    for conds, config_elements in gated:
+        if not overlay_engine.conditions_pass({"conditions": conds}, ctx):
+            skip = {id(e) for e in config_elements}
+            all_elements = [e for e in all_elements if id(e) not in skip]
+            if log:
+                logger.info("[OVERLAY] An overlay's own conditions don't match this item; its %d layers are skipped", len(config_elements))
+    selected = overlay_engine.select_elements(all_elements, ctx)
+    if log and len(selected) != len(all_elements):
+        logger.info("[OVERLAY] %d of %d elements selected for this item", len(selected), len(all_elements))
+
+    return meta, ctx, selected
+
+
+def apply_overlay_config(
+    canvas: Image.Image,
+    preset_id: Optional[str],
+    template_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    overlay_config_ids: Optional[list] = None
+) -> Image.Image:
+    """
+    Apply overlay configurations to the canvas.
+
+    Overlay configs come from two sources (both are applied, deduped):
+    1. The preset's linked overlay_config_id (legacy single-link)
+    2. Explicit overlay_config_ids passed in render options (multi-select)
+
+    Args:
+        canvas: The base poster image
+        preset_id: The preset ID (to look up overlay_config_id)
+        template_id: The template ID
+        metadata: Optional metadata dict with fields like video_resolution, audio_codec, labels, etc.
+        overlay_config_ids: Optional list of overlay config IDs to apply directly
+
+    Returns:
+        Canvas with overlays applied
+    """
+    from ..config import logger
+    from .. import overlay_engine
+
+    meta, ctx, selected = _prepare_overlays(preset_id, template_id, metadata, overlay_config_ids)
+    if ctx is None:
+        return canvas
+
+    # Convert to RGBA for overlay compositing
+    if canvas.mode != "RGBA":
+        canvas = canvas.convert("RGBA")
+
+    W, H = canvas.size
+
+    for element in selected:
+        try:
+            if element.get("placement") == "kometa":
+                canvas = overlay_engine.render_kometa_element(canvas, element, ctx)
+            else:
+                text = element.get("text")
+                if element.get("type") == "text_label" and isinstance(text, str) and "{" in text:
+                    # Fill {variables} like Kometa-placed text does; a missing value skips the layer.
+                    filled = overlay_engine.fill_text(text, ctx)
+                    if filled is None:
+                        continue
+                    element = {**element, "text": filled}
+                canvas = _apply_overlay_element(canvas, element, W, H, meta)
+        except Exception as elem_err:
+            logger.error(f"[OVERLAY] Failed to apply element {element.get('type')}: {elem_err}")
 
     return canvas
+
+
+# Metadata badge types (new + legacy aliases)
+_BADGE_DEFAULTS = {
+    "video_badge":              ("video_resolution", 40),
+    "audio_badge":              ("audio_codec", 30),
+    "edition_badge":            ("edition", 30),
+    "streaming_platform_badge": ("streaming_platform", 30),
+    "studio_badge":             ("studio", 30),
+    "resolution_badge":         ("video_resolution", 40),  # legacy alias
+    "codec_badge":              ("audio_codec", 30),       # legacy alias
+}
+
+
+def _element_label(element: Dict[str, Any]) -> str:
+    name = (element.get("name") or "").strip()
+    if name:
+        return name
+    return (element.get("type") or "element").replace("_", " ")
+
+
+def _element_value(element: Dict[str, Any], meta: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+    """The item-specific part of what an element draws (badge value, filled
+    text), so a change in it counts as an overlay change."""
+    from .. import overlay_engine
+    etype = element.get("type")
+    if etype in _BADGE_DEFAULTS:
+        field = element.get("metadata_field") or _BADGE_DEFAULTS[etype][0]
+        return str(meta.get(field) or "")
+    if etype == "label_badge":
+        return ",".join(sorted(str(l) for l in (meta.get("labels") or [])))
+    text = element.get("text")
+    if isinstance(text, str) and "{" in text:
+        return overlay_engine.fill_text(text, ctx) or ""
+    return ""
+
+
+def overlay_summary(options: Dict[str, Any], template_id: str) -> list:
+    """What the overlays would draw on this item right now: a list of
+    {bucket, label, value, design} (design = short hash of the element's own
+    settings, so editing an element also counts as a change). Uses the same
+    selection as the real render, below-logo bucket then above-logo."""
+    import hashlib
+    import json
+    metadata = dict(options.get("metadata") or {})
+    preset_id = options.get("preset_id")
+    ids = options.get("overlay_config_ids") or []
+    below = [c for c in (options.get("overlay_config_ids_below") or []) if c in ids]
+    above = [c for c in ids if c not in below]
+    out = []
+    for bucket, bucket_ids, bucket_preset in (("below", below, None), ("above", above, preset_id)):
+        if not bucket_ids and not bucket_preset:
+            continue
+        meta, ctx, selected = _prepare_overlays(bucket_preset, template_id, metadata, bucket_ids, log=False)
+        if ctx is None:
+            continue
+        for el in selected:
+            design = hashlib.sha1(json.dumps(el, sort_keys=True, default=str).encode()).hexdigest()[:12]
+            out.append({
+                "bucket": bucket,
+                "label": _element_label(el),
+                "value": _element_value(el, meta, ctx),
+                "design": design,
+            })
+    return out
+
+
+def overlay_signature(summary: list) -> str:
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(summary, sort_keys=True).encode()).hexdigest()
 
 
 def _get_text_anchor(element: Dict[str, Any]) -> str:
@@ -1205,17 +1333,6 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
     pos_y = element.get("position_y", 0.5)
     x = int(W * pos_x)
     y = int(H * pos_y)
-
-    # Metadata badge types (new + legacy aliases)
-    _BADGE_DEFAULTS = {
-        "video_badge":              ("video_resolution", 40),
-        "audio_badge":              ("audio_codec", 30),
-        "edition_badge":            ("edition", 30),
-        "streaming_platform_badge": ("streaming_platform", 30),
-        "studio_badge":             ("studio", 30),
-        "resolution_badge":         ("video_resolution", 40),  # legacy alias
-        "codec_badge":              ("audio_codec", 30),       # legacy alias
-    }
 
     if element_type in _BADGE_DEFAULTS:
         default_field, default_font_size = _BADGE_DEFAULTS[element_type]
@@ -1600,19 +1717,12 @@ def _apply_full_cover_image(canvas: Image.Image, element: Dict[str, Any]) -> Ima
     """Apply a full-bleed image overlay that stretches to the canvas's current
     size at this point in the pipeline — intentional, not a bug: behaves like
     _apply_custom_image, which is also canvas-size-relative."""
-    from .. import database as db
+    from .. import overlay_engine
 
-    asset_id = element.get("asset_id")
-    if not asset_id:
+    # An uploaded asset, else an image URL (Kometa overlays that use url:).
+    overlay_img = overlay_engine._load_element_image(element)
+    if overlay_img is None:
         return canvas
-    asset = db.get_overlay_asset(asset_id)
-    if not asset:
-        return canvas
-    asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
-    if not asset_path.exists():
-        return canvas
-
-    overlay_img = Image.open(asset_path).convert("RGBA")
     W, H = canvas.size
     overlay_img = overlay_img.resize((W, H), Image.LANCZOS)
     return Image.alpha_composite(canvas, overlay_img)

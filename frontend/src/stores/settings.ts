@@ -49,6 +49,14 @@ export type MediaMirrorConfig = {
   } | null
 }
 
+export type OverlayRefreshConfig = {
+  enabled?: boolean
+  scheduleCron?: string | null
+  plexLabel?: string
+  lastRunAt?: string | null
+  lastRunStats?: Record<string, number> | null
+}
+
 export type LibraryGroup = {
   id: string
   name: string
@@ -74,6 +82,7 @@ export type LibraryGroup = {
                                       // one or more other members. Saved independently of
                                       // this page's own store save cycle -- MediaMirrorView
                                       // POSTs it directly to /api/media-mirror/config.
+  overlayRefresh?: OverlayRefreshConfig | null  // saved by OverlayRefreshView only
 }
 
 export type PlexSettings = {
@@ -95,6 +104,13 @@ export type TMDBSettings = {
 export type TVDBSettings = {
   apiKey: string
   comingSoon?: boolean
+}
+
+export type MDBListSettings = {
+  apiKey: string
+  audienceRatingSource: string
+  criticRatingSource: string
+  cacheDays: number
 }
 
 export type FanartSettings = {
@@ -151,6 +167,7 @@ export type NotificationSettings = {
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
   discordNotifyMediaMirror?: boolean
+  discordNotifyOverlayRefresh?: boolean
   appriseEnabled: boolean
   appriseUrls: string[]
   appriseNotifyLibraries: string[]
@@ -159,6 +176,7 @@ export type NotificationSettings = {
   appriseNotifyWebhook: boolean
   appriseNotifyAutoGenerate: boolean
   appriseNotifyMediaMirror?: boolean
+  appriseNotifyOverlayRefresh?: boolean
 }
 
 export type UISettings = {
@@ -180,6 +198,7 @@ export type UISettings = {
   tmdb?: TMDBSettings
   tvdb?: TVDBSettings
   fanart?: FanartSettings
+  mdblist?: Partial<MDBListSettings>
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
   apiOrder?: string[]
@@ -222,6 +241,7 @@ const libraryGroups = ref<LibraryGroup[]>([])
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
+const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'imdb', criticRatingSource: 'tomatoes', cacheDays: 7 })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
@@ -243,6 +263,7 @@ const notifications = ref<NotificationSettings>({
   discordNotifyWebhook: true,
   discordNotifyAutoGenerate: true,
   discordNotifyMediaMirror: true,
+  discordNotifyOverlayRefresh: true,
   appriseEnabled: false,
   appriseUrls: [],
   appriseNotifyLibraries: [],
@@ -250,7 +271,8 @@ const notifications = ref<NotificationSettings>({
   appriseNotifyManual: true,
   appriseNotifyWebhook: true,
   appriseNotifyAutoGenerate: true,
-  appriseNotifyMediaMirror: true
+  appriseNotifyMediaMirror: true,
+  appriseNotifyOverlayRefresh: true
 })
 
 async function loadSettings() {
@@ -304,6 +326,12 @@ async function loadSettings() {
     tmdb.value = { apiKey: data.tmdb?.apiKey ?? '' }
     tvdb.value = { apiKey: data.tvdb?.apiKey ?? '', comingSoon: data.tvdb?.comingSoon ?? true }
     fanart.value = { apiKey: data.fanart?.apiKey ?? '' }
+    mdblist.value = {
+      apiKey: data.mdblist?.apiKey ?? '',
+      audienceRatingSource: data.mdblist?.audienceRatingSource ?? 'imdb',
+      criticRatingSource: data.mdblist?.criticRatingSource ?? 'tomatoes',
+      cacheDays: data.mdblist?.cacheDays ?? 7
+    }
     imageQuality.value = {
       outputFormat: data.imageQuality?.outputFormat ?? 'jpg',
       jpgQuality: data.imageQuality?.jpgQuality ?? 95,
@@ -351,6 +379,7 @@ async function loadSettings() {
       discordNotifyWebhook: data.notifications?.discordNotifyWebhook ?? true,
       discordNotifyAutoGenerate: data.notifications?.discordNotifyAutoGenerate ?? true,
       discordNotifyMediaMirror: data.notifications?.discordNotifyMediaMirror ?? true,
+      discordNotifyOverlayRefresh: data.notifications?.discordNotifyOverlayRefresh ?? true,
       appriseEnabled: data.notifications?.appriseEnabled ?? false,
       appriseUrls: data.notifications?.appriseUrls ?? [],
       appriseNotifyLibraries: data.notifications?.appriseNotifyLibraries ?? [],
@@ -358,7 +387,8 @@ async function loadSettings() {
       appriseNotifyManual: data.notifications?.appriseNotifyManual ?? true,
       appriseNotifyWebhook: data.notifications?.appriseNotifyWebhook ?? true,
       appriseNotifyAutoGenerate: data.notifications?.appriseNotifyAutoGenerate ?? true,
-      appriseNotifyMediaMirror: data.notifications?.appriseNotifyMediaMirror ?? true
+      appriseNotifyMediaMirror: data.notifications?.appriseNotifyMediaMirror ?? true,
+      appriseNotifyOverlayRefresh: data.notifications?.appriseNotifyOverlayRefresh ?? true
     }
 
   } catch (e: unknown) {
@@ -397,6 +427,7 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       tmdb: { ...tmdb.value },
       tvdb: { ...tvdb.value },
       fanart: { ...fanart.value },
+      mdblist: { ...mdblist.value },
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value },
       apiOrder: apiOrder.value,
@@ -440,6 +471,7 @@ export function useSettingsStore() {
     tmdb,
     tvdb,
     fanart,
+    mdblist,
     imageQuality,
     performance,
     apiOrder,

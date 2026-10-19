@@ -1,12 +1,24 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick, type Ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, toRaw, shallowRef, type Ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import OverlayRulesEditor from '@/components/overlay/OverlayRulesEditor.vue'
+import KometaPlacementEditor from '@/components/overlay/KometaPlacementEditor.vue'
+import KometaImportModal from '@/components/overlay/KometaImportModal.vue'
+import OverlayPositionEditor from '@/components/overlay/OverlayPositionEditor.vue'
+import OverlayBadgeSets from '@/components/overlay/OverlayBadgeSets.vue'
+import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels'
+import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
+import { useSettingsStore } from '@/stores/settings'
+import {
+  buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor,
+  KOMETA_W, KOMETA_H, referencedLists, checkCondition, type OverlayRuleFields, type OverlayCondition,
+} from '@/services/overlayEngine'
 
 const apiBase = getApiBase()
 
 // --- Types ---
 
-interface OverlayElement {
+interface OverlayElement extends OverlayRuleFields {
   type: string
   position_x: number
   position_y: number
@@ -39,6 +51,8 @@ interface OverlayConfig {
   id: string
   name: string
   elements: OverlayElement[]
+  /** Conditions for the whole overlay: when any fails, none of its layers draw. */
+  conditions?: OverlayCondition[]
   streaming_region?: string
   created_at?: string
   updated_at?: string
@@ -141,13 +155,13 @@ const hoveredElementIdx = ref<number | null>(null)
 
 // Preview canvas
 const previewCanvas = ref<HTMLCanvasElement | null>(null)
-const PREVIEW_W = 300
-const PREVIEW_H = 450
+const PREVIEW_W = 380
+const PREVIEW_H = 570
 const assetImageCache = ref<Record<string, HTMLImageElement>>({})
 const urlImageCache = ref<Record<string, HTMLImageElement>>({})
 
 // Drag state
-const dragEnabled = ref(false)
+const dragEnabled = ref(true)
 const draggingIdx = ref<number | null>(null)
 
 // Poster search state
@@ -183,6 +197,16 @@ const previewAudioLanguage = ref('en')
 const previewEdition = ref('theatrical')
 const previewStreamingPlatform = ref('netflix')
 const previewStudio = ref('a24')
+// Condition test values (overlay engine v2)
+const previewLabels = ref('')
+const previewFilePath = ref('')
+const previewRating = ref('8.0')
+const previewItemLabels = ref<string[]>([])
+const previewItemFilePaths = ref<string[]>([])
+const previewItemLists = ref<string[]>([])
+const previewCriticRating = ref('7.5')
+// Test mode: lists (by URL) the pretend item is on.
+const previewOnLists = ref<Set<string>>(new Set())
 
 const previewMetadataValues: Record<string, Ref<string>> = {
   video_resolution: previewResolution,
@@ -193,6 +217,14 @@ const previewMetadataValues: Record<string, Ref<string>> = {
   edition: previewEdition,
   streaming_platform: previewStreamingPlatform,
   studio: previewStudio,
+}
+
+// Kometa import
+const showKometaImport = ref(false)
+const onKometaImported = async (ids: string[]) => {
+  await Promise.all([loadConfigs(), loadAssets(), loadFonts()])
+  const first = configs.value.find(c => c.id === ids[0])
+  if (first) editConfig(first)
 }
 
 // Asset upload state
@@ -288,18 +320,53 @@ const loadMoviesForLibrary = async (lib: {key: string, title: string, type: stri
   }
 }
 
+// What the open overlay looked like when opened/saved, to warn before throwing edits away.
+let savedSnapshot = ''
+const snapshotOf = (c: OverlayConfig | null) => (c ? JSON.stringify(c) : '')
+const hasUnsavedChanges = () => !!selectedConfig.value && snapshotOf(selectedConfig.value) !== savedSnapshot
+const closeEditor = () => {
+  if (hasUnsavedChanges() && !confirm('You have unsaved changes to this overlay. Close without saving?')) return
+  showEditor.value = false
+}
+const onEditorKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && showEditor.value && !showMovieSearch.value && !showAssetUpload.value) closeEditor()
+}
+
 const createNewConfig = () => {
+  elementFilter.value = ''
+  expandedEls.value = new Set()
   selectedConfig.value = {
     id: `overlay-${Date.now()}`,
-    name: 'New Overlay Config',
+    name: 'New overlay',
     elements: [],
     streaming_region: 'US',
   }
+  savedSnapshot = snapshotOf(selectedConfig.value)
   showEditor.value = true
 }
 
+/** Old "Show/Hide if Label" fields become ordinary label conditions (same behaviour). */
+const migrateLegacyLabels = (els: OverlayElement[]) => {
+  for (const el of els) {
+    const conds = [...(el.conditions || [])]
+    if (el.show_if_label) conds.push({ field: 'label', op: 'eq', value: el.show_if_label })
+    if (el.hide_if_label) conds.push({ field: 'label', op: 'ne', value: el.hide_if_label })
+    if (conds.length !== (el.conditions?.length || 0)) el.conditions = conds
+    delete el.show_if_label
+    delete el.hide_if_label
+  }
+}
+
 const editConfig = (config: OverlayConfig) => {
+  leftTab.value = 'layers'
   selectedConfig.value = JSON.parse(JSON.stringify(config))
+  migrateLegacyLabels(selectedConfig.value?.elements || [])
+  elementFilter.value = ''
+  // Small configs open fully expanded; big (e.g. imported) ones start collapsed.
+  const els = selectedConfig.value?.elements || []
+  expandedEls.value = new Set(els.length <= 3 ? els.map(e => toRaw(e)) : [])
+  // Taken after the label migration: converting old fields alone isn't an edit worth a warning.
+  savedSnapshot = snapshotOf(selectedConfig.value)
   showEditor.value = true
 }
 
@@ -309,23 +376,25 @@ const saveConfig = async () => {
     const res = await fetch(`${apiBase}/api/overlay-configs/save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(selectedConfig.value)
+      // Always send conditions, so removing the last one clears them (null keeps the stored ones).
+      body: JSON.stringify({ ...selectedConfig.value, conditions: selectedConfig.value.conditions || [] })
     })
     if (res.ok) {
       await loadConfigs()
+      savedSnapshot = snapshotOf(selectedConfig.value)
       showEditor.value = false
       selectedConfig.value = null
     } else {
-      alert('Failed to save overlay config')
+      alert('Failed to save overlay')
     }
   } catch (e) {
     console.error('Failed to save overlay config:', e)
-    alert('Failed to save overlay config')
+    alert('Failed to save overlay')
   }
 }
 
 const deleteConfig = async (configId: string) => {
-  let message = 'Delete this overlay configuration?'
+  let message = 'Delete this overlay?'
   try {
     const usageRes = await fetch(`${apiBase}/api/overlay-configs/${configId}/usage`)
     if (usageRes.ok) {
@@ -344,11 +413,11 @@ const deleteConfig = async (configId: string) => {
     if (res.ok) {
       await loadConfigs()
     } else {
-      alert('Failed to delete overlay config')
+      alert('Failed to delete overlay')
     }
   } catch (e) {
     console.error('Failed to delete overlay config:', e)
-    alert('Failed to delete overlay config')
+    alert('Failed to delete overlay')
   }
 }
 
@@ -412,7 +481,7 @@ const rescanAssets = async () => {
 }
 
 const deleteAsset = async (assetId: string) => {
-  if (!confirm('Delete this overlay asset?')) return
+  if (!confirm('Delete this image?')) return
   try {
     const res = await fetch(`${apiBase}/api/overlay-assets/${assetId}`, { method: 'DELETE' })
     if (res.ok) {
@@ -493,6 +562,157 @@ const addElement = (type: string) => {
     position_y: 0.5,
     ...defaults
   })
+  showAddMenu.value = false
+  elementFilter.value = ''
+  const added = selectedConfig.value.elements[selectedConfig.value.elements.length - 1]
+  if (added) revealElement(added)
+}
+
+// --------------------------------------------------------------------------
+// Element list: collapsible cards, search, add menu, reorder
+// --------------------------------------------------------------------------
+
+const ADD_MENU = [
+  { title: 'Badges that change with each movie', items: [
+    { type: 'video_badge', label: 'Video', hint: 'Resolution or video codec' },
+    { type: 'audio_badge', label: 'Audio', hint: 'Codec, channels or language' },
+    { type: 'edition_badge', label: 'Edition', hint: "Director's Cut, IMAX..." },
+    { type: 'streaming_platform_badge', label: 'Streaming', hint: 'Where it streams (TMDb)' },
+    { type: 'studio_badge', label: 'Studio', hint: 'Studio or network logo' },
+  ] },
+  { title: 'Your own images and text', items: [
+    { type: 'custom_image', label: 'Image', hint: 'One of your images, or a link' },
+    { type: 'text_label', label: 'Text', hint: 'Any text, e.g. {audience_rating}' },
+    { type: 'full_cover_image', label: 'Full-poster image', hint: 'A frame or border over the whole poster' },
+  ] },
+]
+
+const showAddMenu = ref(false)
+const elementFilter = ref('')
+const expandedEls = shallowRef(new Set<object>())
+const elementIds = new WeakMap<object, number>()
+let nextElementId = 1
+const elementKey = (el: OverlayElement): number => {
+  const raw = toRaw(el)
+  let id = elementIds.get(raw)
+  if (!id) { id = nextElementId++; elementIds.set(raw, id) }
+  return id
+}
+const isExpanded = (el: OverlayElement) => expandedEls.value.has(toRaw(el))
+const toggleExpanded = (el: OverlayElement) => {
+  const next = new Set(expandedEls.value)
+  const raw = toRaw(el)
+  if (next.has(raw)) next.delete(raw)
+  else next.add(raw)
+  expandedEls.value = next
+}
+const setAllExpanded = (open: boolean) => {
+  const els = filteredElements.value.map(f => toRaw(f.element))
+  const next = new Set(expandedEls.value)
+  for (const raw of els) {
+    if (open) next.add(raw)
+    else next.delete(raw)
+  }
+  expandedEls.value = next
+}
+const revealElement = (el: OverlayElement) => {
+  const raw = toRaw(el)
+  if (!expandedEls.value.has(raw)) expandedEls.value = new Set([...expandedEls.value, raw])
+  nextTick(() => {
+    document.querySelector(`[data-el-key="${elementKey(el)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  })
+}
+
+type ElementTab = 'look' | 'position' | 'when'
+const elementTabs = ref<Record<number, ElementTab>>({})
+const tabOf = (el: OverlayElement): ElementTab => elementTabs.value[elementKey(el)] || 'look'
+const setTab = (el: OverlayElement, tab: ElementTab) => { elementTabs.value = { ...elementTabs.value, [elementKey(el)]: tab } }
+
+const filteredElements = computed(() => {
+  const els = selectedConfig.value?.elements || []
+  const q = elementFilter.value.trim().toLowerCase()
+  return els
+    .map((element, idx) => ({ element, idx }))
+    .filter(({ element }) => {
+      if (!q) return true
+      const hay = [element.name, elementTypeLabel(element.type), element.group, element.text, element.metadata_field]
+        .filter(Boolean).join(' ').toLowerCase()
+      return hay.includes(q)
+    })
+})
+
+// Shown top-down in layer order: the first card is drawn last, i.e. on top.
+const displayElements = computed(() => [...filteredElements.value].reverse())
+
+// Badge types and the media field each one shows by default.
+const BADGE_DEFAULT_FIELD: Record<string, string> = {
+  video_badge: 'video_resolution', resolution_badge: 'video_resolution',
+  audio_badge: 'audio_codec', codec_badge: 'audio_codec',
+  edition_badge: 'edition', streaming_platform_badge: 'streaming_platform', studio_badge: 'studio',
+}
+
+/** Problems that make a layer show nothing (or not what was meant). Shown as a warning on its card. */
+const layerWarnings = (el: OverlayElement): string[] => {
+  const out: string[] = []
+  if (BADGE_DEFAULT_FIELD[el.type]) {
+    const keys = [...new Set([...Object.keys(el.badge_modes || {}), '__other__'])]
+    const mode = (v: string) => getBadgeMode(el, v)
+    if (keys.every(v => mode(v) === 'none')) out.push('Set to show nothing for every value, so it never appears.')
+    const label = (v: string) => (v === '__other__' ? 'other values' : v.toUpperCase())
+    const noImage = keys.filter(v => mode(v) === 'image' && !(el.badge_assets?.[v] || (v !== '__other__' && el.badge_assets?.['__other__'])))
+    if (noImage.length) out.push(`No image picked for ${noImage.map(label).join(', ')}.`)
+    const noUrl = keys.filter(v => mode(v) === 'url' && !(el.badge_urls?.[v] || (v !== '__other__' && el.badge_urls?.['__other__'])))
+    if (noUrl.length) out.push(`No link entered for ${noUrl.map(label).join(', ')}.`)
+  }
+  if ((el.type === 'custom_image' || el.type === 'full_cover_image') && !el.asset_id && !el.url) out.push('No image picked yet.')
+  if (el.type === 'text_label' && !String(el.text || '').trim() && !el.box_only) out.push('No text entered yet.')
+  for (const c of el.conditions || []) {
+    const field = String(c.field || '')
+    if (!field) out.push('A "Show when" condition has no field picked.')
+    else if (field.startsWith('_')) out.push('A "Show when" condition came from Kometa and can never match, so this layer never shows.')
+    else if (!fieldDef(field)) out.push(`"Show when" uses "${field}", which Simposter doesn't know.`)
+    else if (!opDef(String(c.op || 'eq'))?.noValue) {
+      const vals = Array.isArray(c.value) ? c.value : [c.value]
+      if (!vals.some(v => v !== undefined && v !== null && String(v).trim() !== '')) out.push(`The "${fieldDef(field)?.label}" condition has no value.`)
+    }
+  }
+  const names = new Set((selectedConfig.value?.elements || []).map(e => e.name).filter(Boolean))
+  const missing = (el.suppress || []).filter(n => !names.has(n))
+  if (missing.length) out.push(`Hides ${missing.map(n => `"${n}"`).join(', ')}, which no layer is called anymore.`)
+  return out
+}
+
+/** What a layer's Look tab is for, shown at its top. */
+const TYPE_HELP: Record<string, string> = {
+  video_badge: 'Changes with each movie. Pick a field, then choose what to show for each value (an image, text, or nothing).',
+  resolution_badge: 'Changes with each movie. Choose what to show for each resolution.',
+  audio_badge: 'Changes with each movie. Pick a field, then choose what to show for each value (an image, text, or nothing).',
+  codec_badge: 'Changes with each movie. Choose what to show for each audio codec.',
+  edition_badge: "Shows the movie's edition (Plex only), e.g. Director's Cut or IMAX.",
+  streaming_platform_badge: 'Shows where the movie streams, looked up on TMDb for the region at the top.',
+  studio_badge: 'Shows the studio or TV network logo.',
+  custom_image: 'Always the same image. Use "Show when" to put it only on some posters.',
+  text_label: 'Any text. Words in {curly braces} are filled in per movie, e.g. {audience_rating}.',
+  full_cover_image: 'Stretched over the whole poster, e.g. a frame or border. Use a PNG with a see-through middle.',
+}
+
+const moveElement = (idx: number, dir: -1 | 1) => {
+  const els = selectedConfig.value?.elements
+  const to = idx + dir
+  if (!els || to < 0 || to >= els.length) return
+  const [el] = els.splice(idx, 1)
+  if (el) els.splice(to, 0, el)
+}
+
+const duplicateElement = (idx: number) => {
+  const els = selectedConfig.value?.elements
+  const el = els?.[idx]
+  if (!els || !el) return
+  const copy: OverlayElement = JSON.parse(JSON.stringify(el))
+  if (copy.name) copy.name = `${copy.name} copy`
+  els.splice(idx + 1, 0, copy)
+  const added = els[idx + 1]
+  if (added) revealElement(added)
 }
 
 const removeElement = (index: number) => {
@@ -507,9 +727,9 @@ const elementTypeLabel = (type: string): string => {
     edition_badge: 'Edition Badge',
     streaming_platform_badge: 'Streaming Badge',
     studio_badge: 'Studio Badge',
-    custom_image: 'Custom Image',
-    full_cover_image: 'Full Cover',
-    text_label: 'Text Label',
+    custom_image: 'Image',
+    full_cover_image: 'Full-poster image',
+    text_label: 'Text',
     // Legacy types
     resolution_badge: 'Resolution Badge',
     codec_badge: 'Codec Badge',
@@ -710,25 +930,75 @@ const selectLibrary = async (lib: {key: string, title: string, type: string}) =>
   await loadMoviesForLibrary(lib)
 }
 
-const fetchItemMetadata = async (ratingKey: string) => {
+interface ItemData { metadata: Record<string, string>; labels: string[]; file_paths: string[]; lists: string[] }
+
+// Rating fields (MDBList), for conditions and {text} values.
+const RATING_KEYS = new Set([
+  ...FIELDS.filter(f => f.group === 'Ratings').map(f => f.value),
+  ...TEXT_VARIABLES.filter(v => v.group === 'Ratings').map(v => v.key),
+])
+const TEXT_VAR_RE = /\{([A-Za-z0-9_.]+)\}/g
+const textKeys = (el: OverlayElement): string[] => [...String(el.text || '').matchAll(TEXT_VAR_RE)].map(m => m[1] as string)
+
+/** What the current layers (saved or not) need from a real item, sent with the metadata request. */
+const itemNeeds = computed(() => {
+  const els = selectedConfig.value?.elements || []
+  const ratings = els.some(el =>
+    textKeys(el).some(k => RATING_KEYS.has(k)) || (el.conditions || []).some(c => RATING_KEYS.has(String(c.field || '').toLowerCase())))
+    || (selectedConfig.value?.conditions || []).some(c => RATING_KEYS.has(String(c.field || '').toLowerCase()))
+  const types = [...new Set(els.map(e => e.type).filter(t => t === 'streaming_platform_badge' || t === 'studio_badge'))].sort()
+  return { ratings, lists: configLists.value, types }
+})
+const itemNeedsKey = computed(() => JSON.stringify(itemNeeds.value))
+
+const loadItemData = async (ratingKey: string, mediaType: string): Promise<ItemData | null> => {
   try {
     const params = new URLSearchParams({ rating_key: ratingKey })
     if (selectedConfig.value?.id) params.set('config_id', selectedConfig.value.id)
-    params.set('media_type', previewSelectedLibrary.value?.type === 'show' ? 'tv' : 'movie')
+    params.set('media_type', mediaType)
+    const needs = itemNeeds.value
+    if (needs.ratings) params.set('ratings', 'true')
+    if (needs.lists.length) params.set('lists', needs.lists.join(','))
+    if (needs.types.length) params.set('badge_types', needs.types.join(','))
     const res = await fetch(`${apiBase}/api/overlay-preview-metadata?${params}`)
-    if (res.ok) {
-      const data = await res.json()
-      previewItemMetadata.value = data.metadata || {}
-    }
+    if (!res.ok) return null
+    const data = await res.json()
+    return { metadata: data.metadata || {}, labels: data.labels || [], file_paths: data.file_paths || [], lists: data.lists || [] }
   } catch (e) {
     console.error('Failed to fetch item metadata:', e)
+    return null
   }
+}
+
+const loadPosterImage = (key: string) => new Promise<HTMLImageElement | null>(resolve => {
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  img.onload = () => resolve(img)
+  img.onerror = () => resolve(null)
+  img.src = `${apiBase}/api/movie/${key}/poster?raw=1`
+})
+
+const fetchItemMetadata = async (ratingKey: string) => {
+  const d = await loadItemData(ratingKey, previewSelectedLibrary.value?.type === 'show' ? 'tv' : 'movie')
+  if (!d) return
+  previewItemMetadata.value = d.metadata
+  previewItemLabels.value = d.labels
+  previewItemFilePaths.value = d.file_paths
+  previewItemLists.value = d.lists
 }
 
 const selectMovie = async (movie: SimpleMovie) => {
   showMovieSearch.value = false
+  if (pickForCompare) {
+    pickForCompare = false
+    await addCompareItem(movie)
+    return
+  }
   selectedMovie.value = movie
   previewItemMetadata.value = {}
+  previewItemLabels.value = []
+  previewItemFilePaths.value = []
+  previewItemLists.value = []
   posterLoading.value = true
   try {
     const url = `${apiBase}/api/movie/${movie.key}/poster?raw=1`
@@ -746,7 +1016,10 @@ const selectMovie = async (movie: SimpleMovie) => {
   } finally {
     posterLoading.value = false
   }
-  if (previewMode.value === 'item') {
+  if (switchToItemAfterPick) {
+    switchToItemAfterPick = false
+    previewMode.value = 'item'
+  } else if (previewMode.value === 'item') {
     await fetchItemMetadata(movie.key)
   }
   renderPreview()
@@ -754,17 +1027,114 @@ const selectMovie = async (movie: SimpleMovie) => {
 
 const clearPoster = () => {
   selectedMovie.value = null
+  previewMode.value = 'testing'
   posterBgImage.value = null
   previewItemMetadata.value = {}
+  previewItemLabels.value = []
+  previewItemFilePaths.value = []
+  previewItemLists.value = []
   nextTick(renderPreview)
 }
 
+// Item mode uses only the picked item's real values (an empty value stays empty,
+// it must not fall back to the Test-mode inputs).
+const isItemMode = computed(() => previewMode.value === 'item' && !!selectedMovie.value)
+
+// One preview canvas: what to draw on, and the values its layers are checked against.
+type PreviewCtx = ReturnType<typeof buildContext>
+interface Scene {
+  key: string
+  canvas: HTMLCanvasElement
+  bg: HTMLImageElement | null
+  value: (field: string) => string
+  ctx: PreviewCtx
+  meta: Record<string, string>
+  visible: Set<number>
+  /** Only the main preview shows hover outlines and can be dragged on. */
+  interactive: boolean
+}
+const sceneVers: Record<string, number> = {}
+const isStale = (scene: Scene, ver: number) => sceneVers[scene.key] !== ver
+
 const getPreviewValue = (field: string): string => {
-  if (previewMode.value === 'item' && previewItemMetadata.value[field]) {
-    return previewItemMetadata.value[field]
-  }
+  if (isItemMode.value) return previewItemMetadata.value[field] || ''
   return previewMetadataValues[field]?.value || ''
 }
+
+// Elements whose rules hide them for the current values are left out of the
+// preview, unless this is on (then they're drawn faintly so they can be edited).
+const showHiddenInPreview = ref(false)
+try { showHiddenInPreview.value = localStorage.getItem('simposter-overlay-show-hidden') === '1' } catch { /* ignore */ }
+watch(showHiddenInPreview, v => {
+  try { localStorage.setItem('simposter-overlay-show-hidden', v ? '1' : '0') } catch { /* ignore */ }
+  nextTick(renderPreview)
+})
+
+/** Context from a real item's data. */
+const itemContext = (d: ItemData, mediaType: string, title?: string) => buildContext({
+  ...d.metadata, media_type: mediaType, labels: d.labels, file_paths: d.file_paths, lists: d.lists,
+  ...(title ? { movie_title: title } : {}),
+})
+
+/** Context from the example values, with some fields swapped (used by compare tiles). */
+const exampleContext = (overrides: Record<string, string> = {}, title?: string) => {
+  const meta: Record<string, unknown> = {}
+  for (const field of Object.keys(previewMetadataValues)) meta[field] = overrides[field] ?? previewMetadataValues[field]?.value ?? ''
+  meta.labels = previewLabels.value.split(',').map(s => s.trim()).filter(Boolean)
+  meta.file_paths = previewFilePath.value.trim() ? [previewFilePath.value.trim()] : []
+  if (String(previewRating.value).trim() !== '') meta.audience_rating = Number(previewRating.value)
+  if (String(previewCriticRating.value).trim() !== '') meta.critic_rating = Number(previewCriticRating.value)
+  meta.lists = [...previewOnLists.value]
+  if (title) meta.movie_title = title
+  // Ratings without a test box (IMDb, Rotten Tomatoes, ...) use the list's example values.
+  for (const v of TEXT_VARIABLES) {
+    if (v.group === 'Ratings' && meta[v.key] === undefined) meta[v.key] = Number(v.example)
+  }
+  return buildContext(meta)
+}
+
+// Data the preview evaluates element conditions against (same rules as the backend).
+const previewContext = computed(() => {
+  if (isItemMode.value) {
+    const meta: Record<string, string> = {}
+    for (const field of Object.keys(previewMetadataValues)) meta[field] = getPreviewValue(field)
+    return itemContext(
+      { metadata: { ...meta, ...previewItemMetadata.value }, labels: previewItemLabels.value, file_paths: previewItemFilePaths.value, lists: previewItemLists.value },
+      previewSelectedLibrary.value?.type === 'show' ? 'tv' : 'movie',
+      selectedMovie.value?.title,
+    )
+  }
+  return exampleContext({}, selectedMovie.value?.title)
+})
+
+const configLists = computed(() => selectedConfig.value
+  ? referencedLists([...selectedConfig.value.elements, { conditions: selectedConfig.value.conditions || [] }])
+  : [])
+const togglePreviewList = (url: string) => {
+  const next = new Set(previewOnLists.value)
+  if (next.has(url)) next.delete(url)
+  else next.add(url)
+  previewOnLists.value = next
+}
+const listShortName = (url: string) => url.replace('https://mdblist.com/lists/', '')
+
+/** Do the overlay's own conditions match this preview? */
+const overlayPasses = (ctx: PreviewCtx) => (selectedConfig.value?.conditions || []).every(c => checkCondition(c, ctx))
+/** Layers drawn for a preview: none when the overlay's own conditions fail. */
+const selectVisible = (ctx: PreviewCtx) =>
+  selectedConfig.value && overlayPasses(ctx) ? selectElementIndices(selectedConfig.value.elements, ctx) : new Set<number>()
+const visibleElements = computed(() => selectVisible(previewContext.value))
+const overlayMatchesPreview = computed(() => overlayPasses(previewContext.value))
+
+const hasAnyRules = computed(() =>
+  (selectedConfig.value?.elements || []).some(e => e.conditions?.length || e.group || e.suppress?.length || e.placement === 'kometa')
+)
+
+// Preview-space boxes of Kometa-placed elements (for hit testing and dragging).
+const kometaBoxes = new Map<number, { x: number; y: number; w: number; h: number }>()
+const isKometaPlaced = (el: OverlayElement) =>
+  el.placement === 'kometa' && (el.type === 'text_label' || el.type === 'custom_image')
+let dragGrab = { dx: 0, dy: 0 }
 
 // --- Canvas drag ---
 
@@ -780,16 +1150,47 @@ const getCanvasMousePos = (e: MouseEvent): { x: number; y: number } | null => {
 
 const hitTestElement = (normX: number, normY: number): number | null => {
   if (!selectedConfig.value) return null
+  const px = normX * PREVIEW_W, py = normY * PREVIEW_H
+  for (let i = selectedConfig.value.elements.length - 1; i >= 0; i--) {
+    const b = kometaBoxes.get(i)
+    if (b && px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) return i
+  }
   const hitRadius = 25 / PREVIEW_W // ~25px radius in canvas space
   // Iterate in reverse so topmost element (last drawn) is hit first
   for (let i = selectedConfig.value.elements.length - 1; i >= 0; i--) {
     const el = selectedConfig.value.elements[i]
-    if (!el) continue
+    if (!el || isKometaPlaced(el)) continue
     const dx = normX - el.position_x
     const dy = normY - el.position_y
     if (Math.sqrt(dx * dx + dy * dy) < hitRadius) return i
   }
   return null
+}
+
+const startDrag = (idx: number, pos: { x: number; y: number }) => {
+  draggingIdx.value = idx
+  hoveredElementIdx.value = idx
+  const grabbed = selectedConfig.value?.elements[idx]
+  if (grabbed) { setTab(grabbed, 'position'); revealElement(grabbed) }
+  const b = kometaBoxes.get(idx)
+  dragGrab = b ? { dx: pos.x * PREVIEW_W - b.x, dy: pos.y * PREVIEW_H - b.y } : { dx: 0, dy: 0 }
+}
+
+const moveDragged = (pos: { x: number; y: number }) => {
+  if (draggingIdx.value === null || !selectedConfig.value) return
+  const el = selectedConfig.value.elements[draggingIdx.value]
+  if (!el) return
+  const b = kometaBoxes.get(draggingIdx.value)
+  if (isKometaPlaced(el) && b) {
+    const nx = pos.x * PREVIEW_W - dragGrab.dx
+    const ny = pos.y * PREVIEW_H - dragGrab.dy
+    const o = offsetsFromBox(el, PREVIEW_W, PREVIEW_H, b.w, b.h, nx, ny)
+    el.horizontal_offset = o.horizontal_offset
+    el.vertical_offset = o.vertical_offset
+    return
+  }
+  el.position_x = Math.round(Math.max(0, Math.min(1, pos.x)) * 1000) / 1000
+  el.position_y = Math.round(Math.max(0, Math.min(1, pos.y)) * 1000) / 1000
 }
 
 const onCanvasMouseDown = (e: MouseEvent) => {
@@ -798,8 +1199,7 @@ const onCanvasMouseDown = (e: MouseEvent) => {
   if (!pos) return
   const idx = hitTestElement(pos.x, pos.y)
   if (idx !== null) {
-    draggingIdx.value = idx
-    hoveredElementIdx.value = idx
+    startDrag(idx, pos)
     e.preventDefault()
   }
 }
@@ -811,11 +1211,7 @@ const onCanvasMouseMove = (e: MouseEvent) => {
   if (!pos) return
 
   if (draggingIdx.value !== null) {
-    const el = selectedConfig.value.elements[draggingIdx.value]
-    if (el) {
-      el.position_x = Math.round(Math.max(0, Math.min(1, pos.x)) * 1000) / 1000
-      el.position_y = Math.round(Math.max(0, Math.min(1, pos.y)) * 1000) / 1000
-    }
+    moveDragged(pos)
     e.preventDefault()
   } else {
     // Hover feedback
@@ -824,9 +1220,12 @@ const onCanvasMouseMove = (e: MouseEvent) => {
   }
 }
 
-const onCanvasMouseUp = () => {
+const endDrag = () => {
+  if (draggingIdx.value === null) return
   draggingIdx.value = null
+  nextTick(renderPreview)
 }
+const onCanvasMouseUp = () => endDrag()
 
 // Touch support
 const getTouchPos = (e: TouchEvent): { x: number; y: number } | null => {
@@ -847,8 +1246,7 @@ const onCanvasTouchStart = (e: TouchEvent) => {
   if (!pos) return
   const idx = hitTestElement(pos.x, pos.y)
   if (idx !== null) {
-    draggingIdx.value = idx
-    hoveredElementIdx.value = idx
+    startDrag(idx, pos)
     e.preventDefault()
   }
 }
@@ -857,17 +1255,11 @@ const onCanvasTouchMove = (e: TouchEvent) => {
   if (!dragEnabled.value || draggingIdx.value === null || !selectedConfig.value) return
   const pos = getTouchPos(e)
   if (!pos) return
-  const el = selectedConfig.value.elements[draggingIdx.value]
-  if (el) {
-    el.position_x = Math.round(Math.max(0, Math.min(1, pos.x)) * 1000) / 1000
-    el.position_y = Math.round(Math.max(0, Math.min(1, pos.y)) * 1000) / 1000
-  }
+  moveDragged(pos)
   e.preventDefault()
 }
 
-const onCanvasTouchEnd = () => {
-  draggingIdx.value = null
-}
+const onCanvasTouchEnd = () => endDrag()
 
 // --- Preview canvas rendering ---
 
@@ -939,15 +1331,30 @@ const prefetchBadgeUrl = (url: string) => {
     .catch(() => {})
 }
 
-// Render version counter — incremented on every renderPreview call.
-// Async renders check this before drawing after each image-load await.
-// If a newer render has started, the stale render aborts instead of overwriting.
-let _renderVer = 0
-
-const renderPreview = async () => {
-  const ver = ++_renderVer
+// Each canvas has its own render version (sceneVers): async renders check it after
+// every image-load await, and a stale render aborts instead of overwriting a newer one.
+const renderPreview = () => {
+  if (!selectedConfig.value) return
   const canvas = previewCanvas.value
-  if (!canvas || !selectedConfig.value) return
+  if (canvas) {
+    renderScene({
+      key: 'main', canvas, bg: posterBgImage.value, value: getPreviewValue, ctx: previewContext.value,
+      meta: previewItemMetadata.value, visible: visibleElements.value, interactive: true,
+    })
+  }
+  // Compare posters aren't redrawn on every drag move, only when the drag ends.
+  if (showCompare.value && draggingIdx.value === null) {
+    for (const tile of compareTiles.value) {
+      const c = compareCanvases.get(tile.id)
+      if (c) renderScene(tileScene(tile, c))
+    }
+  }
+}
+
+const renderScene = async (scene: Scene) => {
+  const ver = (sceneVers[scene.key] = (sceneVers[scene.key] || 0) + 1)
+  const canvas = scene.canvas
+  if (!selectedConfig.value) return
 
   const ctx = canvas.getContext('2d')
   if (!ctx) return
@@ -958,8 +1365,8 @@ const renderPreview = async () => {
   ctx.scale(dpr, dpr)
 
   // Background: poster image or gradient
-  if (posterBgImage.value) {
-    const img = posterBgImage.value
+  if (scene.bg) {
+    const img = scene.bg
     // Cover-fill the canvas maintaining aspect ratio
     const imgAspect = img.width / img.height
     const canvasAspect = PREVIEW_W / PREVIEW_H
@@ -987,7 +1394,7 @@ const renderPreview = async () => {
   ctx.strokeRect(0.5, 0.5, PREVIEW_W - 1, PREVIEW_H - 1)
 
   // Grid guides (only without poster bg)
-  if (!posterBgImage.value) {
+  if (!scene.bg) {
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)'
     ctx.setLineDash([4, 4])
     ctx.beginPath()
@@ -1009,17 +1416,135 @@ const renderPreview = async () => {
     }
   }
 
-  // Render each element
+  // Render each element. Elements whose rules hide them for this item are drawn
+  // faint so they can still be found and edited.
+  if (scene.interactive) kometaBoxes.clear()
+  const visible = scene.visible
   for (let idx = 0; idx < selectedConfig.value.elements.length; idx++) {
-    if (_renderVer !== ver) return  // A newer render has started; abort this stale one
+    if (isStale(scene, ver)) return  // A newer render has started; abort this stale one
     const el = selectedConfig.value.elements[idx]
     if (!el) continue
     const x = el.position_x * PREVIEW_W
     const y = el.position_y * PREVIEW_H
-    const isHovered = hoveredElementIdx.value === idx || draggingIdx.value === idx
+    const isHovered = scene.interactive && (hoveredElementIdx.value === idx || draggingIdx.value === idx)
 
-    await renderPreviewElement(ctx, el, x, y, idx, isHovered, ver)
+    ctx.save()
+    if (!visible.has(idx)) {
+      // Compare tiles always leave skipped layers out: they show the real result.
+      if (!scene.interactive || (!showHiddenInPreview.value && !isHovered)) { ctx.restore(); continue }
+      ctx.globalAlpha = isHovered ? 0.5 : 0.2
+    }
+    // Layer numbers are only drawn on the main preview (-1 = don't draw).
+    const drawIdx = scene.interactive ? idx : -1
+    if (isKometaPlaced(el)) await renderKometaPreview(ctx, el, drawIdx, isHovered, ver, scene)
+    else await renderPreviewElement(ctx, el, x, y, drawIdx, isHovered, ver, scene)
+    ctx.restore()
   }
+}
+
+// Kometa-placed element: same layout math as backend/overlay_engine.py, scaled
+// from Kometa's 1000x1500 space to the preview canvas.
+const renderKometaPreview = async (
+  ctx: CanvasRenderingContext2D, el: OverlayElement, idx: number, isHovered: boolean, ver: number, scene: Scene
+) => {
+  const s = Math.min(PREVIEW_W / KOMETA_W, PREVIEW_H / KOMETA_H)
+  let cw = 0, ch = 0
+  let drawContent: ((cx: number, cy: number) => void) | null = null
+
+  if (el.box_only) {
+    // Kometa "backdrop": only the box; a missing size fills the canvas.
+    cw = 0
+    ch = 0
+  } else if (el.type === 'text_label') {
+    const filled = fillText(el.text || '', scene.ctx)
+    const text = filled ?? (el.text || 'Text')
+    const size = Math.max(4, (el.font_size || 40) * s)
+    const stroke = (el.stroke_width || 0) * s
+    const font = `${size}px "${el.font_family || 'Arial'}", sans-serif`
+    ctx.font = font
+    const m = ctx.measureText(text)
+    const asc = m.actualBoundingBoxAscent || size * 0.8
+    const desc = m.actualBoundingBoxDescent || size * 0.2
+    cw = m.width + stroke * 2
+    ch = asc + desc + stroke * 2
+    const missing = filled === null
+    drawContent = (cx, cy) => {
+      ctx.font = font
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'alphabetic'
+      const tx = cx + stroke, ty = cy + stroke + asc
+      if (missing) ctx.globalAlpha *= 0.5
+      if (stroke > 0) {
+        ctx.lineJoin = 'round'
+        ctx.lineWidth = stroke * 2
+        ctx.strokeStyle = cssColor(el.stroke_color, '#000000')
+        ctx.strokeText(text, tx, ty)
+      }
+      ctx.fillStyle = cssColor(el.font_color, '#FFFFFF')
+      ctx.fillText(text, tx, ty)
+    }
+  } else {
+    let img: HTMLImageElement | null = null
+    try {
+      if (el.asset_id) img = await loadAssetImage(el.asset_id)
+      else if (el.url) img = await loadUrlImage(el.url)
+    } catch { img = null }
+    if (isStale(scene, ver)) return
+    const mult = (el.scale || 1) * s
+    if (img) {
+      const im = img
+      cw = im.width * mult
+      ch = im.height * mult
+      drawContent = (cx, cy) => ctx.drawImage(im, cx, cy, cw, ch)
+    } else {
+      cw = 120 * s
+      ch = 60 * s
+      drawContent = (cx, cy) => {
+        ctx.strokeStyle = '#34d399'
+        ctx.setLineDash([3, 3])
+        ctx.strokeRect(cx, cy, cw, ch)
+        ctx.setLineDash([])
+      }
+    }
+  }
+
+  const pad = (el.back_padding || 0) * s
+  const bw = el.back_width ? el.back_width * s : el.box_only ? PREVIEW_W : cw + pad * 2
+  const bh = el.back_height ? el.back_height * s : el.box_only ? PREVIEW_H : ch + pad * 2
+  const { x, y } = placeBox(el, PREVIEW_W, PREVIEW_H, bw, bh)
+  if (scene.interactive) kometaBoxes.set(idx, { x, y, w: bw, h: bh })
+
+  const lineW = (el.back_line_width || 0) * s
+  if (el.back_color || (lineW && el.back_line_color)) {
+    const r = (el.back_radius || 0) * s
+    ctx.beginPath()
+    ctx.roundRect(x, y, bw, bh, r)
+    if (el.back_color) {
+      ctx.fillStyle = cssColor(el.back_color, 'transparent')
+      ctx.fill()
+    }
+    if (lineW) {
+      ctx.lineWidth = lineW
+      ctx.strokeStyle = cssColor(el.back_line_color, '#FFFFFF')
+      ctx.stroke()
+    }
+  }
+
+  const align = (el.back_align || 'center').toLowerCase()
+  let cx = x + (bw - cw) / 2
+  let cy = y + (bh - ch) / 2
+  if (align.includes('left')) cx = x + pad
+  else if (align.includes('right')) cx = x + bw - pad - cw
+  if (align.includes('top')) cy = y + pad
+  else if (align.includes('bottom')) cy = y + bh - pad - ch
+  drawContent?.(cx, cy)
+
+  if (isHovered) {
+    ctx.strokeStyle = '#fbbf24'
+    ctx.lineWidth = 1.5
+    ctx.strokeRect(x - 1, y - 1, bw + 2, bh + 2)
+  }
+  drawElementIndex(ctx, x, y, idx)
 }
 
 const renderPreviewElement = async (
@@ -1029,7 +1554,8 @@ const renderPreviewElement = async (
   y: number,
   idx: number,
   isHovered: boolean,
-  ver: number = 0
+  ver: number,
+  scene: Scene,
 ) => {
   const scale = PREVIEW_W / 2000
 
@@ -1047,7 +1573,7 @@ const renderPreviewElement = async (
   const cfg = badgeConfig[el.type]
   if (cfg) {
     const metaField = el.metadata_field || cfg.defaultField
-    const value = getPreviewValue(metaField) || (previewMetadataValues[metaField]?.value ?? '')
+    const value = scene.value(metaField)
     const mode = el.badge_modes?.[value] ?? el.badge_modes?.['__other__'] ?? 'text'
 
     if (mode === 'none') {
@@ -1064,7 +1590,7 @@ const renderPreviewElement = async (
       if (assetId) {
         try {
           const img = await loadAssetImage(assetId)
-          if (_renderVer !== ver) return  // stale render — a newer one has started
+          if (isStale(scene, ver)) return  // stale render — a newer one has started
           // Apply per-value scale/anchor overrides for badge types
           const effectiveEl = {
             ...el,
@@ -1081,7 +1607,7 @@ const renderPreviewElement = async (
       if (url) {
         try {
           const img = await loadUrlImage(url)
-          if (_renderVer !== ver) return  // stale render
+          if (isStale(scene, ver)) return  // stale render
           const effectiveEl = {
             ...el,
             scale: el.badge_scales?.[value] ?? el.badge_scales?.['__other__'] ?? el.scale,
@@ -1105,11 +1631,11 @@ const renderPreviewElement = async (
           let assetUrl = `${apiBase}/api/asset-image?slug=${encodeURIComponent(resolvedSlug)}`
           // Pass TMDb company_id for studio_badge so ID-based lookup takes priority
           if (el.type === 'studio_badge') {
-            const cid = previewItemMetadata.value['studio_company_id']
+            const cid = scene.meta['studio_company_id']
             if (cid) assetUrl += `&company_id=${encodeURIComponent(cid)}`
           }
           const img = await loadDirectImage(assetUrl)
-          if (_renderVer !== ver) return  // stale render
+          if (isStale(scene, ver)) return  // stale render
           const effectiveEl = {
             ...el,
             scale: el.badge_scales?.[value] ?? el.badge_scales?.['__other__'] ?? el.scale,
@@ -1133,7 +1659,7 @@ const renderPreviewElement = async (
     if (el.asset_id) {
       try {
         const img = await loadAssetImage(el.asset_id)
-        if (_renderVer !== ver) return  // stale render
+        if (isStale(scene, ver)) return  // stale render
         drawAssetOnCanvas(ctx, img, el, x, y, scale, idx, isHovered, '#34d399')
         return
       } catch { /* fallback */ }
@@ -1142,10 +1668,10 @@ const renderPreviewElement = async (
       drawBadge(ctx, x, y, 'IMG', 9, '#34d399', 'rgba(52, 211, 153, 0.15)', idx, isHovered)
     }
   } else if (el.type === 'full_cover_image') {
-    if (el.asset_id) {
+    if (el.asset_id || el.url) {
       try {
-        const img = await loadAssetImage(el.asset_id)
-        if (_renderVer !== ver) return  // stale render
+        const img = el.asset_id ? await loadAssetImage(el.asset_id) : await loadUrlImage(el.url as string)
+        if (isStale(scene, ver)) return  // stale render
         ctx.drawImage(img, 0, 0, PREVIEW_W, PREVIEW_H)
         if (isHovered) {
           ctx.strokeStyle = '#22d3ee'
@@ -1160,7 +1686,14 @@ const renderPreviewElement = async (
       drawBadge(ctx, PREVIEW_W / 2, PREVIEW_H / 2, 'FULL COVER', 9, '#22d3ee', 'rgba(34, 211, 238, 0.15)', idx, isHovered)
     }
   } else if (el.type === 'text_label') {
-    const text = el.text || 'Text'
+    // Same as the real render: {variables} filled in; a missing value skips the layer
+    // (drawn faint with the raw text so it can still be found and moved).
+    const filled = fillText(el.text || '', scene.ctx)
+    if (filled === null) {
+      if (!scene.interactive) return
+      ctx.globalAlpha *= 0.4
+    }
+    const text = filled || el.text || 'Text'
     const fontSize = Math.max(4, Math.round((el.font_size || 40) * scale))
     const color = el.font_color || '#FFFFFF'
     const align = (el.text_align || 'center') as CanvasTextAlign
@@ -1210,37 +1743,30 @@ const drawAssetOnCanvas = (
     drawH *= el.scale
   }
 
-  // Apply percentage-based width/height (relative to canvas)
-  if (el.width && el.width > 0) {
-    const targetW = PREVIEW_W * el.width
-    const r = targetW / drawW
-    drawW = targetW
-    drawH *= r
+  // Width/height and max-size limits only apply to image layers, as in the real render
+  // (backend/templates/universal.py: badges are drawn at their own size x scale, uncapped).
+  if (el.type === 'custom_image') {
+    if (el.width && el.width > 0) {
+      const targetW = PREVIEW_W * el.width
+      const r = targetW / drawW
+      drawW = targetW
+      drawH *= r
+    }
+    if (el.height && el.height > 0) {
+      const targetH = PREVIEW_H * el.height
+      const r = targetH / drawH
+      drawH = targetH
+      drawW *= r
+    }
+    if (el.max_width) {
+      const maxW = el.max_width * scale
+      if (drawW > maxW) { drawH *= maxW / drawW; drawW = maxW }
+    }
+    if (el.max_height) {
+      const maxH = el.max_height * scale
+      if (drawH > maxH) { drawW *= maxH / drawH; drawH = maxH }
+    }
   }
-  if (el.height && el.height > 0) {
-    const targetH = PREVIEW_H * el.height
-    const r = targetH / drawH
-    drawH = targetH
-    drawW *= r
-  }
-
-  // Apply max pixel constraints (scaled to preview)
-  if (el.max_width) {
-    const maxW = el.max_width * scale
-    if (drawW > maxW) { drawH *= maxW / drawW; drawW = maxW }
-  }
-  if (el.max_height) {
-    const maxH = el.max_height * scale
-    if (drawH > maxH) { drawW *= maxH / drawH; drawH = maxH }
-  }
-
-  const maxDim = PREVIEW_W * 0.5
-  if (drawW > maxDim || drawH > maxDim) {
-    const r = maxDim / Math.max(drawW, drawH)
-    drawW *= r; drawH *= r
-  }
-  drawW = Math.max(drawW, 16)
-  drawH = Math.max(drawH, 16)
 
   // Apply anchor point
   const anchor = el.anchor || 'center'
@@ -1298,6 +1824,7 @@ const drawBadge = (
 }
 
 const drawElementIndex = (ctx: CanvasRenderingContext2D, x: number, y: number, idx: number) => {
+  if (idx < 0) return
   ctx.font = 'bold 7px sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
@@ -1307,7 +1834,8 @@ const drawElementIndex = (ctx: CanvasRenderingContext2D, x: number, y: number, i
   ctx.arc(lx, ly, 6, 0, Math.PI * 2)
   ctx.fill()
   ctx.fillStyle = '#fff'
-  ctx.fillText(`${idx + 1}`, lx, ly)
+  // Same number as the layer list (1 = top).
+  ctx.fillText(`${(selectedConfig.value?.elements.length || 0) - idx}`, lx, ly)
 }
 
 // --- Watchers ---
@@ -1336,8 +1864,201 @@ watch(previewAudioLanguage, () => { nextTick(renderPreview) })
 watch(previewEdition, () => { nextTick(renderPreview) })
 watch(previewStreamingPlatform, () => { nextTick(renderPreview) })
 watch(previewStudio, () => { nextTick(renderPreview) })
+watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
 // Re-render when the simposter asset map loads (it arrives async after mount)
 watch(simposterAssetMap, () => { renderPreview() })
+// A new rating/list/badge type in the layers: fetch it for the real items being previewed.
+let needsTimer: ReturnType<typeof setTimeout> | undefined
+watch(itemNeedsKey, () => {
+  clearTimeout(needsTimer)
+  needsTimer = setTimeout(async () => {
+    if (previewMode.value === 'item' && selectedMovie.value) await fetchItemMetadata(selectedMovie.value.key)
+    const tiles = compareTiles.value.filter(t => t.movie)
+    if (!tiles.length) return
+    const fresh = await Promise.all(tiles.map(t => loadItemData(t.movie!.key, t.mediaType || 'movie')))
+    compareTiles.value = compareTiles.value.map(t => {
+      const i = tiles.findIndex(x => x.id === t.id)
+      return i >= 0 ? { ...t, data: fresh[i] || t.data } : t
+    })
+    nextTick(renderPreview)
+  }, 400)
+})
+
+// Test values that this overlay actually uses; the rest sit behind "More values".
+const BADGE_TEST_FIELD: Record<string, string> = {
+  video_resolution: 'resolution', video_codec: 'video_codec', audio_codec: 'audio_codec',
+  audio_channels: 'audio_channels', audio_language: 'audio_language',
+}
+const CONDITION_TEST_FIELD: Record<string, string> = {
+  resolution: 'resolution', video_resolution: 'resolution', video_codec: 'video_codec', audio_codec: 'audio_codec',
+  audio_channels: 'audio_channels', audio_language: 'audio_language', edition: 'edition', label: 'labels', labels: 'labels',
+  filepath: 'filepath', file_path: 'filepath', filename: 'filepath', audience_rating: 'audience_rating',
+  critic_rating: 'critic_rating', list: 'list', mdblist_list: 'list', streaming_platform: 'platform', studio: 'studio',
+}
+const usedTestFields = computed(() => {
+  const out = new Set<string>()
+  for (const el of selectedConfig.value?.elements || []) {
+    if (el.type === 'video_badge' || el.type === 'resolution_badge') out.add(BADGE_TEST_FIELD[el.metadata_field || 'video_resolution'] || 'resolution')
+    if (el.type === 'audio_badge' || el.type === 'codec_badge') out.add(BADGE_TEST_FIELD[el.metadata_field || 'audio_codec'] || 'audio_codec')
+    if (el.type === 'edition_badge') out.add('edition')
+    if (el.type === 'streaming_platform_badge') out.add('platform')
+    if (el.type === 'studio_badge') out.add('studio')
+    for (const c of el.conditions || []) {
+      const f = CONDITION_TEST_FIELD[String(c.field || '').toLowerCase()]
+      if (f) out.add(f)
+    }
+    for (const k of textKeys(el)) {
+      const f = CONDITION_TEST_FIELD[k.toLowerCase()]
+      if (f) out.add(f)
+    }
+  }
+  for (const c of selectedConfig.value?.conditions || []) {
+    const f = CONDITION_TEST_FIELD[String(c.field || '').toLowerCase()]
+    if (f) out.add(f)
+  }
+  if (!out.size) { out.add('resolution'); out.add('audio_codec') }
+  return out
+})
+const showAllTestValues = ref(false)
+const showTest = (field: string) => showAllTestValues.value || usedTestFields.value.has(field)
+
+// "A real movie" with nothing picked yet opens the picker, then switches over.
+let switchToItemAfterPick = false
+const useRealItem = () => {
+  if (selectedMovie.value) { previewMode.value = 'item'; return }
+  switchToItemAfterPick = true
+  openMovieSearch()
+}
+
+const showAssets = ref(false)
+
+// Renaming a layer (its name is also how hide rules point at it).
+const renamingKey = ref<number | null>(null)
+const renameDraft = ref('')
+const startRename = (el: OverlayElement) => {
+  renameDraft.value = el.name || ''
+  renamingKey.value = elementKey(el)
+  nextTick(() => (document.querySelector('.element-rename') as HTMLInputElement | null)?.select())
+}
+const commitRename = (el: OverlayElement) => {
+  if (renamingKey.value !== elementKey(el)) return
+  renamingKey.value = null
+  const next = renameDraft.value.trim()
+  const old = el.name
+  if (next === (old || '')) return
+  if (next) el.name = next
+  else delete el.name
+  // Keep hide rules pointing at it.
+  if (old) {
+    for (const other of selectedConfig.value?.elements || []) {
+      if (other.suppress?.includes(old)) {
+        const kept = other.suppress.filter(n => n !== old)
+        other.suppress = next ? other.suppress.map(n => (n === old ? next : n)) : kept
+        if (!other.suppress.length) delete other.suppress
+      }
+    }
+  }
+}
+
+// {text} values that need MDBList are only offered once its API key is set.
+const settingsStore = useSettingsStore()
+const hasMdblistKey = computed(() => !!settingsStore.mdblist.value.apiKey)
+const textVariableGroups = computed(() => TEXT_VARIABLE_GROUPS
+  .map(g => ({ group: g, vars: TEXT_VARIABLES.filter(v => v.group === g && (hasMdblistKey.value || !needsMdblist(v))) }))
+  .filter(g => g.vars.length))
+
+/** Put {key} into a text layer at the cursor (or at the end), from the "Insert value" list. */
+const insertTextVariable = (el: OverlayElement, e: Event) => {
+  const select = e.target as HTMLSelectElement
+  const key = select.value
+  select.value = ''
+  if (!key) return
+  const input = select.parentElement?.querySelector('input') as HTMLInputElement | null
+  const token = `{${key}}`
+  const text = el.text || ''
+  const start = input && document.activeElement === input ? (input.selectionStart ?? text.length) : (lastTextCursor.get(el) ?? text.length)
+  const end = input && document.activeElement === input ? (input.selectionEnd ?? start) : start
+  el.text = text.slice(0, start) + token + text.slice(end)
+  const pos = start + token.length
+  lastTextCursor.set(el, pos)
+  nextTick(() => {
+    if (!input) return
+    input.focus()
+    input.setSelectionRange(pos, pos)
+  })
+}
+// The select takes focus before its change event, so remember where the cursor was.
+const lastTextCursor = new WeakMap<object, number>()
+const rememberTextCursor = (el: OverlayElement, e: Event) => {
+  const input = e.target as HTMLInputElement
+  lastTextCursor.set(el, input.selectionStart ?? (el.text || '').length)
+}
+
+// Left side of the editor: build layers first, then group them into badge sets.
+const leftTab = ref<'layers' | 'sets' | 'when'>('layers')
+const badgeSetCount = computed(() => new Set((selectedConfig.value?.elements || []).map(e => e.group).filter(Boolean)).size)
+
+// ---- Compare: the same overlay on a few posters at once ----
+interface CompareTile {
+  id: number
+  label: string
+  /** Example tile: fields that differ from the example values. */
+  values?: Record<string, string>
+  /** Real item tile. */
+  movie?: SimpleMovie
+  mediaType?: string
+  data?: ItemData
+  bg: HTMLImageElement | null
+}
+let nextTileId = 1
+const exampleTile = (label: string, values: Record<string, string>): CompareTile => ({ id: nextTileId++, label, values, bg: null })
+const compareTiles = ref<CompareTile[]>([
+  exampleTile('4K · HEVC · Atmos', { video_resolution: '4k', video_codec: 'hevc', audio_codec: 'atmos', audio_channels: '8' }),
+  exampleTile('1080p · H.264 · DTS', { video_resolution: '1080', video_codec: 'h264', audio_codec: 'dts', audio_channels: '6' }),
+  exampleTile('720p · AAC stereo', { video_resolution: '720', video_codec: 'h264', audio_codec: 'aac', audio_channels: '2' }),
+])
+const showCompare = ref(false)
+try { showCompare.value = localStorage.getItem('simposter-overlay-compare') === '1' } catch { /* ignore */ }
+watch(showCompare, v => {
+  try { localStorage.setItem('simposter-overlay-compare', v ? '1' : '0') } catch { /* ignore */ }
+  nextTick(renderPreview)
+})
+const compareCanvases = new Map<number, HTMLCanvasElement>()
+const setCompareCanvas = (id: number, el: unknown) => {
+  if (el instanceof HTMLCanvasElement) compareCanvases.set(id, el)
+  else compareCanvases.delete(id)
+}
+let pickForCompare = false
+const pickCompareItem = () => {
+  pickForCompare = true
+  openMovieSearch()
+}
+const addCompareItem = async (movie: SimpleMovie) => {
+  const mediaType = previewSelectedLibrary.value?.type === 'show' ? 'tv' : 'movie'
+  const tile: CompareTile = { id: nextTileId++, label: movie.title, movie, mediaType, bg: null }
+  compareTiles.value = [...compareTiles.value, tile]
+  const [data, bg] = await Promise.all([loadItemData(movie.key, mediaType), loadPosterImage(movie.key)])
+  compareTiles.value = compareTiles.value.map(t => (t.id === tile.id ? { ...t, data: data || undefined, bg } : t))
+  nextTick(renderPreview)
+}
+const removeCompareTile = (id: number) => {
+  compareTiles.value = compareTiles.value.filter(t => t.id !== id)
+  nextTick(renderPreview)
+}
+const tileScene = (tile: CompareTile, canvas: HTMLCanvasElement): Scene => {
+  if (tile.movie) {
+    const meta = tile.data?.metadata || {}
+    const ctx = itemContext(tile.data || { metadata: {}, labels: [], file_paths: [], lists: [] }, tile.mediaType || 'movie', tile.movie.title)
+    return { key: `tile-${tile.id}`, canvas, bg: tile.bg, value: f => meta[f] || '', ctx, meta, visible: selectVisible(ctx), interactive: false }
+  }
+  const values = tile.values || {}
+  const ctx = exampleContext(values, selectedMovie.value?.title)
+  return {
+    key: `tile-${tile.id}`, canvas, bg: posterBgImage.value,
+    value: f => values[f] ?? previewMetadataValues[f]?.value ?? '',
+    ctx, meta: {}, visible: selectVisible(ctx), interactive: false,
+  }
+}
 
 const hasStreamingBadge = computed(() =>
   selectedConfig.value?.elements.some(e => e.type === 'streaming_platform_badge') ?? false
@@ -1359,7 +2080,9 @@ watch(showEditor, (val) => {
   }
 })
 
+onUnmounted(() => window.removeEventListener('keydown', onEditorKeydown))
 onMounted(() => {
+  window.addEventListener('keydown', onEditorKeydown)
   loadConfigs()
   loadAssets()
   loadFonts()
@@ -1371,8 +2094,8 @@ onMounted(() => {
   <div class="overlay-manager">
     <div class="page-header">
       <div>
-        <h1>&#x1F9EA; Overlay Configuration <span style="font-size: 0.55em; opacity: 0.6; vertical-align: middle; font-weight: 400;">(experimental)</span></h1>
-        <p class="page-subtitle">Create reusable overlay templates with badges, images, and text elements</p>
+        <h1>&#x1F9EA; Overlays <span style="font-size: 0.55em; opacity: 0.6; vertical-align: middle; font-weight: 400;">(experimental)</span></h1>
+        <p class="page-subtitle">Badges, images and text drawn on top of a poster. Build one here, then turn it on in a preset or in the editor's Extras tab.</p>
       </div>
     </div>
 
@@ -1380,24 +2103,32 @@ onMounted(() => {
       <!-- Left: Configs List -->
       <div class="section-card">
         <div class="section-header">
-          <h2>Overlay Configurations</h2>
+          <h2>Your overlays</h2>
+          <div style="display:flex;gap:0.5rem;">
+          <button class="btn-secondary-sm" title="Import Kometa overlay files" @click="showKometaImport = true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Import Kometa
+          </button>
           <button class="btn-primary-sm" @click="createNewConfig">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
             </svg>
-            New Config
+            New overlay
           </button>
+          </div>
         </div>
 
         <div v-if="loading" class="loading">Loading...</div>
         <div v-else-if="configs.length === 0" class="empty-state">
-          No overlay configurations yet. Create one to get started!
+          No overlays yet. Click <strong>New overlay</strong> to build one, or <strong>Import Kometa</strong> if you already have Kometa overlay files.
         </div>
         <div v-else class="configs-list">
           <div v-for="config in configs" :key="config.id" class="config-item">
             <div class="config-info">
               <div class="config-name">{{ config.name }}</div>
-              <div class="config-meta">{{ config.elements.length }} element{{ config.elements.length !== 1 ? 's' : '' }}</div>
+              <div class="config-meta">{{ config.elements.length }} layer{{ config.elements.length !== 1 ? 's' : '' }}</div>
             </div>
             <div class="config-actions">
               <button class="btn-icon" @click="editConfig(config)" title="Edit">
@@ -1416,63 +2147,69 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- Right: Assets Library -->
+      <!-- Right: your images (collapsed by default; only needed when building image badges) -->
       <div class="section-card">
         <div class="section-header">
-          <h2>Assets Library</h2>
-          <div style="display:flex;gap:0.5rem;">
-            <button class="btn-secondary-sm" @click="rescanAssets" title="Scan config/assets/ folder for new files">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-              </svg>
-              Rescan
-            </button>
-            <button class="btn-primary-sm" @click="showAssetUpload = true">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              Upload Asset
-            </button>
-          </div>
+          <button type="button" class="section-toggle" @click="showAssets = !showAssets">
+            <span class="section-chev" :class="{ open: showAssets }">›</span>
+            <h2>Your images <span class="elements-count">{{ assets.length }}</span></h2>
+          </button>
+          <button class="btn-primary-sm" @click="showAssetUpload = true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            Upload image
+          </button>
         </div>
 
-        <div v-if="assets.length === 0" class="empty-state">
-          No assets yet. Upload images or drop files into <code>config/assets/</code> and click Rescan.
-        </div>
-        <div v-else class="assets-grid">
-          <div v-for="asset in assets" :key="asset.id" class="asset-item">
-            <img :src="getAssetUrl(asset)" :alt="asset.name" class="asset-thumbnail" />
-            <div class="asset-info">
-              <div class="asset-name">{{ asset.name }}</div>
-              <div class="asset-meta">{{ asset.width }}x{{ asset.height }}</div>
-            </div>
-            <button class="btn-icon-sm danger" @click="deleteAsset(asset.id)" title="Delete">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-              </svg>
-            </button>
+        <p v-if="!showAssets" class="section-note">
+          Images you can use in badges and image layers.<template v-if="assets.length"> Click the title to see them.</template>
+        </p>
+        <template v-else>
+          <div v-if="assets.length === 0" class="empty-state">
+            No images yet. Upload one, or copy files into <code>config/assets/</code> and
+            <button type="button" class="btn-link" @click="rescanAssets">check the folder</button>.
           </div>
-        </div>
+          <template v-else>
+            <div class="assets-grid">
+              <div v-for="asset in assets" :key="asset.id" class="asset-item">
+                <img :src="getAssetUrl(asset)" :alt="asset.name" class="asset-thumbnail" />
+                <div class="asset-info">
+                  <div class="asset-name">{{ asset.name }}</div>
+                  <div class="asset-meta">{{ asset.width }}x{{ asset.height }}</div>
+                </div>
+                <button class="btn-icon-sm danger" @click="deleteAsset(asset.id)" title="Delete">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <p class="section-note">Added files to <code>config/assets/</code> yourself? <button type="button" class="btn-link" @click="rescanAssets">Check the folder again</button></p>
+          </template>
+        </template>
       </div>
     </div>
 
     <!-- Config Editor Modal -->
-    <div v-if="showEditor && selectedConfig" class="modal-overlay" @click.self="showEditor = false">
+    <Teleport to="body">
+    <!-- Teleported so it centers on the window, not the page area (Quirk #23). -->
+    <div v-if="showEditor && selectedConfig" class="modal-overlay">
       <div class="editor-modal">
         <div class="editor-header">
           <div>
-            <h2>Edit Overlay Configuration</h2>
+            <h2>Edit overlay</h2>
             <div class="editor-name-row">
-              <input v-model="selectedConfig.name" class="config-name-input" placeholder="Config name..." />
+              <input v-model="selectedConfig.name" class="config-name-input" placeholder="Overlay name..." />
               <div v-if="hasStreamingBadge" class="region-selector">
-                <span class="region-label">Region</span>
+                <span class="region-label">Streaming region</span>
                 <select v-model="selectedConfig.streaming_region" class="region-select">
                   <option v-for="r in STREAMING_REGIONS" :key="r.code" :value="r.code">{{ r.label }}</option>
                 </select>
               </div>
             </div>
           </div>
-          <button class="btn-close" @click="showEditor = false">
+          <button class="btn-close" title="Close" @click="closeEditor">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
@@ -1484,93 +2221,139 @@ onMounted(() => {
             <!-- Left: Elements -->
             <div class="elements-column">
               <div class="elements-header">
-                <h3>Elements</h3>
-                <div class="add-element-buttons">
-                  <button class="btn-add" @click="addElement('video_badge')">+ Video</button>
-                  <button class="btn-add" @click="addElement('audio_badge')">+ Audio</button>
-                  <button class="btn-add" @click="addElement('edition_badge')">+ Edition</button>
-                  <button class="btn-add" @click="addElement('streaming_platform_badge')">+ Stream</button>
-                  <button class="btn-add" @click="addElement('studio_badge')">+ Studio</button>
-                  <button class="btn-add" @click="addElement('custom_image')">+ Image</button>
-                  <button class="btn-add" @click="addElement('full_cover_image')">+ Full Cover</button>
-                  <button class="btn-add" @click="addElement('text_label')">+ Text</button>
+                <div class="elements-title-row">
+                  <div class="left-tabs" role="tablist">
+                    <button type="button" role="tab" :class="{ on: leftTab === 'layers' }" @click="leftTab = 'layers'">
+                      <span class="step">1</span> Layers <span class="elements-count">{{ selectedConfig.elements.length }}</span>
+                    </button>
+                    <button type="button" role="tab" :class="{ on: leftTab === 'sets' }" @click="leftTab = 'sets'">
+                      <span class="step">2</span> Badge sets <span class="elements-count">{{ badgeSetCount }}</span>
+                    </button>
+                    <button type="button" role="tab" :class="{ on: leftTab === 'when' }" @click="leftTab = 'when'">
+                      <span class="step">3</span> Show overlay when <span class="elements-count">{{ selectedConfig.conditions?.length || 0 }}</span>
+                    </button>
+                  </div>
+                  <div v-if="leftTab === 'layers'" class="add-menu-wrap">
+                    <button class="btn-add-main" @click="showAddMenu = !showAddMenu">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                      Add layer
+                    </button>
+                    <div v-if="showAddMenu" class="menu-backdrop" @click="showAddMenu = false"></div>
+                    <div v-if="showAddMenu" class="add-menu">
+                      <div v-for="section in ADD_MENU" :key="section.title" class="add-menu-section">
+                        <div class="add-menu-title">{{ section.title }}</div>
+                        <button v-for="item in section.items" :key="item.type" class="add-menu-item" @click="addElement(item.type)">
+                          <span class="add-menu-dot" :style="{ background: elementTypeColor(item.type) }"></span>
+                          <span class="add-menu-label">{{ item.label }}</span>
+                          <span class="add-menu-hint">{{ item.hint }}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="leftTab === 'layers' && selectedConfig.elements.length > 3" class="elements-toolbar">
+                  <input v-model="elementFilter" class="elements-search" type="search" placeholder="Find a layer..." />
+                  <button class="btn-link" @click="setAllExpanded(true)">Expand all</button>
+                  <button class="btn-link" @click="setAllExpanded(false)">Collapse all</button>
                 </div>
               </div>
 
+              <template v-if="leftTab === 'layers'">
+              <p v-if="selectedConfig.elements.length > 1" class="layer-hint">Top of the list is drawn on top.</p>
+
               <div v-if="selectedConfig.elements.length === 0" class="empty-elements">
-                No elements yet. Add elements using the buttons above.
+                <strong>This overlay is empty.</strong><br />
+                Click <strong>Add layer</strong> and pick a badge that changes with each movie (like 4K or Atmos),
+                or your own image or text. Each layer you add shows up on the preview on the right.
+              </div>
+              <div v-else-if="filteredElements.length === 0" class="empty-elements">
+                No layers match "{{ elementFilter }}".
               </div>
 
               <div v-else class="elements-list">
                 <div
-                  v-for="(element, idx) in selectedConfig.elements"
-                  :key="idx"
+                  v-for="{ element, idx } in displayElements"
+                  :key="elementKey(element)"
+                  :data-el-key="elementKey(element)"
                   class="element-card"
-                  :class="{ 'element-hovered': hoveredElementIdx === idx }"
+                  :class="{ 'element-hovered': hoveredElementIdx === idx, 'element-collapsed': !isExpanded(element), 'element-dimmed': !visibleElements.has(idx) }"
                   @mouseenter="hoveredElementIdx = idx"
                   @mouseleave="hoveredElementIdx = null"
                 >
-                  <div class="element-header">
+                  <div class="element-header" @click="toggleExpanded(element)">
                     <div class="element-header-left">
-                      <span class="element-index">{{ idx + 1 }}</span>
-                      <span class="element-type-badge" :style="{ background: elementTypeColor(element.type) + '22', color: elementTypeColor(element.type), borderColor: elementTypeColor(element.type) + '44' }">
-                        {{ elementTypeLabel(element.type) }}
-                      </span>
+                      <svg class="element-chevron" :class="{ open: isExpanded(element) }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"/></svg>
+                      <span class="element-index" title="Layer (1 = top)">{{ selectedConfig.elements.length - idx }}</span>
+                      <span class="element-dot" :style="{ background: elementTypeColor(element.type) }"></span>
+                      <div class="element-title">
+                        <input
+                          v-if="renamingKey === elementKey(element)"
+                          v-model="renameDraft"
+                          class="element-rename"
+                          :placeholder="elementNoun(element)"
+                          @click.stop
+                          @keyup.enter="commitRename(element)"
+                          @keyup.esc.stop="renamingKey = null"
+                          @blur="commitRename(element)"
+                        />
+                        <span v-else class="element-name" title="Double-click to rename" @dblclick.stop="startRename(element)">
+                          {{ element.name || elementNoun(element) }}
+                          <button type="button" class="rename-btn" title="Rename" @click.stop="startRename(element)">✎</button>
+                        </span>
+                        <span class="element-summary">
+                          {{ elementPlace(element) }} · {{ elementWhen(element) }}<template v-if="element.group"> · in set "{{ element.group }}"</template>
+                        </span>
+                      </div>
+                      <span v-if="layerWarnings(element).length" class="element-warn" :title="layerWarnings(element).join('\n')">⚠</span>
+                      <span v-if="!visibleElements.has(idx)" class="element-hidden" title="Not drawn for the movie or values used in the preview">not on this preview</span>
                     </div>
-                    <button class="btn-remove" @click="removeElement(idx)" title="Remove element">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                      </svg>
-                    </button>
+                    <div class="element-actions" @click.stop>
+                      <button class="btn-mini" :disabled="idx === selectedConfig.elements.length - 1" @click="moveElement(idx, 1)" title="Move up (drawn above the ones below it)">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 15 12 9 18 15"/></svg>
+                      </button>
+                      <button class="btn-mini" :disabled="idx === 0" @click="moveElement(idx, -1)" title="Move down (drawn under the ones above it)">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                      </button>
+                      <button class="btn-mini" @click="duplicateElement(idx)" title="Duplicate">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                      </button>
+                      <button class="btn-mini danger" @click="removeElement(idx)" title="Remove element">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                      </button>
+                    </div>
                   </div>
 
-                  <div class="element-fields">
-                    <!-- Position (all types except full_cover_image, which always fills the canvas) -->
-                    <template v-if="element.type !== 'full_cover_image'">
-                      <label>
-                        <span>X Position</span>
-                        <input type="number" v-model.number="element.position_x" min="0" max="1" step="0.01" />
-                      </label>
-                      <label>
-                        <span>Y Position</span>
-                        <input type="number" v-model.number="element.position_y" min="0" max="1" step="0.01" />
-                      </label>
-                    </template>
+                  <div v-if="isExpanded(element)" class="element-fields">
+                    <ul v-if="layerWarnings(element).length" class="warn-list">
+                      <li v-for="w in layerWarnings(element)" :key="w">⚠ {{ w }}</li>
+                    </ul>
+                    <div class="el-tabs">
+                      <button type="button" :class="{ on: tabOf(element) === 'look' }" @click="setTab(element, 'look')">Look</button>
+                      <button type="button" :class="{ on: tabOf(element) === 'position' }" @click="setTab(element, 'position')">Position</button>
+                      <button type="button" :class="{ on: tabOf(element) === 'when' }" @click="setTab(element, 'when')">
+                        Show when<span v-if="element.conditions?.length" class="el-tab-count">{{ element.conditions.length }}</span>
+                      </button>
+                    </div>
 
-                    <!-- Scale + Anchor (custom_image only — badge types use per-value overrides) -->
-                    <template v-if="element.type === 'custom_image'">
-                      <label>
-                        <span>Scale (0.1-2.0)</span>
-                        <input type="number" v-model.number="element.scale" min="0.1" max="2.0" step="0.1" placeholder="1.0" />
-                      </label>
-                      <label>
-                        <span>Anchor</span>
-                        <select v-model="element.anchor">
-                          <option value="top-left">Top Left</option>
-                          <option value="top-center">Top Center</option>
-                          <option value="top-right">Top Right</option>
-                          <option value="center-left">Center Left</option>
-                          <option value="center">Center (default)</option>
-                          <option value="center-right">Center Right</option>
-                          <option value="bottom-left">Bottom Left</option>
-                          <option value="bottom-center">Bottom Center</option>
-                          <option value="bottom-right">Bottom Right</option>
-                        </select>
-                      </label>
-                    </template>
+                    <OverlayPositionEditor v-if="tabOf(element) === 'position'" :element="element" />
+                    <OverlayRulesEditor v-else-if="tabOf(element) === 'when'" :element="element" />
 
+                    <template v-else>
+                    <p v-if="TYPE_HELP[element.type]" class="look-help">{{ TYPE_HELP[element.type] }}</p>
                     <!-- Video Badge (+ legacy resolution_badge) -->
                     <template v-if="element.type === 'video_badge' || element.type === 'resolution_badge'">
+                      <div class="look-sec"><div class="look-sec-title">What it shows</div><div class="look-sec-grid">
                       <label class="field-full">
-                        <span>Metadata Field</span>
+                        <span>Show the movie's</span>
                         <select v-model="element.metadata_field">
                           <option value="video_resolution">Video Resolution</option>
                           <option value="video_codec">Video Codec</option>
                         </select>
                       </label>
-                      <div class="field-divider"></div>
-                      <div class="field-full badge-assets-section">
-                        <div class="badge-assets-label">Badge Rendering (per value)</div>
+                      </div></div>
+                      <div class="field-full badge-assets-section look-sec">
+                        <div class="look-sec-title">For each value</div>
+                        <p class="look-sec-help">Choose what to draw for each value: an image, your own text, or nothing.</p>
                         <div class="badge-asset-rows">
                           <div v-for="val in withOther(getValuesForField(element.metadata_field || 'video_resolution'))" :key="val" class="badge-asset-item">
                             <div class="badge-asset-row">
@@ -1636,7 +2419,7 @@ onMounted(() => {
                         </div>
                       </div>
                       <template v-if="hasBadgeTextMode(element)">
-                        <div class="field-divider"></div>
+                        <div class="look-sec"><div class="look-sec-title">Text style</div><div class="look-sec-grid">
                         <label>
                           <span>Font Size (px)</span>
                           <input type="number" v-model.number="element.font_size" min="8" max="200" step="1" />
@@ -1673,22 +2456,25 @@ onMounted(() => {
                             <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
                           </div>
                         </label>
+                        </div></div>
                       </template>
                     </template>
 
                     <!-- Audio Badge (+ legacy codec_badge) -->
                     <template v-if="element.type === 'audio_badge' || element.type === 'codec_badge'">
+                      <div class="look-sec"><div class="look-sec-title">What it shows</div><div class="look-sec-grid">
                       <label class="field-full">
-                        <span>Metadata Field</span>
+                        <span>Show the movie's</span>
                         <select v-model="element.metadata_field">
                           <option value="audio_codec">Audio Codec</option>
                           <option value="audio_channels">Audio Channels</option>
                           <option value="audio_language">Audio Language</option>
                         </select>
                       </label>
-                      <div class="field-divider"></div>
-                      <div class="field-full badge-assets-section">
-                        <div class="badge-assets-label">Badge Rendering (per value)</div>
+                      </div></div>
+                      <div class="field-full badge-assets-section look-sec">
+                        <div class="look-sec-title">For each value</div>
+                        <p class="look-sec-help">Choose what to draw for each value: an image, your own text, or nothing.</p>
                         <div class="badge-asset-rows">
                           <div v-for="val in withOther(getValuesForField(element.metadata_field || 'audio_codec'))" :key="val" class="badge-asset-item">
                             <div class="badge-asset-row">
@@ -1754,7 +2540,7 @@ onMounted(() => {
                         </div>
                       </div>
                       <template v-if="hasBadgeTextMode(element)">
-                        <div class="field-divider"></div>
+                        <div class="look-sec"><div class="look-sec-title">Text style</div><div class="look-sec-grid">
                         <label>
                           <span>Font Size (px)</span>
                           <input type="number" v-model.number="element.font_size" min="8" max="200" step="1" />
@@ -1791,14 +2577,15 @@ onMounted(() => {
                             <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
                           </div>
                         </label>
+                        </div></div>
                       </template>
                     </template>
 
                     <!-- Edition Badge -->
                     <template v-if="element.type === 'edition_badge'">
-                      <div class="field-divider"></div>
-                      <div class="field-full badge-assets-section">
-                        <div class="badge-assets-label">Badge Rendering (per value)</div>
+                      <div class="field-full badge-assets-section look-sec">
+                        <div class="look-sec-title">For each value</div>
+                        <p class="look-sec-help">Choose what to draw for each value: an image, your own text, or nothing.</p>
                         <div class="badge-asset-rows">
                           <div v-for="val in withOther(EDITION_VALUES)" :key="val" class="badge-asset-item">
                             <div class="badge-asset-row">
@@ -1864,7 +2651,7 @@ onMounted(() => {
                         </div>
                       </div>
                       <template v-if="hasBadgeTextMode(element)">
-                        <div class="field-divider"></div>
+                        <div class="look-sec"><div class="look-sec-title">Text style</div><div class="look-sec-grid">
                         <label>
                           <span>Font Size (px)</span>
                           <input type="number" v-model.number="element.font_size" min="8" max="200" step="1" />
@@ -1901,13 +2688,15 @@ onMounted(() => {
                             <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
                           </div>
                         </label>
+                        </div></div>
                       </template>
                     </template>
 
                     <!-- Streaming Platform Badge -->
                     <template v-if="element.type === 'streaming_platform_badge'">
-                      <div class="field-divider"></div>
-                      <div class="field-full badge-assets-section">
+                      <div class="field-full badge-assets-section look-sec">
+                        <div class="look-sec-title">For each value</div>
+                        <p class="look-sec-help">Choose what to draw for each value: an image, your own text, or nothing.</p>
                         <!-- Default row (applies to all platforms unless overridden) -->
                         <div class="badge-override-section">
                           <span class="badge-override-section-label">Default</span>
@@ -1976,18 +2765,20 @@ onMounted(() => {
                         </div>
                       </div>
                       <template v-if="hasBadgeTextMode(element)">
-                        <div class="field-divider"></div>
+                        <div class="look-sec"><div class="look-sec-title">Text style</div><div class="look-sec-grid">
                         <label><span>Font Size (px)</span><input type="number" v-model.number="element.font_size" min="8" max="200" step="1" /></label>
                         <label><span>Font Color</span><div class="color-input-wrap"><input type="color" v-model="element.font_color" class="color-picker" /><input type="text" v-model="element.font_color" class="color-text" placeholder="#FFFFFF" /></div></label>
                         <label class="field-full"><span>Font Family</span><select v-model="element.font_family"><optgroup label="System Fonts"><option value="Arial">Arial</option><option value="Helvetica">Helvetica</option><option value="Times New Roman">Times New Roman</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Courier New">Courier New</option><option value="Impact">Impact</option></optgroup><optgroup v-if="fonts.length > 0" label="Custom Fonts"><option v-for="f in fonts" :key="f" :value="f">{{ f }}</option></optgroup></select></label>
                         <label class="field-full"><span>Text Align</span><div class="align-btn-group"><button type="button" :class="{ active: (element.text_align||'center')==='left' }" @click="element.text_align='left'">Left</button><button type="button" :class="{ active: (element.text_align||'center')==='center' }" @click="element.text_align='center'">Center</button><button type="button" :class="{ active: (element.text_align||'center')==='right' }" @click="element.text_align='right'">Right</button></div></label>
+                        </div></div>
                       </template>
                     </template>
 
                     <!-- Studio Badge -->
                     <template v-if="element.type === 'studio_badge'">
-                      <div class="field-divider"></div>
-                      <div class="field-full badge-assets-section">
+                      <div class="field-full badge-assets-section look-sec">
+                        <div class="look-sec-title">For each value</div>
+                        <p class="look-sec-help">Choose what to draw for each value: an image, your own text, or nothing.</p>
                         <!-- Default row -->
                         <div class="badge-override-section">
                           <span class="badge-override-section-label">Default</span>
@@ -2056,18 +2847,20 @@ onMounted(() => {
                         </div>
                       </div>
                       <template v-if="hasBadgeTextMode(element)">
-                        <div class="field-divider"></div>
+                        <div class="look-sec"><div class="look-sec-title">Text style</div><div class="look-sec-grid">
                         <label><span>Font Size (px)</span><input type="number" v-model.number="element.font_size" min="8" max="200" step="1" /></label>
                         <label><span>Font Color</span><div class="color-input-wrap"><input type="color" v-model="element.font_color" class="color-picker" /><input type="text" v-model="element.font_color" class="color-text" placeholder="#FFFFFF" /></div></label>
                         <label class="field-full"><span>Font Family</span><select v-model="element.font_family"><optgroup label="System Fonts"><option value="Arial">Arial</option><option value="Helvetica">Helvetica</option><option value="Times New Roman">Times New Roman</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Courier New">Courier New</option><option value="Impact">Impact</option></optgroup><optgroup v-if="fonts.length > 0" label="Custom Fonts"><option v-for="f in fonts" :key="f" :value="f">{{ f }}</option></optgroup></select></label>
                         <label class="field-full"><span>Text Align</span><div class="align-btn-group"><button type="button" :class="{ active: (element.text_align||'center')==='left' }" @click="element.text_align='left'">Left</button><button type="button" :class="{ active: (element.text_align||'center')==='center' }" @click="element.text_align='center'">Center</button><button type="button" :class="{ active: (element.text_align||'center')==='right' }" @click="element.text_align='right'">Right</button></div></label>
+                        </div></div>
                       </template>
                     </template>
 
                     <!-- Custom Image -->
                     <template v-if="element.type === 'custom_image'">
+                      <div class="look-sec"><div class="look-sec-title">Image</div><div class="look-sec-grid">
                       <label class="field-full">
-                        <span>Asset</span>
+                        <span>Image</span>
                         <select v-model="element.asset_id">
                           <option :value="undefined">Select asset...</option>
                           <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }} ({{ asset.width }}x{{ asset.height }})</option>
@@ -2081,28 +2874,48 @@ onMounted(() => {
                         <span>Max Height (px)</span>
                         <input type="number" v-model.number="element.max_height" min="0" step="10" placeholder="none" />
                       </label>
+                      <label>
+                        <span>Scale{{ element.placement === 'kometa' ? ' (Kometa size)' : '' }}</span>
+                        <input type="number" v-model.number="element.scale" min="0.05" max="4" step="0.05" placeholder="1.0" />
+                      </label>
+                      </div></div>
                     </template>
 
                     <!-- Full Cover Image -->
                     <template v-if="element.type === 'full_cover_image'">
+                      <div class="look-sec"><div class="look-sec-title">Image</div><div class="look-sec-grid">
                       <label class="field-full">
-                        <span>Asset</span>
+                        <span>Image</span>
                         <select v-model="element.asset_id">
                           <option :value="undefined">Select asset...</option>
                           <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }} ({{ asset.width }}x{{ asset.height }})</option>
                         </select>
                       </label>
-                      <p class="field-full" style="font-size: 12px; color: var(--muted); margin: 0;">Stretches to fill the full canvas — no position, scale, or anchor controls apply.</p>
+                      </div></div>
                     </template>
 
                     <!-- Text Label -->
                     <template v-if="element.type === 'text_label'">
+                      <div class="look-sec"><div class="look-sec-title">Text</div><div class="look-sec-grid">
                       <label class="field-full">
-                        <span>Text</span>
-                        <input type="text" v-model="element.text" placeholder="Enter text..." />
+                        <span>What it says</span>
+                        <div class="text-var-row">
+                          <input type="text" v-model="element.text" placeholder="Enter text, e.g. {audience_rating}" @blur="rememberTextCursor(element, $event)" />
+                          <select class="text-var-select" value="" title="Insert a value that's filled in for each movie" @change="insertTextVariable(element, $event)">
+                            <option value="" disabled>+ Insert value…</option>
+                            <optgroup v-for="g in textVariableGroups" :key="g.group" :label="g.group">
+                              <option v-for="v in g.vars" :key="v.key" :value="v.key">
+                                {{ v.label }} (e.g. {{ v.example }}){{ v.note && !needsMdblist(v) ? ` · ${v.note}` : '' }}
+                              </option>
+                            </optgroup>
+                          </select>
+                        </div>
+                        <small class="text-var-hint">Values in {curly braces} are filled in per movie. If a value is missing for a movie, this layer is skipped on that poster.<template v-if="!hasMdblistKey"> Ratings appear in the list once you add an MDBList API key in Settings → General.</template></small>
                       </label>
+                      </div></div>
+                      <div class="look-sec"><div class="look-sec-title">Font</div><div class="look-sec-grid">
                       <label>
-                        <span>Font Size (px)</span>
+                        <span>Font Size{{ element.placement === 'kometa' ? ' (Kometa size)' : ' (px)' }}</span>
                         <input type="number" v-model.number="element.font_size" min="8" max="200" step="1" />
                       </label>
                       <label>
@@ -2129,28 +2942,26 @@ onMounted(() => {
                             </optgroup>
                           </select>
                       </label>
-                      <label class="field-full">
-                        <span>Text Align</span>
-                        <div class="align-btn-group">
-                          <button type="button" :class="{ active: (element.text_align || 'center') === 'left' }" @click="element.text_align = 'left'">Left</button>
-                          <button type="button" :class="{ active: (element.text_align || 'center') === 'center' }" @click="element.text_align = 'center'">Center</button>
-                          <button type="button" :class="{ active: (element.text_align || 'center') === 'right' }" @click="element.text_align = 'right'">Right</button>
-                        </div>
-                      </label>
+                      </div></div>
                     </template>
 
-                    <!-- Conditional rendering (all types) -->
-                    <div class="field-divider"></div>
-                    <label>
-                      <span>Show if Label</span>
-                      <input type="text" v-model="element.show_if_label" placeholder="optional" />
-                    </label>
-                    <label>
-                      <span>Hide if Label</span>
-                      <input type="text" v-model="element.hide_if_label" placeholder="optional" />
-                    </label>
+                    <KometaPlacementEditor
+                      v-if="element.type === 'text_label' || element.type === 'custom_image'"
+                      :element="element"
+                    />
+                    </template>
                   </div>
                 </div>
+              </div>
+              </template>
+
+              <OverlayBadgeSets v-else-if="leftTab === 'sets'" embedded :elements="selectedConfig.elements" />
+              <div v-else class="overlay-when">
+                <p class="overlay-when-help">
+                  Conditions for the whole overlay. When any of them doesn't match a movie, none of this overlay's layers are drawn on
+                  its poster. Each layer's own "Show when" still applies on top.
+                </p>
+                <OverlayRulesEditor :element="selectedConfig" subject="overlay" />
               </div>
             </div>
 
@@ -2158,32 +2969,45 @@ onMounted(() => {
             <div class="preview-column">
               <div class="preview-panel">
                 <div class="preview-top-row">
-                  <div class="preview-label">Live Preview</div>
-                  <label class="drag-toggle">
-                    <input type="checkbox" v-model="dragEnabled" />
-                    <span>Drag to position</span>
-                  </label>
+                  <div class="preview-label">Preview</div>
+                  <div class="preview-toggles">
+                    <label class="drag-toggle" title="Draw elements that are hidden for this item faintly, so you can still see and move them">
+                      <input type="checkbox" v-model="showHiddenInPreview" />
+                      <span>Show skipped layers</span>
+                    </label>
+                    <label class="drag-toggle">
+                      <input type="checkbox" v-model="dragEnabled" />
+                      <span>Drag to move</span>
+                    </label>
+                  </div>
                 </div>
 
-                <!-- Poster search -->
+                <!-- What the preview pretends the movie is -->
+                <div class="preview-as">
+                  <span class="preview-as-label">Preview with</span>
+                  <div class="preview-mode-toggle">
+                    <button :class="['mode-btn', previewMode === 'testing' && 'active']" @click="previewMode = 'testing'">Example values</button>
+                    <button :class="['mode-btn', previewMode === 'item' && 'active']" @click="useRealItem">A real movie or show</button>
+                  </div>
+                </div>
                 <div class="poster-search-row">
                   <button class="btn-search" @click="openMovieSearch" :disabled="posterLoading">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
                     </svg>
-                    {{ selectedMovie ? selectedMovie.title : 'Pick item...' }}
+                    {{ selectedMovie ? selectedMovie.title : (previewMode === 'item' ? 'Pick a movie or show...' : 'Use a real poster as the background...') }}
                   </button>
                   <button v-if="selectedMovie" class="btn-clear-poster" @click="clearPoster" title="Clear">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                     </svg>
                   </button>
-                  <div v-if="selectedMovie" class="preview-mode-toggle">
-                    <button :class="['mode-btn', previewMode === 'testing' && 'active']" @click="previewMode = 'testing'">Test</button>
-                    <button :class="['mode-btn', previewMode === 'item' && 'active']" @click="previewMode = 'item'">Item</button>
-                  </div>
                 </div>
 
+                <p v-if="!overlayMatchesPreview" class="overlay-off-note">
+                  This overlay's own conditions don't match this preview, so nothing is drawn.
+                  <button type="button" class="btn-link" @click="leftTab = 'when'">See conditions</button>
+                </p>
                 <div class="preview-frame">
                   <canvas
                     ref="previewCanvas"
@@ -2213,60 +3037,118 @@ onMounted(() => {
                     <span>Studio</span>
                     <span class="item-val">{{ previewItemMetadata['studio'] || '—' }}</span>
                   </div>
+                  <template v-if="hasAnyRules">
+                    <div class="preview-value-field">
+                      <span>Labels</span>
+                      <span class="item-val">{{ previewItemLabels.join(', ') || '—' }}</span>
+                    </div>
+                    <div class="preview-value-field preview-value-wide">
+                      <span>File</span>
+                      <span class="item-val item-path" :title="previewItemFilePaths.join(', ')">{{ previewItemFilePaths[0] || 'not scanned yet' }}</span>
+                    </div>
+                  </template>
                 </div>
                 <div v-else class="preview-values">
-                  <label class="preview-value-field">
+                  <label v-if="showTest('resolution')" class="preview-value-field">
                     <span>Resolution</span>
                     <select v-model="previewResolution">
                       <option v-for="v in RESOLUTION_VALUES" :key="v" :value="v">{{ v.toUpperCase() }}</option>
                     </select>
                   </label>
-                  <label class="preview-value-field">
+                  <label v-if="showTest('video_codec')" class="preview-value-field">
                     <span>Video Codec</span>
                     <select v-model="previewVideoCodec">
                       <option v-for="v in VIDEO_CODEC_VALUES" :key="v" :value="v">{{ v.toUpperCase() }}</option>
                     </select>
                   </label>
-                  <label class="preview-value-field">
+                  <label v-if="showTest('audio_codec')" class="preview-value-field">
                     <span>Audio Codec</span>
                     <select v-model="previewCodec">
                       <option v-for="v in CODEC_VALUES" :key="v" :value="v">{{ v.toUpperCase() }}</option>
                     </select>
                   </label>
-                  <label class="preview-value-field">
+                  <label v-if="showTest('audio_channels')" class="preview-value-field">
                     <span>Channels</span>
                     <select v-model="previewAudioChannels">
                       <option v-for="v in AUDIO_CHANNELS_VALUES" :key="v" :value="v">{{ v }}</option>
                     </select>
                   </label>
-                  <label class="preview-value-field">
+                  <label v-if="showTest('audio_language')" class="preview-value-field">
                     <span>Language</span>
                     <select v-model="previewAudioLanguage">
                       <option v-for="v in AUDIO_LANGUAGE_VALUES" :key="v" :value="v">{{ v.toUpperCase() }}</option>
                     </select>
                   </label>
-                  <label class="preview-value-field">
+                  <label v-if="showTest('edition')" class="preview-value-field">
                     <span>Edition</span>
                     <select v-model="previewEdition">
                       <option v-for="v in EDITION_VALUES" :key="v" :value="v">{{ v.charAt(0).toUpperCase() + v.slice(1) }}</option>
                     </select>
                   </label>
-                  <label v-if="hasStreamingBadge" class="preview-value-field">
+                  <label v-if="hasStreamingBadge && showTest('platform')" class="preview-value-field">
                     <span>Platform</span>
                     <select v-model="previewStreamingPlatform">
                       <option v-for="v in STREAMING_PLATFORM_VALUES" :key="v" :value="v">{{ STREAMING_PLATFORM_LABELS[v] || v }}</option>
                     </select>
                   </label>
-                  <label v-if="hasStudioBadge" class="preview-value-field">
+                  <label v-if="hasStudioBadge && showTest('studio')" class="preview-value-field">
                     <span>Studio</span>
                     <select v-model="previewStudio">
                       <option v-for="v in STUDIO_VALUES" :key="v" :value="v">{{ STUDIO_LABELS[v] || v }}</option>
                     </select>
                   </label>
+                  <template v-if="hasAnyRules || showAllTestValues">
+                    <label v-if="showTest('labels')" class="preview-value-field">
+                      <span>Labels</span>
+                      <input type="text" v-model.lazy="previewLabels" placeholder="comma separated" />
+                    </label>
+                    <label v-if="showTest('audience_rating')" class="preview-value-field">
+                      <span>Audience rating</span>
+                      <input type="number" step="0.1" v-model.lazy="previewRating" />
+                    </label>
+                    <label v-if="showTest('critic_rating')" class="preview-value-field">
+                      <span>Critic rating</span>
+                      <input type="number" step="0.1" v-model.lazy="previewCriticRating" />
+                    </label>
+                    <label v-if="showTest('filepath')" class="preview-value-field preview-value-wide">
+                      <span>File path</span>
+                      <input type="text" v-model.lazy="previewFilePath" placeholder="/movies/Title (2024)/Title (2024) [Bluray-2160p].mkv" />
+                    </label>
+                    <div v-if="configLists.length && showTest('list')" class="preview-value-field preview-value-wide">
+                      <span>On MDBList lists</span>
+                      <div class="preview-list-toggles">
+                        <label v-for="url in configLists" :key="url" class="preview-list-toggle" :title="url">
+                          <input type="checkbox" :checked="previewOnLists.has(url)" @change="togglePreviewList(url)" />
+                          {{ listShortName(url) }}
+                        </label>
+                      </div>
+                    </div>
+                  </template>
+                  <button type="button" class="btn-link more-values" @click="showAllTestValues = !showAllTestValues">
+                    {{ showAllTestValues ? 'Only the values this overlay uses' : 'More values' }}
+                  </button>
+                </div>
+
+                <div class="compare">
+                  <label class="drag-toggle">
+                    <input type="checkbox" v-model="showCompare" />
+                    <span>Compare on several posters</span>
+                  </label>
+                  <div v-if="showCompare" class="compare-grid">
+                    <div v-for="tile in compareTiles" :key="tile.id" class="compare-tile">
+                      <canvas :ref="el => setCompareCanvas(tile.id, el)" class="compare-canvas" :width="PREVIEW_W" :height="PREVIEW_H"></canvas>
+                      <div class="compare-label" :title="tile.label">
+                        <span>{{ tile.label }}</span>
+                        <button type="button" class="compare-x" title="Remove" @click="removeCompareTile(tile.id)">✕</button>
+                      </div>
+                    </div>
+                    <button type="button" class="compare-add" @click="pickCompareItem">+ Add a real movie or show</button>
+                  </div>
+                  <p v-if="showCompare" class="compare-hint">Example posters use the example values above, with only resolution and audio changed.</p>
                 </div>
 
                 <div class="preview-info">
-                  <span>{{ selectedConfig.elements.length }} element{{ selectedConfig.elements.length !== 1 ? 's' : '' }}</span>
+                  <span>{{ selectedConfig.elements.length }} layer{{ selectedConfig.elements.length !== 1 ? 's' : '' }}<template v-if="visibleElements.size !== selectedConfig.elements.length"> · {{ visibleElements.size }} drawn on this preview</template></span>
                   <span>2000 x 3000</span>
                 </div>
               </div>
@@ -2275,13 +3157,15 @@ onMounted(() => {
         </div>
 
         <div class="editor-footer">
-          <button class="btn-secondary" @click="showEditor = false">Cancel</button>
-          <button class="btn-primary" @click="saveConfig">Save Configuration</button>
+          <button class="btn-secondary" @click="closeEditor">Cancel</button>
+          <button class="btn-primary" @click="saveConfig">Save overlay</button>
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- Item Picker Modal (2-step: library → item) -->
+    <Teleport to="body">
     <div v-if="showMovieSearch" class="modal-overlay" @click.self="showMovieSearch = false" style="z-index: 1100;">
       <div class="search-modal">
         <div class="search-modal-header">
@@ -2344,12 +3228,14 @@ onMounted(() => {
         </div>
       </div>
     </div>
+    </Teleport>
 
     <!-- Asset Upload Modal -->
-    <div v-if="showAssetUpload" class="modal-overlay" @click.self="showAssetUpload = false">
+    <Teleport to="body">
+    <div v-if="showAssetUpload" class="modal-overlay" style="z-index: 1100;" @click.self="showAssetUpload = false">
       <div class="upload-modal">
         <div class="upload-header">
-          <h3>Upload Overlay Asset</h3>
+          <h3>Upload image</h3>
           <button class="btn-close" @click="showAssetUpload = false">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -2374,6 +3260,8 @@ onMounted(() => {
         </div>
       </div>
     </div>
+    </Teleport>
+    <KometaImportModal v-if="showKometaImport" @close="showKometaImport = false" @imported="onKometaImported" />
   </div>
 </template>
 
@@ -2422,7 +3310,7 @@ onMounted(() => {
 /* Modals */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); }
 
-.editor-modal { background: var(--surface, #1a1f2e); border: 1px solid var(--border, #2a2f3e); border-radius: 14px; width: 94%; max-width: 1100px; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
+.editor-modal { background: var(--surface, #1a1f2e); border: 1px solid var(--border, #2a2f3e); border-radius: 14px; width: 96vw; max-width: 1760px; height: 94vh; max-height: 94vh; display: flex; flex-direction: column; overflow: hidden; }
 .editor-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border, #2a2f3e); }
 .editor-header h2 { margin: 0 0 0.4rem 0; color: var(--text-primary, #fff); font-size: 1.15rem; }
 .editor-name-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
@@ -2437,31 +3325,90 @@ onMounted(() => {
 .btn-close:hover { color: var(--text-primary, #fff); }
 
 .editor-body { flex: 1; overflow-y: auto; padding: 1.25rem; }
-.editor-columns { display: grid; grid-template-columns: 1fr 330px; gap: 1.25rem; align-items: start; }
+.editor-columns { display: grid; grid-template-columns: minmax(0, 1fr) 440px; gap: 1.25rem; align-items: start; }
 
 /* Elements column */
 .elements-column { display: flex; flex-direction: column; gap: 0.75rem; min-width: 0; }
-.elements-header { margin-bottom: 0.25rem; }
-.elements-header h3 { margin: 0 0 0.6rem 0; color: var(--text-primary, #fff); font-size: 0.95rem; }
-.add-element-buttons { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.elements-header { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.25rem; }
+.elements-title-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.elements-count { font-size: 0.7rem; font-weight: 600; color: var(--text-secondary, #aaa); background: rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 0.05rem 0.45rem; }
 
-.btn-add { padding: 0.3rem 0.6rem; background: rgba(61, 214, 183, 0.08); border: 1px solid rgba(61, 214, 183, 0.25); border-radius: 5px; color: var(--accent, #3dd6b7); cursor: pointer; font-size: 0.75rem; transition: all 0.15s; }
-.btn-add:hover { background: rgba(61, 214, 183, 0.18); }
+.add-menu-wrap { position: relative; }
+.btn-add-main { display: flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.75rem; background: rgba(61, 214, 183, 0.1); border: 1px solid rgba(61, 214, 183, 0.3); border-radius: 6px; color: var(--accent, #3dd6b7); cursor: pointer; font-size: 0.78rem; font-weight: 600; transition: all 0.15s; }
+.btn-add-main:hover { background: rgba(61, 214, 183, 0.2); }
+.menu-backdrop { position: fixed; inset: 0; z-index: 40; }
+.add-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 41; width: 300px; background: var(--surface, #1b1f2a); border: 1px solid var(--border, #2a2f3e); border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); padding: 0.35rem; }
+.add-menu-section + .add-menu-section { border-top: 1px solid var(--border, #2a2f3e); margin-top: 0.3rem; padding-top: 0.3rem; }
+.add-menu-title { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary, #888); padding: 0.25rem 0.5rem; }
+.add-menu-item { display: grid; grid-template-columns: 10px auto 1fr; align-items: center; gap: 0.5rem; width: 100%; padding: 0.4rem 0.5rem; background: transparent; border: none; border-radius: 5px; color: var(--text-primary, #fff); cursor: pointer; text-align: left; font-size: 0.8rem; }
+.add-menu-item:hover { background: rgba(61, 214, 183, 0.1); }
+.add-menu-dot { width: 8px; height: 8px; border-radius: 50%; }
+.add-menu-label { font-weight: 600; white-space: nowrap; }
+.add-menu-hint { color: var(--text-secondary, #888); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.elements-toolbar { display: flex; align-items: center; gap: 0.5rem; }
+.elements-search { flex: 1; min-width: 0; padding: 0.35rem 0.55rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.8rem; }
+.elements-search:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.btn-link { background: none; border: none; padding: 0.2rem 0.3rem; color: var(--accent, #3dd6b7); cursor: pointer; font-size: 0.74rem; white-space: nowrap; }
+.btn-link:hover { text-decoration: underline; }
 
 .empty-elements { padding: 2rem; text-align: center; color: var(--text-secondary, #aaa); font-size: 0.9rem; }
 
 .elements-list { display: flex; flex-direction: column; gap: 0.6rem; }
-.element-card { background: rgba(255, 255, 255, 0.015); border: 1px solid var(--border, #2a2f3e); border-radius: 8px; padding: 0.7rem; transition: border-color 0.15s; }
+.element-card { background: rgba(255, 255, 255, 0.015); border: 1px solid var(--border, #2a2f3e); border-radius: 8px; padding: 0.55rem 0.7rem; transition: border-color 0.15s; }
 .element-card.element-hovered { border-color: rgba(61, 214, 183, 0.4); }
+.element-card.element-dimmed .element-header-left { opacity: 0.6; }
 
-.element-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; }
-.element-header-left { display: flex; align-items: center; gap: 0.5rem; }
+.element-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; cursor: pointer; user-select: none; }
+.element-card:not(.element-collapsed) .element-header { margin-bottom: 0.6rem; }
+.element-header-left { display: flex; align-items: center; gap: 0.5rem; min-width: 0; flex: 1; }
+.element-chevron { flex-shrink: 0; color: var(--text-secondary, #888); transition: transform 0.15s; }
+.element-chevron.open { transform: rotate(90deg); }
+.element-title { display: flex; flex-direction: column; min-width: 0; }
+.element-summary { font-size: 0.68rem; color: var(--text-secondary, #888); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.element-actions { display: flex; gap: 0.15rem; flex-shrink: 0; opacity: 0.55; transition: opacity 0.15s; }
+.element-card:hover .element-actions { opacity: 1; }
+.btn-mini { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--text-secondary, #888); cursor: pointer; transition: all 0.15s; }
+.btn-mini:hover:not(:disabled) { border-color: var(--border, #2a2f3e); color: var(--text-primary, #fff); background: rgba(255, 255, 255, 0.05); }
+.btn-mini.danger:hover:not(:disabled) { border-color: #f87171; color: #f87171; background: rgba(248, 113, 113, 0.1); }
+.btn-mini:disabled { opacity: 0.3; cursor: default; }
 .element-index { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; background: rgba(255, 255, 255, 0.08); border-radius: 50%; color: var(--text-secondary, #aaa); font-size: 0.7rem; font-weight: 600; }
-.element-type-badge { padding: 2px 8px; border: 1px solid; border-radius: 10px; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
 
-.btn-remove { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--text-secondary, #666); cursor: pointer; transition: all 0.15s; }
-.btn-remove:hover { border-color: #f87171; color: #f87171; background: rgba(248, 113, 113, 0.1); }
 
+.look-help { grid-column: 1 / -1; margin: 0; font-size: 0.72rem; color: var(--text-secondary, #888); line-height: 1.4; }
+.element-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.section-toggle { display: flex; align-items: center; gap: 0.45rem; background: none; border: none; padding: 0; cursor: pointer; color: inherit; }
+.section-chev { display: inline-block; transition: transform 0.15s; color: var(--text-secondary, #888); font-size: 1.1rem; }
+.section-chev.open { transform: rotate(90deg); }
+.section-note { margin: 0.25rem 0 0; font-size: 0.78rem; color: var(--text-secondary, #888); }
+.preview-as { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+.preview-as-label { font-size: 0.75rem; color: var(--text-secondary, #888); }
+.more-values { grid-column: 1 / -1; justify-self: start; font-size: 0.72rem; }
+.el-tabs { grid-column: 1 / -1; display: flex; gap: 0.25rem; border-bottom: 1px solid var(--border, #2a2f3e); margin-bottom: 0.2rem; }
+.el-tabs button { padding: 0.35rem 0.7rem; background: none; border: none; border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--text-secondary, #888); font-size: 0.76rem; cursor: pointer; }
+.el-tabs button:hover { color: var(--text-primary, #fff); }
+.el-tabs button.on { color: var(--accent, #3dd6b7); border-bottom-color: var(--accent, #3dd6b7); font-weight: 600; }
+.el-tab-count { display: inline-block; margin-left: 0.3rem; padding: 0 0.35rem; border-radius: 8px; background: rgba(61, 214, 183, 0.15); font-size: 0.65rem; }
+.text-var-row { display: flex; gap: 0.4rem; align-items: stretch; }
+.text-var-row input { flex: 1; min-width: 0; }
+.text-var-select { flex: 0 0 auto; max-width: 13rem; background-color: var(--surface-soft, #141824); color-scheme: dark; }
+:root[data-theme='light'] .text-var-select { color-scheme: light; }
+.text-var-select option, .text-var-select optgroup { background: var(--surface, #1b1f2a); color: var(--text-primary, #fff); }
+.text-var-hint { font-size: 0.68rem; color: var(--text-secondary, #888); }
+.element-rename { width: 100%; max-width: 22rem; padding: 0.2rem 0.4rem; background: rgba(255, 255, 255, 0.06); border: 1px solid var(--accent, #3dd6b7); border-radius: 5px; color: var(--text-primary, #fff); font-size: 0.82rem; font-weight: 600; }
+.rename-btn { margin-left: 0.3rem; padding: 0 0.2rem; background: none; border: none; color: var(--text-secondary, #888); font-size: 0.78rem; cursor: pointer; opacity: 0; }
+.element-header:hover .rename-btn, .rename-btn:focus { opacity: 1; }
+.rename-btn:hover { color: var(--accent, #3dd6b7); }
+.overlay-when { display: flex; flex-direction: column; gap: 0.6rem; }
+.overlay-when-help { margin: 0; font-size: 0.8rem; color: var(--text-secondary, #aaa); line-height: 1.45; }
+.overlay-off-note { margin: 0; padding: 0.45rem 0.6rem; border: 1px solid rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.07); border-radius: 6px; color: #fbbf24; font-size: 0.72rem; }
+.left-tabs { display: flex; gap: 0.25rem; }
+.left-tabs button { display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.75rem; background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-secondary, #888); font-size: 0.92rem; font-weight: 600; cursor: pointer; }
+.left-tabs button:hover { color: var(--text-primary, #fff); }
+.left-tabs button.on { color: var(--text-primary, #fff); border-bottom-color: var(--accent, #3dd6b7); }
+.left-tabs .step { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: rgba(255, 255, 255, 0.08); font-size: 0.68rem; }
+.left-tabs button.on .step { background: var(--accent, #3dd6b7); color: #0b0f17; }
+.layer-hint { margin: 0 0 0.4rem; font-size: 0.7rem; color: var(--text-secondary, #888); }
 .element-fields { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.55rem; }
 .element-fields label { display: flex; flex-direction: column; gap: 0.2rem; }
 .element-fields label.field-full { grid-column: 1 / -1; }
@@ -2469,7 +3416,13 @@ onMounted(() => {
 .element-fields input, .element-fields select { padding: 0.35rem 0.45rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 5px; color: var(--text-primary, #fff); font-size: 0.8rem; }
 .element-fields input:focus, .element-fields select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 
-.field-divider { grid-column: 1 / -1; height: 1px; background: var(--border, #2a2f3e); margin: 0.15rem 0; }
+.element-name { font-size: 0.74rem; color: var(--text-primary, #fff); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.element-hidden { flex-shrink: 0; font-size: 0.66rem; color: var(--text-secondary, #888); border: 1px dashed var(--border, #2a2f3e); border-radius: 4px; padding: 0.05rem 0.35rem; }
+.preview-value-wide { grid-column: 1 / -1; }
+.preview-list-toggles { display: flex; flex-wrap: wrap; gap: 0.3rem 0.8rem; }
+.preview-list-toggle { display: flex; align-items: center; gap: 0.3rem; font-size: 0.75rem; color: var(--text-primary, #fff); cursor: pointer; }
+.preview-value-field input { min-width: 0; }
+.item-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .field-full { grid-column: 1 / -1; }
 
 .color-input-wrap { display: flex; gap: 0.35rem; align-items: stretch; }
@@ -2480,6 +3433,11 @@ onMounted(() => {
 
 /* Badge assets mapping */
 .badge-assets-section { display: flex; flex-direction: column; gap: 0.4rem; }
+/* Look tab: each group of settings in its own titled box */
+.look-sec { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 0.5rem; padding: 0.6rem 0.7rem 0.7rem; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 8px; background: rgba(255, 255, 255, 0.015); }
+.look-sec-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent, #3dd6b7); }
+.look-sec-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+.look-sec-help { margin: -0.2rem 0 0; font-size: 0.7rem; color: var(--text-secondary, #888); }
 
 /* Compact badge rows for streaming/studio (override-based layout) */
 .badge-override-section { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
@@ -2593,7 +3551,6 @@ onMounted(() => {
 .badge-alias-add-btn:hover:not(:disabled) { background: rgba(61,214,183,0.2); border-color: var(--accent, #3dd6b7); }
 .badge-alias-add-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-.badge-assets-label { color: var(--text-secondary, #888); font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 .badge-asset-rows { display: flex; flex-direction: column; gap: 0.4rem; }
 .badge-asset-item { display: flex; flex-direction: column; gap: 0.25rem; }
 .badge-asset-row { display: flex; align-items: center; gap: 0.4rem; }
@@ -2620,11 +3577,12 @@ onMounted(() => {
 
 /* Preview column */
 .preview-column { position: sticky; top: 0; }
-.preview-panel { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #2a2f3e); border-radius: 10px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; overflow-y: auto; max-height: calc(88vh - 140px); }
+.preview-panel { background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border, #2a2f3e); border-radius: 10px; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; overflow-y: auto; max-height: calc(94vh - 170px); }
 
 .preview-top-row { display: flex; justify-content: space-between; align-items: center; }
 .preview-label { color: var(--text-secondary, #888); font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
 
+.preview-toggles { display: flex; align-items: center; gap: 0.75rem; }
 .drag-toggle { display: flex; align-items: center; gap: 0.35rem; cursor: pointer; user-select: none; }
 .drag-toggle input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--accent, #3dd6b7); cursor: pointer; }
 .drag-toggle span { color: var(--text-secondary, #888); font-size: 0.7rem; }
@@ -2654,6 +3612,18 @@ onMounted(() => {
 .preview-value-field select { padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .preview-value-field select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 
+.element-warn { color: #fbbf24; font-size: 0.85rem; cursor: help; flex-shrink: 0; }
+.warn-list { grid-column: 1 / -1; margin: 0; padding: 0.4rem 0.6rem; list-style: none; border: 1px solid rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.07); border-radius: 6px; color: #fbbf24; font-size: 0.74rem; line-height: 1.45; }
+.compare { display: flex; flex-direction: column; gap: 0.4rem; }
+.compare-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.4rem; }
+.compare-tile { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.compare-canvas { width: 100%; height: auto; aspect-ratio: 2 / 3; border-radius: 4px; background: rgba(0, 0, 0, 0.3); display: block; }
+.compare-label { display: flex; align-items: center; gap: 0.2rem; font-size: 0.66rem; color: var(--text-secondary, #aaa); min-width: 0; }
+.compare-label span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.compare-x { background: none; border: none; color: var(--text-secondary, #888); cursor: pointer; font-size: 0.7rem; padding: 0 0.15rem; }
+.compare-x:hover { color: #f87171; }
+.compare-add { aspect-ratio: 2 / 3; border: 1px dashed var(--border, #3a4050); border-radius: 4px; background: transparent; color: var(--accent, #3dd6b7); font-size: 0.72rem; cursor: pointer; padding: 0.4rem; }
+.compare-hint { margin: 0; font-size: 0.66rem; color: var(--text-secondary, #888); }
 .preview-info { display: flex; justify-content: space-between; color: var(--text-secondary, #666); font-size: 0.7rem; }
 
 .editor-footer { display: flex; justify-content: flex-end; gap: 0.75rem; padding: 1rem 1.5rem; border-top: 1px solid var(--border, #2a2f3e); }
@@ -2705,7 +3675,7 @@ onMounted(() => {
 @media (max-width: 900px) {
   .overlay-manager { padding: 1rem; }
   .content-grid { grid-template-columns: 1fr; }
-  .editor-modal { width: 96%; max-height: 92vh; }
+  .editor-modal { width: 96%; height: 94vh; }
   .editor-columns { grid-template-columns: 1fr; }
   .preview-column { position: static; order: -1; }
   .upload-modal { width: 96%; }

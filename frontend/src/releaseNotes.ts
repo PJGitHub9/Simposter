@@ -10,6 +10,34 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.0',
+    date: '2026-10-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Overlays are much easier to build: layers are listed top-down (the top one is drawn on top), each layer has Look, Position and Show when tabs, and settings are grouped in labelled boxes.',
+          'Show when: put a layer, or a whole overlay, only on posters that match, e.g. only 4K movies, only TrueHD Atmos, only files named "remux", or only movies rated 8 or higher.',
+          'Badge sets: group layers that shouldn\'t appear together (like 4K, 1080p and 720p) so only the first match is drawn.',
+          'Text layers can show values per movie, e.g. {audience_rating} or {mdb_imdb_rating}, picked from an Insert value list.',
+          'MDBList ratings and lists for overlays (add your API key in Settings, General).',
+          'Import Kometa overlay files, with a report of anything Simposter can\'t do yet.',
+          'Overlay Refresh: re-render posters whose overlay would now look different, on a schedule per library group.',
+          'Preview improvements: compare the overlay on several posters at once, a warning on layers that would show nothing, and a bigger editor.',
+          'The version badge now tells you when your branch has an update, or when your branch was merged and you should switch to another one.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Text layers showed {values} as written instead of filling them in.',
+          'The overlay preview limited image badges to half the poster width, so a larger Scale did nothing.',
+          'The update check never worked.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.7.12',
     date: '2026-10-16',
     sections: [

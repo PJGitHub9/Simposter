@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
+import { getApiBase } from '@/services/apiBase'
 
 const props = defineProps<{
   theme: string
@@ -62,6 +64,41 @@ const localTvdbApiKey = computed({
   get: () => props.tvdbApiKey,
   set: (val) => emit('update:tvdbApiKey', val)
 })
+
+const settingsStore = useSettingsStore()
+const ratingSources = [
+  { value: 'imdb', label: 'IMDb' },
+  { value: 'tomatoes', label: 'Rotten Tomatoes (critics)' },
+  { value: 'tomatoesaudience', label: 'Rotten Tomatoes (audience)' },
+  { value: 'tmdb', label: 'TMDb' },
+  { value: 'trakt', label: 'Trakt' },
+  { value: 'metacritic', label: 'Metacritic' },
+  { value: 'metacriticuser', label: 'Metacritic (users)' },
+  { value: 'letterboxd', label: 'Letterboxd' },
+  { value: 'myanimelist', label: 'MyAnimeList' },
+  { value: 'score', label: 'MDBList score' },
+]
+const mdblistTesting = ref(false)
+const mdblistResult = ref<{ ok: boolean; message: string } | null>(null)
+async function testMdblist() {
+  mdblistTesting.value = true
+  mdblistResult.value = null
+  try {
+    const res = await fetch(`${getApiBase()}/api/test-mdblist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: settingsStore.mdblist.value.apiKey }),
+    })
+    const data = await res.json()
+    mdblistResult.value = data.status === 'ok'
+      ? { ok: true, message: `✓ ${data.message || 'Valid'}` }
+      : { ok: false, message: `Error: ${data.error || 'Invalid key'}` }
+  } catch {
+    mdblistResult.value = { ok: false, message: 'Error: could not reach the server' }
+  } finally {
+    mdblistTesting.value = false
+  }
+}
 
 const localFanartApiKey = computed({
   get: () => props.fanartApiKey,
@@ -276,6 +313,54 @@ const timezones = computed(() => {
     </div>
 
     <div class="section">
+      <h3>MDBList (overlay ratings &amp; lists)</h3>
+      <p class="section-description">
+        Overlays can show ratings (IMDb, Rotten Tomatoes, TMDb, Trakt, Metacritic, Letterboxd and more) and only appear on
+        items in an MDBList list (for example a "trending" ribbon). Kometa overlay files that use <code>audience_rating</code>,
+        <code>critic_rating</code> or <code>mdblist_list</code> need this. Results are cached, so a render rarely calls MDBList.
+      </p>
+      <div class="api-keys-grid">
+        <label>
+          <span class="label-text">MDBList API Key</span>
+          <div class="input-with-button">
+            <input v-model="settingsStore.mdblist.value.apiKey" type="password" placeholder="Enter your MDBList API key" />
+            <button
+              @click="testMdblist"
+              class="secondary"
+              :disabled="!settingsStore.mdblist.value.apiKey || mdblistTesting"
+              type="button"
+            >
+              {{ mdblistTesting ? 'Testing...' : 'Test' }}
+            </button>
+          </div>
+          <span v-if="mdblistResult" :class="['api-test-result', mdblistResult.ok ? 'success' : 'error']">
+            {{ mdblistResult.message }}
+          </span>
+          <span class="help-text">Free key at <a href="https://mdblist.com/preferences/" target="_blank">mdblist.com/preferences</a> (API section). The free tier has a daily request limit.</span>
+        </label>
+        <label>
+          <span class="label-text">Audience rating comes from</span>
+          <select v-model="settingsStore.mdblist.value.audienceRatingSource">
+            <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+          </select>
+          <span class="help-text">Fills <code>audience_rating</code> (0–10). In Kometa this is your Plex library's audience rating; pick the source your library uses.</span>
+        </label>
+        <label>
+          <span class="label-text">Critic rating comes from</span>
+          <select v-model="settingsStore.mdblist.value.criticRatingSource">
+            <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+          </select>
+          <span class="help-text">Fills <code>critic_rating</code> (0–10).</span>
+        </label>
+        <label>
+          <span class="label-text">Keep ratings and lists for (days)</span>
+          <input v-model.number="settingsStore.mdblist.value.cacheDays" type="number" min="1" max="90" />
+          <span class="help-text">After this, the next render fetches fresh values.</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="section">
       <button @click="emit('save')" class="primary" :disabled="!unsavedChanges">
         {{ unsavedChanges ? 'Save Changes' : 'No Changes' }}
       </button>
@@ -284,6 +369,14 @@ const timezones = computed(() => {
 </template>
 
 <style scoped>
+.section-description code,
+.help-text code {
+  font-size: 0.85em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .tab-content {
   padding: 20px;
   max-width: 1600px;

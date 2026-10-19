@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
 
 # Get logger without importing from config to avoid circular imports
@@ -410,6 +410,10 @@ def init_database():
         if "square_art_url" not in cols:
             cursor.execute("ALTER TABLE movie_cache ADD COLUMN square_art_url TEXT")
             logger.info("[DB] Added 'square_art_url' column to movie_cache")
+        if "file_paths_json" not in cols:
+            # Media file path(s), filled by scans; used by overlay file-name conditions.
+            cursor.execute("ALTER TABLE movie_cache ADD COLUMN file_paths_json TEXT")
+            logger.info("[DB] Added 'file_paths_json' column to movie_cache")
         if "server_id" not in cols:
             # Which configured media server (see the mediaServers setting) this
             # cached row came from -- 'plex-1' for every existing row, since this
@@ -495,6 +499,10 @@ def init_database():
         if "square_art_url" not in tv_cols:
             cursor.execute("ALTER TABLE tv_cache ADD COLUMN square_art_url TEXT")
             logger.info("[DB] Added 'square_art_url' column to tv_cache")
+        if "file_paths_json" not in tv_cols:
+            # Show folder path(s), filled by scans; used by overlay file-name conditions.
+            cursor.execute("ALTER TABLE tv_cache ADD COLUMN file_paths_json TEXT")
+            logger.info("[DB] Added 'file_paths_json' column to tv_cache")
         if "server_id" not in tv_cols:
             # See the matching movie_cache 'server_id' migration comment above --
             # same reasoning, same default, same non-PK design (CLAUDE.md Quirk #57).
@@ -843,6 +851,10 @@ def init_database():
         if "streaming_region" not in overlay_cols:
             cursor.execute("ALTER TABLE overlay_configs ADD COLUMN streaming_region TEXT DEFAULT 'US'")
             logger.info("[DB] Added 'streaming_region' column to overlay_configs table")
+        # Conditions for the whole overlay (all must pass for any of its layers to draw).
+        if "conditions_json" not in overlay_cols:
+            cursor.execute("ALTER TABLE overlay_configs ADD COLUMN conditions_json TEXT")
+            logger.info("[DB] Added 'conditions_json' column to overlay_configs table")
 
         # Streaming provider cache — stores TMDb watch/providers results per item
         cursor.execute("""
@@ -945,6 +957,72 @@ def init_database():
                 source_hash TEXT NOT NULL,
                 synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (source_server_id, source_rating_key, asset_type, target_server_id)
+            )
+        """)
+
+        # Overlay refresh (Quirk #166): what was rendered for each sent poster
+        # that had overlays, so a scheduled check can tell when an item's
+        # overlay would now come out differently (new resolution, rating,
+        # list membership, edited overlay config) and re-render it from the
+        # same source art. season_index -1 = not a season.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS overlay_state (
+                server_id TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                season_index INTEGER NOT NULL DEFAULT -1,
+                media_type TEXT NOT NULL,
+                library_id TEXT,
+                tmdb_id INTEGER,
+                title TEXT,
+                year INTEGER,
+                meta_rating_key TEXT,
+                template_id TEXT NOT NULL,
+                preset_id TEXT,
+                background_url TEXT,
+                logo_url TEXT,
+                options_json TEXT NOT NULL,
+                summary_json TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                is_collection INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (server_id, rating_key, season_index)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_overlay_state_library ON overlay_state(server_id, library_id)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS overlay_refresh_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                group_id TEXT,
+                server_id TEXT,
+                rating_key TEXT,
+                season_index INTEGER,
+                title TEXT,
+                status TEXT NOT NULL,
+                detail TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_overlay_refresh_log_group ON overlay_refresh_log(group_id, created_at)")
+
+        # MDBList caches (overlay ratings and list membership). item_ratings is
+        # keyed by "movie:tmdb:603"-style keys; data_json holds the normalized
+        # ratings, or {} when MDBList had nothing (so misses aren't refetched
+        # every render). list_cache holds the tmdb ids on an MDBList list.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS item_ratings (
+                cache_key TEXT PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                fetched_at REAL NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS list_cache (
+                list_url TEXT PRIMARY KEY,
+                title TEXT,
+                movie_ids_json TEXT NOT NULL,
+                show_ids_json TEXT NOT NULL,
+                fetched_at REAL NOT NULL
             )
         """)
 
@@ -1274,6 +1352,7 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "tmdb.apiKey",
     "tvdb.apiKey",
     "fanart.apiKey",
+    "mdblist.apiKey",
     "automation.webhookSecret",
     "automation.webhookAutoLabels",
     "automation.labelToAdd",
@@ -1663,12 +1742,20 @@ def delete_preset(template_id: str, preset_id: str) -> bool:
 # Overlay Configuration Functions
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _overlay_conditions(raw: Optional[str]) -> List[Dict[str, Any]]:
+    try:
+        value = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        return []
+    return [c for c in value if isinstance(c, dict)] if isinstance(value, list) else []
+
+
 def get_all_overlay_configs() -> List[Dict[str, Any]]:
     """Get all overlay configurations."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, elements_json, streaming_region, created_at, updated_at
+            SELECT id, name, elements_json, streaming_region, conditions_json, created_at, updated_at
             FROM overlay_configs
             ORDER BY created_at DESC
         """)
@@ -1680,6 +1767,7 @@ def get_all_overlay_configs() -> List[Dict[str, Any]]:
             "name": row["name"],
             "elements": json.loads(row["elements_json"]),
             "streaming_region": row["streaming_region"] or "US",
+            "conditions": _overlay_conditions(row["conditions_json"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
@@ -1692,7 +1780,7 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, elements_json, streaming_region, created_at, updated_at
+            SELECT id, name, elements_json, streaming_region, conditions_json, created_at, updated_at
             FROM overlay_configs
             WHERE id = ?
         """, (config_id,))
@@ -1704,25 +1792,30 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
             "name": row["name"],
             "elements": json.loads(row["elements_json"]),
             "streaming_region": row["streaming_region"] or "US",
+            "conditions": _overlay_conditions(row["conditions_json"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
     return None
 
 
-def save_overlay_config(config_id: str, name: str, elements: List[Dict[str, Any]], streaming_region: str = "US") -> None:
-    """Save or update an overlay configuration."""
+def save_overlay_config(config_id: str, name: str, elements: List[Dict[str, Any]], streaming_region: str = "US",
+                        conditions: Optional[List[Dict[str, Any]]] = None) -> None:
+    """Save or update an overlay configuration. conditions=None keeps the stored
+    whole-overlay conditions (callers that don't know about them, e.g. a Kometa re-import)."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO overlay_configs (id, name, elements_json, streaming_region, created_at, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            INSERT INTO overlay_configs (id, name, elements_json, streaming_region, conditions_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 elements_json = excluded.elements_json,
                 streaming_region = excluded.streaming_region,
+                conditions_json = COALESCE(excluded.conditions_json, overlay_configs.conditions_json),
                 updated_at = CURRENT_TIMESTAMP
-        """, (config_id, name, json.dumps(elements), streaming_region))
+        """, (config_id, name, json.dumps(elements), streaming_region,
+              None if conditions is None else json.dumps(conditions)))
     logger.info(f"[DB] Saved overlay config {config_id} ({name})")
 
 
@@ -2128,6 +2221,139 @@ def record_mirror_sync(source_server_id: str, source_rating_key: str, asset_type
                 source_hash = excluded.source_hash,
                 synced_at = CURRENT_TIMESTAMP
         """, (source_server_id, str(source_rating_key), asset_type, target_server_id, str(target_rating_key), source_hash))
+
+
+# ---------------------------------------------------------------------------
+# Overlay refresh state (Quirk #166)
+# ---------------------------------------------------------------------------
+
+def _season_db(season_index: Optional[int]) -> int:
+    return -1 if season_index is None else int(season_index)
+
+
+def upsert_overlay_state(row: Dict[str, Any]) -> None:
+    """Insert/replace one sent poster's overlay inputs. `row` keys match the
+    overlay_state columns; options/summary are passed as Python objects."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO overlay_state
+                (server_id, rating_key, season_index, media_type, library_id, tmdb_id, title, year,
+                 meta_rating_key, template_id, preset_id, background_url, logo_url,
+                 options_json, summary_json, signature, is_collection, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(server_id, rating_key, season_index) DO UPDATE SET
+                media_type = excluded.media_type, library_id = excluded.library_id,
+                tmdb_id = excluded.tmdb_id, title = excluded.title, year = excluded.year,
+                meta_rating_key = excluded.meta_rating_key, template_id = excluded.template_id,
+                preset_id = excluded.preset_id, background_url = excluded.background_url,
+                logo_url = excluded.logo_url, options_json = excluded.options_json,
+                summary_json = excluded.summary_json, signature = excluded.signature,
+                is_collection = excluded.is_collection, updated_at = CURRENT_TIMESTAMP
+        """, (
+            row["server_id"], str(row["rating_key"]), _season_db(row.get("season_index")),
+            row.get("media_type") or "movie", str(row["library_id"]) if row.get("library_id") is not None else None,
+            row.get("tmdb_id"), row.get("title"), row.get("year"),
+            str(row.get("meta_rating_key") or row["rating_key"]), row["template_id"], row.get("preset_id"),
+            row.get("background_url"), row.get("logo_url"),
+            json.dumps(row.get("options") or {}), json.dumps(row.get("summary") or []),
+            row["signature"], 1 if row.get("is_collection") else 0,
+        ))
+
+
+def delete_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM overlay_state WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        )
+
+
+def _overlay_state_row(r) -> Dict[str, Any]:
+    d = dict(r)
+    d["season_index"] = None if d.get("season_index") in (None, -1) else d["season_index"]
+    try:
+        d["options"] = json.loads(d.pop("options_json") or "{}")
+    except Exception:
+        d["options"] = {}
+    try:
+        d["summary"] = json.loads(d.pop("summary_json") or "[]")
+    except Exception:
+        d["summary"] = []
+    d["is_collection"] = bool(d.get("is_collection"))
+    return d
+
+
+def get_overlay_states(pairs: List[tuple]) -> List[Dict[str, Any]]:
+    """Every tracked poster in the given (server_id, library_id) pairs."""
+    if not pairs:
+        return []
+    clause = " OR ".join("(server_id = ? AND library_id = ?)" for _ in pairs)
+    params: List[Any] = []
+    for sid, lid in pairs:
+        params += [sid, str(lid)]
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM overlay_state WHERE {clause} ORDER BY title COLLATE NOCASE, season_index",
+            params,
+        ).fetchall()
+    return [_overlay_state_row(r) for r in rows]
+
+
+def count_overlay_states(pairs: List[tuple]) -> int:
+    if not pairs:
+        return 0
+    clause = " OR ".join("(server_id = ? AND library_id = ?)" for _ in pairs)
+    params: List[Any] = []
+    for sid, lid in pairs:
+        params += [sid, str(lid)]
+    with get_db() as conn:
+        return conn.execute(f"SELECT COUNT(*) FROM overlay_state WHERE {clause}", params).fetchone()[0]
+
+
+def add_overlay_refresh_log(run_id: str, group_id: Optional[str], entries: List[Dict[str, Any]]) -> None:
+    if not entries:
+        return
+    with get_db() as conn:
+        conn.executemany("""
+            INSERT INTO overlay_refresh_log (run_id, group_id, server_id, rating_key, season_index, title, status, detail)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [(run_id, group_id, e.get("server_id"), e.get("rating_key"), e.get("season_index"),
+               e.get("title"), e.get("status"), e.get("detail")) for e in entries])
+        # Keep the log bounded: the last 2000 lines per group.
+        conn.execute("""
+            DELETE FROM overlay_refresh_log WHERE group_id IS ? AND id NOT IN (
+                SELECT id FROM overlay_refresh_log WHERE group_id IS ? ORDER BY id DESC LIMIT 2000
+            )
+        """, (group_id, group_id))
+
+
+def get_overlay_refresh_log(group_id: Optional[str], limit: int = 300) -> List[Dict[str, Any]]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM overlay_refresh_log WHERE group_id IS ? ORDER BY id DESC LIMIT ?",
+            (group_id, int(limit)),
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("season_index") == -1:
+            d["season_index"] = None
+        out.append(d)
+    return out
+
+
+def set_library_group_overlay_refresh(group_id: str, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Replace one Library Group's `overlayRefresh` config (by group id) and
+    save immediately, like set_library_group_mirror_config()."""
+    settings_row = get_ui_settings() or {}
+    groups = settings_row.get("libraryGroups") or []
+    for group in groups:
+        if group.get("id") == group_id:
+            group["overlayRefresh"] = config
+            settings_row["libraryGroups"] = groups
+            save_ui_settings(settings_row)
+            return group
+    return None
 
 
 def touch_tmdb_last_seen(media_type: str, tmdb_id: Optional[int], season_index: Optional[int] = None) -> None:
@@ -3856,6 +4082,37 @@ def get_library_id_for_rating_key(rating_key: str) -> Optional[str]:
     return row["library_id"] if row and row["library_id"] else None
 
 
+def set_file_paths(paths_by_key: Dict[str, Optional[List[str]]], is_tv: bool = False) -> int:
+    """Store each item's media file path(s) (movie_cache, or tv_cache when is_tv).
+
+    A None value means "couldn't fetch this time" and leaves the stored paths
+    alone; an empty list is stored as-is. Kept separate from the scan upserts
+    so those don't each need another column. Returns the number of rows sent."""
+    table = "tv_cache" if is_tv else "movie_cache"
+    rows = [(json.dumps(v), str(k)) for k, v in paths_by_key.items() if k and v is not None]
+    if not rows:
+        return 0
+    with get_db() as conn:
+        conn.cursor().executemany(f"UPDATE {table} SET file_paths_json = ? WHERE rating_key = ?", rows)
+    return len(rows)
+
+
+def get_file_paths(rating_key: str) -> List[str]:
+    """Media file path(s) a scan recorded for this item, or [] if none yet."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for table in ("movie_cache", "tv_cache"):
+            cursor.execute(f"SELECT file_paths_json FROM {table} WHERE rating_key = ?", (str(rating_key),))
+            row = cursor.fetchone()
+            if row and row["file_paths_json"]:
+                try:
+                    value = json.loads(row["file_paths_json"])
+                except (ValueError, TypeError):
+                    return []
+                return [str(p) for p in value] if isinstance(value, list) else []
+    return []
+
+
 def get_server_id_for_rating_key(rating_key: str) -> str:
     """Which configured media server (Quirk #57's `mediaServers` model) a
     rating_key/item id belongs to -- checked against movie_cache/tv_cache/
@@ -4349,6 +4606,9 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
         )
         counts["mirror_sync_state"] = cursor.rowcount
 
+        cursor.execute("DELETE FROM overlay_state WHERE server_id = ?", (server_id,))
+        counts["overlay_state"] = cursor.rowcount
+
     logger.info("[MEDIA_SERVER] Purged DB cache for removed server %s: %s", server_id, counts)
     return {"rating_keys": own_keys, "counts": counts}
 
@@ -4564,3 +4824,88 @@ def restore_poster_history_rows(rows: list) -> None:
 init_database()
 # Copy environment variables to UI settings on startup
 copy_env_to_ui_settings()
+
+
+# ---------------------------------------------------------------------------
+# MDBList caches (backend/mdblist_client.py)
+# ---------------------------------------------------------------------------
+
+def get_item_ratings(cache_key: str) -> Optional[Tuple[Dict[str, Any], float]]:
+    """(ratings dict, fetched_at epoch) or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT data_json, fetched_at FROM item_ratings WHERE cache_key = ?", (cache_key,)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["data_json"] or "{}"), float(row["fetched_at"])
+    except (TypeError, ValueError):
+        return None
+
+
+def save_item_ratings(cache_key: str, data: Dict[str, Any], fetched_at: float) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO item_ratings (cache_key, data_json, fetched_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET data_json = excluded.data_json, fetched_at = excluded.fetched_at",
+            (cache_key, json.dumps(data), fetched_at),
+        )
+        conn.commit()
+
+
+def get_list_cache(list_url: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT title, movie_ids_json, show_ids_json, fetched_at FROM list_cache WHERE list_url = ?", (list_url,)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return {
+            "title": row["title"],
+            "movie_ids": json.loads(row["movie_ids_json"] or "[]"),
+            "show_ids": json.loads(row["show_ids_json"] or "[]"),
+            "fetched_at": float(row["fetched_at"]),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+def save_list_cache(list_url: str, title: Optional[str], movie_ids: List[int], show_ids: List[int], fetched_at: float) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO list_cache (list_url, title, movie_ids_json, show_ids_json, fetched_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(list_url) DO UPDATE SET title = excluded.title, movie_ids_json = excluded.movie_ids_json, "
+            "show_ids_json = excluded.show_ids_json, fetched_at = excluded.fetched_at",
+            (list_url, title, json.dumps(movie_ids), json.dumps(show_ids), fetched_at),
+        )
+        conn.commit()
+
+
+def get_all_list_cache() -> List[Dict[str, Any]]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT list_url, title, movie_ids_json, show_ids_json, fetched_at FROM list_cache ORDER BY list_url"
+        ).fetchall()
+    out = []
+    for row in rows:
+        try:
+            out.append({
+                "url": row["list_url"],
+                "title": row["title"],
+                "movies": len(json.loads(row["movie_ids_json"] or "[]")),
+                "shows": len(json.loads(row["show_ids_json"] or "[]")),
+                "fetched_at": float(row["fetched_at"]),
+            })
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def clear_mdblist_cache() -> int:
+    with get_db() as conn:
+        n = conn.execute("DELETE FROM item_ratings").rowcount
+        n += conn.execute("DELETE FROM list_cache").rowcount
+        conn.commit()
+    return n

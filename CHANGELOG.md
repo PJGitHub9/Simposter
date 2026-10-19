@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.8.0 (2026-10-19) — `dev-overlays` branch
+
+### New Features
+- **Overlay engine v2** — per-layer conditions (`conditions`: resolution, codecs, channels, language, edition, file path regex, labels, year, title, studio, streaming platform, MDBList ratings and lists), badge sets (`group` + `weight`, first match wins) and hide rules (`suppress`), plus Kometa-style placement (align + offset in a 1000x1500 space) with background boxes and outlines. Shared by `backend/overlay_engine.py` and the preview's `frontend/src/services/overlayEngine.ts`.
+- **Whole-overlay conditions** — new `overlay_configs.conditions_json`; when they fail, none of the overlay's layers draw (real renders, Overlay Refresh and preview).
+- **Kometa overlay importer** — Overlay Manager → Import Kometa expands Kometa's templates, maps what Simposter supports and reports the rest.
+- **MDBList** — ratings and list membership for conditions and text, cached in the database (Settings → General).
+- **Overlay Refresh** — per-library-group page that re-renders posters whose overlay would now come out differently, with a schedule, Plex label and log.
+- **File paths from scans** — scans store each item's media file path for file-name conditions.
+- **Overlay Manager redesign** — tabs for Layers / Badge sets / Show overlay when; per-layer Look / Position / Show when tabs; one pin-and-distance position control in pixels; plain-English layer titles; rename layers; warnings on layers that draw nothing; compare the overlay on several example or real posters; "Insert value" list for text; a larger editor; unsaved-changes prompt.
+- **Branch-aware update check** — `/api/version-info` reads the running branch's `frontend/src/version.ts` from GitHub (cached for an hour) and `branches.json` from `main`, so the version badge shows an update on any branch, and a "Move to …" badge when the branch was merged, retired or deleted.
+
+### Bug Fixes
+- **Text variables** — plain (non-Kometa) text layers drew `{audience_rating}` literally; they now fill values and skip the layer when one is missing.
+- **Preview badge size** — the preview capped image badges at half the canvas width; real renders never did.
+- **Update check** — it only ran on `main` and queried a placeholder repository (`YOUR_USERNAME/simposter`), so it never reported anything.
+
 ## v1.7.12 (2026-10-16) — `webui-overhaul-dev` branch
 
 ### New Features

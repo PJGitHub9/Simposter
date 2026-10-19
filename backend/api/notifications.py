@@ -87,6 +87,7 @@ def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> boo
         "webhook": "appriseNotifyWebhook",
         "auto_generate": "appriseNotifyAutoGenerate",
         "media_mirror": "appriseNotifyMediaMirror",
+        "overlay_refresh": "appriseNotifyOverlayRefresh",
     }
 
     setting_key = source_map.get(source)
@@ -126,6 +127,7 @@ def _should_notify(source: str, library_id: Optional[str] = None) -> bool:
         "webhook": "discordNotifyWebhook",
         "auto_generate": "discordNotifyAutoGenerate",
         "media_mirror": "discordNotifyMediaMirror",
+        "overlay_refresh": "discordNotifyOverlayRefresh",
     }
 
     setting_key = source_map.get(source)
@@ -193,6 +195,7 @@ def _get_source_emoji(source: str) -> str:
         "webhook": "\U0001F517",  # Link
         "auto_generate": "\U0001F504",  # Arrows
         "media_mirror": "\U0001FA9E",  # Mirror
+        "overlay_refresh": "\U0001F501",  # Repeat
     }.get(source, "\U0001F3AC")  # Clapper board default
 
 
@@ -204,6 +207,7 @@ def _get_source_label(source: str) -> str:
         "webhook": "Webhook",
         "auto_generate": "Auto-Generate",
         "media_mirror": "Media Mirror",
+        "overlay_refresh": "Overlay Refresh",
     }.get(source, source)
 
 
@@ -792,6 +796,89 @@ def send_media_mirror_notification(
                     logger.warning("[APPRISE] One or more Apprise services failed (Media Mirror)")
             except Exception as e:
                 logger.error("[APPRISE] Media Mirror notification error: %s", e)
+
+
+def send_overlay_refresh_notification(
+    group: Dict[str, Any],
+    stats: Dict[str, int],
+    items: List[Dict[str, Any]],
+    scheduled: bool = False,
+) -> None:
+    """Run summary for an overlay refresh (Quirk #166): how many tracked
+    posters were checked/updated/failed, plus a few of the updated titles.
+    Uses its own "Overlay Refresh" toggles; library filter = the group's
+    first member library."""
+    members = (group or {}).get("members") or []
+    library_id = str(members[0].get("libraryId")) if members else None
+    send_discord = _should_notify("overlay_refresh", library_id)
+    send_apprise = _should_notify_apprise("overlay_refresh", library_id)
+    if not send_discord and not send_apprise:
+        return
+
+    fields: List[tuple] = [("Library", (group or {}).get("name") or _get_library_name(library_id))]
+    fields.append(("Checked", str(stats.get("checked", 0))))
+    fields.append(("Updated", str(stats.get("updated", 0))))
+    if stats.get("failed"):
+        fields.append(("Failed", str(stats["failed"])))
+    updated = [i for i in items if i.get("status") == "updated"]
+    if updated:
+        lines = [f"{i.get('title')}: {i.get('reason')}" for i in updated[:5]]
+        if len(updated) > 5:
+            lines.append(f"...and {len(updated) - 5} more")
+        fields.append(("Changes", "\n".join(lines)[:1000]))
+    if stats.get("failed"):
+        description = f"Finished with {stats['failed']} failed poster(s)"
+        color = 0xFFA502
+    elif stats.get("updated"):
+        description = f"{stats['updated']} poster(s) re-rendered with updated overlays"
+        color = 0x3DD6B7
+    else:
+        description = f"Nothing changed ({stats.get('checked', 0)} poster(s) checked)"
+        color = 0x3DD6B7
+
+    title = f"\U0001F501 {'Scheduled ' if scheduled else ''}Overlay Refresh Complete"
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "fields": [{"name": n, "value": v, "inline": n != "Changes"} for n, v in fields],
+        "footer": {"text": "Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    settings = _get_notification_settings()
+    if send_discord:
+        try:
+            resp = requests.post(settings.get("discordWebhookUrl", ""), json={"embeds": [embed]}, timeout=10)
+            if resp.status_code not in (200, 204):
+                logger.warning("[DISCORD] Overlay refresh notification failed: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.error("[DISCORD] Overlay refresh notification error: %s", e)
+
+    if send_apprise:
+        other_urls: List[str] = []
+        for url in settings.get("appriseUrls", []) or []:
+            if not url.strip():
+                continue
+            discord_webhook = _resolve_discord_webhook_url(url)
+            if discord_webhook:
+                try:
+                    requests.post(discord_webhook, json={"embeds": [embed]}, timeout=10)
+                except Exception as e:
+                    logger.error("[APPRISE] Overlay refresh Discord embed error: %s", e)
+            else:
+                other_urls.append(url.strip())
+        if other_urls:
+            try:
+                import apprise
+                ap = apprise.Apprise()
+                for url in other_urls:
+                    ap.add(url)
+                body = description + "".join(f"\n{n}: {v}" for n, v in fields)
+                if len(ap) > 0 and not ap.notify(title=f"{title} — Simposter", body=body):
+                    logger.warning("[APPRISE] One or more Apprise services failed (overlay refresh)")
+            except Exception as e:
+                logger.error("[APPRISE] Overlay refresh notification error: %s", e)
 
 
 def send_batch_notification(

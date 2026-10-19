@@ -16,6 +16,7 @@ import BackdropsView from './views/BackdropsView.vue'
 import SquareArtView from './views/SquareArtView.vue'
 import ThumbArtView from './views/ThumbArtView.vue'
 import MediaMirrorView from './views/MediaMirrorView.vue'
+import OverlayRefreshView from './views/OverlayRefreshView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -30,6 +31,7 @@ export const router = createRouter({
     { path: '/movies/square-art', name: 'square-art', component: SquareArtView },
     { path: '/movies/thumb-art', name: 'thumb-art', component: ThumbArtView },
     { path: '/movies/media-mirror', name: 'media-mirror', component: MediaMirrorView },
+    { path: '/movies/overlay-refresh', name: 'overlay-refresh', component: OverlayRefreshView },
     { path: '/tv-shows', name: 'tv-shows', component: TvShowsView },
     { path: '/tv-shows/batch-edit', name: 'tv-batch-edit', component: TvBatchEditView },
     { path: '/tv-shows/local-assets', name: 'tv-local-assets', component: LocalAssetsView },
@@ -38,6 +40,7 @@ export const router = createRouter({
     { path: '/tv-shows/square-art', name: 'tv-square-art', component: SquareArtView },
     { path: '/tv-shows/thumb-art', name: 'tv-thumb-art', component: ThumbArtView },
     { path: '/tv-shows/media-mirror', name: 'tv-media-mirror', component: MediaMirrorView },
+    { path: '/tv-shows/overlay-refresh', name: 'tv-overlay-refresh', component: OverlayRefreshView },
     { path: '/backup', name: 'backup', component: BackupRestoreView },
     { path: '/templates', name: 'template-manager', component: TemplateManagerView },
     { path: '/overlays', name: 'overlay-config-manager', component: OverlayConfigManagerView },

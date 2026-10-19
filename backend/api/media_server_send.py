@@ -32,7 +32,7 @@ send_batch_notification()), so adding one only for the sync branch would be a
 NEW inconsistency, not a cleanup.
 """
 import base64
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import APIRouter, HTTPException
@@ -67,6 +67,11 @@ class MediaServerSendRequest(BaseModel):
     # server it's targeting and can pass it straight through.
     server_id: Optional[str] = None
     notify: bool = True  # False when the editor sends one combined notification itself
+    # What the uploaded preview was rendered from (the manual editors send it),
+    # so the poster can be tracked for overlay refresh (Quirk #166):
+    # {template_id, preset_id, background_url, logo_url, options, library_id,
+    #  source_server_id, meta_rating_key, media_type, title, year, tmdb_id}
+    render: Optional[Dict[str, Any]] = None
 
 
 def _resolve_image_bytes(req: MediaServerSendRequest) -> tuple:
@@ -361,6 +366,38 @@ def _cache_logo_after_upload(item_id: str, image_bytes: bytes, content_type: str
     return new_logo_url
 
 
+def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id: str) -> None:
+    """Track a manual-editor poster sent to Jellyfin/Emby for overlay refresh.
+    Metadata is rebuilt the same way the preview built it (from the item the
+    editor rendered, meta_rating_key). Never raises."""
+    try:
+        from ..config import inject_plex_media_metadata
+        from ..overlay_refresh import record_send, library_in_group
+        r = req.render or {}
+        template_id = r.get("template_id")
+        if not template_id:
+            return
+        media_type = "tv" if (r.get("media_type") in ("tv", "tv-show") or req.is_tv) else "movie"
+        opts = dict(r.get("options") or {})
+        # The preview endpoint sets these from the request body the same way.
+        opts["movie_title"] = r.get("title") or ""
+        opts["movie_year"] = r.get("year") or ""
+        if r.get("preset_id"):
+            opts["preset_id"] = r["preset_id"]
+        meta_key = str(r.get("meta_rating_key") or req.rating_key)
+        inject_plex_media_metadata(opts, meta_key, tmdb_id=r.get("tmdb_id"), is_tv=media_type == "tv")
+        library_id = library_in_group(r.get("source_server_id") or server_id, r.get("library_id"), media_type, server_id)
+        record_send(
+            server_id, item_id, template_id=template_id, options=opts,
+            background_url=r.get("background_url"), logo_url=r.get("logo_url"),
+            media_type=media_type, library_id=library_id,
+            season_index=req.season_index if req.season_index is not None else r.get("season_index"),
+            tmdb_id=r.get("tmdb_id"), title=r.get("title"), year=r.get("year"),
+        )
+    except Exception as e:
+        logger.debug("[MEDIA_SERVER_SEND] overlay refresh record failed for %s: %s", item_id, e)
+
+
 @router.post("/send-poster")
 def api_send_poster(req: MediaServerSendRequest):
     server_id, client = _resolve_non_plex_client(req.rating_key, req.server_id)
@@ -397,6 +434,8 @@ def api_send_poster(req: MediaServerSendRequest):
     # directly would always miss.
     if req.notify:
         _notify_manual_send(req.rating_key, server_id, "poster")
+    if req.render:
+        _record_editor_render(req, server_id, item_id)
     return {"status": "ok", "poster_url": new_poster_url, "item_id": item_id}
 
 

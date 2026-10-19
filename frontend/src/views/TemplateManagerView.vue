@@ -284,7 +284,7 @@ const importOverlayInfo = computed(() => {
     if (!o) return ''
     const c = (o.configs || []).length
     const a = (o.assets || []).length
-    return `Includes ${c} overlay config${c === 1 ? '' : 's'} and ${a} overlay image${a === 1 ? '' : 's'}.`
+    return `Includes ${c} overlay${c === 1 ? '' : 's'} and ${a} overlay image${a === 1 ? '' : 's'}.`
   } catch {
     return ''
   }
@@ -445,7 +445,7 @@ const handleImport = async () => {
     importText.value = ''
     await fetchPresets()
     const n = data?.overlay_configs || 0
-    showSuccess(n ? `Presets imported, with ${n} overlay config${n === 1 ? '' : 's'}` : 'Presets imported')
+    showSuccess(n ? `Presets imported, with ${n} overlay${n === 1 ? '' : 's'}` : 'Presets imported')
   } catch (e) {
     showError(e instanceof Error ? e.message : 'Invalid JSON')
   } finally {
@@ -908,7 +908,7 @@ onMounted(async () => {
           <button class="section-toggle" @click="showImportExport = !showImportExport">
             <div class="toggle-left">
               <h3>Import / Export</h3>
-              <span class="help">Backup or transfer presets as JSON. Overlay configs a preset uses, and their images, are included.</span>
+              <span class="help">Backup or transfer presets as JSON. Overlays a preset uses, and their images, are included.</span>
             </div>
             <svg class="acc-chevron" :class="{ open: showImportExport }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="6 9 12 15 18 9" />

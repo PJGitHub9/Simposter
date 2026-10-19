@@ -77,7 +77,8 @@ def api_plex_send(req: PlexSendRequest):
                 movie_details = {
                     'title': title,
                     'year': int(year) if year and year.isdigit() else None,
-                    'library_id': req.library_id
+                    'library_id': req.library_id,
+                    'parent_title': item.get('parentTitle'),
                 }
     except Exception as plex_err:
         logger.debug("[PLEX] Failed to get metadata from Plex for template vars: %s", plex_err)
@@ -239,6 +240,19 @@ def api_plex_send(req: PlexSendRequest):
         )
     except Exception as history_err:
         logger.debug("[HISTORY] Failed to record manual send: %s", history_err)
+
+    # Remember the render inputs for overlay refresh (Quirk #166).
+    from ..overlay_refresh import record_send
+    record_send(
+        "plex-1", req.rating_key,
+        template_id=req.template_id, options=options,
+        background_url=req.background_url, logo_url=req.logo_url,
+        media_type="tv" if is_tv else "movie",
+        library_id=req.library_id or movie_details.get("library_id"),
+        season_index=req.season_index if is_tv else None,
+        title=movie_details.get("parent_title") or movie_details.get("title"), year=movie_details.get("year"),
+        is_collection=bool(req.is_collection),
+    )
 
     # Send notifications for manual send
     _notif_kwargs = dict(
