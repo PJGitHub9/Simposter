@@ -90,6 +90,77 @@ class _AssetSaver:
         return asset_id
 
 
+def finalize_elements(
+    elements: List[Dict[str, Any]],
+    report: List[Dict[str, Any]],
+    find_image,
+    find_font,
+    saver: "_AssetSaver",
+    dry_run: bool,
+    available_fonts: set,
+    saved_font_names: Dict[str, str],
+    missing_images: Dict[str, List[str]],
+):
+    """Attach images and fonts to mapped elements and validate them. find_image /
+    find_font(wanted_path) return (name, bytes) or None. Shared by the upload
+    import and live Kometa files. Returns (elements, fonts written)."""
+    fonts_saved = 0
+    entries = {e["name"]: e for e in report}
+    final_elements: List[Dict[str, Any]] = []
+    for element in elements:
+        entry = entries.get(element["name"], {"messages": []})
+        # Image
+        wanted = entry.get("image")
+        if wanted:
+            found = find_image(wanted)
+            entry["image_match"] = found[0] if found else None
+            if found:
+                match, content = found
+                asset_id = saver.save(match, content)
+                if asset_id and not dry_run:
+                    element["asset_id"] = asset_id
+                scale_px = entry.pop("scale_px", None)
+                if scale_px and (scale_px.get("width") or scale_px.get("height")):
+                    try:
+                        from PIL import Image
+                        import io
+                        with Image.open(io.BytesIO(content)) as img:
+                            w, h = img.size
+                        element["scale"] = (scale_px["width"] / w) if scale_px.get("width") else (scale_px["height"] / h)
+                    except Exception:
+                        pass
+            else:
+                missing_images.setdefault(wanted, []).append(element["name"])
+                entry["messages"].append(f"image {PurePosixPath(wanted).name} wasn't found")
+                if entry.get("status") == "ok":
+                    entry["status"] = "warning"
+        # Font
+        font = entry.get("font")
+        if font:
+            family = element.get("font_family") or ""
+            found = find_font(font)
+            if found:
+                fname = PurePosixPath(found[0]).name
+                if not dry_run and fname not in saved_font_names:
+                    target = _font_dir() / fname
+                    content = found[1]
+                    if not target.exists() or target.read_bytes() != content:
+                        target.write_bytes(content)
+                        fonts_saved += 1
+                    saved_font_names[fname] = PurePosixPath(fname).stem
+                element["font_family"] = PurePosixPath(fname).stem
+            elif family.lower() not in available_fonts:
+                entry["messages"].append(f"font {PurePosixPath(str(font)).name} not found; upload it or the default font is used")
+                if entry.get("status") == "ok":
+                    entry["status"] = "warning"
+        try:
+            final_elements.append(OverlayElement(**element).model_dump(exclude_none=True))
+        except Exception as e:
+            entry["status"] = "skipped"
+            entry["messages"].append(f"invalid element: {e}")
+    return final_elements, fonts_saved
+
+
 @router.post("/overlay-configs/kometa-import")
 async def api_kometa_import(
     files: List[UploadFile] = File(...),
@@ -152,59 +223,17 @@ async def api_kometa_import(
             continue
         item["messages"].extend(file_messages)
 
-        entries = {e["name"]: e for e in report}
-        final_elements: List[Dict[str, Any]] = []
-        for element in elements:
-            entry = entries.get(element["name"], {"messages": []})
-            # Image
-            wanted = entry.get("image")
-            if wanted:
-                match = ki.match_upload(wanted, bundle["image"])
-                entry["image_match"] = match
-                if match:
-                    content = bundle["image"][match]
-                    asset_id = saver.save(match, content)
-                    if asset_id and not dry_run:
-                        element["asset_id"] = asset_id
-                    scale_px = entry.pop("scale_px", None)
-                    if scale_px and (scale_px.get("width") or scale_px.get("height")):
-                        try:
-                            from PIL import Image
-                            import io
-                            with Image.open(io.BytesIO(content)) as img:
-                                w, h = img.size
-                            element["scale"] = (scale_px["width"] / w) if scale_px.get("width") else (scale_px["height"] / h)
-                        except Exception:
-                            pass
-                else:
-                    missing_images.setdefault(wanted, []).append(element["name"])
-                    entry["messages"].append(f"image {PurePosixPath(wanted).name} wasn't uploaded")
-                    if entry.get("status") == "ok":
-                        entry["status"] = "warning"
-            # Font
-            font = entry.get("font")
-            if font:
-                family = element.get("font_family") or ""
-                fmatch = ki.match_upload(font, bundle["font"])
-                if fmatch:
-                    fname = PurePosixPath(fmatch).name
-                    if not dry_run and fname not in saved_font_names:
-                        target = _font_dir() / fname
-                        content = bundle["font"][fmatch]
-                        if not target.exists() or target.read_bytes() != content:
-                            target.write_bytes(content)
-                            fonts_saved += 1
-                        saved_font_names[fname] = PurePosixPath(fname).stem
-                    element["font_family"] = PurePosixPath(fname).stem
-                elif family.lower() not in available_fonts:
-                    entry["messages"].append(f"font {PurePosixPath(str(font)).name} not found; upload it or the default font is used")
-                    if entry.get("status") == "ok":
-                        entry["status"] = "warning"
-            try:
-                final_elements.append(OverlayElement(**element).model_dump(exclude_none=True))
-            except Exception as e:
-                entry["status"] = "skipped"
-                entry["messages"].append(f"invalid element: {e}")
+        def _find_upload(kind: str):
+            def find(wanted: str):
+                match = ki.match_upload(wanted, bundle[kind])
+                return (match, bundle[kind][match]) if match else None
+            return find
+
+        final_elements, added_fonts = finalize_elements(
+            elements, report, _find_upload("image"), _find_upload("font"), saver, dry_run,
+            available_fonts, saved_font_names, missing_images,
+        )
+        fonts_saved += added_fonts
 
         config_name = (name_map.get(path) or stem).strip() or stem
         config_id = existing_configs.get(config_name) or f"overlay-kometa-{uuid.uuid4().hex[:10]}"

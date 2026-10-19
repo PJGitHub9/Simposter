@@ -608,28 +608,15 @@ async def api_presets_import(payload: dict = Body(...)):
         # merge_presets() assigns for an id-less "shared/compact" import isn't
         # returned from that call, so those still rely purely on self-heal.
         try:
-            from ..rendering import generate_overlay
-            from ..templates.canvas import resolve_canvas_size
-            from ..config import settings
-            generated = 0
+            from ..overlay_cache import refresh_preset
+            refreshed = 0
             for template_id, tpl_data in payload.items():
                 presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
                 for preset in presets_list:
-                    pid = preset.get("id")
-                    options = preset.get("options") or {}
-                    if not pid:
-                        continue
-                    try:
-                        canvas_w, canvas_h = resolve_canvas_size(options)
-                        overlay_img = generate_overlay(options, canvas_w, canvas_h)
-                        overlay_dir = Path(settings.CONFIG_DIR) / "overlays" / template_id
-                        overlay_dir.mkdir(parents=True, exist_ok=True)
-                        overlay_img.save(overlay_dir / f"{pid}.png", "PNG")
-                        generated += 1
-                    except Exception as one_err:
-                        logger.warning(f"[PRESETS] Failed to generate overlay cache for imported preset {template_id}/{pid}: {one_err}")
-            if generated:
-                logger.info(f"[PRESETS] Generated overlay cache for {generated} imported preset(s)")
+                    if isinstance(preset, dict) and preset.get("id"):
+                        refreshed += 1 if refresh_preset(template_id, preset["id"]) else 0
+            if refreshed:
+                logger.info(f"[PRESETS] Generated overlay cache for {refreshed} imported preset(s)")
         except Exception as overlay_batch_err:
             logger.warning(f"[PRESETS] Overlay cache generation for imported presets failed: {overlay_batch_err}")
 
@@ -644,7 +631,6 @@ async def api_presets_import(payload: dict = Body(...)):
 @router.post("/presets/save")
 def api_save_preset(req: PresetSaveRequest):
     """Save a preset to the database and generate overlay cache."""
-    from ..rendering import generate_overlay
     from ..config import settings
 
     template_id = req.template_id or "uniformlogo"
@@ -668,22 +654,10 @@ def api_save_preset(req: PresetSaveRequest):
         db.save_preset(template_id, preset_id, preset_name, options, season_options)
         logger.info(f"[PRESETS] Saved preset {preset_id} for template {template_id}")
         
-        # Generate and save overlay cache
-        try:
-            overlay = generate_overlay(options)
-            
-            # Create overlay directory: config/overlays/{template_id}/
-            overlay_dir = Path(settings.CONFIG_DIR) / "overlays" / template_id
-            overlay_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Save overlay as PNG
-            overlay_path = overlay_dir / f"{preset_id}.png"
-            overlay.save(overlay_path, "PNG")
-            logger.info(f"[PRESETS] Generated overlay cache: {overlay_path}")
-        except Exception as overlay_err:
-            logger.warning(f"[PRESETS] Failed to generate overlay cache: {overlay_err}")
-            # Non-fatal: continue even if overlay generation fails
-        
+        # Overlay effect caches for this preset (series + season settings).
+        from ..overlay_cache import refresh_preset
+        refresh_preset(template_id, preset_id)
+
         return {"message": f"Preset '{preset_id}' saved."}
     except Exception as e:
         logger.error(f"[PRESETS] Error saving preset: {e}")
@@ -722,6 +696,8 @@ def api_save_season_options(req: dict = Body(...)):
             )
         
         logger.info(f"[PRESETS] Saved season options for preset {preset_id}")
+        from ..overlay_cache import refresh_preset
+        refresh_preset(template_id, preset_id)
         return {"message": f"Season options for preset '{preset_id}' saved."}
     except HTTPException:
         raise
@@ -742,6 +718,8 @@ def api_delete_preset(req: PresetDeleteRequest):
             raise HTTPException(status_code=404, detail="Preset not found")
 
         logger.info(f"[PRESETS] Deleted preset {preset_id} from template {template_id}")
+        from ..overlay_cache import remove_preset
+        remove_preset(template_id, preset_id)
         return {"message": f"Preset '{preset_id}' deleted."}
     except HTTPException:
         raise

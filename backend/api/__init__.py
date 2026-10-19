@@ -23,6 +23,7 @@ from . import (
     backup,
     overlay_config,
     kometa_import,
+    live_kometa,
     mdblist,
     version_info,
     cleanup,
@@ -56,6 +57,7 @@ router.include_router(notifications.router)
 router.include_router(backup.router)
 router.include_router(overlay_config.router)
 router.include_router(kometa_import.router)
+router.include_router(live_kometa.router)
 router.include_router(mdblist.router)
 router.include_router(version_info.router)
 router.include_router(cleanup.router)

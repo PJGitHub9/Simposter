@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.8.02 (2026-10-19) — `dev-overlays` branch
+
+### Improvements
+- **Overlay effect cache built ahead of time** — new `backend/overlay_cache.py`. At startup (background thread), after a database restore, and on preset save / season save / import, every preset's effect layers are generated from its stored options (series and season settings); deleting a preset removes its files.
+
+### Bug Fixes
+- **Wrong cached effects** — the cache file was `config/overlays/{template}/{preset}.png`, one per preset, and a cache miss generated it from whatever was being rendered. A season config with its own matte/fade/vignette, or a Square Art (square canvas) render, could put its layer there and every other render of that preset would then use it. Files are now `{preset}--{signature}.png`, where the signature covers the effect options and canvas size; old-style files are removed at startup and flagged by Cleanup.
+
+## v1.8.01 (2026-10-19) — `dev-overlays` branch
+
+### New Features
+- **Live Kometa files** — Overlay Manager → Advanced. A server-side overlay YAML is re-read on an interval (`live_kometa_files` table, `backend/live_kometa.py`, `/api/live-kometa-files`, APScheduler job per file); when its contents change it is re-imported into the same overlay config (whole-overlay conditions kept), and optionally Overlay Refresh runs for every library group of that type. Local images/fonts are found next to the file or in the folders above it.
+- **ID-list builders** — Kometa `tmdb_movie`, `tmdb_show` and `tvdb_show` import as `tmdb_id`/`tvdb_id` conditions instead of a hidden layer; the engine fills a missing id from the scan cache when a condition needs it, and "TMDb ID"/"TVDB ID" are Show when fields.
+
+### Changes
+- The Kometa importer's image/font matching and validation moved into a shared `finalize_elements()` used by uploads and live files; an image that can't be matched is now reported as "wasn't found".
+
 ## v1.8.0 (2026-10-19) — `dev-overlays` branch
 
 ### New Features

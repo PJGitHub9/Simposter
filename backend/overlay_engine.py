@@ -70,7 +70,7 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Which lazily-loaded data the elements use: stored file paths, MDBList
     ratings (conditions or text variables), and MDBList lists (conditions)."""
     rating_fields = _rating_field_names()
-    needs = {"paths": False, "ratings": False, "lists": []}
+    needs = {"paths": False, "ratings": False, "lists": [], "ids": False}
     for element in elements:
         for cond in element.get("conditions") or []:
             if not isinstance(cond, dict):
@@ -80,6 +80,8 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
                 needs["paths"] = True
             elif field in rating_fields:
                 needs["ratings"] = True
+            elif field in ("tmdb_id", "tvdb_id"):
+                needs["ids"] = True
             elif field in _LIST_FIELDS:
                 for value in (cond.get("value") if isinstance(cond.get("value"), list) else [cond.get("value")]):
                     if value and str(value) not in needs["lists"]:
@@ -128,6 +130,16 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
             except Exception:
                 paths = []
         ctx["file_paths"] = paths
+    if needs.get("ids") and (ctx.get("tmdb_id") in (None, "") or ctx.get("tvdb_id") in (None, "")) and ctx.get("rating_key"):
+        try:
+            from . import database as db
+            cached_tmdb, cached_tvdb = db.get_ids_for_rating_key(str(ctx["rating_key"]))
+            if ctx.get("tmdb_id") in (None, "") and cached_tmdb:
+                ctx["tmdb_id"] = cached_tmdb
+            if ctx.get("tvdb_id") in (None, "") and cached_tvdb:
+                ctx["tvdb_id"] = cached_tvdb
+        except Exception:
+            pass
     if needs["ratings"] or needs["lists"]:
         tmdb_id, tvdb_id, media_type = _item_ids(ctx)
         try:

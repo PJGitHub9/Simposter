@@ -404,6 +404,16 @@ def api_overlay_preview_metadata(
             except Exception as pre_err:
                 logger.debug(f"[OVERLAY] Preview pre-pass error: {pre_err}")
 
+        # TMDb/TVDB ids, for conditions that match fixed id lists (imported tmdb_movie etc.).
+        try:
+            cached_tmdb, cached_tvdb = db.get_ids_for_rating_key(rating_key)
+            if cached_tmdb and not info.get("tmdb_id"):
+                info["tmdb_id"] = str(cached_tmdb)
+            if cached_tvdb and not info.get("tvdb_id"):
+                info["tvdb_id"] = str(cached_tvdb)
+        except Exception:
+            pass
+
         # Labels and file paths for previewing element conditions (overlay engine v2).
         labels: list = []
         file_paths: list = []

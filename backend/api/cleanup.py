@@ -157,14 +157,17 @@ def api_cleanup_scan(history_days: int = 180):
         Path(SQUARE_ART_CACHE_DIR), include_thumbs=True,
     )
 
-    # --- Overlay effect cache (config/overlays/{template_id}/{preset_id}.png) -
+    # --- Overlay effect cache (config/overlays/{template_id}/{preset_id}--{sig}.png)
+    from ..overlay_cache import is_orphan as is_overlay_cache_orphan
     overlay_cache_orphans: List[Path] = []
     if OVERLAY_CACHE_DIR.exists():
         for template_dir in OVERLAY_CACHE_DIR.iterdir():
             if not template_dir.is_dir():
                 continue
             for f in template_dir.iterdir():
-                if f.is_file() and (template_dir.name, f.stem) not in known_template_preset_pairs:
+                # {preset_id}--{signature}.png (backend/overlay_cache.py); old {preset_id}.png
+                # files are leftovers too.
+                if f.is_file() and is_overlay_cache_orphan(template_dir.name, f.stem, known_template_preset_pairs):
                     overlay_cache_orphans.append(f)
     scan["overlay_effect_cache"] = [str(p) for p in overlay_cache_orphans]
     categories.append({

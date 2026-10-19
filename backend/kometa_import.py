@@ -77,6 +77,13 @@ _LIST_BUILDER_PREFIXES = (
     "plex_collection", "boxofficemojo", "trakt_list", "summary",
 )
 
+# Builders that are a fixed list of IDs: matched against the item's own ID.
+_ID_BUILDERS = {
+    "tmdb_movie": ("tmdb_id", "TMDb"),
+    "tmdb_show": ("tmdb_id", "TMDb"),
+    "tvdb_show": ("tvdb_id", "TVDB"),
+}
+
 # Filter attributes Simposter can check, and how a bare (no modifier) value compares.
 # "string" filters match when the value is contained; "tag" filters match exactly.
 _FILTER_FIELDS = {
@@ -728,6 +735,22 @@ def map_definition(
                 messages.append("mdblist_list needs an MDBList API key (Settings → General); hidden until one is added")
             conditions.append({"field": "list", "op": "eq", "value": norm[0]} if len(norm) == 1
                               else {"field": "list", "op": "in", "value": norm})
+            continue
+        if key in _ID_BUILDERS:
+            field, kind = _ID_BUILDERS[key]
+            ids = []
+            for item in _get_list(raw):
+                for part in str(item).split(","):
+                    part = part.strip()
+                    if part.isdigit() and part not in ids:
+                        ids.append(part)
+            if not ids:
+                messages.append(f"{key} has no {kind} IDs; element hidden")
+                conditions.append(_never(f"_list_{key}"))
+                continue
+            messages.append(f"{key}: matched by {kind} ID ({len(ids)} item{'s' if len(ids) != 1 else ''}); re-import to pick up changes to the list")
+            conditions.append({"field": field, "op": "eq", "value": ids[0]} if len(ids) == 1
+                              else {"field": field, "op": "in", "value": ids})
             continue
         if key.startswith(_LIST_BUILDER_PREFIXES):
             messages.append(f"{key} (a list of items) isn't supported yet; element hidden")

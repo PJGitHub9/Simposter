@@ -6,6 +6,7 @@ import KometaPlacementEditor from '@/components/overlay/KometaPlacementEditor.vu
 import KometaImportModal from '@/components/overlay/KometaImportModal.vue'
 import OverlayPositionEditor from '@/components/overlay/OverlayPositionEditor.vue'
 import OverlayBadgeSets from '@/components/overlay/OverlayBadgeSets.vue'
+import LiveKometaFiles from '@/components/overlay/LiveKometaFiles.vue'
 import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels'
 import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
@@ -1932,6 +1933,13 @@ const useRealItem = () => {
 
 const showAssets = ref(false)
 
+// Advanced section (live Kometa files), closed by default.
+const showAdvanced = ref(false)
+const openOverlayById = (id: string) => {
+  const cfg = configs.value.find(c => c.id === id)
+  if (cfg) editConfig(cfg)
+}
+
 // Renaming a layer (its name is also how hide rules point at it).
 const renamingKey = ref<number | null>(null)
 const renameDraft = ref('')
@@ -2192,6 +2200,21 @@ onMounted(() => {
     </div>
 
     <!-- Config Editor Modal -->
+    <!-- Advanced: live Kometa files (hidden until opened) -->
+    <div class="section-card advanced-card">
+      <div class="section-header">
+        <button type="button" class="section-toggle" @click="showAdvanced = !showAdvanced">
+          <span class="section-chev" :class="{ open: showAdvanced }">›</span>
+          <h2>Advanced</h2>
+        </button>
+      </div>
+      <p v-if="!showAdvanced" class="section-note">Live Kometa files: overlay files another tool keeps rewriting (like UMTK), re-imported automatically.</p>
+      <template v-else>
+        <h3 class="advanced-sub">Live Kometa files</h3>
+        <LiveKometaFiles @changed="loadConfigs" @open-overlay="openOverlayById" />
+      </template>
+    </div>
+
     <Teleport to="body">
     <!-- Teleported so it centers on the window, not the page area (Quirk #23). -->
     <div v-if="showEditor && selectedConfig" class="modal-overlay">
@@ -3375,6 +3398,8 @@ onMounted(() => {
 .element-index { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; background: rgba(255, 255, 255, 0.08); border-radius: 50%; color: var(--text-secondary, #aaa); font-size: 0.7rem; font-weight: 600; }
 
 
+.advanced-card { margin-top: 1.25rem; }
+.advanced-sub { margin: 0.6rem 0 0.4rem; font-size: 0.95rem; color: var(--text-primary, #fff); }
 .look-help { grid-column: 1 / -1; margin: 0; font-size: 0.72rem; color: var(--text-secondary, #888); line-height: 1.4; }
 .element-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .section-toggle { display: flex; align-items: center; gap: 0.45rem; background: none; border: none; padding: 0; cursor: pointer; color: inherit; }

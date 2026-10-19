@@ -10,6 +10,38 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.02',
+    date: '2026-10-19',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Fast-render overlay layers (matte, fade, vignette) are now built for every preset when Simposter starts, and again when a preset is saved or imported, so the first batch render is already fast.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'A season poster with its own matte, fade or vignette, or a Square Art render, could reuse the series poster\'s cached effects (or the other way round). Each now has its own.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.01',
+    date: '2026-10-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Live Kometa files (Overlay Manager, Advanced): point Simposter at an overlay file another tool keeps rewriting, like UMTK\'s daily files. It re-reads the file on a schedule, re-imports it into the same overlay when it changed, and can re-render the posters whose overlay now looks different.',
+          'Kometa files that list movies or shows by ID (tmdb_movie, tmdb_show, tvdb_show) now import, matching each item by its TMDb or TVDB ID. Re-import files you imported before to pick this up.',
+          'TMDb ID and TVDB ID can be used in Show when.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.0',
     date: '2026-10-19',
     sections: [

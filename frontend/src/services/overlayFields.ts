@@ -80,6 +80,8 @@ export const FIELDS: FieldDef[] = [
     options: opts([['movie', 'Movie'], ['tv', 'TV show']]),
   },
   { value: 'year', label: 'Year', group: 'Item', kind: 'number', placeholder: '2024' },
+  { value: 'tmdb_id', label: 'TMDb ID', group: 'Item', kind: 'text', placeholder: '603', hint: 'Use "is any of" for a list of IDs.' },
+  { value: 'tvdb_id', label: 'TVDB ID', group: 'Item', kind: 'text', placeholder: '81189', hint: 'TV shows. Use "is any of" for a list of IDs.' },
   { value: 'title', label: 'Title', group: 'Item', kind: 'text', placeholder: 'Star Wars' },
   { value: 'studio', label: 'Studio', group: 'Item', kind: 'text', placeholder: 'a24' },
   { value: 'streaming_platform', label: 'Streaming platform', group: 'Item', kind: 'text', placeholder: 'netflix' },

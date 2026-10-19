@@ -196,6 +196,10 @@ def api_import_database(data: Dict[str, Any]):
 
         # The cached overlay effect layers belong to the old presets; they regenerate on next render.
         shutil.rmtree(Path(settings.CONFIG_DIR) / "overlays", ignore_errors=True)
+        # Rebuild them for the restored presets in the background.
+        import threading
+        from ..overlay_cache import warm_all
+        threading.Thread(target=warm_all, daemon=True, name="overlay-cache-warm").start()
 
         # Apply the restored settings now instead of waiting for a restart.
         try:

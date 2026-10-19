@@ -856,6 +856,26 @@ def init_database():
             cursor.execute("ALTER TABLE overlay_configs ADD COLUMN conditions_json TEXT")
             logger.info("[DB] Added 'conditions_json' column to overlay_configs table")
 
+        # Live Kometa files: overlay YAMLs on disk that are re-imported when they change.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS live_kometa_files (
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL,
+                name TEXT,
+                library_type TEXT NOT NULL DEFAULT 'movie',
+                config_id TEXT,
+                interval_hours REAL NOT NULL DEFAULT 6,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                refresh_posters INTEGER NOT NULL DEFAULT 1,
+                last_hash TEXT,
+                last_checked_at TEXT,
+                last_changed_at TEXT,
+                last_status TEXT,
+                last_message TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         # Streaming provider cache — stores TMDb watch/providers results per item
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS streaming_provider_cache (
@@ -1748,6 +1768,65 @@ def _overlay_conditions(raw: Optional[str]) -> List[Dict[str, Any]]:
     except (TypeError, ValueError):
         return []
     return [c for c in value if isinstance(c, dict)] if isinstance(value, list) else []
+
+
+_LIVE_KOMETA_COLUMNS = (
+    "id", "path", "name", "library_type", "config_id", "interval_hours", "enabled", "refresh_posters",
+    "last_hash", "last_checked_at", "last_changed_at", "last_status", "last_message", "created_at",
+)
+
+
+def _live_kometa_row(row) -> Dict[str, Any]:
+    d = {k: row[k] for k in _LIVE_KOMETA_COLUMNS}
+    d["enabled"] = bool(d["enabled"])
+    d["refresh_posters"] = bool(d["refresh_posters"])
+    return d
+
+
+def get_live_kometa_files() -> List[Dict[str, Any]]:
+    with get_db() as conn:
+        rows = conn.execute(f"SELECT {', '.join(_LIVE_KOMETA_COLUMNS)} FROM live_kometa_files ORDER BY created_at").fetchall()
+    return [_live_kometa_row(r) for r in rows]
+
+
+def get_live_kometa_file(file_id: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(f"SELECT {', '.join(_LIVE_KOMETA_COLUMNS)} FROM live_kometa_files WHERE id = ?", (file_id,)).fetchone()
+    return _live_kometa_row(row) if row else None
+
+
+def save_live_kometa_file(file_id: str, path: str, name: str, library_type: str, interval_hours: float,
+                          enabled: bool, refresh_posters: bool) -> None:
+    """Create or update the user-editable part of a live Kometa file."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO live_kometa_files (id, path, name, library_type, interval_hours, enabled, refresh_posters)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                path = excluded.path, name = excluded.name, library_type = excluded.library_type,
+                interval_hours = excluded.interval_hours, enabled = excluded.enabled,
+                refresh_posters = excluded.refresh_posters,
+                last_hash = CASE WHEN live_kometa_files.path = excluded.path
+                                  AND live_kometa_files.library_type = excluded.library_type
+                                 THEN live_kometa_files.last_hash ELSE NULL END
+        """, (file_id, path, name, library_type, interval_hours, int(enabled), int(refresh_posters)))
+
+
+def update_live_kometa_status(file_id: str, **fields: Any) -> None:
+    """Set sync results (config_id, last_hash, last_checked_at, last_changed_at, last_status, last_message)."""
+    allowed = {"config_id", "last_hash", "last_checked_at", "last_changed_at", "last_status", "last_message"}
+    sets = {k: v for k, v in fields.items() if k in allowed}
+    if not sets:
+        return
+    with get_db() as conn:
+        conn.execute(f"UPDATE live_kometa_files SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?",
+                     (*sets.values(), file_id))
+
+
+def delete_live_kometa_file(file_id: str) -> bool:
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM live_kometa_files WHERE id = ?", (file_id,))
+        return cur.rowcount > 0
 
 
 def get_all_overlay_configs() -> List[Dict[str, Any]]:
