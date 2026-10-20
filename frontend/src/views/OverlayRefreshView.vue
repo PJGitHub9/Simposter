@@ -49,8 +49,12 @@ type RunStatus = {
   finished_at?: string
 }
 
+type TrackedOverlay = { id: string; name: string; missing: boolean }
+type OverlayUsage = TrackedOverlay & { count: number }
+
 type TrackedItem = {
   key: string
+  overlays: TrackedOverlay[]
   server: string
   title: string | null
   year: number | null
@@ -103,6 +107,9 @@ let previousState: RunStatus['state'] | undefined
 const showTracked = ref(false)
 const trackedItems = ref<TrackedItem[]>([])
 const trackedSearch = ref('')
+// Filter the tracked list to posters sent with one overlay ('' = all).
+const overlayFilter = ref('')
+const overlayUsage = ref<OverlayUsage[]>([])
 const trackedLimit = ref(100)
 
 const showLog = ref(false)
@@ -118,11 +125,23 @@ const pendingKeys = computed(() => resultItems.value.filter(i => i.status === 'c
 
 const filteredTracked = computed(() => {
   const q = trackedSearch.value.trim().toLowerCase()
-  const list = q
-    ? trackedItems.value.filter(i => (i.title || '').toLowerCase().includes(q) || i.overlay.some(o => o.toLowerCase().includes(q)))
-    : trackedItems.value
+  let list = trackedItems.value
+  if (overlayFilter.value) list = list.filter(i => i.overlays.some(o => o.id === overlayFilter.value))
+  if (q) {
+    list = list.filter(i => (i.title || '').toLowerCase().includes(q)
+      || i.overlay.some(o => o.toLowerCase().includes(q))
+      || i.overlays.some(o => o.name.toLowerCase().includes(q)))
+  }
   return list
 })
+const filterLabel = computed(() => overlayUsage.value.find(o => o.id === overlayFilter.value)?.name || '')
+
+/** Re-render and re-send the given tracked posters now, even if nothing changed. */
+const resendItems = (items: TrackedItem[], what: string) => {
+  if (!items.length) return
+  if (!confirm(`Re-render and re-send ${what}? This uploads ${items.length === 1 ? 'the poster' : `${items.length} posters`} to the media server now.`)) return
+  startRun(true, items.map(i => i.key), true, true)
+}
 
 const formatDate = (iso?: string | null) => {
   if (!iso) return ''
@@ -194,9 +213,9 @@ const saveConfig = async () => {
   }
 }
 
-const startRun = async (apply: boolean, keys?: string[], force = false) => {
+const startRun = async (apply: boolean, keys?: string[], force = false, confirmed = false) => {
   if (!group.value || running.value) return
-  if (force && !confirm(`Re-render and re-send all ${tracked.value} tracked poster(s), even unchanged ones?`)) return
+  if (force && !confirmed && !confirm(`Re-render and re-send all ${tracked.value} tracked poster(s), even unchanged ones?`)) return
   starting.value = true
   try {
     const res = await fetch(`${apiBase}/api/overlay-refresh/run`, {
@@ -240,7 +259,10 @@ const pollStatus = async () => {
 const fetchTracked = async () => {
   if (!group.value) return
   const res = await fetch(`${apiBase}/api/overlay-refresh/items?group_id=${encodeURIComponent(group.value.id)}`)
-  trackedItems.value = res.ok ? (await res.json()).items || [] : []
+  const data = res.ok ? await res.json() : {}
+  trackedItems.value = data.items || []
+  overlayUsage.value = data.overlays || []
+  if (overlayFilter.value && !overlayUsage.value.some(o => o.id === overlayFilter.value)) overlayFilter.value = ''
 }
 
 const fetchLog = async () => {
@@ -405,17 +427,51 @@ onUnmounted(() => {
           <span>{{ showTracked ? '▾' : '▸' }}</span> Tracked posters
         </button>
         <template v-if="showTracked">
-          <input v-model="trackedSearch" type="text" class="text-input search-input" placeholder="Search title or overlay..." />
+          <p class="state-msg small">
+            Each poster keeps the overlays it was last sent with (from its preset, or what was turned on in the editor).
+            Changing a preset's overlays later applies to a poster the next time it's sent.
+          </p>
+          <div class="tracked-toolbar">
+            <input v-model="trackedSearch" type="text" class="text-input search-input" placeholder="Search title or overlay..." />
+            <select v-model="overlayFilter" class="text-input overlay-filter">
+              <option value="">All overlays</option>
+              <option v-for="o in overlayUsage" :key="o.id" :value="o.id">
+                {{ o.name }}{{ o.missing ? ' (deleted)' : '' }} ({{ o.count }})
+              </option>
+            </select>
+            <button
+              v-if="overlayFilter && filteredTracked.length"
+              class="btn-secondary"
+              :disabled="running || starting"
+              @click="resendItems(filteredTracked, `every poster with '${filterLabel}' (${filteredTracked.length})`)"
+            >Re-send these {{ filteredTracked.length }}</button>
+          </div>
           <table class="result-table">
             <thead>
-              <tr><th>Item</th><th>Server</th><th>Overlay</th><th>Sent</th></tr>
+              <tr><th>Item</th><th>Server</th><th>Overlays</th><th>Draws</th><th>Sent</th><th></th></tr>
             </thead>
             <tbody>
               <tr v-for="item in filteredTracked.slice(0, trackedLimit)" :key="item.key">
                 <td>{{ itemTitle(item.title, item.year, item.season_index) }}</td>
                 <td>{{ item.server }}</td>
-                <td class="overlay-cell">{{ item.overlay.join(', ') || 'none' }}</td>
+                <td class="overlay-cell">
+                  <button
+                    v-for="o in item.overlays"
+                    :key="o.id"
+                    type="button"
+                    class="overlay-chip"
+                    :class="{ missing: o.missing, active: o.id === overlayFilter }"
+                    :title="o.missing ? 'This overlay was deleted' : 'Show only posters with this overlay'"
+                    @click="overlayFilter = o.id"
+                  >{{ o.name }}</button>
+                  <span v-if="!item.overlays.length">none</span>
+                </td>
+                <td class="overlay-cell">{{ item.overlay.join(', ') || 'nothing' }}</td>
                 <td class="date-cell">{{ formatDate(item.updated_at) }}</td>
+                <td>
+                  <button class="btn-link" :disabled="running || starting" title="Re-render and re-send this poster now"
+                    @click="resendItems([item], itemTitle(item.title, item.year, item.season_index))">Re-send</button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -745,4 +801,11 @@ button:disabled {
   gap: 8px;
   align-items: center;
 }
+.tracked-toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.tracked-toolbar .search-input { flex: 1; min-width: 180px; margin: 0; }
+.overlay-filter { width: auto; min-width: 180px; color-scheme: dark; }
+:root[data-theme='light'] .overlay-filter { color-scheme: light; }
+.overlay-chip { display: inline-block; margin: 0 0.25rem 0.2rem 0; padding: 0.05rem 0.45rem; border-radius: 10px; border: 1px solid rgba(61, 214, 183, 0.35); background: rgba(61, 214, 183, 0.08); color: var(--accent, #3dd6b7); font-size: 0.72rem; cursor: pointer; }
+.overlay-chip.active { background: rgba(61, 214, 183, 0.25); }
+.overlay-chip.missing { border-style: dashed; border-color: #f87171; color: #f87171; background: transparent; }
 </style>

@@ -62,9 +62,9 @@ def api_preview(req: PreviewRequest):
         ui_settings_data = db.get_ui_settings()
         if ui_settings_data:
             use_overlay_cache = ui_settings_data.get("performance", {}).get("useOverlayCache", True)
-            logger.info(f"[PREVIEW] Global overlay cache setting: {use_overlay_cache}")
+            logger.debug(f"[PREVIEW] Global overlay cache setting: {use_overlay_cache}")
         else:
-            logger.info("[PREVIEW] No UI settings found, using default: overlay cache enabled")
+            logger.debug("[PREVIEW] No UI settings found, using default: overlay cache enabled")
 
         # Load white logo fallback setting
         white_logo_fallback = db.get_setting("fallback.white_logo_fallback") or "use_next"
@@ -101,9 +101,9 @@ def api_preview(req: PreviewRequest):
         template_id = req.template_id
 
         if req.preset_id:
-            logger.info("[PREVIEW] Loading preset '%s' for template '%s'", req.preset_id, template_id)
-            logger.info("[PREVIEW] Incoming request options keys: %s", list(render_options.keys()))
-            logger.info("[PREVIEW] season_text in request: %s", render_options.get("season_text"))
+            logger.debug("[PREVIEW] Loading preset '%s' for template '%s'", req.preset_id, template_id)
+            logger.debug("[PREVIEW] Incoming request options keys: %s", list(render_options.keys()))
+            logger.debug("[PREVIEW] season_text in request: %s", render_options.get("season_text"))
             presets = load_presets()
 
             if template_id in presets:
@@ -126,19 +126,19 @@ def api_preview(req: PreviewRequest):
                     if is_season and isinstance(preset.get("season_options"), dict):
                         preset_options = db.resolve_season_options(preset.get("options", {}), preset.get("season_options", {}))
                         logger.info("[PREVIEW] Using season_options for preset '%s' (season_text='%s')", req.preset_id, st)
-                        logger.info("[PREVIEW] season_options from DB: text_overlay_enabled=%s custom_text=%s logo_mode=%s", 
+                        logger.debug("[PREVIEW] season_options from DB: text_overlay_enabled=%s custom_text=%s logo_mode=%s", 
                                     preset_options.get("text_overlay_enabled"), 
                                     preset_options.get("custom_text"), 
                                     preset_options.get("logo_mode"))
                     else:
                         preset_options = preset.get("options", {})
-                        logger.info("[PREVIEW] Using regular options for preset '%s' (is_season=%s)", req.preset_id, is_season)
+                        logger.debug("[PREVIEW] Using regular options for preset '%s' (is_season=%s)", req.preset_id, is_season)
                     
                     # Remove deprecated disableOverlayCache flag from preset options
                     # (overlay cache now respects global settings)
                     if "disableOverlayCache" in preset_options:
                         del preset_options["disableOverlayCache"]
-                        logger.info("[PREVIEW] Removed deprecated disableOverlayCache flag from preset '%s'", req.preset_id)
+                        logger.debug("[PREVIEW] Removed deprecated disableOverlayCache flag from preset '%s'", req.preset_id)
                     
                     # Merge preset options (request options take precedence so sliders work)
                     render_options = {**preset_options, **render_options}
@@ -146,7 +146,7 @@ def api_preview(req: PreviewRequest):
                     logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or preset_options.get("logo_preference") or preset_options.get("logo_mode") or "first"
                     logo_preference = map_logo_mode_to_preference(logo_preference)
                     logger.debug("[PREVIEW] Applied preset '%s' options (is_season=%s): %s", req.preset_id, is_season, preset_options)
-                    logger.info("[PREVIEW] Effective opts: text_overlay_enabled=%s custom_text=%s logo_mode=%s", render_options.get("text_overlay_enabled"), render_options.get("custom_text"), render_options.get("logo_mode"))
+                    logger.debug("[PREVIEW] Effective opts: text_overlay_enabled=%s custom_text=%s logo_mode=%s", render_options.get("text_overlay_enabled"), render_options.get("custom_text"), render_options.get("logo_mode"))
                     logo_override = render_options.get("logo_url") or render_options.get("logoUrl")
                     if logo_override:
                         logo_url = logo_override
@@ -184,9 +184,9 @@ def api_preview(req: PreviewRequest):
         
         if disable_overlay_cache is True:  # Explicitly True, not just falsy
             use_overlay_cache = False
-            logger.info(f"[PREVIEW] Overlay cache disabled via preset/request flag (disableOverlayCache={disable_overlay_cache})")
+            logger.debug(f"[PREVIEW] Overlay cache disabled via preset/request flag (disableOverlayCache={disable_overlay_cache})")
         else:
-            logger.info(f"[PREVIEW] Using global overlay cache setting: {use_overlay_cache}")
+            logger.debug(f"[PREVIEW] Using global overlay cache setting: {use_overlay_cache}")
 
         # If background_url contains a rating key pattern, try TMDB lookup
         background_url = req.background_url
@@ -226,7 +226,7 @@ def api_preview(req: PreviewRequest):
         # Fallback: use rating_key from request body (sent by frontend for media info lookup)
         if req.rating_key and not rating_key:
             rating_key = req.rating_key
-            logger.info("[PREVIEW] Using rating_key from request body: %s", rating_key)
+            logger.debug("[PREVIEW] Using rating_key from request body: %s", rating_key)
 
         # Best-effort display title for log readability — a cheap local DB cache lookup
         # (movie_cache/tv_cache from the last library scan, or poster_history as a last
@@ -242,7 +242,8 @@ def api_preview(req: PreviewRequest):
                 display_title = None
         _dt = f" [{display_title}]" if display_title else ""
 
-        logger.info("[PREVIEW] Detected rating_key=%s%s is_tv_show=%s", rating_key, _dt, is_tv_show)
+        logger.info("[PREVIEW] %s: %s, preset '%s' (key %s)", "TV show" if is_tv_show else "Movie",
+                    display_title or "unknown title", req.preset_id or "none", rating_key)
 
         if rating_key and not is_tv_show:
             try:
@@ -348,7 +349,7 @@ def api_preview(req: PreviewRequest):
                         else:
                             raise HTTPException(status_code=404, detail="No valid poster found (even after fallback).")
                     else:
-                        logger.info("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
+                        logger.debug("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
 
                     # Pick logo based on preference (only if logo_mode is not 'none')
                     logo_mode = render_options.get("logo_mode", "first")
@@ -581,7 +582,7 @@ def api_preview(req: PreviewRequest):
                                 logger.warning("[PREVIEW] No valid TV show poster found (even after fallback)")
                     else:
                         # background_url is already a direct image URL (from frontend /select-poster)
-                        logger.info("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
+                        logger.debug("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
 
                     # Fetch logos (always from series, not season-specific)
                     show_imgs = get_images_for_tv_show(tmdb_id, original_language)

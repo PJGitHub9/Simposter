@@ -1077,7 +1077,7 @@ def _prepare_overlays(
 
     if not config_ids:
         if log:
-            logger.info("[OVERLAY] No overlay config IDs to apply (preset_id=%s, explicit_ids=%s)", preset_id, overlay_config_ids)
+            logger.debug("[OVERLAY] No overlay config IDs to apply (preset_id=%s, explicit_ids=%s)", preset_id, overlay_config_ids)
         return meta, None, []
 
     # Pre-pass: resolve streaming platform and studio if any config needs them
@@ -1134,52 +1134,127 @@ def _prepare_overlays(
                 logger.debug("[OVERLAY] Pre-pass config error for %s: %s", cid, cfg_err)
 
     if log:
-        logger.info("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
+        logger.debug("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
 
     # Gather every element from every config first, so one selection pass can
     # apply conditions, group/weight and suppress across all of them (Kometa's
     # groups span overlay files). Elements without those keys pass straight
     # through, in their original order.
     all_elements: list = []
-    # Whole-overlay conditions, checked once the context is built: [(conditions, elements)]
+    # Whole-overlay conditions, checked once the context is built: [(conditions, elements, name)]
     gated: list = []
+    config_names: list = []
     for config_id in config_ids:
         try:
             overlay_config = db.get_overlay_config(config_id)
             if not overlay_config:
-                logger.warning(f"[OVERLAY] Overlay config {config_id} not found")
+                _warn_missing_overlay(preset_id, config_id)
                 continue
 
             elements = overlay_config.get("elements", [])
+            config_names.append((overlay_config.get("name") or config_id, len(elements)))
             if not elements:
-                if log:
-                    logger.info(f"[OVERLAY] Overlay config '{overlay_config['name']}' has no elements, skipping")
                 continue
 
-            element_types = [e.get("type", "unknown") for e in elements]
             if log:
-                logger.info(f"[OVERLAY] Applying overlay config '{overlay_config['name']}' with {len(elements)} elements: {element_types}")
+                logger.debug("[OVERLAY] Overlay '%s': %d layers %s", overlay_config.get("name"), len(elements),
+                             [e.get("type", "unknown") for e in elements])
             config_elements = [e for e in elements if isinstance(e, dict)]
             all_elements.extend(config_elements)
             if overlay_config.get("conditions"):
-                gated.append((overlay_config["conditions"], config_elements))
+                gated.append((overlay_config["conditions"], config_elements, overlay_config.get("name") or config_id))
         except Exception as e:
             logger.error(f"[OVERLAY] Failed to load overlay config {config_id}: {e}")
 
     from .. import overlay_engine
     # Stand-ins so data the whole-overlay conditions use (ratings, lists, file paths) gets loaded.
-    ctx = overlay_engine.build_context(meta, elements=all_elements + [{"conditions": conds} for conds, _ in gated])
-    for conds, config_elements in gated:
-        if not overlay_engine.conditions_pass({"conditions": conds}, ctx):
+    every_element = list(all_elements)
+    ctx = overlay_engine.build_context(meta, elements=all_elements + [{"conditions": conds} for conds, _, _ in gated])
+    gated_reasons: dict = {}
+    for conds, config_elements, config_name in gated:
+        failed = next((c for c in conds if isinstance(c, dict) and not overlay_engine.check_condition(c, ctx)), None)
+        if failed is not None:
             skip = {id(e) for e in config_elements}
             all_elements = [e for e in all_elements if id(e) not in skip]
-            if log:
-                logger.info("[OVERLAY] An overlay's own conditions don't match this item; its %d layers are skipped", len(config_elements))
+            why = f"the overlay '{config_name}' doesn't apply: " + overlay_engine.describe_failure(failed, ctx)
+            for e in config_elements:
+                gated_reasons[id(e)] = why
     selected = overlay_engine.select_elements(all_elements, ctx)
-    if log and len(selected) != len(all_elements):
-        logger.info("[OVERLAY] %d of %d elements selected for this item", len(selected), len(all_elements))
+    if log:
+        _log_overlay_summary(meta, ctx, config_names, every_element, all_elements, gated_reasons, selected)
 
     return meta, ctx, selected
+
+
+# Missing overlay configs already reported this run (preset, config) -- once is enough.
+_missing_overlay_warned: set = set()
+_MAX_SKIPPED_LINES = 8
+
+
+def _warn_missing_overlay(preset_id: Optional[str], config_id: str) -> None:
+    from ..config import logger
+    key = (preset_id or "", config_id)
+    if key in _missing_overlay_warned:
+        logger.debug("[OVERLAY] Overlay %s not found (preset %s)", config_id, preset_id)
+        return
+    _missing_overlay_warned.add(key)
+    where = f"Preset '{preset_id}' turns on" if preset_id else "This render turns on"
+    logger.warning("[OVERLAY] %s an overlay that no longer exists (%s), so it's skipped. "
+                   "Open the preset in the editor and save it to remove it. (Shown once.)", where, config_id)
+
+
+def _item_title(meta: Dict[str, Any]) -> str:
+    title = meta.get("movie_title") or meta.get("title")
+    year = meta.get("movie_year") or meta.get("year")
+    if not title and meta.get("rating_key"):
+        try:
+            from .. import database as db
+            title, year = db.get_title_for_rating_key(str(meta["rating_key"]))
+        except Exception:
+            title = None
+    if not title:
+        return f"item {meta.get('rating_key')}" if meta.get("rating_key") else "this poster"
+    return f"{title} ({year})" if year else str(title)
+
+
+def _log_overlay_summary(meta, ctx, config_names, every_element, eligible, gated_reasons, selected) -> None:
+    """One readable block per overlay render: what was applied, the data the
+    rules saw, what was drawn and why the rest wasn't."""
+    from .. import overlay_engine
+    from ..config import logger
+    if not config_names:
+        return
+    overlays = ", ".join(f"'{n}' ({c} layer{'s' if c != 1 else ''})" for n, c in config_names)
+    logger.info("[OVERLAY] %s: overlays %s; drew %d of %d layers",
+                _item_title(meta), overlays, len(selected), len(every_element))
+    logger.info("[OVERLAY]   Data: %s", overlay_engine.data_summary(ctx, every_element))
+
+    selected_ids = {id(e) for e in selected}
+    explained = dict((id(e), why) for e, why in overlay_engine.explain_selection(eligible, ctx))
+    drawn = []
+    for e in every_element:
+        if id(e) not in selected_ids:
+            continue
+        label = overlay_engine.element_label(e)
+        if e.get("type") in _BADGE_DEFAULTS:
+            field = e.get("metadata_field") or _BADGE_DEFAULTS[e["type"]][0]
+            value = ctx.get(field) or meta.get(field)
+            label += f" = {value}" if value else f" (no {overlay_engine.FIELD_LABELS.get(field, field)} for this item, so it shows nothing)"
+        drawn.append(label)
+    if drawn:
+        logger.info("[OVERLAY]   Drew: %s", "; ".join(drawn))
+
+    skipped = [(e, gated_reasons.get(id(e)) or explained.get(id(e)) or "not drawn")
+               for e in every_element if id(e) not in selected_ids]
+    for i, (e, why) in enumerate(skipped):
+        line = "[OVERLAY]   Skipped %s: %s"
+        if i < _MAX_SKIPPED_LINES:
+            logger.info(line, overlay_engine.element_label(e), why)
+        else:
+            logger.debug(line, overlay_engine.element_label(e), why)
+    if len(skipped) > _MAX_SKIPPED_LINES:
+        logger.info("[OVERLAY]   ...and %d more skipped (set the log level to DEBUG to list them all)",
+                    len(skipped) - _MAX_SKIPPED_LINES)
 
 
 def apply_overlay_config(
@@ -1320,12 +1395,12 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
     from ..config import logger
 
     element_type = element.get("type")
-    logger.info("[OVERLAY] Processing element type='%s' at position=(%.2f, %.2f)",
+    logger.debug("[OVERLAY] Processing element type='%s' at position=(%.2f, %.2f)",
                 element_type, element.get("position_x", 0.5), element.get("position_y", 0.5))
 
     # Check conditional rendering based on labels
     if not _should_render_element(element, metadata):
-        logger.info("[OVERLAY]   -> Skipped (conditional label filter)")
+        logger.debug("[OVERLAY]   -> Skipped (conditional label filter)")
         return canvas
 
     # Calculate position
@@ -1544,10 +1619,10 @@ def _apply_metadata_badge(
     metadata_field = element.get("metadata_field") or default_field
     value = metadata.get(metadata_field, "")
     if not value:
-        logger.info("[OVERLAY]   -> Metadata badge: no value for field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
+        logger.debug("[OVERLAY]   -> Metadata badge: no value for field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
         return canvas
 
-    logger.info("[OVERLAY]   -> Metadata badge: %s = '%s'", metadata_field, value)
+    logger.debug("[OVERLAY]   -> Metadata badge: %s = '%s'", metadata_field, value)
 
     # Check per-value mode; fall back to '__other__' catch-all, then "text"
     badge_modes = element.get("badge_modes") or {}
@@ -1557,7 +1632,7 @@ def _apply_metadata_badge(
         mode = badge_modes.get("__other__", "text")
 
     if mode == "none":
-        logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", value)
+        logger.debug("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", value)
         return canvas
 
     if mode == "image":
@@ -1567,11 +1642,11 @@ def _apply_metadata_badge(
             try:
                 result = _render_badge_asset(canvas, element, x, y, asset_id, value=value)
                 if result is not None:
-                    logger.info("[OVERLAY]   -> Rendered metadata badge as image (asset=%s)", asset_id)
+                    logger.debug("[OVERLAY]   -> Rendered metadata badge as image (asset=%s)", asset_id)
                     return result
             except Exception as e:
                 logger.warning(f"[OVERLAY] Failed to render metadata badge asset: {e}")
-        logger.info("[OVERLAY]   -> Image mode but asset not found, falling through to text")
+        logger.debug("[OVERLAY]   -> Image mode but asset not found, falling through to text")
 
     if mode == "url":
         badge_urls = element.get("badge_urls") or {}
@@ -1607,9 +1682,9 @@ def _apply_metadata_badge(
                 badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
                 badge_layer.paste(img, (paste_x, paste_y))
                 canvas = Image.alpha_composite(canvas, badge_layer)
-                logger.info("[OVERLAY]   -> Rendered metadata badge from URL: %s", url[:80])
+                logger.debug("[OVERLAY]   -> Rendered metadata badge from URL: %s", url[:80])
                 return canvas
-        logger.info("[OVERLAY]   -> URL mode: no URL or fetch failed for '%s', falling through to text", value)
+        logger.debug("[OVERLAY]   -> URL mode: no URL or fetch failed for '%s', falling through to text", value)
 
     if mode == "asset":
         from ..simposter_assets import get_asset_url
@@ -1647,9 +1722,9 @@ def _apply_metadata_badge(
                 badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
                 badge_layer.paste(img, (paste_x, paste_y))
                 canvas = Image.alpha_composite(canvas, badge_layer)
-                logger.info("[OVERLAY]   -> Rendered metadata badge from simposter asset: %s", asset_url[:80])
+                logger.debug("[OVERLAY]   -> Rendered metadata badge from simposter asset: %s", asset_url[:80])
                 return canvas
-        logger.info("[OVERLAY]   -> Asset mode: no simposter asset for '%s', falling through to text", value)
+        logger.debug("[OVERLAY]   -> Asset mode: no simposter asset for '%s', falling through to text", value)
 
     # Text rendering using element font settings
     font_family = element.get("font_family", "arial")
@@ -1666,7 +1741,7 @@ def _apply_metadata_badge(
     badge_texts = element.get("badge_texts") or {}
     display_text = badge_texts.get(value.lower()) or _SLUG_DISPLAY_LABELS.get(value.lower()) or value.upper()
 
-    logger.info("[OVERLAY]   -> Rendering metadata badge text '%s' (font=%s size=%s color=%s) at (%d, %d)",
+    logger.debug("[OVERLAY]   -> Rendering metadata badge text '%s' (font=%s size=%s color=%s) at (%d, %d)",
                 display_text, font_family, font_size, font_color_hex, x, y)
 
     draw = ImageDraw.Draw(canvas)

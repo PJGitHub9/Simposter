@@ -11,12 +11,14 @@ export interface ReleaseNote {
 export const releaseNotes: ReleaseNote[] = [
   {
     version: 'v1.8.02',
-    date: '2026-10-19',
+    date: '2026-10-20',
     sections: [
       {
         title: 'Improvements',
         items: [
-          'Fast-render overlay layers (matte, fade, vignette) are now built for every preset when Simposter starts, and again when a preset is saved or imported, so the first batch render is already fast.'
+          'Fast-render overlay layers (matte, fade, vignette) are now built for every preset when Simposter starts, and again when a preset is saved or imported, so the first batch render is already fast.',
+          'Clearer logs: each poster with overlays gets a short summary of the data used (including ratings, or why they weren\'t loaded), the layers drawn, and why each other layer was skipped. Internal details moved to the debug log level.',
+          'Overlay Refresh lists which overlays each poster was sent with. Filter by an overlay, then re-send every poster that has it, or re-send a single poster.'
         ]
       },
       {

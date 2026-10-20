@@ -93,9 +93,17 @@ def api_overlay_refresh_items(group_id: str):
     group = _require_group(group_id)
     states = db.get_overlay_states(refresh.group_pairs(group))
     from ..media_server import get_server_label
+    names = {c["id"]: c.get("name") or c["id"] for c in db.get_all_overlay_configs()}
     out = []
+    usage: dict = {}
     for s in states:
+        overlays = []
+        for cid in refresh.state_overlay_ids(s):
+            overlays.append({"id": cid, "name": names.get(cid, cid), "missing": cid not in names})
+            entry = usage.setdefault(cid, {"id": cid, "name": names.get(cid, cid), "missing": cid not in names, "count": 0})
+            entry["count"] += 1
         out.append({
+            "overlays": overlays,
             "key": refresh.state_key(s),
             "server_id": s["server_id"],
             "server": get_server_label(s["server_id"]),
@@ -107,7 +115,7 @@ def api_overlay_refresh_items(group_id: str):
             "overlay": [e.get("label") + (f" = {e['value']}" if e.get("value") else "") for e in (s.get("summary") or [])],
             "updated_at": s.get("updated_at"),
         })
-    return {"items": out}
+    return {"items": out, "overlays": sorted(usage.values(), key=lambda o: (o["missing"], str(o["name"]).lower()))}
 
 
 @router.get("/log")

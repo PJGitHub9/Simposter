@@ -27,7 +27,7 @@ def get_logos_merged(
         logo_source = db.get_setting("pref.logo_source") or "tmdb_fanart"
         logger.info("[LOGO_SOURCES] Using logo source from database: %s", logo_source)
     else:
-        logger.info("[LOGO_SOURCES] Using logo source from override: %s", logo_source)
+        logger.debug("[LOGO_SOURCES] Using logo source from override: %s", logo_source)
 
     logger.debug("[LOGO_SOURCES] Fetching logos for tmdb_id=%s with source=%s", tmdb_id, logo_source)
 

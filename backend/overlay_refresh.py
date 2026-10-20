@@ -327,6 +327,26 @@ def group_pairs(group: dict) -> List[tuple]:
             if m.get("serverId") and m.get("libraryId") is not None]
 
 
+def state_overlay_ids(state: Dict[str, Any]) -> List[str]:
+    """Overlay config ids a tracked poster was sent with (above and below the
+    logo, plus a preset's legacy single link), in order, without repeats."""
+    opts = state.get("options") or {}
+    ids: List[str] = []
+    for value in (opts.get("overlay_config_ids") or [], opts.get("overlay_config_ids_below") or []):
+        for cid in value if isinstance(value, list) else [value]:
+            if cid and str(cid) not in ids:
+                ids.append(str(cid))
+    if state.get("preset_id") and state.get("template_id"):
+        try:
+            preset = db.get_preset(state["template_id"], state["preset_id"])
+            linked = (preset or {}).get("overlay_config_id")
+            if linked and str(linked) not in ids:
+                ids.append(str(linked))
+        except Exception:
+            pass
+    return ids
+
+
 def state_key(state: Dict[str, Any]) -> str:
     si = state.get("season_index")
     return f"{state['server_id']}:{state['rating_key']}:{-1 if si is None else si}"

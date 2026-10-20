@@ -26,7 +26,7 @@ Placement (render_kometa_element), used when element["placement"] == "kometa":
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
@@ -113,6 +113,9 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
     needs = needed_data(elements) if elements else {"paths": False, "ratings": False, "lists": []}
     needs_paths = needs_paths or needs["paths"]
     ctx = dict(meta or {})
+    # Why data a rule needs is missing (shown in the render log by data_summary()).
+    notes: Dict[str, str] = {}
+    ctx["_notes"] = notes
     ctx["resolution"] = normalize_resolution(ctx.get("video_resolution"))
     if ctx.get("year") is None and ctx.get("movie_year") not in (None, ""):
         ctx["year"] = ctx.get("movie_year")
@@ -130,6 +133,8 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
             except Exception:
                 paths = []
         ctx["file_paths"] = paths
+        if not paths:
+            notes["filepath"] = "no file path stored yet, scan the library"
     if needs.get("ids") and (ctx.get("tmdb_id") in (None, "") or ctx.get("tvdb_id") in (None, "")) and ctx.get("rating_key"):
         try:
             from . import database as db
@@ -144,16 +149,30 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
         tmdb_id, tvdb_id, media_type = _item_ids(ctx)
         try:
             from . import mdblist_client as mdb
-            if needs["ratings"]:
-                data = mdb.get_ratings(media_type, tmdb_id=tmdb_id, tvdb_id=tvdb_id)
-                for key, value in mdb.rating_fields(data or {}).items():
-                    if ctx.get(key) in (None, ""):  # values from the media server win
-                        ctx[key] = value
-            if needs["lists"]:
-                ctx["lists"] = mdb.lists_containing(needs["lists"], media_type, tmdb_id) if tmdb_id else []
+            if not mdb.has_key():
+                if needs["ratings"]:
+                    notes["ratings"] = "no MDBList API key in Settings > General"
+                if needs["lists"]:
+                    notes["lists"] = "no MDBList API key in Settings > General"
+            else:
+                if needs["ratings"]:
+                    if not tmdb_id and not tvdb_id:
+                        notes["ratings"] = "this item has no TMDb/TVDB ID"
+                    data = mdb.get_ratings(media_type, tmdb_id=tmdb_id, tvdb_id=tvdb_id) if (tmdb_id or tvdb_id) else None
+                    fields = mdb.rating_fields(data or {})
+                    for key, value in fields.items():
+                        if ctx.get(key) in (None, ""):  # values from the media server win
+                            ctx[key] = value
+                    if (tmdb_id or tvdb_id) and not fields:
+                        notes["ratings"] = "MDBList has no ratings for this item"
+                if needs["lists"]:
+                    ctx["lists"] = mdb.lists_containing(needs["lists"], media_type, tmdb_id) if tmdb_id else []
+                    if not tmdb_id:
+                        notes["lists"] = "this item has no TMDb ID"
         except Exception as e:  # never fail a render over ratings
             from .config import logger
             logger.debug("[OVERLAY] MDBList lookup failed: %s", e)
+            notes.setdefault("ratings", f"MDBList lookup failed: {e}")
     return ctx
 
 
@@ -520,3 +539,153 @@ def render_kometa_element(canvas: Image.Image, element: Dict[str, Any], ctx: Dic
     content_layer.paste(content, (cx, cy))  # clips at the canvas edge
     layer = Image.alpha_composite(layer, content_layer)
     return Image.alpha_composite(canvas, layer)
+
+
+# --------------------------------------------------------------------------
+# Plain-language explanations for the render log
+# --------------------------------------------------------------------------
+
+FIELD_LABELS = {
+    "resolution": "Resolution", "video_resolution": "Resolution", "video_codec": "Video codec",
+    "audio_codec": "Audio codec", "audio_channels": "Audio channels", "audio_language": "Audio language",
+    "filepath": "File path", "file_path": "File path", "filename": "File path", "edition": "Edition",
+    "label": "Label", "labels": "Label", "list": "MDBList list", "lists": "MDBList list", "mdblist_list": "MDBList list",
+    "media_type": "Movie or show", "year": "Year", "title": "Title", "studio": "Studio",
+    "streaming_platform": "Streaming platform", "tmdb_id": "TMDb ID", "tvdb_id": "TVDB ID",
+    "audience_rating": "Audience rating", "critic_rating": "Critic rating", "mdb_rating": "MDBList score",
+    "mdb_average_rating": "MDBList average", "mdb_imdb_rating": "IMDb rating", "mdb_tomatoes_rating": "Rotten Tomatoes",
+    "mdb_tomatoesaudience_rating": "RT audience", "mdb_metacritic_rating": "Metacritic",
+    "mdb_metacriticuser_rating": "Metacritic user score", "mdb_tmdb_rating": "TMDb rating",
+    "mdb_trakt_rating": "Trakt rating", "mdb_letterboxd_rating": "Letterboxd rating",
+    "mdb_myanimelist_rating": "MyAnimeList score",
+}
+_OP_WORDS = {
+    "eq": "is", "is": "is", "ne": "is not", "not": "is not", "in": "is one of", "not_in": "is none of",
+    "contains": "contains", "not_contains": "doesn't contain", "regex": "matches", "not_regex": "doesn't match",
+    "gt": "is above", "gte": "is at least", "lt": "is below", "lte": "is at most",
+    "exists": "is set", "not_exists": "is empty",
+}
+
+
+def element_label(element: Dict[str, Any]) -> str:
+    name = str(element.get("name") or "").strip()
+    if name:
+        return name
+    etype = str(element.get("type") or "layer").replace("_", " ")
+    text = str(element.get("text") or "").strip()
+    return f'{etype} "{text[:30]}"' if text else etype
+
+
+def _short(values: Any, limit: int = 3) -> str:
+    vals = values if isinstance(values, (list, tuple)) else [values]
+    vals = [str(v) for v in vals if v not in (None, "")]
+    if len(vals) > limit:
+        return ", ".join(vals[:limit]) + f" +{len(vals) - limit} more"
+    return ", ".join(vals) or "(nothing)"
+
+
+def describe_failure(cond: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+    """Why one condition doesn't match, e.g. 'TMDb ID is 1291595; needs: is one of 656908, 858035 +11 more'."""
+    field = str(cond.get("field") or "").strip().lower()
+    if not field:
+        return "a condition has no field"
+    if field.startswith("_"):
+        return "uses a Kometa rule Simposter can't check"
+    label = FIELD_LABELS.get(field, field)
+    op = str(cond.get("op") or "eq").strip().lower()
+    want = "" if op in ("exists", "not_exists") else " " + _short(cond.get("value"))
+    needs = f"needs: {_OP_WORDS.get(op, op)}{want}"
+    values = _field_values(field, ctx)
+    if not values:
+        notes = ctx.get("_notes") or {}
+        key = "ratings" if field in _rating_field_names() else "lists" if field in _LIST_FIELDS else field
+        why = notes.get(key) or notes.get("filepath" if key in ("file_path", "filename") else key)
+        return f"{label} is unknown{f' ({why})' if why else ''}; {needs}"
+    actual = _short([PurePosixPath(str(v)).name if field in ("filepath", "file_path", "filename") else v for v in values])
+    return f"{label} is {actual}; {needs}"
+
+
+def explain_selection(elements: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Tuple[Dict[str, Any], Optional[str]]]:
+    """[(element, None if drawn else why not)], using the same rules as select_elements()."""
+    reasons: Dict[int, Optional[str]] = {}
+    passing: List[Dict[str, Any]] = []
+    for element in elements:
+        labels_lower = [label.lower() for label in ctx.get("labels") or []]
+        show, hide = element.get("show_if_label"), element.get("hide_if_label")
+        if show and str(show).lower() not in labels_lower:
+            reasons[id(element)] = f'needs the label "{show}"'
+            continue
+        if hide and str(hide).lower() in labels_lower:
+            reasons[id(element)] = f'has the label "{hide}"'
+            continue
+        failed = next((c for c in element.get("conditions") or [] if isinstance(c, dict) and not check_condition(c, ctx)), None)
+        if failed is not None:
+            reasons[id(element)] = describe_failure(failed, ctx)
+            continue
+        passing.append(element)
+
+    winners: Dict[str, Tuple[float, int]] = {}
+    for idx, element in enumerate(passing):
+        group = element.get("group")
+        if group:
+            weight = _as_number(element.get("weight")) or 0.0
+            best = winners.get(group)
+            if best is None or weight > best[0]:
+                winners[group] = (weight, idx)
+    kept: List[Dict[str, Any]] = []
+    for idx, element in enumerate(passing):
+        group = element.get("group")
+        if group and winners.get(group, (None, idx))[1] != idx:
+            reasons[id(element)] = f'another layer won in set "{group}" ({element_label(passing[winners[group][1]])})'
+        else:
+            kept.append(element)
+
+    hiders: Dict[str, str] = {}
+    for element in kept:
+        for name in element.get("suppress") or []:
+            hiders.setdefault(str(name), element_label(element))
+    for element in kept:
+        name = str(element.get("name") or "")
+        if name and name in hiders:
+            reasons[id(element)] = f"hidden by {hiders[name]}"
+        else:
+            reasons[id(element)] = None
+    return [(e, reasons.get(id(e), "not drawn")) for e in elements]
+
+
+def data_summary(ctx: Dict[str, Any], elements: List[Dict[str, Any]]) -> str:
+    """The item data the rules were checked against, in a line."""
+    parts: List[str] = []
+    res = ctx.get("resolution")
+    if res:
+        parts.append(str(res).upper() if res in ("4k", "sd") else str(res))
+    for key in ("video_codec", "audio_codec"):
+        if ctx.get(key):
+            parts.append(str(ctx[key]).upper())
+    if ctx.get("audio_channels"):
+        parts.append(f"{ctx['audio_channels']}ch")
+    if ctx.get("audio_language"):
+        parts.append(f"lang {ctx['audio_language']}")
+    if ctx.get("edition"):
+        parts.append(f'edition "{ctx["edition"]}"')
+    for key, label in (("tmdb_id", "TMDb"), ("tvdb_id", "TVDB")):
+        if ctx.get(key):
+            parts.append(f"{label} {ctx[key]}")
+    if ctx.get("labels"):
+        parts.append("labels " + _short(ctx["labels"], 4))
+    if ctx.get("file_paths"):
+        parts.append("file " + PurePosixPath(str(ctx["file_paths"][0])).name)
+    notes = dict(ctx.get("_notes") or {})
+    needs = needed_data(elements)
+    if needs["ratings"]:
+        used = sorted({str(c.get("field")).lower() for e in elements for c in (e.get("conditions") or [])
+                       if isinstance(c, dict) and str(c.get("field") or "").lower() in _rating_field_names()}
+                      | {m.group(1) for e in elements for m in _VAR_RE.finditer(str(e.get("text") or ""))
+                         if m.group(1) in _rating_field_names()})
+        shown = [f"{FIELD_LABELS.get(k, k)} {_format_value(ctx[k])}" for k in used if ctx.get(k) not in (None, "")]
+        parts.append("ratings: " + (", ".join(shown) if shown else notes.get("ratings") or "none found"))
+    if needs["lists"]:
+        parts.append("on MDBList lists: " + (_short(ctx.get("lists") or [], 3) if ctx.get("lists") else notes.get("lists") or "none"))
+    if needs["paths"] and notes.get("filepath"):
+        parts.append("file: " + notes["filepath"])
+    return ", ".join(parts) or "no media info"

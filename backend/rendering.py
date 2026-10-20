@@ -324,7 +324,7 @@ def render_with_overlay_cache(
 
     if use_cache and preset_id and overlay_path.exists():
         try:
-            logger.info(f"[CACHE] Overlay cache enabled and found: {overlay_path}")
+            logger.debug(f"[CACHE] Overlay cache enabled and found: {overlay_path}")
 
             # Download poster and logo in parallel, reusing the shared _download_image()
             # helper instead of a bespoke fetch — gives this path the same LRU byte cache
@@ -497,7 +497,10 @@ def render_with_overlay_cache(
             logger.warning(f"[CACHE] Failed to use overlay cache, falling back to full render: {e}")
 
     else:
-        logger.info(f"[CACHE] Overlay cache {'disabled' if not use_cache else 'missing'} for template={template_id} preset={preset_id}; using full render")
+        if use_cache and preset_id:
+            logger.info("[CACHE] No cached overlay yet for preset '%s' with these settings; full render this time, building it for next time", preset_id)
+        else:
+            logger.debug("[CACHE] Overlay cache off for template=%s preset=%s; full render", template_id, preset_id)
         # Self-heal a missing cache instead of falling back to a full render forever.
         # A preset can end up with no cached overlay for reasons that have nothing
         # to do with this specific render: POST /api/presets/import (used by

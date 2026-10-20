@@ -888,7 +888,7 @@ def inject_plex_media_metadata(
     if plex_media:
         existing_meta = render_options.get("metadata") or {}
         render_options["metadata"] = {**existing_meta, **plex_media}
-        logger.info("%sInjected Plex media info for rating_key=%s: %s", log_prefix, rating_key, plex_media)
+        logger.debug("%sInjected Plex media info for rating_key=%s: %s", log_prefix, rating_key, plex_media)
 
     resolved_tmdb_id = tmdb_id
     resolved_is_tv = is_tv
@@ -933,7 +933,7 @@ def inject_plex_media_metadata(
         render_options.setdefault("metadata", {})
         render_options["metadata"]["tmdb_id"] = resolved_tmdb_id
         render_options["metadata"]["media_type"] = "tv" if resolved_is_tv else "movie"
-        logger.info("%sInjected tmdb_id=%s media_type=%s for studio/streaming badge resolution", log_prefix, resolved_tmdb_id, render_options["metadata"]["media_type"])
+        logger.debug("%sInjected tmdb_id=%s media_type=%s for studio/streaming badge resolution", log_prefix, resolved_tmdb_id, render_options["metadata"]["media_type"])
 
     return render_options
 

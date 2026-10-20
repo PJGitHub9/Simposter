@@ -192,7 +192,7 @@ def _build_lang_param(language_preference: Optional[str], original_language: Opt
 
 
 def get_images_for_movie(tmdb_id: int, original_language: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
-    logger.info("[TMDB] Fetching images tmdb_id=%s", tmdb_id)
+    logger.debug("[TMDB] Fetching images tmdb_id=%s", tmdb_id)
     language_pref = db.get_setting("pref.language") or "en"
     include_lang = _build_lang_param(language_pref, original_language)
     data = _cached_tmdb_get(
@@ -276,7 +276,7 @@ def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
     """
     Fetch movie details from TMDb (title, year, etc.)
     """
-    logger.info("[TMDB] Fetching movie details tmdb_id=%s", tmdb_id)
+    logger.debug("[TMDB] Fetching movie details tmdb_id=%s", tmdb_id)
     data = _cached_tmdb_get(f"/movie/{tmdb_id}", {})
 
     title = data.get("title", "")

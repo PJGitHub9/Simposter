@@ -1,8 +1,10 @@
 # Changelog
 
-## v1.8.02 (2026-10-19) — `dev-overlays` branch
+## v1.8.02 (2026-10-20) — `dev-overlays` branch
 
 ### Improvements
+- **Overlays per poster in Overlay Refresh** — Tracked posters shows the overlays each poster was sent with (`state_overlay_ids()`: its stored `overlay_config_ids`, `overlay_config_ids_below` and the preset's legacy link; deleted ones flagged), a filter by overlay with counts, "Re-send these N" for the filtered posters and a per-poster "Re-send" (a forced apply run limited to those keys).
+- **Readable overlay logs** — each overlay render logs one block: the item and overlays applied, the data the rules were checked against (resolution, codecs, TMDb/TVDB ID, labels, file name, MDBList ratings used or why they weren't loaded), the layers drawn (badges with their value) and a reason per skipped layer (failed condition with the item's actual value, lost in a badge set, hidden by another layer, or the overlay's own conditions); up to 8 skipped lines at INFO, the rest at DEBUG (`overlay_engine.explain_selection()`, `describe_failure()`, `data_summary()`). A preset pointing at a deleted overlay is warned about once per run with how to fix it. Per-layer drawing details and preview plumbing (option keys, cache flags, injected metadata, TMDb fetches) moved to DEBUG.
 - **Overlay effect cache built ahead of time** — new `backend/overlay_cache.py`. At startup (background thread), after a database restore, and on preset save / season save / import, every preset's effect layers are generated from its stored options (series and season settings); deleting a preset removes its files.
 
 ### Bug Fixes
