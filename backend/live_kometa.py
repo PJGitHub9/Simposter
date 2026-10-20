@@ -98,7 +98,8 @@ def _sync(live: Dict[str, Any], force: bool, scheduled: bool) -> Dict[str, Any]:
     except ki.ImportError_ as e:
         return done("error", f"Couldn't read the file: {e}")
 
-    from .api.kometa_import import _AssetSaver, finalize_elements
+    from .api.kometa_import import _AssetSaver, finalize_elements, _remote_cache
+    _remote_cache.clear()
     from .api.overlay_config import api_list_fonts
     saver = _AssetSaver(dry_run=False)
     available_fonts = {f.lower() for f in api_list_fonts().get("fonts", [])}

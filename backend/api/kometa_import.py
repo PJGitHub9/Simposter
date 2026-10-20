@@ -10,7 +10,7 @@ import hashlib
 import json
 import uuid
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
@@ -90,6 +90,41 @@ class _AssetSaver:
         return asset_id
 
 
+_MAX_REMOTE_IMAGE_BYTES = 15 * 1024 * 1024
+_remote_cache: Dict[str, Optional[Tuple[str, bytes]]] = {}
+
+
+def download_remote_image(url: str) -> Optional[Tuple[str, bytes]]:
+    """(file name, bytes) of an image an overlay links to, or None. Public URLs
+    only (same SSRF guard as the badge proxy); one download per URL per import."""
+    if url in _remote_cache:
+        return _remote_cache[url]
+    result = None
+    try:
+        import requests
+        from urllib.parse import urlparse, unquote
+        from ..middleware.validation import assert_external_fetch_safe
+        from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
+        assert_external_fetch_safe(url)
+        r = requests.get(url, headers=EXTERNAL_IMAGE_FETCH_HEADERS, timeout=20, stream=True)
+        r.raise_for_status()
+        content = r.raw.read(_MAX_REMOTE_IMAGE_BYTES + 1, decode_content=True)
+        if len(content) > _MAX_REMOTE_IMAGE_BYTES:
+            raise ValueError("larger than 15 MB")
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(content)) as img:
+            img.verify()
+        name = PurePosixPath(unquote(urlparse(url).path)).name or "image.png"
+        if not PurePosixPath(name).suffix:
+            name += ".png"
+        result = (name, content)
+    except Exception as e:
+        logger.warning("[KOMETA IMPORT] Couldn't download %s: %s", url, e)
+    _remote_cache[url] = result
+    return result
+
+
 def finalize_elements(
     elements: List[Dict[str, Any]],
     report: List[Dict[str, Any]],
@@ -134,6 +169,23 @@ def finalize_elements(
                 entry["messages"].append(f"image {PurePosixPath(wanted).name} wasn't found")
                 if entry.get("status") == "ok":
                     entry["status"] = "warning"
+        # Image the overlay links to (url, git, Kometa default): download it into the
+        # image library so it's listed in the editor and doesn't depend on the link.
+        remote = element.get("url")
+        if remote and not element.get("asset_id"):
+            name = PurePosixPath(str(remote).split("?")[0]).name or "image"
+            if dry_run:
+                entry["messages"].append(f"image {name} will be downloaded from its link")
+            else:
+                got = download_remote_image(str(remote))
+                asset_id = saver.save(got[0], got[1]) if got else None
+                if asset_id:
+                    element["asset_id"] = asset_id
+                    entry["messages"].append(f"downloaded image {got[0]}")
+                else:
+                    entry["messages"].append(f"couldn't download {name}; the layer keeps the link and fetches it when rendering")
+                    if entry.get("status") == "ok":
+                        entry["status"] = "warning"
         # Font
         font = entry.get("font")
         if font:
@@ -188,6 +240,7 @@ async def api_kometa_import(
         raise HTTPException(400, "No .yml files found in the upload")
 
     yaml_texts = {path: _decode(content) for path, content in bundle["yaml"].items()}
+    _remote_cache.clear()
     available_fonts = {f.lower() for f in api_list_fonts().get("fonts", [])}
     saver = _AssetSaver(dry_run)
     existing_configs = {c["name"]: c["id"] for c in db.get_all_overlay_configs()} if overwrite else {}

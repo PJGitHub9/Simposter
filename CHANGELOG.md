@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.03 (2026-10-20) — `dev-overlays` branch
+
+### Bug Fixes
+- **Remote overlay images** — a Kometa overlay with `url:`/`git:`/default images was imported as a link only: it rendered (fetched each time) but the editor's Image list showed nothing and the link wasn't visible. `finalize_elements()` now downloads it (`download_remote_image()`: SSRF guard, 15 MB cap, image check, once per URL per import) and saves it as an overlay asset (reused on re-import), keeping the link as a fallback; a failed download is reported and the layer keeps the link. Image and full-poster image layers show an "Image link" field in the editor. Applies to uploads and live Kometa files.
+
 ## v1.8.02 (2026-10-20) — `dev-overlays` branch
 
 ### Improvements

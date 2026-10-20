@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.03',
+    date: '2026-10-20',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Kometa imports now download images an overlay links to (url, git or Kometa defaults) into your image library, so they show in the editor\'s Image list and don\'t depend on the link. Image layers also show their link in the editor. Re-import files you imported before.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.02',
     date: '2026-10-20',
     sections: [

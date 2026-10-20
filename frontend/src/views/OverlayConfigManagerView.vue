@@ -1933,6 +1933,13 @@ const useRealItem = () => {
 
 const showAssets = ref(false)
 
+/** Image layers can use a link instead of (or as a fallback for) an uploaded image. */
+const setElementUrl = (el: OverlayElement, value: string) => {
+  const v = value.trim()
+  if (v) (el as OverlayElement & { url?: string }).url = v
+  else delete (el as OverlayElement & { url?: string }).url
+}
+
 // Advanced section (live Kometa files), closed by default.
 const showAdvanced = ref(false)
 const openOverlayById = (id: string) => {
@@ -2901,6 +2908,10 @@ onMounted(() => {
                         <span>Scale{{ element.placement === 'kometa' ? ' (Kometa size)' : '' }}</span>
                         <input type="number" v-model.number="element.scale" min="0.05" max="4" step="0.05" placeholder="1.0" />
                       </label>
+                      <label v-if="element.placement !== 'kometa'" class="field-full">
+                        <span>Image link (used when no image is picked above)</span>
+                        <input type="text" :value="element.url || ''" placeholder="https://..." @change="setElementUrl(element, ($event.target as HTMLInputElement).value)" />
+                      </label>
                       </div></div>
                     </template>
 
@@ -2913,6 +2924,10 @@ onMounted(() => {
                           <option :value="undefined">Select asset...</option>
                           <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }} ({{ asset.width }}x{{ asset.height }})</option>
                         </select>
+                      </label>
+                      <label class="field-full">
+                        <span>Image link (used when no image is picked above)</span>
+                        <input type="text" :value="element.url || ''" placeholder="https://..." @change="setElementUrl(element, ($event.target as HTMLInputElement).value)" />
                       </label>
                       </div></div>
                     </template>
