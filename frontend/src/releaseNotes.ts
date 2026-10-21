@@ -10,6 +10,29 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.04',
+    date: '2026-10-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Kometa import: "Paste YAML" lets you paste an overlay file instead of uploading it. You can still add the images, fonts or zip it uses alongside.',
+          'Two new "Show when" fields: Days since added (from the date your last scan recorded) and Show status (continuing, ended, canceled or upcoming, from TMDb, for TV shows). Both have example values in the preview.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'TSSK overlay files now import correctly: their status filters (tvdb_status / tmdb_status) and "added" filters work instead of hiding the layer.',
+          'Filters with several comma-separated values, such as "label.not: Coming Soon, RequestNeeded", are now treated as separate values, as Kometa does. Before, they were read as one value and never matched.',
+          'Kometa overlays named "backdrop…" are imported as background boxes, as Kometa draws them, instead of looking for an image file.',
+          'An empty or comment-only overlay file (for example one TSSK has not filled yet) imports as an overlay with no layers instead of failing.',
+          'Overlays matched by a TMDb/TVDB ID list no longer show as a warning in the import report; the note about re-importing to update the list is shown as information.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.03',
     date: '2026-10-20',
     sections: [

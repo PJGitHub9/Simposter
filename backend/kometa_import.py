@@ -99,6 +99,16 @@ _FILTER_FIELDS = {
     "audience_rating": ("audience_rating", "number"),
     "critic_rating": ("critic_rating", "number"),
     "user_rating": ("user_rating", "number"),
+    "tvdb_status": ("show_status", "status"),
+    "tmdb_status": ("show_status", "status"),
+    "added": ("days_since_added", "days"),
+}
+
+# Kometa's tmdb_status values -> the show_status values the engine fills
+# (continuing / ended / canceled / upcoming, from TMDb's show status).
+_TMDB_STATUS_MAP = {
+    "returning": "continuing", "planned": "upcoming", "production": "upcoming",
+    "pilot": "upcoming", "ended": "ended", "canceled": "canceled",
 }
 
 
@@ -447,6 +457,8 @@ def _load_yaml(text: str) -> Dict[str, Any]:
         data = yaml.safe_load(text)
     except yaml.YAMLError as e:
         raise ImportError_(f"YAML error: {e}")
+    if data is None:
+        return {}
     if not isinstance(data, dict):
         raise ImportError_("File is not a YAML mapping")
     return data
@@ -559,10 +571,40 @@ def _filter_conditions(key: str, value: Any, messages: List[str]) -> Optional[Li
         return None
     field, kind = spec
     values = _get_list(value)
+    if modifier != "regex":
+        # Kometa splits comma-separated filter values ("label.not: A, B").
+        split: List[Any] = []
+        for v in values:
+            if isinstance(v, str) and "," in v:
+                split.extend(p.strip() for p in v.split(",") if p.strip())
+            else:
+                split.append(v)
+        values = split
     if field in RATING_FIELDS:
         msg = _rating_message(field)
         if msg:
             messages.append(msg)
+
+    if kind == "days":
+        # Kometa date filters: "added: 7" = added within the last 7 days,
+        # "added.not: 7" = not within the last 7 days.
+        days = _num(values[0]) if values else None
+        if days is None or modifier not in ("", "not"):
+            return None
+        return [{"field": field, "op": "lte" if modifier == "" else "gt", "value": days}]
+    if kind == "status":
+        wanted: List[str] = []
+        for v in values:
+            sv = str(v).strip().lower()
+            sv = _TMDB_STATUS_MAP.get(sv, sv) if attr == "tmdb_status" else sv
+            if sv and sv not in wanted:
+                wanted.append(sv)
+        if not wanted or modifier not in ("", "not"):
+            return None
+        if modifier == "not":
+            return [{"field": field, "op": "not_in", "value": wanted}]
+        return [{"field": field, "op": "eq", "value": wanted[0]} if len(wanted) == 1
+                else {"field": field, "op": "in", "value": wanted}]
 
     if modifier in ("gt", "gte", "lt", "lte"):
         if kind == "number" or field == "year":
@@ -624,6 +666,7 @@ def map_definition(
 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """Expanded definition -> (element or None, report entry)."""
     messages: List[str] = []
+    info: List[str] = []  # notes that don't make the overlay a warning
     entry: Dict[str, Any] = {"name": mapping_name, "status": "ok", "messages": messages}
     methods = {str(k).lower(): k for k in definition}
 
@@ -748,7 +791,7 @@ def map_definition(
                 messages.append(f"{key} has no {kind} IDs; element hidden")
                 conditions.append(_never(f"_list_{key}"))
                 continue
-            messages.append(f"{key}: matched by {kind} ID ({len(ids)} item{'s' if len(ids) != 1 else ''}); re-import to pick up changes to the list")
+            info.append(f"{key}: matched by {kind} ID ({len(ids)} item{'s' if len(ids) != 1 else ''}); re-import to pick up changes to the list")
             conditions.append({"field": field, "op": "eq", "value": ids[0]} if len(ids) == 1
                               else {"field": field, "op": "in", "value": ids})
             continue
@@ -792,7 +835,7 @@ def map_definition(
     if oname.startswith("blur"):
         return skip("blur overlays aren't supported")
 
-    if oname == "backdrop":
+    if oname.startswith("backdrop"):
         element["type"] = "text_label"
         element["box_only"] = True
         placement()
@@ -856,9 +899,11 @@ def map_definition(
     if conditions:
         element["conditions"] = conditions
     messages[:] = list(dict.fromkeys(messages))
+    has_warnings = bool(messages)
+    messages.extend(m for m in dict.fromkeys(info) if m not in messages)
     if any(c.get("op") == "exists" and str(c.get("field", "")).startswith("_") for c in conditions):
         entry["status"] = "hidden"
-    elif messages:
+    elif has_warnings:
         entry["status"] = "warning"
     return element, entry
 
@@ -873,7 +918,12 @@ def expand_file(
     """Returns (elements, report entries, file-level messages)."""
     data = _load_yaml(text)
     file_messages: List[str] = []
+    if not data:
+        # UMTK/TSSK write a comment-only file when nothing matches right now.
+        return [], [], ["The file has no overlays right now (empty or only comments); the overlay is saved with no layers."]
     overlays = data.get("overlays")
+    if overlays is None and "overlays" in data:
+        return [], [], ["The file's overlays section is empty; the overlay is saved with no layers."]
     if not isinstance(overlays, dict) or not overlays:
         raise ImportError_("No 'overlays:' section (is this a Kometa overlay file?)")
     if data.get("queues"):

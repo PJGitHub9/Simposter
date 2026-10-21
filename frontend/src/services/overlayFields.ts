@@ -80,6 +80,15 @@ export const FIELDS: FieldDef[] = [
     options: opts([['movie', 'Movie'], ['tv', 'TV show']]),
   },
   { value: 'year', label: 'Year', group: 'Item', kind: 'number', placeholder: '2024' },
+  {
+    value: 'days_since_added', label: 'Days since added', group: 'Item', kind: 'number', placeholder: '7',
+    hint: 'Days since it was added to the library. "is at most 7" = added in the last week. Needs a library scan.',
+  },
+  {
+    value: 'show_status', label: 'Show status', group: 'Item', kind: 'choice',
+    options: opts([['continuing', 'Continuing'], ['ended', 'Ended'], ['canceled', 'Canceled'], ['upcoming', 'Upcoming']]),
+    note: 'TV shows; from TMDb.',
+  },
   { value: 'tmdb_id', label: 'TMDb ID', group: 'Item', kind: 'text', placeholder: '603', hint: 'Use "is any of" for a list of IDs.' },
   { value: 'tvdb_id', label: 'TVDB ID', group: 'Item', kind: 'text', placeholder: '81189', hint: 'TV shows. Use "is any of" for a list of IDs.' },
   { value: 'title', label: 'Title', group: 'Item', kind: 'text', placeholder: 'Star Wars' },

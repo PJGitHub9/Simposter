@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.04 (2026-10-21) — `dev-overlays` branch
+
+### New Features
+- **Paste YAML** — the Kometa import modal has a "Paste YAML" box; the pasted text (must have a top-level `overlays:` or `templates:` line) becomes a `<name>.yml` file in the browser and goes through the same import as uploads, so images/fonts/zips can still be added alongside. Pasting again under the same name replaces the earlier paste.
+- **Days since added / Show status** — new condition fields `days_since_added` (whole days since the cached `added_at`; `get_added_at_for_rating_key()`) and `show_status` (TMDb TV `status` mapped to continuing/ended/canceled/upcoming; `get_tv_show_details()` now returns `status`). Loaded only when a condition uses them (`needed_data()` keys `added`/`status`), with a reason in the overlay log when missing; listed in Show when, the preview's example values and `/overlay-preview-metadata`.
+
+### Bug Fixes
+- **TSSK filters** — `tvdb_status`/`tmdb_status` map to `show_status` (TMDb values translated) and `added: N` to `days_since_added lte N` (`added.not` → `gt`), instead of a hidden `_unsupported_*` condition.
+- **Comma-separated filter values** — `label.not: A, B` (and other string/tag filters) are split into separate values as Kometa's `get_list` does; previously the whole string was one value, so the condition never matched. Regex filters are left whole.
+- **`backdrop` overlays** — any overlay name starting with "backdrop" becomes a box, matching Kometa's `overlay.py`, instead of an image lookup.
+- **Empty overlay files** — an empty/comment-only file, or `overlays:` with nothing under it, returns no layers plus a message instead of an error; an upload import skips it, a live Kometa file saves the empty overlay (clearing its layers).
+- **ID-list note** — the "list only updates on re-import" note for `tmdb_movie`/`tmdb_show`/`tvdb_show` is reported as info, so those overlays show as ok.
+
 ## v1.8.03 (2026-10-20) — `dev-overlays` branch
 
 ### Bug Fixes

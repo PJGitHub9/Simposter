@@ -70,7 +70,7 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Which lazily-loaded data the elements use: stored file paths, MDBList
     ratings (conditions or text variables), and MDBList lists (conditions)."""
     rating_fields = _rating_field_names()
-    needs = {"paths": False, "ratings": False, "lists": [], "ids": False}
+    needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False}
     for element in elements:
         for cond in element.get("conditions") or []:
             if not isinstance(cond, dict):
@@ -82,14 +82,36 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
                 needs["ratings"] = True
             elif field in ("tmdb_id", "tvdb_id"):
                 needs["ids"] = True
+            elif field in ("days_since_added", "added"):
+                needs["added"] = True
+            elif field == "show_status":
+                needs["status"] = True
             elif field in _LIST_FIELDS:
                 for value in (cond.get("value") if isinstance(cond.get("value"), list) else [cond.get("value")]):
                     if value and str(value) not in needs["lists"]:
                         needs["lists"].append(str(value))
         text = element.get("text")
-        if text and any(m.group(1) in rating_fields for m in _VAR_RE.finditer(str(text))):
-            needs["ratings"] = True
+        if text:
+            names = {m.group(1) for m in _VAR_RE.finditer(str(text))}
+            if names & rating_fields:
+                needs["ratings"] = True
+            if "days_since_added" in names:
+                needs["added"] = True
+            if "show_status" in names:
+                needs["status"] = True
     return needs
+
+
+# TMDb show status -> the words Kometa's tvdb_status filter uses (plus canceled,
+# which TMDb distinguishes from ended).
+_SHOW_STATUS = {
+    "returning series": "continuing", "ended": "ended", "canceled": "canceled", "cancelled": "canceled",
+    "in production": "upcoming", "planned": "upcoming", "pilot": "upcoming",
+}
+
+
+def _is_tv(ctx: Dict[str, Any]) -> bool:
+    return str(ctx.get("media_type") or "").lower() in ("tv", "show", "tv-show")
 
 
 def _item_ids(ctx: Dict[str, Any]) -> Tuple[Optional[Any], Optional[Any], str]:
@@ -111,6 +133,8 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
     list membership are loaded only when the given elements use them (cached,
     so a render normally makes no API call)."""
     needs = needed_data(elements) if elements else {"paths": False, "ratings": False, "lists": []}
+    needs.setdefault("added", False)
+    needs.setdefault("status", False)
     needs_paths = needs_paths or needs["paths"]
     ctx = dict(meta or {})
     # Why data a rule needs is missing (shown in the render log by data_summary()).
@@ -145,6 +169,39 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                 ctx["tvdb_id"] = cached_tvdb
         except Exception:
             pass
+    if needs["added"] and ctx.get("days_since_added") in (None, ""):
+        added_at = ctx.get("added_at") or ctx.get("addedAt")
+        if not added_at and ctx.get("rating_key"):
+            try:
+                from . import database as db
+                added_at = db.get_added_at_for_rating_key(str(ctx["rating_key"]))
+            except Exception:
+                added_at = None
+        try:
+            if added_at:
+                import time
+                ctx["days_since_added"] = max(0, int((time.time() - float(added_at)) // 86400))
+        except (TypeError, ValueError):
+            pass
+        if ctx.get("days_since_added") in (None, ""):
+            notes["days_since_added"] = "no date added stored yet, scan the library"
+    if needs["status"] and ctx.get("show_status") in (None, ""):
+        if not _is_tv(ctx):
+            notes["show_status"] = "only TV shows have a status"
+        else:
+            tmdb_id, _tvdb, _mt = _item_ids(ctx)
+            if not tmdb_id:
+                notes["show_status"] = "this show has no TMDb ID"
+            else:
+                try:
+                    from .tmdb_client import get_tv_show_details
+                    raw = str(get_tv_show_details(int(tmdb_id)).get("status") or "").strip().lower()
+                    if raw:
+                        ctx["show_status"] = _SHOW_STATUS.get(raw, raw)
+                    else:
+                        notes["show_status"] = "TMDb has no status for this show"
+                except Exception as e:
+                    notes["show_status"] = f"TMDb lookup failed: {e}"
     if needs["ratings"] or needs["lists"]:
         tmdb_id, tvdb_id, media_type = _item_ids(ctx)
         try:
@@ -558,6 +615,7 @@ FIELD_LABELS = {
     "mdb_metacriticuser_rating": "Metacritic user score", "mdb_tmdb_rating": "TMDb rating",
     "mdb_trakt_rating": "Trakt rating", "mdb_letterboxd_rating": "Letterboxd rating",
     "mdb_myanimelist_rating": "MyAnimeList score",
+    "days_since_added": "Days since added", "show_status": "Show status",
 }
 _OP_WORDS = {
     "eq": "is", "is": "is", "ne": "is not", "not": "is not", "in": "is one of", "not_in": "is none of",
@@ -686,6 +744,11 @@ def data_summary(ctx: Dict[str, Any], elements: List[Dict[str, Any]]) -> str:
         parts.append("ratings: " + (", ".join(shown) if shown else notes.get("ratings") or "none found"))
     if needs["lists"]:
         parts.append("on MDBList lists: " + (_short(ctx.get("lists") or [], 3) if ctx.get("lists") else notes.get("lists") or "none"))
+    if needs.get("added"):
+        parts.append(f"added {ctx['days_since_added']} days ago" if ctx.get("days_since_added") not in (None, "")
+                     else "date added: " + (notes.get("days_since_added") or "unknown"))
+    if needs.get("status"):
+        parts.append("status " + str(ctx.get("show_status") or notes.get("show_status") or "unknown"))
     if needs["paths"] and notes.get("filepath"):
         parts.append("file: " + notes["filepath"])
     return ", ".join(parts) or "no media info"

@@ -206,6 +206,8 @@ const previewItemLabels = ref<string[]>([])
 const previewItemFilePaths = ref<string[]>([])
 const previewItemLists = ref<string[]>([])
 const previewCriticRating = ref('7.5')
+const previewDaysAdded = ref('3')
+const previewShowStatus = ref('continuing')
 // Test mode: lists (by URL) the pretend item is on.
 const previewOnLists = ref<Set<string>>(new Set())
 
@@ -948,7 +950,14 @@ const itemNeeds = computed(() => {
     textKeys(el).some(k => RATING_KEYS.has(k)) || (el.conditions || []).some(c => RATING_KEYS.has(String(c.field || '').toLowerCase())))
     || (selectedConfig.value?.conditions || []).some(c => RATING_KEYS.has(String(c.field || '').toLowerCase()))
   const types = [...new Set(els.map(e => e.type).filter(t => t === 'streaming_platform_badge' || t === 'studio_badge'))].sort()
-  return { ratings, lists: configLists.value, types }
+  // Item data fields filled on request (date added, show status).
+  const used = new Set<string>()
+  for (const c of [...els.flatMap(el => el.conditions || []), ...(selectedConfig.value?.conditions || [])]) {
+    const f = String(c.field || '').toLowerCase()
+    if (f === 'days_since_added' || f === 'show_status') used.add(f)
+  }
+  for (const el of els) for (const k of textKeys(el)) if (k === 'days_since_added' || k === 'show_status') used.add(k)
+  return { ratings, lists: configLists.value, types, fields: [...used].sort() }
 })
 const itemNeedsKey = computed(() => JSON.stringify(itemNeeds.value))
 
@@ -961,6 +970,7 @@ const loadItemData = async (ratingKey: string, mediaType: string): Promise<ItemD
     if (needs.ratings) params.set('ratings', 'true')
     if (needs.lists.length) params.set('lists', needs.lists.join(','))
     if (needs.types.length) params.set('badge_types', needs.types.join(','))
+    if (needs.fields.length) params.set('fields', needs.fields.join(','))
     const res = await fetch(`${apiBase}/api/overlay-preview-metadata?${params}`)
     if (!res.ok) return null
     const data = await res.json()
@@ -1085,6 +1095,8 @@ const exampleContext = (overrides: Record<string, string> = {}, title?: string) 
   meta.file_paths = previewFilePath.value.trim() ? [previewFilePath.value.trim()] : []
   if (String(previewRating.value).trim() !== '') meta.audience_rating = Number(previewRating.value)
   if (String(previewCriticRating.value).trim() !== '') meta.critic_rating = Number(previewCriticRating.value)
+  if (String(previewDaysAdded.value).trim() !== '') meta.days_since_added = Number(previewDaysAdded.value)
+  if (previewShowStatus.value) meta.show_status = previewShowStatus.value
   meta.lists = [...previewOnLists.value]
   if (title) meta.movie_title = title
   // Ratings without a test box (IMDb, Rotten Tomatoes, ...) use the list's example values.
@@ -1865,7 +1877,7 @@ watch(previewAudioLanguage, () => { nextTick(renderPreview) })
 watch(previewEdition, () => { nextTick(renderPreview) })
 watch(previewStreamingPlatform, () => { nextTick(renderPreview) })
 watch(previewStudio, () => { nextTick(renderPreview) })
-watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
+watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
 // Re-render when the simposter asset map loads (it arrives async after mount)
 watch(simposterAssetMap, () => { renderPreview() })
 // A new rating/list/badge type in the layers: fetch it for the real items being previewed.
@@ -1895,6 +1907,7 @@ const CONDITION_TEST_FIELD: Record<string, string> = {
   audio_channels: 'audio_channels', audio_language: 'audio_language', edition: 'edition', label: 'labels', labels: 'labels',
   filepath: 'filepath', file_path: 'filepath', filename: 'filepath', audience_rating: 'audience_rating',
   critic_rating: 'critic_rating', list: 'list', mdblist_list: 'list', streaming_platform: 'platform', studio: 'studio',
+  days_since_added: 'days_since_added', show_status: 'show_status',
 }
 const usedTestFields = computed(() => {
   const out = new Set<string>()
@@ -3147,6 +3160,19 @@ onMounted(() => {
                     <label v-if="showTest('critic_rating')" class="preview-value-field">
                       <span>Critic rating</span>
                       <input type="number" step="0.1" v-model.lazy="previewCriticRating" />
+                    </label>
+                    <label v-if="showTest('days_since_added')" class="preview-value-field">
+                      <span>Days since added</span>
+                      <input type="number" min="0" step="1" v-model.lazy="previewDaysAdded" />
+                    </label>
+                    <label v-if="showTest('show_status')" class="preview-value-field">
+                      <span>Show status</span>
+                      <select v-model="previewShowStatus">
+                        <option value="continuing">Continuing</option>
+                        <option value="ended">Ended</option>
+                        <option value="canceled">Canceled</option>
+                        <option value="upcoming">Upcoming</option>
+                      </select>
                     </label>
                     <label v-if="showTest('filepath')" class="preview-value-field preview-value-wide">
                       <span>File path</span>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Import Kometa overlay files (backend/api/kometa_import.py). Pick the YAML
-// files plus the images/fonts they use (loose, a folder, or a zip), check the
-// report, then import. Each overlay file becomes one overlay config.
+// files plus the images/fonts they use (loose, a folder, or a zip), or paste
+// YAML text, check the report, then import. Each overlay file becomes one
+// overlay config. Pasted text is sent as a .yml file like a picked one.
 import { computed, ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 
@@ -71,6 +72,29 @@ const addFiles = (list: FileList | File[] | null) => {
 const onDrop = (e: DragEvent) => {
   dragOver.value = false
   addFiles(e.dataTransfer?.files || null)
+}
+
+// ---- Paste YAML ----
+const showPaste = ref(false)
+const pasteText = ref('')
+const pasteName = ref('')
+const pasteError = ref('')
+const addPasted = () => {
+  pasteError.value = ''
+  const text = pasteText.value.trim()
+  if (!text) return
+  if (!/^(overlays|templates)\s*:/m.test(text)) {
+    pasteError.value = "Paste a whole Kometa overlay file: it should have a line starting with 'overlays:'."
+    return
+  }
+  const base = (pasteName.value.trim() || 'Pasted overlay').replace(/[\/:*?"<>|]+/g, ' ').trim() || 'Pasted overlay'
+  const path = `${base}.yml`
+  // Pasting again under the same name replaces the earlier paste.
+  picked.value = picked.value.filter(p => p.path !== path)
+  addFiles([new File([text + '\n'], path, { type: 'text/yaml' })])
+  pasteText.value = ''
+  pasteName.value = ''
+  showPaste.value = false
 }
 
 const removePicked = (i: number) => {
@@ -214,8 +238,29 @@ const KIND_LABEL: Record<string, string> = {
             <span>Drop files here, or</span>
             <button class="btn" @click="fileInput?.click()">Add files</button>
             <button class="btn" @click="folderInput?.click()">Add folder</button>
+            <button class="btn" :class="{ on: showPaste }" @click="showPaste = !showPaste">Paste YAML</button>
             <input ref="fileInput" type="file" multiple :accept="ACCEPT" hidden @change="addFiles(($event.target as HTMLInputElement).files); ($event.target as HTMLInputElement).value = ''" />
             <input ref="folderInput" type="file" webkitdirectory multiple hidden @change="addFiles(($event.target as HTMLInputElement).files); ($event.target as HTMLInputElement).value = ''" />
+          </div>
+
+          <div v-if="showPaste" class="ki-paste">
+            <textarea
+              v-model="pasteText"
+              class="ki-paste-text"
+              rows="10"
+              spellcheck="false"
+              placeholder="overlays:&#10;  my_overlay:&#10;    overlay:&#10;      name: text(4K)&#10;      ..."
+            ></textarea>
+            <div class="ki-paste-row">
+              <input v-model="pasteName" type="text" class="ki-paste-name" placeholder="Overlay name (optional)" @keyup.enter="addPasted" />
+              <button class="btn primary" :disabled="!pasteText.trim()" @click="addPasted">Add to import</button>
+              <button class="link" @click="showPaste = false; pasteError = ''">Cancel</button>
+            </div>
+            <p v-if="pasteError" class="ki-error">{{ pasteError }}</p>
+            <p class="hint">
+              If the YAML points to local images or fonts (e.g. <code>file: overlays/4k.png</code>), add those files too with
+              Add files or by dropping them above. Images it links to on the web are downloaded during the import.
+            </p>
           </div>
 
           <div v-if="picked.length" class="ki-picked">
@@ -340,6 +385,12 @@ const KIND_LABEL: Record<string, string> = {
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.primary { background: var(--accent, #3dd6b7); border-color: var(--accent, #3dd6b7); color: #04130f; font-weight: 600; }
 .link { background: none; border: none; color: var(--accent, #3dd6b7); cursor: pointer; font-size: 0.78rem; padding: 0; }
+.btn.on { border-color: var(--accent, #3dd6b7); color: var(--accent, #3dd6b7); }
+.ki-paste { display: flex; flex-direction: column; gap: 0.45rem; }
+.ki-paste-text { width: 100%; box-sizing: border-box; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid var(--border, #2a2f3e); background: rgba(0, 0, 0, 0.25); color: var(--text-primary, #fff); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; line-height: 1.45; resize: vertical; }
+.ki-paste-text:focus, .ki-paste-name:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.ki-paste-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.ki-paste-name { flex: 1; min-width: 180px; padding: 0.4rem 0.55rem; border-radius: 7px; border: 1px solid var(--border, #2a2f3e); background: rgba(255, 255, 255, 0.04); color: var(--text-primary, #fff); font-size: 0.82rem; }
 .ki-picked-sum { display: flex; align-items: center; gap: 0.6rem; font-size: 0.8rem; color: var(--text-secondary, #888); margin-bottom: 0.35rem; }
 .ki-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
 .chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.15rem 0.45rem; border-radius: 999px; background: rgba(255, 255, 255, 0.06); color: var(--text-primary, #fff); font-size: 0.72rem; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

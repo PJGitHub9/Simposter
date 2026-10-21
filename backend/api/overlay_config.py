@@ -356,6 +356,7 @@ def api_overlay_preview_metadata(
     ratings: bool = False,
     lists: Optional[str] = None,
     badge_types: Optional[str] = None,
+    fields: Optional[str] = None,
 ):
     """Return Plex media metadata for a given rating_key for use in the overlay config preview.
 
@@ -363,7 +364,8 @@ def api_overlay_preview_metadata(
     TMDb pre-pass that apply_overlay_config uses, so item-mode preview reflects real values.
 
     The editor also says what its current, possibly unsaved, layers use (ratings=1,
-    lists=comma-separated list URLs, badge_types=comma-separated element types), so
+    lists=comma-separated list URLs, badge_types=comma-separated element types,
+    fields=other data fields its rules use, e.g. days_since_added,show_status), so
     the preview doesn't wait for a save before fetching that data.
     """
     try:
@@ -447,6 +449,28 @@ def api_overlay_preview_metadata(
                     lists_out = ctx.get("lists") or []
             except Exception as mdb_err:
                 logger.debug(f"[OVERLAY] Preview MDBList error: {mdb_err}")
+        # Date added and show status, when the layers' rules use them.
+        wanted = {f.strip() for f in (fields or "").split(",") if f.strip()}
+        if saved_cfg:
+            for e in saved_cfg.get("elements", []):
+                for c in (e.get("conditions") or []) if isinstance(e, dict) else []:
+                    if isinstance(c, dict) and c.get("field") in ("days_since_added", "show_status"):
+                        wanted.add(c["field"])
+        wanted &= {"days_since_added", "show_status"}
+        if wanted:
+            try:
+                from .. import overlay_engine
+                tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+                stand_in = [{"type": "text_label", "conditions": [{"field": f, "op": "exists"} for f in wanted]}]
+                ctx = overlay_engine.build_context(
+                    {"rating_key": rating_key, "tmdb_id": tmdb_id, "tvdb_id": tvdb_id, "media_type": media_type},
+                    elements=stand_in,
+                )
+                for f in wanted:
+                    if ctx.get(f) not in (None, ""):
+                        info[f] = ctx[f]
+            except Exception as extra_err:
+                logger.debug(f"[OVERLAY] Preview extra fields error: {extra_err}")
         return {"metadata": info, "labels": labels, "file_paths": file_paths, "lists": lists_out}
     except Exception as e:
         logger.warning(f"[OVERLAY] Failed to fetch preview metadata for {rating_key}: {e}")

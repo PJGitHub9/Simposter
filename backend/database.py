@@ -4220,6 +4220,16 @@ def get_server_id_for_rating_key(rating_key: str) -> str:
     return "plex-1"
 
 
+def get_added_at_for_rating_key(rating_key: str) -> Optional[int]:
+    """When an item was added to its library (epoch seconds), from movie_cache /
+    tv_cache, or None. Used by overlay rules on days since added."""
+    with get_db() as conn:
+        row = conn.execute("SELECT added_at FROM movie_cache WHERE rating_key = ? LIMIT 1", (rating_key,)).fetchone()
+        if not row:
+            row = conn.execute("SELECT added_at FROM tv_cache WHERE rating_key = ? LIMIT 1", (rating_key,)).fetchone()
+    return _coerce_added_at(row["added_at"]) if row else None
+
+
 def get_ids_for_rating_key(rating_key: str) -> tuple:
     """Return (tmdb_id, tvdb_id) for a rating_key from movie_cache/tv_cache,
     whichever known cache columns exist (movie_cache has no tvdb_id column

@@ -362,6 +362,7 @@ def get_tv_show_details(tmdb_id: int) -> Dict[str, Any]:
         "year": year,
         "first_air_date": first_air_date,
         "number_of_seasons": number_of_seasons,
+        "status": data.get("status", ""),
     }
 
 
