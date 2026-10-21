@@ -38,7 +38,7 @@ When the same title exists on more than one server in a group (matched by TMDb/T
 
 ### Sending to more than one server
 
-When an item exists on several servers, sending opens a picker where you choose which servers get the poster or logo, or all of them. This applies in the manual editor, the grid's resend button and Batch Edit. Simposter finds the item's copy on each server for you.
+When an item exists on several servers, sending opens a picker where you choose which servers get the poster or logo, or all of them. This applies in the manual editor, the Logo and Backdrop editors, the grid's resend button, Local Assets resend and Batch Edit. Simposter finds the item's copy on each server for you, and sends one notification listing every server that got it.
 
 ---
 
@@ -46,7 +46,8 @@ When an item exists on several servers, sending opens a picker where you choose 
 
 - **Scan** on a group (Settings → Libraries), **Scan All Libraries**, and **Scheduled Scans** cover every server in your groups, including collections. To limit the schedule, tick specific groups — each is scanned on every server it includes.
 - With **automatic poster generation** turned on for a group, posters are generated for new items a scan finds, on Jellyfin/Emby as well as Plex. A library's very first scan is treated as importing what's already there, not as new arrivals, so linking an existing library doesn't re-render everything.
-- If an item exists on both Plex and Jellyfin, it's generated once (from the Plex side) and then sent to the other servers.
+- If an item exists on both Plex and Jellyfin, it's generated once (from the Plex side) and then sent to the other servers. If Jellyfin hadn't imported the file yet when the poster was made, Jellyfin's next scan sends it the same poster.
+- A normal scan only re-downloads a poster that changed on the server since the last scan (for example after Kometa or someone else replaced it). **Force Refresh All Art** re-downloads everything.
 
 Webhooks (Radarr/Sonarr) can target a whole library group. See [WEBHOOKS.md](WEBHOOKS.md#library-groups).
 
@@ -59,7 +60,7 @@ Webhooks (Radarr/Sonarr) can target a whole library group. See [WEBHOOKS.md](WEB
 - Choose the **source** server, the **target** servers, and which artwork to copy: posters, logos, backdrops and/or square art (square art is Plex-only).
 - **Also mirror Collections** copies collection artwork too, with its own artwork choices.
 - The mapping tables show which item on each target server matches each source item, with search and pages, and tabs for Movies/TV and Collections. Use the per-row **Send** button to copy a single item.
-- **Run Now** for a one-off copy, or turn on the **schedule**. Only images that changed since the last run are copied again. Tick **Re-copy everything** to force a full copy, e.g. after artwork was changed directly on a target server.
+- **Run Now** for a one-off copy, or turn on the **schedule**. Each run sends a notification with how many of each artwork type were copied (a scheduled run that copied nothing stays quiet; toggle "Media Mirror" in Settings → Notifications). Only images that changed since the last run are copied again. Tick **Re-copy everything** to force a full copy, e.g. after artwork was changed directly on a target server.
 
 ---
 
@@ -95,9 +96,14 @@ History and your saved poster files are kept. If you remove Plex, Simposter stop
 
 ---
 
+## Server-specific artwork
+
+- **Thumb Art** (🌄, Jellyfin/Emby only): their 16:9 "Thumb" image. The page only appears for library groups that include a Jellyfin or Emby library.
+
 ## Plex-only features
 
 Jellyfin and Emby have no equivalent for these:
 
 - **Square art**: it's a Plex artwork type.
-- **Labels**: "Default Labels to Remove", "Label to Add After Sending", Kometa compatibility and webhook ignore labels only apply to Plex items.
+- **Labels**: "Default Labels to Remove", "Label to Add After Sending", Kometa compatibility, webhook ignore labels, the Overlay Refresh label and the **Label** overlay rule only apply to Plex items.
+- **Edition**: the edition overlay badge and rule read Plex's edition field. On Jellyfin/Emby, match the edition tag in the file name instead (see [OVERLAYS.md](OVERLAYS.md#show-when-rules)).

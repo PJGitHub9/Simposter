@@ -312,10 +312,10 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
         except Exception as e:
             raise HTTPException(400, f"Invalid logo_data: {e}")
     elif req.logo_url:
-        from ..middleware.validation import validate_url
+        from ..middleware.validation import validate_url, safe_get
         req.logo_url = validate_url(req.logo_url)
         try:
-            r = requests.get(req.logo_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.logo_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/png").split(";")[0].strip()
             logo_bytes = r.content
@@ -404,10 +404,10 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
         except Exception as e:
             raise HTTPException(400, f"Invalid art_data: {e}")
     elif req.art_url:
-        from ..middleware.validation import validate_url
+        from ..middleware.validation import validate_url, safe_get
         req.art_url = validate_url(req.art_url)
         try:
-            r = requests.get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             art_bytes = r.content
@@ -510,10 +510,10 @@ def api_plex_send_square_art(req: PlexSquareArtSendRequest):
         except Exception as e:
             raise HTTPException(400, f"Invalid art_data: {e}")
     elif req.art_url:
-        from ..middleware.validation import validate_url
+        from ..middleware.validation import validate_url, safe_get
         req.art_url = validate_url(req.art_url)
         try:
-            r = requests.get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             art_bytes = r.content

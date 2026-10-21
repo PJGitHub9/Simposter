@@ -5,7 +5,7 @@ import threading
 
 import requests
 
-from .config import logger, settings
+from .config import logger, settings, redact_secrets
 from . import database as db
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
@@ -117,7 +117,7 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if hasattr(e, "response") and e.response is not None:
             text = str(e.response.text)[:200]
         logger.warning("[TMDB] Request failed url=%s status=%s err=%s body=%s", url, getattr(e, "response", None), e, text)
-        raise TMDBError(f"TMDb request failed: {e}") from e
+        raise TMDBError(f"TMDb request failed: {redact_secrets(e)}") from e
 
 
 def get_tv_external_ids(tmdb_id: int) -> Dict[str, Any]:

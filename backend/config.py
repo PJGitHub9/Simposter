@@ -335,6 +335,75 @@ settings.LOG_FILE = str(preferred_log)
 # ==========================
 #  Logging with sensitive data redaction
 # ==========================
+# Secret-looking query/header values, e.g. "?api_key=abc", "&apikey=abc",
+# "X-Plex-Token=abc", "secret=abc", 'MediaBrowser Token="abc"'. Catches keys that
+# aren't saved yet (a "Test" button) and URLs inside requests' exception text.
+_SECRET_PARAM_RE = re.compile(
+    r"(?i)((?:api_?key|apikey|api_token|x-plex-token|plex-token|token|secret)=)[^&\s'\"<>,;)]+"
+)
+_SECRET_HEADER_RE = re.compile(r'(?i)(token=")[^"]*(")')
+
+_known_secrets_cache: dict = {"at": 0.0, "values": ()}
+
+
+def _media_server_secrets() -> list:
+    """Tokens/API keys of every configured media server, read straight from the
+    settings table (config.py can't import database.py)."""
+    try:
+        import sqlite3
+        db_path = Path(settings.SETTINGS_DIR) / "simposter.db"
+        if not db_path.exists():
+            return []
+        conn = sqlite3.connect(str(db_path), timeout=2)
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+        finally:
+            conn.close()
+        servers = json.loads(row[0]) if row and row[0] else []
+        out = []
+        for s in servers if isinstance(servers, list) else []:
+            if isinstance(s, dict):
+                for k in ("token", "apiKey"):
+                    if s.get(k):
+                        out.append(str(s[k]))
+        return out
+    except Exception:
+        return []
+
+
+def _known_secrets() -> tuple:
+    """Every saved secret value, longest first, refreshed at most once a minute."""
+    import time as _time
+    now = _time.time()
+    if now - _known_secrets_cache["at"] < 60:
+        return _known_secrets_cache["values"]
+    vals = [
+        getattr(settings, name, "") or ""
+        for name in ("PLEX_TOKEN", "TMDB_API_KEY", "TVDB_API_KEY", "FANART_API_KEY",
+                     "MDBLIST_API_KEY", "WEBHOOK_SECRET")
+    ]
+    vals += _media_server_secrets()
+    values = tuple(sorted({str(v) for v in vals if v and len(str(v)) >= 6}, key=len, reverse=True))
+    _known_secrets_cache.update(at=now, values=values)
+    return values
+
+
+def redact_secrets(text) -> str:
+    """Hide API keys, tokens and secrets in a string before it is logged or
+    returned to the browser."""
+    if text is None:
+        return ""
+    s = str(text)
+    if not s:
+        return s
+    s = _SECRET_PARAM_RE.sub(r"\1***", s)
+    s = _SECRET_HEADER_RE.sub(r"\1***\2", s)
+    for secret in _known_secrets():
+        if secret in s:
+            s = s.replace(secret, secret[:4] + "***")
+    return s
+
+
 class RedactingFormatter(logging.Formatter):
     """Custom formatter that redacts sensitive information from logs."""
 
@@ -345,14 +414,7 @@ class RedactingFormatter(logging.Formatter):
         else:
             record.api_tag = ""
 
-        original = super().format(record)
-        # Redact tokens and API keys
-        redacted = original
-        if settings.PLEX_TOKEN and len(settings.PLEX_TOKEN) > 4:
-            redacted = redacted.replace(settings.PLEX_TOKEN, settings.PLEX_TOKEN[:4] + "***REDACTED***")
-        if settings.TMDB_API_KEY and len(settings.TMDB_API_KEY) > 4:
-            redacted = redacted.replace(settings.TMDB_API_KEY, settings.TMDB_API_KEY[:4] + "***REDACTED***")
-        return redacted
+        return redact_secrets(super().format(record))
 
 # High-frequency UI progress-polling endpoints (batch/scan/backup progress bars,
 # polled every 200ms-3s while an operation runs) add zero diagnostic value to the

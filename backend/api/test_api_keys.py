@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from ..config import logger, settings, SECRET_MASK
+from ..config import logger, settings, SECRET_MASK, redact_secrets
 from .. import tmdb_client, fanart_client
 
 router = APIRouter()
@@ -54,7 +54,7 @@ async def test_tmdb_api_key(payload: dict):
         logger.error(f"[TEST_TMDB] Error testing API key: {e}")
         return {
             "status": "error",
-            "error": str(e)
+            "error": redact_secrets(e)
         }
 
 
@@ -86,7 +86,7 @@ async def test_tvdb_api_key(payload: dict):
         return result
     except Exception as e:
         logger.error(f"[TEST_TVDB] Error testing API key: {e}")
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": redact_secrets(e)}
 
 
 @router.post("/test-fanart")
@@ -143,5 +143,5 @@ async def test_fanart_api_key(payload: dict):
         logger.error(f"[TEST_FANART] Error testing API key: {e}")
         return {
             "status": "error",
-            "error": str(e)
+            "error": redact_secrets(e)
         }

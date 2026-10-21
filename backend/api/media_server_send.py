@@ -89,7 +89,9 @@ def _resolve_image_bytes(req: MediaServerSendRequest) -> tuple:
         from ..middleware.validation import validate_url
         url = validate_url(req.image_url)
         try:
-            r = requests.get(url, timeout=15)
+            from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
+            from ..middleware.validation import safe_get
+            r = safe_get(url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             return r.content, content_type
@@ -185,8 +187,8 @@ def api_notify_send_summary(req: SendSummaryNotifyRequest):
             # fetch it for the notification thumbnail (best-effort, size-capped).
             try:
                 from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
-                from ..middleware.validation import validate_url
-                r = requests.get(validate_url(req.image_url), timeout=10, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+                from ..middleware.validation import validate_url, safe_get
+                r = safe_get(validate_url(req.image_url), timeout=10, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
                 if r.ok and len(r.content) <= 8_000_000:
                     poster_data = r.content
             except Exception as e:

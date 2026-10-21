@@ -103,10 +103,10 @@ def download_remote_image(url: str) -> Optional[Tuple[str, bytes]]:
     try:
         import requests
         from urllib.parse import urlparse, unquote
-        from ..middleware.validation import assert_external_fetch_safe
+        from ..middleware.validation import assert_external_fetch_safe, safe_get
         from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
         assert_external_fetch_safe(url)
-        r = requests.get(url, headers=EXTERNAL_IMAGE_FETCH_HEADERS, timeout=20, stream=True)
+        r = safe_get(url, strict=True, headers=EXTERNAL_IMAGE_FETCH_HEADERS, timeout=20, stream=True)
         r.raise_for_status()
         content = r.raw.read(_MAX_REMOTE_IMAGE_BYTES + 1, decode_content=True)
         if len(content) > _MAX_REMOTE_IMAGE_BYTES:

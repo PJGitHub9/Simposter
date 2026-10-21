@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.10',
+    date: '2026-10-21',
+    sections: [
+      {
+        title: 'Security',
+        items: [
+          'API keys and tokens (Fanart, TVDB, MDBList, Jellyfin/Emby, the webhook secret) are now hidden in the log and in error messages, not only the Plex token and TMDb key.',
+          'Image links (Kometa imports, URL badges, editor URLs, logo/backdrop sends) are checked again at every redirect, so a public link can no longer redirect to a device on your network.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'New overlay guide (docs/OVERLAYS.md), and the README, getting-started, media server, collections, architecture and workflow docs are updated for the overlay features.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.04',
     date: '2026-10-21',
     sections: [

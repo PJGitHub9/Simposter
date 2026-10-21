@@ -37,7 +37,7 @@ def _download_image(url: str) -> Image.Image:
     if not url:
         raise ValueError("Empty image URL")
 
-    from .middleware.validation import assert_fetch_url_safe
+    from .middleware.validation import assert_fetch_url_safe, safe_get
     assert_fetch_url_safe(url)
 
     # Cache hit — skip HTTP entirely
@@ -61,7 +61,7 @@ def _download_image(url: str) -> Image.Image:
     for attempt in range(max_retries):
         try:
             # Increase timeout from 20s to 60s for slow connections
-            resp = requests.get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            resp = safe_get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             resp.raise_for_status()
             break
         except requests.exceptions.Timeout:

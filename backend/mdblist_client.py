@@ -27,7 +27,7 @@ from urllib.parse import urlencode
 import requests
 
 from .config import logger, settings
-from .config import SECRET_MASK
+from .config import SECRET_MASK, redact_secrets
 
 API_URL = "https://api.mdblist.com/"
 LIST_URL_PREFIX = "https://mdblist.com/lists/"
@@ -106,7 +106,7 @@ def _request(path_or_url: str, params: Optional[Dict[str, Any]] = None, json_dat
             else:
                 r = requests.get(url, params=query, timeout=20)
         except requests.RequestException as e:
-            raise MDBListError(f"MDBList request failed: {e}")
+            raise MDBListError(f"MDBList request failed: {redact_secrets(e)}")
         finally:
             _last_request = time.time()
     if r.status_code == 429:
@@ -144,7 +144,7 @@ def test_key(api_key: str) -> Dict[str, Any]:
     try:
         data, _ = _request("user", api_key=api_key)
     except MDBListError as e:
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": redact_secrets(e)}
     data = data if isinstance(data, dict) else {}
     limit = data.get("api_requests")
     used = data.get("api_requests_count")

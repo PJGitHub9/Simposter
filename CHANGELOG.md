@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.10 (2026-10-21) — `dev-overlays` branch
+
+Numbered 1.8.10 rather than 1.8.1: versions are compared part by part as numbers, so 1.8.1 would sort before 1.8.04.
+
+### Security
+- **Secrets in logs and errors** — new `redact_secrets()` (config.py) masks `api_key=`/`apikey=`/`api_token=`/`token=`/`x-plex-token=`/`secret=` values, `Token="..."` headers and every saved credential (settings keys plus each `mediaServers` token/apiKey). Used by `RedactingFormatter` for all log lines (simposter and uvicorn) and by the TMDb/TVDB/MDBList client errors and the key-test endpoints. Before, only the Plex token and TMDb key were masked, and `requests` errors carried the full URL with the key. Plex force-refresh fetches no longer put `X-Plex-Token` in the URL (it is already sent as a header).
+- **Redirects re-checked** — new `safe_get()` (middleware/validation.py) follows redirects one hop at a time and runs the SSRF check on each (max 5). Used by the render image download, Kometa remote image downloads, URL badges (and the proxy that uses them), media-server send/notify image URLs and Plex logo/backdrop/square-art URL sends. Before, only the first URL was checked, so a public link could redirect to a LAN or cloud-metadata address.
+
+### Documentation
+- New `docs/OVERLAYS.md` (overlay guide). README, GETTING_STARTED, MEDIA_SERVERS, COLLECTIONS_AND_POSTERS, ARCHITECTURE and WORKFLOW updated for overlays, Kometa import, MDBList, Overlay Refresh and live Kometa files.
+
 ## v1.8.04 (2026-10-21) — `dev-overlays` branch
 
 ### New Features

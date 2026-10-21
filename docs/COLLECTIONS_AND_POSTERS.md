@@ -50,7 +50,7 @@ A logo drop shadow (Photoshop-style — angle, distance, size, opacity) is also 
 
 ## Overlay Badges
 
-Badges pull live metadata from Plex (resolution, codec, audio channels, edition title) or TMDb (studio, streaming platform) and render on top of the poster:
+Badges pull live metadata from your media server (resolution, codec, audio channels; edition title on Plex) or TMDb (studio, streaming platform) and render on top of the poster:
 
 - **Video** — Resolution (4K, 1080p, 720p) and codec (HEVC, AV1, H.264)
 - **Audio** — Codec (Atmos, DTS-X, TrueHD), channels, language
@@ -58,14 +58,34 @@ Badges pull live metadata from Plex (resolution, codec, audio channels, edition 
 - **Studio / Streaming platform** — Auto-detected
 - **Custom images** — Your own badge assets (4K logo, Dolby Vision seal, etc.)
 - **Text labels** — Custom text with full font/size/color control
-- **Full-cover images** — An image that stretches to fill the whole canvas, placed below or above the logo/text
+- **Full-poster images** — An image that stretches to fill the whole canvas, e.g. a frame
+- **Ratings** — audience, critic, IMDb, Rotten Tomatoes and more, from MDBList, as text or as rules
 
-Each badge value can be individually set to **None**, **Text**, or **Image** mode — so you can show 4K as a badge image but render Dolby Atmos as text, for example. Every overlay element can also be placed **below** the logo/text instead of the default above.
+Each badge value can be individually set to **None**, **Text**, **Image**, **URL** or **Simposter Asset** mode — so you can show 4K as a badge image but render Dolby Atmos as text, for example. A whole overlay can also be placed **below** the logo/text instead of the default above.
 
-Badge visibility can be controlled with Plex labels: `show_if_label` / `hide_if_label`.
+Every layer can have **Show when** rules (file name, ratings, MDBList lists, show status, days since added, labels…), and you can import Kometa overlay files directly. The full guide is in **[OVERLAYS.md](OVERLAYS.md)**.
 
 <img width="1102" height="904" alt="image" src="https://github.com/user-attachments/assets/55866bfe-aded-499a-b321-a45c77893cbe" />
 
+
+---
+
+## Logos, Backdrops, Square Art & Thumb Art
+
+Each library's sidebar menu has a page per artwork type, showing what every item currently has on your server, with search, sort and label filters (Logos, Backdrops and Square Art also filter by "missing"). Click an item to open its editor:
+
+- **🖼️ Logos**: pick a clear logo from TMDb, Fanart.tv or TVDB (or upload one) and send it.
+- **🎞️ Backdrops**: pick a background image and send it.
+- **🔳 Square Art** (Plex only): renders a 1:1 version of the poster with your template and preset, and sends it to Plex's square art slot.
+- **🌄 Thumb Art** (Jellyfin/Emby only, shown when the library group has a Jellyfin or Emby library): a 16:9 landscape image with the logo, sent to Jellyfin/Emby's Thumb image.
+
+If the item is on more than one server, Send asks which servers get it. In the poster editor you can also use a **backdrop as the poster background** (Images: Backdrops), with zoom and left/right pan.
+
+---
+
+## Local Assets
+
+**📁 Local Assets** lists the posters Simposter has saved to disk. You can filter by library and folder, change the thumbnail size, rename or delete files, and **resend** a saved poster to its server, or to any server in its library group, without re-rendering it.
 
 ---
 

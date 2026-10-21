@@ -4,7 +4,7 @@ import threading
 
 import requests
 
-from .config import logger, settings
+from .config import logger, settings, redact_secrets
 
 TVDB_API_BASE = "https://api4.thetvdb.com/v4"
 
@@ -76,7 +76,7 @@ def _get_token() -> str:
             if hasattr(e, "response") and e.response is not None:
                 text = str(e.response.text)[:200]
             logger.warning("[TVDB] Login failed: %s body=%s", e, text)
-            raise TVDBError(f"TVDB login failed: {e}")
+            raise TVDBError(f"TVDB login failed: {redact_secrets(e)}")
 
 
 def _tvdb_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -99,7 +99,7 @@ def _tvdb_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
         raise TVDBError(f"TVDB HTTP {e.response.status_code if e.response else 'error'}: {text}")
     except Exception as e:
         logger.warning("[TVDB] Request failed url=%s err=%s type=%s", url, e, type(e).__name__)
-        raise TVDBError(f"TVDB request failed: {e}")
+        raise TVDBError(f"TVDB request failed: {redact_secrets(e)}")
 
 
 def get_series_images(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
@@ -308,4 +308,4 @@ def test_tvdb_key(api_key: str) -> Dict[str, Any]:
         text = ""
         if hasattr(e, "response") and e.response is not None:
             text = str(e.response.text)[:200]
-        return {"status": "error", "error": f"{e}", "body": text}
+        return {"status": "error", "error": redact_secrets(e), "body": redact_secrets(text)}

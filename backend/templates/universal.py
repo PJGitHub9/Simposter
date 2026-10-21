@@ -1576,7 +1576,8 @@ def _fetch_url_badge_image(url: str) -> Optional[Image.Image]:
 
     # Download and cache
     try:
-        resp = _requests.get(url, timeout=10, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+        from ..middleware.validation import safe_get
+        resp = safe_get(url, strict=True, timeout=10, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
         img.save(str(cache_path), "PNG")

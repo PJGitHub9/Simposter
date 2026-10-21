@@ -364,7 +364,7 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False, server_
 
     # Add cache-busting parameter when force refreshing to bypass Plex's cache
     import time
-    cache_buster = f"?X-Plex-Token={settings.PLEX_TOKEN}&t={int(time.time())}" if force_refresh else ""
+    cache_buster = f"?t={int(time.time())}" if force_refresh else ""
     direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb{cache_buster}"
 
     # Try direct poster URL
