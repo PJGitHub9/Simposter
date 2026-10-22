@@ -236,12 +236,34 @@ def check_state(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _upload_tracked(client, server_id: str, state: Dict[str, Any], payload: bytes, content_type: str) -> str:
+    """Upload a re-rendered poster for a tracked item. If Jellyfin/Emby
+    re-imported the item under a new id, find it again by TMDb/TVDB id and
+    retry once; the tracked row is moved to the new id (the database's
+    re-key does that), so `state` is updated to match. Returns the id the
+    poster was uploaded to."""
+    from .api.media_server_send import _upload_poster_and_verify, is_not_found_error, refresh_stale_item_id
+    rating_key = state["rating_key"]
+    is_collection = bool(state.get("is_collection"))
+    try:
+        _upload_poster_and_verify(client, server_id, rating_key, payload, content_type, is_collection=is_collection)
+        return rating_key
+    except Exception as e:
+        new_key = None
+        if is_not_found_error(e) and not is_collection:
+            new_key = refresh_stale_item_id(server_id, client, str(rating_key))
+        if not new_key:
+            raise
+    _upload_poster_and_verify(client, server_id, new_key, payload, content_type, is_collection=is_collection)
+    state["rating_key"] = new_key
+    return new_key
+
+
 def refresh_state(state: Dict[str, Any], checked: Optional[Dict[str, Any]] = None, source: str = "overlay_refresh") -> Dict[str, Any]:
     """Re-render one tracked poster from its stored source art and upload it.
     Returns {"status": "updated"|"failed", "detail": ...}."""
     from .rendering import render_poster_image
     from .api.save import encode_poster_for_plex
-    from .api.media_server_send import _upload_poster_and_verify
     from .media_server import get_client
     from .save_paths import save_or_cache_render
 
@@ -258,8 +280,7 @@ def refresh_state(state: Dict[str, Any], checked: Optional[Dict[str, Any]] = Non
     opts = checked["options"]
     img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
     payload, content_type = encode_poster_for_plex(img, for_plex=is_plex)
-    _upload_poster_and_verify(client, server_id, rating_key, payload, content_type,
-                              is_collection=bool(state.get("is_collection")))
+    rating_key = _upload_tracked(client, server_id, state, payload, content_type)
 
     try:
         save_or_cache_render(rating_key, payload, None)
@@ -304,7 +325,6 @@ def remove_state(state: Dict[str, Any], source: str = "overlay_refresh") -> Dict
     again the next time it's sent with a preset that has them."""
     from .rendering import render_poster_image
     from .api.save import encode_poster_for_plex
-    from .api.media_server_send import _upload_poster_and_verify
     from .media_server import get_client
     from .save_paths import save_or_cache_render
 
@@ -324,8 +344,7 @@ def remove_state(state: Dict[str, Any], source: str = "overlay_refresh") -> Dict
     opts.pop("preset_id", None)
     img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
     payload, content_type = encode_poster_for_plex(img, for_plex=is_plex)
-    _upload_poster_and_verify(client, server_id, rating_key, payload, content_type,
-                              is_collection=bool(state.get("is_collection")))
+    rating_key = _upload_tracked(client, server_id, state, payload, content_type)
 
     try:
         save_or_cache_render(rating_key, payload, None)

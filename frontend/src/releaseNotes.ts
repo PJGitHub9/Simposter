@@ -10,6 +10,29 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.12',
+    date: '2026-10-22',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Jellyfin/Emby scans are faster: items that haven\'t changed since the last scan are skipped.',
+          'Settings → Media Servers shows Silo as a coming server type (not usable yet).',
+          'Settings → Media Servers marks Emby as "Testing required": it uses the same calls as Jellyfin but hasn\'t been tested on a real Emby server yet.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Jellyfin/Emby: sending to an item that the server re-imported (it gets a new id) no longer fails until the next scan. Simposter finds the item again and sends to it.',
+          'Jellyfin/Emby: resolution and audio language badges set up in the Overlay Manager now match Jellyfin items too (they used different value names). Run a scan to update existing items.',
+          'Overlay Manager preview shows studio and streaming badges for Jellyfin/Emby items.',
+          'Jellyfin/Emby: a library scan with auto-generate on no longer makes a new poster for an item that a Radarr/Sonarr webhook already sent one to.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.11',
     date: '2026-10-22',
     sections: [

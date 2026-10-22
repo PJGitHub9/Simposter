@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.12 (2026-10-22) — `dev-overlays` branch
+
+### Improvements
+- **Faster Jellyfin/Emby scans** — the library listing now asks for each item's `Etag` (an MD5 of the item's `DateLastSaved` in Jellyfin's source). New table `media_server_item_etags`; `_fetch_art_and_media_info_for_scan()` skips the metadata/logo/backdrop requests for items whose Etag hasn't changed since the scan that last fetched them (the poster-version check still runs for every item). The Etag is stored only after a successful metadata fetch, so failures are retried.
+- Settings → Media Servers has a greyed-out **Silo** section marked "Future update" (placeholder only).
+- Settings → Media Servers shows a "Testing required" tag and note on the Emby section (Emby support assumes the Jellyfin API and is untested on a real Emby server).
+
+### Bug Fixes
+- **Re-imported Jellyfin/Emby items** — when Jellyfin re-imports a file it gives the item a new id, and every send to the old id returned 404 until the next scan. New `upload_with_stale_retry()`/`refresh_stale_item_id()` (media_server_send.py): on a 404 (or a season that can't be found under the cached series id), the item is looked up again by TMDb/TVDB id in the same library, its cached rows are moved to the new id (`db.rekey_media_server_item()`: movie/TV cache, overlay refresh state, poster fingerprints, scan Etags) and the upload is retried once. Used by the poster/logo/backdrop/thumb-art send endpoints, Media Mirror target uploads and Overlay Refresh.
+- **Jellyfin/Emby media info in Plex's vocabulary** — resolution is now `4k`/`1080`/`720`/`sd` (was `1080p`/`720p`) and audio language a 2-letter code (`en`, was `eng`), so per-value overlay badges set up in the Overlay Manager match Jellyfin items too. Existing rows are corrected by the next Jellyfin scan.
+- **Overlay Manager preview** — studio and streaming badges for a Jellyfin/Emby item (or a TV show) now use the scanned TMDb id instead of asking Plex.
+- A Jellyfin/Emby scan with auto-generate on no longer regenerates (or re-sends) a poster for an item that a Radarr/Sonarr webhook or a cross-server sync already sent one to. New `db.poster_already_sent()` checks History for a successful send to that item on that server; `process_new_media_server_content()` skips those items.
+
 ## v1.8.11 (2026-10-22) — `dev-overlays` branch
 
 ### New Features

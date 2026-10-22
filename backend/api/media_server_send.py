@@ -251,6 +251,73 @@ def _resolve_non_plex_client(rating_key: str, server_id_hint: Optional[str] = No
     return server_id, client
 
 
+_STALE_ID_MESSAGE = ("This title isn't on the server under the id Simposter has, and it couldn't be found "
+                     "again by its TMDb/TVDB id. Scan the library in Simposter, then try again.")
+
+
+def is_not_found_error(e: Exception) -> bool:
+    """True for an HTTP 404 from a media server call (requests.HTTPError)."""
+    return getattr(getattr(e, "response", None), "status_code", None) == 404
+
+
+def refresh_stale_item_id(server_id: str, client, rating_key: str) -> Optional[str]:
+    """Jellyfin/Emby give an item a new id when they re-import its file, so a
+    cached id can stop working until the next scan. Look the item up again by
+    its TMDb/TVDB id in the same library; if it's there under a new id, move
+    the cached rows to that id and return it. None when there's nothing better
+    to try (not cached, no external id, not found, or the same id)."""
+    if server_id == "plex-1":
+        return None
+    from .. import database as db
+    ident = db.get_cached_item_identity(rating_key)
+    if not ident or ident.get("server_id") != server_id:
+        return None
+    if not (ident.get("tmdb_id") or ident.get("tvdb_id")):
+        return None
+    try:
+        new_id = client.find_item_by_external_id(
+            ident.get("tmdb_id"), ident.get("tvdb_id"), ident["media_type"],
+            library_id=ident.get("library_id"),
+        )
+    except Exception as e:
+        logger.debug("[MEDIA_SERVER_SEND:%s] Re-lookup of %s failed: %s", server_id, rating_key, e)
+        return None
+    if not new_id or str(new_id) == str(rating_key):
+        return None
+    db.rekey_media_server_item(server_id, rating_key, str(new_id))
+    logger.info("[MEDIA_SERVER_SEND:%s] '%s' was re-imported on the server: %s is now %s",
+                server_id, ident.get("title") or rating_key, rating_key, new_id)
+    return str(new_id)
+
+
+def upload_with_stale_retry(server_id: str, client, rating_key: str, season_index: Optional[int], upload) -> tuple:
+    """Run upload(item_id) for this item (or its season), and if the server
+    says the id no longer exists, find the item again by TMDb/TVDB id and try
+    once more. Returns (item_id uploaded to, current rating_key). Raises an
+    HTTPException 404 when the item can't be found; other upload errors are
+    raised as they are."""
+    item_id = _resolve_season_item_id(client, rating_key, season_index)
+    if item_id:
+        try:
+            upload(item_id)
+            return item_id, rating_key
+        except Exception as e:
+            if not is_not_found_error(e):
+                raise
+    # Either the upload 404ed, or the season couldn't be found under this
+    # series id (a stale series id lists no seasons at all).
+    new_key = refresh_stale_item_id(server_id, client, rating_key)
+    if not new_key:
+        if item_id is None:
+            raise HTTPException(404, f"Could not resolve season {season_index} for series {rating_key} on {server_id}")
+        raise HTTPException(404, _STALE_ID_MESSAGE)
+    item_id = _resolve_season_item_id(client, new_key, season_index)
+    if not item_id:
+        raise HTTPException(404, f"Could not resolve season {season_index} for series {new_key} on {server_id}")
+    upload(item_id)
+    return item_id, new_key
+
+
 def _upload_poster_and_verify(client, server_id: str, item_id: str, image_bytes: bytes, content_type: str, is_collection: bool = False) -> None:
     """Core upload+verify-diagnostic logic for a poster, factored out of
     api_send_poster() so batch.py's multi-server sync (which already has a
@@ -370,7 +437,7 @@ def _cache_logo_after_upload(item_id: str, image_bytes: bytes, content_type: str
     return new_logo_url
 
 
-def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id: str) -> None:
+def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id: str, current_key: Optional[str] = None) -> None:
     """Track a manual-editor poster sent to Jellyfin/Emby for overlay refresh.
     Metadata is rebuilt the same way the preview built it (from the item the
     editor rendered, meta_rating_key). Never raises."""
@@ -389,6 +456,8 @@ def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id
         if r.get("preset_id"):
             opts["preset_id"] = r["preset_id"]
         meta_key = str(r.get("meta_rating_key") or req.rating_key)
+        if current_key and meta_key == str(req.rating_key):
+            meta_key = str(current_key)  # the item was re-imported under a new id
         inject_plex_media_metadata(opts, meta_key, tmdb_id=r.get("tmdb_id"), is_tv=media_type == "tv")
         library_id = library_in_group(r.get("source_server_id") or server_id, r.get("library_id"), media_type, server_id)
         record_send(
@@ -405,9 +474,6 @@ def _record_editor_render(req: "MediaServerSendRequest", server_id: str, item_id
 @router.post("/send-poster")
 def api_send_poster(req: MediaServerSendRequest):
     server_id, client = _resolve_non_plex_client(req.rating_key, req.server_id)
-    item_id = _resolve_season_item_id(client, req.rating_key, req.season_index)
-    if not item_id:
-        raise HTTPException(404, f"Could not resolve season {req.season_index} for series {req.rating_key} on {server_id}")
     image_bytes, _content_type = _resolve_image_bytes(req)
 
     from io import BytesIO
@@ -423,50 +489,57 @@ def api_send_poster(req: MediaServerSendRequest):
     image_bytes, content_type = encode_poster_for_plex(img, for_plex=False)
 
     try:
-        _upload_poster_and_verify(client, server_id, item_id, image_bytes, content_type)
+        item_id, current_key = upload_with_stale_retry(
+            server_id, client, req.rating_key, req.season_index,
+            lambda iid: _upload_poster_and_verify(client, server_id, iid, image_bytes, content_type),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("[MEDIA_SERVER_SEND:%s] Poster upload failed item_id=%s: %s", server_id, item_id, e)
+        logger.error("[MEDIA_SERVER_SEND:%s] Poster upload failed rating_key=%s: %s", server_id, req.rating_key, e)
         raise HTTPException(500, f"Failed to upload poster: {e}")
 
     new_poster_url = _cache_poster_after_upload(item_id, image_bytes, content_type)
 
     logger.info("[MEDIA_SERVER_SEND:%s] Poster sent for item_id=%s%s", server_id, item_id,
-                f" (season {req.season_index} of series {req.rating_key})" if req.season_index is not None else "")
-    # req.rating_key (not item_id) -- only the series/movie-level id is ever
+                f" (season {req.season_index} of series {current_key})" if req.season_index is not None else "")
+    # current_key (not item_id) -- only the series/movie-level id is ever
     # scanned/cached with its own title/library_id row (Quirk #100); a
     # season-resolved item_id is never individually cached, so looking it up
     # directly would always miss.
     if req.notify:
-        _notify_manual_send(req.rating_key, server_id, "poster")
+        _notify_manual_send(current_key, server_id, "poster")
     if req.render:
-        _record_editor_render(req, server_id, item_id)
-    return {"status": "ok", "poster_url": new_poster_url, "item_id": item_id}
+        _record_editor_render(req, server_id, item_id, current_key)
+    return {"status": "ok", "poster_url": new_poster_url, "item_id": item_id, "rating_key": current_key}
 
 
 @router.post("/send-logo")
 def api_send_logo(req: MediaServerSendRequest):
     server_id, client = _resolve_non_plex_client(req.rating_key, req.server_id)
-    item_id = _resolve_season_item_id(client, req.rating_key, req.season_index)
-    if not item_id:
-        raise HTTPException(404, f"Could not resolve season {req.season_index} for series {req.rating_key} on {server_id}")
     image_bytes, content_type = _resolve_image_bytes(req)
 
     from .save import normalize_logo_for_plex
     image_bytes, content_type = normalize_logo_for_plex(image_bytes, content_type)
 
     try:
-        client.upload_image(item_id, ImageType.LOGO, image_bytes, content_type)
+        item_id, current_key = upload_with_stale_retry(
+            server_id, client, req.rating_key, req.season_index,
+            lambda iid: client.upload_image(iid, ImageType.LOGO, image_bytes, content_type),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("[MEDIA_SERVER_SEND:%s] Logo upload failed item_id=%s: %s", server_id, item_id, e)
+        logger.error("[MEDIA_SERVER_SEND:%s] Logo upload failed rating_key=%s: %s", server_id, req.rating_key, e)
         raise HTTPException(500, f"Failed to upload logo: {e}")
 
     new_logo_url = _cache_logo_after_upload(item_id, image_bytes, content_type, is_tv=req.is_tv)
 
     logger.info("[MEDIA_SERVER_SEND:%s] Logo sent for item_id=%s%s", server_id, item_id,
-                f" (season {req.season_index} of series {req.rating_key})" if req.season_index is not None else "")
+                f" (season {req.season_index} of series {current_key})" if req.season_index is not None else "")
     if req.notify:
-        _notify_manual_send(req.rating_key, server_id, "logo")
-    return {"status": "ok", "logo_url": new_logo_url, "item_id": item_id}
+        _notify_manual_send(current_key, server_id, "logo")
+    return {"status": "ok", "logo_url": new_logo_url, "item_id": item_id, "rating_key": current_key}
 
 
 def sync_render_to_linked_servers(
@@ -624,29 +697,32 @@ def api_send_thumb_art(req: MediaServerSendRequest):
     image_bytes, content_type = normalize_backdrop_for_plex(image_bytes, content_type, for_plex=False)
 
     try:
-        client.upload_image(req.rating_key, ImageType.THUMB_ART, image_bytes, content_type)
+        # A 404 means the server no longer has this item id (Jellyfin re-imported
+        # the file); upload_with_stale_retry() finds it again by TMDb/TVDB id.
+        _, rating_key = upload_with_stale_retry(
+            server_id, client, req.rating_key, None,
+            lambda iid: client.upload_image(iid, ImageType.THUMB_ART, image_bytes, content_type),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("[MEDIA_SERVER_SEND:%s] Thumb art upload failed rating_key=%s: %s", server_id, req.rating_key, e)
-        # A 404 here means the server no longer has this item id -- typically
-        # Jellyfin re-imported the file under a new id since the last scan.
-        if getattr(getattr(e, "response", None), "status_code", None) == 404:
-            raise HTTPException(404, "This title isn't on the server under the id Simposter has (it was likely re-imported). Scan the library in Simposter, then try again.")
         raise HTTPException(500, f"Failed to upload thumb art: {e}")
 
     new_url = None
     try:
         from .movies import _save_thumb_art_cache, _thumb_art_cache_url, _thumb_art_thumbnail
-        saved = _save_thumb_art_cache(req.rating_key, image_bytes, content_type)
+        saved = _save_thumb_art_cache(rating_key, image_bytes, content_type)
         if saved:
-            _thumb_art_thumbnail(req.rating_key, saved)
-            new_url = _thumb_art_cache_url(req.rating_key, saved)
+            _thumb_art_thumbnail(rating_key, saved)
+            new_url = _thumb_art_cache_url(rating_key, saved)
     except Exception as e:
         logger.debug("[MEDIA_SERVER_SEND:%s] Failed to update thumb art cache after upload: %s", server_id, e)
 
-    logger.info("[MEDIA_SERVER_SEND:%s] Thumb art sent for rating_key=%s", server_id, req.rating_key)
+    logger.info("[MEDIA_SERVER_SEND:%s] Thumb art sent for rating_key=%s", server_id, rating_key)
     if req.notify:
-        _notify_manual_send(req.rating_key, server_id, "thumb_art")
-    return {"status": "ok", "thumb_art_url": new_url}
+        _notify_manual_send(rating_key, server_id, "thumb_art")
+    return {"status": "ok", "thumb_art_url": new_url, "rating_key": rating_key}
 
 
 @router.post("/send-backdrop")
@@ -658,7 +734,12 @@ def api_send_backdrop(req: MediaServerSendRequest):
     image_bytes, content_type = normalize_backdrop_for_plex(image_bytes, content_type, for_plex=False)
 
     try:
-        client.upload_image(req.rating_key, ImageType.BACKDROP, image_bytes, content_type)
+        _, rating_key = upload_with_stale_retry(
+            server_id, client, req.rating_key, None,
+            lambda iid: client.upload_image(iid, ImageType.BACKDROP, image_bytes, content_type),
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("[MEDIA_SERVER_SEND:%s] Backdrop upload failed rating_key=%s: %s", server_id, req.rating_key, e)
         raise HTTPException(500, f"Failed to upload backdrop: {e}")
@@ -667,23 +748,23 @@ def api_send_backdrop(req: MediaServerSendRequest):
     try:
         from .. import database as db
         from .movies import _save_art_cache, _art_cache_url, _art_thumbnail
-        saved = _save_art_cache(req.rating_key, image_bytes, content_type)
+        saved = _save_art_cache(rating_key, image_bytes, content_type)
         if saved:
-            _art_thumbnail(req.rating_key, saved)
-            new_art_url = _art_cache_url(req.rating_key, saved)
+            _art_thumbnail(rating_key, saved)
+            new_art_url = _art_cache_url(rating_key, saved)
             if req.is_tv:
-                db.update_tv_art_url(req.rating_key, new_art_url)
+                db.update_tv_art_url(rating_key, new_art_url)
             else:
-                db.update_movie_art_url(req.rating_key, new_art_url)
+                db.update_movie_art_url(rating_key, new_art_url)
     except Exception as e:
         logger.debug("[MEDIA_SERVER_SEND:%s] Failed to update backdrop cache after upload: %s", server_id, e)
 
-    logger.info("[MEDIA_SERVER_SEND:%s] Backdrop sent for rating_key=%s", server_id, req.rating_key)
+    logger.info("[MEDIA_SERVER_SEND:%s] Backdrop sent for rating_key=%s", server_id, rating_key)
     # Was missing entirely before -- poster/logo sends both notify via
     # _notify_manual_send(), backdrop simply never got the same call added
     # (not a deliberate scope cut, see api_send_poster()/api_send_logo()'s
     # own notification calls and this module's docstring, which only
     # excludes square_art for a real reason -- Jellyfin has no equivalent).
     if req.notify:
-        _notify_manual_send(req.rating_key, server_id, "backdrop")
-    return {"status": "ok", "art_url": new_art_url}
+        _notify_manual_send(rating_key, server_id, "backdrop")
+    return {"status": "ok", "art_url": new_art_url, "rating_key": rating_key}

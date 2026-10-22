@@ -378,7 +378,13 @@ def api_overlay_preview_metadata(
             try:
                 cfg = saved_cfg or {}
                 element_types = {e.get("type") for e in cfg.get("elements", [])} | extra_types
-                tmdb_id = get_movie_tmdb_id(rating_key) if element_types & {"streaming_platform_badge", "studio_badge"} else None
+                tmdb_id = None
+                if element_types & {"streaming_platform_badge", "studio_badge"}:
+                    # Scanned id first: a Jellyfin/Emby item (or a TV show) has
+                    # no Plex movie metadata to read it from.
+                    tmdb_id = db.get_ids_for_rating_key(str(rating_key))[0]
+                    if not tmdb_id and db.get_server_id_for_rating_key(str(rating_key)) == "plex-1":
+                        tmdb_id = get_movie_tmdb_id(rating_key)
 
                 if tmdb_id and "streaming_platform_badge" in element_types:
                     try:

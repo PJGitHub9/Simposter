@@ -1041,6 +1041,18 @@ def init_database():
             )
         """)
 
+        # Jellyfin/Emby scans: the item's Etag (an MD5 of its DateLastSaved)
+        # from the last scan that fetched its details, so an unchanged item's
+        # metadata/logo/backdrop aren't requested again (api/media_server.py).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS media_server_item_etags (
+                server_id TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                etag TEXT NOT NULL,
+                PRIMARY KEY (server_id, rating_key)
+            )
+        """)
+
         # MDBList caches (overlay ratings and list membership). item_ratings is
         # keyed by "movie:tmdb:603"-style keys; data_json holds the normalized
         # ratings, or {} when MDBList had nothing (so misses aren't refetched
@@ -4273,6 +4285,83 @@ def get_ids_for_rating_key(rating_key: str) -> tuple:
     return None, None
 
 
+def get_cached_item_identity(rating_key: str) -> Optional[Dict[str, Any]]:
+    """What Simposter knows about a cached movie/show: which table, server,
+    library and external ids. Used to find the item again on its server
+    after Jellyfin/Emby re-imported it under a new id. None if not cached."""
+    with get_db() as conn:
+        for table, media_type in (("movie_cache", "movie"), ("tv_cache", "tv")):
+            row = conn.execute(
+                f"SELECT server_id, library_id, tmdb_id, tvdb_id, title FROM {table} WHERE rating_key = ? LIMIT 1",
+                (str(rating_key),),
+            ).fetchone()
+            if row:
+                return {
+                    "table": table, "media_type": media_type, "server_id": row["server_id"],
+                    "library_id": row["library_id"], "tmdb_id": row["tmdb_id"],
+                    "tvdb_id": row["tvdb_id"], "title": row["title"],
+                }
+    return None
+
+
+def rekey_media_server_item(server_id: str, old_key: str, new_key: str) -> bool:
+    """Move a Jellyfin/Emby item's cached rows from its old item id to a new
+    one (the server re-imported the file under a new id). Covers the cache
+    row and the per-item tracking tables that are keyed by the item id
+    (overlay refresh, poster drift). If a row for the new id already exists
+    (a scan got there first), the old row is just dropped. Returns True if
+    anything changed. Never touches Plex rows."""
+    old_key, new_key = str(old_key), str(new_key)
+    if not old_key or not new_key or old_key == new_key or server_id == "plex-1":
+        return False
+    changed = False
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for table in ("movie_cache", "tv_cache"):
+            cursor.execute(f"SELECT 1 FROM {table} WHERE rating_key = ? AND server_id = ?", (old_key, server_id))
+            if not cursor.fetchone():
+                continue
+            cursor.execute(f"SELECT 1 FROM {table} WHERE rating_key = ?", (new_key,))
+            if cursor.fetchone():
+                cursor.execute(f"DELETE FROM {table} WHERE rating_key = ? AND server_id = ?", (old_key, server_id))
+            else:
+                cursor.execute(f"UPDATE {table} SET rating_key = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ? AND server_id = ?",
+                               (new_key, old_key, server_id))
+            changed = True
+        for table in ("overlay_state", "poster_fingerprints", "media_server_item_etags"):
+            try:
+                cursor.execute(f"UPDATE OR IGNORE {table} SET rating_key = ? WHERE server_id = ? AND rating_key = ?",
+                               (new_key, server_id, old_key))
+                cursor.execute(f"DELETE FROM {table} WHERE server_id = ? AND rating_key = ?", (server_id, old_key))
+            except sqlite3.Error as e:
+                logger.debug("[DB] rekey %s %s -> %s failed: %s", table, old_key, new_key, e)
+    if changed:
+        logger.info("[DB] '%s': item id %s is now %s (re-imported on the server)", server_id, old_key, new_key)
+    return changed
+
+
+def get_media_server_etags(server_id: str) -> Dict[str, str]:
+    """{rating_key: etag} recorded by earlier Jellyfin/Emby scans of this server."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT rating_key, etag FROM media_server_item_etags WHERE server_id = ?",
+                            (server_id,)).fetchall()
+    return {r["rating_key"]: r["etag"] for r in rows}
+
+
+def set_media_server_etag(server_id: str, rating_key: str, etag: Optional[str]) -> None:
+    """Record (or, with no etag, forget) an item's Etag after a scan fetched its details."""
+    with get_db() as conn:
+        if etag:
+            conn.execute(
+                "INSERT INTO media_server_item_etags (server_id, rating_key, etag) VALUES (?, ?, ?) "
+                "ON CONFLICT(server_id, rating_key) DO UPDATE SET etag = excluded.etag",
+                (server_id, str(rating_key), str(etag)),
+            )
+        else:
+            conn.execute("DELETE FROM media_server_item_etags WHERE server_id = ? AND rating_key = ?",
+                         (server_id, str(rating_key)))
+
+
 def record_poster_history(
     rating_key: str,
     library_id: Optional[str],
@@ -4471,6 +4560,30 @@ def get_poster_history_by_id(history_id: int) -> Optional[Dict[str, Any]]:
         "server_id": row["server_id"] if "server_id" in row_keys else "plex-1",
         "created_at": row["created_at"],
     }
+
+
+def poster_already_sent(server_id: str, rating_key: str) -> bool:
+    """True if History has a successful poster send to this item on this server.
+
+    Used by the Jellyfin/Emby scan's auto-generate so an item a webhook (or a
+    cross-server sync) already gave a poster isn't regenerated just because
+    the scan sees it for the first time."""
+    if not server_id or not rating_key:
+        return False
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT 1 FROM poster_history
+                   WHERE server_id = ? AND rating_key = ?
+                     AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'overlay_refresh')
+                     AND COALESCE(status, 'success') = 'success'
+                   LIMIT 1""",
+                (server_id, str(rating_key)),
+            )
+            return cursor.fetchone() is not None
+    except Exception:
+        return False
 
 
 def get_last_plex_send_preset(media_type: str, tmdb_id: Optional[int]) -> Optional[Dict[str, Any]]:
@@ -4698,7 +4811,8 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
                 shared.update(r[0] for r in cursor.fetchall())
         own_keys = sorted(keys - shared)
 
-        for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue", "poster_fingerprints"):
+        for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue", "poster_fingerprints",
+                      "media_server_item_etags"):
             cursor.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
             counts[table] = cursor.rowcount
 

@@ -366,8 +366,23 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
         update_art = db.update_movie_art_url
         update_media_info = db.update_movie_media_info
 
+    # Skip the per-item metadata/logo/backdrop requests for items the server
+    # hasn't saved since the last scan that fetched them (same Etag). The
+    # poster check below needs no request when nothing changed, so it still
+    # runs for every item.
+    server_id = getattr(client, "server_id", None)
+    try:
+        known_etags = db.get_media_server_etags(server_id) if server_id else {}
+    except Exception as e:
+        logger.debug("[MEDIA_SERVER_SCAN] Could not read stored item etags: %s", e)
+        known_etags = {}
+    skipped = 0
+
     def _one(item) -> None:
+        nonlocal skipped
         rating_key = item.id
+        etag = getattr(item, "etag", None)
+        unchanged = bool(etag) and known_etags.get(rating_key) == etag
         try:
             # Re-download only when the server's poster version changed
             # (ImageTags.Primary) -- Quirk #152.
@@ -389,6 +404,9 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
                 poster_drift.check_after_download(getattr(client, "server_id", None), rating_key, poster_path)
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Poster fetch failed for %s: %s", rating_key, e)
+        if unchanged:
+            skipped += 1
+            return
         try:
             logo_path = fetch_and_cache_logo(rating_key)
             if logo_path:
@@ -412,6 +430,10 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
                 audio_language=meta.audio_language,
                 edition=meta.edition,
             )
+            # Only after the details were fetched, so a failed fetch is retried
+            # next scan.
+            if server_id and etag:
+                db.set_media_server_etag(server_id, rating_key, etag)
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Media-info fetch failed for %s: %s", rating_key, e)
 
@@ -420,7 +442,11 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
         for _ in as_completed(futures):
             pass
 
-    logger.info("[MEDIA_SERVER_SCAN] Fetched art + media info for %d %s item(s)", len(items), media_type)
+    if skipped:
+        logger.info("[MEDIA_SERVER_SCAN] Fetched art + media info for %d %s item(s); %d unchanged since the last scan were skipped",
+                    len(items) - skipped, media_type, skipped)
+    else:
+        logger.info("[MEDIA_SERVER_SCAN] Fetched art + media info for %d %s item(s)", len(items), media_type)
 
 
 @router.post("/{server_id}/scan")

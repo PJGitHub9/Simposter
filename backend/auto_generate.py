@@ -629,6 +629,13 @@ def process_new_media_server_content(
         for item in new_items:
             if not item.get("rating_key"):
                 continue
+            # A webhook (or a sync from another server) already sent this item a
+            # poster before this scan first saw it: nothing to do.
+            if db.poster_already_sent(server_id, item["rating_key"]):
+                results["skipped"] += 1
+                logger.info("[AUTO_GEN] Skipping %s on %s -- Simposter already sent it a poster",
+                            item.get("title") or item["rating_key"], server_id)
+                continue
             if _is_on_plex(item):
                 results["skipped"] += 1
                 title = item.get("title") or item.get("rating_key")

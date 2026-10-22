@@ -133,7 +133,9 @@ class JellyfinClient(MediaServerClient):
             "ParentId": library_id,
             "Recursive": "true",
             "IncludeItemTypes": item_type,
-            "Fields": "ProviderIds,Path,ProductionYear,DateCreated",
+            # Etag = MD5 of the item's DateLastSaved (BaseItem.GetEtag() in
+            # Jellyfin's source); it changes whenever the server saves the item.
+            "Fields": "ProviderIds,Path,ProductionYear,DateCreated,Etag",
             "CollapseBoxSetItems": "false",
         }
         try:
@@ -160,6 +162,7 @@ class JellyfinClient(MediaServerClient):
                 library_id=library_id,
                 file_path=item.get("Path"),
                 image_version=(item.get("ImageTags") or {}).get("Primary"),
+                etag=item.get("Etag") or None,
             ))
         return out
 
@@ -297,7 +300,7 @@ class JellyfinClient(MediaServerClient):
                 audio_codec = (stream.get("Codec") or "").lower() or None
                 channels = stream.get("Channels")
                 audio_channels = str(channels) if channels else None
-                audio_language = stream.get("Language") or None
+                audio_language = self._normalize_language(stream.get("Language"))
 
         return MediaItemMetadata(
             tmdb_id=provider_ids.get("Tmdb"),
@@ -312,9 +315,10 @@ class JellyfinClient(MediaServerClient):
 
     @staticmethod
     def _classify_resolution(width: Optional[int]) -> Optional[str]:
-        # Width-threshold classification (plan doc sec8) -- not a
-        # Jellyfin-specific fact, just a reasonable, already-precedented
-        # bucketing.
+        # Width-threshold classification (plan doc sec8). Values use Plex's
+        # videoResolution vocabulary ("4k", "1080", "720", "sd"), because the
+        # Overlay Manager's per-value badge settings are keyed on those; a
+        # Jellyfin "1080p" never matched a badge set up for "1080".
         if not width:
             return None
         if width >= 7000:
@@ -322,12 +326,36 @@ class JellyfinClient(MediaServerClient):
         if width >= 3800:
             return "4k"
         if width >= 2500:
-            return "1440p"
+            return "1440"
         if width >= 1800:
-            return "1080p"
+            return "1080"
         if width >= 1200:
-            return "720p"
+            return "720"
         return "sd"
+
+    # Jellyfin/Emby report a stream's language as a 3-letter ISO 639-2 code
+    # ("eng"); Plex (and the Overlay Manager's per-value badges) use the
+    # 2-letter code ("en"). Common languages only; anything else is kept as is.
+    _LANGUAGE_3_TO_2 = {
+        "eng": "en", "spa": "es", "fre": "fr", "fra": "fr", "ger": "de", "deu": "de",
+        "jpn": "ja", "kor": "ko", "chi": "zh", "zho": "zh", "ita": "it", "por": "pt",
+        "rus": "ru", "dut": "nl", "nld": "nl", "swe": "sv", "nor": "no", "nob": "nb",
+        "nno": "nn", "dan": "da", "fin": "fi", "pol": "pl", "tur": "tr", "ara": "ar",
+        "hin": "hi", "heb": "he", "gre": "el", "ell": "el", "cze": "cs", "ces": "cs",
+        "hun": "hu", "rum": "ro", "ron": "ro", "tha": "th", "vie": "vi", "ind": "id",
+        "ukr": "uk", "per": "fa", "fas": "fa", "may": "ms", "msa": "ms", "tam": "ta",
+        "tel": "te", "ice": "is", "isl": "is", "bul": "bg", "hrv": "hr", "srp": "sr",
+        "slo": "sk", "slk": "sk", "slv": "sl", "cat": "ca", "fil": "tl", "tgl": "tl",
+    }
+
+    @classmethod
+    def _normalize_language(cls, code: Optional[str]) -> Optional[str]:
+        if not code:
+            return None
+        code = str(code).strip().lower()
+        if code in ("und", "unknown", ""):
+            return None
+        return cls._LANGUAGE_3_TO_2.get(code, code)
 
     def item_exists(self, item_id: str) -> Optional[bool]:
         # Same not-directly-confirmed caveat as get_item_metadata.
