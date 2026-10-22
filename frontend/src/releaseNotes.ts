@@ -17,6 +17,7 @@ export const releaseNotes: ReleaseNote[] = [
         title: 'Improvements',
         items: [
           'Jellyfin/Emby scans are faster: items that haven\'t changed since the last scan are skipped.',
+          'Settings → Output is simpler: pick a save layout from cards that show the exact file names it writes. Templates and variables only appear under Custom, where variables can be clicked in.',
           'Settings → Media Servers shows Silo as a coming server type (not usable yet).',
           'Settings → Media Servers marks Emby as "Testing required": it uses the same calls as Jellyfin but hasn\'t been tested on a real Emby server yet.'
         ]

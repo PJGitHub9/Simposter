@@ -5,6 +5,7 @@
 ### Improvements
 - **Faster Jellyfin/Emby scans** — the library listing now asks for each item's `Etag` (an MD5 of the item's `DateLastSaved` in Jellyfin's source). New table `media_server_item_etags`; `_fetch_art_and_media_info_for_scan()` skips the metadata/logo/backdrop requests for items whose Etag hasn't changed since the scan that last fetched them (the poster-version check still runs for every item). The Etag is stored only after a successful metadata fetch, so failures are retried.
 - Settings → Media Servers has a greyed-out **Silo** section marked "Future update" (placeholder only).
+- **Settings → Output redesigned** — save layouts are cards with a live example (movie, show, season) computed by a port of `save_paths.apply_save_location_variables()`/`_sanitize()`/`resolve_save_path()`; templates, clickable variable chips and per-field examples only under Custom; "Send to Plex" folded into the Saving section ("Also save a copy when sending to a media server"); the Path Variable Examples section is gone. Stored settings are unchanged.
 - Settings → Media Servers shows a "Testing required" tag and note on the Emby section (Emby support assumes the Jellyfin API and is untested on a real Emby server).
 
 ### Bug Fixes
