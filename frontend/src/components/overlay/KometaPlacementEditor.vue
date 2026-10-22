@@ -9,7 +9,8 @@ import type { OverlayRuleFields } from '@/services/overlayEngine'
 const props = defineProps<{ element: OverlayRuleFields & { type: string } }>()
 
 const isKometa = computed(() => props.element.placement === 'kometa')
-const isText = computed(() => props.element.type === 'text_label')
+const isBoxOnly = computed(() => !!props.element.box_only)
+const isText = computed(() => props.element.type === 'text_label' && !isBoxOnly.value)
 
 /** Convert a plain (point + anchor) element to Kometa placement in place. */
 const convert = () => {
@@ -94,7 +95,7 @@ const pickerValue = (v: string | undefined, fallback: string) => {
     </template>
 
     <template v-else>
-      <div class="kp-sec">
+      <div v-if="!isBoxOnly" class="kp-sec">
       <div class="kp-sec-head">
         <div class="kp-sec-title">{{ isText ? 'Outline' : 'Image link' }}</div>
         <button v-if="isText && hasOutline" type="button" class="kp-remove" @click="removeOutline">Remove outline</button>
@@ -122,12 +123,13 @@ const pickerValue = (v: string | undefined, fallback: string) => {
       </div>
 
       <div v-if="!hasBox" class="kp-sec">
+      <p v-if="isBoxOnly" class="kp-note">This box has no color yet, so nothing is drawn.</p>
       <button type="button" class="kp-add" @click="addBox">+ Add a background box</button>
       </div>
       <div v-else class="kp-sec">
       <div class="kp-sec-head">
         <div class="kp-sec-title">Background box</div>
-        <button type="button" class="kp-remove" @click="removeBox">Remove background box</button>
+        <button v-if="!isBoxOnly" type="button" class="kp-remove" @click="removeBox">Remove background box</button>
       </div>
       <div class="kp-grid">
         <label>
@@ -189,6 +191,7 @@ const pickerValue = (v: string | undefined, fallback: string) => {
 .kp-remove:hover { color: #f87171; text-decoration: underline; }
 .kp-sec-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent, #3dd6b7); }
 .kp-add { align-self: flex-start; padding: 0.3rem 0.7rem; background: rgba(61, 214, 183, 0.08); border: 1px dashed rgba(61, 214, 183, 0.35); border-radius: 6px; color: var(--accent, #3dd6b7); cursor: pointer; font-size: 0.74rem; }
+.kp-note { margin: 0 0 0.4rem; font-size: 0.72rem; color: var(--text-secondary, #888); }
 .kp-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.45rem; }
 .kp-grid label { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
 .kp-grid label.full { grid-column: 1 / -1; }

@@ -672,6 +672,7 @@ const layerWarnings = (el: OverlayElement): string[] => {
   }
   if ((el.type === 'custom_image' || el.type === 'full_cover_image') && !el.asset_id && !el.url) out.push('No image picked yet.')
   if (el.type === 'text_label' && !String(el.text || '').trim() && !el.box_only) out.push('No text entered yet.')
+  if (el.box_only && !el.back_color && !(Number(el.back_line_width) > 0)) out.push('This box has no color or border, so it draws nothing.')
   for (const c of el.conditions || []) {
     const field = String(c.field || '')
     if (!field) out.push('A "Show when" condition has no field picked.')
@@ -2452,7 +2453,8 @@ onMounted(() => {
                     <OverlayRulesEditor v-else-if="tabOf(element) === 'when'" :element="element" />
 
                     <template v-else>
-                    <p v-if="TYPE_HELP[element.type]" class="look-help">{{ TYPE_HELP[element.type] }}</p>
+                    <p v-if="element.box_only" class="look-help">A plain box with no text or image (a Kometa "backdrop"). Set its color and size below; without a color or border it draws nothing.</p>
+                    <p v-else-if="TYPE_HELP[element.type]" class="look-help">{{ TYPE_HELP[element.type] }}</p>
                     <!-- Video Badge (+ legacy resolution_badge) -->
                     <template v-if="element.type === 'video_badge' || element.type === 'resolution_badge'">
                       <div class="look-sec"><div class="look-sec-title">What it shows</div><div class="look-sec-grid">
@@ -3016,7 +3018,7 @@ onMounted(() => {
                     </template>
 
                     <!-- Text Label -->
-                    <template v-if="element.type === 'text_label'">
+                    <template v-if="element.type === 'text_label' && !element.box_only">
                       <div class="look-sec"><div class="look-sec-title">Text</div><div class="look-sec-grid">
                       <label class="field-full">
                         <span>What it says</span>

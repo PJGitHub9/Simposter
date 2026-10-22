@@ -857,6 +857,8 @@ def map_definition(
         placement()
         element["text"] = ""
         entry["element_type"] = "box"
+        if not element.get("back_color") and not element.get("back_line_width"):
+            messages.append("backdrop has no back_color, so it draws nothing until you pick a color")
     elif oname.startswith("text"):
         m = re.search(r"\((.+)\)", oname)
         if not m:

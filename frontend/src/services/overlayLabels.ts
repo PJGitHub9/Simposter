@@ -65,6 +65,7 @@ const FIELD_NOUNS: Record<string, string> = {
 export const elementNoun = (el: LabelledElement): string => {
   if (el.metadata_field && FIELD_NOUNS[el.metadata_field]) return FIELD_NOUNS[el.metadata_field]!
   const type = ELEMENT_TYPE_LABELS[String(el.type)] || String(el.type || 'Layer')
+  if ((el as { box_only?: boolean }).box_only) return 'Background box'
   if (el.type === 'text_label' && el.text) return `Text "${String(el.text).slice(0, 24)}"`
   return type
 }

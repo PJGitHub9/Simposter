@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.13',
+    date: '2026-10-22',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Live Kometa files: a Browse button next to the file path lets you pick the .yml file from the Simposter server folders instead of typing the path.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Live Kometa files: the status now says which layers were skipped and why (for example, text with no position in the file).',
+          'Overlay Manager: a Kometa "backdrop" layer shows as a Background box with its color and size settings, instead of empty text fields, and warns when it has no color.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.12',
     date: '2026-10-22',
     sections: [

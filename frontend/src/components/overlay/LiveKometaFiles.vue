@@ -4,6 +4,7 @@
 // changes; see backend/live_kometa.py. Lives in Overlay Manager → Advanced.
 import { onMounted, ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import ServerFilePicker from './ServerFilePicker.vue'
 
 interface LiveFile {
   id: string
@@ -36,6 +37,12 @@ const INTERVALS = [
   { hours: 12, label: 'Every 12 hours' },
   { hours: 24, label: 'Once a day' },
 ]
+
+const showPicker = ref(false)
+const onPicked = (path: string) => {
+  form.value.path = path
+  showPicker.value = false
+}
 
 const blank = () => ({ id: '' as string, path: '', name: '', library_type: 'movie', interval_hours: 6, enabled: true, refresh_posters: true })
 const form = ref(blank())
@@ -153,8 +160,12 @@ onMounted(load)
     <div v-if="showForm" class="form">
       <label class="full">
         <span>File path on the Simposter server</span>
-        <input v-model="form.path" type="text" placeholder="/kometa/config/overlays/UMTK_MOVIES_UPCOMING_OVERLAYS.yml" />
+        <div class="path-row">
+          <input v-model="form.path" type="text" placeholder="/kometa/config/overlays/UMTK_MOVIES_UPCOMING_OVERLAYS.yml" />
+          <button type="button" class="btn browse" @click="showPicker = true">Browse…</button>
+        </div>
       </label>
+      <ServerFilePicker v-if="showPicker" :start="form.path" @pick="onPicked" @close="showPicker = false" />
       <label>
         <span>Overlay name (optional)</span>
         <input v-model="form.name" type="text" placeholder="Same as the file name" />
@@ -210,6 +221,9 @@ onMounted(load)
 .form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.55rem; padding: 0.7rem; border: 1px solid var(--border, #2a2f3e); border-radius: 8px; }
 .form label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.72rem; color: var(--text-secondary, #888); }
 .form .full { grid-column: 1 / -1; }
+.path-row { display: flex; gap: 0.4rem; }
+.path-row input { flex: 1; min-width: 0; }
+.btn.browse { align-self: stretch; white-space: nowrap; }
 .form input[type='text'], .form select { padding: 0.35rem 0.45rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 5px; color: var(--text-primary, #fff); font-size: 0.8rem; }
 .form select { background-color: var(--surface-soft, #141824); color-scheme: dark; }
 :root[data-theme='light'] .form select { color-scheme: light; }

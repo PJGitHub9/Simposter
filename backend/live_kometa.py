@@ -122,7 +122,17 @@ def _sync(live: Dict[str, Any], force: bool, scheduled: bool) -> Dict[str, Any]:
     if counts["hidden"]:
         parts.append(f"{counts['hidden']} hidden")
     if counts["skipped"]:
-        parts.append(f"{counts['skipped']} skipped")
+        # Group skipped overlays by reason so the status says why, not just how many.
+        reasons: Dict[str, List[str]] = {}
+        for r in report:
+            if r.get("status") == "skipped":
+                why = (r.get("messages") or ["no reason given"])[0]
+                reasons.setdefault(why, []).append(str(r.get("name") or "?"))
+        detail = "; ".join(
+            f"{why}: {', '.join(names[:3])}{f' +{len(names) - 3} more' if len(names) > 3 else ''}"
+            for why, names in reasons.items()
+        )
+        parts.append(f"{counts['skipped']} skipped ({detail})")
     if missing:
         parts.append(f"{len(missing)} image(s) not found")
     message = "Re-imported: " + ", ".join(parts)

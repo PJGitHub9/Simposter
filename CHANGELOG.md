@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.8.13 (2026-10-22) — `dev-overlays` branch
+
+### New Features
+- **Server file picker for live Kometa files** — new `GET /api/live-kometa-files/browse?path=` lists the subfolders and `.yml`/`.yaml` files of a folder on the Simposter server (hidden entries skipped, max 2000 entries), plus starting points (drives or `/`, and `/config`, `/kometa`, `/umtk`, `/tssk`, `/data`, `/mnt`, home and the config folder when they exist). New `ServerFilePicker.vue`, opened by a Browse… button next to the live-file path.
+
+### Improvements
+- Live-file status lists skipped overlays grouped by reason (e.g. text overlays with no `horizontal_offset`/`vertical_offset`).
+- The Kometa importer warns when a `backdrop` overlay has no `back_color`, since it draws nothing.
+- Overlay Manager: box-only (`backdrop`) layers are named "Background box", their Look tab shows only the box settings, and a layer warning appears when the box has no color or border.
+
 ## v1.8.12 (2026-10-22) — `dev-overlays` branch
 
 ### Improvements
