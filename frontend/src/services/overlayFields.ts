@@ -210,6 +210,8 @@ export const TEXT_VARIABLES: TextVariable[] = [
   { key: 'year', label: 'Year', group: 'Item', example: '2021' },
   { key: 'edition', label: 'Edition', group: 'Item', example: "Director's Cut", note: 'Plex only' },
   { key: 'studio', label: 'Studio', group: 'Item', example: 'Legendary' },
+  { key: 'days_since_added', label: 'Days since added', group: 'Item', example: '3' },
+  { key: 'show_status', label: 'Show status', group: 'Item', example: 'continuing', note: 'TV shows only' },
   { key: 'resolution', label: 'Resolution', group: 'Video', example: '4k' },
   { key: 'video_codec', label: 'Video codec', group: 'Video', example: 'hevc' },
   { key: 'audio_codec', label: 'Audio codec', group: 'Audio', example: 'truehd' },

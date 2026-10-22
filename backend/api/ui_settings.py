@@ -476,6 +476,26 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
             if isinstance(g, dict) and g.get("id") in stored_refresh:
                 g["overlayRefresh"] = stored_refresh[g.get("id")]
 
+        # Media Mirror's config is also saved from its own page, so keep the
+        # stored copy. The one Settings-side edit to it is removing a media
+        # server, which drops that server from the mirror: redo that here for
+        # every server that was saved before but is missing from this save.
+        stored_mirror = {g.get("id"): g.get("mirror") for g in (current.get("libraryGroups") or []) if isinstance(g, dict)}
+        before_ids = {s.get("id") for s in (current.get("mediaServers") or []) if isinstance(s, dict)}
+        after_ids = {s.get("id") for s in (merged.get("mediaServers") or []) if isinstance(s, dict)}
+        removed_ids = before_ids - after_ids
+        for g in merged.get("libraryGroups") or []:
+            if not isinstance(g, dict) or g.get("id") not in stored_mirror:
+                continue
+            mirror = stored_mirror[g.get("id")]
+            if isinstance(mirror, dict) and removed_ids:
+                mirror = dict(mirror)
+                mirror["targetServerIds"] = [t for t in (mirror.get("targetServerIds") or []) if t not in removed_ids]
+                if mirror.get("sourceServerId") in removed_ids:
+                    mirror["sourceServerId"] = None
+                    mirror["enabled"] = False
+            g["mirror"] = mirror
+
         # Track an explicit Plex removal (see PlexSettings.ignoreEnvCredentials).
         # Computed here rather than trusted from the payload: the frontend
         # rebuilds the plex object from scratch on every save and never sends it.

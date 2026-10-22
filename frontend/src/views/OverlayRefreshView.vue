@@ -36,7 +36,7 @@ type RunItem = {
 
 type RunStatus = {
   state?: 'idle' | 'running' | 'done' | 'error'
-  mode?: 'check' | 'apply'
+  mode?: 'check' | 'apply' | 'remove'
   total?: number
   processed?: number
   current?: string
@@ -44,6 +44,7 @@ type RunStatus = {
   updated?: number
   unchanged?: number
   failed?: number
+  removed?: number
   error?: string | null
   items?: RunItem[]
   finished_at?: string
@@ -143,6 +144,15 @@ const resendItems = (items: TrackedItem[], what: string) => {
   startRun(true, items.map(i => i.key), true, true)
 }
 
+/** Re-send the given tracked posters with no overlays and stop tracking them. */
+const removeOverlays = (items: TrackedItem[], what: string) => {
+  if (!items.length) return
+  if (!confirm(`Remove the overlays from ${what}?
+
+${items.length === 1 ? 'The poster is' : `${items.length} posters are`} re-rendered from the original art without any overlays and sent to the media server now. They are no longer tracked here, so a refresh won't add the overlays back; sending them again with a preset that has overlays will.`)) return
+  startRun(true, items.map(i => i.key), false, true, true)
+}
+
 const formatDate = (iso?: string | null) => {
   if (!iso) return ''
   const d = new Date(iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ', 'T') + 'Z')
@@ -213,7 +223,7 @@ const saveConfig = async () => {
   }
 }
 
-const startRun = async (apply: boolean, keys?: string[], force = false, confirmed = false) => {
+const startRun = async (apply: boolean, keys?: string[], force = false, confirmed = false, remove = false) => {
   if (!group.value || running.value) return
   if (force && !confirmed && !confirm(`Re-render and re-send all ${tracked.value} tracked poster(s), even unchanged ones?`)) return
   starting.value = true
@@ -221,14 +231,14 @@ const startRun = async (apply: boolean, keys?: string[], force = false, confirme
     const res = await fetch(`${apiBase}/api/overlay-refresh/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ group_id: group.value.id, apply, keys: keys ?? null, force }),
+      body: JSON.stringify({ group_id: group.value.id, apply, keys: keys ?? null, force, remove }),
     })
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       status.value = { state: 'error', error: data.detail || 'Could not start' }
       return
     }
-    status.value = { state: 'running', mode: apply ? 'apply' : 'check', processed: 0, total: 0, items: [] }
+    status.value = { state: 'running', mode: remove ? 'remove' : apply ? 'apply' : 'check', processed: 0, total: 0, items: [] }
     await pollStatus()
   } finally {
     starting.value = false
@@ -245,7 +255,7 @@ const pollStatus = async () => {
     status.value = data
     previousState = data.state
     if (prev === 'running' && data.state !== 'running') {
-      if (data.mode === 'apply') {
+      if (data.mode === 'apply' || data.mode === 'remove') {
         await fetchGroup()
         if (showTracked.value) await fetchTracked()
         if (showLog.value) await fetchLog()
@@ -385,7 +395,7 @@ onUnmounted(() => {
 
         <div v-if="running" class="progress">
           <div class="progress-text">
-            {{ status.mode === 'apply' ? 'Refreshing' : 'Checking' }} {{ status.processed || 0 }} / {{ status.total || 0 }}
+            {{ status.mode === 'remove' ? 'Removing overlays' : status.mode === 'apply' ? 'Refreshing' : 'Checking' }} {{ status.processed || 0 }} / {{ status.total || 0 }}
             <span v-if="status.current" class="progress-current">— {{ status.current }}</span>
           </div>
           <div class="progress-bar"><div class="progress-fill" :style="{ width: progressPct + '%' }"></div></div>
@@ -399,6 +409,9 @@ onUnmounted(() => {
             <button v-if="pendingKeys.length" class="btn-primary btn-small" @click="startRun(true, pendingKeys)">
               Refresh these {{ pendingKeys.length }}
             </button>
+          </template>
+          <template v-else-if="status.mode === 'remove'">
+            Overlays removed from {{ status.removed || 0 }} poster(s), {{ status.failed || 0 }} failed.
           </template>
           <template v-else>
             {{ status.updated || 0 }} updated, {{ status.failed || 0 }} failed, {{ status.unchanged || 0 }} unchanged.
@@ -445,6 +458,12 @@ onUnmounted(() => {
               :disabled="running || starting"
               @click="resendItems(filteredTracked, `every poster with '${filterLabel}' (${filteredTracked.length})`)"
             >Re-send these {{ filteredTracked.length }}</button>
+            <button
+              v-if="(overlayFilter || trackedSearch.trim()) && filteredTracked.length"
+              class="btn-link"
+              :disabled="running || starting"
+              @click="removeOverlays(filteredTracked, `these ${filteredTracked.length} poster(s)`)"
+            >Remove overlays from these {{ filteredTracked.length }}</button>
           </div>
           <table class="result-table">
             <thead>
@@ -471,6 +490,8 @@ onUnmounted(() => {
                 <td>
                   <button class="btn-link" :disabled="running || starting" title="Re-render and re-send this poster now"
                     @click="resendItems([item], itemTitle(item.title, item.year, item.season_index))">Re-send</button>
+                  <button class="btn-link" :disabled="running || starting" title="Re-send this poster without overlays and stop tracking it"
+                    @click="removeOverlays([item], itemTitle(item.title, item.year, item.season_index))">Remove overlays</button>
                 </td>
               </tr>
             </tbody>
@@ -782,6 +803,11 @@ button:disabled {
 .status-pill.failed {
   background: rgba(255, 71, 87, 0.18);
   color: #ff8a8a;
+}
+
+.status-pill.removed {
+  background: rgba(61, 214, 183, 0.18);
+  color: #3dd6b7;
 }
 
 .status-pill.changed {

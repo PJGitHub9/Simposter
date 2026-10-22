@@ -161,7 +161,8 @@ def finalize_elements(
                         import io
                         with Image.open(io.BytesIO(content)) as img:
                             w, h = img.size
-                        element["scale"] = (scale_px["width"] / w) if scale_px.get("width") else (scale_px["height"] / h)
+                        key = "addon_scale" if element.get("type") == "text_label" else "scale"
+                        element[key] = (scale_px["width"] / w) if scale_px.get("width") else (scale_px["height"] / h)
                     except Exception:
                         pass
             else:

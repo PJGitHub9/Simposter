@@ -11,7 +11,7 @@ import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels
 import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
 import {
-  buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor,
+  buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor, blurAmount, queuePlacements,
   KOMETA_W, KOMETA_H, referencedLists, checkCondition, type OverlayRuleFields, type OverlayCondition,
 } from '@/services/overlayEngine'
 
@@ -557,6 +557,8 @@ const addElement = (type: string) => {
     defaults.font_color = '#FFFFFF'
     defaults.font_family = 'Arial'
     defaults.text = ''
+  } else if (type === 'blur') {
+    defaults.blur_amount = 20
   }
 
   selectedConfig.value.elements.push({
@@ -587,6 +589,7 @@ const ADD_MENU = [
     { type: 'custom_image', label: 'Image', hint: 'One of your images, or a link' },
     { type: 'text_label', label: 'Text', hint: 'Any text, e.g. {audience_rating}' },
     { type: 'full_cover_image', label: 'Full-poster image', hint: 'A frame or border over the whole poster' },
+    { type: 'blur', label: 'Blur', hint: 'Blurs the poster under the other layers' },
   ] },
 ]
 
@@ -697,6 +700,7 @@ const TYPE_HELP: Record<string, string> = {
   custom_image: 'Always the same image. Use "Show when" to put it only on some posters.',
   text_label: 'Any text. Words in {curly braces} are filled in per movie, e.g. {audience_rating}.',
   full_cover_image: 'Stretched over the whole poster, e.g. a frame or border. Use a PNG with a see-through middle.',
+  blur: 'Blurs the poster under the other layers of this overlay (Kometa blur). With several blur layers, the strongest one is used.',
 }
 
 const moveElement = (idx: number, dir: -1 | 1) => {
@@ -733,6 +737,7 @@ const elementTypeLabel = (type: string): string => {
     custom_image: 'Image',
     full_cover_image: 'Full-poster image',
     text_label: 'Text',
+    blur: 'Blur',
     // Legacy types
     resolution_badge: 'Resolution Badge',
     codec_badge: 'Codec Badge',
@@ -751,6 +756,7 @@ const elementTypeColor = (type: string): string => {
     custom_image: '#34d399',
     full_cover_image: '#22d3ee',
     text_label: '#fbbf24',
+    blur: '#94a3b8',
     // Legacy types
     resolution_badge: '#60a5fa',
     codec_badge: '#a78bfa',
@@ -1401,6 +1407,20 @@ const renderScene = async (scene: Scene) => {
     ctx.fillRect(0, 0, PREVIEW_W, PREVIEW_H)
   }
 
+  // Kometa blur: blur what's drawn so far, like the backend does before the layers.
+  const blurPx = blurAmount(selectedConfig.value.elements, scene.visible) * Math.min(PREVIEW_W / KOMETA_W, PREVIEW_H / KOMETA_H)
+  if (blurPx > 0) {
+    const copy = document.createElement('canvas')
+    copy.width = ctx.canvas.width
+    copy.height = ctx.canvas.height
+    copy.getContext('2d')?.drawImage(ctx.canvas, 0, 0)
+    ctx.save()
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.filter = `blur(${blurPx * (ctx.canvas.width / PREVIEW_W)}px)`
+    ctx.drawImage(copy, 0, 0)
+    ctx.restore()
+  }
+
   // Poster border
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)'
   ctx.lineWidth = 1
@@ -1433,10 +1453,15 @@ const renderScene = async (scene: Scene) => {
   // faint so they can still be found and edited.
   if (scene.interactive) kometaBoxes.clear()
   const visible = scene.visible
+  const queued = queuePlacements(selectedConfig.value.elements, visible)
   for (let idx = 0; idx < selectedConfig.value.elements.length; idx++) {
     if (isStale(scene, ver)) return  // A newer render has started; abort this stale one
-    const el = selectedConfig.value.elements[idx]
-    if (!el) continue
+    const raw = selectedConfig.value.elements[idx]
+    if (!raw || raw.type === 'blur') continue
+    // A queued layer takes its queue's position; past the last position it isn't drawn.
+    const slot = queued.get(idx)
+    if (queued.has(idx) && slot === null) continue
+    const el: OverlayElement = slot ? { ...raw, ...slot, placement: 'kometa' } : raw
     const x = el.position_x * PREVIEW_W
     const y = el.position_y * PREVIEW_H
     const isHovered = scene.interactive && (hoveredElementIdx.value === idx || draggingIdx.value === idx)
@@ -1451,6 +1476,7 @@ const renderScene = async (scene: Scene) => {
     const drawIdx = scene.interactive ? idx : -1
     if (isKometaPlaced(el)) await renderKometaPreview(ctx, el, drawIdx, isHovered, ver, scene)
     else await renderPreviewElement(ctx, el, x, y, drawIdx, isHovered, ver, scene)
+    if (slot && scene.interactive) kometaBoxes.delete(idx)  // its position comes from the queue: not draggable
     ctx.restore()
   }
 }
@@ -1478,14 +1504,47 @@ const renderKometaPreview = async (
     const m = ctx.measureText(text)
     const asc = m.actualBoundingBoxAscent || size * 0.8
     const desc = m.actualBoundingBoxDescent || size * 0.2
-    cw = m.width + stroke * 2
-    ch = asc + desc + stroke * 2
+    const tw = m.width + stroke * 2
+    const th = asc + desc + stroke * 2
+    cw = tw
+    ch = th
     const missing = filled === null
+    // Image next to the text (Kometa text addon), laid out like the backend.
+    let addon: HTMLImageElement | null = null
+    if (el.asset_id || el.url) {
+      try {
+        addon = el.asset_id ? await loadAssetImage(el.asset_id) : await loadUrlImage(el.url as string)
+      } catch { addon = null }
+      if (isStale(scene, ver)) return
+    }
+    let textX = 0, textY = 0, addX = 0, addY = 0, iw = 0, ih = 0
+    if (addon) {
+      const am = (el.addon_scale || 1) * s
+      iw = addon.width * am
+      ih = addon.height * am
+      const off = (el.addon_offset || 0) * s
+      const pos = (el.addon_position || 'left').toLowerCase()
+      if (pos === 'left' || pos === 'right') {
+        cw = tw + iw + off
+        ch = Math.max(th, ih)
+        if (pos === 'left') textX = iw + off
+        else addX = tw + off
+      } else {
+        cw = Math.max(tw, iw)
+        ch = th + ih + off
+        textX = (cw - tw) / 2
+        addX = (cw - iw) / 2
+        if (pos === 'top') textY = ih + off
+        else addY = th + off
+      }
+    }
+    const addonImg = addon
     drawContent = (cx, cy) => {
+      if (addonImg) ctx.drawImage(addonImg, cx + addX, cy + addY, iw, ih)
       ctx.font = font
       ctx.textAlign = 'left'
       ctx.textBaseline = 'alphabetic'
-      const tx = cx + stroke, ty = cy + stroke + asc
+      const tx = cx + textX + stroke, ty = cy + textY + stroke + asc
       if (missing) ctx.globalAlpha *= 0.5
       if (stroke > 0) {
         ctx.lineJoin = 'round'
@@ -1947,6 +2006,12 @@ const useRealItem = () => {
 const showAssets = ref(false)
 
 /** Image layers can use a link instead of (or as a fallback for) an uploaded image. */
+const setOptionalText = (el: OverlayElement, key: 'font_style' | 'asset_id', value: string) => {
+  const v = value.trim()
+  if (v) el[key] = v
+  else delete el[key]
+}
+
 const setElementUrl = (el: OverlayElement, value: string) => {
   const v = value.trim()
   if (v) (el as OverlayElement & { url?: string }).url = v
@@ -2378,7 +2443,12 @@ onMounted(() => {
                       </button>
                     </div>
 
-                    <OverlayPositionEditor v-if="tabOf(element) === 'position'" :element="element" />
+                    <p v-if="tabOf(element) === 'position' && element.queue" class="look-help">
+                      This layer is in the queue "{{ element.queue }}": it takes the queue's next free position (highest weight first),
+                      so the position below isn't used. Re-import the Kometa file to change the queue.
+                    </p>
+                    <p v-else-if="tabOf(element) === 'position' && element.type === 'blur'" class="look-help">A blur covers the whole poster; it has no position.</p>
+                    <OverlayPositionEditor v-else-if="tabOf(element) === 'position'" :element="element" />
                     <OverlayRulesEditor v-else-if="tabOf(element) === 'when'" :element="element" />
 
                     <template v-else>
@@ -2992,6 +3062,54 @@ onMounted(() => {
                               <option v-for="f in fonts" :key="f" :value="f">{{ f }}</option>
                             </optgroup>
                           </select>
+                      </label>
+                      <label class="field-full">
+                        <span>Font style (variable fonts only, e.g. Bold)</span>
+                        <input type="text" :value="element.font_style || ''" placeholder="Leave empty for the font's default"
+                          @change="setOptionalText(element, 'font_style', ($event.target as HTMLInputElement).value)" />
+                        <small class="text-var-hint">Only fonts with several built-in styles use this. The preview shows the default style.</small>
+                      </label>
+                      </div></div>
+                      <div v-if="element.placement === 'kometa'" class="look-sec"><div class="look-sec-title">Image next to the text</div><div class="look-sec-grid">
+                      <label class="field-full">
+                        <span>Image</span>
+                        <select :value="element.asset_id" @change="setOptionalText(element, 'asset_id', ($event.target as HTMLSelectElement).value)">
+                          <option value="">None</option>
+                          <option v-for="asset in assets" :key="asset.id" :value="asset.id">{{ asset.name }} ({{ asset.width }}x{{ asset.height }})</option>
+                        </select>
+                      </label>
+                      <label class="field-full">
+                        <span>Image link (used when no image is picked above)</span>
+                        <input type="text" :value="element.url || ''" placeholder="https://..." @change="setElementUrl(element, ($event.target as HTMLInputElement).value)" />
+                      </label>
+                      <template v-if="element.asset_id || element.url">
+                        <label>
+                          <span>Side</span>
+                          <select v-model="element.addon_position">
+                            <option :value="undefined">Left</option>
+                            <option value="right">Right</option>
+                            <option value="top">Above</option>
+                            <option value="bottom">Below</option>
+                          </select>
+                        </label>
+                        <label>
+                          <span>Gap (Kometa px)</span>
+                          <input type="number" v-model.number="element.addon_offset" min="0" max="500" step="1" />
+                        </label>
+                        <label>
+                          <span>Image scale</span>
+                          <input type="number" v-model.number="element.addon_scale" min="0.05" max="10" step="0.05" placeholder="1" />
+                        </label>
+                      </template>
+                      </div></div>
+                    </template>
+
+                    <!-- Blur -->
+                    <template v-if="element.type === 'blur'">
+                      <div class="look-sec"><div class="look-sec-title">Blur</div><div class="look-sec-grid">
+                      <label class="field-full">
+                        <span>Strength (1-100, Kometa scale): {{ element.blur_amount || 0 }}</span>
+                        <input type="range" v-model.number="element.blur_amount" min="1" max="100" step="1" />
                       </label>
                       </div></div>
                     </template>

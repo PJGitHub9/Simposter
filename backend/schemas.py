@@ -576,6 +576,15 @@ class OverlayElement(BaseModel):
     stroke_width: Optional[float] = None
     stroke_color: Optional[str] = None
     box_only: Optional[bool] = None  # Kometa "backdrop": draw only the back box
+    font_style: Optional[str] = None  # Named style of a variable font (Kometa font_style)
+    # Image drawn next to a text layer (Kometa text addon); the image is asset_id/url
+    addon_position: Optional[str] = None  # left | right | top | bottom
+    addon_offset: Optional[float] = None  # gap between text and image, Kometa px
+    addon_scale: Optional[float] = None
+    blur_amount: Optional[float] = None  # type "blur": Kometa blur(N), 1-100
+    # Kometa queue: selected layers take these positions, highest weight first
+    queue: Optional[str] = None
+    queue_positions: Optional[List[Dict[str, Any]]] = None
 
 
 class OverlayConfigSaveRequest(BaseModel):

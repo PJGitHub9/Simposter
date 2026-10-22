@@ -1,0 +1,280 @@
+"""
+Poster drift detection: notice when a poster Simposter sent was changed on the
+server by something else (Kometa overlays, a manual edit, another tool).
+
+How it works:
+  * Every successful poster send stores a small fingerprint of the sent image
+    (a 16x24 RGB thumbnail, base64) per (server_id, rating_key).
+  * Scans already re-download a poster only when the server reports a new
+    poster version (Quirk #152). Right after that download, the new poster is
+    fingerprinted and compared with the stored one.
+  * A difference beyond normal re-encoding/resizing noise marks the item as
+    drifted. What happens next is the user's choice (get_action()):
+      off     - nothing is checked
+      list    - shown under History -> Changed Outside Simposter
+      notify  - listed, plus one Discord/Apprise summary per scan
+      resend  - listed, and the last poster Simposter sent is uploaded again
+
+Items Simposter never sent a poster to have no fingerprint and are never
+reported.
+"""
+from __future__ import annotations
+
+import base64
+import io
+import threading
+from typing import Any, Dict, List, Optional
+
+from PIL import Image
+
+from . import database as db
+from .config import logger
+
+ACTIONS = ("off", "list", "notify", "resend")
+DEFAULT_ACTION = "list"
+_GRID = (16, 24)  # width x height of the fingerprint thumbnail
+
+# Thresholds, from comparing renders against JPEG-recompressed, Plex-sized
+# copies (noise) and against copies with a small corner badge (a change).
+_CELL_DELTA = 40     # a cell this different (0-255, any channel) counts as changed
+_CHANGED_CELLS = 2   # this many changed cells = drift
+_MEAN_DELTA = 10.0   # or an average difference this large = drift
+
+_pending_lock = threading.Lock()
+_pending: List[Dict[str, Any]] = []
+
+
+# --------------------------------------------------------------------------
+# Settings (own table, so a Settings page save can't reset it)
+# --------------------------------------------------------------------------
+
+def _ensure_config_table(cursor) -> None:
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS poster_drift_config (id INTEGER PRIMARY KEY CHECK (id = 1), action TEXT NOT NULL)"
+    )
+
+
+def get_action() -> str:
+    try:
+        with db.get_db() as conn:
+            cur = conn.cursor()
+            _ensure_config_table(cur)
+            cur.execute("SELECT action FROM poster_drift_config WHERE id = 1")
+            row = cur.fetchone()
+        action = row[0] if row else DEFAULT_ACTION
+        return action if action in ACTIONS else DEFAULT_ACTION
+    except Exception:
+        return DEFAULT_ACTION
+
+
+def set_action(action: str) -> str:
+    if action not in ACTIONS:
+        raise ValueError(f"action must be one of {', '.join(ACTIONS)}")
+    with db.get_db() as conn:
+        cur = conn.cursor()
+        _ensure_config_table(cur)
+        cur.execute(
+            "INSERT INTO poster_drift_config (id, action) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET action = excluded.action",
+            (action,),
+        )
+    return action
+
+
+# --------------------------------------------------------------------------
+# Fingerprints
+# --------------------------------------------------------------------------
+
+def fingerprint(image: Any) -> Optional[str]:
+    """bytes / path / PIL image -> base64 of a 16x24 RGB thumbnail."""
+    try:
+        if isinstance(image, Image.Image):
+            img = image
+        elif isinstance(image, (bytes, bytearray)):
+            img = Image.open(io.BytesIO(image))
+        else:
+            img = Image.open(str(image))
+        img = img.convert("RGB").resize(_GRID, Image.BOX)
+        return base64.b64encode(img.tobytes()).decode("ascii")
+    except Exception as e:
+        logger.debug("[DRIFT] Couldn't fingerprint image: %s", e)
+        return None
+
+
+def compare(a: str, b: str) -> Dict[str, Any]:
+    """{"drift": bool, "score": mean difference, "changed_cells": n}."""
+    pa = base64.b64decode(a)
+    pb = base64.b64decode(b)
+    if len(pa) != len(pb) or not pa:
+        return {"drift": True, "score": 255.0, "changed_cells": -1}
+    changed = 0
+    total = 0
+    for i in range(0, len(pa), 3):
+        d = max(abs(pa[i] - pb[i]), abs(pa[i + 1] - pb[i + 1]), abs(pa[i + 2] - pb[i + 2]))
+        total += d
+        if d > _CELL_DELTA:
+            changed += 1
+    mean = total / (len(pa) / 3)
+    return {"drift": changed >= _CHANGED_CELLS or mean > _MEAN_DELTA,
+            "score": round(mean, 2), "changed_cells": changed}
+
+
+def record_sent(server_id: Optional[str], rating_key: Optional[str], image: Any) -> None:
+    """Remember what Simposter just sent to this item (clears any drift mark).
+    Never raises: a fingerprint failure must not fail a send."""
+    if not rating_key or image is None:
+        return
+    fp = fingerprint(image)
+    if not fp:
+        return
+    try:
+        with db.get_db() as conn:
+            conn.cursor().execute(
+                """INSERT INTO poster_fingerprints (server_id, rating_key, fingerprint, sent_at,
+                                                    drift_detected_at, drift_score, drift_action)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP, NULL, NULL, NULL)
+                   ON CONFLICT(server_id, rating_key) DO UPDATE SET
+                     fingerprint = excluded.fingerprint, sent_at = CURRENT_TIMESTAMP,
+                     drift_detected_at = NULL, drift_score = NULL, drift_action = NULL""",
+                (server_id or "plex-1", str(rating_key), fp),
+            )
+    except Exception as e:
+        logger.debug("[DRIFT] Couldn't store fingerprint for %s: %s", rating_key, e)
+
+
+# --------------------------------------------------------------------------
+# Checking after a scan
+# --------------------------------------------------------------------------
+
+def check_after_download(server_id: Optional[str], rating_key: str, poster_path: Any) -> Optional[Dict[str, Any]]:
+    """Called by a scan right after it re-downloaded a poster whose version
+    changed. Compares it with what Simposter last sent; marks and handles a
+    drift. Returns the drift info, or None."""
+    server_id = server_id or "plex-1"
+    try:
+        action = get_action()
+        if action == "off":
+            return None
+        with db.get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT fingerprint, drift_detected_at FROM poster_fingerprints WHERE server_id = ? AND rating_key = ?",
+                (server_id, str(rating_key)),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        current = fingerprint(poster_path)
+        if not current:
+            return None
+        result = compare(row[0], current)
+        if not result["drift"]:
+            return None
+        title = _title(rating_key)
+        logger.info("[DRIFT] Poster for %s on %s was changed outside Simposter (difference %.1f, %d areas)",
+                    title, server_id, result["score"], result["changed_cells"])
+        already = row[1] is not None
+        with db.get_db() as conn:
+            conn.cursor().execute(
+                """UPDATE poster_fingerprints SET drift_detected_at = CURRENT_TIMESTAMP, drift_score = ?,
+                     drift_action = ? WHERE server_id = ? AND rating_key = ?""",
+                (result["score"], action, server_id, str(rating_key)),
+            )
+        info = {"server_id": server_id, "rating_key": str(rating_key), "title": title, **result}
+        if action == "resend":
+            info["resent"] = resend(server_id, str(rating_key))
+        if action in ("notify", "resend") and not already:
+            with _pending_lock:
+                _pending.append(info)
+        return info
+    except Exception as e:
+        logger.debug("[DRIFT] Check failed for %s: %s", rating_key, e)
+        return None
+
+
+def _title(rating_key: str) -> str:
+    try:
+        title, year = db.get_title_for_rating_key(str(rating_key))
+        if title:
+            return f"{title} ({year})" if year else str(title)
+    except Exception:
+        pass
+    return f"item {rating_key}"
+
+
+def resend(server_id: str, rating_key: str) -> bool:
+    """Upload the last poster Simposter sent again (the resend cache), the same
+    way the grid's resend button does."""
+    try:
+        from .api.plexsend import api_render_cache_resend, ResendCachedRequest, ResendTarget
+        is_tv = _is_tv(rating_key)
+        api_render_cache_resend(
+            rating_key,
+            ResendCachedRequest(is_tv=is_tv, targets=[ResendTarget(server_id=server_id, rating_key=rating_key)]),
+        )
+        logger.info("[DRIFT] Re-sent Simposter's poster for %s to %s", _title(rating_key), server_id)
+        return True
+    except Exception as e:
+        logger.warning("[DRIFT] Couldn't re-send the poster for %s: %s", _title(rating_key), getattr(e, "detail", e))
+        return False
+
+
+def _is_tv(rating_key: str) -> bool:
+    try:
+        return db.get_cached_tv_show(str(rating_key)) is not None
+    except Exception:
+        return False
+
+
+def dismiss(server_id: str, rating_key: str, poster_path: Any = None) -> None:
+    """Keep the server's poster: clear the drift mark, and if the current
+    poster is available, adopt it as the new baseline so it isn't reported again."""
+    fp = fingerprint(poster_path) if poster_path else None
+    with db.get_db() as conn:
+        if fp:
+            conn.cursor().execute(
+                """UPDATE poster_fingerprints SET fingerprint = ?, drift_detected_at = NULL, drift_score = NULL,
+                     drift_action = NULL WHERE server_id = ? AND rating_key = ?""",
+                (fp, server_id, rating_key),
+            )
+        else:
+            conn.cursor().execute(
+                """UPDATE poster_fingerprints SET drift_detected_at = NULL, drift_score = NULL, drift_action = NULL
+                   WHERE server_id = ? AND rating_key = ?""",
+                (server_id, rating_key),
+            )
+
+
+def list_drifted() -> List[Dict[str, Any]]:
+    with db.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT server_id, rating_key, sent_at, drift_detected_at, drift_score, drift_action
+               FROM poster_fingerprints WHERE drift_detected_at IS NOT NULL ORDER BY drift_detected_at DESC"""
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        r["title"] = _title(r["rating_key"])
+        r["is_tv"] = _is_tv(r["rating_key"])
+    return rows
+
+
+def tracked_count() -> int:
+    with db.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM poster_fingerprints")
+        return int(cur.fetchone()[0])
+
+
+def flush_notifications() -> None:
+    """Send one summary for the drifts found since the last flush (end of a scan)."""
+    with _pending_lock:
+        items = list(_pending)
+        _pending.clear()
+    if not items:
+        return
+    try:
+        from .api.notifications import send_poster_drift_notification
+        send_poster_drift_notification(items)
+    except Exception as e:
+        logger.warning("[DRIFT] Notification failed: %s", e)

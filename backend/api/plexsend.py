@@ -843,6 +843,8 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                     data=cached,
                     timeout=20,
                 ).raise_for_status()
+                from .. import poster_drift
+                poster_drift.record_sent("plex-1", target.rating_key, cached)
                 logger.info("[PLEXSEND] Resent cached poster for %s (%s)", target.rating_key, _title_for_ctx)
                 _remove_labels_for_key(target.rating_key, req.is_tv, library_id, db)
                 _add_label_for_key(target.rating_key, req.is_tv, library_id, db)
@@ -897,6 +899,8 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                         data=season_cached,
                         timeout=20,
                     ).raise_for_status()
+                    from .. import poster_drift
+                    poster_drift.record_sent("plex-1", season_key, season_cached)
                     resent_seasons += 1
                     logger.info("[PLEXSEND] Resent cached season poster for %s", season_key)
                     _remove_labels_for_key(season_key, True, library_id, db)
@@ -1015,6 +1019,8 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
                     data=payload,
                     timeout=20,
                 ).raise_for_status()
+                from .. import poster_drift
+                poster_drift.record_sent("plex-1", rating_key, payload)
             else:
                 # Deliberately calls the lower-level upload+verify primitive, not
                 # api_send_poster() -- that wrapper unconditionally re-encodes

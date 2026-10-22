@@ -88,7 +88,90 @@ const resolvePresetName = (templateId: string | null, presetId: string | null): 
 }
 
 // Tab state
-const activeTab = ref<'history' | 'retry-queue'>('history')
+const activeTab = ref<'history' | 'retry-queue' | 'drift'>('history')
+
+// Posters changed outside Simposter (backend/poster_drift.py)
+interface DriftItem {
+  server_id: string
+  rating_key: string
+  title: string
+  is_tv: boolean
+  sent_at: string
+  drift_detected_at: string
+  drift_score: number | null
+  drift_action: string | null
+}
+const driftItems = ref<DriftItem[]>([])
+const driftAction = ref('list')
+const driftTracked = ref(0)
+const driftLoading = ref(false)
+const driftBusy = ref<string | null>(null)
+const driftMessage = ref('')
+const DRIFT_ACTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: 'off', label: "Don't check", hint: 'Scans never compare posters.' },
+  { value: 'list', label: 'Only list them here', hint: 'Changed posters show up in this tab.' },
+  { value: 'notify', label: 'List and notify', hint: 'Also one Discord/Apprise message per scan that finds changes.' },
+  { value: 'resend', label: "Put Simposter's poster back", hint: "Re-sends the last poster Simposter sent (and notifies). If another tool keeps changing it, they'll take turns." },
+]
+const driftHint = computed(() => DRIFT_ACTIONS.find(a => a.value === driftAction.value)?.hint || '')
+
+const fetchDrift = async () => {
+  driftLoading.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/poster-drift`)
+    if (!res.ok) throw new Error(`Failed to load: ${res.status}`)
+    const data = await res.json()
+    driftItems.value = data.items || []
+    driftAction.value = data.action || 'list'
+    driftTracked.value = data.tracked || 0
+  } catch (e: any) {
+    console.error('[DRIFT] Error:', e)
+  } finally {
+    driftLoading.value = false
+  }
+}
+
+const switchToDrift = () => {
+  activeTab.value = 'drift'
+  fetchDrift()
+}
+
+const setDriftAction = async (action: string) => {
+  const res = await fetch(`${apiBase}/api/poster-drift/config`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+  })
+  if (res.ok) driftAction.value = action
+}
+
+const driftKey = (item: DriftItem) => `${item.server_id}:${item.rating_key}`
+
+const driftDo = async (item: DriftItem, what: 'resend' | 'dismiss') => {
+  driftBusy.value = `${what}:${driftKey(item)}`
+  driftMessage.value = ''
+  try {
+    const res = await fetch(
+      `${apiBase}/api/poster-drift/${encodeURIComponent(item.server_id)}/${encodeURIComponent(item.rating_key)}/${what}`,
+      { method: 'POST' },
+    )
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || `Failed: ${res.status}`)
+    }
+    if (what === 'resend') driftMessage.value = `Re-sent Simposter's poster for ${item.title}.`
+    await fetchDrift()
+  } catch (e: any) {
+    driftMessage.value = e.message || String(e)
+  } finally {
+    driftBusy.value = null
+  }
+}
+
+const driftSentUrl = (item: DriftItem) =>
+  `${apiBase}/api/render-cache/${encodeURIComponent(item.rating_key)}/preview?v=${encodeURIComponent(item.sent_at || '')}`
+const driftCurrentUrl = (item: DriftItem) => {
+  const kind = item.is_tv && item.server_id !== 'plex-1' ? 'tv-show' : 'movie'
+  return `${apiBase}/api/${kind}/${encodeURIComponent(item.rating_key)}/poster?raw=1&v=${encodeURIComponent(item.drift_detected_at || '')}`
+}
 
 // Retry queue state
 const retryItems = ref<RetryQueueItem[]>([])
@@ -336,6 +419,8 @@ const getActionLabel = (record: HistoryRecord) => {
       return `Sent to ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'overlay_refresh':
       return `Overlay refreshed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
+    case 'overlay_removed':
+      return `Overlays removed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'saved_local':
       return 'Saved Locally'
     case 'failed':
@@ -352,6 +437,7 @@ const getActionClass = (action: string) => {
       return 'action-plex'
     case 'resent_to_plex':
     case 'overlay_refresh':
+    case 'overlay_removed':
       return 'action-resent'
     case 'saved_local':
       return 'action-local'
@@ -426,7 +512,7 @@ const clearFilters = () => {
 // Check if a record can be previewed
 const canPreview = (record: HistoryRecord): boolean => {
   // Can preview if we have a save_path (local file) or if it was sent to Plex (rating_key)
-  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'overlay_refresh') && record.rating_key))
+  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'overlay_refresh' || record.action === 'overlay_removed') && record.rating_key))
 }
 
 // Get the preview image URL for a record
@@ -568,6 +654,8 @@ onMounted(async () => {
   fetchPresetNames()
   // Load retry count for badge indicator (non-blocking)
   fetchRetryQueue()
+  // Count for the Changed Outside Simposter tab badge
+  fetchDrift()
 })
 </script>
 
@@ -586,6 +674,10 @@ onMounted(async () => {
       <button :class="['tab-btn', { active: activeTab === 'retry-queue' }]" @click="switchToRetry">
         Retry Queue
         <span v-if="retryCount > 0" class="retry-count-badge">{{ retryCount }}</span>
+      </button>
+      <button :class="['tab-btn', { active: activeTab === 'drift' }]" @click="switchToDrift">
+        Changed Outside Simposter
+        <span v-if="driftItems.length > 0" class="retry-count-badge">{{ driftItems.length }}</span>
       </button>
     </div>
 
@@ -630,6 +722,7 @@ onMounted(async () => {
             <option value="resent_to_plex">Resent to Plex</option>
             <option value="sent_to_media_server">Synced to Linked Server</option>
             <option value="overlay_refresh">Overlay Refreshed</option>
+            <option value="overlay_removed">Overlays Removed</option>
             <option value="saved_local">Saved Locally</option>
             <option value="failed">Failed</option>
           </select>
@@ -866,6 +959,69 @@ onMounted(async () => {
         </table>
       </div>
     </template><!-- end retry-queue tab -->
+
+    <!-- Changed outside Simposter -->
+    <template v-if="activeTab === 'drift'">
+      <div class="retry-queue-header">
+        <div class="retry-queue-info">
+          <span class="retry-pending-count" :class="{ 'retry-none': driftItems.length === 0 }">
+            {{ driftItems.length ? `${driftItems.length} poster${driftItems.length !== 1 ? 's' : ''} changed outside Simposter` : 'No changed posters found' }}
+          </span>
+          <span class="retry-info-hint">
+            After Simposter sends a poster it remembers what it looked like. When a library scan sees the server's poster
+            changed (Kometa overlays, a manual edit, another tool), it compares the two. {{ driftTracked }} poster{{ driftTracked !== 1 ? 's' : '' }} tracked.
+          </span>
+        </div>
+        <button @click="fetchDrift" class="btn-refresh" :disabled="driftLoading">
+          {{ driftLoading ? 'Loading...' : 'Refresh' }}
+        </button>
+      </div>
+
+      <div class="drift-setting">
+        <label>
+          <span>When a scan finds a changed poster</span>
+          <select :value="driftAction" @change="setDriftAction(($event.target as HTMLSelectElement).value)">
+            <option v-for="a in DRIFT_ACTIONS" :key="a.value" :value="a.value">{{ a.label }}</option>
+          </select>
+        </label>
+        <small>{{ driftHint }} Saved right away.</small>
+      </div>
+
+      <p v-if="driftMessage" class="drift-message">{{ driftMessage }}</p>
+
+      <div v-if="driftLoading && driftItems.length === 0" class="loading">Loading...</div>
+      <div v-else-if="driftItems.length === 0" class="empty-state">
+        <p>Nothing changed outside Simposter.</p>
+        <p class="hint">Only posters Simposter sent are tracked, and they're checked when a scan sees the server's poster change.</p>
+      </div>
+      <div v-else class="drift-grid">
+        <div v-for="item in driftItems" :key="driftKey(item)" class="drift-card">
+          <div class="drift-title">{{ item.title }}</div>
+          <div class="drift-meta">
+            {{ mediaServerLabel(item.server_id, settings.mediaServers.value) }} · noticed {{ formatDate(item.drift_detected_at) }}
+            <template v-if="item.drift_action === 'resend'"> · re-send was tried</template>
+          </div>
+          <div class="drift-images">
+            <figure>
+              <img :src="driftSentUrl(item)" alt="" loading="lazy" @error="($event.target as HTMLImageElement).style.visibility = 'hidden'" />
+              <figcaption>Simposter sent</figcaption>
+            </figure>
+            <figure>
+              <img :src="driftCurrentUrl(item)" alt="" loading="lazy" />
+              <figcaption>On the server now</figcaption>
+            </figure>
+          </div>
+          <div class="drift-actions">
+            <button class="btn-retry-now" :disabled="driftBusy !== null" @click="driftDo(item, 'resend')">
+              {{ driftBusy === `resend:${driftKey(item)}` ? '...' : "Put Simposter's back" }}
+            </button>
+            <button class="btn-dismiss" :disabled="driftBusy !== null" title="Keep the server's poster and stop reporting this change" @click="driftDo(item, 'dismiss')">
+              Keep server's
+            </button>
+          </div>
+        </div>
+      </div>
+    </template>
 
     <!-- Preview Popup -->
     <Teleport to="body">
@@ -1428,6 +1584,39 @@ onMounted(async () => {
 }
 
 /* Retry queue styles */
+.drift-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 14px;
+}
+.drift-setting label { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.9rem; }
+.drift-setting select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.drift-setting small, .drift-meta { color: var(--text-secondary, #9aa4b2); font-size: 0.8rem; }
+.drift-message { margin: 0 0 12px; font-size: 0.85rem; }
+.drift-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.drift-card {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.drift-title { font-weight: 600; }
+.drift-images { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.drift-images figure { margin: 0; }
+.drift-images img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 6px; background: rgba(0, 0, 0, 0.3); }
+.drift-images figcaption { font-size: 0.75rem; text-align: center; color: var(--text-secondary, #9aa4b2); margin-top: 4px; }
+.drift-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 .retry-queue-header {
   display: flex;
   align-items: center;

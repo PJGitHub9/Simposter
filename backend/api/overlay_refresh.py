@@ -72,12 +72,13 @@ class RefreshRunRequest(BaseModel):
     apply: bool = False          # False = check only (nothing is uploaded)
     keys: Optional[List[str]] = None  # limit to these "server:rating_key:season" keys
     force: bool = False          # re-render even when nothing changed
+    remove: bool = False         # re-send without overlays and stop tracking
 
 
 @router.post("/run")
 def api_overlay_refresh_run(req: RefreshRunRequest):
     _require_group(req.group_id)
-    if not refresh.start_run(req.group_id, req.apply, req.keys, req.force):
+    if not refresh.start_run(req.group_id, req.apply, req.keys, req.force, remove=req.remove):
         raise HTTPException(409, "A check or refresh is already running for this group")
     return {"status": "started"}
 

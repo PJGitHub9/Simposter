@@ -482,11 +482,28 @@ def _load_element_font(element: Dict[str, Any], size: int):
             if not path.is_absolute():
                 path = Path(settings.CONFIG_DIR) / path
             if path.exists():
-                return ImageFont.truetype(str(path), size)
+                return _apply_font_style(ImageFont.truetype(str(path), size), element.get("font_style"))
         except Exception:
             pass
     from .templates.universal import _load_font
-    return _load_font(element.get("font_family") or "arial", size)
+    return _apply_font_style(_load_font(element.get("font_family") or "arial", size), element.get("font_style"))
+
+
+def _apply_font_style(font, style: Any):
+    """Pick a named style of a variable font (Kometa's font_style). A font with
+    no such style, or no styles at all, is used as it is."""
+    if not style or font is None:
+        return font
+    try:
+        wanted = str(style).strip().lower()
+        for name in font.get_variation_names():
+            label = name.decode("utf-8", "ignore") if isinstance(name, bytes) else str(name)
+            if label.strip().lower() == wanted:
+                font.set_variation_by_name(name)
+                break
+    except Exception:
+        pass  # not a variable font (or no FreeType variation support)
+    return font
 
 
 def _load_element_image(element: Dict[str, Any]) -> Optional[Image.Image]:
@@ -529,7 +546,8 @@ def _render_content(element: Dict[str, Any], ctx: Dict[str, Any], s: float) -> O
             stroke_width=stroke,
             stroke_fill=_parse_color(element.get("stroke_color"), (0, 0, 0, 255)),
         )
-        return img
+        addon = _load_addon_image(element, s)
+        return _with_addon(img, addon, element, s) if addon is not None else img
 
     img = _load_element_image(element)
     if img is None:
@@ -538,6 +556,80 @@ def _render_content(element: Dict[str, Any], ctx: Dict[str, Any], s: float) -> O
     if abs(mult - 1.0) > 1e-6:
         img = img.resize((max(1, int(img.width * mult)), max(1, int(img.height * mult))), Image.LANCZOS)
     return img
+
+
+def _load_addon_image(element: Dict[str, Any], s: float) -> Optional[Image.Image]:
+    """The image drawn next to a text layer (Kometa's text addon), sized for the canvas."""
+    if not (element.get("asset_id") or element.get("url")):
+        return None
+    img = _load_element_image(element)
+    if img is None:
+        return None
+    mult = (_as_number(element.get("addon_scale")) or 1.0) * s
+    if abs(mult - 1.0) > 1e-6:
+        img = img.resize((max(1, int(img.width * mult)), max(1, int(img.height * mult))), Image.LANCZOS)
+    return img
+
+
+def _with_addon(text_img: Image.Image, addon: Image.Image, element: Dict[str, Any], s: float) -> Image.Image:
+    """Text and its addon image in one box, laid out like Kometa's get_backdrop:
+    left/right put them side by side (top-aligned), top/bottom stack them
+    (the narrower one centered)."""
+    off = int(round((_as_number(element.get("addon_offset")) or 0) * s))
+    pos = str(element.get("addon_position") or "left").lower()
+    tw, th = text_img.size
+    iw, ih = addon.size
+    if pos in ("left", "right"):
+        bw, bh = tw + iw + off, max(th, ih)
+        if pos == "left":
+            tx, ty, ax, ay = iw + off, 0, 0, 0
+        else:
+            tx, ty, ax, ay = 0, 0, tw + off, 0
+    else:
+        bw, bh = max(tw, iw), th + ih + off
+        tx, ax = (bw - tw) // 2, (bw - iw) // 2
+        if pos == "top":
+            ty, ay = ih + off, 0
+        else:
+            ty, ay = 0, th + off
+    out = Image.new("RGBA", (max(1, bw), max(1, bh)), (0, 0, 0, 0))
+    out.alpha_composite(addon, (ax, ay))
+    out.alpha_composite(text_img, (tx, ty))
+    return out
+
+
+def blur_radius(elements: List[Dict[str, Any]], W: int, H: int) -> float:
+    """The blur to apply for these selected layers: the largest one (Kometa uses
+    the strongest blur(N) only), scaled from Kometa's 1000x1500 canvas."""
+    amounts = [_as_number(e.get("blur_amount")) or 0 for e in elements if e.get("type") == "blur"]
+    amount = max([a for a in amounts if a > 0], default=0)
+    return amount * _scale(W, H) if amount else 0.0
+
+
+def apply_blur(canvas: Image.Image, radius: float) -> Image.Image:
+    if radius <= 0:
+        return canvas
+    from PIL import ImageFilter
+    return canvas.filter(ImageFilter.GaussianBlur(radius))
+
+
+def queue_placements(selected: List[Dict[str, Any]]) -> Dict[int, Optional[Dict[str, Any]]]:
+    """Kometa queues: the selected layers of each queue, highest weight first,
+    take the queue's positions in order. Returns {id(element): position} for
+    queued layers; None means the queue ran out of positions (not drawn)."""
+    queues: Dict[str, List[Tuple[float, int, Dict[str, Any]]]] = {}
+    for idx, element in enumerate(selected):
+        name = element.get("queue")
+        if name and isinstance(element.get("queue_positions"), list):
+            queues.setdefault(str(name), []).append((_as_number(element.get("weight")) or 0.0, idx, element))
+    out: Dict[int, Optional[Dict[str, Any]]] = {}
+    for members in queues.values():
+        members.sort(key=lambda m: (-m[0], m[1]))
+        for slot, (_, _, element) in enumerate(members):
+            positions = element.get("queue_positions") or []
+            pos = positions[slot] if slot < len(positions) and isinstance(positions[slot], dict) else None
+            out[id(element)] = pos
+    return out
 
 
 def render_kometa_element(canvas: Image.Image, element: Dict[str, Any], ctx: Dict[str, Any]) -> Image.Image:

@@ -33,6 +33,14 @@ export interface OverlayRuleFields {
   stroke_width?: number
   stroke_color?: string
   box_only?: boolean
+  type?: string
+  font_style?: string
+  addon_position?: string
+  addon_offset?: number
+  addon_scale?: number
+  blur_amount?: number
+  queue?: string
+  queue_positions?: Array<Record<string, unknown>>
 }
 
 export type OverlayContext = Record<string, unknown> & {
@@ -244,6 +252,39 @@ export const selectElementIndices = (elements: OverlayRuleFields[], ctx: Overlay
   const suppressed = new Set<string>()
   for (const i of kept) for (const n of elements[i]?.suppress || []) suppressed.add(String(n))
   return new Set(kept.filter(i => !suppressed.has(String(elements[i]?.name || ''))))
+}
+
+/** Kometa blur(N): the strongest blur among the drawn layers (0 = none), in Kometa px. */
+export const blurAmount = (elements: OverlayRuleFields[], visible: Set<number>): number => {
+  let best = 0
+  elements.forEach((el, i) => {
+    if (el.type === 'blur' && visible.has(i)) best = Math.max(best, asNumber(el.blur_amount) ?? 0)
+  })
+  return best
+}
+
+/** Kometa queues: drawn layers of each queue, highest weight first, take the
+ * queue's positions in order. null = the queue ran out of positions. Same as
+ * queue_placements() in backend/overlay_engine.py. */
+export const queuePlacements = (
+  elements: OverlayRuleFields[], visible: Set<number>
+): Map<number, Record<string, unknown> | null> => {
+  const queues = new Map<string, Array<{ w: number; i: number }>>()
+  elements.forEach((el, i) => {
+    if (!visible.has(i) || !el.queue || !Array.isArray(el.queue_positions)) return
+    const list = queues.get(el.queue) || []
+    list.push({ w: asNumber(el.weight) ?? 0, i })
+    queues.set(el.queue, list)
+  })
+  const out = new Map<number, Record<string, unknown> | null>()
+  for (const members of queues.values()) {
+    members.sort((a, b) => b.w - a.w || a.i - b.i)
+    members.forEach((m, slot) => {
+      const pos = elements[m.i]?.queue_positions?.[slot]
+      out.set(m.i, pos && typeof pos === 'object' ? pos : null)
+    })
+  }
+  return out
 }
 
 export const fillText = (template: string, ctx: OverlayContext): string | null => {

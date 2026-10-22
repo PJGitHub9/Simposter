@@ -662,7 +662,8 @@ def _resolve_image_source(ov: Dict[str, Any]) -> Tuple[Optional[str], Optional[s
 
 
 def map_definition(
-    mapping_name: str, definition: Dict[str, Any], library_type: str
+    mapping_name: str, definition: Dict[str, Any], library_type: str,
+    queues: Optional[Dict[str, List[Dict[str, Any]]]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
     """Expanded definition -> (element or None, report entry)."""
     messages: List[str] = []
@@ -708,11 +709,21 @@ def map_definition(
         return skip("overlay has no name")
     if "|" in oname:
         return skip("overlay name can't contain '|'")
-    if ov.get("queue"):
-        return skip("queues aren't supported yet (Kometa positions these automatically)")
-
     element: Dict[str, Any] = {"name": mapping_name}
     conditions: List[Dict[str, Any]] = []
+
+    # Queue: Kometa places the queue's layers, highest weight first, into its positions.
+    queue_name = str(ov["queue"]) if ov.get("queue") else None
+    if queue_name:
+        if ov.get("group"):
+            return skip("'group' and 'queue' can't be used together")
+        if _num(ov.get("weight")) is None:
+            return skip("'queue' needs a 'weight'")
+        positions = (queues or {}).get(queue_name)
+        if not positions:
+            return skip(f"queue '{queue_name}' isn't defined in this file's queues")
+        element["queue"] = queue_name
+        element["queue_positions"] = positions
 
     # Group / weight / suppress
     if ov.get("group"):
@@ -810,8 +821,8 @@ def map_definition(
     # Placement
     h_off = _offset(ov.get("horizontal_offset"))
     v_off = _offset(ov.get("vertical_offset"))
-    has_coords = h_off is not None and v_off is not None
-    if (h_off is None) != (v_off is None):
+    has_coords = (h_off is not None and v_off is not None) or bool(queue_name)
+    if (h_off is None) != (v_off is None) and not queue_name:
         return skip("horizontal_offset and vertical_offset must be used together")
 
     def placement() -> None:
@@ -833,9 +844,14 @@ def map_definition(
     image_path, image_url = _resolve_image_source(ov)
 
     if oname.startswith("blur"):
-        return skip("blur overlays aren't supported")
-
-    if oname.startswith("backdrop"):
+        m = re.search(r"\(([^)]+)\)", oname)
+        amount = _num(m.group(1)) if m else None
+        if amount is None or not 1 <= amount <= 100:
+            amount = 50  # Kometa's default for a missing or bad blur value
+        element["type"] = "blur"
+        element["blur_amount"] = int(amount)
+        entry["element_type"] = "blur"
+    elif oname.startswith("backdrop"):
         element["type"] = "text_label"
         element["box_only"] = True
         placement()
@@ -862,10 +878,25 @@ def map_definition(
         element["font_family"] = PurePosixPath(font.replace("\\", "/")).stem
         entry["font"] = font
         if ov.get("font_style"):
-            messages.append("font_style (variable fonts) isn't supported")
+            element["font_style"] = str(ov["font_style"])
         if image_path or image_url:
-            messages.append("the image next to the text (addon) isn't supported; only the text is drawn")
-            image_path = image_url = None
+            # Image drawn next to the text (Kometa's text addon).
+            pos = str(ov.get("addon_position") or "left").lower()
+            element["addon_position"] = pos if pos in ("left", "right", "top", "bottom") else "left"
+            off = _num(ov.get("addon_offset"))
+            if off:
+                element["addon_offset"] = int(off)
+            sw, sh = ov.get("scale_width"), ov.get("scale_height")
+            if sw or sh:
+                pct = str(sw or sh)
+                if pct.endswith("%") and _num(pct[:-1]) is not None:
+                    element["addon_scale"] = _num(pct[:-1]) / 100
+                else:
+                    entry["scale_px"] = {"width": _num(sw), "height": _num(sh)}
+            if image_url:
+                element["url"] = image_url
+            if image_path:
+                entry["image"] = image_path
         for var in _text_vars(text):
             if var in RATING_FIELDS or var in MDBLIST_RATING_FIELDS:
                 msg = _rating_message(var)
@@ -912,6 +943,104 @@ def map_definition(
 # One overlay file
 # --------------------------------------------------------------------------
 
+def _fill_vars(text: str, *dicts: Dict[str, Any]) -> str:
+    for d in dicts:
+        for k, v in d.items():
+            text = text.replace(f"<<{k}>>", str(v))
+    return text
+
+
+def parse_queues(raw: Any, temp_vars: Dict[str, Any], messages: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """A file's queues -> {name: [positions]}, following Kometa's OverlayFile:
+    a list of positions, or a dict of named position lists with an optional
+    settings block (position, overlay_limit, default, dynamic_position). Each
+    position inherits the align/offset keys it leaves out from the one before."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    keys = ("horizontal_align", "vertical_align", "horizontal_offset", "vertical_offset")
+    position = temp_vars.get("position") or None
+    limit_all = _num(temp_vars.get("overlay_limit"))
+    for name, queue in raw.items():
+        name = str(name)
+        queue_position = temp_vars.get(f"position_{name}") or position
+        limit = limit_all
+        defaults: Dict[str, Any] = {k: None for k in keys}
+        settings = queue.get("settings") if isinstance(queue, dict) else None
+        if isinstance(settings, dict):
+            if settings.get("position") and not queue_position:
+                queue_position = settings["position"]
+            if settings.get("overlay_limit") is not None and limit is None:
+                limit = _num(settings["overlay_limit"])
+            for k, v in (settings.get("default") or {}).items():
+                defaults[k] = v
+            if settings.get("conditionals"):
+                messages.append(f"queue '{name}': conditionals aren't supported; their default values are used")
+                for k, v in settings["conditionals"].items():
+                    if isinstance(v, dict) and "default" in v:
+                        defaults[k] = v["default"]
+            dyn = settings.get("dynamic_position")
+            if isinstance(dyn, dict) and dyn and not queue_position:
+                def dv(key, default):
+                    val = dyn.get(key, default)
+                    return _fill_vars(str(val), temp_vars, defaults) if val is not None else default
+                v_align = str(dv("initial_vertical_align", "top")).lower()
+                h_align = str(dv("initial_horizontal_align", "left")).lower()
+                v0 = int(_num(dv("initial_vertical_offset", 0)) or 0)
+                h0 = int(_num(dv("initial_horizontal_offset", 0)) or 0)
+                vs = int(_num(dv("vertical_spacing", 0)) or 0)
+                hs = int(_num(dv("horizontal_spacing", 0)) or 0)
+                surround = str(dv("surround", False)).lower() in ("true", "1", "yes")
+                queue_position = [{
+                    "vertical_align": v_align if v_align in ("top", "center", "bottom") else "top",
+                    "horizontal_align": h_align if h_align in ("left", "center", "right") else "left",
+                    "vertical_offset": v0, "horizontal_offset": h0,
+                }]
+                for x in range(20):
+                    factor = ((x // 2 + 1) * (-1 if x % 2 == 1 else 1)) if surround else (x + 1)
+                    queue_position.append({"vertical_offset": v0 + factor * vs, "horizontal_offset": h0 + factor * hs})
+        initial = None
+        if isinstance(queue_position, list) and queue_position:
+            initial = queue_position
+        elif isinstance(queue, list):
+            initial = queue
+        elif isinstance(queue, dict):
+            if queue_position:
+                key = _fill_vars(str(queue_position), temp_vars, defaults)
+                if key in queue:
+                    initial = queue[key]
+                else:
+                    messages.append(f"queue '{name}': position '{key}' doesn't exist; queue skipped")
+                    continue
+            if not initial:
+                initial = next((v for k, v in queue.items() if k != "settings"), None)
+        if not isinstance(initial, list):
+            messages.append(f"queue '{name}' must be a list of positions; queue skipped")
+            continue
+        final: List[Dict[str, Any]] = []
+        ok = True
+        for pos in initial:
+            pos = pos if isinstance(pos, dict) else {}
+            for k in keys:
+                if k in pos:
+                    defaults[k] = pos[k]
+            if any(defaults[k] is None for k in keys):
+                messages.append(f"queue '{name}' is missing an align or offset; queue skipped")
+                ok = False
+                break
+            final.append({
+                "horizontal_align": str(defaults["horizontal_align"]).lower(),
+                "vertical_align": str(defaults["vertical_align"]).lower(),
+                "horizontal_offset": _offset(defaults["horizontal_offset"]) or 0,
+                "vertical_offset": _offset(defaults["vertical_offset"]) or 0,
+            })
+            if limit and len(final) >= limit:
+                break
+        if ok and final:
+            out[name] = final
+    return out
+
+
 def expand_file(
     text: str, library_type: str, yaml_files: Dict[str, str], config_vars: Optional[Dict[str, Any]] = None
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
@@ -926,8 +1055,7 @@ def expand_file(
         return [], [], ["The file's overlays section is empty; the overlay is saved with no layers."]
     if not isinstance(overlays, dict) or not overlays:
         raise ImportError_("No 'overlays:' section (is this a Kometa overlay file?)")
-    if data.get("queues"):
-        file_messages.append("queues aren't supported yet; overlays that use one are skipped")
+    queues = parse_queues(data.get("queues"), config_vars or {}, file_messages)
 
     templates: Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
     for k, v in (data.get("templates") or {}).items():
@@ -958,7 +1086,7 @@ def expand_file(
                     if str(attr).lower() not in methods:
                         definition[attr] = value
                         methods[str(attr).lower()] = attr
-            element, entry = map_definition(mapping_name, definition, library_type)
+            element, entry = map_definition(mapping_name, definition, library_type, queues)
         except ImportError_ as e:
             element, entry = None, {"name": mapping_name, "status": "skipped", "messages": [str(e)]}
         except Exception as e:  # never let one definition kill the file

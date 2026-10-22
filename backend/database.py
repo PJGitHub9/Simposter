@@ -1025,6 +1025,22 @@ def init_database():
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_overlay_refresh_log_group ON overlay_refresh_log(group_id, created_at)")
 
+        # Poster drift detection: a small fingerprint of the last poster
+        # Simposter sent to each item, compared when a scan re-downloads a
+        # poster that changed on the server (backend/poster_drift.py).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_fingerprints (
+                server_id TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                drift_detected_at TIMESTAMP,
+                drift_score REAL,
+                drift_action TEXT,
+                PRIMARY KEY (server_id, rating_key)
+            )
+        """)
+
         # MDBList caches (overlay ratings and list membership). item_ratings is
         # keyed by "movie:tmdb:603"-style keys; data_json holds the normalized
         # ratings, or {} when MDBList had nothing (so misses aren't refetched
@@ -4308,6 +4324,13 @@ def record_poster_history(
         except Exception as e:
             logger.warning(f"[HISTORY] Failed to save thumbnail for {rating_key}: {e}")
 
+    # Remember what was sent, for poster drift detection (backend/poster_drift.py).
+    if poster_data and status == 'success' and action in (
+        "sent_to_plex", "resent_to_plex", "sent_to_media_server", "overlay_refresh", "overlay_removed"
+    ):
+        from . import poster_drift
+        poster_drift.record_sent(server_id, rating_key, poster_data)
+
     with get_db() as conn:
         cursor = conn.cursor()
 
@@ -4675,7 +4698,7 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
                 shared.update(r[0] for r in cursor.fetchall())
         own_keys = sorted(keys - shared)
 
-        for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue"):
+        for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue", "poster_fingerprints"):
             cursor.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
             counts[table] = cursor.rowcount
 

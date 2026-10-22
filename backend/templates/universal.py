@@ -1294,7 +1294,18 @@ def apply_overlay_config(
 
     W, H = canvas.size
 
+    # Kometa blur(N): blur what's under this overlay bucket once, before its layers.
+    canvas = overlay_engine.apply_blur(canvas, overlay_engine.blur_radius(selected, W, H))
+    queued = overlay_engine.queue_placements(selected)
+
     for element in selected:
+        if element.get("type") == "blur":
+            continue
+        if id(element) in queued:
+            pos = queued[id(element)]
+            if pos is None:
+                continue  # the queue has no position left for this layer
+            element = {**element, **pos, "placement": "kometa"}
         try:
             if element.get("placement") == "kometa":
                 canvas = overlay_engine.render_kometa_element(canvas, element, ctx)

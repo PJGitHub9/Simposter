@@ -798,6 +798,72 @@ def send_media_mirror_notification(
                 logger.error("[APPRISE] Media Mirror notification error: %s", e)
 
 
+def send_poster_drift_notification(items: List[Dict[str, Any]]) -> None:
+    """One summary per scan of posters changed outside Simposter (poster_drift.py).
+    Only sent when the drift action is "notify" or "resend"; uses the normal
+    Discord/Apprise switches. The library filter doesn't apply (an item can
+    belong to any library)."""
+    send_discord = _should_notify("poster_drift")
+    send_apprise = _should_notify_apprise("poster_drift")
+    if not items or (not send_discord and not send_apprise):
+        return
+    from ..media_server import get_server_label
+    resent = [i for i in items if i.get("resent")]
+    lines = []
+    for i in items[:15]:
+        line = f"{i.get('title') or i.get('rating_key')} ({get_server_label(i.get('server_id') or 'plex-1')})"
+        if "resent" in i:
+            line += " — re-sent" if i["resent"] else " — re-send failed"
+        lines.append(line)
+    if len(items) > 15:
+        lines.append(f"...and {len(items) - 15} more")
+    title = "\U0001F50D Posters Changed Outside Simposter"
+    description = f"{len(items)} poster(s) were changed on the server since Simposter sent them."
+    if resent:
+        description += f" {len(resent)} re-sent."
+    fields = [("Items", "\n".join(lines))]
+    embed = {
+        "title": title,
+        "description": description,
+        "color": 0xFFA502,
+        "fields": [{"name": n, "value": v[:1024], "inline": False} for n, v in fields],
+        "footer": {"text": "Simposter · History → Changed Outside Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    settings = _get_notification_settings()
+    if send_discord:
+        try:
+            resp = requests.post(settings.get("discordWebhookUrl", ""), json={"embeds": [embed]}, timeout=10)
+            if resp.status_code not in (200, 204):
+                logger.warning("[DISCORD] Poster drift notification failed: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.error("[DISCORD] Poster drift notification error: %s", e)
+    if send_apprise:
+        other_urls: List[str] = []
+        for url in settings.get("appriseUrls", []) or []:
+            if not url.strip():
+                continue
+            discord_webhook = _resolve_discord_webhook_url(url)
+            if discord_webhook:
+                try:
+                    requests.post(discord_webhook, json={"embeds": [embed]}, timeout=10)
+                except Exception as e:
+                    logger.error("[APPRISE] Poster drift Discord embed error: %s", e)
+            else:
+                other_urls.append(url.strip())
+        if other_urls:
+            try:
+                import apprise
+                ap = apprise.Apprise()
+                for url in other_urls:
+                    ap.add(url)
+                body = description + "\n" + "\n".join(lines)
+                if len(ap) > 0 and not ap.notify(title=f"{title} — Simposter", body=body):
+                    logger.warning("[APPRISE] One or more Apprise services failed (poster drift)")
+            except Exception as e:
+                logger.error("[APPRISE] Poster drift notification error: %s", e)
+
+
 def send_overlay_refresh_notification(
     group: Dict[str, Any],
     stats: Dict[str, int],
@@ -817,7 +883,10 @@ def send_overlay_refresh_notification(
 
     fields: List[tuple] = [("Library", (group or {}).get("name") or _get_library_name(library_id))]
     fields.append(("Checked", str(stats.get("checked", 0))))
-    fields.append(("Updated", str(stats.get("updated", 0))))
+    if stats.get("removed"):
+        fields.append(("Overlays removed", str(stats["removed"])))
+    else:
+        fields.append(("Updated", str(stats.get("updated", 0))))
     if stats.get("failed"):
         fields.append(("Failed", str(stats["failed"])))
     updated = [i for i in items if i.get("status") == "updated"]
@@ -829,6 +898,9 @@ def send_overlay_refresh_notification(
     if stats.get("failed"):
         description = f"Finished with {stats['failed']} failed poster(s)"
         color = 0xFFA502
+    elif stats.get("removed"):
+        description = f"Overlays removed from {stats['removed']} poster(s)"
+        color = 0x3DD6B7
     elif stats.get("updated"):
         description = f"{stats['updated']} poster(s) re-rendered with updated overlays"
         color = 0x3DD6B7

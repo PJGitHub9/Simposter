@@ -268,6 +268,8 @@ def _upload_poster_and_verify(client, server_id: str, item_id: str, image_bytes:
     _plex_media_segment()). Jellyfin/Emby ignore it (no such URL distinction
     there -- interface parity only, same as upload_image()'s own doc)."""
     client.upload_image(item_id, ImageType.POSTER, image_bytes, content_type, is_collection=is_collection)
+    from .. import poster_drift
+    poster_drift.record_sent(server_id, item_id, image_bytes)
 
     # A 200 from upload_image() only proves the server ACCEPTED the request --
     # not that it actually stored the new image (see CLAUDE.md Quirk #36's

@@ -250,3 +250,63 @@ def api_apply_retry_settings(enabled: bool = Query(...), interval_hours: float =
         cancel_poster_retry()
     return {"status": "ok"}
 
+
+
+# ============================================================================
+# Posters changed outside Simposter (backend/poster_drift.py)
+# ============================================================================
+
+class PosterDriftConfigRequest(BaseModel):
+    action: str
+
+
+def _current_poster_path(server_id: str, rating_key: str, is_tv: bool):
+    """The poster the last scan downloaded for this item (no server call)."""
+    try:
+        if is_tv and server_id != "plex-1":
+            from .tv_shows import fetch_and_cache_tv_poster
+            path = fetch_and_cache_tv_poster(rating_key)
+            if path:
+                return path
+        from .movies import fetch_and_cache_poster
+        return fetch_and_cache_poster(rating_key)
+    except Exception:
+        return None
+
+
+@router.get("/poster-drift")
+def api_get_poster_drift():
+    from .. import poster_drift
+    return {
+        "action": poster_drift.get_action(),
+        "actions": list(poster_drift.ACTIONS),
+        "tracked": poster_drift.tracked_count(),
+        "items": poster_drift.list_drifted(),
+    }
+
+
+@router.post("/poster-drift/config")
+def api_set_poster_drift_config(req: PosterDriftConfigRequest):
+    from .. import poster_drift
+    try:
+        return {"action": poster_drift.set_action(req.action)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/poster-drift/{server_id}/{rating_key}/resend")
+def api_poster_drift_resend(server_id: str, rating_key: str):
+    """Put Simposter's last poster back on the server."""
+    from .. import poster_drift
+    if not poster_drift.resend(server_id, rating_key):
+        raise HTTPException(502, "Couldn't re-send: no saved poster for this item, or the upload failed (see the log).")
+    return {"status": "ok"}
+
+
+@router.post("/poster-drift/{server_id}/{rating_key}/dismiss")
+def api_poster_drift_dismiss(server_id: str, rating_key: str):
+    """Keep the server's poster and stop reporting it."""
+    from .. import poster_drift
+    path = _current_poster_path(server_id, rating_key, poster_drift._is_tv(rating_key))
+    poster_drift.dismiss(server_id, rating_key, path)
+    return {"status": "ok"}

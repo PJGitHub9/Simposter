@@ -10,6 +10,35 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.11',
+    date: '2026-10-22',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'History → Changed Outside Simposter: Simposter now notices when a poster it sent was changed on the server (Kometa overlays, a manual edit, another tool). Choose what happens: only list it, list and notify, or put the Simposter poster back.',
+          'Each changed poster is shown next to the one Simposter sent.',
+          'Kometa import now supports blur, font styles of variable fonts, images next to text (addon images) and queues (layers that fill a list of positions, highest weight first). Blur is also a new layer type in the Overlay Manager.',
+          'Overlay Refresh can remove overlays: re-send a poster (or a filtered set) without any overlays.',
+          'Text layers can insert "Days since added" and "Show status".'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Saving Settings no longer reverts a Media Mirror setup made on the Media Mirror page in the meantime.'
+        ]
+      },
+      {
+        title: 'Security',
+        items: [
+          'Pillow updated to 13.0 (Python 3.11 and newer) and Vite to 8.3.5.',
+          'Restoring a database backup only reuses a stored media server key when the server address is the same.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.10',
     date: '2026-10-21',
     sections: [

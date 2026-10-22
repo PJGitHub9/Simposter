@@ -12,7 +12,7 @@ from PIL import Image
 
 import requests
 from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, THUMB_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_media_paths_from_metadata, extract_tvdb_id_from_metadata, normalize_collection_title
-from .. import cache, database as db
+from .. import cache, database as db, poster_drift
 from .art_cache import make_art_cache
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, search_collection, get_collection_images, TMDBError
@@ -1656,6 +1656,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 if poster_path:
                     if refresh:
                         record_poster_version(movie_key, version)
+                        poster_drift.check_after_download("plex-1", movie_key, poster_path)
                     return movie_key, _poster_cache_url(movie_key, poster_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch poster for movie {movie_key}: {e}")
@@ -1847,6 +1848,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 if poster_path:
                     if refresh:
                         record_poster_version(key, version)
+                        poster_drift.check_after_download("plex-1", key, poster_path)
                     poster_url = _poster_cache_url(key, poster_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch poster for TV show {key}: {e}")
@@ -2051,6 +2053,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             logger.error(f"[SCAN] Failed to scan linked libraries: {e}")
 
         logger.info(f"[SCAN] Completed full library sync")
+        poster_drift.flush_notifications()
         scan_status.update({
             "state": "done",
             "finished_at": datetime.now(timezone.utc).isoformat(),

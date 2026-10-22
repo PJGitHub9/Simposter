@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.8.11 (2026-10-22) — `dev-overlays` branch
+
+### New Features
+- **Poster drift detection** — new `backend/poster_drift.py`. Every successful poster send stores a 16x24 RGB fingerprint per (server, item) in the new `poster_fingerprints` table (hooked into `record_poster_history()` for send actions, `_upload_poster_and_verify()` and the Plex resend paths). When a scan re-downloads a poster whose server version changed (Quirk #152; Plex and Jellyfin/Emby), it is compared with the stored one; a change beyond re-encoding/resizing noise is marked. The action is a preference (own table `poster_drift_config`, so a Settings save can't reset it): off, list, notify (one Discord/Apprise summary per scan) or resend (re-uploads the resend cache via `api_render_cache_resend()`). History has a "Changed Outside Simposter" tab with both posters side by side, "Put Simposter's back" and "Keep server's" (adopts the current poster as the new baseline). Endpoints `GET /api/poster-drift`, `POST /api/poster-drift/config`, `POST /api/poster-drift/{server}/{key}/resend|dismiss`. Items Simposter never sent are never reported.
+- **Kometa blur** — `blur(N)` imports as a `blur` layer (`blur_amount`, 1-100, default 50); the strongest blur among a bucket's drawn layers is applied once (`GaussianBlur(N × canvas scale)`) before its other layers. Also addable in the Overlay Manager.
+- **Kometa `font_style`** — stored on the layer and applied with `set_variation_by_name()` for variable fonts; other fonts ignore it.
+- **Text addon images** — a `text(...)` overlay with an image keeps it (`asset_id`/`url`, `addon_position`, `addon_offset`, `addon_scale`), laid out like Kometa's `get_backdrop` (side by side top-aligned, or stacked and centered). Editable under "Image next to the text".
+- **Kometa queues** — `parse_queues()` reads a file's `queues:` (lists, named lists with `settings` position/overlay_limit/default/dynamic_position; conditionals use their defaults), and queued overlays get `queue` + `queue_positions`. At render, selected layers of a queue take its positions by weight (highest first); extra layers aren't drawn. Same logic in the preview (`queuePlacements()`).
+- **Remove overlays** (Overlay Refresh) and **Days since added / Show status** text values — see CLAUDE.md Quirk #174.
+
+### Bug Fixes
+- Media Mirror config is kept on a Settings save (stored `mirror` preserved per group; a removed server is still dropped).
+
+### Security
+- Pillow 13.0.0 on Python 3.11+ (12.3.0 kept for 3.10); `npm audit fix` (vite 8.3.5). A database restore only fills a media server's stored key when its URL matches.
+
 ## v1.8.10 (2026-10-21) — `dev-overlays` branch
 
 Numbered 1.8.10 rather than 1.8.1: versions are compared part by part as numbers, so 1.8.1 would sort before 1.8.04.

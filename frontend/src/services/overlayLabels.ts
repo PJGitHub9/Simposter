@@ -19,6 +19,7 @@ export const ELEMENT_TYPE_LABELS: Record<string, string> = {
   custom_image: 'Image',
   full_cover_image: 'Full-poster image',
   text_label: 'Text',
+  blur: 'Blur',
   resolution_badge: 'Resolution badge',
   codec_badge: 'Codec badge',
   label_badge: 'Label badge',
@@ -70,7 +71,8 @@ export const elementNoun = (el: LabelledElement): string => {
 
 /** "top-left", "bottom", "center", "whole poster". */
 export const elementPlace = (el: DescribedElement): string => {
-  if (el.type === 'full_cover_image') return 'whole poster'
+  if (el.type === 'full_cover_image' || el.type === 'blur') return 'whole poster'
+  if ((el as { queue?: string }).queue) return `queue "${(el as { queue?: string }).queue}"`
   let v: string
   let h: string
   if (el.placement === 'kometa') {

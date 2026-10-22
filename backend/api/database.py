@@ -55,6 +55,12 @@ def _fill_media_server_secrets(value: str, current_value: str) -> str:
         if not isinstance(s, dict):
             continue
         existing = by_id.get(s.get("id")) or {}
+        # Only hand over a stored credential when the server address is the same;
+        # a backup pointing the same id at another server must not get our key.
+        url_new = (s.get("url") or "").strip().rstrip("/").lower()
+        url_old = (existing.get("url") or "").strip().rstrip("/").lower()
+        if url_new and url_old and url_new != url_old:
+            continue
         for f in _MEDIA_SERVER_SECRET_FIELDS:
             if not s.get(f) and existing.get(f):
                 s[f] = existing[f]

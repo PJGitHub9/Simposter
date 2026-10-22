@@ -385,6 +385,8 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
                     update_poster(rating_key, _movie_poster_cache_url(rating_key, poster_path), item.library_id or "default")
             if refresh and poster_path:
                 record_poster_version(rating_key, version)
+                from .. import poster_drift
+                poster_drift.check_after_download(getattr(client, "server_id", None), rating_key, poster_path)
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Poster fetch failed for %s: %s", rating_key, e)
         try:
@@ -496,6 +498,8 @@ def api_scan_media_server(server_id: str, library_id: Optional[str] = None, medi
                 _update_scan_status(f"Scanning {server_label}: {display_name} (collections)")
                 results.append(_scan_one_collection_library(client, server_id, library_id, display_name))
                 scan_status.update({"processed": 2})
+            from .. import poster_drift
+            poster_drift.flush_notifications()
             scan_status.update({"state": "done", "finished_at": datetime.now(timezone.utc).isoformat()})
         except Exception as e:
             scan_status.update({"state": "error", "error": str(e), "finished_at": datetime.now(timezone.utc).isoformat()})

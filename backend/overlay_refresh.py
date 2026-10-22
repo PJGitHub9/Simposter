@@ -297,6 +297,66 @@ def refresh_state(state: Dict[str, Any], checked: Optional[Dict[str, Any]] = Non
     return {"status": "updated", "detail": checked["reason"] or "re-rendered"}
 
 
+def remove_state(state: Dict[str, Any], source: str = "overlay_refresh") -> Dict[str, Any]:
+    """Re-render one tracked poster from its stored source art with no
+    overlays at all, upload it, drop the Plex label and stop tracking it (so a
+    later refresh doesn't put the overlays back). The poster gets overlays
+    again the next time it's sent with a preset that has them."""
+    from .rendering import render_poster_image
+    from .api.save import encode_poster_for_plex
+    from .api.media_server_send import _upload_poster_and_verify
+    from .media_server import get_client
+    from .save_paths import save_or_cache_render
+
+    server_id = state["server_id"]
+    rating_key = state["rating_key"]
+    is_plex = server_id == "plex-1"
+    client = get_client(server_id)
+    if client is None:
+        return {"status": "failed", "detail": f"server {server_id} is not configured"}
+    if not state.get("background_url"):
+        return {"status": "failed", "detail": "no source image recorded"}
+
+    opts = _fresh_options(state)
+    opts["overlay_config_ids"] = []
+    opts["overlay_config_ids_below"] = []
+    # The preset's legacy single overlay link is read through preset_id.
+    opts.pop("preset_id", None)
+    img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
+    payload, content_type = encode_poster_for_plex(img, for_plex=is_plex)
+    _upload_poster_and_verify(client, server_id, rating_key, payload, content_type,
+                              is_collection=bool(state.get("is_collection")))
+
+    try:
+        save_or_cache_render(rating_key, payload, None)
+    except Exception as e:
+        logger.debug("[OVERLAY_REFRESH] resend cache update failed for %s: %s", rating_key, e)
+
+    try:
+        db.record_poster_history(
+            rating_key=rating_key,
+            library_id=state.get("library_id"),
+            title=_display_title({**state, "year": None}),
+            year=state.get("year"),
+            template_id=state["template_id"],
+            preset_id=state.get("preset_id"),
+            action="overlay_removed",
+            source=source,
+            poster_data=payload,
+            server_id=server_id,
+        )
+    except Exception as e:
+        logger.debug("[OVERLAY_REFRESH] history write failed for %s: %s", rating_key, e)
+
+    if is_plex:
+        label = _refresh_label(_group_for_library(server_id, state.get("library_id"), state.get("media_type") or "movie"))
+        if label:
+            _apply_plex_label(rating_key, label, False)
+
+    db.delete_overlay_state(server_id, rating_key, state.get("season_index"))
+    return {"status": "removed", "detail": "overlays removed"}
+
+
 # ---------------------------------------------------------------------------
 # Group runs
 # ---------------------------------------------------------------------------
@@ -353,14 +413,16 @@ def state_key(state: Dict[str, Any]) -> str:
 
 
 def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
-              force: bool = False, scheduled: bool = False) -> Dict[str, Any]:
+              force: bool = False, scheduled: bool = False, remove: bool = False) -> Dict[str, Any]:
     """Check (apply=False) or check-and-refresh (apply=True) every tracked
-    poster in one group. Progress goes to run_status[group_id]."""
+    poster in one group, or with remove=True re-send them without overlays.
+    Progress goes to run_status[group_id]."""
     run_id = uuid.uuid4().hex[:12]
-    mode = "apply" if apply else "check"
+    apply = apply or remove
+    mode = "remove" if remove else ("apply" if apply else "check")
     _update_status(group_id, {
         "state": "running", "mode": mode, "run_id": run_id, "total": 0, "processed": 0,
-        "current": "", "changed": 0, "updated": 0, "unchanged": 0, "failed": 0,
+        "current": "", "changed": 0, "updated": 0, "unchanged": 0, "failed": 0, "removed": 0,
         "error": None, "items": [], "started_at": datetime.now().isoformat(timespec="seconds"),
     })
     group = None
@@ -375,7 +437,7 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
             states = [s for s in states if state_key(s) in wanted]
         _update_status(group_id, {"total": len(states)})
         items: List[Dict[str, Any]] = []
-        counts = {"changed": 0, "updated": 0, "unchanged": 0, "failed": 0}
+        counts = {"changed": 0, "updated": 0, "unchanged": 0, "failed": 0, "removed": 0}
         for i, state in enumerate(states):
             title = _display_title(state)
             _update_status(group_id, {"processed": i, "current": title})
@@ -384,6 +446,22 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                 "season_index": state.get("season_index"), "title": title,
             }
             try:
+                if remove:
+                    result = remove_state(state, source="overlay_refresh")
+                    entry["status"] = result["status"]
+                    entry["reason"] = result["detail"]
+                    if result["status"] == "removed":
+                        counts["removed"] += 1
+                    else:
+                        counts["failed"] += 1
+                    items.append(entry)
+                    log_entries.append({
+                        "server_id": entry["server_id"], "rating_key": entry["rating_key"],
+                        "season_index": entry["season_index"], "title": title,
+                        "status": entry["status"], "detail": entry["reason"],
+                    })
+                    _update_status(group_id, {**counts, "items": items[-500:]})
+                    continue
                 checked = check_state(state)
                 if not checked["changed"] and not force:
                     counts["unchanged"] += 1
@@ -436,19 +514,19 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
 
 
 def start_run(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
-              force: bool = False, scheduled: bool = False) -> bool:
+              force: bool = False, scheduled: bool = False, remove: bool = False) -> bool:
     """Start run_group() in a background thread. False if one is already running."""
     with run_status_lock:
         if (run_status.get(group_id) or {}).get("state") == "running":
             return False
         run_status.setdefault(group_id, {})["state"] = "running"
-    threading.Thread(target=run_group, args=(group_id, apply, only_keys, force, scheduled), daemon=True).start()
+    threading.Thread(target=run_group, args=(group_id, apply, only_keys, force, scheduled, remove), daemon=True).start()
     return True
 
 
 def _notify(group: dict, stats: Dict[str, int], items: List[Dict[str, Any]], scheduled: bool) -> None:
     """Summary notification; a scheduled run that changed nothing stays quiet."""
-    if scheduled and not stats.get("updated") and not stats.get("failed"):
+    if scheduled and not stats.get("updated") and not stats.get("failed") and not stats.get("removed"):
         return
     try:
         from .api.notifications import send_overlay_refresh_notification
