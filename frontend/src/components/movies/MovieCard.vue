@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import ResendPreviewModal from './ResendPreviewModal.vue'
 
@@ -19,6 +20,8 @@ const props = defineProps<{
   cacheRatingKey?: string | null
   edition?: string | null
   hasCachedPoster?: boolean
+  // Poster was changed on a server after Simposter sent it (poster_drift.py).
+  posterChanged?: boolean
   isTV?: boolean
   serverId?: string | null
   alsoOn?: string[] | null
@@ -68,6 +71,8 @@ function displayServerLabel(type: string): string {
 function serverIconSrc(type: string): string {
   return `/icons/${type}.svg`
 }
+
+const router = useRouter()
 
 const emit = defineEmits<{
   (e: 'select'): void
@@ -125,6 +130,12 @@ async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
 <template>
   <article class="card glass" @click="emit('select')">
     <div class="thumb" :style="{ backgroundImage: `url(${poster})` }">
+      <button
+        v-if="posterChanged"
+        class="changed-badge"
+        title="This poster was changed on the server after Simposter sent it. Click to see it in History."
+        @click.stop="router.push({ name: 'history', query: { tab: 'drift' } })"
+      >Changed</button>
       <button class="refresh-btn" title="Refresh poster" @click.stop="emit('refresh')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="23 4 23 10 17 10" />
@@ -290,6 +301,25 @@ async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
 }
 
 /* --- resend button (bottom-left) --- */
+.changed-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.6);
+  background: rgba(30, 22, 6, 0.75);
+  color: #fbbf24;
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.changed-badge:hover {
+  background: rgba(60, 44, 10, 0.9);
+}
+
 .resend-btn {
   position: absolute;
   bottom: 8px;

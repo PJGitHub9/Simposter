@@ -25,9 +25,20 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def is_network_path(path: str) -> bool:
+    """UNC/network paths (\\host\share, //host/share). Touching one makes
+    Windows connect to that host and send the account's credentials, so the
+    live-file picker and validate_path() never open them."""
+    p = (path or "").strip().replace("\\", "/")
+    return p.startswith("//")
+
+
 def validate_path(path: str) -> Path:
     """The file must exist and be a .yml/.yaml file."""
-    p = Path(str(path or "").strip()).expanduser()
+    raw = str(path or "").strip()
+    if is_network_path(raw):
+        raise ValueError("Network paths aren't allowed; mount the share on the server and use its local path")
+    p = Path(raw).expanduser()
     if p.suffix.lower() not in (".yml", ".yaml"):
         raise ValueError("Pick a .yml or .yaml file")
     if not p.is_file():

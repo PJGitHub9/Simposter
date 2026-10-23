@@ -265,7 +265,7 @@ class MediaMirrorConfig(BaseModel):
     enabled: bool = False
     sourceServerId: Optional[str] = None
     targetServerIds: List[str] = Field(default_factory=list)
-    assetTypes: List[str] = Field(default_factory=list)  # subset of poster/logo/backdrop/square_art
+    assetTypes: List[str] = Field(default_factory=list)  # subset of poster/logo/backdrop/square_art/thumb_art
     scheduleEnabled: bool = False
     scheduleCron: Optional[str] = None
     lastRunAt: Optional[str] = None
@@ -538,6 +538,7 @@ class OverlayElement(BaseModel):
     text: Optional[str] = None  # For text_label: the text to display
     font_family: Optional[str] = None  # For text_label
     font_size: Optional[int] = None  # For text_label
+    font_weight: Optional[str] = None  # For Kometa-placed text: "400"/"700" (default "700"); Kometa imports set "400" since Kometa has no weight
     font_color: Optional[str] = None  # For text_label
     label_name: Optional[str] = None  # For label_badge: Plex label to check
     show_if_label: Optional[str] = None  # Show only if this Plex label is present

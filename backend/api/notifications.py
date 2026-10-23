@@ -671,6 +671,7 @@ _MIRROR_ASSET_LABELS = [
     ("logo", "Logos"),
     ("backdrop", "Backdrops"),
     ("square_art", "Square Art"),
+    ("thumb_art", "Thumb Art"),
 ]
 
 
@@ -812,13 +813,15 @@ def send_poster_drift_notification(items: List[Dict[str, Any]]) -> None:
     lines = []
     for i in items[:15]:
         line = f"{i.get('title') or i.get('rating_key')} ({get_server_label(i.get('server_id') or 'plex-1')})"
+        if (i.get("asset_type") or "poster") != "poster":
+            line += f" · {i['asset_type']}"
         if "resent" in i:
             line += " — re-sent" if i["resent"] else " — re-send failed"
         lines.append(line)
     if len(items) > 15:
         lines.append(f"...and {len(items) - 15} more")
-    title = "\U0001F50D Posters Changed Outside Simposter"
-    description = f"{len(items)} poster(s) were changed on the server since Simposter sent them."
+    title = "\U0001F50D Art Changed Outside Simposter"
+    description = f"{len(items)} poster(s), logo(s) or backdrop(s) were changed on the server since Simposter sent them."
     if resent:
         description += f" {len(resent)} re-sent."
     fields = [("Items", "\n".join(lines))]

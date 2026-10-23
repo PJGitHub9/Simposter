@@ -486,7 +486,8 @@ def _load_element_font(element: Dict[str, Any], size: int):
         except Exception:
             pass
     from .templates.universal import _load_font
-    return _apply_font_style(_load_font(element.get("font_family") or "arial", size), element.get("font_style"))
+    weight = str(element.get("font_weight") or "700")
+    return _apply_font_style(_load_font(element.get("font_family") or "arial", size, weight), element.get("font_style"))
 
 
 def _apply_font_style(font, style: Any):

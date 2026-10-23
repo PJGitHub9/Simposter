@@ -350,7 +350,7 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
     from .movies import (
         fetch_and_cache_poster, fetch_and_cache_logo, fetch_and_cache_backdrop,
         _poster_cache_url as _movie_poster_cache_url, _logo_cache_url, _art_cache_url,
-        poster_changed_on_server, record_poster_version,
+        poster_changed_on_server, record_poster_version, asset_changed_on_server, record_asset_version,
     )
 
     is_tv = media_type != "movie"
@@ -407,15 +407,35 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
         if unchanged:
             skipped += 1
             return
+        # Logo/backdrop: re-download only when the server's image tag changed.
+        def _art_refresh(kind: str, version):
+            refresh = asset_changed_on_server(kind, rating_key, version)
+            if refresh:
+                logger.info("[MEDIA_SERVER_SCAN] %s changed on server for %s — refreshing", kind.capitalize(), rating_key)
+            return refresh
+
+        def _after_refresh(kind: str, version, path) -> None:
+            record_asset_version(kind, rating_key, version)
+            from .. import poster_drift
+            poster_drift.check_after_download(server_id, rating_key, path, kind)
+
         try:
-            logo_path = fetch_and_cache_logo(rating_key)
+            logo_version = getattr(item, "logo_version", None)
+            logo_refresh = _art_refresh("logo", logo_version)
+            logo_path = fetch_and_cache_logo(rating_key, force_refresh=logo_refresh)
             if logo_path:
+                if logo_refresh:
+                    _after_refresh("logo", logo_version, logo_path)
                 update_logo(rating_key, _logo_cache_url(rating_key, logo_path))
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Logo fetch failed for %s: %s", rating_key, e)
         try:
-            art_path = fetch_and_cache_backdrop(rating_key)
+            art_version = getattr(item, "backdrop_version", None)
+            art_refresh = _art_refresh("backdrop", art_version)
+            art_path = fetch_and_cache_backdrop(rating_key, force_refresh=art_refresh)
             if art_path:
+                if art_refresh:
+                    _after_refresh("backdrop", art_version, art_path)
                 update_art(rating_key, _art_cache_url(rating_key, art_path))
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Backdrop fetch failed for %s: %s", rating_key, e)

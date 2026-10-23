@@ -878,6 +878,8 @@ def map_definition(
             element["stroke_color"] = str(ov["stroke_color"])
         font = str(ov.get("font") or "Roboto-Medium.ttf")
         element["font_family"] = PurePosixPath(font.replace("\\", "/")).stem
+        # Kometa draws the font file as it is, so never fall back to a bold variant.
+        element["font_weight"] = "400"
         entry["font"] = font
         if ov.get("font_style"):
             element["font_style"] = str(ov["font_style"])

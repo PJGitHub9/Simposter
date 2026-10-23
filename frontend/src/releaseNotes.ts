@@ -10,6 +10,34 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.14',
+    date: '2026-10-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Changed outside Simposter now covers logos and backdrops too, not just posters. Library scans notice a logo or backdrop changed on the server, and History lists it next to the one Simposter sent, with Put back and Keep server\'s.',
+          'A "Changed" badge marks posters, logos and backdrops changed outside Simposter in the Movies, TV Shows, Logos and Backdrops grids. Click it to open the list in History.',
+          'Media Mirror can copy Thumb Art between Jellyfin and Emby servers, and Backup / Restore covers Thumb Art for Jellyfin/Emby libraries.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Library scans re-download a logo or backdrop when it changed on the server, without needing Force Refresh.',
+          'Overlay Manager: the preview draws text with the same font as the finished poster (uploaded fonts and Kometa fonts), instead of a stand-in from your browser.',
+          'Backup / Restore only offers Square Art for Plex libraries.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Kometa overlays: text now uses the same fonts as Kometa (Roboto-Medium by default, and any other font Kometa ships) instead of falling back to a bold system font. Use "Check now" on a live file, or import again, to update an existing overlay.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.13',
     date: '2026-10-22',
     sections: [

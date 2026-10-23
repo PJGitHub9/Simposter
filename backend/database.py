@@ -1032,14 +1032,41 @@ def init_database():
             CREATE TABLE IF NOT EXISTS poster_fingerprints (
                 server_id TEXT NOT NULL,
                 rating_key TEXT NOT NULL,
+                asset_type TEXT NOT NULL DEFAULT 'poster',
                 fingerprint TEXT NOT NULL,
                 sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 drift_detected_at TIMESTAMP,
                 drift_score REAL,
                 drift_action TEXT,
-                PRIMARY KEY (server_id, rating_key)
+                PRIMARY KEY (server_id, rating_key, asset_type)
             )
         """)
+        # v1.8.13: logos and backdrops are tracked too. A table from v1.8.11/12
+        # has no asset_type and a (server_id, rating_key) key, so rebuild it once.
+        cursor.execute("PRAGMA table_info(poster_fingerprints)")
+        if "asset_type" not in [r[1] for r in cursor.fetchall()]:
+            cursor.execute("ALTER TABLE poster_fingerprints RENAME TO poster_fingerprints_old")
+            cursor.execute("""
+                CREATE TABLE poster_fingerprints (
+                    server_id TEXT NOT NULL,
+                    rating_key TEXT NOT NULL,
+                    asset_type TEXT NOT NULL DEFAULT 'poster',
+                    fingerprint TEXT NOT NULL,
+                    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    drift_detected_at TIMESTAMP,
+                    drift_score REAL,
+                    drift_action TEXT,
+                    PRIMARY KEY (server_id, rating_key, asset_type)
+                )
+            """)
+            cursor.execute("""
+                INSERT INTO poster_fingerprints (server_id, rating_key, asset_type, fingerprint, sent_at,
+                                                 drift_detected_at, drift_score, drift_action)
+                SELECT server_id, rating_key, 'poster', fingerprint, sent_at, drift_detected_at, drift_score, drift_action
+                FROM poster_fingerprints_old
+            """)
+            cursor.execute("DROP TABLE poster_fingerprints_old")
+            logger.info("[DB] poster_fingerprints now tracks logos and backdrops too")
 
         # Jellyfin/Emby scans: the item's Etag (an MD5 of its DateLastSaved)
         # from the last scan that fetched its details, so an unchanged item's
@@ -4836,6 +4863,11 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
         counts["overlay_state"] = cursor.rowcount
 
     logger.info("[MEDIA_SERVER] Purged DB cache for removed server %s: %s", server_id, counts)
+    try:
+        from . import poster_drift
+        poster_drift.remove_sent_copies(server_id)
+    except Exception:
+        pass
     return {"rating_keys": own_keys, "counts": counts}
 
 

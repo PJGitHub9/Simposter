@@ -48,6 +48,8 @@ _ASSET_TYPE_MAP = {
     "logo": ImageType.LOGO,
     "backdrop": ImageType.BACKDROP,
     "square_art": ImageType.SQUARE_ART,
+    # Jellyfin/Emby only (no Plex slot); Plex sources/targets are skipped per item.
+    "thumb_art": ImageType.THUMB_ART,
 }
 
 # ---------------------------------------------------------------------------
@@ -168,6 +170,7 @@ _ASSET_TYPE_LABELS = {
     "logo": "Logo",
     "backdrop": "Backdrop",
     "square_art": "Square Art",
+    "thumb_art": "Thumb Art",
 }
 
 
@@ -206,7 +209,7 @@ def _normalize(raw: bytes, asset_type: str, source_rating_key: str = "?", for_pl
         return encode_poster_for_plex(img, for_plex=for_plex)
     if asset_type == "logo":
         return normalize_logo_for_plex(raw)
-    # backdrop and square_art both get the same treatment -- Quirk #44's own
+    # backdrop, square_art and thumb_art all get the same treatment -- Quirk #44's own
     # established reasoning ("the same kind of large photographic image").
     return normalize_backdrop_for_plex(raw, for_plex=for_plex)
 

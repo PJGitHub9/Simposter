@@ -32,6 +32,7 @@ interface OverlayElement extends OverlayRuleFields {
   asset_id?: string
   text?: string
   font_family?: string
+  font_weight?: string
   font_size?: number
   font_color?: string
   label_name?: string
@@ -1152,6 +1153,31 @@ const hasAnyRules = computed(() =>
 
 // Preview-space boxes of Kometa-placed elements (for hit testing and dragging).
 const kometaBoxes = new Map<number, { x: number; y: number; w: number; h: number }>()
+// Fonts on the Simposter server (uploaded, bundled or Kometa's) are loaded into
+// the page so the preview draws text with the same font as the render.
+const BROWSER_FONTS = new Set(['arial', 'helvetica', 'times new roman', 'georgia', 'verdana', 'courier new', 'impact'])
+const serverFonts = new Map<string, 'loading' | 'ok' | 'none'>()
+const fontFaceName = (family: string) => `sp-font-${family.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+/** CSS font string for a text layer; starts loading a server font the first time. */
+const previewFont = (family: string | undefined, size: number, weight: string | number) => {
+  const fam = (family || 'Arial').trim()
+  const key = fam.toLowerCase()
+  if (!BROWSER_FONTS.has(key)) {
+    const state = serverFonts.get(key)
+    // A server font file is one weight; asking for bold would make the browser fake it.
+    if (state === 'ok') return `${size}px "${fontFaceName(fam)}", sans-serif`
+    if (!state) {
+      serverFonts.set(key, 'loading')
+      const face = new FontFace(fontFaceName(fam), `url(${apiBase}/api/fonts/file?name=${encodeURIComponent(fam)})`)
+      face.load()
+        .then(f => { document.fonts.add(f); serverFonts.set(key, 'ok'); renderPreview() })
+        .catch(() => serverFonts.set(key, 'none'))
+    }
+  }
+  const bold = ['bold', '700', '800', '900'].includes(String(weight).toLowerCase())
+  return `${bold ? 'bold ' : ''}${size}px "${fam}", sans-serif`
+}
+
 const isKometaPlaced = (el: OverlayElement) =>
   el.placement === 'kometa' && (el.type === 'text_label' || el.type === 'custom_image')
 let dragGrab = { dx: 0, dy: 0 }
@@ -1500,7 +1526,7 @@ const renderKometaPreview = async (
     const text = filled ?? (el.text || 'Text')
     const size = Math.max(4, (el.font_size || 40) * s)
     const stroke = (el.stroke_width || 0) * s
-    const font = `${size}px "${el.font_family || 'Arial'}", sans-serif`
+    const font = previewFont(el.font_family, size, el.font_weight || '700')
     ctx.font = font
     const m = ctx.measureText(text)
     const asc = m.actualBoundingBoxAscent || size * 0.8
@@ -1771,7 +1797,7 @@ const renderPreviewElement = async (
     const color = el.font_color || '#FFFFFF'
     const align = (el.text_align || 'center') as CanvasTextAlign
 
-    ctx.font = `bold ${fontSize}px sans-serif`
+    ctx.font = previewFont(el.font_family, fontSize, '700')
     ctx.textAlign = align
     ctx.textBaseline = 'middle'
 

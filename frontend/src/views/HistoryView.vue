@@ -94,6 +94,7 @@ const activeTab = ref<'history' | 'retry-queue' | 'drift'>('history')
 interface DriftItem {
   server_id: string
   rating_key: string
+  asset_type?: 'poster' | 'logo' | 'backdrop'
   title: string
   is_tv: boolean
   sent_at: string
@@ -108,10 +109,10 @@ const driftLoading = ref(false)
 const driftBusy = ref<string | null>(null)
 const driftMessage = ref('')
 const DRIFT_ACTIONS: Array<{ value: string; label: string; hint: string }> = [
-  { value: 'off', label: "Don't check", hint: 'Scans never compare posters.' },
-  { value: 'list', label: 'Only list them here', hint: 'Changed posters show up in this tab.' },
+  { value: 'off', label: "Don't check", hint: 'Scans never compare posters, logos or backdrops.' },
+  { value: 'list', label: 'Only list them here', hint: 'Changed posters, logos and backdrops show up in this tab.' },
   { value: 'notify', label: 'List and notify', hint: 'Also one Discord/Apprise message per scan that finds changes.' },
-  { value: 'resend', label: "Put Simposter's poster back", hint: "Re-sends the last poster Simposter sent (and notifies). If another tool keeps changing it, they'll take turns." },
+  { value: 'resend', label: "Put Simposter's version back", hint: "Re-sends what Simposter last sent (and notifies). If another tool keeps changing it, they'll take turns." },
 ]
 const driftHint = computed(() => DRIFT_ACTIONS.find(a => a.value === driftAction.value)?.hint || '')
 
@@ -143,21 +144,22 @@ const setDriftAction = async (action: string) => {
   if (res.ok) driftAction.value = action
 }
 
-const driftKey = (item: DriftItem) => `${item.server_id}:${item.rating_key}`
+const driftAsset = (item: DriftItem) => item.asset_type || 'poster'
+const driftKey = (item: DriftItem) => `${item.server_id}:${item.rating_key}:${driftAsset(item)}`
 
 const driftDo = async (item: DriftItem, what: 'resend' | 'dismiss') => {
   driftBusy.value = `${what}:${driftKey(item)}`
   driftMessage.value = ''
   try {
     const res = await fetch(
-      `${apiBase}/api/poster-drift/${encodeURIComponent(item.server_id)}/${encodeURIComponent(item.rating_key)}/${what}`,
+      `${apiBase}/api/poster-drift/${encodeURIComponent(item.server_id)}/${encodeURIComponent(item.rating_key)}/${what}?asset=${driftAsset(item)}`,
       { method: 'POST' },
     )
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.detail || `Failed: ${res.status}`)
     }
-    if (what === 'resend') driftMessage.value = `Re-sent Simposter's poster for ${item.title}.`
+    if (what === 'resend') driftMessage.value = `Re-sent Simposter's ${driftAsset(item)} for ${item.title}.`
     await fetchDrift()
   } catch (e: any) {
     driftMessage.value = e.message || String(e)
@@ -166,12 +168,22 @@ const driftDo = async (item: DriftItem, what: 'resend' | 'dismiss') => {
   }
 }
 
-const driftSentUrl = (item: DriftItem) =>
-  `${apiBase}/api/render-cache/${encodeURIComponent(item.rating_key)}/preview?v=${encodeURIComponent(item.sent_at || '')}`
-const driftCurrentUrl = (item: DriftItem) => {
-  const kind = item.is_tv && item.server_id !== 'plex-1' ? 'tv-show' : 'movie'
-  return `${apiBase}/api/${kind}/${encodeURIComponent(item.rating_key)}/poster?raw=1&v=${encodeURIComponent(item.drift_detected_at || '')}`
+const driftSentUrl = (item: DriftItem) => {
+  const v = encodeURIComponent(item.sent_at || '')
+  if (driftAsset(item) !== 'poster') {
+    return `${apiBase}/api/poster-drift/${encodeURIComponent(item.server_id)}/${encodeURIComponent(item.rating_key)}/sent?asset=${driftAsset(item)}&v=${v}`
+  }
+  return `${apiBase}/api/render-cache/${encodeURIComponent(item.rating_key)}/preview?v=${v}`
 }
+const driftCurrentUrl = (item: DriftItem) => {
+  const key = encodeURIComponent(item.rating_key)
+  const v = encodeURIComponent(item.drift_detected_at || '')
+  if (driftAsset(item) === 'logo') return `${apiBase}/api/logo/${key}?raw=1&v=${v}`
+  if (driftAsset(item) === 'backdrop') return `${apiBase}/api/backdrop/${key}?raw=1&v=${v}`
+  const kind = item.is_tv && item.server_id !== 'plex-1' ? 'tv-show' : 'movie'
+  return `${apiBase}/api/${kind}/${key}/poster?raw=1&v=${v}`
+}
+const DRIFT_ASSET_LABELS: Record<string, string> = { poster: 'Poster', logo: 'Logo', backdrop: 'Backdrop' }
 
 // Retry queue state
 const retryItems = ref<RetryQueueItem[]>([])
@@ -651,6 +663,8 @@ onMounted(async () => {
     await settings.load()
   }
   fetchHistory()
+  // Opened from a grid "Changed" badge.
+  if (router.currentRoute.value.query.tab === 'drift') switchToDrift()
   fetchPresetNames()
   // Load retry count for badge indicator (non-blocking)
   fetchRetryQueue()
@@ -965,11 +979,11 @@ onMounted(async () => {
       <div class="retry-queue-header">
         <div class="retry-queue-info">
           <span class="retry-pending-count" :class="{ 'retry-none': driftItems.length === 0 }">
-            {{ driftItems.length ? `${driftItems.length} poster${driftItems.length !== 1 ? 's' : ''} changed outside Simposter` : 'No changed posters found' }}
+            {{ driftItems.length ? `${driftItems.length} item${driftItems.length !== 1 ? 's' : ''} changed outside Simposter` : 'Nothing changed outside Simposter' }}
           </span>
           <span class="retry-info-hint">
-            After Simposter sends a poster it remembers what it looked like. When a library scan sees the server's poster
-            changed (Kometa overlays, a manual edit, another tool), it compares the two. {{ driftTracked }} poster{{ driftTracked !== 1 ? 's' : '' }} tracked.
+            After Simposter sends a poster, logo or backdrop it remembers what it looked like. When a library scan sees the
+            server's copy changed (Kometa overlays, a manual edit, another tool), it compares the two. {{ driftTracked }} tracked.
           </span>
         </div>
         <button @click="fetchDrift" class="btn-refresh" :disabled="driftLoading">
@@ -979,7 +993,7 @@ onMounted(async () => {
 
       <div class="drift-setting">
         <label>
-          <span>When a scan finds a changed poster</span>
+          <span>When a scan finds a changed poster, logo or backdrop</span>
           <select :value="driftAction" @change="setDriftAction(($event.target as HTMLSelectElement).value)">
             <option v-for="a in DRIFT_ACTIONS" :key="a.value" :value="a.value">{{ a.label }}</option>
           </select>
@@ -992,16 +1006,16 @@ onMounted(async () => {
       <div v-if="driftLoading && driftItems.length === 0" class="loading">Loading...</div>
       <div v-else-if="driftItems.length === 0" class="empty-state">
         <p>Nothing changed outside Simposter.</p>
-        <p class="hint">Only posters Simposter sent are tracked, and they're checked when a scan sees the server's poster change.</p>
+        <p class="hint">Only art Simposter sent is tracked, and it's checked when a scan sees the server's copy change.</p>
       </div>
       <div v-else class="drift-grid">
         <div v-for="item in driftItems" :key="driftKey(item)" class="drift-card">
-          <div class="drift-title">{{ item.title }}</div>
+          <div class="drift-title">{{ item.title }} <span class="drift-asset">{{ DRIFT_ASSET_LABELS[driftAsset(item)] }}</span></div>
           <div class="drift-meta">
             {{ mediaServerLabel(item.server_id, settings.mediaServers.value) }} · noticed {{ formatDate(item.drift_detected_at) }}
             <template v-if="item.drift_action === 'resend'"> · re-send was tried</template>
           </div>
-          <div class="drift-images">
+          <div class="drift-images" :class="{ wide: driftAsset(item) !== 'poster' }">
             <figure>
               <img :src="driftSentUrl(item)" alt="" loading="lazy" @error="($event.target as HTMLImageElement).style.visibility = 'hidden'" />
               <figcaption>Simposter sent</figcaption>
@@ -1015,7 +1029,7 @@ onMounted(async () => {
             <button class="btn-retry-now" :disabled="driftBusy !== null" @click="driftDo(item, 'resend')">
               {{ driftBusy === `resend:${driftKey(item)}` ? '...' : "Put Simposter's back" }}
             </button>
-            <button class="btn-dismiss" :disabled="driftBusy !== null" title="Keep the server's poster and stop reporting this change" @click="driftDo(item, 'dismiss')">
+            <button class="btn-dismiss" :disabled="driftBusy !== null" :title="`Keep the server's ${driftAsset(item)} and stop reporting this change`" @click="driftDo(item, 'dismiss')">
               Keep server's
             </button>
           </div>
@@ -1615,6 +1629,8 @@ onMounted(async () => {
 .drift-images figure { margin: 0; }
 .drift-images img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 6px; background: rgba(0, 0, 0, 0.3); }
 .drift-images figcaption { font-size: 0.75rem; text-align: center; color: var(--text-secondary, #9aa4b2); margin-top: 4px; }
+.drift-images.wide img { aspect-ratio: 16 / 9; object-fit: contain; background: repeating-conic-gradient(rgba(255, 255, 255, 0.06) 0% 25%, transparent 0% 50%) 50% / 16px 16px; }
+.drift-asset { margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 0.68rem; font-weight: 600; background: rgba(61, 214, 183, 0.15); color: var(--accent, #3dd6b7); vertical-align: middle; }
 .drift-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .retry-queue-header {

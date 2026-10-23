@@ -336,6 +336,8 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
     try:
         r = plex_session.post(plex_url, headers=upload_headers, data=logo_bytes, timeout=20)
         r.raise_for_status()
+        from .. import poster_drift
+        poster_drift.record_sent("plex-1", req.rating_key, logo_bytes, "logo")
     except Exception as e:
         logger.error("[PLEX] Logo upload failed rating_key=%s [%s] err=%s", req.rating_key, _logo_title, e)
         raise HTTPException(500, f"Failed to upload logo to Plex: {e}")
@@ -435,6 +437,8 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
     try:
         r = plex_session.post(plex_url, headers=upload_headers, data=art_bytes, timeout=20)
         r.raise_for_status()
+        from .. import poster_drift
+        poster_drift.record_sent("plex-1", req.rating_key, art_bytes, "backdrop")
     except Exception as e:
         logger.error("[PLEX] Backdrop upload failed rating_key=%s [%s] err=%s", req.rating_key, _art_title, e)
         raise HTTPException(500, f"Failed to upload backdrop to Plex: {e}")

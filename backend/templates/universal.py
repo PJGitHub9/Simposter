@@ -192,6 +192,130 @@ _KOMETA_REMOTE_FONTS = {
     "yesteryearregular": "Yesteryear-Regular.ttf",
 }
 
+# Fonts bundled with Kometa itself (Kometa-Team/Kometa's fonts/ folder, open
+# font licenses). Kometa overlay files name them by file, e.g. its default
+# "Roboto-Medium.ttf"; fetched and cached on first use like the ones above.
+_KOMETA_REPO_FONTS_BASE_URL = "https://raw.githubusercontent.com/Kometa-Team/Kometa/master/fonts/"
+_KOMETA_REPO_FONTS = {_n.rsplit(".", 1)[0].lower().replace("-", "").replace("_", ""): _n for _n in (
+    "Arimo-Bold.ttf",
+    "Arimo-BoldItalic.ttf",
+    "Arimo-Italic.ttf",
+    "Arimo-Medium.ttf",
+    "Arimo-MediumItalic.ttf",
+    "Arimo-Regular.ttf",
+    "Arimo-SemiBold.ttf",
+    "Arimo-SemiBoldItalic.ttf",
+    "Comfortaa-Bold.ttf",
+    "Comfortaa-Light.ttf",
+    "Comfortaa-Medium.ttf",
+    "Comfortaa-Regular.ttf",
+    "Comfortaa-SemiBold.ttf",
+    "Consensus-Bold.otf",
+    "Consensus-ExtraLight.otf",
+    "Consensus-Light.otf",
+    "Consensus-Medium.otf",
+    "Consensus-Regular.otf",
+    "Consensus-SemiBold.otf",
+    "Consensus-Thin.otf",
+    "Figtree-Black.ttf",
+    "Figtree-BlackItalic.ttf",
+    "Figtree-Bold.ttf",
+    "Figtree-BoldItalic.ttf",
+    "Figtree-ExtraBold.ttf",
+    "Figtree-ExtraBoldItalic.ttf",
+    "Figtree-Italic.ttf",
+    "Figtree-Light.ttf",
+    "Figtree-LightItalic.ttf",
+    "Figtree-Medium.ttf",
+    "Figtree-MediumItalic.ttf",
+    "Figtree-Regular.ttf",
+    "Figtree-SemiBold.ttf",
+    "Figtree-SemiBoldItalic.ttf",
+    "Inter-Black.ttf",
+    "Inter-Bold.ttf",
+    "Inter-ExtraBold.ttf",
+    "Inter-ExtraLight.ttf",
+    "Inter-Light.ttf",
+    "Inter-Medium.ttf",
+    "Inter-Regular.ttf",
+    "Inter-SemiBold.ttf",
+    "Inter-Thin.ttf",
+    "Lato-Black.ttf",
+    "Lato-BlackItalic.ttf",
+    "Lato-Bold.ttf",
+    "Lato-BoldItalic.ttf",
+    "Lato-Italic.ttf",
+    "Lato-Light.ttf",
+    "Lato-LightItalic.ttf",
+    "Lato-Regular.ttf",
+    "Lato-Thin.ttf",
+    "Lato-ThinItalic.ttf",
+    "LibreFranklin-Black.ttf",
+    "LibreFranklin-BlackItalic.ttf",
+    "LibreFranklin-Bold.ttf",
+    "LibreFranklin-BoldItalic.ttf",
+    "LibreFranklin-ExtraBold.ttf",
+    "LibreFranklin-ExtraBoldItalic.ttf",
+    "LibreFranklin-ExtraLight.ttf",
+    "LibreFranklin-ExtraLightItalic.ttf",
+    "LibreFranklin-Italic.ttf",
+    "LibreFranklin-Light.ttf",
+    "LibreFranklin-LightItalic.ttf",
+    "LibreFranklin-Medium.ttf",
+    "LibreFranklin-MediumItalic.ttf",
+    "LibreFranklin-Regular.ttf",
+    "LibreFranklin-SemiBold.ttf",
+    "LibreFranklin-SemiBoldItalic.ttf",
+    "LibreFranklin-Thin.ttf",
+    "LibreFranklin-ThinItalic.ttf",
+    "Montserrat-Black.ttf",
+    "Montserrat-BlackItalic.ttf",
+    "Montserrat-Bold.ttf",
+    "Montserrat-BoldItalic.ttf",
+    "Montserrat-ExtraBold.ttf",
+    "Montserrat-ExtraBoldItalic.ttf",
+    "Montserrat-ExtraLight.ttf",
+    "Montserrat-ExtraLightItalic.ttf",
+    "Montserrat-Italic.ttf",
+    "Montserrat-Light.ttf",
+    "Montserrat-LightItalic.ttf",
+    "Montserrat-Medium.ttf",
+    "Montserrat-MediumItalic.ttf",
+    "Montserrat-Regular.ttf",
+    "Montserrat-SemiBold.ttf",
+    "Montserrat-SemiBoldItalic.ttf",
+    "Montserrat-Thin.ttf",
+    "Montserrat-ThinItalic.ttf",
+    "Roboto-Black.ttf",
+    "Roboto-BlackItalic.ttf",
+    "Roboto-Bold.ttf",
+    "Roboto-BoldItalic.ttf",
+    "Roboto-Italic.ttf",
+    "Roboto-Light.ttf",
+    "Roboto-LightItalic.ttf",
+    "Roboto-Medium.ttf",
+    "Roboto-MediumItalic.ttf",
+    "Roboto-Regular.ttf",
+    "Roboto-Thin.ttf",
+    "Roboto-ThinItalic.ttf",
+    "SourceSans3-Black.ttf",
+    "SourceSans3-BlackItalic.ttf",
+    "SourceSans3-Bold.ttf",
+    "SourceSans3-BoldItalic.ttf",
+    "SourceSans3-ExtraBold.ttf",
+    "SourceSans3-ExtraBoldItalic.ttf",
+    "SourceSans3-ExtraLight.ttf",
+    "SourceSans3-ExtraLightItalic.ttf",
+    "SourceSans3-Italic.ttf",
+    "SourceSans3-Light.ttf",
+    "SourceSans3-LightItalic.ttf",
+    "SourceSans3-Medium.ttf",
+    "SourceSans3-MediumItalic.ttf",
+    "SourceSans3-Regular.ttf",
+    "SourceSans3-SemiBold.ttf",
+    "SourceSans3-SemiBoldItalic.ttf",
+)}
+
 
 def _normalize_font_token(name: str) -> str:
     return "".join(c for c in (name or "").lower() if c.isalnum())
@@ -216,7 +340,12 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     breaks rendering — _load_font()'s remaining fallback chain (system fonts,
     then PIL's default) still applies.
     """
-    filename = _KOMETA_REMOTE_FONTS.get(_normalize_font_token(font_family))
+    token = _normalize_font_token(font_family)
+    filename = _KOMETA_REMOTE_FONTS.get(token)
+    base_url = _KOMETA_REMOTE_FONTS_BASE_URL
+    if not filename:
+        filename = _KOMETA_REPO_FONTS.get(token)
+        base_url = _KOMETA_REPO_FONTS_BASE_URL
     if not filename:
         return None
 
@@ -224,10 +353,10 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     if not cache_path.exists():
         try:
             import requests
-            resp = requests.get(_KOMETA_REMOTE_FONTS_BASE_URL + filename, timeout=10)
+            resp = requests.get(base_url + filename, timeout=10)
             resp.raise_for_status()
             cache_path.write_bytes(resp.content)
-            logger.info("[FONT] Fetched and cached '%s' from Kometa-Team defaults repo", filename)
+            logger.info("[FONT] Fetched and cached '%s' from Kometa-Team on GitHub", filename)
         except Exception as e:
             logger.debug("[FONT] Failed to fetch remote font '%s': %s", filename, e)
             return None

@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.8.14 (2026-10-23) — `dev-overlays` branch
+
+### New Features
+- **Drift detection for logos and backdrops** — `poster_fingerprints` gains an `asset_type` column (rebuilt once from the v1.8.11-13 `(server_id, rating_key)` key). Logo/backdrop sends are fingerprinted in `PlexClient`/`JellyfinClient.upload_image()` and the direct Plex posts (plexsend, Batch Edit's logo upload, Backup restore); the sent bytes are kept in `config/cache/drift_sent/` so "Put back" can re-upload them. Scans compare a re-downloaded logo/backdrop the same way as posters. History's tab shows the asset type and the right images; `GET /api/poster-drift/{server}/{key}/sent?asset=` serves the kept copy; resend/dismiss take `?asset=`. Notifications say "Art Changed Outside Simposter".
+- **"Changed" badges** on Movies/TV Shows cards and the Logos/Backdrops grids (`GET /api/poster-drift/keys`, `useDriftKeys.ts`), linking to History → Changed Outside Simposter (`?tab=drift`).
+- **Thumb Art in Media Mirror and Backup** — `thumb_art` asset type (Jellyfin/Emby only: offered in Media Mirror when the source and a target are Jellyfin/Emby; on Backup for a Jellyfin/Emby library, where Plex items are skipped). Backup shows Square Art only for Plex libraries.
+
+### Improvements
+- **Scans re-check logos and backdrops** — `asset_changed_on_server()`/`record_asset_version()` generalize the poster version files (`.logover`/`.artver`). Plex: the movie scan reads the `clearLogo` Image URL and `art` from the metadata it already fetches; TV uses the listing's `art` and the poster path (Plex stamps every image of an item with the same update time). Jellyfin/Emby: `ImageTags.Logo` and `BackdropImageTags[0]` from the listing.
+- **Overlay Manager preview fonts** — new `GET /api/fonts/file?name=` (same folders as the render, fetches Kometa fonts on first use); the preview loads them with `FontFace` and draws text with them.
+
+### Bug Fixes
+- **Kometa text rendered bold** — imported text names Kometa's font files (default `Roboto-Medium.ttf`), which Simposter didn't have, so `_load_font()` fell through to a bold system font (its default weight is 700). Kometa's own `fonts/` folder (117 files, `_KOMETA_REPO_FONTS` in universal.py) is now fetched from GitHub and cached on first use like the Kometa Creator fonts, and listed by `/api/fonts`. Imported text layers get `font_weight: "400"` (new `OverlayElement.font_weight`, used by `_load_element_font()`), so a font that still isn't found falls back to a regular weight. Existing imports need a re-import (live files: Check now).
+
+### Security
+- Live Kometa files: the folder picker (`/live-kometa-files/browse`) and `validate_path()` refuse UNC/network paths (`\\host\share`, `//host/share`), since opening one makes Windows connect to that host with the account's credentials; folder errors no longer echo the OS error text.
+
 ## v1.8.13 (2026-10-22) — `dev-overlays` branch
 
 ### New Features

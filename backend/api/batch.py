@@ -834,6 +834,8 @@ def _process_single_movie(
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
+                        from .. import poster_drift
+                        poster_drift.record_sent("plex-1", rating_key, logo_bytes, "logo")
                         logger.info("[BATCH] Uploaded logo to Plex for %s [%s]", rating_key, title_hint)
                         # Cache the just-uploaded bytes locally and point the DB's cached
                         # logo_url at that copy (served via /api/logo/{rating_key}) instead of
@@ -2193,6 +2195,8 @@ def _render_and_save_poster(
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
+                        from .. import poster_drift
+                        poster_drift.record_sent("plex-1", rating_key, logo_bytes, "logo")
                         logger.info("[BATCH] Uploaded logo to Plex for %s [%s]", rating_key, display_title)
                         # Cache the just-uploaded bytes locally instead of caching the raw
                         # external TMDb/Fanart URL below -- see the matching comment in

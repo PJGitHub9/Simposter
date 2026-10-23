@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { useDriftKeys } from '@/composables/useDriftKeys'
 import { getApiBase } from '@/services/apiBase'
 import { compareTitles } from '@/services/sortTitle'
 import BackdropEditorModal from '@/components/BackdropEditorModal.vue'
@@ -161,7 +162,15 @@ watch(libraryId, (newLib) => {
   refresh()
   libraryGroupPref.load(newLib || '')
 })
+// Backdrop changed on a server after Simposter sent it (poster_drift.py).
+const router = useRouter()
+const drift = useDriftKeys()
+const assetChanged = (item: { key: string; other_servers?: { rating_key: string }[] | null }) =>
+  drift.changed([item.key, ...(item.other_servers || []).map(s => s.rating_key)], 'backdrop')
+const openDrift = () => router.push({ name: 'history', query: { tab: 'drift' } })
+
 onMounted(() => {
+  drift.load()
   refresh()
   libraryGroupPref.load(libraryId.value)
 })
@@ -249,6 +258,12 @@ onMounted(() => {
         @click="openEditor(item)"
       >
         <div class="backdrop-area">
+          <button
+            v-if="assetChanged(item)"
+            class="changed-badge"
+            title="This backdrop was changed on the server after Simposter sent it. Click to see it in History."
+            @click.stop="openDrift"
+          >Changed</button>
           <img
             v-if="item.art_url && !failedImages.has(item.key)"
             :src="thumbUrl(item.art_url)"
@@ -610,5 +625,20 @@ onMounted(() => {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 10px;
   }
+}
+
+.changed-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.6);
+  background: rgba(30, 22, 6, 0.75);
+  color: #fbbf24;
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 </style>

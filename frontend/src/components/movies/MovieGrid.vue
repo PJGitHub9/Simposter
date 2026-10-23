@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import MovieCard from './MovieCard.vue'
+import { useDriftKeys } from '@/composables/useDriftKeys'
 
 type Entry = {
   title: string
@@ -48,6 +50,11 @@ function cacheSourceKey(item: Entry): string | null {
   return match ? match.rating_key : null
 }
 
+// Poster changed outside Simposter on any of the item's servers.
+const drift = useDriftKeys()
+onMounted(() => { drift.load() })
+const posterChanged = (item: Entry) => drift.changed([item.key, ...(item.other_servers || []).map(s => s.rating_key)])
+
 const emit = defineEmits<{
   (e: 'select', movie: Entry): void
   (e: 'refresh', key: string): void
@@ -74,6 +81,7 @@ const emit = defineEmits<{
         :cacheRatingKey="cacheSourceKey(item)"
         :edition="item.edition"
         :hasCachedPoster="!!cacheSourceKey(item)"
+        :posterChanged="posterChanged(item)"
         :isTV="isTV"
         :serverId="item.server_id"
         :alsoOn="item.also_on"

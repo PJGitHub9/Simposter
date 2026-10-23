@@ -290,7 +290,7 @@ def api_list_fonts():
     (fetched-and-cached on first actual use — see universal.py's
     _load_remote_kometa_font() — so they're listed as selectable immediately
     even before that first fetch happens)."""
-    from ..templates.universal import _KOMETA_REMOTE_FONTS, _kometa_fonts_cache_dir
+    from ..templates.universal import _KOMETA_REMOTE_FONTS, _KOMETA_REPO_FONTS, _kometa_fonts_cache_dir
 
     font_extensions = {'.ttf', '.otf', '.ttc'}
     font_names: set[str] = set()
@@ -310,8 +310,42 @@ def api_list_fonts():
 
     # Known Kometa default font names, listed even before first use fetches them
     font_names.update(Path(fname).stem for fname in _KOMETA_REMOTE_FONTS.values())
+    font_names.update(Path(fname).stem for fname in _KOMETA_REPO_FONTS.values())
 
     return {"fonts": sorted(font_names, key=str.lower)}
+
+
+_FONT_MEDIA_TYPES = {".ttf": "font/ttf", ".otf": "font/otf", ".ttc": "font/collection"}
+
+
+@router.get("/fonts/file")
+def api_font_file(name: str):
+    """The font file for a font name, so the Overlay Manager preview can draw
+    with the same font as the render. Looks in the same folders as the render
+    (exact file name, case-insensitive) and fetches a Kometa font on first use."""
+    from ..templates.universal import _kometa_fonts_cache_dir, _load_remote_kometa_font
+    wanted = (name or "").strip()
+    if not wanted or "/" in wanted or "\\" in wanted or ".." in wanted:
+        raise HTTPException(400, "Invalid font name")
+    dirs = [Path(settings.CONFIG_DIR) / "fonts", BASE_DIR / "config" / "fonts", _kometa_fonts_cache_dir()]
+
+    def find():
+        low = wanted.lower()
+        for d in dirs:
+            if not d.is_dir():
+                continue
+            for f in d.iterdir():
+                if f.is_file() and f.suffix.lower() in _FONT_MEDIA_TYPES and f.stem.lower() == low:
+                    return f
+        return None
+
+    path = find()
+    if path is None and _load_remote_kometa_font(wanted, 12, False) is not None:
+        path = find()
+    if path is None:
+        raise HTTPException(404, "Font not found")
+    return FileResponse(str(path), media_type=_FONT_MEDIA_TYPES[path.suffix.lower()],
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════

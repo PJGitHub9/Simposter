@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from .. import database as db
 from .. import live_kometa
+from ..config import logger
 
 router = APIRouter()
 
@@ -119,6 +120,8 @@ def api_browse_live_files(path: Optional[str] = None):
     raw = (path or "").strip()
     if not raw:
         return {"path": None, "parent": None, "dirs": [], "files": [], "roots": roots}
+    if live_kometa.is_network_path(raw):
+        raise HTTPException(400, "Network paths aren't allowed; mount the share on the server and use its local path")
     p = Path(raw).expanduser()
     if p.suffix.lower() in _BROWSE_EXT and not p.is_dir():
         p = p.parent
@@ -143,6 +146,7 @@ def api_browse_live_files(path: Optional[str] = None):
     except PermissionError:
         raise HTTPException(403, f"Simposter can't read this folder: {raw}")
     except OSError as e:
-        raise HTTPException(400, f"Couldn't open this folder: {e}")
+        logger.debug("[LIVE KOMETA] Couldn't open %s: %s", raw, e)
+        raise HTTPException(400, f"Couldn't open this folder: {raw}")
     parent = str(p.parent) if p.parent != p else None
     return {"path": str(p), "parent": parent, "dirs": dirs, "files": files, "roots": roots}

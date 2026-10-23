@@ -6,12 +6,13 @@ import { getApiBase } from '@/services/apiBase'
 const route = useRoute()
 const apiBase = getApiBase()
 
-type AssetType = 'poster' | 'logo' | 'backdrop' | 'square_art'
+type AssetType = 'poster' | 'logo' | 'backdrop' | 'square_art' | 'thumb_art'
 const ASSET_TYPES: { value: AssetType; label: string; icon: string }[] = [
   { value: 'poster', label: 'Posters', icon: '' },
   { value: 'logo', label: 'Logos', icon: '\u{1F5BC}️' },
   { value: 'backdrop', label: 'Backdrops', icon: '\u{1F39E}️' },
   { value: 'square_art', label: 'Square Art', icon: '\u{1F533}' },
+  { value: 'thumb_art', label: 'Thumb Art', icon: '\u{1F304}' },
 ]
 
 type BackupStatus = { count: number; last_date: string | null; total_size: number; path: string }
@@ -26,7 +27,7 @@ const loading = ref(false)
 // silently expanding what an existing action does without opting in.
 const backupSelected = ref<Set<AssetType>>(new Set(['poster']))
 const statusByType = ref<Record<AssetType, BackupStatus>>({
-  poster: emptyStatus(), logo: emptyStatus(), backdrop: emptyStatus(), square_art: emptyStatus(),
+  poster: emptyStatus(), logo: emptyStatus(), backdrop: emptyStatus(), square_art: emptyStatus(), thumb_art: emptyStatus(),
 })
 // Restore is inherently per-type (the preview/match flow scans one folder at
 // a time), so it gets a single-select rather than the backup checklist.
@@ -64,6 +65,13 @@ const filteredAssignItems = computed(() => {
 })
 
 const isTv = computed(() => mediaType.value === 'tv-show')
+// Square Art exists only on Plex, Thumb Art only on Jellyfin/Emby (Quirk #153):
+// offer the one that fits this library's server.
+const serverId = computed(() => String(route.query.server || 'plex-1'))
+const shownAssetTypes = computed(() => {
+  const plex = serverId.value.startsWith('plex')
+  return ASSET_TYPES.filter(t => (t.value === 'square_art' ? plex : t.value === 'thumb_art' ? !plex : true))
+})
 
 const toggleSelectAll = () => {
   const newVal = !allMatchedSelected.value
@@ -327,7 +335,7 @@ onMounted(() => {
         <!-- Per-type checklist + status -->
         <div v-if="loading" class="status-row muted">Loading...</div>
         <div v-else class="asset-type-list">
-          <div v-for="t in ASSET_TYPES" :key="t.value" class="asset-type-row">
+          <div v-for="t in shownAssetTypes" :key="t.value" class="asset-type-row">
             <label class="asset-type-check">
               <input type="checkbox" :checked="backupSelected.has(t.value)" @change="toggleBackupType(t.value)" />
               <span class="asset-type-label">
@@ -397,7 +405,7 @@ onMounted(() => {
         <!-- Asset type selector -->
         <div class="type-tabs">
           <button
-            v-for="t in ASSET_TYPES"
+            v-for="t in shownAssetTypes"
             :key="t.value"
             class="type-tab"
             :class="{ active: restoreAssetType === t.value }"
