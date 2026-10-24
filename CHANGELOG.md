@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.8.15 (2026-10-23) — `dev-overlays` branch
+
+### New Features
+- **Two new starter presets** (`_DEFAULT_PRESETS_TEMPLATE` in presets.py): `budget-mm2k` and `budget-cl2k`, both 26px white border, textless posters and fixed text boxes; mm2k draws `{title}` as text, cl2k uses the logo with a `{season}` caption on season posters. Shipped without overlay links.
+- **Starter fonts** — `/api/presets/default-template` now includes `_fonts` (`STARTER_FONTS` in universal.py: Arimo, Roboto, Inter, Montserrat, Lato, Comfortaa, Bebas Neue; all OFL/Apache 2.0, fetched from Kometa's GitHub repos, not shipped). `/api/presets/import` downloads those plus every `font_family` the imported presets use, in a background thread (`prefetch_fonts()`); fonts already on disk or unknown names are skipped.
+
+### Bug Fixes
+- **Arial on Docker** — Arial isn't free to ship and isn't in the image, so presets using "Arial"/"Arial Bold" (the starters included) fell back to DejaVu Sans. `_OPEN_SUBSTITUTES` maps Arial/Helvetica to Arimo (metric-compatible, Apache 2.0) when the real font isn't installed; it's tried after local and system fonts.
+- Kometa Creator font names: `Bebas-Regular` now points to upstream's renamed `BebasNeue-Regular.ttf`, `Helvetica-Bold` (commercial, removed upstream) falls back to Arimo Bold, and `PlusJakartaSans-Bold` was added. A font already in `config/fonts_cache/` is always used first by exact name, so installs that downloaded `Helvetica-Bold.ttf` or `Bebas-Regular.ttf` earlier keep using them. A failed download isn't retried on every render (until restart).
+
 ## v1.8.14 (2026-10-23) — `dev-overlays` branch
 
 ### New Features

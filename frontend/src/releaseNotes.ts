@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.15',
+    date: '2026-10-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Two new starter presets with a white border: budget-mm2k (the title as text) and budget-cl2k (the logo, with the season number on season posters). New installs get them during setup; existing installs can add them with Template Manager → Import Simposter defaults.',
+          'Importing the Simposter defaults also downloads a set of free fonts (Arimo, Roboto, Inter, Montserrat, Lato, Comfortaa, Bebas Neue), so they show in the font lists and are ready to use. Fonts that imported presets use are downloaded too.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Presets that use Arial (including the Simposter starters) no longer fall back to a different-looking font on Docker, where Arial isn\'t installed: they use Arimo, a free font with the same shape and spacing.',
+          'The Bebas font from Kometa\'s font collection loads again (it was renamed to Bebas Neue).'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.14',
     date: '2026-10-23',
     sections: [

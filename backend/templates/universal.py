@@ -1,7 +1,7 @@
 # backend/templates/universal.py
 # Universal template with full creative controls for cinematic posters
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from PIL import Image, ImageDraw, ImageOps, ImageEnhance, ImageFilter, ImageChops, ImageFont
 import random
 import numpy as np
@@ -167,16 +167,20 @@ _KOMETA_REMOTE_FONTS_BASE_URL = (
 )
 _KOMETA_REMOTE_FONTS = {
     "barlowregular": "Barlow-Regular.ttf",
-    "bebasregular": "Bebas-Regular.ttf",
+    # Upstream renamed Bebas-Regular to BebasNeue-Regular; keep the old name working.
+    "bebasregular": "BebasNeue-Regular.ttf",
+    "bebasneue": "BebasNeue-Regular.ttf",
+    "bebasneueregular": "BebasNeue-Regular.ttf",
     "boecklinsuniverse": "BoecklinsUniverse.ttf",
     "boogalooregular": "Boogaloo-Regular.ttf",
     "cherrycreamsoda": "CherryCreamSoda-Regular.ttf",
     "cherrycreamsodaregular": "CherryCreamSoda-Regular.ttf",
     "comfortaamedium": "Comfortaa-Medium.ttf",
-    "helveticabold": "Helvetica-Bold.ttf",
     "jurabold": "Jura-Bold.ttf",
     "limelightregular": "Limelight-Regular.ttf",
     "monoton": "Monoton-Regular.ttf",
+    "plusjakartasans": "PlusJakartaSans-Bold.ttf",
+    "plusjakartasansbold": "PlusJakartaSans-Bold.ttf",
     "monotonregular": "Monoton-Regular.ttf",
     "pressstart2p": "Press-Start-2P.ttf",
     "righteous": "Righteous-Regular.ttf",
@@ -317,6 +321,32 @@ _KOMETA_REPO_FONTS = {_n.rsplit(".", 1)[0].lower().replace("-", "").replace("_",
 )}
 
 
+# Open look-alikes for common fonts that aren't free to ship (and aren't in the
+# Docker image): a preset naming "Arial" renders with Arimo, Google's
+# metric-compatible Arial replacement (Apache 2.0), instead of falling back to
+# DejaVu Sans. Only used when the real font isn't installed.
+_OPEN_SUBSTITUTES = {
+    "arial": ("Arimo-Regular", "Arimo-Bold"),
+    "arialbold": ("Arimo-Bold", "Arimo-Bold"),
+    "arialregular": ("Arimo-Regular", "Arimo-Bold"),
+    "helvetica": ("Arimo-Regular", "Arimo-Bold"),
+    "helveticaneue": ("Arimo-Regular", "Arimo-Bold"),
+    "helveticabold": ("Arimo-Bold", "Arimo-Bold"),
+}
+
+# Fonts downloaded when the Simposter defaults are imported, so they're ready
+# (and in the font list) before first use. All open licenses (OFL/Apache 2.0),
+# fetched from Kometa's GitHub repos rather than shipped with Simposter.
+STARTER_FONTS = [
+    "Arimo-Regular", "Arimo-Bold",
+    "Roboto-Regular", "Roboto-Medium", "Roboto-Bold",
+    "Inter-Regular", "Inter-Bold",
+    "Montserrat-Regular", "Montserrat-Bold",
+    "Lato-Regular", "Lato-Bold",
+    "Comfortaa-Medium", "BebasNeue-Regular",
+]
+
+
 def _normalize_font_token(name: str) -> str:
     return "".join(c for c in (name or "").lower() if c.isalnum())
 
@@ -330,6 +360,9 @@ def _kometa_fonts_cache_dir() -> Path:
     return cache_dir
 
 
+_FAILED_FONT_FETCHES: set = set()
+
+
 def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     """
     Fetch-and-cache-on-first-use: if font_family matches one of the Kometa
@@ -341,6 +374,16 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     then PIL's default) still applies.
     """
     token = _normalize_font_token(font_family)
+    # A font already in the cache under this name is used as is. This keeps
+    # fonts working that upstream later renamed or removed (e.g. Helvetica-Bold,
+    # which isn't free to redistribute, or the old Bebas-Regular).
+    cache_dir = _kometa_fonts_cache_dir()
+    try:
+        for f in cache_dir.iterdir():
+            if f.suffix.lower() in (".ttf", ".otf", ".ttc") and _normalize_font_token(f.stem) == token:
+                return ImageFont.truetype(str(f), font_size)
+    except Exception:
+        pass
     filename = _KOMETA_REMOTE_FONTS.get(token)
     base_url = _KOMETA_REMOTE_FONTS_BASE_URL
     if not filename:
@@ -349,8 +392,10 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     if not filename:
         return None
 
-    cache_path = _kometa_fonts_cache_dir() / filename
+    cache_path = cache_dir / filename
     if not cache_path.exists():
+        if filename in _FAILED_FONT_FETCHES:
+            return None
         try:
             import requests
             resp = requests.get(base_url + filename, timeout=10)
@@ -359,6 +404,8 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
             logger.info("[FONT] Fetched and cached '%s' from Kometa-Team on GitHub", filename)
         except Exception as e:
             logger.debug("[FONT] Failed to fetch remote font '%s': %s", filename, e)
+            # Don't retry on every render; a restart tries again.
+            _FAILED_FONT_FETCHES.add(filename)
             return None
 
     try:
@@ -366,6 +413,42 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     except Exception as e:
         logger.debug("[FONT] Failed to load cached remote font %s: %s", cache_path, e)
         return None
+
+
+def _have_font_file(name: str) -> bool:
+    """A font file with exactly this name (any extension) is already on disk."""
+    low = (name or "").strip().lower()
+    dirs = [Path(settings.CONFIG_DIR) / "fonts", Path(__file__).resolve().parent.parent.parent / "config" / "fonts",
+            _kometa_fonts_cache_dir()]
+    for d in dirs:
+        try:
+            if d.is_dir() and any(f.stem.lower() == low and f.suffix.lower() in (".ttf", ".otf", ".ttc") for f in d.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def prefetch_fonts(names) -> List[str]:
+    """Download the Kometa/open fonts in `names` that aren't on disk yet (others
+    are ignored). Arial-like names fetch their open look-alike. Returns the
+    names that were fetched."""
+    fetched = []
+    wanted = []
+    for name in names or []:
+        name = str(name or "").strip()
+        if not name:
+            continue
+        substitute = _OPEN_SUBSTITUTES.get(_normalize_font_token(name))
+        wanted.extend(substitute if substitute else (name,))
+    for name in dict.fromkeys(wanted):
+        if _have_font_file(name):
+            continue
+        if _load_remote_kometa_font(name, 12, False) is not None:
+            fetched.append(name)
+    if fetched:
+        logger.info("[FONT] Downloaded %d font(s): %s", len(fetched), ", ".join(fetched))
+    return fetched
 
 
 def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
@@ -502,6 +585,14 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
             font_obj = scan_directory(sys_dir)
             if font_obj:
                 return font_obj
+
+    # 4b) Open look-alike for a font that isn't free to ship (Arial -> Arimo)
+    substitute = _OPEN_SUBSTITUTES.get(_normalize_font_token(font_family))
+    if substitute:
+        font_obj = _load_remote_kometa_font(substitute[1] if boldish else substitute[0], font_size, boldish)
+        if font_obj:
+            logger.debug("[FONT] Using %s in place of '%s'", substitute[1] if boldish else substitute[0], font_family)
+            return font_obj
 
     # 4) Common font name aliases as fallback
     # Map font families to their actual file names on different systems
