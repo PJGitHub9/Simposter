@@ -93,6 +93,12 @@ def _apply_rate_limit():
         _rate_limit_requests.append(now)
 
 
+def find_tmdb_ids_by_imdb(imdb_id: str) -> List[int]:
+    """TMDb ids (movies, then shows) that TMDb links to this IMDb id."""
+    data = _cached_tmdb_get(f"/find/{imdb_id}", {"external_source": "imdb_id"})
+    return [int(r["id"]) for key in ("movie_results", "tv_results") for r in (data.get(key) or []) if r.get("id")]
+
+
 def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if not settings.TMDB_API_KEY:
         logger.error("[TMDB] TMDB_API_KEY not set")

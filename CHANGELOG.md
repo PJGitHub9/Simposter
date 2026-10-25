@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.16 (2026-10-25) — `dev-overlays` branch
+
+### Bug Fixes
+- **Several TMDb ids on one Plex item** — `extract_tmdb_id_from_metadata()` used the first `tmdb://` GUID; Plex can keep an old one (seen: an entry for the film's working title). With more than one, `_pick_tmdb_id()` uses the id TMDb's `/find/{imdb}` returns for the item's IMDb GUID (`tmdb_client.find_tmdb_ids_by_imdb()`); no IMDb id or no match keeps the first. Picks are cached per process and logged. Stored rows are corrected by the next Plex scan.
+
 ## v1.8.15 (2026-10-23) — `dev-overlays` branch
 
 ### New Features

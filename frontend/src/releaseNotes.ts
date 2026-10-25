@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.16',
+    date: '2026-10-25',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Plex items with more than one TMDb ID (Plex sometimes keeps an old one) now use the right ID, the one TMDb links to the item\'s IMDb ID. Before, the first one was used, which could fetch art for the wrong movie and show the item twice in a group with Jellyfin/Emby. Run a library scan to correct existing items.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.15',
     date: '2026-10-23',
     sections: [

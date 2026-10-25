@@ -763,12 +763,45 @@ def extract_tmdb_id_from_metadata(xml_text: str) -> Optional[int]:
         logger.debug("Failed to parse XML metadata: %s", e)
         return None
 
+    tmdb_ids: List[int] = []
+    imdb_id = None
     for g in root.findall(".//Guid"):
         gid = g.get("id") or ""
         match = re.search(r"(?:tmdb|themoviedb)://(\d+)", gid)
-        if match:
-            return int(match.group(1))
-    return None
+        if match and int(match.group(1)) not in tmdb_ids:
+            tmdb_ids.append(int(match.group(1)))
+        imdb = re.search(r"imdb://(tt\d+)", gid)
+        if imdb and not imdb_id:
+            imdb_id = imdb.group(1)
+    if len(tmdb_ids) > 1:
+        return _pick_tmdb_id(tmdb_ids, imdb_id)
+    return tmdb_ids[0] if tmdb_ids else None
+
+
+# (tmdb ids, imdb id) -> chosen id, so a scan doesn't ask TMDb again for every item.
+_TMDB_PICKS: Dict[tuple, int] = {}
+
+
+def _pick_tmdb_id(tmdb_ids: List[int], imdb_id: Optional[str]) -> int:
+    """Plex sometimes attaches two TMDb ids to one item (e.g. an old entry for
+    the film's working title plus the real one). Use the one TMDb itself
+    links to the item's IMDb id; without an IMDb id or a match, keep the
+    first, as before."""
+    key = (tuple(tmdb_ids), imdb_id)
+    if key in _TMDB_PICKS:
+        return _TMDB_PICKS[key]
+    chosen = tmdb_ids[0]
+    if imdb_id:
+        try:
+            from .tmdb_client import find_tmdb_ids_by_imdb
+            matches = [i for i in find_tmdb_ids_by_imdb(imdb_id) if i in tmdb_ids]
+            if matches:
+                chosen = matches[0]
+        except Exception as e:
+            logger.debug("[TMDB] Couldn't check IMDb %s against TMDb ids %s: %s", imdb_id, tmdb_ids, e)
+    logger.info("[TMDB] Plex lists several TMDb ids %s (IMDb %s); using %s", tmdb_ids, imdb_id or "none", chosen)
+    _TMDB_PICKS[key] = chosen
+    return chosen
 
 
 def extract_tvdb_id_from_metadata(xml_text: str) -> Optional[int]:
