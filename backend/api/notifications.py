@@ -50,11 +50,12 @@ def _get_notification_settings() -> Dict[str, Any]:
 
 
 def _library_passes_filter(notify_libraries: List[str], library_id: Optional[str]) -> bool:
-    """Library filter, group-aware. The filter list holds library ids picked in
-    Settings -> Notifications; a library passes when it's in the list OR any
-    library in its library group is. Without this, a send to a group's
-    Jellyfin/Emby library was dropped whenever only its Plex library (or the
-    other way round) had been picked, even though they're the same library."""
+    """Library filter, group-aware. Settings -> Notifications stores picked
+    library groups as "group:<id>"; older installs stored plain library ids,
+    which still work. A library passes when its group is picked, or when it
+    (or any library in its group) is in the list. Without the group check, a
+    send to a group's Jellyfin/Emby library was dropped whenever only its Plex
+    library (or the other way round) had been picked."""
     if not notify_libraries or not library_id:
         return True
     wanted = {str(x) for x in notify_libraries}
@@ -64,7 +65,9 @@ def _library_passes_filter(notify_libraries: List[str], library_id: Optional[str
         ui_settings = db.get_ui_settings() or {}
         for group in ui_settings.get("libraryGroups", []) or []:
             ids = {str(m.get("libraryId")) for m in group.get("members", []) or []}
-            if str(library_id) in ids and ids & wanted:
+            if str(library_id) not in ids:
+                continue
+            if f"group:{group.get('id')}" in wanted or ids & wanted:
                 return True
     except Exception:
         pass

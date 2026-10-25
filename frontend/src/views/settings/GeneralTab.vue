@@ -78,6 +78,15 @@ const ratingSources = [
   { value: 'myanimelist', label: 'MyAnimeList' },
   { value: 'score', label: 'MDBList score' },
 ]
+// Planned rating/list sources, shown greyed out (no settings yet).
+const upcomingSources = [
+  { name: 'AniList', note: 'Anime scores and lists.' },
+  { name: 'MyAnimeList', note: 'Anime scores and lists.' },
+  { name: 'SIMKL', note: 'Ratings and lists for movies, shows and anime.' },
+  { name: 'WeTrakr', note: 'Ratings and lists.' },
+  { name: 'Floppy', note: 'Your own self-hosted ratings and lists, connected by URL.' },
+]
+
 const mdblistTesting = ref(false)
 const mdblistResult = ref<{ ok: boolean; message: string } | null>(null)
 async function testMdblist() {
@@ -360,6 +369,19 @@ const timezones = computed(() => {
       </div>
     </div>
 
+    <div class="section section-coming-soon" aria-disabled="true">
+      <h3>More rating &amp; list sources <span class="coming-soon-badge">Coming soon</span></h3>
+      <p class="section-description">
+        More places to get ratings and lists for overlays, alongside MDBList.
+      </p>
+      <div class="source-grid">
+        <div v-for="src in upcomingSources" :key="src.name" class="source-card">
+          <span class="source-name">{{ src.name }}</span>
+          <span class="help-text">{{ src.note }}</span>
+        </div>
+      </div>
+    </div>
+
     <div class="section">
       <button @click="emit('save')" class="primary" :disabled="!unsavedChanges">
         {{ unsavedChanges ? 'Save Changes' : 'No Changes' }}
@@ -369,6 +391,46 @@ const timezones = computed(() => {
 </template>
 
 <style scoped>
+.section-coming-soon {
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+}
+
+.coming-soon-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #9aa4b2);
+}
+
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.source-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 .section-description code,
 .help-text code {
   font-size: 0.85em;

@@ -243,90 +243,28 @@ const webhookInstructions = computed(() => {
   <div class="tab-content">
     <h2>Automation</h2>
 
-    <!-- Automatic Poster Generation -->
+    <!-- Webhooks -->
     <div class="section" :class="{ 'unsaved-changes': automationChanged }">
-      <h3>Automatic Poster Generation</h3>
+      <h3>Webhooks</h3>
       <p class="section-description">
-        Configure automatic poster generation and delivery via webhooks (Radarr, Sonarr, Tautulli).
-        Webhooks automatically trigger poster generation when new media is added.
+        Radarr, Sonarr and Tautulli can tell Simposter when something is added, and Simposter makes a poster for it.
+        Create the URL to paste into them with the generator below.
       </p>
-
       <label class="checkbox-label">
         <input type="checkbox" v-model="localWebhookAutoSend" />
-        <span>Automatically Send to Plex</span>
+        <span>Send webhook posters to your media servers</span>
       </label>
       <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, webhook-generated posters are automatically sent to Plex and replace the existing poster
+        When on, the poster is sent to the servers in the item's library group (Plex, Jellyfin, Emby) and replaces the current one.
+        When off, it's only made and saved.
       </p>
-
       <label class="checkbox-label">
         <input type="checkbox" v-model="localWebhookAlwaysRegenerateSeason" />
-        <span>Always Regenerate Season Poster</span>
+        <span>Always regenerate season posters</span>
       </label>
       <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, a new season poster is generated every time a new episode webhook is received. When disabled, season posters that have already been sent to Plex are skipped.
+        When on, every new-episode webhook makes a new season poster. When off, seasons that already have a Simposter poster are skipped.
       </p>
-
-      <label>
-        <span class="label-text">Existing Content — Poster Behaviour</span>
-        <select v-model="localExistingContentMode">
-          <option value="regenerate">Regenerate — always create a new poster</option>
-          <option value="resend">Resend — reuse the last sent poster if available</option>
-        </select>
-        <span class="help-text">
-          When a webhook or scheduled scan fires for a title that already has a Simposter-generated poster,
-          <strong>Resend</strong> pushes the cached rendered poster straight back to Plex without regenerating.
-          Useful when you have manually tuned a poster and don't want it overwritten by future Radarr/Sonarr events.
-        </span>
-      </label>
-
-      <label class="checkbox-label">
-        <input type="checkbox" v-model="localRetryUntilTemplateMet" />
-        <span>Retry Poster Generation Until Ideal Template Is Met</span>
-      </label>
-      <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, if a poster is generated but the ideal template conditions weren't met (e.g. a logo was required but none was available, or a textless poster was needed), Simposter will keep a retry queue and attempt to regenerate on the interval below. Once the ideal poster is created it stops retrying. A manual send always overrides and stops retries for that title.
-      </p>
-
-      <template v-if="localRetryUntilTemplateMet">
-        <label>
-          <span class="label-text">Retry Interval (hours)</span>
-          <input type="number" v-model.number="localRetryIntervalHours" min="1" max="720" step="1" style="width:100px" />
-          <span class="help-text">How often (in hours) to check the retry queue and attempt regeneration.</span>
-        </label>
-
-        <label>
-          <span class="label-text">Max Retry Attempts (0 = unlimited)</span>
-          <input type="number" v-model.number="localRetryMaxAttempts" min="0" max="9999" step="1" style="width:100px" />
-          <span class="help-text">Stop retrying after this many attempts. Set to 0 to retry indefinitely.</span>
-        </label>
-      </template>
-
-      <label>
-        <span class="label-text">Reuse Cached Poster For (days, 0 = disabled)</span>
-        <input type="number" v-model.number="localReuseCachedPosterDays" min="0" max="365" step="1" style="width:100px" />
-        <span class="help-text">
-          If a webhook or scheduled scan discovers what looks like a brand-new item, but a poster was already sent for the same TMDb title within this many days, Simposter resends that cached poster instead of generating a fresh one. Protects against a tool like Radarr/Sonarr (or something re-grabbing a trailer file) causing Plex to re-match an item under a new internal ID — which otherwise looks identical to a genuinely new library addition, and would silently overwrite a poster you already tuned. Only applies to webhook/auto-generate — manual batch, save, and send always render fresh.
-        </span>
-      </label>
-
-      <!-- The global "Labels to Remove After Sending" field (webhookAutoLabels) was removed
-           from this UI — it duplicated Settings → Libraries' per-library "Default Labels to
-           Remove", which is the actually-used mechanism (and more precise, since it's scoped
-           per library). The underlying webhookAutoLabels setting/merge logic is untouched
-           server-side for any install that already has a value stored there; it's just no
-           longer editable from this tab. -->
-
-      <label>
-        <span class="label-text">Label to Add After Sending</span>
-        <input
-          type="text"
-          v-model="localLabelToAdd"
-          placeholder="e.g. Simposter"
-        />
-        <span class="help-text">Optional — tags an item with this label after Simposter successfully sends a poster to Plex, so you can see (or filter/smart-collection on) which items got a Simposter-generated poster. Leave blank to disable. Applies to every send path: manual, batch, webhook, auto-generate, and resend.</span>
-      </label>
-
       <label>
         <span class="label-text">Webhook Secret (optional)</span>
         <input
@@ -462,6 +400,80 @@ const webhookInstructions = computed(() => {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Items that already have a poster -->
+    <div class="section" :class="{ 'unsaved-changes': automationChanged }">
+      <h3>Items that already have a poster</h3>
+      <p class="section-description">
+        What webhooks and library scans do when they find something Simposter has already made a poster for.
+      </p>
+      <label>
+        <span class="label-text">When an item already has a Simposter poster</span>
+        <select v-model="localExistingContentMode">
+          <option value="regenerate">Regenerate — always create a new poster</option>
+          <option value="resend">Resend — reuse the last sent poster if available</option>
+        </select>
+        <span class="help-text">
+          When a webhook or scheduled scan fires for a title that already has a Simposter-generated poster,
+          <strong>Resend</strong> sends the last poster Simposter made for it again, without regenerating.
+          Useful when you have manually tuned a poster and don't want it overwritten by future Radarr/Sonarr events.
+        </span>
+      </label>
+      <label>
+        <span class="label-text">Reuse Cached Poster For (days, 0 = disabled)</span>
+        <input type="number" v-model.number="localReuseCachedPosterDays" min="0" max="365" step="1" style="width:100px" />
+        <span class="help-text">
+          If a webhook or scheduled scan discovers what looks like a brand-new item, but a poster was already sent for the same TMDb title within this many days, Simposter resends that cached poster instead of generating a fresh one. Protects against a tool like Radarr/Sonarr (or something re-grabbing a trailer file) causing the media server to re-match an item under a new internal ID — which otherwise looks identical to a genuinely new library addition, and would silently overwrite a poster you already tuned. Only applies to webhook/auto-generate — manual batch, save, and send always render fresh.
+        </span>
+      </label>
+    </div>
+
+    <!-- Retry queue -->
+    <div class="section" :class="{ 'unsaved-changes': automationChanged }">
+      <h3>Retry queue</h3>
+      <p class="section-description">
+        Try again later when a poster couldn't follow its preset, for example when the logo or textless poster it needs doesn't exist yet.
+        Queued items are listed under History &rarr; Retry Queue.
+      </p>
+      <label class="checkbox-label">
+        <input type="checkbox" v-model="localRetryUntilTemplateMet" />
+        <span>Retry Poster Generation Until Ideal Template Is Met</span>
+      </label>
+      <p class="help-text" style="margin: -8px 0 16px 0;">
+        When enabled, if a poster is generated but the ideal template conditions weren't met (e.g. a logo was required but none was available, or a textless poster was needed), Simposter will keep a retry queue and attempt to regenerate on the interval below. Once the ideal poster is created it stops retrying. A manual send always overrides and stops retries for that title.
+      </p>
+
+      <template v-if="localRetryUntilTemplateMet">
+        <label>
+          <span class="label-text">Retry Interval (hours)</span>
+          <input type="number" v-model.number="localRetryIntervalHours" min="1" max="720" step="1" style="width:100px" />
+          <span class="help-text">How often (in hours) to check the retry queue and attempt regeneration.</span>
+        </label>
+
+        <label>
+          <span class="label-text">Max Retry Attempts (0 = unlimited)</span>
+          <input type="number" v-model.number="localRetryMaxAttempts" min="0" max="9999" step="1" style="width:100px" />
+          <span class="help-text">Stop retrying after this many attempts. Set to 0 to retry indefinitely.</span>
+        </label>
+      </template>
+    </div>
+
+    <!-- Plex labels -->
+    <div class="section" :class="{ 'unsaved-changes': automationChanged }">
+      <h3>Plex labels <span class="plex-only-tag">Plex only</span></h3>
+      <p class="section-description">
+        Jellyfin and Emby don't use labels, so this only affects Plex. Labels to remove after sending are set per library in Settings &rarr; Libraries.
+      </p>
+      <label>
+        <span class="label-text">Label to add after sending</span>
+        <input
+          type="text"
+          v-model="localLabelToAdd"
+          placeholder="e.g. Simposter"
+        />
+        <span class="help-text">Optional — tags an item with this label after Simposter successfully sends a poster to Plex, so you can see (or filter/smart-collection on) which items got a Simposter-generated poster. Leave blank to disable. Applies to every send path: manual, batch, webhook, auto-generate, and resend.</span>
+      </label>
     </div>
 
     <div class="actions">
@@ -757,5 +769,18 @@ button.primary:hover:not(:disabled) {
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.plex-only-tag {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(229, 160, 13, 0.15);
+  color: #e5a00d;
 }
 </style>

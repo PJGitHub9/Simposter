@@ -137,19 +137,10 @@ const localAppriseNotifyOverlayRefresh = computed({
   set: (val) => emit('update:appriseNotifyOverlayRefresh', val)
 })
 
-const isAppriseLibrarySelected = (libraryId: string) => {
-  return props.appriseNotifyLibraries.includes(libraryId)
-}
+const isAppriseLibrarySelected = (id: string) => isPicked(props.appriseNotifyLibraries, id)
 
-const toggleAppriseLibrary = (libraryId: string) => {
-  const current = [...props.appriseNotifyLibraries]
-  const index = current.indexOf(libraryId)
-  if (index > -1) {
-    current.splice(index, 1)
-  } else {
-    current.push(libraryId)
-  }
-  emit('update:appriseNotifyLibraries', current)
+const toggleAppriseLibrary = (id: string) => {
+  emit('update:appriseNotifyLibraries', togglePick(props.appriseNotifyLibraries, id))
 }
 
 const selectAllAppriseLibraries = () => {
@@ -208,53 +199,63 @@ const testApprise = async () => {
 
 const settingsStore = useSettingsStore()
 
-// Combine all libraries for display
-const allLibraries = computed(() => {
-  const movieLibs = props.libraries.map(lib => ({
-    ...lib,
-    type: 'movie' as const,
-    label: lib.displayName || lib.title || lib.id
-  }))
-  const tvLibs = props.tvShowLibraries.map(lib => ({
-    ...lib,
-    type: 'tv' as const,
-    label: `${lib.displayName || lib.title || lib.id} (TV)`
-  }))
-  // Jellyfin/Emby libraries live only in Library Groups, not the Plex
-  // mappings above. Without them here they could never be ticked -- and once
-  // ANY library was ticked, the backend's filter blocked every notification
-  // for them.
-  const plexIds = new Set([...movieLibs, ...tvLibs].map(l => String(l.id)))
-  const otherLibs: { id: string; type: 'movie' | 'tv'; label: string }[] = []
+// One checkbox per library group (Plex, Jellyfin and Emby libraries of the same
+// group together), stored as "group:<id>". Older settings stored plain library
+// ids; a group counts as picked when any of its libraries is, and toggling it
+// replaces those ids with the group entry.
+type NotifyOption = { id: string; type: 'movie' | 'tv'; label: string; libraryIds: string[] }
+
+const allLibraries = computed<NotifyOption[]>(() => {
+  const options: NotifyOption[] = []
+  const grouped = new Set<string>()
   for (const g of settingsStore.libraryGroups.value || []) {
-    for (const m of g.members || []) {
-      if (m.serverId === 'plex-1' || !m.libraryId || plexIds.has(String(m.libraryId))) continue
-      plexIds.add(String(m.libraryId))
-      const tv = g.mediaType === 'tv'
-      const name = g.name || m.libraryName || m.libraryId
-      otherLibs.push({
-        id: String(m.libraryId),
+    const members = (g.members || []).filter(m => m.libraryId)
+    if (!members.length) continue
+    const ids = members.map(m => String(m.libraryId))
+    ids.forEach(id => grouped.add(id))
+    const servers = [...new Set(members.map(m => mediaServerLabel(m.serverId, settingsStore.mediaServers.value)))]
+    const tv = g.mediaType === 'tv'
+    const name = g.name || members[0]?.libraryName || ids[0]
+    options.push({
+      id: `group:${g.id}`,
+      type: tv ? 'tv' : 'movie',
+      label: `${name} (${servers.join(', ')}${tv ? ', TV' : ''})`,
+      libraryIds: ids,
+    })
+  }
+  // A Plex library that isn't in any group yet still gets a checkbox.
+  for (const [libs, tv] of [[props.libraries, false], [props.tvShowLibraries, true]] as const) {
+    for (const lib of libs) {
+      if (!lib.id || grouped.has(String(lib.id))) continue
+      options.push({
+        id: String(lib.id),
         type: tv ? 'tv' : 'movie',
-        label: `${name} (${mediaServerLabel(m.serverId, settingsStore.mediaServers.value)}${tv ? ', TV' : ''})`,
+        label: `${lib.displayName || lib.title || lib.id}${tv ? ' (TV)' : ''}`,
+        libraryIds: [String(lib.id)],
       })
     }
   }
-  return [...movieLibs, ...tvLibs, ...otherLibs]
+  return options
 })
 
-const isLibrarySelected = (libraryId: string) => {
-  return props.discordNotifyLibraries.includes(libraryId)
+const optionFor = (id: string) => allLibraries.value.find(o => o.id === id)
+
+const isPicked = (list: string[], id: string) => {
+  if (list.includes(id)) return true
+  const ids = optionFor(id)?.libraryIds || []
+  return ids.some(libId => list.includes(libId))
 }
 
-const toggleLibrary = (libraryId: string) => {
-  const current = [...props.discordNotifyLibraries]
-  const index = current.indexOf(libraryId)
-  if (index > -1) {
-    current.splice(index, 1)
-  } else {
-    current.push(libraryId)
-  }
-  emit('update:discordNotifyLibraries', current)
+const togglePick = (list: string[], id: string): string[] => {
+  const ids = new Set([id, ...(optionFor(id)?.libraryIds || [])])
+  const rest = list.filter(x => !ids.has(x))
+  return isPicked(list, id) ? rest : [...rest, id]
+}
+
+const isLibrarySelected = (id: string) => isPicked(props.discordNotifyLibraries, id)
+
+const toggleLibrary = (id: string) => {
+  emit('update:discordNotifyLibraries', togglePick(props.discordNotifyLibraries, id))
 }
 
 const selectAllLibraries = () => {
@@ -346,14 +347,14 @@ const testWebhook = async () => {
         <!-- Library Selection -->
         <div class="subsection">
           <div class="subsection-header">
-            <span class="label-text">Libraries to notify for</span>
+            <span class="label-text">Library groups to notify for</span>
             <div class="quick-actions">
               <button type="button" class="link-btn" @click="selectAllLibraries">Select All</button>
               <span class="separator">|</span>
               <button type="button" class="link-btn" @click="deselectAllLibraries">Deselect All</button>
             </div>
           </div>
-          <span class="help-text">Choose which libraries should trigger Discord notifications</span>
+          <span class="help-text">Choose which library groups send Discord notifications (each covers its Plex, Jellyfin and Emby libraries). None picked = all.</span>
 
           <div v-if="allLibraries.length > 0" class="libraries-grid">
             <label
@@ -370,7 +371,7 @@ const testWebhook = async () => {
             </label>
           </div>
           <p v-else class="no-libraries">
-            No libraries configured. Add libraries in the Libraries tab first.
+            No library groups yet. Add libraries in the Libraries tab first.
           </p>
         </div>
 
@@ -505,14 +506,14 @@ const testWebhook = async () => {
         <!-- Library selection -->
         <div class="subsection">
           <div class="subsection-header">
-            <span class="label-text">Libraries to notify for</span>
+            <span class="label-text">Library groups to notify for</span>
             <div class="quick-actions">
               <button type="button" class="link-btn" @click="selectAllAppriseLibraries">Select All</button>
               <span class="separator">|</span>
               <button type="button" class="link-btn" @click="deselectAllAppriseLibraries">Deselect All</button>
             </div>
           </div>
-          <span class="help-text">Choose which libraries should trigger Apprise notifications</span>
+          <span class="help-text">Choose which library groups send Apprise notifications (each covers its Plex, Jellyfin and Emby libraries). None picked = all.</span>
 
           <div v-if="allLibraries.length > 0" class="libraries-grid">
             <label
@@ -529,7 +530,7 @@ const testWebhook = async () => {
             </label>
           </div>
           <p v-else class="no-libraries">
-            No libraries configured. Add libraries in the Libraries tab first.
+            No library groups yet. Add libraries in the Libraries tab first.
           </p>
         </div>
 
