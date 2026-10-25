@@ -12,7 +12,8 @@ const emit = defineEmits<{
 
 const visible = ref(false)
 const missedNotes = ref<ReleaseNote[]>([])
-const activeMajorRelease = ref<MajorRelease | null>(null)
+// Milestones crossed since the last visit, newest first (at most two).
+const activeMajorReleases = ref<MajorRelease[]>([])
 
 // Compares two 'vX.Y.Z'-style version strings. Returns <0 if a<b, 0 if equal, >0 if a>b.
 function compareVersions(a: string, b: string): number {
@@ -35,12 +36,15 @@ onMounted(() => {
   // exists for. Fresh installs (no lastSeen) skip this — onboarding already covers
   // the intro for them, they don't need a "look what you missed" tour of the past.
   if (lastSeen) {
-    // Newest milestone crossed wins, so someone jumping several milestones sees the latest tour.
-    const crossed = [...majorReleases].reverse().find(
+    // Every milestone crossed, newest first, so someone coming from main sees
+    // both Jellyfin/Emby and the overlay overhaul, while someone coming from
+    // webui-overhaul-dev (already past v1.7.0) sees only the overlays. Capped at
+    // two so a very old install doesn't get a wall of tours.
+    const crossed = [...majorReleases].reverse().filter(
       (m) => compareVersions(APP_VERSION, m.version) >= 0 && compareVersions(lastSeen, m.version) < 0
-    )
-    if (crossed) {
-      activeMajorRelease.value = crossed
+    ).slice(0, 2)
+    if (crossed.length) {
+      activeMajorReleases.value = crossed
       visible.value = true
       return
     }
@@ -79,24 +83,27 @@ function viewFullChangelog() {
 <template>
   <Teleport to="body">
     <!-- Major-release highlight reel -->
-    <div v-if="visible && activeMajorRelease" class="announcement-overlay" @click.self="dismiss">
+    <div v-if="visible && activeMajorReleases.length" class="announcement-overlay" @click.self="dismiss">
       <div class="announcement-modal major glass">
         <div class="announcement-header major-header">
           <div>
-            <span class="major-eyebrow">Major Update</span>
-            <h2>{{ activeMajorRelease.title }}</h2>
+            <span class="major-eyebrow">{{ activeMajorReleases.length > 1 ? 'Major Updates' : 'Major Update' }}</span>
+            <h2>{{ activeMajorReleases.map(m => m.title).join(' + ') }}</h2>
           </div>
           <button class="close-btn" @click="dismiss">&times;</button>
         </div>
         <div class="announcement-body">
-          <p class="major-intro">{{ activeMajorRelease.intro }}</p>
-          <div class="highlight-grid">
-            <div v-for="h in activeMajorRelease.highlights" :key="h.title" class="highlight-card">
-              <div class="highlight-icon">{{ h.icon }}</div>
-              <div class="highlight-title">{{ h.title }}</div>
-              <div class="highlight-desc">{{ h.description }}</div>
+          <template v-for="m in activeMajorReleases" :key="m.version">
+            <h3 v-if="activeMajorReleases.length > 1" class="major-section-title">{{ m.title }}</h3>
+            <p class="major-intro">{{ m.intro }}</p>
+            <div class="highlight-grid">
+              <div v-for="h in m.highlights" :key="h.title" class="highlight-card">
+                <div class="highlight-icon">{{ h.icon }}</div>
+                <div class="highlight-title">{{ h.title }}</div>
+                <div class="highlight-desc">{{ h.description }}</div>
+              </div>
             </div>
-          </div>
+          </template>
         </div>
         <div class="announcement-footer">
           <button class="btn-link" @click="viewFullChangelog">View full changelog</button>
@@ -408,5 +415,14 @@ function viewFullChangelog() {
 
 :root[data-theme='light'] .release-date {
   color: #718096;
+}
+.major-section-title {
+  margin: 18px 0 6px;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+
+.major-section-title:first-child {
+  margin-top: 0;
 }
 </style>

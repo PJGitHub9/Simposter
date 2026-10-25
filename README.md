@@ -13,8 +13,9 @@
 - **Media Mirror** — keep posters, logos and backdrops in sync from one server to the others, on demand or on a schedule
 - **Multi-source artwork** — TMDb, TVDB, Fanart.tv, with configurable priority and fallback rules
 - **Overlays** — resolution, codec, audio, edition, studio and streaming badges, images and text with per-layer rules (file name, ratings, lists, show status, days since added…)
-- **Kometa overlay import** — bring in your Kometa overlay files (including UMTK/TSSK ones, kept in sync as they change), with MDBList ratings and lists
+- **Kometa overlay import** (beta) — bring in your Kometa overlay files (including UMTK/TSSK ones, kept in sync as they change), with MDBList ratings and lists
 - **Overlay Refresh** — re-render posters whose overlay would now look different (new rating, 4K upgrade, list change), on a schedule
+- **Changed outside Simposter** — notices when a poster, logo or backdrop it sent was changed on the server, and lets you put Simposter's back or keep the new one
 - **Batch edit** — apply a preset across your whole library in one run, with live progress
 - **Webhooks** — Radarr, Sonarr, and Tautulli, auto-generate on import (target a whole library group across servers)
 - **Scheduled scans** and a **smart retry queue** for hands-off automation

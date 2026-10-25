@@ -163,6 +163,11 @@ export const majorReleases: MajorRelease[] = [
         title: 'Scans that keep up',
         description: 'Library scans are much faster and now pick up posters changed outside Simposter (for example by Kometa) without a force refresh.',
       },
+      {
+        icon: '✏️',
+        title: 'A tidier poster editor',
+        description: 'Settings in tabs and collapsible cards, separate logo and text boxes you can drag right on the preview, guides, and backdrops as poster backgrounds.',
+      },
     ],
   },
   {
@@ -192,13 +197,23 @@ export const majorReleases: MajorRelease[] = [
       },
       {
         icon: '📥',
-        title: 'Kometa import',
-        description: 'Bring in your Kometa overlay files; Simposter maps what it can and tells you what it skipped.',
+        title: 'Kometa import (beta)',
+        description: 'Bring in your Kometa overlay files, or point Simposter at files another tool like UMTK keeps rewriting and it re-imports them on a schedule. It maps what it can and tells you what it skipped.',
       },
       {
         icon: '🔁',
         title: 'Overlay Refresh',
         description: 'Keep posters up to date when their overlay would change, e.g. a movie upgraded to 4K, on a schedule per library.',
+      },
+      {
+        icon: '🔔',
+        title: 'Changed outside Simposter',
+        description: 'Simposter notices when a poster, logo or backdrop it sent was changed on the server by something else. A badge marks it on the grid, and History lets you put Simposter\'s version back or keep the new one.',
+      },
+      {
+        icon: '🔤',
+        title: 'Starter presets and fonts',
+        description: 'Two new starter presets, a set of free fonts that comes with the Simposter defaults, and Kometa\'s own fonts for imported overlays.',
       },
       {
         icon: '🔔',

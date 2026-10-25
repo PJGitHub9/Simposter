@@ -137,6 +137,8 @@ Rename a layer with the pencil icon or by double-clicking its name. Hide rules f
 
 **📐 Overlays → Import Kometa** turns Kometa overlay files into Simposter overlays (one overlay per file).
 
+> **Beta.** Kometa import and live Kometa files work, but Kometa files vary a lot and some may still import slightly differently than Kometa draws them. Please report anything that looks off.
+
 1. Add the overlay `.yml` files, or **Paste YAML** to paste one in. Add the images and fonts they use alongside: loose files, a folder, or a zip.
 2. Pick the library type the files are for (**Movies** or **TV Shows**).
 3. **Check** shows a report per file and per overlay: what imported, what was skipped and why, and which images weren't found.
@@ -150,6 +152,7 @@ Then turn the overlays on in a preset (or the editor's Extras → Overlays).
 - Images from files, links (`url:`, `git:`) and Kometa's defaults (`default:`/`pmm:`). Linked images are downloaded into **Your images**.
 - Positions (`horizontal_align`/`vertical_align` and offsets), background boxes (`back_color`, size, radius, padding, border), text with `text(…)` and variables, fonts, outlines.
 - `group`/`weight` (as badge sets) and `suppress_overlays` (as hide rules).
+- `queues` (layers fill a list of positions, highest weight first), `blur`, images next to text (addon images) and `font_style` for variable fonts.
 - Filters: resolution, codecs, channels, language, file path, edition, labels, year, title, studio, ratings, `added`, `tvdb_status`/`tmdb_status`, and the usual modifiers (`.not`, `.regex`, `.gte`, `.lte`, …). Comma-separated values (`label.not: Coming Soon, RequestNeeded`) are split, as in Kometa.
 - Builders: `tmdb_movie`, `tmdb_show` and `tvdb_show` ID lists, and `mdblist_list`.
 
@@ -157,14 +160,16 @@ Then turn the overlays on in a preset (or the editor's Extras → Overlays).
 
 These are listed in the import report:
 
-- `queues` and `blur`
-- text addon images, `font_style`
 - builders other than the ID lists and MDBList lists (Trakt, Plex searches, other list sources). Those layers are imported but hidden, so you can see and edit them.
 - unknown filters (imported but hidden, with a note on the rule)
 - text overlays with no `horizontal_offset`/`vertical_offset` (Kometa rejects these too)
 - `text()` with nothing inside (Kometa draws nothing for it either)
 
 An ID list (`tmdb_movie: 123, 456`) is copied at import time. If another tool rewrites the file regularly, use [Live Kometa files](#live-kometa-files) so the list stays current.
+
+### Fonts
+
+Kometa overlay files name font files, and Kometa's default is `Roboto-Medium.ttf`. Fonts you add with the import are used first. Otherwise Simposter downloads the font from Kometa's own font collection the first time it's needed, so imported text looks the same as in Kometa. A font it can't find anywhere falls back to a regular-weight system font.
 
 ### UMTK and TSSK
 
@@ -206,9 +211,9 @@ How it works and its limits:
 
 ## Live Kometa files
 
-Some tools rewrite their Kometa overlay files every day (UMTK and TSSK update their item lists). **📐 Overlays → Advanced → Live Kometa files** keeps an overlay in step with such a file:
+Some tools rewrite their Kometa overlay files every day (UMTK and TSSK update their item lists). **📐 Overlays → Advanced → Live Kometa files** (beta) keeps an overlay in step with such a file:
 
-- **File path on the Simposter server**: the `.yml` file. In Docker, mount the folder with the file into the Simposter container (for example `- /mnt/user/appdata/kometa/config:/kometa/config:ro`) and use the path inside the container.
+- **File path on the Simposter server**: the `.yml` file. **Browse…** lists the folders on the Simposter server so you can pick it. In Docker, mount the folder with the file into the Simposter container (for example `- /mnt/user/appdata/kometa/config:/kometa/config:ro`) and use the path inside the container.
 - **Overlay name** (optional), **Library type** (Movies / TV shows), and **Check the file** (every hour to once a day).
 - **When it changes, re-render posters whose overlay now looks different**: runs Overlay Refresh for every library of that type after the file changes.
 

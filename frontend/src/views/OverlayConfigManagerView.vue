@@ -2229,7 +2229,7 @@ onMounted(() => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
-            Import Kometa
+            Import Kometa <span class="beta-badge" title="Beta: works, but may still have small issues. Please report anything odd.">Beta</span>
           </button>
           <button class="btn-primary-sm" @click="createNewConfig">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2320,9 +2320,9 @@ onMounted(() => {
           <h2>Advanced</h2>
         </button>
       </div>
-      <p v-if="!showAdvanced" class="section-note">Live Kometa files: overlay files another tool keeps rewriting (like UMTK), re-imported automatically.</p>
+      <p v-if="!showAdvanced" class="section-note">Live Kometa files <span class="beta-badge" title="Beta: works, but may still have small issues. Please report anything odd.">Beta</span>: overlay files another tool keeps rewriting (like UMTK), re-imported automatically.</p>
       <template v-else>
-        <h3 class="advanced-sub">Live Kometa files</h3>
+        <h3 class="advanced-sub">Live Kometa files <span class="beta-badge" title="Beta: works, but may still have small issues. Please report anything odd.">Beta</span></h3>
         <LiveKometaFiles @changed="loadConfigs" @open-overlay="openOverlayById" />
       </template>
     </div>
@@ -3891,5 +3891,18 @@ onMounted(() => {
   .editor-columns { grid-template-columns: 1fr; }
   .preview-column { position: static; order: -1; }
   .upload-modal { width: 96%; }
+}
+
+.beta-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(139, 92, 246, 0.18);
+  color: #a78bfa;
 }
 </style>

@@ -204,7 +204,7 @@ const KIND_LABEL: Record<string, string> = {
     <div class="ki-backdrop" @click.self="emit('close')">
       <div class="ki-modal">
         <div class="ki-head">
-          <h3>Import Kometa overlays</h3>
+          <h3>Import Kometa overlays <span class="beta-badge" title="Beta: works, but may still have small issues. Please report anything odd.">Beta</span></h3>
           <button class="ki-x" title="Close" @click="emit('close')">✕</button>
         </div>
 
@@ -435,4 +435,17 @@ const KIND_LABEL: Record<string, string> = {
 .ki-done { display: flex; flex-direction: column; gap: 0.4rem; color: var(--text-primary, #fff); font-size: 0.85rem; }
 .ki-done-title { font-weight: 700; font-size: 0.95rem; color: var(--accent, #3dd6b7); }
 .ki-done p { margin: 0; }
+
+.beta-badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(139, 92, 246, 0.18);
+  color: #a78bfa;
+}
 </style>

@@ -152,13 +152,21 @@ For batches instead of one at a time, see **Batch Processing** in [COLLECTIONS_A
 | **Libraries** | **Library groups** (link the same library across Plex/Jellyfin/Emby — see [MEDIA_SERVERS.md](MEDIA_SERVERS.md)), auto-generate preset per group, Merge items, webhook ignore labels, per-library default labels to remove, **Kometa Compatibility** (auto-checks "Overlay" for any library added from now on), add/remove libraries (removing purges that library's cache/DB rows, keeping History) |
 | **Media Servers** | Add, name, test and remove Plex, Jellyfin and Emby servers (removing one purges its cached data on save) |
 | **Output** | Save-location path templates (with Kometa-compatible presets, including a `{folder}` variable that matches Radarr/Sonarr's real on-disk folder names) for movies, TV shows, and collections; batch subfolder option; image format/quality |
-| **Automation** | Webhook URL generator, automatic poster generation (auto-send, retry queue, existing content mode, webhook secret), **Label to Add After Sending** (optional — tags an item after a poster's sent, so you can filter/smart-collection on what Simposter has touched), **Reuse Cached Poster For (days)** (optional — protects a hand-tuned poster from being silently regenerated if Radarr/Sonarr/a similar tool causes Plex to re-match the item under a new internal ID) |
+| **Automation** | **Webhooks** (auto-send to your media servers, season posters, webhook secret) and the webhook URL generator; **Items that already have a poster** (regenerate or resend, and **Reuse Cached Poster For (days)**, which protects a hand-tuned poster when Radarr/Sonarr or a similar tool makes the server re-match an item under a new ID); the **Retry queue**; **Plex labels** (an optional label added after a poster is sent) |
 | **Performance** | Concurrent renders (up to 10 — see the tip below), overlay cache, API rate limits, cache management |
-| **Notifications** | Discord webhook and Apprise URLs, per-event toggles (batch / manual / webhook / auto-generate / Media Mirror / Overlay Refresh), per-library filter |
+| **Notifications** | Discord webhook and Apprise URLs, per-event toggles (batch / manual / webhook / auto-generate / Media Mirror / Overlay Refresh), which library groups to notify for |
 | **Advanced** | **Run Startup Wizard** button, API source priority order, database backup/restore |
 | **Cleanup** | Find and clear Simposter's own stale cache (reversible), compact Simposter's database, scheduled cleanup, and **Media Server Maintenance** for each of your servers |
 
 > **Tip:** if batch renders feel slow, try raising **Concurrent Rendering** in Performance — it's not capped at a low number the way some tools are. Going from 2 to ~8-9 workers has been measured cutting total batch time by more than half on real libraries, at the cost of each individual item taking a bit longer (worth it for the total time saved). Overlay cache should also stay on; it's the single biggest speed lever for the Uniform Logo template.
+
+---
+
+## Fonts
+
+- **Starter fonts**: importing the Simposter defaults (in the setup wizard, or Template Manager → **Import Simposter defaults**) also downloads a set of free fonts: Arimo, Roboto, Inter, Montserrat, Lato, Comfortaa and Bebas Neue. Fonts used by any presets you import are downloaded too.
+- **Arial and Helvetica** aren't free to ship, and the Docker image doesn't have them. When a preset asks for one and it isn't installed, Simposter uses Arimo, a free font with the same shape and spacing as Arial.
+- **Your own fonts**: put `.ttf`/`.otf` files in `config/fonts` and use the file name (without extension) as the font name. They take priority over everything else, so you can use a font you own, like Helvetica.
 
 ---
 
@@ -193,7 +201,8 @@ config/
 │   └── poster_renders/    # Cached rendered posters for resend mode
 ├── overlays/              # Pre-rendered effect layers (matte/fade/vignette), rebuilt automatically
 ├── assets/                # Overlay images (uploaded or imported from Kometa files)
-├── fonts/                 # Fonts installed from Kometa imports
+├── fonts/                 # Your own fonts, and fonts added with Kometa imports
+├── fonts_cache/           # Fonts Simposter downloaded (starter fonts, Kometa's fonts)
 └── output/                # Saved poster files
     └── {Library}/
         └── {Title} ({Year}).jpg

@@ -166,6 +166,16 @@ Every poster generation is logged in the **History** tab:
 
 ![History](https://github.com/user-attachments/assets/2e7b7b23-770e-463e-91e6-62f0d061fff1)
 
+### Changed outside Simposter
+
+After Simposter sends a poster, logo or backdrop, it remembers what it looked like. When a library scan sees that the server's copy changed (Kometa adding an overlay, a manual edit, another tool), it compares the two and lists real changes under **History → Changed Outside Simposter**, with Simposter's version next to the server's. Small differences from the server re-saving or resizing the image don't count.
+
+- Choose what happens when a change is found: don't check, only list it, list it and send a notification, or put Simposter's version back automatically. If another tool keeps changing it, the two will take turns, so automatic put-back is best used when nothing else manages that item's art.
+- Per item: **Put Simposter's back** sends what Simposter last sent, **Keep server's** accepts the change and stops reporting it.
+- A **Changed** badge marks these items on the Movies, TV Shows, Logos and Backdrops grids; click it to open the list.
+
+Only art Simposter sent is tracked, and only from the version that added this onward.
+
 
 
 ---
