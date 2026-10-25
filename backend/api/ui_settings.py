@@ -226,6 +226,10 @@ def _apply_runtime_settings(merged: dict):
     fanart_key = fanart_data.get("apiKey") or ""
     object.__setattr__(settings, "FANART_API_KEY", fanart_key)
 
+    # MDBList runtime key (ratings and lists for overlays)
+    mdblist_data = merged.get("mdblist", {}) or {}
+    object.__setattr__(settings, "MDBLIST_API_KEY", mdblist_data.get("apiKey") or "")
+
     # Library mappings for name/id resolution
     object.__setattr__(settings, "PLEX_LIBRARY_MAPPINGS", library_mappings)
 
@@ -279,6 +283,7 @@ def _env_overrides() -> dict:
     tmdb_key = os.getenv("TMDB_API_KEY")
     tvdb_key = os.getenv("TVDB_API_KEY")
     fanart_key = os.getenv("FANART_API_KEY")
+    mdblist_key = os.getenv("MDBLIST_API_KEY")
 
     if plex_url:
         out.setdefault("plex", {})["url"] = plex_url
@@ -294,6 +299,8 @@ def _env_overrides() -> dict:
         out.setdefault("tvdb", {})["apiKey"] = tvdb_key
     if fanart_key:
         out.setdefault("fanart", {})["apiKey"] = fanart_key
+    if mdblist_key:
+        out.setdefault("mdblist", {})["apiKey"] = mdblist_key
     return out
 
 
@@ -352,7 +359,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
         # Merge with defaults so newly added fields are included
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False)
         merged = {**defaults, **data}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance", "automation", "scheduler", "notifications"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {**defaults.get(nested_key, {}), **data.get(nested_key, {})}
 
         # ENV variables are now copied to DB on container startup instead of runtime overrides
@@ -422,7 +429,7 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
         incoming = _restore_unchanged_secrets(incoming, current)
         incoming = _restore_unchanged_media_server_secrets(incoming, current)
         merged = {**defaults, **current, **incoming}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "imageQuality", "performance", "automation", "scheduler", "notifications"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {
                 **defaults.get(nested_key, {}),
                 **current.get(nested_key, {}),
@@ -460,6 +467,34 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
                     list_key, len(current_list), "y" if len(current_list) == 1 else "ies",
                 )
                 merged[list_key] = current_list
+
+        # overlayRefresh is edited only from its own page (saved straight to the
+        # DB), so a Settings save -- which sends whatever the store loaded --
+        # must not overwrite it with an older copy.
+        stored_refresh = {g.get("id"): g.get("overlayRefresh") for g in (current.get("libraryGroups") or []) if isinstance(g, dict)}
+        for g in merged.get("libraryGroups") or []:
+            if isinstance(g, dict) and g.get("id") in stored_refresh:
+                g["overlayRefresh"] = stored_refresh[g.get("id")]
+
+        # Media Mirror's config is also saved from its own page, so keep the
+        # stored copy. The one Settings-side edit to it is removing a media
+        # server, which drops that server from the mirror: redo that here for
+        # every server that was saved before but is missing from this save.
+        stored_mirror = {g.get("id"): g.get("mirror") for g in (current.get("libraryGroups") or []) if isinstance(g, dict)}
+        before_ids = {s.get("id") for s in (current.get("mediaServers") or []) if isinstance(s, dict)}
+        after_ids = {s.get("id") for s in (merged.get("mediaServers") or []) if isinstance(s, dict)}
+        removed_ids = before_ids - after_ids
+        for g in merged.get("libraryGroups") or []:
+            if not isinstance(g, dict) or g.get("id") not in stored_mirror:
+                continue
+            mirror = stored_mirror[g.get("id")]
+            if isinstance(mirror, dict) and removed_ids:
+                mirror = dict(mirror)
+                mirror["targetServerIds"] = [t for t in (mirror.get("targetServerIds") or []) if t not in removed_ids]
+                if mirror.get("sourceServerId") in removed_ids:
+                    mirror["sourceServerId"] = None
+                    mirror["enabled"] = False
+            g["mirror"] = mirror
 
         # Track an explicit Plex removal (see PlexSettings.ignoreEnvCredentials).
         # Computed here rather than trusted from the payload: the frontend

@@ -106,7 +106,7 @@ def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, dire
         if direct_endpoint:
             try:
                 import time as _time
-                cache_buster = f"?X-Plex-Token={settings.PLEX_TOKEN}&t={int(_time.time())}" if force_refresh else ""
+                cache_buster = f"?t={int(_time.time())}" if force_refresh else ""
                 direct_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/{direct_endpoint}{cache_buster}"
                 r = plex_session.get(direct_url, headers=plex_headers(), timeout=10)
                 if r.status_code == 200 and r.content:

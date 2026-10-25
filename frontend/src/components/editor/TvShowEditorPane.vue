@@ -2368,7 +2368,19 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
     const res = await fetch(`${apiBase}/api/media-server/send-poster`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rating_key: ratingKey, image_data: lastPreview.value, is_tv: true, server_id: serverId, notify: false })
+      body: JSON.stringify({
+        rating_key: ratingKey, image_data: lastPreview.value, is_tv: true, server_id: serverId, notify: false,
+        // What the preview was rendered from, for overlay refresh tracking.
+        render: {
+          template_id: selectedTemplate.value, preset_id: selectedPreset.value,
+          background_url: bgUrl.value, logo_url: logoUrl.value || null,
+          options: withBgAdjust(optionsPayload.value, bgUrl.value),
+          library_id: props.movie.library_id ?? null, source_server_id: props.movie.server_id || 'plex-1',
+          meta_rating_key: props.movie.key, media_type: 'tv',
+          season_index: currentSeason.value && !currentSeason.value.isSeries ? currentSeason.value.index : null,
+          title: props.movie.title, year: props.movie.year ?? null, tmdb_id: tmdbId.value,
+        },
+      })
     })
     return res.ok
   } catch {
@@ -3948,7 +3960,7 @@ watch(tmdbId, () => {
               <input v-model="options.borderColor" type="color" />
             </div>
           </EditorCard>
-          <EditorCard v-if="overlayConfigs.length > 0" title="Overlay configs" :default-open="true" :summary="options.overlayConfigIds.length ? `${options.overlayConfigIds.length} on` : 'None'">
+          <EditorCard v-if="overlayConfigs.length > 0" title="Overlays" :default-open="true" :summary="options.overlayConfigIds.length ? `${options.overlayConfigIds.length} on` : 'None'">
             <div v-if="overlayConfigs.length > 0" class="slider">
                             <div class="overlay-config-checkboxes">
                 <div v-for="cfg in overlayConfigs" :key="cfg.id" class="overlay-config-item">

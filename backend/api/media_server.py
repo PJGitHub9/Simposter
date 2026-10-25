@@ -243,6 +243,16 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     else:
         counts = db.upsert_media_server_tv_shows(server_id, library_id, rows)
 
+    # Media file path (a show's folder for TV), for overlay file-name conditions.
+    try:
+        db.set_file_paths(
+            {i.id: ([i.file_path] if i.file_path else []) for i in items},
+            is_tv=(media_type != "movie"),
+        )
+    except Exception as e:
+        from ..config import logger
+        logger.debug("[MEDIA_SERVER_SCAN] Failed to store file paths for %s: %s", library_id, e)
+
     # Fetch poster/logo/backdrop art + video/audio media info for every
     # scanned item -- deliberately a SECOND pass, after the identity rows
     # above already exist (fetch_and_cache_poster()/etc route to the right
@@ -340,7 +350,7 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
     from .movies import (
         fetch_and_cache_poster, fetch_and_cache_logo, fetch_and_cache_backdrop,
         _poster_cache_url as _movie_poster_cache_url, _logo_cache_url, _art_cache_url,
-        poster_changed_on_server, record_poster_version,
+        poster_changed_on_server, record_poster_version, asset_changed_on_server, record_asset_version,
     )
 
     is_tv = media_type != "movie"
@@ -356,8 +366,23 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
         update_art = db.update_movie_art_url
         update_media_info = db.update_movie_media_info
 
+    # Skip the per-item metadata/logo/backdrop requests for items the server
+    # hasn't saved since the last scan that fetched them (same Etag). The
+    # poster check below needs no request when nothing changed, so it still
+    # runs for every item.
+    server_id = getattr(client, "server_id", None)
+    try:
+        known_etags = db.get_media_server_etags(server_id) if server_id else {}
+    except Exception as e:
+        logger.debug("[MEDIA_SERVER_SCAN] Could not read stored item etags: %s", e)
+        known_etags = {}
+    skipped = 0
+
     def _one(item) -> None:
+        nonlocal skipped
         rating_key = item.id
+        etag = getattr(item, "etag", None)
+        unchanged = bool(etag) and known_etags.get(rating_key) == etag
         try:
             # Re-download only when the server's poster version changed
             # (ImageTags.Primary) -- Quirk #152.
@@ -375,17 +400,42 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
                     update_poster(rating_key, _movie_poster_cache_url(rating_key, poster_path), item.library_id or "default")
             if refresh and poster_path:
                 record_poster_version(rating_key, version)
+                from .. import poster_drift
+                poster_drift.check_after_download(getattr(client, "server_id", None), rating_key, poster_path)
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Poster fetch failed for %s: %s", rating_key, e)
+        if unchanged:
+            skipped += 1
+            return
+        # Logo/backdrop: re-download only when the server's image tag changed.
+        def _art_refresh(kind: str, version):
+            refresh = asset_changed_on_server(kind, rating_key, version)
+            if refresh:
+                logger.info("[MEDIA_SERVER_SCAN] %s changed on server for %s — refreshing", kind.capitalize(), rating_key)
+            return refresh
+
+        def _after_refresh(kind: str, version, path) -> None:
+            record_asset_version(kind, rating_key, version)
+            from .. import poster_drift
+            poster_drift.check_after_download(server_id, rating_key, path, kind)
+
         try:
-            logo_path = fetch_and_cache_logo(rating_key)
+            logo_version = getattr(item, "logo_version", None)
+            logo_refresh = _art_refresh("logo", logo_version)
+            logo_path = fetch_and_cache_logo(rating_key, force_refresh=logo_refresh)
             if logo_path:
+                if logo_refresh:
+                    _after_refresh("logo", logo_version, logo_path)
                 update_logo(rating_key, _logo_cache_url(rating_key, logo_path))
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Logo fetch failed for %s: %s", rating_key, e)
         try:
-            art_path = fetch_and_cache_backdrop(rating_key)
+            art_version = getattr(item, "backdrop_version", None)
+            art_refresh = _art_refresh("backdrop", art_version)
+            art_path = fetch_and_cache_backdrop(rating_key, force_refresh=art_refresh)
             if art_path:
+                if art_refresh:
+                    _after_refresh("backdrop", art_version, art_path)
                 update_art(rating_key, _art_cache_url(rating_key, art_path))
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Backdrop fetch failed for %s: %s", rating_key, e)
@@ -400,6 +450,10 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
                 audio_language=meta.audio_language,
                 edition=meta.edition,
             )
+            # Only after the details were fetched, so a failed fetch is retried
+            # next scan.
+            if server_id and etag:
+                db.set_media_server_etag(server_id, rating_key, etag)
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Media-info fetch failed for %s: %s", rating_key, e)
 
@@ -408,7 +462,11 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
         for _ in as_completed(futures):
             pass
 
-    logger.info("[MEDIA_SERVER_SCAN] Fetched art + media info for %d %s item(s)", len(items), media_type)
+    if skipped:
+        logger.info("[MEDIA_SERVER_SCAN] Fetched art + media info for %d %s item(s); %d unchanged since the last scan were skipped",
+                    len(items) - skipped, media_type, skipped)
+    else:
+        logger.info("[MEDIA_SERVER_SCAN] Fetched art + media info for %d %s item(s)", len(items), media_type)
 
 
 @router.post("/{server_id}/scan")
@@ -486,6 +544,8 @@ def api_scan_media_server(server_id: str, library_id: Optional[str] = None, medi
                 _update_scan_status(f"Scanning {server_label}: {display_name} (collections)")
                 results.append(_scan_one_collection_library(client, server_id, library_id, display_name))
                 scan_status.update({"processed": 2})
+            from .. import poster_drift
+            poster_drift.flush_notifications()
             scan_status.update({"state": "done", "finished_at": datetime.now(timezone.utc).isoformat()})
         except Exception as e:
             scan_status.update({"state": "error", "error": str(e), "finished_at": datetime.now(timezone.utc).isoformat()})

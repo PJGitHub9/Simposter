@@ -56,6 +56,13 @@ class MediaItem:
     # Opaque poster version (Jellyfin/Emby ImageTags.Primary) -- changes when
     # the poster changes, so a scan can re-download only changed posters.
     image_version: Optional[str] = None
+    # Same for the logo (ImageTags.Logo) and first backdrop (BackdropImageTags[0]).
+    logo_version: Optional[str] = None
+    backdrop_version: Optional[str] = None
+    # Opaque "item changed" marker (Jellyfin/Emby Etag, an MD5 of the item's
+    # DateLastSaved) -- unchanged means the scan can skip re-fetching its
+    # metadata, logo and backdrop.
+    etag: Optional[str] = None
 
 
 @dataclass

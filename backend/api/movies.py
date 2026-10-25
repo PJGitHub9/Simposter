@@ -11,8 +11,8 @@ from pydantic import BaseModel
 from PIL import Image
 
 import requests
-from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, THUMB_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata, normalize_collection_title
-from .. import cache, database as db
+from ..config import settings, plex_headers, logger, get_plex_movies, get_movie_tmdb_id, plex_session, POSTER_CACHE_DIR, LOGO_CACHE_DIR, ART_CACHE_DIR, SQUARE_ART_CACHE_DIR, THUMB_ART_CACHE_DIR, get_reuse_cached_poster_days, purge_stale_render_cache_by_tmdb, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled, extract_tmdb_id_from_metadata, extract_media_paths_from_metadata, extract_tvdb_id_from_metadata, normalize_collection_title
+from .. import cache, database as db, poster_drift
 from .art_cache import make_art_cache
 from ..schemas import Movie, MovieTMDbResponse, LabelsResponse, LabelsRemoveRequest
 from ..tmdb_client import get_images_for_movie, get_movie_details, get_movie_external_ids, search_collection, get_collection_images, TMDBError
@@ -305,35 +305,52 @@ def _prewarm_streaming_providers_async(items: List[dict], media_type: str) -> No
     threading.Thread(target=_run, name=f"streaming-prewarm-{media_type}", daemon=True).start()
 
 
-def _poster_version_file(rating_key: str) -> Path:
-    return Path(POSTER_CACHE_DIR) / f"{rating_key}.thumbver"
+_ASSET_VERSION_FILES = {
+    "poster": (POSTER_CACHE_DIR, "thumbver"),
+    "logo": (LOGO_CACHE_DIR, "logover"),
+    "backdrop": (ART_CACHE_DIR, "artver"),
+}
 
 
-def poster_changed_on_server(rating_key: str, version: Optional[str]) -> bool:
-    """True when Plex's current poster version (the `thumb` path, which ends in
-    an update timestamp) differs from the one recorded when we last cached it.
-    Lets a normal scan re-download only posters changed outside Simposter
-    (Kometa overlays, manual edits) without a full force refresh (Quirk #152).
+def _asset_version_file(kind: str, rating_key: str) -> Path:
+    folder, ext = _ASSET_VERSION_FILES[kind]
+    return Path(folder) / f"{rating_key}.{ext}"
+
+
+def asset_changed_on_server(kind: str, rating_key: str, version: Optional[str]) -> bool:
+    """True when the server's current version of an item's poster/logo/backdrop
+    differs from the one recorded when we last cached it. Plex: the image path,
+    which ends in the item's update timestamp. Jellyfin/Emby: the image tag.
+    Lets a normal scan re-download only art changed outside Simposter (Kometa
+    overlays, manual edits) without a full force refresh (Quirk #152).
     The first time a version is seen it's just recorded, not treated as a
     change, so upgrading doesn't trigger a one-off full re-download."""
     if not version:
         return False
-    f = _poster_version_file(rating_key)
+    f = _asset_version_file(kind, rating_key)
     try:
         old = f.read_text().strip()
     except OSError:
-        record_poster_version(rating_key, version)
+        record_asset_version(kind, rating_key, version)
         return False
     return old != version
 
 
-def record_poster_version(rating_key: str, version: Optional[str]) -> None:
+def record_asset_version(kind: str, rating_key: str, version: Optional[str]) -> None:
     if not version:
         return
     try:
-        _poster_version_file(rating_key).write_text(version)
+        _asset_version_file(kind, rating_key).write_text(version)
     except OSError:
         pass
+
+
+def poster_changed_on_server(rating_key: str, version: Optional[str]) -> bool:
+    return asset_changed_on_server("poster", rating_key, version)
+
+
+def record_poster_version(rating_key: str, version: Optional[str]) -> None:
+    record_asset_version("poster", rating_key, version)
 
 
 def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False, server_id_hint: Optional[str] = None) -> Optional[Path]:
@@ -364,7 +381,7 @@ def fetch_and_cache_poster(rating_key: str, force_refresh: bool = False, server_
 
     # Add cache-busting parameter when force refreshing to bypass Plex's cache
     import time
-    cache_buster = f"?X-Plex-Token={settings.PLEX_TOKEN}&t={int(time.time())}" if force_refresh else ""
+    cache_buster = f"?t={int(time.time())}" if force_refresh else ""
     direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb{cache_buster}"
 
     # Try direct poster URL
@@ -1591,6 +1608,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         bulk_labels = {}
         bulk_tmdb_ids = {}
         bulk_thumb_versions = {}
+        bulk_art_versions = {}
+        bulk_file_paths = {}
         # Parallelized (was a fully sequential one-request-at-a-time loop) --
         # this is a lightweight XML metadata fetch, the same /library/metadata/{key}
         # request the poster-fetch phase below already makes concurrently at
@@ -1614,10 +1633,16 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                         labels_list.append(tag)
                 video = root.find(".//Video")
                 thumb_version = video.get("thumb") if video is not None else None
-                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text), thumb_version
+                # Logo/backdrop versions: their image paths end in an update
+                # timestamp, like the poster's (Quirk #152).
+                art_versions = {"backdrop": video.get("art") if video is not None else None, "logo": None}
+                for image in root.findall(".//Image"):
+                    if image.get("type") == "clearLogo":
+                        art_versions["logo"] = image.get("url")
+                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text), thumb_version, extract_media_paths_from_metadata(r.text), art_versions
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
-                return movie_key, [], None, None
+                return movie_key, [], None, None, None, {}
 
         if movie_keys:
             try:
@@ -1626,7 +1651,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     label_futures = {executor.submit(_fetch_label_for_movie, key): key for key in movie_keys}
                     label_done = 0
                     for future in as_completed(label_futures):
-                        movie_key, labels_list, tmdb_id, thumb_version = future.result()
+                        movie_key, labels_list, tmdb_id, thumb_version, file_paths, art_versions = future.result()
+                        bulk_art_versions[movie_key] = art_versions
+                        bulk_file_paths[movie_key] = file_paths
                         bulk_labels[movie_key] = labels_list
                         bulk_tmdb_ids[movie_key] = tmdb_id
                         bulk_thumb_versions[movie_key] = thumb_version
@@ -1654,15 +1681,30 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 if poster_path:
                     if refresh:
                         record_poster_version(movie_key, version)
+                        poster_drift.check_after_download("plex-1", movie_key, poster_path)
                     return movie_key, _poster_cache_url(movie_key, poster_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch poster for movie {movie_key}: {e}")
             return movie_key, None
 
+        def _art_refresh(kind: str, movie_key: str):
+            version = (bulk_art_versions.get(movie_key) or {}).get(kind)
+            refresh = force_poster_refresh or asset_changed_on_server(kind, movie_key, version)
+            if refresh and not force_poster_refresh:
+                logger.info("[SCAN] %s changed in Plex for %s — refreshing", kind.capitalize(), movie_key)
+            return refresh, version
+
+        def _after_art_refresh(kind: str, movie_key: str, version, path) -> None:
+            record_asset_version(kind, movie_key, version)
+            poster_drift.check_after_download("plex-1", movie_key, path, kind)
+
         def fetch_logo_for_movie(movie_key):
             try:
-                logo_path = fetch_and_cache_logo(movie_key, force_refresh=force_poster_refresh)
+                refresh, version = _art_refresh("logo", movie_key)
+                logo_path = fetch_and_cache_logo(movie_key, force_refresh=refresh)
                 if logo_path:
+                    if refresh:
+                        _after_art_refresh("logo", movie_key, version, logo_path)
                     return movie_key, _logo_cache_url(movie_key, logo_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch logo for movie {movie_key}: {e}")
@@ -1670,8 +1712,11 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
         def fetch_backdrop_for_movie(movie_key):
             try:
-                art_path = fetch_and_cache_backdrop(movie_key, force_refresh=force_poster_refresh)
+                refresh, version = _art_refresh("backdrop", movie_key)
+                art_path = fetch_and_cache_backdrop(movie_key, force_refresh=refresh)
                 if art_path:
+                    if refresh:
+                        _after_art_refresh("backdrop", movie_key, version, art_path)
                     # Pre-warm the grid thumbnail here too, not just lazily on first
                     # view -- the network round-trip above is the expensive part, so
                     # generating it now (from bytes already on disk, no extra fetch)
@@ -1782,6 +1827,10 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
             # Refresh cache
             cache.refresh_from_list(cached_movies)
+            try:
+                db.set_file_paths({m["rating_key"]: bulk_file_paths.get(m["rating_key"]) for m in cached_movies})
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to store file paths for library {lib_id}: {e}")
             logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id} ({len(new_movies)} new)")
 
             # Mark every currently-present movie with a known tmdb_id as "still here" --
@@ -1841,22 +1890,41 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 if poster_path:
                     if refresh:
                         record_poster_version(key, version)
+                        poster_drift.check_after_download("plex-1", key, poster_path)
                     poster_url = _poster_cache_url(key, poster_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch poster for TV show {key}: {e}")
 
+            # The listing has no logo path; Plex stamps every image path of an
+            # item with the same update time, so the poster path stands in for it.
+            def _tv_art_refresh(kind: str, version):
+                refresh = force_poster_refresh or asset_changed_on_server(kind, key, version)
+                if refresh and not force_poster_refresh:
+                    logger.info("[SCAN] %s changed in Plex for TV show %s — refreshing", kind.capitalize(), key)
+                return refresh
+
             logo_url = None
             try:
-                logo_path = fetch_and_cache_logo(key, force_refresh=force_poster_refresh)
+                logo_version = show.get("thumb")
+                logo_refresh = _tv_art_refresh("logo", logo_version)
+                logo_path = fetch_and_cache_logo(key, force_refresh=logo_refresh)
                 if logo_path:
+                    if logo_refresh:
+                        record_asset_version("logo", key, logo_version)
+                        poster_drift.check_after_download("plex-1", key, logo_path, "logo")
                     logo_url = _logo_cache_url(key, logo_path)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch logo for TV show {key}: {e}")
 
             art_url = None
             try:
-                art_path = fetch_and_cache_backdrop(key, force_refresh=force_poster_refresh)
+                art_version = show.get("art")
+                art_refresh = _tv_art_refresh("backdrop", art_version)
+                art_path = fetch_and_cache_backdrop(key, force_refresh=art_refresh)
                 if art_path:
+                    if art_refresh:
+                        record_asset_version("backdrop", key, art_version)
+                        poster_drift.check_after_download("plex-1", key, art_path, "backdrop")
                     # Pre-warm the grid thumbnail now, from bytes already on disk --
                     # see the matching movie-scan comment above / CLAUDE.md Quirk #49.
                     _art_thumbnail(key, art_path)
@@ -1891,12 +1959,14 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             # in a bulk scan; opening the show once in the editor still fills it in.
             tmdb_id = None
             tvdb_id = None
+            file_paths = None
             try:
                 url = f"{settings.PLEX_URL}/library/metadata/{key}"
                 r = plex_session.get(url, headers=plex_headers(), timeout=10)
                 r.raise_for_status()
                 tmdb_id = extract_tmdb_id_from_metadata(r.text)
                 tvdb_id = extract_tvdb_id_from_metadata(r.text)
+                file_paths = extract_media_paths_from_metadata(r.text)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch tmdb/tvdb id for TV show {key}: {e}")
 
@@ -1913,6 +1983,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "square_art_url": square_art_url,
                 "labels": labels,
                 "library_id": lib_id,
+                "file_paths": file_paths,
             }
 
         if tv_shows:
@@ -1936,6 +2007,10 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
             # Refresh cache
             cache.refresh_tv_from_list(cached_shows)
+            try:
+                db.set_file_paths({s["rating_key"]: s.get("file_paths") for s in cached_shows}, is_tv=True)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to store file paths for TV library {lib_id}: {e}")
             logger.info(f"[SCAN] Cached {len(cached_shows)} TV shows for library {lib_id} ({len(new_shows)} new)")
 
             # Mark every currently-present show as "still here" (series-level only --
@@ -2038,6 +2113,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             logger.error(f"[SCAN] Failed to scan linked libraries: {e}")
 
         logger.info(f"[SCAN] Completed full library sync")
+        poster_drift.flush_notifications()
         scan_status.update({
             "state": "done",
             "finished_at": datetime.now(timezone.utc).isoformat(),

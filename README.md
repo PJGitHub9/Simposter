@@ -12,7 +12,10 @@
 - **Plex, Jellyfin and Emby** — use any combination (Plex not required), link the same library across servers, and send artwork to several servers at once
 - **Media Mirror** — keep posters, logos and backdrops in sync from one server to the others, on demand or on a schedule
 - **Multi-source artwork** — TMDb, TVDB, Fanart.tv, with configurable priority and fallback rules
-- **Overlay badges** — resolution, codec, audio, edition, studio, streaming platform, custom images, text
+- **Overlays** — resolution, codec, audio, edition, studio and streaming badges, images and text with per-layer rules (file name, ratings, lists, show status, days since added…)
+- **Kometa overlay import** (beta) — bring in your Kometa overlay files (including UMTK/TSSK ones, kept in sync as they change), with MDBList ratings and lists
+- **Overlay Refresh** — re-render posters whose overlay would now look different (new rating, 4K upgrade, list change), on a schedule
+- **Changed outside Simposter** — notices when a poster, logo or backdrop it sent was changed on the server, and lets you put Simposter's back or keep the new one
 - **Batch edit** — apply a preset across your whole library in one run, with live progress
 - **Webhooks** — Radarr, Sonarr, and Tautulli, auto-generate on import (target a whole library group across servers)
 - **Scheduled scans** and a **smart retry queue** for hands-off automation
@@ -46,6 +49,7 @@ Prefer not to build locally? Pre-built images are published to [ghcr.io/pjgithub
 |-----|--------------|
 | **[Getting Started](docs/GETTING_STARTED.md)** | Install (Docker/local dev), the setup wizard, your first poster, Settings reference, environment variables |
 | **[Media Servers](docs/MEDIA_SERVERS.md)** | Plex, Jellyfin and Emby: connecting servers, library groups, merged browsing, multi-server sending, Media Mirror, collection matching, server maintenance |
+| **[Overlays](docs/OVERLAYS.md)** | Building overlays and their rules, text values, Kometa import, MDBList ratings and lists, Overlay Refresh, live Kometa files |
 | **[Collections & Poster Guide](docs/COLLECTIONS_AND_POSTERS.md)** | Templates/presets, logos, overlay badges, batch processing, the smart retry queue, and Collections (including why a Fanart.tv key matters) |
 | **[Webhooks](docs/WEBHOOKS.md)** | Radarr, Sonarr, and Tautulli setup, payload examples, dry-run testing |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Technical architecture, API routers, rendering pipeline (for contributors) |
@@ -64,7 +68,7 @@ A few related projects solve overlapping problems — no affiliation with any of
 - **[Posterizarr](https://github.com/fscorrupt/Posterizarr)** is best for mass library operations — a similar automation-first poster tool, but it misses out on manual per-item customization. Simposter leans more toward interactive editing (live preview, manual per-item tuning) alongside its automation, rather than automation-only.
 - **[PosterTools](https://postertools.org/square-lab/)** is best for non-selfhosters — a hosted poster/title-card creation tool, no server to run yourself.
 - **[TitleCardMaker](https://github.com/CollinHeist/TitleCardMaker)** focuses specifically on TV episode title cards, a different artifact than posters.
-- **[UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Shows-for-Kometa)** generates "coming soon" overlays, a narrower and complementary use case.
+- **[UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Shows-for-Kometa)** generates "coming soon" overlays, a narrower and complementary use case. Its Kometa overlay files can be imported into Simposter and kept in sync.
 
 **Poster styles that inspired Simposter:** [darkmatte](https://www.reddit.com/r/PlexPosters/) and [ikonok](https://www.reddit.com/r/PlexPosters/) — both from r/PlexPosters.
 

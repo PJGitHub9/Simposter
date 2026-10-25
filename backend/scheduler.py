@@ -106,6 +106,25 @@ def init_scheduler(restore_from_settings: bool = True):
             if restored_mirror_count:
                 logger.info("[SCHEDULER] Restored %d scheduled media mirror job(s)", restored_mirror_count)
 
+            # Per-group scheduled overlay refresh (Quirk #166).
+            restored_refresh = 0
+            for group in library_groups:
+                cfg = (group or {}).get("overlayRefresh") or {}
+                if cfg.get("enabled") and cfg.get("scheduleCron") and group.get("id"):
+                    if schedule_overlay_refresh(group["id"], cfg["scheduleCron"]):
+                        restored_refresh += 1
+            if restored_refresh:
+                logger.info("[SCHEDULER] Restored %d scheduled overlay refresh job(s)", restored_refresh)
+
+            # Live Kometa files: re-read every N hours.
+            from . import database as _db
+            restored_live = 0
+            for live in _db.get_live_kometa_files():
+                if live.get("enabled") and schedule_live_kometa(live["id"], live.get("interval_hours") or 6):
+                    restored_live += 1
+            if restored_live:
+                logger.info("[SCHEDULER] Restored %d live Kometa file job(s)", restored_live)
+
         except Exception as e:
             logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e, exc_info=True)
 
@@ -857,3 +876,129 @@ def shutdown_scheduler():
         _scheduler.shutdown(wait=False)
         _scheduler = None
         logger.info("[SCHEDULER] Scheduler shut down")
+
+
+# ---------------------------------------------------------------------------
+# Overlay refresh (Quirk #166) -- one job per library group
+# ---------------------------------------------------------------------------
+
+def _overlay_refresh_job_id(group_id: str) -> str:
+    return f"overlay_refresh_{group_id}"
+
+
+def _live_kometa_job_id(file_id: str) -> str:
+    return f"live_kometa_{file_id}"
+
+
+def _run_live_kometa(file_id: str) -> None:
+    try:
+        from .live_kometa import sync_file
+        sync_file(file_id, scheduled=True)
+    except Exception as e:
+        logger.error("[SCHEDULER] Live Kometa file %s failed: %s", file_id, e, exc_info=True)
+
+
+def schedule_live_kometa(file_id: str, interval_hours: float) -> bool:
+    """Re-read a live Kometa file every interval_hours (at least 15 minutes)."""
+    if _scheduler is None:
+        logger.error("[SCHEDULER] Scheduler not initialized, call init_scheduler() first")
+        return False
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+        minutes = max(15, int(round(float(interval_hours) * 60)))
+        job_id = _live_kometa_job_id(file_id)
+        _scheduler.add_job(
+            func=_run_live_kometa,
+            trigger=IntervalTrigger(minutes=minutes),
+            id=job_id,
+            name=f"Live Kometa file ({file_id})",
+            args=[file_id],
+            replace_existing=True,
+        )
+        logger.info("[SCHEDULER] Live Kometa file %s checked every %d min (next: %s)",
+                    file_id, minutes, _scheduler.get_job(job_id).next_run_time)
+        return True
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to schedule live Kometa file %s: %s", file_id, e)
+        return False
+
+
+def cancel_live_kometa(file_id: str) -> bool:
+    if _scheduler is None:
+        return False
+    job_id = _live_kometa_job_id(file_id)
+    if _scheduler.get_job(job_id):
+        _scheduler.remove_job(job_id)
+        return True
+    return False
+
+
+def get_live_kometa_next_run(file_id: str) -> Optional[str]:
+    if _scheduler is None:
+        return None
+    job = _scheduler.get_job(_live_kometa_job_id(file_id))
+    return job.next_run_time.isoformat() if job and job.next_run_time else None
+
+
+def schedule_overlay_refresh(group_id: str, cron_expression: str) -> bool:
+    if _scheduler is None:
+        logger.error("[SCHEDULER] Scheduler not initialized, call init_scheduler() first")
+        return False
+    try:
+        trigger = _build_cron_trigger(cron_expression)
+        if trigger is None:
+            return False
+        job_id = _overlay_refresh_job_id(group_id)
+        _scheduler.add_job(
+            func=_run_scheduled_overlay_refresh,
+            trigger=trigger,
+            id=job_id,
+            name=f"Overlay Refresh ({group_id})",
+            args=[group_id],
+            replace_existing=True,
+        )
+        logger.info("[SCHEDULER] Scheduled overlay refresh for group %s with cron: %s (next: %s)",
+                    group_id, cron_expression, _scheduler.get_job(job_id).next_run_time)
+        return True
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to schedule overlay refresh for group %s: %s", group_id, e)
+        return False
+
+
+def cancel_overlay_refresh(group_id: str) -> bool:
+    if _scheduler is None:
+        return False
+    try:
+        job_id = _overlay_refresh_job_id(group_id)
+        if _scheduler.get_job(job_id):
+            _scheduler.remove_job(job_id)
+            logger.info("[SCHEDULER] Cancelled overlay refresh job for group %s", group_id)
+            return True
+        return False
+    except Exception as e:
+        logger.error("[SCHEDULER] Failed to cancel overlay refresh for group %s: %s", group_id, e)
+        return False
+
+
+def get_overlay_refresh_schedule(group_id: str) -> Optional[dict]:
+    if _scheduler is None:
+        return None
+    job = _scheduler.get_job(_overlay_refresh_job_id(group_id))
+    if job is None:
+        return None
+    return {
+        "job_id": job.id,
+        "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+        "trigger": str(job.trigger),
+    }
+
+
+def _run_scheduled_overlay_refresh(group_id: str):
+    """Scheduled run: check every tracked poster in the group and re-render the
+    changed ones. Logged and swallowed on failure, like the other jobs."""
+    try:
+        from . import overlay_refresh
+        logger.info("[SCHEDULER] ========== SCHEDULED OVERLAY REFRESH (%s) ==========", group_id)
+        overlay_refresh.run_group(group_id, apply=True, scheduled=True)
+    except Exception as e:
+        logger.error("[SCHEDULER] Scheduled overlay refresh failed for %s: %s", group_id, e, exc_info=True)

@@ -48,6 +48,8 @@ _ASSET_TYPE_MAP = {
     "logo": ImageType.LOGO,
     "backdrop": ImageType.BACKDROP,
     "square_art": ImageType.SQUARE_ART,
+    # Jellyfin/Emby only (no Plex slot); Plex sources/targets are skipped per item.
+    "thumb_art": ImageType.THUMB_ART,
 }
 
 # ---------------------------------------------------------------------------
@@ -168,6 +170,7 @@ _ASSET_TYPE_LABELS = {
     "logo": "Logo",
     "backdrop": "Backdrop",
     "square_art": "Square Art",
+    "thumb_art": "Thumb Art",
 }
 
 
@@ -206,7 +209,7 @@ def _normalize(raw: bytes, asset_type: str, source_rating_key: str = "?", for_pl
         return encode_poster_for_plex(img, for_plex=for_plex)
     if asset_type == "logo":
         return normalize_logo_for_plex(raw)
-    # backdrop and square_art both get the same treatment -- Quirk #44's own
+    # backdrop, square_art and thumb_art all get the same treatment -- Quirk #44's own
     # established reasoning ("the same kind of large photographic image").
     return normalize_backdrop_for_plex(raw, for_plex=for_plex)
 
@@ -302,7 +305,8 @@ def _sync_one_item(
         asset_failed = False
         for target_id, target_rating_key in targets_needing.items():
             target_label = target_labels.get(target_id, target_id)
-            try:
+
+            def _upload(item_key, _target_id=target_id):
                 if asset_type == "poster":
                     # Reuses the exact verify-after-upload diagnostic
                     # media_server_send.py's api_send_poster() already has
@@ -315,12 +319,27 @@ def _sync_one_item(
                     # this treatment yet -- only posters have ever needed it
                     # in a real report so far.
                     from .media_server_send import _upload_poster_and_verify
-                    _upload_poster_and_verify(target_clients[target_id], target_id, target_rating_key, image_bytes, content_type, is_collection=is_collection)
+                    _upload_poster_and_verify(target_clients[_target_id], _target_id, item_key, image_bytes, content_type, is_collection=is_collection)
                 else:
-                    target_clients[target_id].upload_image(
-                        target_rating_key, _ASSET_TYPE_MAP[asset_type], image_bytes, content_type,
+                    target_clients[_target_id].upload_image(
+                        item_key, _ASSET_TYPE_MAP[asset_type], image_bytes, content_type,
                         is_collection=is_collection,
                     )
+            try:
+                try:
+                    _upload(target_rating_key)
+                except Exception as e:
+                    # Jellyfin/Emby give an item a new id when they re-import its
+                    # file; find it again by TMDb/TVDB id and try once more.
+                    from .media_server_send import is_not_found_error, refresh_stale_item_id
+                    new_key = None
+                    if is_not_found_error(e) and not is_collection:
+                        new_key = refresh_stale_item_id(target_id, target_clients[target_id], str(target_rating_key))
+                    if not new_key:
+                        raise
+                    target_rating_key = new_key
+                    real_targets[target_id] = new_key
+                    _upload(target_rating_key)
                 item_touched = True
                 asset_copied = True
                 logger.info("[MIRROR] %s --> %s: %s - %s", source_label, target_label, asset_label, title_display)

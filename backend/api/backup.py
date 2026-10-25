@@ -19,7 +19,7 @@ from typing import List, Optional
 from ..config import settings, plex_session, plex_headers, logger
 from .. import database as db
 from ..save_paths import resolve_library_label
-from .movies import fetch_and_cache_logo, fetch_and_cache_backdrop, fetch_and_cache_square_art
+from .movies import fetch_and_cache_logo, fetch_and_cache_backdrop, fetch_and_cache_square_art, fetch_and_cache_thumb_art
 from .save import normalize_logo_for_plex, normalize_backdrop_for_plex
 
 router = APIRouter()
@@ -31,8 +31,8 @@ router = APIRouter()
 # Posters deliberately stay in the library's own base dir with NO subfolder --
 # that's the original, pre-existing layout, and changing it would silently
 # strand any backup a user already has on disk from before this feature.
-_ASSET_SUBDIRS = {"logo": "logos", "backdrop": "backdrops", "square_art": "square_art"}
-_VALID_ASSET_TYPES = {"poster", "logo", "backdrop", "square_art"}
+_ASSET_SUBDIRS = {"logo": "logos", "backdrop": "backdrops", "square_art": "square_art", "thumb_art": "thumb_art"}
+_VALID_ASSET_TYPES = {"poster", "logo", "backdrop", "square_art", "thumb_art"}
 
 # Plex upload endpoint (relative to /library/metadata/{rating_key}/) + which
 # save.py normalize function to run bytes through first, per asset type --
@@ -687,6 +687,8 @@ _FETCH_AND_CACHE = {
     "logo": fetch_and_cache_logo,
     "backdrop": fetch_and_cache_backdrop,
     "square_art": fetch_and_cache_square_art,
+    # Jellyfin/Emby only (Quirk #153); Plex items are skipped, not counted as failures.
+    "thumb_art": fetch_and_cache_thumb_art,
 }
 
 
@@ -716,6 +718,8 @@ def _backup_art_library(library_id: str, items: list, asset_type: str, progress_
             "current_movie": title,
             "current_step": f"Downloading {asset_type.replace('_', ' ')} ({idx + 1}/{total_items})",
         })
+        if asset_type == "thumb_art" and db.get_server_id_for_rating_key(rating_key) == "plex-1":
+            continue
 
         try:
             # force_refresh=True: a backup should reflect what's CURRENTLY in
@@ -790,6 +794,7 @@ def _restore_selected(items: list, asset_type: str = "poster"):
     image_type_for_asset = {
         "poster": ImageType.POSTER, "logo": ImageType.LOGO,
         "backdrop": ImageType.BACKDROP, "square_art": ImageType.SQUARE_ART,
+        "thumb_art": ImageType.THUMB_ART,
     }.get(asset_type, ImageType.POSTER)
 
     for idx, item in enumerate(items):
@@ -815,7 +820,7 @@ def _restore_selected(items: list, asset_type: str = "poster"):
             # to a Plex image-upload endpoint).
             if asset_type == "logo":
                 payload, content_type = normalize_logo_for_plex(payload, content_type)
-            elif asset_type in ("backdrop", "square_art"):
+            elif asset_type in ("backdrop", "square_art", "thumb_art"):
                 payload, content_type = normalize_backdrop_for_plex(payload, content_type)
 
             server_id = db.get_server_id_for_rating_key(rating_key)
@@ -828,6 +833,8 @@ def _restore_selected(items: list, asset_type: str = "poster"):
                 # this function's own broad except below, counted as a normal
                 # per-item failure rather than aborting the whole restore run.
                 client.upload_image(rating_key, image_type_for_asset, payload, content_type)
+            elif asset_type == "thumb_art":
+                raise NotImplementedError("Plex has no thumb art slot")
             else:
                 url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/{endpoint_segment}"
                 headers = {
@@ -836,6 +843,13 @@ def _restore_selected(items: list, asset_type: str = "poster"):
                 }
                 resp = requests.post(url, headers=headers, data=payload, timeout=20)
                 resp.raise_for_status()
+            # A restore sets the item's art on purpose: use it as the baseline
+            # for drift detection (poster_drift.py).
+            try:
+                from .. import poster_drift
+                poster_drift.record_sent(server_id, rating_key, payload, asset_type)
+            except Exception:
+                pass
             succeeded += 1
         except Exception as e:
             logger.debug("[BACKUP] Error restoring %s (key=%s): %s", filename, rating_key, e)

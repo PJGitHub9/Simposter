@@ -22,11 +22,15 @@ from . import (
     notifications,
     backup,
     overlay_config,
+    kometa_import,
+    live_kometa,
+    mdblist,
     version_info,
     cleanup,
     media_server,
     media_server_send,
     media_mirror,
+    overlay_refresh,
 )
 
 router = APIRouter()
@@ -52,8 +56,12 @@ router.include_router(database.router)
 router.include_router(notifications.router)
 router.include_router(backup.router)
 router.include_router(overlay_config.router)
+router.include_router(kometa_import.router)
+router.include_router(live_kometa.router)
+router.include_router(mdblist.router)
 router.include_router(version_info.router)
 router.include_router(cleanup.router)
 router.include_router(media_server.router)
 router.include_router(media_server_send.router)
 router.include_router(media_mirror.router)
+router.include_router(overlay_refresh.router)

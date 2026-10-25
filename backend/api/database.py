@@ -55,6 +55,12 @@ def _fill_media_server_secrets(value: str, current_value: str) -> str:
         if not isinstance(s, dict):
             continue
         existing = by_id.get(s.get("id")) or {}
+        # Only hand over a stored credential when the server address is the same;
+        # a backup pointing the same id at another server must not get our key.
+        url_new = (s.get("url") or "").strip().rstrip("/").lower()
+        url_old = (existing.get("url") or "").strip().rstrip("/").lower()
+        if url_new and url_old and url_new != url_old:
+            continue
         for f in _MEDIA_SERVER_SECRET_FIELDS:
             if not s.get(f) and existing.get(f):
                 s[f] = existing[f]
@@ -196,6 +202,10 @@ def api_import_database(data: Dict[str, Any]):
 
         # The cached overlay effect layers belong to the old presets; they regenerate on next render.
         shutil.rmtree(Path(settings.CONFIG_DIR) / "overlays", ignore_errors=True)
+        # Rebuild them for the restored presets in the background.
+        import threading
+        from ..overlay_cache import warm_all
+        threading.Thread(target=warm_all, daemon=True, name="overlay-cache-warm").start()
 
         # Apply the restored settings now instead of waiting for a restart.
         try:

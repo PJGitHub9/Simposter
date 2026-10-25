@@ -151,6 +151,31 @@ def assert_external_fetch_safe(url: str) -> None:
         raise ValueError(f"Refusing to fetch URL ({reason}): {url[:120]}")
 
 
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
+def safe_get(url: str, strict: bool = False, max_redirects: int = 5, **kwargs):
+    """requests.get() that applies the SSRF check to the first URL and to every
+    redirect it follows. A plain requests.get() only checks what we hand it, so a
+    public URL that redirects to a LAN or metadata address would get through.
+    strict matches assert_external_fetch_safe() (no private hosts at all), else
+    assert_fetch_url_safe(). Raises ValueError for a blocked URL or too many redirects."""
+    import requests
+    from urllib.parse import urljoin
+
+    kwargs["allow_redirects"] = False
+    check = assert_external_fetch_safe if strict else assert_fetch_url_safe
+    for _ in range(max_redirects + 1):
+        check(url)
+        resp = requests.get(url, **kwargs)
+        location = resp.headers.get("Location")
+        if resp.status_code not in _REDIRECT_CODES or not location:
+            return resp
+        resp.close()
+        url = urljoin(url, location)
+    raise ValueError(f"Too many redirects: {url[:120]}")
+
+
 def validate_rating_key(rating_key: str) -> str:
     """
     Validate Plex rating key format.

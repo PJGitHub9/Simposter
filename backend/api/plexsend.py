@@ -77,7 +77,8 @@ def api_plex_send(req: PlexSendRequest):
                 movie_details = {
                     'title': title,
                     'year': int(year) if year and year.isdigit() else None,
-                    'library_id': req.library_id
+                    'library_id': req.library_id,
+                    'parent_title': item.get('parentTitle'),
                 }
     except Exception as plex_err:
         logger.debug("[PLEX] Failed to get metadata from Plex for template vars: %s", plex_err)
@@ -240,6 +241,19 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as history_err:
         logger.debug("[HISTORY] Failed to record manual send: %s", history_err)
 
+    # Remember the render inputs for overlay refresh (Quirk #166).
+    from ..overlay_refresh import record_send
+    record_send(
+        "plex-1", req.rating_key,
+        template_id=req.template_id, options=options,
+        background_url=req.background_url, logo_url=req.logo_url,
+        media_type="tv" if is_tv else "movie",
+        library_id=req.library_id or movie_details.get("library_id"),
+        season_index=req.season_index if is_tv else None,
+        title=movie_details.get("parent_title") or movie_details.get("title"), year=movie_details.get("year"),
+        is_collection=bool(req.is_collection),
+    )
+
     # Send notifications for manual send
     _notif_kwargs = dict(
         title=movie_details.get("title", "Unknown"),
@@ -298,10 +312,10 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
         except Exception as e:
             raise HTTPException(400, f"Invalid logo_data: {e}")
     elif req.logo_url:
-        from ..middleware.validation import validate_url
+        from ..middleware.validation import validate_url, safe_get
         req.logo_url = validate_url(req.logo_url)
         try:
-            r = requests.get(req.logo_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.logo_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/png").split(";")[0].strip()
             logo_bytes = r.content
@@ -322,6 +336,8 @@ def api_plex_send_logo(req: PlexLogoSendRequest):
     try:
         r = plex_session.post(plex_url, headers=upload_headers, data=logo_bytes, timeout=20)
         r.raise_for_status()
+        from .. import poster_drift
+        poster_drift.record_sent("plex-1", req.rating_key, logo_bytes, "logo")
     except Exception as e:
         logger.error("[PLEX] Logo upload failed rating_key=%s [%s] err=%s", req.rating_key, _logo_title, e)
         raise HTTPException(500, f"Failed to upload logo to Plex: {e}")
@@ -390,10 +406,10 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
         except Exception as e:
             raise HTTPException(400, f"Invalid art_data: {e}")
     elif req.art_url:
-        from ..middleware.validation import validate_url
+        from ..middleware.validation import validate_url, safe_get
         req.art_url = validate_url(req.art_url)
         try:
-            r = requests.get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             art_bytes = r.content
@@ -421,6 +437,8 @@ def api_plex_send_backdrop(req: PlexBackdropSendRequest):
     try:
         r = plex_session.post(plex_url, headers=upload_headers, data=art_bytes, timeout=20)
         r.raise_for_status()
+        from .. import poster_drift
+        poster_drift.record_sent("plex-1", req.rating_key, art_bytes, "backdrop")
     except Exception as e:
         logger.error("[PLEX] Backdrop upload failed rating_key=%s [%s] err=%s", req.rating_key, _art_title, e)
         raise HTTPException(500, f"Failed to upload backdrop to Plex: {e}")
@@ -496,10 +514,10 @@ def api_plex_send_square_art(req: PlexSquareArtSendRequest):
         except Exception as e:
             raise HTTPException(400, f"Invalid art_data: {e}")
     elif req.art_url:
-        from ..middleware.validation import validate_url
+        from ..middleware.validation import validate_url, safe_get
         req.art_url = validate_url(req.art_url)
         try:
-            r = requests.get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            r = safe_get(req.art_url, timeout=15, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             r.raise_for_status()
             content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
             art_bytes = r.content
@@ -829,6 +847,8 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                     data=cached,
                     timeout=20,
                 ).raise_for_status()
+                from .. import poster_drift
+                poster_drift.record_sent("plex-1", target.rating_key, cached)
                 logger.info("[PLEXSEND] Resent cached poster for %s (%s)", target.rating_key, _title_for_ctx)
                 _remove_labels_for_key(target.rating_key, req.is_tv, library_id, db)
                 _add_label_for_key(target.rating_key, req.is_tv, library_id, db)
@@ -883,6 +903,8 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                         data=season_cached,
                         timeout=20,
                     ).raise_for_status()
+                    from .. import poster_drift
+                    poster_drift.record_sent("plex-1", season_key, season_cached)
                     resent_seasons += 1
                     logger.info("[PLEXSEND] Resent cached season poster for %s", season_key)
                     _remove_labels_for_key(season_key, True, library_id, db)
@@ -1001,6 +1023,8 @@ def api_local_assets_resend(req: LocalAssetResendRequest):
                     data=payload,
                     timeout=20,
                 ).raise_for_status()
+                from .. import poster_drift
+                poster_drift.record_sent("plex-1", rating_key, payload)
             else:
                 # Deliberately calls the lower-level upload+verify primitive, not
                 # api_send_poster() -- that wrapper unconditionally re-encodes

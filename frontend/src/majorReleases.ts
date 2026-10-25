@@ -163,6 +163,63 @@ export const majorReleases: MajorRelease[] = [
         title: 'Scans that keep up',
         description: 'Library scans are much faster and now pick up posters changed outside Simposter (for example by Kometa) without a force refresh.',
       },
+      {
+        icon: '✏️',
+        title: 'A tidier poster editor',
+        description: 'Settings in tabs and collapsible cards, separate logo and text boxes you can drag right on the preview, guides, and backdrops as poster backgrounds.',
+      },
+    ],
+  },
+  {
+    version: 'v1.8.0',
+    title: 'Overlays, rebuilt',
+    intro: "This update is mostly about overlays: what you can put on a poster, when it shows, and how easy it is to build. Here's the short version; the full changelog is one click away below.",
+    highlights: [
+      {
+        icon: '🧱',
+        title: 'A friendlier overlay editor',
+        description: 'Layers listed top-down, Look / Position / Show when tabs for each one, grouped settings, warnings when a layer would show nothing, and a preview that can compare several posters at once.',
+      },
+      {
+        icon: '🎯',
+        title: 'Show when',
+        description: 'Put a layer, or a whole overlay, only on the posters that match: 4K only, Atmos only, remux files, highly rated movies, items on an MDBList list, and more.',
+      },
+      {
+        icon: '🏷️',
+        title: 'Badge sets',
+        description: "Group badges that shouldn't appear together, like 4K, 1080p and 720p, and only the first match is drawn.",
+      },
+      {
+        icon: '⭐',
+        title: 'Ratings on posters',
+        description: 'With an MDBList API key, show IMDb, Rotten Tomatoes, Metacritic and other ratings as text or use them in conditions.',
+      },
+      {
+        icon: '📥',
+        title: 'Kometa import (beta)',
+        description: 'Bring in your Kometa overlay files, or point Simposter at files another tool like UMTK keeps rewriting and it re-imports them on a schedule. It maps what it can and tells you what it skipped.',
+      },
+      {
+        icon: '🔁',
+        title: 'Overlay Refresh',
+        description: 'Keep posters up to date when their overlay would change, e.g. a movie upgraded to 4K, on a schedule per library.',
+      },
+      {
+        icon: '🔔',
+        title: 'Changed outside Simposter',
+        description: 'Simposter notices when a poster, logo or backdrop it sent was changed on the server by something else. A badge marks it on the grid, and History lets you put Simposter\'s version back or keep the new one.',
+      },
+      {
+        icon: '🔤',
+        title: 'Starter presets and fonts',
+        description: 'Two new starter presets, a set of free fonts that comes with the Simposter defaults, and Kometa\'s own fonts for imported overlays.',
+      },
+      {
+        icon: '🔔',
+        title: 'Branch-aware updates',
+        description: 'The version badge now shows updates for the branch you run, and tells you when that branch was merged and where to move.',
+      },
     ],
   },
 ]

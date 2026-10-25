@@ -1,5 +1,142 @@
 # Changelog
 
+## v1.8.16 (2026-10-25) — `dev-overlays` branch
+
+### Bug Fixes
+- **Several TMDb ids on one Plex item** — `extract_tmdb_id_from_metadata()` used the first `tmdb://` GUID; Plex can keep an old one (seen: an entry for the film's working title). With more than one, `_pick_tmdb_id()` uses the id TMDb's `/find/{imdb}` returns for the item's IMDb GUID (`tmdb_client.find_tmdb_ids_by_imdb()`); no IMDb id or no match keeps the first. Picks are cached per process and logged. Stored rows are corrected by the next Plex scan.
+
+## v1.8.15 (2026-10-23) — `dev-overlays` branch
+
+### New Features
+- **Two new starter presets** (`_DEFAULT_PRESETS_TEMPLATE` in presets.py): `budget-mm2k` and `budget-cl2k`, both 26px white border, textless posters and fixed text boxes; mm2k draws `{title}` as text, cl2k uses the logo with a `{season}` caption on season posters. Shipped without overlay links.
+- **Starter fonts** — `/api/presets/default-template` now includes `_fonts` (`STARTER_FONTS` in universal.py: Arimo, Roboto, Inter, Montserrat, Lato, Comfortaa, Bebas Neue; all OFL/Apache 2.0, fetched from Kometa's GitHub repos, not shipped). `/api/presets/import` downloads those plus every `font_family` the imported presets use, in a background thread (`prefetch_fonts()`); fonts already on disk or unknown names are skipped.
+
+### Bug Fixes
+- **Arial on Docker** — Arial isn't free to ship and isn't in the image, so presets using "Arial"/"Arial Bold" (the starters included) fell back to DejaVu Sans. `_OPEN_SUBSTITUTES` maps Arial/Helvetica to Arimo (metric-compatible, Apache 2.0) when the real font isn't installed; it's tried after local and system fonts.
+- Kometa Creator font names: `Bebas-Regular` now points to upstream's renamed `BebasNeue-Regular.ttf`, `Helvetica-Bold` (commercial, removed upstream) falls back to Arimo Bold, and `PlusJakartaSans-Bold` was added. A font already in `config/fonts_cache/` is always used first by exact name, so installs that downloaded `Helvetica-Bold.ttf` or `Bebas-Regular.ttf` earlier keep using them. A failed download isn't retried on every render (until restart).
+
+## v1.8.14 (2026-10-23) — `dev-overlays` branch
+
+### New Features
+- **Drift detection for logos and backdrops** — `poster_fingerprints` gains an `asset_type` column (rebuilt once from the v1.8.11-13 `(server_id, rating_key)` key). Logo/backdrop sends are fingerprinted in `PlexClient`/`JellyfinClient.upload_image()` and the direct Plex posts (plexsend, Batch Edit's logo upload, Backup restore); the sent bytes are kept in `config/cache/drift_sent/` so "Put back" can re-upload them. Scans compare a re-downloaded logo/backdrop the same way as posters. History's tab shows the asset type and the right images; `GET /api/poster-drift/{server}/{key}/sent?asset=` serves the kept copy; resend/dismiss take `?asset=`. Notifications say "Art Changed Outside Simposter".
+- **"Changed" badges** on Movies/TV Shows cards and the Logos/Backdrops grids (`GET /api/poster-drift/keys`, `useDriftKeys.ts`), linking to History → Changed Outside Simposter (`?tab=drift`).
+- **Thumb Art in Media Mirror and Backup** — `thumb_art` asset type (Jellyfin/Emby only: offered in Media Mirror when the source and a target are Jellyfin/Emby; on Backup for a Jellyfin/Emby library, where Plex items are skipped). Backup shows Square Art only for Plex libraries.
+
+### Improvements
+- **Scans re-check logos and backdrops** — `asset_changed_on_server()`/`record_asset_version()` generalize the poster version files (`.logover`/`.artver`). Plex: the movie scan reads the `clearLogo` Image URL and `art` from the metadata it already fetches; TV uses the listing's `art` and the poster path (Plex stamps every image of an item with the same update time). Jellyfin/Emby: `ImageTags.Logo` and `BackdropImageTags[0]` from the listing.
+- **Overlay Manager preview fonts** — new `GET /api/fonts/file?name=` (same folders as the render, fetches Kometa fonts on first use); the preview loads them with `FontFace` and draws text with them.
+
+### Bug Fixes
+- **Kometa text rendered bold** — imported text names Kometa's font files (default `Roboto-Medium.ttf`), which Simposter didn't have, so `_load_font()` fell through to a bold system font (its default weight is 700). Kometa's own `fonts/` folder (117 files, `_KOMETA_REPO_FONTS` in universal.py) is now fetched from GitHub and cached on first use like the Kometa Creator fonts, and listed by `/api/fonts`. Imported text layers get `font_weight: "400"` (new `OverlayElement.font_weight`, used by `_load_element_font()`), so a font that still isn't found falls back to a regular weight. Existing imports need a re-import (live files: Check now).
+
+### Security
+- Live Kometa files: the folder picker (`/live-kometa-files/browse`) and `validate_path()` refuse UNC/network paths (`\\host\share`, `//host/share`), since opening one makes Windows connect to that host with the account's credentials; folder errors no longer echo the OS error text.
+
+## v1.8.13 (2026-10-22) — `dev-overlays` branch
+
+### New Features
+- **Server file picker for live Kometa files** — new `GET /api/live-kometa-files/browse?path=` lists the subfolders and `.yml`/`.yaml` files of a folder on the Simposter server (hidden entries skipped, max 2000 entries), plus starting points (drives or `/`, and `/config`, `/kometa`, `/umtk`, `/tssk`, `/data`, `/mnt`, home and the config folder when they exist). New `ServerFilePicker.vue`, opened by a Browse… button next to the live-file path.
+
+### Improvements
+- Live-file status lists skipped overlays grouped by reason (e.g. text overlays with no `horizontal_offset`/`vertical_offset`).
+- The Kometa importer warns when a `backdrop` overlay has no `back_color`, since it draws nothing.
+- Overlay Manager: box-only (`backdrop`) layers are named "Background box", their Look tab shows only the box settings, and a layer warning appears when the box has no color or border.
+
+## v1.8.12 (2026-10-22) — `dev-overlays` branch
+
+### Improvements
+- **Faster Jellyfin/Emby scans** — the library listing now asks for each item's `Etag` (an MD5 of the item's `DateLastSaved` in Jellyfin's source). New table `media_server_item_etags`; `_fetch_art_and_media_info_for_scan()` skips the metadata/logo/backdrop requests for items whose Etag hasn't changed since the scan that last fetched them (the poster-version check still runs for every item). The Etag is stored only after a successful metadata fetch, so failures are retried.
+- Settings → Media Servers has a greyed-out **Silo** section marked "Future update" (placeholder only).
+- **Settings → Output redesigned** — save layouts are cards with a live example (movie, show, season) computed by a port of `save_paths.apply_save_location_variables()`/`_sanitize()`/`resolve_save_path()`; templates, clickable variable chips and per-field examples only under Custom; "Send to Plex" folded into the Saving section ("Also save a copy when sending to a media server"); the Path Variable Examples section is gone. Stored settings are unchanged.
+- Settings → Media Servers shows a "Testing required" tag and note on the Emby section (Emby support assumes the Jellyfin API and is untested on a real Emby server).
+
+### Bug Fixes
+- **Re-imported Jellyfin/Emby items** — when Jellyfin re-imports a file it gives the item a new id, and every send to the old id returned 404 until the next scan. New `upload_with_stale_retry()`/`refresh_stale_item_id()` (media_server_send.py): on a 404 (or a season that can't be found under the cached series id), the item is looked up again by TMDb/TVDB id in the same library, its cached rows are moved to the new id (`db.rekey_media_server_item()`: movie/TV cache, overlay refresh state, poster fingerprints, scan Etags) and the upload is retried once. Used by the poster/logo/backdrop/thumb-art send endpoints, Media Mirror target uploads and Overlay Refresh.
+- **Jellyfin/Emby media info in Plex's vocabulary** — resolution is now `4k`/`1080`/`720`/`sd` (was `1080p`/`720p`) and audio language a 2-letter code (`en`, was `eng`), so per-value overlay badges set up in the Overlay Manager match Jellyfin items too. Existing rows are corrected by the next Jellyfin scan.
+- **Overlay Manager preview** — studio and streaming badges for a Jellyfin/Emby item (or a TV show) now use the scanned TMDb id instead of asking Plex.
+- A Jellyfin/Emby scan with auto-generate on no longer regenerates (or re-sends) a poster for an item that a Radarr/Sonarr webhook or a cross-server sync already sent one to. New `db.poster_already_sent()` checks History for a successful send to that item on that server; `process_new_media_server_content()` skips those items.
+
+## v1.8.11 (2026-10-22) — `dev-overlays` branch
+
+### New Features
+- **Poster drift detection** — new `backend/poster_drift.py`. Every successful poster send stores a 16x24 RGB fingerprint per (server, item) in the new `poster_fingerprints` table (hooked into `record_poster_history()` for send actions, `_upload_poster_and_verify()` and the Plex resend paths). When a scan re-downloads a poster whose server version changed (Quirk #152; Plex and Jellyfin/Emby), it is compared with the stored one; a change beyond re-encoding/resizing noise is marked. The action is a preference (own table `poster_drift_config`, so a Settings save can't reset it): off, list, notify (one Discord/Apprise summary per scan) or resend (re-uploads the resend cache via `api_render_cache_resend()`). History has a "Changed Outside Simposter" tab with both posters side by side, "Put Simposter's back" and "Keep server's" (adopts the current poster as the new baseline). Endpoints `GET /api/poster-drift`, `POST /api/poster-drift/config`, `POST /api/poster-drift/{server}/{key}/resend|dismiss`. Items Simposter never sent are never reported.
+- **Kometa blur** — `blur(N)` imports as a `blur` layer (`blur_amount`, 1-100, default 50); the strongest blur among a bucket's drawn layers is applied once (`GaussianBlur(N × canvas scale)`) before its other layers. Also addable in the Overlay Manager.
+- **Kometa `font_style`** — stored on the layer and applied with `set_variation_by_name()` for variable fonts; other fonts ignore it.
+- **Text addon images** — a `text(...)` overlay with an image keeps it (`asset_id`/`url`, `addon_position`, `addon_offset`, `addon_scale`), laid out like Kometa's `get_backdrop` (side by side top-aligned, or stacked and centered). Editable under "Image next to the text".
+- **Kometa queues** — `parse_queues()` reads a file's `queues:` (lists, named lists with `settings` position/overlay_limit/default/dynamic_position; conditionals use their defaults), and queued overlays get `queue` + `queue_positions`. At render, selected layers of a queue take its positions by weight (highest first); extra layers aren't drawn. Same logic in the preview (`queuePlacements()`).
+- **Remove overlays** (Overlay Refresh) and **Days since added / Show status** text values — see CLAUDE.md Quirk #174.
+
+### Bug Fixes
+- Media Mirror config is kept on a Settings save (stored `mirror` preserved per group; a removed server is still dropped).
+
+### Security
+- Pillow 13.0.0 on Python 3.11+ (12.3.0 kept for 3.10); `npm audit fix` (vite 8.3.5). A database restore only fills a media server's stored key when its URL matches.
+
+## v1.8.10 (2026-10-21) — `dev-overlays` branch
+
+Numbered 1.8.10 rather than 1.8.1: versions are compared part by part as numbers, so 1.8.1 would sort before 1.8.04.
+
+### Security
+- **Secrets in logs and errors** — new `redact_secrets()` (config.py) masks `api_key=`/`apikey=`/`api_token=`/`token=`/`x-plex-token=`/`secret=` values, `Token="..."` headers and every saved credential (settings keys plus each `mediaServers` token/apiKey). Used by `RedactingFormatter` for all log lines (simposter and uvicorn) and by the TMDb/TVDB/MDBList client errors and the key-test endpoints. Before, only the Plex token and TMDb key were masked, and `requests` errors carried the full URL with the key. Plex force-refresh fetches no longer put `X-Plex-Token` in the URL (it is already sent as a header).
+- **Redirects re-checked** — new `safe_get()` (middleware/validation.py) follows redirects one hop at a time and runs the SSRF check on each (max 5). Used by the render image download, Kometa remote image downloads, URL badges (and the proxy that uses them), media-server send/notify image URLs and Plex logo/backdrop/square-art URL sends. Before, only the first URL was checked, so a public link could redirect to a LAN or cloud-metadata address.
+
+### Documentation
+- New `docs/OVERLAYS.md` (overlay guide). README, GETTING_STARTED, MEDIA_SERVERS, COLLECTIONS_AND_POSTERS, ARCHITECTURE and WORKFLOW updated for overlays, Kometa import, MDBList, Overlay Refresh and live Kometa files.
+
+## v1.8.04 (2026-10-21) — `dev-overlays` branch
+
+### New Features
+- **Paste YAML** — the Kometa import modal has a "Paste YAML" box; the pasted text (must have a top-level `overlays:` or `templates:` line) becomes a `<name>.yml` file in the browser and goes through the same import as uploads, so images/fonts/zips can still be added alongside. Pasting again under the same name replaces the earlier paste.
+- **Days since added / Show status** — new condition fields `days_since_added` (whole days since the cached `added_at`; `get_added_at_for_rating_key()`) and `show_status` (TMDb TV `status` mapped to continuing/ended/canceled/upcoming; `get_tv_show_details()` now returns `status`). Loaded only when a condition uses them (`needed_data()` keys `added`/`status`), with a reason in the overlay log when missing; listed in Show when, the preview's example values and `/overlay-preview-metadata`.
+
+### Bug Fixes
+- **TSSK filters** — `tvdb_status`/`tmdb_status` map to `show_status` (TMDb values translated) and `added: N` to `days_since_added lte N` (`added.not` → `gt`), instead of a hidden `_unsupported_*` condition.
+- **Comma-separated filter values** — `label.not: A, B` (and other string/tag filters) are split into separate values as Kometa's `get_list` does; previously the whole string was one value, so the condition never matched. Regex filters are left whole.
+- **`backdrop` overlays** — any overlay name starting with "backdrop" becomes a box, matching Kometa's `overlay.py`, instead of an image lookup.
+- **Empty overlay files** — an empty/comment-only file, or `overlays:` with nothing under it, returns no layers plus a message instead of an error; an upload import skips it, a live Kometa file saves the empty overlay (clearing its layers).
+- **ID-list note** — the "list only updates on re-import" note for `tmdb_movie`/`tmdb_show`/`tvdb_show` is reported as info, so those overlays show as ok.
+
+## v1.8.03 (2026-10-20) — `dev-overlays` branch
+
+### Bug Fixes
+- **Remote overlay images** — a Kometa overlay with `url:`/`git:`/default images was imported as a link only: it rendered (fetched each time) but the editor's Image list showed nothing and the link wasn't visible. `finalize_elements()` now downloads it (`download_remote_image()`: SSRF guard, 15 MB cap, image check, once per URL per import) and saves it as an overlay asset (reused on re-import), keeping the link as a fallback; a failed download is reported and the layer keeps the link. Image and full-poster image layers show an "Image link" field in the editor. Applies to uploads and live Kometa files.
+
+## v1.8.02 (2026-10-20) — `dev-overlays` branch
+
+### Improvements
+- **Overlays per poster in Overlay Refresh** — Tracked posters shows the overlays each poster was sent with (`state_overlay_ids()`: its stored `overlay_config_ids`, `overlay_config_ids_below` and the preset's legacy link; deleted ones flagged), a filter by overlay with counts, "Re-send these N" for the filtered posters and a per-poster "Re-send" (a forced apply run limited to those keys).
+- **Readable overlay logs** — each overlay render logs one block: the item and overlays applied, the data the rules were checked against (resolution, codecs, TMDb/TVDB ID, labels, file name, MDBList ratings used or why they weren't loaded), the layers drawn (badges with their value) and a reason per skipped layer (failed condition with the item's actual value, lost in a badge set, hidden by another layer, or the overlay's own conditions); up to 8 skipped lines at INFO, the rest at DEBUG (`overlay_engine.explain_selection()`, `describe_failure()`, `data_summary()`). A preset pointing at a deleted overlay is warned about once per run with how to fix it. Per-layer drawing details and preview plumbing (option keys, cache flags, injected metadata, TMDb fetches) moved to DEBUG.
+- **Overlay effect cache built ahead of time** — new `backend/overlay_cache.py`. At startup (background thread), after a database restore, and on preset save / season save / import, every preset's effect layers are generated from its stored options (series and season settings); deleting a preset removes its files.
+
+### Bug Fixes
+- **Wrong cached effects** — the cache file was `config/overlays/{template}/{preset}.png`, one per preset, and a cache miss generated it from whatever was being rendered. A season config with its own matte/fade/vignette, or a Square Art (square canvas) render, could put its layer there and every other render of that preset would then use it. Files are now `{preset}--{signature}.png`, where the signature covers the effect options and canvas size; old-style files are removed at startup and flagged by Cleanup.
+
+## v1.8.01 (2026-10-19) — `dev-overlays` branch
+
+### New Features
+- **Live Kometa files** — Overlay Manager → Advanced. A server-side overlay YAML is re-read on an interval (`live_kometa_files` table, `backend/live_kometa.py`, `/api/live-kometa-files`, APScheduler job per file); when its contents change it is re-imported into the same overlay config (whole-overlay conditions kept), and optionally Overlay Refresh runs for every library group of that type. Local images/fonts are found next to the file or in the folders above it.
+- **ID-list builders** — Kometa `tmdb_movie`, `tmdb_show` and `tvdb_show` import as `tmdb_id`/`tvdb_id` conditions instead of a hidden layer; the engine fills a missing id from the scan cache when a condition needs it, and "TMDb ID"/"TVDB ID" are Show when fields.
+
+### Changes
+- The Kometa importer's image/font matching and validation moved into a shared `finalize_elements()` used by uploads and live files; an image that can't be matched is now reported as "wasn't found".
+
+## v1.8.0 (2026-10-19) — `dev-overlays` branch
+
+### New Features
+- **Overlay engine v2** — per-layer conditions (`conditions`: resolution, codecs, channels, language, edition, file path regex, labels, year, title, studio, streaming platform, MDBList ratings and lists), badge sets (`group` + `weight`, first match wins) and hide rules (`suppress`), plus Kometa-style placement (align + offset in a 1000x1500 space) with background boxes and outlines. Shared by `backend/overlay_engine.py` and the preview's `frontend/src/services/overlayEngine.ts`.
+- **Whole-overlay conditions** — new `overlay_configs.conditions_json`; when they fail, none of the overlay's layers draw (real renders, Overlay Refresh and preview).
+- **Kometa overlay importer** — Overlay Manager → Import Kometa expands Kometa's templates, maps what Simposter supports and reports the rest.
+- **MDBList** — ratings and list membership for conditions and text, cached in the database (Settings → General).
+- **Overlay Refresh** — per-library-group page that re-renders posters whose overlay would now come out differently, with a schedule, Plex label and log.
+- **File paths from scans** — scans store each item's media file path for file-name conditions.
+- **Overlay Manager redesign** — tabs for Layers / Badge sets / Show overlay when; per-layer Look / Position / Show when tabs; one pin-and-distance position control in pixels; plain-English layer titles; rename layers; warnings on layers that draw nothing; compare the overlay on several example or real posters; "Insert value" list for text; a larger editor; unsaved-changes prompt.
+- **Branch-aware update check** — `/api/version-info` reads the running branch's `frontend/src/version.ts` from GitHub (cached for an hour) and `branches.json` from `main`, so the version badge shows an update on any branch, and a "Move to …" badge when the branch was merged, retired or deleted.
+
+### Bug Fixes
+- **Text variables** — plain (non-Kometa) text layers drew `{audience_rating}` literally; they now fill values and skip the layer when one is missing.
+- **Preview badge size** — the preview capped image badges at half the canvas width; real renders never did.
+- **Update check** — it only ran on `main` and queried a placeholder repository (`YOUR_USERNAME/simposter`), so it never reported anything.
+
 ## v1.7.12 (2026-10-16) — `webui-overhaul-dev` branch
 
 ### New Features

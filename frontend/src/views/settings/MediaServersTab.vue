@@ -27,7 +27,14 @@
       :key="group.type"
       :class="['section', { 'section-unsaved': group.changed }]"
     >
-      <h3>{{ group.label }}</h3>
+      <h3>
+        {{ group.label }}
+        <span v-if="group.type === 'emby'" class="coming-soon-badge testing-badge">Testing required</span>
+      </h3>
+      <p v-if="group.type === 'emby'" class="scan-hint">
+        Emby support uses the same calls as Jellyfin and hasn't been tested on a real Emby server yet.
+        Please report anything that doesn't work.
+      </p>
 
       <div class="server-list">
         <!-- The main Plex server ('plex-1'). Same card shape and controls as
@@ -194,6 +201,13 @@
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- Placeholder for a planned server type; nothing here is functional. -->
+    <div class="section section-coming-soon" aria-disabled="true">
+      <h3>Silo <span class="coming-soon-badge">Future update</span></h3>
+      <p class="empty-state">Silo support is planned for a future update.</p>
+      <button type="button" class="secondary-small add-server-toggle" disabled>+ Add a Silo Server</button>
     </div>
     </div>
 
@@ -709,6 +723,28 @@ h3 {
 .server-type-badge.plex { background: rgba(229, 160, 13, 0.15); color: #e5a00d; }
 .server-type-badge.jellyfin { background: rgba(170, 92, 195, 0.15); color: #aa5cc3; }
 .server-type-badge.emby { background: rgba(82, 181, 75, 0.15); color: #52b54b; }
+
+.section-coming-soon {
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+}
+.coming-soon-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #9aa4b2);
+}
+.testing-badge {
+  background: rgba(229, 160, 13, 0.15);
+  color: #e5a00d;
+}
 
 .primary-badge {
   font-size: 11px;

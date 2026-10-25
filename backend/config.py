@@ -48,6 +48,7 @@ SECRET_FIELD_PATHS = (
     ("tmdb", "apiKey"),
     ("tvdb", "apiKey"),
     ("fanart", "apiKey"),
+    ("mdblist", "apiKey"),
     ("automation", "webhookSecret"),
 )
 
@@ -122,6 +123,7 @@ class Settings(BaseSettings):
     TVDB_API_KEY: str = ""
     TVDB_PIN: str = ""
     FANART_API_KEY: str = ""
+    MDBLIST_API_KEY: str = ""
 
     OUTPUT_ROOT: str = ""
     CONFIG_DIR: str = "./config"
@@ -333,6 +335,75 @@ settings.LOG_FILE = str(preferred_log)
 # ==========================
 #  Logging with sensitive data redaction
 # ==========================
+# Secret-looking query/header values, e.g. "?api_key=abc", "&apikey=abc",
+# "X-Plex-Token=abc", "secret=abc", 'MediaBrowser Token="abc"'. Catches keys that
+# aren't saved yet (a "Test" button) and URLs inside requests' exception text.
+_SECRET_PARAM_RE = re.compile(
+    r"(?i)((?:api_?key|apikey|api_token|x-plex-token|plex-token|token|secret)=)[^&\s'\"<>,;)]+"
+)
+_SECRET_HEADER_RE = re.compile(r'(?i)(token=")[^"]*(")')
+
+_known_secrets_cache: dict = {"at": 0.0, "values": ()}
+
+
+def _media_server_secrets() -> list:
+    """Tokens/API keys of every configured media server, read straight from the
+    settings table (config.py can't import database.py)."""
+    try:
+        import sqlite3
+        db_path = Path(settings.SETTINGS_DIR) / "simposter.db"
+        if not db_path.exists():
+            return []
+        conn = sqlite3.connect(str(db_path), timeout=2)
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+        finally:
+            conn.close()
+        servers = json.loads(row[0]) if row and row[0] else []
+        out = []
+        for s in servers if isinstance(servers, list) else []:
+            if isinstance(s, dict):
+                for k in ("token", "apiKey"):
+                    if s.get(k):
+                        out.append(str(s[k]))
+        return out
+    except Exception:
+        return []
+
+
+def _known_secrets() -> tuple:
+    """Every saved secret value, longest first, refreshed at most once a minute."""
+    import time as _time
+    now = _time.time()
+    if now - _known_secrets_cache["at"] < 60:
+        return _known_secrets_cache["values"]
+    vals = [
+        getattr(settings, name, "") or ""
+        for name in ("PLEX_TOKEN", "TMDB_API_KEY", "TVDB_API_KEY", "FANART_API_KEY",
+                     "MDBLIST_API_KEY", "WEBHOOK_SECRET")
+    ]
+    vals += _media_server_secrets()
+    values = tuple(sorted({str(v) for v in vals if v and len(str(v)) >= 6}, key=len, reverse=True))
+    _known_secrets_cache.update(at=now, values=values)
+    return values
+
+
+def redact_secrets(text) -> str:
+    """Hide API keys, tokens and secrets in a string before it is logged or
+    returned to the browser."""
+    if text is None:
+        return ""
+    s = str(text)
+    if not s:
+        return s
+    s = _SECRET_PARAM_RE.sub(r"\1***", s)
+    s = _SECRET_HEADER_RE.sub(r"\1***\2", s)
+    for secret in _known_secrets():
+        if secret in s:
+            s = s.replace(secret, secret[:4] + "***")
+    return s
+
+
 class RedactingFormatter(logging.Formatter):
     """Custom formatter that redacts sensitive information from logs."""
 
@@ -343,14 +414,7 @@ class RedactingFormatter(logging.Formatter):
         else:
             record.api_tag = ""
 
-        original = super().format(record)
-        # Redact tokens and API keys
-        redacted = original
-        if settings.PLEX_TOKEN and len(settings.PLEX_TOKEN) > 4:
-            redacted = redacted.replace(settings.PLEX_TOKEN, settings.PLEX_TOKEN[:4] + "***REDACTED***")
-        if settings.TMDB_API_KEY and len(settings.TMDB_API_KEY) > 4:
-            redacted = redacted.replace(settings.TMDB_API_KEY, settings.TMDB_API_KEY[:4] + "***REDACTED***")
-        return redacted
+        return redact_secrets(super().format(record))
 
 # High-frequency UI progress-polling endpoints (batch/scan/backup progress bars,
 # polled every 200ms-3s while an operation runs) add zero diagnostic value to the
@@ -699,12 +763,45 @@ def extract_tmdb_id_from_metadata(xml_text: str) -> Optional[int]:
         logger.debug("Failed to parse XML metadata: %s", e)
         return None
 
+    tmdb_ids: List[int] = []
+    imdb_id = None
     for g in root.findall(".//Guid"):
         gid = g.get("id") or ""
         match = re.search(r"(?:tmdb|themoviedb)://(\d+)", gid)
-        if match:
-            return int(match.group(1))
-    return None
+        if match and int(match.group(1)) not in tmdb_ids:
+            tmdb_ids.append(int(match.group(1)))
+        imdb = re.search(r"imdb://(tt\d+)", gid)
+        if imdb and not imdb_id:
+            imdb_id = imdb.group(1)
+    if len(tmdb_ids) > 1:
+        return _pick_tmdb_id(tmdb_ids, imdb_id)
+    return tmdb_ids[0] if tmdb_ids else None
+
+
+# (tmdb ids, imdb id) -> chosen id, so a scan doesn't ask TMDb again for every item.
+_TMDB_PICKS: Dict[tuple, int] = {}
+
+
+def _pick_tmdb_id(tmdb_ids: List[int], imdb_id: Optional[str]) -> int:
+    """Plex sometimes attaches two TMDb ids to one item (e.g. an old entry for
+    the film's working title plus the real one). Use the one TMDb itself
+    links to the item's IMDb id; without an IMDb id or a match, keep the
+    first, as before."""
+    key = (tuple(tmdb_ids), imdb_id)
+    if key in _TMDB_PICKS:
+        return _TMDB_PICKS[key]
+    chosen = tmdb_ids[0]
+    if imdb_id:
+        try:
+            from .tmdb_client import find_tmdb_ids_by_imdb
+            matches = [i for i in find_tmdb_ids_by_imdb(imdb_id) if i in tmdb_ids]
+            if matches:
+                chosen = matches[0]
+        except Exception as e:
+            logger.debug("[TMDB] Couldn't check IMDb %s against TMDb ids %s: %s", imdb_id, tmdb_ids, e)
+    logger.info("[TMDB] Plex lists several TMDb ids %s (IMDb %s); using %s", tmdb_ids, imdb_id or "none", chosen)
+    _TMDB_PICKS[key] = chosen
+    return chosen
 
 
 def extract_tvdb_id_from_metadata(xml_text: str) -> Optional[int]:
@@ -801,7 +898,14 @@ def get_plex_media_info(rating_key: str) -> Dict[str, str]:
     except Exception:
         pass  # DB not available yet or import error
 
-    # 2. Fetch from Plex and cache the result
+    # 2. Fetch from Plex and cache the result (only for a Plex item; a
+    #    Jellyfin/Emby item's media info comes from its scan)
+    try:
+        from . import database as db
+        if not settings.PLEX_URL or db.get_server_id_for_rating_key(str(rating_key)) != "plex-1":
+            return {}
+    except Exception:
+        pass
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=6)
@@ -871,16 +975,37 @@ def inject_plex_media_metadata(
     if not rating_key:
         return render_options
 
+    # The overlay engine looks up this item's stored file paths by rating_key
+    # (filename conditions, Kometa's filepath.regex).
+    render_options["metadata"] = {**(render_options.get("metadata") or {}), "rating_key": str(rating_key)}
+
     plex_media = get_plex_media_info(rating_key)
     if plex_media:
         existing_meta = render_options.get("metadata") or {}
         render_options["metadata"] = {**existing_meta, **plex_media}
-        logger.info("%sInjected Plex media info for rating_key=%s: %s", log_prefix, rating_key, plex_media)
+        logger.debug("%sInjected Plex media info for rating_key=%s: %s", log_prefix, rating_key, plex_media)
 
     resolved_tmdb_id = tmdb_id
     resolved_is_tv = is_tv
 
-    if resolved_tmdb_id is None or resolved_is_tv is None:
+    # A Jellyfin/Emby item (or no Plex at all): the ids are already in the scan
+    # cache, and a Plex lookup would only fail.
+    if (resolved_tmdb_id is None or resolved_is_tv is None) and plex_xml_text is None:
+        try:
+            from . import database as db
+            if not settings.PLEX_URL or db.get_server_id_for_rating_key(str(rating_key)) != "plex-1":
+                cached_tmdb, _cached_tvdb = db.get_ids_for_rating_key(str(rating_key))
+                if resolved_tmdb_id is None and cached_tmdb:
+                    resolved_tmdb_id = cached_tmdb
+                if resolved_is_tv is None:
+                    with db.get_db() as conn:
+                        resolved_is_tv = conn.execute(
+                            "SELECT 1 FROM tv_cache WHERE rating_key = ? LIMIT 1", (str(rating_key),)
+                        ).fetchone() is not None
+        except Exception as e:
+            logger.debug("%sCached id lookup failed for %s: %s", log_prefix, rating_key, e)
+
+    if (resolved_tmdb_id is None or resolved_is_tv is None) and settings.PLEX_URL:
         xml_text = plex_xml_text
         if xml_text is None:
             try:
@@ -903,7 +1028,7 @@ def inject_plex_media_metadata(
         render_options.setdefault("metadata", {})
         render_options["metadata"]["tmdb_id"] = resolved_tmdb_id
         render_options["metadata"]["media_type"] = "tv" if resolved_is_tv else "movie"
-        logger.info("%sInjected tmdb_id=%s media_type=%s for studio/streaming badge resolution", log_prefix, resolved_tmdb_id, render_options["metadata"]["media_type"])
+        logger.debug("%sInjected tmdb_id=%s media_type=%s for studio/streaming badge resolution", log_prefix, resolved_tmdb_id, render_options["metadata"]["media_type"])
 
     return render_options
 
@@ -981,6 +1106,26 @@ def extract_folder_name_from_metadata(xml_text: str) -> Optional[str]:
     if len(segments) >= 4:
         return segments[-2]
     return None
+
+
+def extract_media_paths_from_metadata(xml_text: str) -> List[str]:
+    """Every media file path in a Plex /library/metadata/{key} response.
+
+    Movies: one <Part file> per version (a movie with 4K + 1080p copies has two).
+    Shows: no <Part> at this level, so the show folder(s) from <Location path>.
+    Used by overlay conditions that match on the file name (Kometa's
+    filepath.regex). Returns [] on any parse failure."""
+    if not xml_text or xml_text.startswith("<html"):
+        return []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    paths = [p.get("file") for p in root.findall(".//Part") if p.get("file")]
+    if not paths:
+        paths = [loc.get("path") for loc in root.findall(".//Location") if loc.get("path")]
+    seen = set()
+    return [p for p in paths if not (p in seen or seen.add(p))]
 
 
 def get_movie_folder_name(rating_key: str) -> Optional[str]:

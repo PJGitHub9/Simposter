@@ -37,7 +37,7 @@ def _download_image(url: str) -> Image.Image:
     if not url:
         raise ValueError("Empty image URL")
 
-    from .middleware.validation import assert_fetch_url_safe
+    from .middleware.validation import assert_fetch_url_safe, safe_get
     assert_fetch_url_safe(url)
 
     # Cache hit — skip HTTP entirely
@@ -61,7 +61,7 @@ def _download_image(url: str) -> Image.Image:
     for attempt in range(max_retries):
         try:
             # Increase timeout from 20s to 60s for slow connections
-            resp = requests.get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
+            resp = safe_get(url, timeout=60, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
             resp.raise_for_status()
             break
         except requests.exceptions.Timeout:
@@ -317,11 +317,14 @@ def render_with_overlay_cache(
     from .templates.universal import _resize_cover, _hex_to_rgb, _solid_color_logo, _render_text_overlay, _add_grain
     from PIL import ImageOps
 
-    overlay_path = Path(settings.CONFIG_DIR) / "overlays" / template_id / f"{preset_id}.png"
+    # Keyed by preset AND the effect settings + canvas (backend/overlay_cache.py),
+    # so a season config or a square canvas never reuses another variant's layer.
+    from .overlay_cache import cache_path as _overlay_cache_path, ensure as _ensure_overlay_cache
+    overlay_path = _overlay_cache_path(template_id, preset_id, render_options) if preset_id else Path("")
 
-    if use_cache and overlay_path.exists():
+    if use_cache and preset_id and overlay_path.exists():
         try:
-            logger.info(f"[CACHE] Overlay cache enabled and found: {overlay_path}")
+            logger.debug(f"[CACHE] Overlay cache enabled and found: {overlay_path}")
 
             # Download poster and logo in parallel, reusing the shared _download_image()
             # helper instead of a bespoke fetch — gives this path the same LRU byte cache
@@ -494,7 +497,10 @@ def render_with_overlay_cache(
             logger.warning(f"[CACHE] Failed to use overlay cache, falling back to full render: {e}")
 
     else:
-        logger.info(f"[CACHE] Overlay cache {'disabled' if not use_cache else 'missing'} for template={template_id} preset={preset_id}; using full render")
+        if use_cache and preset_id:
+            logger.info("[CACHE] No cached overlay yet for preset '%s' with these settings; full render this time, building it for next time", preset_id)
+        else:
+            logger.debug("[CACHE] Overlay cache off for template=%s preset=%s; full render", template_id, preset_id)
         # Self-heal a missing cache instead of falling back to a full render forever.
         # A preset can end up with no cached overlay for reasons that have nothing
         # to do with this specific render: POST /api/presets/import (used by
@@ -519,15 +525,7 @@ def render_with_overlay_cache(
         # preview -- always sends disableOverlayCache=true (render.ts, Quirk #17),
         # so it can never reach here with unsaved slider-drag values baked in.
         if use_cache and preset_id:
-            try:
-                from .templates.canvas import resolve_canvas_size
-                gen_canvas_w, gen_canvas_h = resolve_canvas_size(render_options)
-                overlay_img = generate_overlay(render_options, gen_canvas_w, gen_canvas_h)
-                overlay_path.parent.mkdir(parents=True, exist_ok=True)
-                overlay_img.save(overlay_path, "PNG")
-                logger.info(f"[CACHE] Self-healed missing overlay cache: {overlay_path}")
-            except Exception as gen_err:
-                logger.warning(f"[CACHE] Failed to self-heal missing overlay cache for template={template_id} preset={preset_id}: {gen_err}")
+            _ensure_overlay_cache(template_id, preset_id, render_options)
 
     return render_poster_image(template_id, poster_url, logo_url, render_options)
 

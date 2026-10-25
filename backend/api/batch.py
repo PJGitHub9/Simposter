@@ -171,6 +171,24 @@ def _resend_cached_bytes_for_movie(rating_key: str, title_hint: str, cached_byte
         }
 
 
+def _record_overlay_send(server_id, item_id, req, template_id, render_options, background_url, logo_url,
+                         media_type="movie", tmdb_id=None, title=None, year=None, season_index=None):
+    """Remember a sent poster's render inputs for overlay refresh (Quirk #166).
+    The item's library on `server_id` is looked up in the batch library's group."""
+    try:
+        from ..overlay_refresh import record_send, library_in_group
+        source_server = getattr(req, "source_server_id", None) or "plex-1"
+        library_id = library_in_group(source_server, getattr(req, "library_id", None), media_type, server_id)
+        record_send(
+            server_id, item_id, template_id=template_id, options=render_options,
+            background_url=background_url, logo_url=logo_url, media_type=media_type,
+            library_id=library_id, season_index=season_index, tmdb_id=tmdb_id,
+            title=title, year=year,
+        )
+    except Exception as e:
+        logger.debug("[BATCH] overlay refresh record failed for %s: %s", item_id, e)
+
+
 def _process_single_movie(
     idx: int,
     rating_key: str,
@@ -719,6 +737,12 @@ def _process_single_movie(
                             )
                         except Exception as sync_history_err:
                             logger.debug("[BATCH] Failed to record history for sync to %s: %s", _s.get("server_id"), sync_history_err)
+                        _record_overlay_send(
+                            _s["server_id"], _s["item_id"], req, template_id, render_options,
+                            poster_url, logo_url if logo_mode != "none" else None,
+                            media_type="movie", tmdb_id=tmdb_id,
+                            title=movie_details.get("title"), year=movie_details.get("year"),
+                        )
             except Exception as sync_err:
                 logger.warning("[BATCH] Multi-server sync failed for %s [%s]: %s", rating_key, title_hint, sync_err)
 
@@ -810,6 +834,8 @@ def _process_single_movie(
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
+                        from .. import poster_drift
+                        poster_drift.record_sent("plex-1", rating_key, logo_bytes, "logo")
                         logger.info("[BATCH] Uploaded logo to Plex for %s [%s]", rating_key, title_hint)
                         # Cache the just-uploaded bytes locally and point the DB's cached
                         # logo_url at that copy (served via /api/logo/{rating_key}) instead of
@@ -850,6 +876,13 @@ def _process_single_movie(
                 )
             except Exception as history_err:
                 logger.debug(f"[BATCH] Failed to record history for plex send: {history_err}")
+
+            _record_overlay_send(
+                "plex-1", rating_key, req, template_id, render_options,
+                poster_url, logo_url if logo_mode != "none" else None,
+                media_type="movie", tmdb_id=tmdb_id,
+                title=movie_details.get("title"), year=movie_details.get("year"),
+            )
 
         # Refresh cached poster from Plex so UI sees the new image
         try:
@@ -2091,6 +2124,11 @@ def _render_and_save_poster(
                         )
                     except Exception as sync_history_err:
                         logger.debug("[BATCH] Failed to record history for sync to %s: %s", _s.get("server_id"), sync_history_err)
+                    _record_overlay_send(
+                        _s["server_id"], _s["item_id"], req, template_id, render_options,
+                        poster_url, logo_url, media_type="tv", tmdb_id=tmdb_id,
+                        title=title, year=year, season_index=season_index,
+                    )
         except Exception as sync_err:
             logger.warning("[BATCH] Multi-server sync failed for %s: %s", display_title, sync_err)
 
@@ -2157,6 +2195,8 @@ def _render_and_save_poster(
                         plex_logo_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/clearLogos"
                         logo_hdrs = {"X-Plex-Token": settings.PLEX_TOKEN, "Content-Type": ct}
                         plex_session.post(plex_logo_url, headers=logo_hdrs, data=logo_bytes, timeout=20)
+                        from .. import poster_drift
+                        poster_drift.record_sent("plex-1", rating_key, logo_bytes, "logo")
                         logger.info("[BATCH] Uploaded logo to Plex for %s [%s]", rating_key, display_title)
                         # Cache the just-uploaded bytes locally instead of caching the raw
                         # external TMDb/Fanart URL below -- see the matching comment in
@@ -2237,6 +2277,12 @@ def _render_and_save_poster(
                 )
             except Exception:
                 pass
+
+            _record_overlay_send(
+                "plex-1", rating_key, req, template_id, render_options,
+                poster_url, logo_url, media_type="tv", tmdb_id=tmdb_id,
+                title=title, year=year, season_index=season_index,
+            )
 
         except Exception as upload_err:
             logger.error("[BATCH] Plex upload failed for %s: %s", display_title, upload_err)

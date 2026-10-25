@@ -168,6 +168,8 @@ class PlexClient(MediaServerClient):
         r = plex_session.post(url, headers=headers, data=image_bytes, timeout=20)
         r.raise_for_status()
 
+        _record_art_sent(self.server_id, item_id, image_type, image_bytes)
+
     def download_image(self, item_id: str, image_type: ImageType) -> Optional[bytes]:
         direct_endpoint = _DIRECT_DOWNLOAD_ENDPOINT.get(image_type)
         if direct_endpoint:
@@ -289,3 +291,16 @@ class PlexClient(MediaServerClient):
             logger.error("[PLEX_CLIENT:%s] find_season_by_index failed (series=%s season=%s): %s",
                          self.server_id, series_item_id, season_index, e)
             return None
+
+
+def _record_art_sent(server_id, item_id, image_type, image_bytes) -> None:
+    """Logos/backdrops: remember what was sent for drift detection
+    (poster_drift.py; posters are recorded by their own send paths)."""
+    asset = {ImageType.LOGO: "logo", ImageType.BACKDROP: "backdrop"}.get(image_type)
+    if not asset:
+        return
+    try:
+        from ..poster_drift import record_sent
+        record_sent(server_id, item_id, image_bytes, asset)
+    except Exception:
+        pass

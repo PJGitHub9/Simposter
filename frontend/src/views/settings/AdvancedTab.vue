@@ -55,7 +55,7 @@ const dbImportSummary = computed(() => {
       `${d.presets.length} presets`
     ]
     if (d.overlays) {
-      parts.push(`${(d.overlays.configs || []).length} overlay configs`)
+      parts.push(`${(d.overlays.configs || []).length} overlays`)
       parts.push(`${(d.overlays.assets || []).length} overlay images`)
     }
     const when = d.exported_at ? ` from ${new Date(d.exported_at).toLocaleString()}` : ''
@@ -242,7 +242,7 @@ const moveApiDown = (api: string) => {
     <div class="section">
       <h3>Database Backup</h3>
       <p class="section-description">
-        Export and import your Simposter settings, presets and overlay configs (with their badge images) as one JSON file.
+        Export and import your Simposter settings, presets and overlays (with their badge images) as one JSON file.
       </p>
 
       <div class="preset-actions">
@@ -290,7 +290,7 @@ const moveApiDown = (api: string) => {
       <ul class="included-list">
         <li><strong>All Settings:</strong> media server connections, library groups, save locations, automation, notifications and schedules (API keys only if you tick the box)</li>
         <li><strong>Template Presets:</strong> every preset, including season settings</li>
-        <li><strong>Overlay Configs:</strong> every overlay config and the badge images it uses</li>
+        <li><strong>Overlays:</strong> every overlay and the badge images it uses</li>
         <li><strong>Not included:</strong> poster/logo caches, history and the retry queue. Run a library scan after restoring to rebuild the caches.</li>
       </ul>
       <div class="note">
@@ -309,7 +309,7 @@ const moveApiDown = (api: string) => {
 
         <div class="modal-body">
           <p class="modal-description">
-            ⚠️ <strong>Warning:</strong> This replaces your current settings, presets and overlay configs. Export a backup first if you might want them back.
+            ⚠️ <strong>Warning:</strong> This replaces your current settings, presets and overlays. Export a backup first if you might want them back.
           </p>
 
           <label class="file-pick">

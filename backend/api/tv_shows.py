@@ -51,6 +51,8 @@ def _get_plex_tv_shows(lib_ids: Optional[List[str]] = None) -> List[dict]:
                         # Poster version (ends in an update timestamp) -- lets the
                         # scan re-download only changed posters (Quirk #152).
                         "thumb": directory.get("thumb"),
+                        # Backdrop version, same idea.
+                        "art": directory.get("art"),
                     })
         except Exception as e:
             logger.error(f"Failed to fetch TV shows from library {lib_id}: {e}")
@@ -167,7 +169,7 @@ def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> O
 
     # Add cache-busting parameter when force refreshing to bypass Plex's cache
     import time
-    cache_buster = f"?X-Plex-Token={settings.PLEX_TOKEN}&t={int(time.time())}" if force_refresh else ""
+    cache_buster = f"?t={int(time.time())}" if force_refresh else ""
     direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb{cache_buster}"
 
     # Try direct poster URL

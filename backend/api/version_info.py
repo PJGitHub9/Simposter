@@ -131,53 +131,128 @@ def get_docker_tag() -> Optional[str]:
     return None
 
 
-def check_for_updates(current_version: str, branch: str) -> Optional[dict]:
-    """
-    Check GitHub for newer releases/commits.
-    Returns dict with 'available': bool, 'latest_version': str, 'url': str
-    """
+# GitHub repo the update check reads from (raw files, no API token needed).
+GITHUB_REPO = os.getenv("SIMPOSTER_GITHUB_REPO", "PJGitHub9/Simposter")
+RAW_BASE = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
+# Branch whose branches.json says which branches are still maintained.
+MANIFEST_BRANCH = "main"
+_CACHE_TTL = 3600          # seconds a successful lookup is reused
+_CACHE_TTL_FAILED = 600    # a failed lookup (offline, rate limit) is retried sooner
+_cache: dict = {}
+
+
+def _cached(key: str, fetch):
+    """fetch() result for key, reused for an hour (10 minutes when it failed)."""
+    import time
+    now = time.time()
+    hit = _cache.get(key)
+    if hit and now - hit[0] < (_CACHE_TTL if hit[1] is not None else _CACHE_TTL_FAILED):
+        return hit[1]
     try:
-        if branch == 'main':
-            # Check GitHub releases for main branch
-            url = "https://api.github.com/repos/YOUR_USERNAME/simposter/releases/latest"
-            response = requests.get(url, timeout=5)
-            if response.status_code == 200:
-                data = response.json()
-                latest_tag = data.get('tag_name', '')
-
-                # Compare versions
-                current_tuple = parse_version(current_version)
-                latest_tuple = parse_version(latest_tag)
-
-                if latest_tuple > current_tuple:
-                    return {
-                        'available': True,
-                        'latest_version': latest_tag,
-                        'url': data.get('html_url', '')
-                    }
-        elif branch and branch != 'main':
-            # For dev branches, don't check for updates
-            pass
-
-        return {'available': False, 'latest_version': current_version, 'url': ''}
+        value = fetch()
     except Exception as e:
-        logger.debug(f"Update check failed: {e}")
-        return None
+        logger.debug(f"Update check: {key} failed: {e}")
+        value = None
+    _cache[key] = (now, value)
+    return value
+
+
+def _fetch_raw(branch: str, path: str):
+    """(status_code, text) of a file on a branch on GitHub."""
+    from urllib.parse import quote
+    r = requests.get(f"{RAW_BASE}/{quote(branch, safe='')}/{path}", timeout=5)
+    return r.status_code, (r.text if r.status_code == 200 else "")
+
+
+def _remote_version(branch: str) -> dict:
+    """{'exists': bool, 'version': str|None} for a branch on GitHub, None when unknown."""
+    def fetch():
+        status, text = _fetch_raw(branch, "frontend/src/version.ts")
+        if status == 404:
+            return {"exists": False, "version": None}
+        if status != 200:
+            raise RuntimeError(f"HTTP {status}")
+        for line in text.splitlines():
+            if "APP_VERSION" in line and "'" in line:
+                return {"exists": True, "version": line.split("'")[1].strip()}
+        return {"exists": True, "version": None}
+    return _cached(f"version:{branch}", fetch)
+
+
+def _branch_manifest() -> dict:
+    """branches.json from the main branch: which branches are active, merged or retired."""
+    import json
+
+    def fetch():
+        status, text = _fetch_raw(MANIFEST_BRANCH, "branches.json")
+        if status != 200:
+            raise RuntimeError(f"HTTP {status}")
+        data = json.loads(text)
+        return data if isinstance(data, dict) else {}
+    return _cached("manifest", fetch) or {}
+
+
+def check_for_updates(current_version: str, branch: Optional[str]) -> dict:
+    """
+    Update and branch status for the running branch:
+      - update_available / latest_version: the newest APP_VERSION on this branch on GitHub
+      - branch_status: 'active' | 'merged' | 'retired' | 'missing' | 'unknown'
+        ('missing' = the branch no longer exists on GitHub)
+      - branch_move_to / branch_message: where to go instead, from branches.json on main
+    """
+    result = {
+        "available": False, "latest_version": None, "url": "",
+        "branch_status": "unknown", "branch_move_to": None, "branch_message": None,
+    }
+    if not branch or branch in ("HEAD", "unknown") or os.getenv("DISABLE_UPDATE_CHECK", "").lower() in ("1", "true", "yes"):
+        return result
+
+    info = (_branch_manifest().get("branches") or {}).get(branch) or {}
+    status = str(info.get("status") or "").lower()
+    move_to = info.get("move_to") or info.get("into")
+
+    remote = _remote_version(branch)
+    if remote is not None:
+        if remote["exists"]:
+            result["branch_status"] = status or "active"
+            latest = remote["version"]
+            result["latest_version"] = latest
+            result["url"] = f"https://github.com/{GITHUB_REPO}/tree/{branch}"
+            if latest and parse_version(latest) > parse_version(current_version):
+                result["available"] = True
+        else:
+            result["branch_status"] = status if status in ("merged", "retired") else "missing"
+    elif status:
+        result["branch_status"] = status
+
+    if result["branch_status"] in ("merged", "retired", "missing"):
+        result["branch_move_to"] = move_to or ("main" if branch != "main" else None)
+        result["branch_message"] = info.get("message")
+        target = result["branch_move_to"]
+        if target:
+            result["url"] = f"https://github.com/{GITHUB_REPO}/tree/{target}"
+            target_remote = _remote_version(target)
+            if target_remote and target_remote.get("version"):
+                result["latest_version"] = target_remote["version"]
+    return result
 
 
 @router.get("/version-info")
-async def get_version_info():
+def get_version_info():
     """
     Get version info including branch and update status.
 
     Returns:
         {
-            "version": "v1.5.5",
-            "branch": "dev" | "main" | null,
-            "display_version": "v1.5.5-dev" | "v1.5.5",
-            "update_available": bool,
-            "latest_version": "v1.5.6",
-            "update_url": "https://github.com/..."
+            "version": "v1.8.0",
+            "branch": "webui-overhaul-dev" | "main" | null,
+            "display_version": "v1.8.0-webui-overhaul-dev" | "v1.8.0",
+            "update_available": bool,       # a newer version is on this branch on GitHub
+            "latest_version": "v1.8.1",
+            "update_url": "https://github.com/...",
+            "branch_status": "active" | "merged" | "retired" | "missing" | "unknown",
+            "branch_move_to": "webui-overhaul-dev" | null,
+            "branch_message": str | null
         }
     """
     current_version = get_current_version()
@@ -190,17 +265,17 @@ async def get_version_info():
         # Only add suffix for non-main branches
         display_version = f"{current_version}-{branch}"
 
-    # Check for updates (only for main branch)
-    update_info = None
-    if branch == 'main':
-        update_info = check_for_updates(current_version, branch)
+    update_info = check_for_updates(current_version, branch)
 
     return {
         "version": current_version,
         "branch": branch,
         "docker_tag": docker_tag,
         "display_version": display_version,
-        "update_available": update_info.get('available', False) if update_info else False,
-        "latest_version": update_info.get('latest_version') if update_info else None,
-        "update_url": update_info.get('url') if update_info else None
+        "update_available": update_info["available"],
+        "latest_version": update_info["latest_version"],
+        "update_url": update_info["url"] or None,
+        "branch_status": update_info["branch_status"],
+        "branch_move_to": update_info["branch_move_to"],
+        "branch_message": update_info["branch_message"],
     }

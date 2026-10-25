@@ -326,6 +326,157 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
                 },
             },
             {
+                "name": "budget-mm2k",
+                "options": {
+                    "poster_zoom": 1,
+                    "poster_shift_y": 0,
+                    "matte_height_ratio": 0.15,
+                    "fade_height_ratio": 0.15,
+                    "top_matte_height_ratio": 0.01,
+                    "top_fade_height_ratio": 0.04,
+                    "vignette_strength": 0.1,
+                    "grain_amount": 0,
+                    "logo_scale": 0.45,
+                    "logo_offset": 0.86,
+                    "uniform_logo_max_w": 1523,
+                    "uniform_logo_max_h": 360,
+                    "uniform_logo_offset_x": 0.5,
+                    "uniform_logo_offset_y": 0.91,
+                    "uniform_logo_h_align": "center",
+                    "uniform_logo_v_align": "center",
+                    "uniform_logo_shadow_enabled": False,
+                    "uniform_logo_shadow_opacity": 60,
+                    "uniform_logo_shadow_angle": -45,
+                    "uniform_logo_shadow_distance": 8,
+                    "uniform_logo_shadow_size": 15,
+                    "uniform_logo_shadow_color": "#000000",
+                    "border_enabled": True,
+                    "border_px": 26,
+                    "border_color": "#ffffff",
+                    "overlay_file": "",
+                    "overlay_opacity": 0.4,
+                    "overlay_mode": "screen",
+                    "poster_filter": "textless",
+                    "logo_preference": "white",
+                    "logo_mode": "none",
+                    "logo_hex": "#ffffff",
+                    "text_overlay_enabled": True,
+                    "custom_text": "{title}",
+                    "font_family": "Arial Bold",
+                    "font_size": 150,
+                    "font_weight": "700",
+                    "text_color": "#ffffff",
+                    "text_align": "center",
+                    "text_transform": "uppercase",
+                    "letter_spacing": 0,
+                    "line_height": 1.1,
+                    "position_y": 0.83,
+                    "shadow_enabled": False,
+                    "shadow_blur": 10,
+                    "shadow_offset_x": 0,
+                    "shadow_offset_y": 4,
+                    "shadow_color": "#000000",
+                    "shadow_opacity": 0.8,
+                    "stroke_enabled": False,
+                    "stroke_width": 7,
+                    "stroke_color": "#000000",
+                    "text_bbox_enabled": True,
+                    "text_box_max_w": 1800,
+                    "text_box_max_h": 551,
+                    "text_box_offset_x": 0.5,
+                    "text_box_offset_y": 0.84,
+                    "text_box_h_align": "center",
+                    "text_box_v_align": "center",
+                    "logoSource": "tmdb_fanart",
+                },
+                "season_options": {
+                    "custom_text": "{season}",
+                    "font_family": "Arial",
+                    "font_size": 150,
+                    "letter_spacing": 1,
+                    "position_y": 0.85,
+                    "shadow_blur": 0,
+                },
+            },
+            {
+                "name": "budget-cl2k",
+                "options": {
+                    "poster_zoom": 1,
+                    "poster_shift_y": 0,
+                    "matte_height_ratio": 0.15,
+                    "fade_height_ratio": 0.15,
+                    "top_matte_height_ratio": 0.01,
+                    "top_fade_height_ratio": 0.04,
+                    "vignette_strength": 0.1,
+                    "grain_amount": 0,
+                    "logo_scale": 0.45,
+                    "logo_offset": 0.86,
+                    "uniform_logo_max_w": 1600,
+                    "uniform_logo_max_h": 400,
+                    "uniform_logo_offset_x": 0.5,
+                    "uniform_logo_offset_y": 0.84,
+                    "uniform_logo_h_align": "center",
+                    "uniform_logo_v_align": "center",
+                    "uniform_logo_shadow_enabled": False,
+                    "uniform_logo_shadow_opacity": 60,
+                    "uniform_logo_shadow_angle": -45,
+                    "uniform_logo_shadow_distance": 8,
+                    "uniform_logo_shadow_size": 15,
+                    "uniform_logo_shadow_color": "#000000",
+                    "border_enabled": True,
+                    "border_px": 26,
+                    "border_color": "#ffffff",
+                    "overlay_file": "",
+                    "overlay_opacity": 0.4,
+                    "overlay_mode": "screen",
+                    "poster_filter": "textless",
+                    "logo_preference": "white",
+                    "logo_mode": "original",
+                    "logo_hex": "#ffffff",
+                    "text_overlay_enabled": False,
+                    "custom_text": "",
+                    "font_family": "Arial Bold",
+                    "font_size": 150,
+                    "font_weight": "700",
+                    "text_color": "#ffffff",
+                    "text_align": "center",
+                    "text_transform": "uppercase",
+                    "letter_spacing": 0,
+                    "line_height": 1.1,
+                    "position_y": 0.83,
+                    "shadow_enabled": False,
+                    "shadow_blur": 10,
+                    "shadow_offset_x": 0,
+                    "shadow_offset_y": 4,
+                    "shadow_color": "#000000",
+                    "shadow_opacity": 0.8,
+                    "stroke_enabled": False,
+                    "stroke_width": 7,
+                    "stroke_color": "#000000",
+                    "text_bbox_enabled": True,
+                    "text_box_max_w": 1800,
+                    "text_box_max_h": 551,
+                    "text_box_offset_x": 0.5,
+                    "text_box_offset_y": 0.84,
+                    "text_box_h_align": "center",
+                    "text_box_v_align": "center",
+                    "logoSource": "tmdb_fanart",
+                },
+                "season_options": {
+                    "top_matte_height_ratio": 0,
+                    "top_fade_height_ratio": 0,
+                    "text_overlay_enabled": True,
+                    "custom_text": "{season}",
+                    "font_size": 100,
+                    "font_weight": "400",
+                    "letter_spacing": 1,
+                    "position_y": 0.85,
+                    "shadow_blur": 0,
+                    "text_box_max_h": 150,
+                    "text_box_offset_y": 0.97,
+                },
+            },
+            {
                 "name": "textless-border",
                 "options": {
                     "poster_zoom": 1,
@@ -419,6 +570,35 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
 }
 
 
+def _prefetch_preset_fonts(payload: dict, extra_fonts) -> None:
+    """Download, in the background, the fonts the imported presets use plus any
+    listed under "_fonts" (the Simposter defaults' starter set), so they're
+    ready before the first render. Only fonts Simposter knows how to fetch
+    (Kometa's open fonts, and an open look-alike for Arial) are downloaded."""
+    names = [str(n) for n in (extra_fonts or []) if isinstance(n, str)]
+    for tpl_data in payload.values():
+        if not isinstance(tpl_data, dict):
+            continue
+        for preset in tpl_data.get("presets", []) or []:
+            if not isinstance(preset, dict):
+                continue
+            for opts in (preset.get("options") or {}, preset.get("season_options") or {}):
+                if isinstance(opts, dict) and isinstance(opts.get("font_family"), str):
+                    names.append(opts["font_family"])
+    if not names:
+        return
+
+    def _run():
+        try:
+            from ..templates.universal import prefetch_fonts
+            prefetch_fonts(names)
+        except Exception as e:
+            logger.debug("[PRESETS] Font download failed: %s", e)
+
+    import threading
+    threading.Thread(target=_run, name="preset-font-prefetch", daemon=True).start()
+
+
 @router.get("/presets/default-template")
 def api_presets_default_template():
     """Return the built-in starter presets for new-user onboarding (never auto-applied to
@@ -426,6 +606,9 @@ def api_presets_default_template():
     first run). IDs are generated from each preset's name here rather than hardcoded, so
     the source-of-truth data above only needs a display name."""
     result: dict = {}
+    # Fonts to download when these are imported (see api_presets_import).
+    from ..templates.universal import STARTER_FONTS
+    result["_fonts"] = list(STARTER_FONTS)
     for template_id, tdata in _DEFAULT_PRESETS_TEMPLATE.items():
         presets = []
         for preset in tdata["presets"]:
@@ -571,6 +754,7 @@ async def api_presets_import(payload: dict = Body(...)):
             raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
         payload = dict(payload)
+        extra_fonts = payload.pop("_fonts", None)
         overlays = payload.pop("_overlays", None)
         restored_overlays = 0
         if isinstance(overlays, dict):
@@ -591,6 +775,7 @@ async def api_presets_import(payload: dict = Body(...)):
 
         db.merge_presets(payload)
         logger.info("[PRESETS] Imported and merged presets from JSON")
+        _prefetch_preset_fonts(payload, extra_fonts)
 
         # Real root cause found while investigating a reported "every render of
         # the default 'simposter-main' preset takes 10+ seconds" — this import
@@ -608,28 +793,15 @@ async def api_presets_import(payload: dict = Body(...)):
         # merge_presets() assigns for an id-less "shared/compact" import isn't
         # returned from that call, so those still rely purely on self-heal.
         try:
-            from ..rendering import generate_overlay
-            from ..templates.canvas import resolve_canvas_size
-            from ..config import settings
-            generated = 0
+            from ..overlay_cache import refresh_preset
+            refreshed = 0
             for template_id, tpl_data in payload.items():
                 presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
                 for preset in presets_list:
-                    pid = preset.get("id")
-                    options = preset.get("options") or {}
-                    if not pid:
-                        continue
-                    try:
-                        canvas_w, canvas_h = resolve_canvas_size(options)
-                        overlay_img = generate_overlay(options, canvas_w, canvas_h)
-                        overlay_dir = Path(settings.CONFIG_DIR) / "overlays" / template_id
-                        overlay_dir.mkdir(parents=True, exist_ok=True)
-                        overlay_img.save(overlay_dir / f"{pid}.png", "PNG")
-                        generated += 1
-                    except Exception as one_err:
-                        logger.warning(f"[PRESETS] Failed to generate overlay cache for imported preset {template_id}/{pid}: {one_err}")
-            if generated:
-                logger.info(f"[PRESETS] Generated overlay cache for {generated} imported preset(s)")
+                    if isinstance(preset, dict) and preset.get("id"):
+                        refreshed += 1 if refresh_preset(template_id, preset["id"]) else 0
+            if refreshed:
+                logger.info(f"[PRESETS] Generated overlay cache for {refreshed} imported preset(s)")
         except Exception as overlay_batch_err:
             logger.warning(f"[PRESETS] Overlay cache generation for imported presets failed: {overlay_batch_err}")
 
@@ -644,7 +816,6 @@ async def api_presets_import(payload: dict = Body(...)):
 @router.post("/presets/save")
 def api_save_preset(req: PresetSaveRequest):
     """Save a preset to the database and generate overlay cache."""
-    from ..rendering import generate_overlay
     from ..config import settings
 
     template_id = req.template_id or "uniformlogo"
@@ -668,22 +839,10 @@ def api_save_preset(req: PresetSaveRequest):
         db.save_preset(template_id, preset_id, preset_name, options, season_options)
         logger.info(f"[PRESETS] Saved preset {preset_id} for template {template_id}")
         
-        # Generate and save overlay cache
-        try:
-            overlay = generate_overlay(options)
-            
-            # Create overlay directory: config/overlays/{template_id}/
-            overlay_dir = Path(settings.CONFIG_DIR) / "overlays" / template_id
-            overlay_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Save overlay as PNG
-            overlay_path = overlay_dir / f"{preset_id}.png"
-            overlay.save(overlay_path, "PNG")
-            logger.info(f"[PRESETS] Generated overlay cache: {overlay_path}")
-        except Exception as overlay_err:
-            logger.warning(f"[PRESETS] Failed to generate overlay cache: {overlay_err}")
-            # Non-fatal: continue even if overlay generation fails
-        
+        # Overlay effect caches for this preset (series + season settings).
+        from ..overlay_cache import refresh_preset
+        refresh_preset(template_id, preset_id)
+
         return {"message": f"Preset '{preset_id}' saved."}
     except Exception as e:
         logger.error(f"[PRESETS] Error saving preset: {e}")
@@ -722,6 +881,8 @@ def api_save_season_options(req: dict = Body(...)):
             )
         
         logger.info(f"[PRESETS] Saved season options for preset {preset_id}")
+        from ..overlay_cache import refresh_preset
+        refresh_preset(template_id, preset_id)
         return {"message": f"Season options for preset '{preset_id}' saved."}
     except HTTPException:
         raise
@@ -742,6 +903,8 @@ def api_delete_preset(req: PresetDeleteRequest):
             raise HTTPException(status_code=404, detail="Preset not found")
 
         logger.info(f"[PRESETS] Deleted preset {preset_id} from template {template_id}")
+        from ..overlay_cache import remove_preset
+        remove_preset(template_id, preset_id)
         return {"message": f"Preset '{preset_id}' deleted."}
     except HTTPException:
         raise

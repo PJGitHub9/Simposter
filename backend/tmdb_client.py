@@ -5,7 +5,7 @@ import threading
 
 import requests
 
-from .config import logger, settings
+from .config import logger, settings, redact_secrets
 from . import database as db
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
@@ -93,6 +93,12 @@ def _apply_rate_limit():
         _rate_limit_requests.append(now)
 
 
+def find_tmdb_ids_by_imdb(imdb_id: str) -> List[int]:
+    """TMDb ids (movies, then shows) that TMDb links to this IMDb id."""
+    data = _cached_tmdb_get(f"/find/{imdb_id}", {"external_source": "imdb_id"})
+    return [int(r["id"]) for key in ("movie_results", "tv_results") for r in (data.get(key) or []) if r.get("id")]
+
+
 def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if not settings.TMDB_API_KEY:
         logger.error("[TMDB] TMDB_API_KEY not set")
@@ -117,7 +123,7 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if hasattr(e, "response") and e.response is not None:
             text = str(e.response.text)[:200]
         logger.warning("[TMDB] Request failed url=%s status=%s err=%s body=%s", url, getattr(e, "response", None), e, text)
-        raise TMDBError(f"TMDb request failed: {e}") from e
+        raise TMDBError(f"TMDb request failed: {redact_secrets(e)}") from e
 
 
 def get_tv_external_ids(tmdb_id: int) -> Dict[str, Any]:
@@ -192,7 +198,7 @@ def _build_lang_param(language_preference: Optional[str], original_language: Opt
 
 
 def get_images_for_movie(tmdb_id: int, original_language: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
-    logger.info("[TMDB] Fetching images tmdb_id=%s", tmdb_id)
+    logger.debug("[TMDB] Fetching images tmdb_id=%s", tmdb_id)
     language_pref = db.get_setting("pref.language") or "en"
     include_lang = _build_lang_param(language_pref, original_language)
     data = _cached_tmdb_get(
@@ -276,7 +282,7 @@ def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
     """
     Fetch movie details from TMDb (title, year, etc.)
     """
-    logger.info("[TMDB] Fetching movie details tmdb_id=%s", tmdb_id)
+    logger.debug("[TMDB] Fetching movie details tmdb_id=%s", tmdb_id)
     data = _cached_tmdb_get(f"/movie/{tmdb_id}", {})
 
     title = data.get("title", "")
@@ -362,6 +368,7 @@ def get_tv_show_details(tmdb_id: int) -> Dict[str, Any]:
         "year": year,
         "first_air_date": first_air_date,
         "number_of_seasons": number_of_seasons,
+        "status": data.get("status", ""),
     }
 
 

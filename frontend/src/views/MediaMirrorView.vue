@@ -163,6 +163,7 @@ const ASSET_TYPE_LABELS: Record<string, string> = {
   logo: 'Logos',
   backdrop: 'Backdrops',
   square_art: 'Square Art',
+  thumb_art: 'Thumb Art',
 }
 
 // Square Art has no Jellyfin/Emby equivalent at all -- JellyfinClient can't
@@ -176,17 +177,32 @@ const isPlexId = (id: string) => id.startsWith('plex')
 const squareArtAvailable = computed(() =>
   isPlexId(sourceServerId.value) && Array.from(targetServerIds.value).some(isPlexId)
 )
-watch(squareArtAvailable, (available) => {
-  if (available) return
-  if (assetTypes.value.has('square_art')) {
-    const next = new Set(assetTypes.value)
-    next.delete('square_art')
-    assetTypes.value = next
-  }
-  if (collectionAssetTypes.value.has('square_art')) {
-    const next = new Set(collectionAssetTypes.value)
-    next.delete('square_art')
-    collectionAssetTypes.value = next
+// Thumb Art is the reverse: Jellyfin/Emby only, no Plex slot (Quirk #153).
+const thumbArtAvailable = computed(() =>
+  !!sourceServerId.value && !isPlexId(sourceServerId.value) && Array.from(targetServerIds.value).some(id => !isPlexId(id))
+)
+const assetDisabled = (id: string) =>
+  (id === 'square_art' && !squareArtAvailable.value) || (id === 'thumb_art' && !thumbArtAvailable.value)
+const assetDisabledReason = (id: string) => {
+  if (id === 'square_art' && !squareArtAvailable.value)
+    return 'Square Art only works when both the source and at least one target are Plex — Jellyfin/Emby have no square art equivalent.'
+  if (id === 'thumb_art' && !thumbArtAvailable.value)
+    return 'Thumb Art only works when both the source and at least one target are Jellyfin/Emby — Plex has no thumb art slot.'
+  return undefined
+}
+watch([squareArtAvailable, thumbArtAvailable], () => {
+  for (const id of ['square_art', 'thumb_art']) {
+    if (!assetDisabled(id)) continue
+    if (assetTypes.value.has(id)) {
+      const next = new Set(assetTypes.value)
+      next.delete(id)
+      assetTypes.value = next
+    }
+    if (collectionAssetTypes.value.has(id)) {
+      const next = new Set(collectionAssetTypes.value)
+      next.delete(id)
+      collectionAssetTypes.value = next
+    }
   }
 })
 
@@ -198,7 +214,7 @@ function toggleTarget(id: string) {
 }
 
 function toggleAssetType(id: string) {
-  if (id === 'square_art' && !squareArtAvailable.value) return
+  if (assetDisabled(id)) return
   const next = new Set(assetTypes.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
@@ -206,7 +222,7 @@ function toggleAssetType(id: string) {
 }
 
 function toggleCollectionAssetType(id: string) {
-  if (id === 'square_art' && !squareArtAvailable.value) return
+  if (assetDisabled(id)) return
   const next = new Set(collectionAssetTypes.value)
   if (next.has(id)) next.delete(id)
   else next.add(id)
@@ -637,15 +653,13 @@ onUnmounted(() => {
                 v-for="(label, id) in ASSET_TYPE_LABELS"
                 :key="id"
                 class="checkbox-item"
-                :class="{ 'checkbox-item-disabled': id === 'square_art' && !squareArtAvailable }"
-                :title="id === 'square_art' && !squareArtAvailable
-                  ? 'Square Art only works when both the source and at least one target are Plex — Jellyfin/Emby have no square art equivalent.'
-                  : undefined"
+                :class="{ 'checkbox-item-disabled': assetDisabled(id) }"
+                :title="assetDisabledReason(id)"
               >
                 <input
                   type="checkbox"
                   :checked="assetTypes.has(id)"
-                  :disabled="id === 'square_art' && !squareArtAvailable"
+                  :disabled="assetDisabled(id)"
                   @change="toggleAssetType(id)"
                 />
                 {{ label }}
@@ -664,15 +678,13 @@ onUnmounted(() => {
                 v-for="(label, id) in ASSET_TYPE_LABELS"
                 :key="id"
                 class="checkbox-item"
-                :class="{ 'checkbox-item-disabled': id === 'square_art' && !squareArtAvailable }"
-                :title="id === 'square_art' && !squareArtAvailable
-                  ? 'Square Art only works when both the source and at least one target are Plex — Jellyfin/Emby have no square art equivalent.'
-                  : undefined"
+                :class="{ 'checkbox-item-disabled': assetDisabled(id) }"
+                :title="assetDisabledReason(id)"
               >
                 <input
                   type="checkbox"
                   :checked="collectionAssetTypes.has(id)"
-                  :disabled="id === 'square_art' && !squareArtAvailable"
+                  :disabled="assetDisabled(id)"
                   @change="toggleCollectionAssetType(id)"
                 />
                 {{ label }}
