@@ -10,6 +10,7 @@ import LiveKometaFiles from '@/components/overlay/LiveKometaFiles.vue'
 import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels'
 import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
+import { listDisplayName, useListSources } from '@/composables/useListSources'
 import {
   buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor, blurAmount, queuePlacements,
   KOMETA_W, KOMETA_H, referencedLists, checkCondition, type OverlayRuleFields, type OverlayCondition,
@@ -1137,7 +1138,9 @@ const togglePreviewList = (url: string) => {
   else next.add(url)
   previewOnLists.value = next
 }
-const listShortName = (url: string) => url.replace('https://mdblist.com/lists/', '')
+const listShortName = (url: string) => listDisplayName(url)
+// List names for rule summaries and the test-mode list checkboxes.
+useListSources().load()
 
 /** Do the overlay's own conditions match this preview? */
 const overlayPasses = (ctx: PreviewCtx) => (selectedConfig.value?.conditions || []).every(c => checkCondition(c, ctx))
@@ -3325,7 +3328,7 @@ onMounted(() => {
                       <input type="text" v-model.lazy="previewFilePath" placeholder="/movies/Title (2024)/Title (2024) [Bluray-2160p].mkv" />
                     </label>
                     <div v-if="configLists.length && showTest('list')" class="preview-value-field preview-value-wide">
-                      <span>On MDBList lists</span>
+                      <span>On lists</span>
                       <div class="preview-list-toggles">
                         <label v-for="url in configLists" :key="url" class="preview-list-toggle" :title="url">
                           <input type="checkbox" :checked="previewOnLists.has(url)" @change="togglePreviewList(url)" />

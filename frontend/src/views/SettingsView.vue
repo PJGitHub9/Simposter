@@ -443,7 +443,11 @@ const captureSettingsSnapshot = () => {
     preferredPosterServer: settings.automation.value.preferredPosterServer,
     libraryGroups: JSON.parse(JSON.stringify(settings.libraryGroups.value)),
     // MDBList (GeneralTab) is bound directly to the store too.
-    mdblist: JSON.parse(JSON.stringify(settings.mdblist.value))
+    mdblist: JSON.parse(JSON.stringify(settings.mdblist.value)),
+    // WeTrakr / SIMKL / Floppy list sources (GeneralTab), also bound to the store.
+    wetrakr: JSON.parse(JSON.stringify(settings.wetrakr.value)),
+    simkl: JSON.parse(JSON.stringify(settings.simkl.value)),
+    floppy: JSON.parse(JSON.stringify(settings.floppy.value))
   })
   hasUnsavedChanges.value = false
 
@@ -539,7 +543,10 @@ const checkForChanges = () => {
     mediaServers: settings.mediaServers.value,
     preferredPosterServer: settings.automation.value.preferredPosterServer,
     libraryGroups: settings.libraryGroups.value,
-    mdblist: settings.mdblist.value
+    mdblist: settings.mdblist.value,
+    wetrakr: settings.wetrakr.value,
+    simkl: settings.simkl.value,
+    floppy: settings.floppy.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -1391,7 +1398,10 @@ watch([
   // so adding/removing/editing a group there needs to be watched off the
   // store itself too, or it silently never flips the unsaved-changes flag.
   () => settings.libraryGroups.value,
-  () => settings.mdblist.value
+  () => settings.mdblist.value,
+  () => settings.wetrakr.value,
+  () => settings.simkl.value,
+  () => settings.floppy.value
 ], () => {
   if (watchersEnabled.value) {
     checkForChanges()

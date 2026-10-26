@@ -49,6 +49,9 @@ SECRET_FIELD_PATHS = (
     ("tvdb", "apiKey"),
     ("fanart", "apiKey"),
     ("mdblist", "apiKey"),
+    ("wetrakr", "clientId"),
+    ("simkl", "clientId"),
+    ("floppy", "token"),
     ("automation", "webhookSecret"),
 )
 
@@ -342,6 +345,7 @@ _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_?key|apikey|api_token|x-plex-token|plex-token|token|secret)=)[^&\s'\"<>,;)]+"
 )
 _SECRET_HEADER_RE = re.compile(r'(?i)(token=")[^"]*(")')
+_SECRET_BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}")
 
 _known_secrets_cache: dict = {"at": 0.0, "values": ()}
 
@@ -357,10 +361,20 @@ def _media_server_secrets() -> list:
         conn = sqlite3.connect(str(db_path), timeout=2)
         try:
             row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+            # List-source keys and sign-in tokens (backend/list_sources.py).
+            extra = [r[0] for r in conn.execute(
+                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token')"
+            ).fetchall()]
+            try:
+                for (data_json,) in conn.execute("SELECT data_json FROM list_source_auth").fetchall():
+                    auth = json.loads(data_json or "{}")
+                    extra += [auth.get(k) for k in ("access_token", "refresh_token")]
+            except sqlite3.Error:
+                pass  # table not created yet
         finally:
             conn.close()
         servers = json.loads(row[0]) if row and row[0] else []
-        out = []
+        out = [str(v) for v in extra if v]
         for s in servers if isinstance(servers, list) else []:
             if isinstance(s, dict):
                 for k in ("token", "apiKey"):
@@ -398,6 +412,7 @@ def redact_secrets(text) -> str:
         return s
     s = _SECRET_PARAM_RE.sub(r"\1***", s)
     s = _SECRET_HEADER_RE.sub(r"\1***\2", s)
+    s = _SECRET_BEARER_RE.sub(r"\1***", s)
     for secret in _known_secrets():
         if secret in s:
             s = s.replace(secret, secret[:4] + "***")

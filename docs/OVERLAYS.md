@@ -11,6 +11,7 @@ This guide covers building overlays, the rules that decide which posters get whi
 - [Badge sets and hide rules](#badge-sets-and-hide-rules)
 - [Importing Kometa overlays](#importing-kometa-overlays)
 - [MDBList ratings and lists](#mdblist-ratings-and-lists)
+- [Lists from WeTrakr, SIMKL and Floppy](#lists-from-wetrakr-simkl-and-floppy)
 - [Overlay Refresh](#overlay-refresh)
 - [Live Kometa files](#live-kometa-files)
 - [Reading the overlay log](#reading-the-overlay-log)
@@ -89,7 +90,7 @@ Every layer, and every overlay as a whole, can have rules. All of a layer's rule
 | **Audio** | Audio codec, audio channels, audio language |
 | **File** | File path / name (pattern match on the file name, e.g. TRaSH naming, CAM/TS, `{edition-…}` tags), edition (Plex only) |
 | **Ratings** | Audience rating (0–10), critic rating (0–10), MDBList score, IMDb, Rotten Tomatoes (critics and audience), Metacritic, TMDb, Trakt, Letterboxd. All need an [MDBList key](#mdblist-ratings-and-lists). |
-| **Lists** | On an MDBList list (needs an MDBList key) |
+| **Lists** | On a list from MDBList, WeTrakr, SIMKL or Floppy (see [Lists from other services](#lists-from-wetrakr-simkl-and-floppy)) |
 | **Item** | Label (Plex only), movie or show, year, days since added, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform |
 
 Operators depend on the field:
@@ -104,7 +105,7 @@ Notes on some fields:
 - **Show status** is continuing, ended, canceled or upcoming, from TMDb. TV shows only.
 - **TMDb ID / TVDB ID** with "is any of" takes a list of IDs. This is how tools like UMTK and TSSK pick items.
 - **Label** and **edition** come from Plex only. On Jellyfin/Emby, match the file name instead (most edition tags are in the file name).
-- Ratings and list fields only appear once an MDBList key is set in Settings → General.
+- Rating fields only appear once an MDBList key is set in Settings → General; "On a list" appears once any list service is set up there.
 - A rule that can't be checked (missing data) doesn't match, so the layer stays off.
 
 ---
@@ -186,7 +187,17 @@ Overlay files from [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Show
 
 Simposter only contacts MDBList when an overlay actually uses a rating or list, and remembers the results for that many days. If MDBList is unreachable, the render still happens; layers that needed the missing value are left off.
 
-For a list rule, paste the list's URL (`https://mdblist.com/lists/user/list-name`) as the value of **On an MDBList list**.
+For a list rule, choose **On a list** and paste the list's URL (`https://mdblist.com/lists/user/list-name`).
+
+### Lists from WeTrakr, SIMKL and Floppy
+
+"On a list" also works with these services. Set them up in **Settings → General**:
+
+- **WeTrakr**: the **Client ID** of an app you create at wetrakr.com → Settings → API (not the client secret; the redirect URL isn't used). Public lists work with just the Client ID. To use your own private lists and your tracking lists (Watchlist, Watching, Watched, On hold, Dropped), click **Connect account**: Simposter shows a code to enter at wetrakr.com/activate.
+- **SIMKL**: a client ID from an app registered at simkl.com/settings/developer as **TV, devices & command line**, then **Connect account** (approve the code on simkl.com). Every SIMKL list needs the connection. Plan to Watch, Watching, Completed, On Hold and Dropped work on a free account; custom lists need SIMKL PRO or VIP.
+- **Floppy**: your server's address (e.g. `http://192.168.1.10:8000`) and an app token from Floppy's Settings → Integrations → App tokens, with the `lists:read` scope.
+
+In the rule, the dropdown lists your own lists from every connected service, grouped by service. To use someone else's public list, choose **Paste a list link…** and paste its link. Lists are matched by TMDb ID and kept for the same number of days as MDBList's; when that time is up, the old copy is used while a fresh one is fetched in the background. If a service can't be reached, layers that need its list stay off and the overlay log says why.
 
 ---
 

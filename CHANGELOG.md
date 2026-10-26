@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.17 (2026-10-26) — `dev-overlays` branch
+
+### New Features
+- **WeTrakr, SIMKL and Floppy lists for overlays** — new `backend/list_sources.py` turns any list link or key into one canonical key (MDBList and WeTrakr/SIMKL list URLs, `wetrakr:<status>`, `simkl:<status>`, `floppy:list:<id>`), so the existing "list" condition field works for every service. Clients: `wetrakr_client.py` (app key in the `wetrakr-api-key` header; public lists need only the key, private lists and tracking lists use the device-code sign-in), `simkl_client.py` (AUTH V2 device flow, every list read signed in; watchlist buckets re-fetched only when `/sync/activities` says something changed; custom lists are PRO/VIP and a free account's `premium_only` answer becomes a clear error), `floppy_client.py` (server address + app token, `/api/v1/lists/`). Contents (TMDb ids) share `list_cache` and MDBList's cache days; a stale list is served from cache while a background thread refreshes it.
+- Sign-in tokens are kept in a new `list_source_auth` table, not the settings table, so a Settings save never drops them. New settings `wetrakr.clientId`, `simkl.clientId`, `floppy.url`, `floppy.token` (the keys masked like other secrets); `Bearer` tokens and these keys are masked in logs.
+- Endpoints: `GET /api/list-sources/status`, `POST /api/list-sources/{provider}/test`, `POST /api/list-sources/{provider}/connect` (+ `/connect/poll`, `DELETE`), `GET /api/list-sources/my-lists`, `POST /api/list-sources/resolve`.
+- Settings → General has WeTrakr, SIMKL and Floppy sections with Test and Connect account. The overlay rule editor's "On a list" offers your lists grouped by service, or a pasted link (looked up through `/resolve`).
+
 ## v1.8.16 (2026-10-25) — `dev-overlays` branch
 
 ### Bug Fixes

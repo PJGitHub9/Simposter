@@ -2,10 +2,11 @@
 // "Show when" for an overlay element: conditions that must all match. Same rules
 // as backend/overlay_engine.py (see services/overlayEngine.ts). Which element wins
 // when several overlap lives in the config-level Badge sets panel.
-import type { OverlayCondition, OverlayRuleFields } from '@/services/overlayEngine'
-import { computed } from 'vue'
+import { normalizeListUrl, type OverlayCondition, type OverlayRuleFields } from '@/services/overlayEngine'
+import { computed, onMounted, ref } from 'vue'
 import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
+import { listDisplayName, providerLabel, useListSources } from '@/composables/useListSources'
 
 /** subject: what the conditions decide about, for the wording (a layer, or a whole overlay). */
 const props = defineProps<{ element: OverlayRuleFields; subject?: 'layer' | 'overlay' }>()
@@ -15,11 +16,64 @@ const what = computed(() => (props.subject === 'overlay' ? 'this overlay' : 'thi
 // (a condition that already uses one keeps showing its field).
 const settings = useSettingsStore()
 const hasMdblistKey = computed(() => !!settings.mdblist.value.apiKey)
+// "On a list" works with any list service set up in Settings → General.
+const hasListSource = computed(() => hasMdblistKey.value || !!settings.wetrakr.value.clientId
+  || !!settings.simkl.value.clientId || !!(settings.floppy.value.url && settings.floppy.value.token))
 const fieldsFor = (c: OverlayCondition) => {
   const current = fieldDef(String(c.field || ''))?.value
+  const offered = (f: (typeof FIELDS)[number]) => f.value === current
+    || (f.kind === 'list' ? hasListSource.value : (hasMdblistKey.value || !needsMdblist(f)))
   return FIELD_GROUPS
-    .map(g => ({ group: g, fields: FIELDS.filter(f => f.group === g && (hasMdblistKey.value || !needsMdblist(f) || f.value === current)) }))
+    .map(g => ({ group: g, fields: FIELDS.filter(f => f.group === g && offered(f)) }))
     .filter(g => g.fields.length)
+}
+
+// ---- List picker for "On a list" conditions
+const listSources = useListSources()
+onMounted(() => { if (props.element.conditions?.some(c => isListField(c))) listSources.load() })
+const isListField = (c: OverlayCondition) => fieldDef(String(c.field || ''))?.kind === 'list'
+const pasteText = ref<Record<number, string>>({})
+const pasteMsg = ref<Record<number, { ok: boolean; text: string } | null>>({})
+const pasteBusy = ref<Record<number, boolean>>({})
+const showPaste = ref<Record<number, boolean>>({})
+
+const listKeys = (c: OverlayCondition): string[] =>
+  valueList(c).map(v => normalizeListUrl(v) || v)
+
+/** Put a list key into the condition: replaces it for "is on", adds it for "is on any of". */
+const useList = (c: OverlayCondition, key: string) => {
+  if (!key) return
+  if (isMulti(c)) {
+    const cur = listKeys(c)
+    if (!cur.includes(key)) c.value = [...cur, key]
+  } else {
+    c.value = key
+  }
+}
+const removeList = (c: OverlayCondition, key: string) => {
+  c.value = listKeys(c).filter(k => k !== key)
+}
+const pickList = (i: number, c: OverlayCondition, value: string) => {
+  if (value === '__paste__') { showPaste.value = { ...showPaste.value, [i]: true }; return }
+  useList(c, value)
+}
+const addPasted = async (i: number, c: OverlayCondition) => {
+  const text = (pasteText.value[i] || '').trim()
+  if (!text) return
+  pasteBusy.value = { ...pasteBusy.value, [i]: true }
+  const res = await listSources.resolve(text)
+  pasteBusy.value = { ...pasteBusy.value, [i]: false }
+  if (!res.key) {
+    pasteMsg.value = { ...pasteMsg.value, [i]: { ok: false, text: res.error || 'Not a list link Simposter recognizes' } }
+    return
+  }
+  useList(c, res.key)
+  pasteText.value = { ...pasteText.value, [i]: '' }
+  showPaste.value = { ...showPaste.value, [i]: false }
+  pasteMsg.value = {
+    ...pasteMsg.value,
+    [i]: res.error ? { ok: false, text: `Added, but it can't be read yet: ${res.error}` } : { ok: true, text: `Added ${listDisplayName(res.key)}` },
+  }
 }
 
 const isMulti = (c: OverlayCondition) => !!opDef(String(c.op))?.multi
@@ -52,6 +106,7 @@ const toggleChoice = (c: OverlayCondition, v: string) => {
 const changeField = (c: OverlayCondition, field: string) => {
   c.field = field
   const def = fieldDef(field)
+  if (def?.kind === 'list') listSources.load()
   const first = opsFor(field)[0]
   c.op = first ? first.value : 'eq'
   c.value = def?.kind === 'choice' && def.options?.[0] ? def.options[0].value : ''
@@ -102,7 +157,42 @@ const removeCondition = (i: number) => {
           <button type="button" class="btn-x" title="Remove condition" @click="removeCondition(i)">✕</button>
         </div>
 
-        <div v-if="!isUnsupported(c) && !isNoValue(c)" class="cond-value-row">
+        <!-- A list: pick one of your lists, or paste any list link -->
+        <div v-if="!isUnsupported(c) && !isNoValue(c) && isListField(c)" class="cond-value-row list-pick">
+          <div v-if="isMulti(c) && listKeys(c).length" class="chips">
+            <span v-for="k in listKeys(c)" :key="k" class="chip on">
+              {{ listDisplayName(k) }}
+              <button type="button" class="chip-x" title="Remove" @click="removeList(c, k)">✕</button>
+            </span>
+          </div>
+          <select class="cond-value" :value="isMulti(c) ? '' : (listKeys(c)[0] || '')" @change="pickList(i, c, ($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = isMulti(c) ? '' : (listKeys(c)[0] || '')">
+            <option value="" disabled>{{ isMulti(c) ? 'Add a list…' : 'Choose a list…' }}</option>
+            <option v-if="!isMulti(c) && listKeys(c)[0] && !listSources.groups.value.some(g => g.items.some(o => o.key === listKeys(c)[0]))" :value="listKeys(c)[0]">
+              {{ listDisplayName(listKeys(c)[0]) }}
+            </option>
+            <optgroup v-for="g in listSources.groups.value" :key="g.label" :label="g.label">
+              <option v-for="o in g.items" :key="o.key" :value="o.key">{{ o.title || listDisplayName(o.key) }}{{ o.items != null ? ` (${o.items})` : '' }}</option>
+            </optgroup>
+            <option value="__paste__">Paste a list link…</option>
+          </select>
+          <div v-if="showPaste[i]" class="paste-row">
+            <input
+              v-model="pasteText[i]"
+              class="cond-value"
+              type="text"
+              placeholder="https://wetrakr.com/lists/… , https://simkl.com/… , https://mdblist.com/lists/… or a Floppy list link"
+              @keydown.enter.prevent="addPasted(i, c)"
+            />
+            <button type="button" class="btn-small" :disabled="pasteBusy[i]" @click="addPasted(i, c)">{{ pasteBusy[i] ? 'Checking…' : 'Add' }}</button>
+          </div>
+          <p v-if="pasteMsg[i]" class="cond-note inline" :class="{ warn: !pasteMsg[i]?.ok }">{{ pasteMsg[i]?.text }}</p>
+          <p v-if="listSources.loaded.value && !listSources.groups.value.length" class="cond-note inline">
+            No lists found yet. Connect WeTrakr, SIMKL or Floppy in Settings → General, or paste a list link.
+          </p>
+          <p v-for="(msg, svc) in listSources.errors.value" :key="svc" class="cond-note inline warn">{{ providerLabel(String(svc)) }}: {{ msg }}</p>
+        </div>
+
+        <div v-else-if="!isUnsupported(c) && !isNoValue(c)" class="cond-value-row">
           <!-- Known choices, several allowed -->
           <div v-if="fieldDef(String(c.field))?.kind === 'choice' && isMulti(c)" class="chips">
             <button
@@ -149,7 +239,7 @@ const removeCondition = (i: number) => {
 
       <div class="rules-actions">
         <button type="button" class="btn-small" @click="addCondition">+ Add condition</button>
-        <p v-if="!hasMdblistKey" class="hint">Ratings and MDBList lists show up here once you add an MDBList API key in Settings → General.</p>
+        <p v-if="!hasMdblistKey" class="hint">Ratings show up here once you add an MDBList API key in Settings → General{{ hasListSource ? '' : ', and lists once you set up MDBList, WeTrakr, SIMKL or Floppy there' }}.</p>
         <span v-if="(element.conditions?.length || 0) > 1" class="hint">All conditions must match.</span>
       </div>
 
@@ -188,5 +278,10 @@ const removeCondition = (i: number) => {
 .btn-x { flex-shrink: 0; width: 24px; height: 24px; padding: 0; background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--text-secondary, #888); cursor: pointer; }
 .btn-x:hover { border-color: #f87171; color: #f87171; }
 .hint { margin: 0; font-size: 0.7rem; color: var(--text-secondary, #888); }
+.list-pick { display: flex; flex-direction: column; gap: 0.35rem; }
+.paste-row { display: flex; gap: 0.35rem; }
+.paste-row .cond-value { flex: 1; }
+.cond-note.inline { padding-left: 0; }
+.chip-x { margin-left: 0.25rem; padding: 0; background: none; border: none; color: inherit; cursor: pointer; font-size: 0.65rem; }
 
 </style>

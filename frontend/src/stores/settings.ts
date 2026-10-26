@@ -113,6 +113,12 @@ export type MDBListSettings = {
   cacheDays: number
 }
 
+// List sources for overlay "On a list" rules (backend/list_sources.py).
+// Sign-in tokens are stored server-side, never here.
+export type WeTrakrSettings = { clientId: string }
+export type SimklSettings = { clientId: string }
+export type FloppySettings = { url: string; token: string }
+
 export type FanartSettings = {
   apiKey: string
 }
@@ -199,6 +205,9 @@ export type UISettings = {
   tvdb?: TVDBSettings
   fanart?: FanartSettings
   mdblist?: Partial<MDBListSettings>
+  wetrakr?: Partial<WeTrakrSettings>
+  simkl?: Partial<SimklSettings>
+  floppy?: Partial<FloppySettings>
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
   apiOrder?: string[]
@@ -242,6 +251,9 @@ const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
 const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'imdb', criticRatingSource: 'tomatoes', cacheDays: 7 })
+const wetrakr = ref<WeTrakrSettings>({ clientId: '' })
+const simkl = ref<SimklSettings>({ clientId: '' })
+const floppy = ref<FloppySettings>({ url: '', token: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
@@ -332,6 +344,9 @@ async function loadSettings() {
       criticRatingSource: data.mdblist?.criticRatingSource ?? 'tomatoes',
       cacheDays: data.mdblist?.cacheDays ?? 7
     }
+    wetrakr.value = { clientId: data.wetrakr?.clientId ?? '' }
+    simkl.value = { clientId: data.simkl?.clientId ?? '' }
+    floppy.value = { url: data.floppy?.url ?? '', token: data.floppy?.token ?? '' }
     imageQuality.value = {
       outputFormat: data.imageQuality?.outputFormat ?? 'jpg',
       jpgQuality: data.imageQuality?.jpgQuality ?? 95,
@@ -428,6 +443,9 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       tvdb: { ...tvdb.value },
       fanart: { ...fanart.value },
       mdblist: { ...mdblist.value },
+      wetrakr: { ...wetrakr.value },
+      simkl: { ...simkl.value },
+      floppy: { ...floppy.value },
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value },
       apiOrder: apiOrder.value,
@@ -472,6 +490,9 @@ export function useSettingsStore() {
     tvdb,
     fanart,
     mdblist,
+    wetrakr,
+    simkl,
+    floppy,
     imageQuality,
     performance,
     apiOrder,

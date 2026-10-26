@@ -1,6 +1,7 @@
 // Fields an overlay rule can test, for the Rules editor. The names must match
 // what backend/overlay_engine.py and services/overlayEngine.ts read.
 import type { OverlayCondition } from '@/services/overlayEngine'
+import { listDisplayName } from '@/composables/useListSources'
 
 export type FieldKind = 'choice' | 'text' | 'number' | 'path' | 'list'
 
@@ -68,8 +69,9 @@ export const FIELDS: FieldDef[] = [
   { value: 'mdb_trakt_rating', label: 'Trakt rating (0-100)', group: 'Ratings', kind: 'number', placeholder: '75', note: 'Needs an MDBList API key.' },
   { value: 'mdb_letterboxd_rating', label: 'Letterboxd rating (0-5)', group: 'Ratings', kind: 'number', placeholder: '3.5', note: 'Needs an MDBList API key.' },
   {
-    value: 'list', label: 'On an MDBList list', group: 'Lists', kind: 'list',
-    placeholder: 'https://mdblist.com/lists/user/list-name', note: 'Needs an MDBList API key.',
+    value: 'list', label: 'On a list', group: 'Lists', kind: 'list',
+    placeholder: 'Paste a MDBList, WeTrakr, SIMKL or Floppy list link',
+    note: 'Lists from MDBList, WeTrakr, SIMKL or Floppy (set them up in Settings, General).',
   },
   {
     value: 'label', label: 'Label', group: 'Item', kind: 'text', placeholder: '4K',
@@ -181,7 +183,7 @@ const valueLabel = (field: string, v: unknown): string => {
   const def = fieldDef(field)
   const hit = def?.options?.find(o => o.value === String(v))
   if (hit) return hit.label
-  if (def?.kind === 'list') return String(v).replace('https://mdblist.com/lists/', '')
+  if (def?.kind === 'list') return listDisplayName(v)
   return String(v)
 }
 

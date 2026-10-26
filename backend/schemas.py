@@ -148,6 +148,23 @@ class MDBListSettings(BaseModel):
     cacheDays: int = 7  # how long ratings and lists are reused before refetching
 
 
+class WeTrakrSettings(BaseModel):
+    # App key (client_id) from wetrakr.com Settings -> API. Reads public lists;
+    # the sign-in for private lists is stored in list_source_auth, not here.
+    clientId: str = ""
+
+
+class SimklSettings(BaseModel):
+    # client_id of an AUTH V2 app registered as "TV, devices & command line"
+    # (simkl.com/settings/developer). Every SIMKL list read needs a sign-in.
+    clientId: str = ""
+
+
+class FloppySettings(BaseModel):
+    url: str = ""    # e.g. http://192.168.1.10:8000
+    token: str = ""  # App token (Settings -> Integrations -> App tokens), scope lists:read
+
+
 class ImageQualitySettings(BaseModel):
     outputFormat: str = "jpg"  # jpg, png, webp
     jpgQuality: int = 95
@@ -373,6 +390,9 @@ class UISettings(BaseModel):
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)
     fanart: FanartSettings = Field(default_factory=FanartSettings)
     mdblist: MDBListSettings = Field(default_factory=MDBListSettings)
+    wetrakr: WeTrakrSettings = Field(default_factory=WeTrakrSettings)
+    simkl: SimklSettings = Field(default_factory=SimklSettings)
+    floppy: FloppySettings = Field(default_factory=FloppySettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)

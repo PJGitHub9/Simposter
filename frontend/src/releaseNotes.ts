@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.17',
+    date: '2026-10-26',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Overlay rules can use lists from WeTrakr, SIMKL and Floppy, not just MDBList. Set them up in Settings → General: WeTrakr takes an app key (public lists) and an optional account connection (your private lists and tracking lists), SIMKL takes a client ID and an account connection (your Plan to Watch, Watching, Completed... lists, and custom lists with SIMKL PRO/VIP), and Floppy takes your server address and an app token.',
+          'In Show when, "On a list" offers your own lists from every connected service in one dropdown, or you can paste any list link. Lists are cached and refreshed in the background, so a render never waits on a list service.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.16',
     date: '2026-10-25',
     sections: [

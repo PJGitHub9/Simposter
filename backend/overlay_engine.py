@@ -68,7 +68,8 @@ def _rating_field_names() -> set:
 
 def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Which lazily-loaded data the elements use: stored file paths, MDBList
-    ratings (conditions or text variables), and MDBList lists (conditions)."""
+    ratings (conditions or text variables), and list membership (conditions;
+    MDBList, WeTrakr, SIMKL or Floppy, see list_sources.py)."""
     rating_fields = _rating_field_names()
     needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False}
     for element in elements:
@@ -202,34 +203,43 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                         notes["show_status"] = "TMDb has no status for this show"
                 except Exception as e:
                     notes["show_status"] = f"TMDb lookup failed: {e}"
-    if needs["ratings"] or needs["lists"]:
+    if needs["ratings"]:
         tmdb_id, tvdb_id, media_type = _item_ids(ctx)
         try:
             from . import mdblist_client as mdb
             if not mdb.has_key():
-                if needs["ratings"]:
-                    notes["ratings"] = "no MDBList API key in Settings > General"
-                if needs["lists"]:
-                    notes["lists"] = "no MDBList API key in Settings > General"
+                notes["ratings"] = "no MDBList API key in Settings > General"
             else:
-                if needs["ratings"]:
-                    if not tmdb_id and not tvdb_id:
-                        notes["ratings"] = "this item has no TMDb/TVDB ID"
-                    data = mdb.get_ratings(media_type, tmdb_id=tmdb_id, tvdb_id=tvdb_id) if (tmdb_id or tvdb_id) else None
-                    fields = mdb.rating_fields(data or {})
-                    for key, value in fields.items():
-                        if ctx.get(key) in (None, ""):  # values from the media server win
-                            ctx[key] = value
-                    if (tmdb_id or tvdb_id) and not fields:
-                        notes["ratings"] = "MDBList has no ratings for this item"
-                if needs["lists"]:
-                    ctx["lists"] = mdb.lists_containing(needs["lists"], media_type, tmdb_id) if tmdb_id else []
-                    if not tmdb_id:
-                        notes["lists"] = "this item has no TMDb ID"
+                if not tmdb_id and not tvdb_id:
+                    notes["ratings"] = "this item has no TMDb/TVDB ID"
+                data = mdb.get_ratings(media_type, tmdb_id=tmdb_id, tvdb_id=tvdb_id) if (tmdb_id or tvdb_id) else None
+                fields = mdb.rating_fields(data or {})
+                for key, value in fields.items():
+                    if ctx.get(key) in (None, ""):  # values from the media server win
+                        ctx[key] = value
+                if (tmdb_id or tvdb_id) and not fields:
+                    notes["ratings"] = "MDBList has no ratings for this item"
         except Exception as e:  # never fail a render over ratings
             from .config import logger
             logger.debug("[OVERLAY] MDBList lookup failed: %s", e)
             notes.setdefault("ratings", f"MDBList lookup failed: {e}")
+    if needs["lists"]:
+        tmdb_id, tvdb_id, media_type = _item_ids(ctx)
+        try:
+            from . import list_sources
+            if not tmdb_id:
+                ctx["lists"] = []
+                notes["lists"] = "this item has no TMDb ID"
+            else:
+                ctx["lists"] = list_sources.lists_containing(needs["lists"], media_type, tmdb_id)
+                setup = list_sources.setup_notes(needs["lists"])
+                if setup:
+                    notes["lists"] = "; ".join(setup)
+        except Exception as e:  # never fail a render over lists
+            from .config import logger
+            logger.debug("[OVERLAY] List lookup failed: %s", e)
+            ctx.setdefault("lists", [])
+            notes.setdefault("lists", f"list lookup failed: {e}")
     return ctx
 
 
@@ -275,8 +285,8 @@ def check_condition(cond: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
     if field == "resolution":
         target = normalize_resolution(target) if not isinstance(target, list) else [normalize_resolution(t) for t in target]
     if field in _LIST_FIELDS:
-        from .mdblist_client import normalize_list_url
-        target = [normalize_list_url(t) or t for t in target] if isinstance(target, list) else (normalize_list_url(target) or target)
+        from .list_sources import normalize_list_key
+        target = [normalize_list_key(t) or t for t in target] if isinstance(target, list) else (normalize_list_key(target) or target)
 
     if op == "exists":
         return bool(values)
@@ -699,7 +709,7 @@ FIELD_LABELS = {
     "resolution": "Resolution", "video_resolution": "Resolution", "video_codec": "Video codec",
     "audio_codec": "Audio codec", "audio_channels": "Audio channels", "audio_language": "Audio language",
     "filepath": "File path", "file_path": "File path", "filename": "File path", "edition": "Edition",
-    "label": "Label", "labels": "Label", "list": "MDBList list", "lists": "MDBList list", "mdblist_list": "MDBList list",
+    "label": "Label", "labels": "Label", "list": "List", "lists": "List", "mdblist_list": "MDBList list",
     "media_type": "Movie or show", "year": "Year", "title": "Title", "studio": "Studio",
     "streaming_platform": "Streaming platform", "tmdb_id": "TMDb ID", "tvdb_id": "TVDB ID",
     "audience_rating": "Audience rating", "critic_rating": "Critic rating", "mdb_rating": "MDBList score",
@@ -836,7 +846,7 @@ def data_summary(ctx: Dict[str, Any], elements: List[Dict[str, Any]]) -> str:
         shown = [f"{FIELD_LABELS.get(k, k)} {_format_value(ctx[k])}" for k in used if ctx.get(k) not in (None, "")]
         parts.append("ratings: " + (", ".join(shown) if shown else notes.get("ratings") or "none found"))
     if needs["lists"]:
-        parts.append("on MDBList lists: " + (_short(ctx.get("lists") or [], 3) if ctx.get("lists") else notes.get("lists") or "none"))
+        parts.append("on lists: " + (_short(ctx.get("lists") or [], 3) if ctx.get("lists") else notes.get("lists") or "none"))
     if needs.get("added"):
         parts.append(f"added {ctx['days_since_added']} days ago" if ctx.get("days_since_added") not in (None, "")
                      else "date added: " + (notes.get("days_since_added") or "unknown"))

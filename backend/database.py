@@ -1101,6 +1101,17 @@ def init_database():
             )
         """)
 
+        # Sign-in tokens for list sources (WeTrakr, SIMKL). Kept out of the
+        # settings table, which every Settings save rebuilds from the page's
+        # copy, so a stale page can never wipe a token the server just stored.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS list_source_auth (
+                provider TEXT PRIMARY KEY,
+                data_json TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+
         conn.commit()
         logger.info(f"[DB] Initialized database at {DB_PATH}")
 
@@ -1428,6 +1439,10 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "tvdb.apiKey",
     "fanart.apiKey",
     "mdblist.apiKey",
+    "wetrakr.clientId",
+    "simkl.clientId",
+    "floppy.url",
+    "floppy.token",
     "automation.webhookSecret",
     "automation.webhookAutoLabels",
     "automation.labelToAdd",
@@ -5167,3 +5182,34 @@ def clear_mdblist_cache() -> int:
         n += conn.execute("DELETE FROM list_cache").rowcount
         conn.commit()
     return n
+
+
+# List-source sign-ins (backend/list_sources.py)
+
+def get_list_source_auth(provider: str) -> Dict[str, Any]:
+    with get_db() as conn:
+        row = conn.execute("SELECT data_json FROM list_source_auth WHERE provider = ?", (provider,)).fetchone()
+    if not row:
+        return {}
+    try:
+        data = json.loads(row["data_json"] or "{}")
+        return data if isinstance(data, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def save_list_source_auth(provider: str, data: Dict[str, Any]) -> None:
+    import time as _time
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO list_source_auth (provider, data_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(provider) DO UPDATE SET data_json = excluded.data_json, updated_at = excluded.updated_at",
+            (provider, json.dumps(data), _time.time()),
+        )
+        conn.commit()
+
+
+def delete_list_source_auth(provider: str) -> None:
+    with get_db() as conn:
+        conn.execute("DELETE FROM list_source_auth WHERE provider = ?", (provider,))
+        conn.commit()

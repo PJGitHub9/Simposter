@@ -49,15 +49,39 @@ export type OverlayContext = Record<string, unknown> & {
   lists?: string[]
 }
 
-/** Condition fields that test MDBList list membership (value = list URL). */
+/** Condition fields that test list membership (value = a list key, see normalizeListUrl). */
 export const LIST_FIELDS = ['list', 'lists', 'mdblist_list']
 
 const LIST_URL_PREFIX = 'https://mdblist.com/lists/'
+const WETRAKR_STATUSES = ['planning', 'watching', 'watched', 'hold', 'dropped']
+const SIMKL_STATUSES = ['plantowatch', 'watching', 'completed', 'hold', 'dropped']
 
-/** Same normalization as backend mdblist_client.normalize_list_url. */
+/** Canonical list key, the same rules as backend list_sources.normalize_list_key:
+ *  MDBList and WeTrakr/SIMKL list links, wetrakr:/simkl: tracking lists and
+ *  floppy:list:N. A pasted Floppy link needs the server address, so the editor
+ *  resolves it through /api/list-sources/resolve and stores the key. */
 export const normalizeListUrl = (url: unknown): string | null => {
-  let u = String(url ?? '').trim().split('?')[0]!.replace(/\/+$/, '')
-  if (!u) return null
+  const raw = String(url ?? '').trim()
+  if (!raw) return null
+  const lower = raw.toLowerCase()
+  if (lower.startsWith('wetrakr:')) {
+    let st = lower.slice(8).trim()
+    if (st === 'paused') st = 'hold'
+    if (WETRAKR_STATUSES.includes(st)) return `wetrakr:${st}`
+    return /^list:\d+$/.test(st) ? `https://wetrakr.com/lists/${st.slice(5)}` : null
+  }
+  if (lower.startsWith('simkl:')) {
+    let st = lower.slice(6).trim().replace(/\s+/g, '')
+    if (st === 'watchlist' || st === 'plan_to_watch') st = 'plantowatch'
+    if (SIMKL_STATUSES.includes(st)) return `simkl:${st}`
+    return /^list:\d+$/.test(st) ? `https://simkl.com/lists/${st.slice(5)}` : null
+  }
+  if (lower.startsWith('floppy:list:')) return /^\d+$/.test(raw.slice(12)) ? `floppy:list:${raw.slice(12)}` : null
+  const wt = /^(?:https?:\/\/)?(?:www\.|api\.)?wetrakr\.com\/(?:[^?#]*\/)?lists?\/(\d+)/i.exec(raw)
+  if (wt) return `https://wetrakr.com/lists/${wt[1]}`
+  const sk = /^(?:https?:\/\/)?(?:www\.)?simkl\.com\/(?:[^?#]*\/)?lists?\/(\d+)/i.exec(raw)
+  if (sk) return `https://simkl.com/lists/${sk[1]}`
+  let u = raw.split('?')[0]!.replace(/\/+$/, '')
   if (u.startsWith('http://')) u = 'https://' + u.slice('http://'.length)
   if (u.startsWith('https://www.mdblist.com/')) u = 'https://mdblist.com/' + u.slice('https://www.mdblist.com/'.length)
   if (!u.startsWith('http')) u = LIST_URL_PREFIX + u.replace(/^\/+/, '')
@@ -65,7 +89,16 @@ export const normalizeListUrl = (url: unknown): string | null => {
   return u
 }
 
-/** Every MDBList list URL the elements' conditions refer to. */
+/** Which service a list key belongs to. */
+export const listProvider = (key: string): 'mdblist' | 'wetrakr' | 'simkl' | 'floppy' | null => {
+  if (key.startsWith(LIST_URL_PREFIX)) return 'mdblist'
+  if (key.startsWith('wetrakr:') || key.startsWith('https://wetrakr.com/')) return 'wetrakr'
+  if (key.startsWith('simkl:') || key.startsWith('https://simkl.com/')) return 'simkl'
+  if (key.startsWith('floppy:')) return 'floppy'
+  return null
+}
+
+/** Every list key the elements' conditions refer to. */
 export const referencedLists = (elements: OverlayRuleFields[]): string[] => {
   const out: string[] = []
   for (const el of elements) {
