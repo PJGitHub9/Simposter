@@ -2620,7 +2620,14 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
     # (accumulated above from every item's own synced_server_ids) covers the
     # non-Plex side independently via the "Also synced to" field, regardless
     # of which action this resolves to.
-    batch_notif_action = "sent_to_plex" if req.send_to_plex else "saved"
+    # A run that only reached Jellyfin/Emby (send_to_plex off, targets only)
+    # is still a send, not "Saved locally"; the Servers field lists them.
+    if req.send_to_plex:
+        batch_notif_action = "sent_to_plex"
+    elif batch_synced_server_ids:
+        batch_notif_action = "sent_to_media_server"
+    else:
+        batch_notif_action = "saved"
 
     # Send Discord completion notification
     if discord_message_id:
@@ -2715,6 +2722,27 @@ def api_batch(req: BatchRequest):
 # Public wrapper functions for programmatic use (auto_generate, webhooks, etc.)
 # ==============================================================================
 
+def _route_to_item_servers(req, rating_key: str, library_id: str, media_type: str) -> None:
+    """Retry-queue and auto-generate helpers build a request with only
+    send_to_plex. For an item that lives on Jellyfin/Emby that sent nothing
+    (it isn't a Plex item, and no other target was named), so a Jellyfin-only
+    install's retries rendered a poster and delivered it nowhere. Target the
+    item's own server plus the rest of its library group instead. Plex items
+    are left exactly as they were."""
+    try:
+        server_id = db.get_server_id_for_rating_key(rating_key) or "plex-1"
+        if server_id == "plex-1":
+            return
+        from ..config import get_library_group_members
+        members = get_library_group_members(server_id, str(library_id or ""), media_type) or []
+        targets = [server_id] + [sid for sid, _lid in members if sid != server_id]
+        req.targets = list(dict.fromkeys(targets))
+        req.source_server_id = server_id
+        logger.info("[BATCH] %s lives on %s; sending to %s", rating_key, server_id, ", ".join(req.targets))
+    except Exception as e:
+        logger.debug("[BATCH] Couldn't resolve servers for %s: %s", rating_key, e)
+
+
 def process_single_movie_poster(
     rating_key: str,
     template_id: str,
@@ -2763,6 +2791,7 @@ def process_single_movie_poster(
             send_only_if_ideal=send_only_if_ideal,
             require_textless_poster=require_textless_poster,
         )
+        _route_to_item_servers(req, rating_key, library_id, "movie")
 
         # Load presets for options
         from ..config import load_presets
@@ -2858,6 +2887,7 @@ def process_single_tv_show_poster(
             send_only_if_ideal=send_only_if_ideal,
             require_textless_poster=require_textless_poster,
         )
+        _route_to_item_servers(req, rating_key, library_id, "tv")
 
         # Load presets for options
         from ..config import load_presets

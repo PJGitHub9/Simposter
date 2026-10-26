@@ -13,6 +13,7 @@ import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels
 import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
 import { listDisplayName, useListSources } from '@/composables/useListSources'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 import {
   buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor, blurAmount, queuePlacements,
   KOMETA_W, KOMETA_H, referencedLists, checkCondition, type OverlayRuleFields, type OverlayCondition,
@@ -179,9 +180,9 @@ const posterBgImage = ref<HTMLImageElement | null>(null)
 const posterLoading = ref(false)
 
 // Library selection for preview
-const previewLibraries = ref<Array<{key: string, title: string, type: string}>>([])
+const previewLibraries = ref<Array<{key: string, title: string, type: string, server?: string}>>([])
 const previewLibrariesLoading = ref(false)
-const previewSelectedLibrary = ref<{key: string, title: string, type: string} | null>(null)
+const previewSelectedLibrary = ref<{key: string, title: string, type: string, server?: string} | null>(null)
 
 // Preview mode: 'item' uses real Plex metadata, 'testing' uses manual dropdowns
 const previewMode = ref<'item' | 'testing'>('testing')
@@ -296,12 +297,29 @@ const loadPreviewLibraries = async () => {
   if (previewLibraries.value.length > 0) return
   previewLibrariesLoading.value = true
   try {
-    const res = await fetch(`${apiBase}/api/test-plex-connection`)
+    // Every connected server's libraries (Plex, Jellyfin, Emby), so a Plex-less
+    // install can preview overlays on its own items too.
+    const res = await fetch(`${apiBase}/api/media-server/libraries`)
     if (res.ok) {
       const data = await res.json()
-      previewLibraries.value = (data.sections || []).filter((s: any) =>
-        s.type === 'movie' || s.type === 'show'
-      )
+      const libs = (data.libraries || []) as Array<{ serverId: string; libraryId: string; libraryName: string; mediaType: string }>
+      const multiServer = new Set(libs.map(l => l.serverId)).size > 1
+      previewLibraries.value = libs
+        .filter(l => l.mediaType === 'movie' || l.mediaType === 'tv')
+        .map(l => ({
+          key: String(l.libraryId),
+          title: multiServer ? `${l.libraryName} (${mediaServerLabel(l.serverId, settingsStore.mediaServers.value)})` : l.libraryName,
+          type: l.mediaType === 'tv' ? 'show' : 'movie',
+          server: l.serverId,
+        }))
+    }
+    if (!previewLibraries.value.length) {
+      // Older setups without a media server list: Plex's own sections.
+      const plexRes = await fetch(`${apiBase}/api/test-plex-connection`)
+      if (plexRes.ok) {
+        const data = await plexRes.json()
+        previewLibraries.value = (data.sections || []).filter((s: any) => s.type === 'movie' || s.type === 'show')
+      }
     }
   } catch (e) {
     console.error('Failed to load libraries:', e)
@@ -310,12 +328,13 @@ const loadPreviewLibraries = async () => {
   }
 }
 
-const loadMoviesForLibrary = async (lib: {key: string, title: string, type: string}) => {
+const loadMoviesForLibrary = async (lib: {key: string, title: string, type: string, server?: string}) => {
   moviesLoaded.value = false
   movies.value = []
   try {
     const endpoint = lib.type === 'show' ? `/api/tv-shows` : `/api/movies`
-    const res = await fetch(`${apiBase}${endpoint}?library_id=${lib.key}`)
+    const serverParam = lib.server && lib.server !== 'plex-1' ? `&server_id=${encodeURIComponent(lib.server)}` : ''
+    const res = await fetch(`${apiBase}${endpoint}?library_id=${encodeURIComponent(lib.key)}${serverParam}`)
     if (res.ok) {
       const data = await res.json()
       movies.value = (Array.isArray(data) ? data : []).map((m: any) => ({ key: m.key, title: m.title }))
@@ -938,7 +957,7 @@ const openMovieSearch = async () => {
   await loadPreviewLibraries()
 }
 
-const selectLibrary = async (lib: {key: string, title: string, type: string}) => {
+const selectLibrary = async (lib: {key: string, title: string, type: string, server?: string}) => {
   previewSelectedLibrary.value = lib
   movieSearchTerm.value = ''
   await loadMoviesForLibrary(lib)

@@ -360,10 +360,16 @@ class JellyfinClient(MediaServerClient):
         return cls._LANGUAGE_3_TO_2.get(code, code)
 
     def item_exists(self, item_id: str) -> Optional[bool]:
-        # Same not-directly-confirmed caveat as get_item_metadata.
+        # Same not-directly-confirmed caveat as get_item_metadata. Doesn't use
+        # _fetch_items_by_ids(), which turns any error into "no items": a network
+        # error must be "unknown" (None), never "deleted" (False), or the retry
+        # queue drops the item (it removes items whose source is gone).
         try:
-            items = self._fetch_items_by_ids([item_id], fields="")
-            return len(items) > 0
+            r = requests.get(f"{self.url}/Items", headers=self._headers(),
+                             params={"Ids": item_id, "Fields": ""}, timeout=10)
+            if r.status_code != 200:
+                return None
+            return len(r.json().get("Items", [])) > 0
         except Exception:
             return None
 

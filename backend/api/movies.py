@@ -451,6 +451,12 @@ def test_plex_connection(plex_url: str = None, plex_token: str = None):
     test_url = (plex_url or settings.PLEX_URL or "").rstrip("/")
     test_token = plex_token if (plex_token and plex_token != SECRET_MASK) else settings.PLEX_TOKEN
 
+    if not test_url:
+        # A Jellyfin/Emby-only install: nothing to test, not an error.
+        return {"status": "not_configured", "error": "Not configured", "message": "Enter a Plex server address first",
+                "plex_url": "",
+                "has_token": bool(test_token), "sections": []}
+
     try:
         url = f"{test_url}/library/sections"
         logger.info(f"[TEST] Testing Plex connection to {test_url}")

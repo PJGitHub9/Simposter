@@ -698,7 +698,9 @@ def cancel_poster_retry():
 
 
 def _plex_item_exists(rating_key: str) -> Optional[bool]:
-    """Check whether a rating_key still exists in Plex at all.
+    """Check whether a rating_key still exists on the server it came from
+    (Plex, or the Jellyfin/Emby server the cache says it belongs to). The
+    name predates multi-server support.
 
     Returns True/False on a definitive answer, or None if the check itself
     failed (network blip, timeout, etc.) — callers must treat None as "unknown,
@@ -706,7 +708,15 @@ def _plex_item_exists(rating_key: str) -> Optional[bool]:
     mistaken for a deleted item.
     """
     try:
+        from . import database as db
+        server_id = db.get_server_id_for_rating_key(rating_key) or "plex-1"
+        if server_id != "plex-1":
+            from .media_server.registry import get_client
+            client = get_client(server_id)
+            return client.item_exists(rating_key) if client else None
         from .config import settings, plex_headers, plex_session
+        if not settings.PLEX_URL:
+            return None
         r = plex_session.get(
             f"{settings.PLEX_URL}/library/metadata/{rating_key}",
             headers=plex_headers(),

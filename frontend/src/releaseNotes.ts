@@ -33,7 +33,9 @@ export const releaseNotes: ReleaseNote[] = [
         items: [
           'TV editor: sending a poster for a Plex show that also has a Jellyfin/Emby copy now goes to every server you pick. It was only sent to Plex. A selected season a picked server doesn\'t have is skipped and named in a message, instead of being sent to another server.',
           'A season poster sent to Plex from the editor now shows in History as "Show - Season 2" with the show\'s year (it showed only "Season 2"), and {title} on the poster is the show\'s name, as in the preview.',
+          'Without Plex: retries (scheduled and Retry now) now send Jellyfin/Emby items to their own server and the rest of their library group. They rendered a poster but sent it nowhere, and a network error could drop items from the queue. Overlays → "A real movie or show" now lists Jellyfin/Emby libraries too.',
           'Changing the Floppy server address now asks for the app token again, instead of keeping the saved token for the new address.',
+          'A Batch Edit sent only to Jellyfin/Emby now says "Sent" in its notification, with the servers it reached (it said "Saved locally").',
           'Importing a Kometa file again (for example the TV copy of one you imported for movies) without uploading its images now uses the images already in Your images with the same file name, instead of reporting them missing and importing the layers without images. Live Kometa files do the same when an image isn\'t on disk.'
         ]
       }
