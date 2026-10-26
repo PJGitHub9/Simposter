@@ -16,6 +16,13 @@ class TMDBError(Exception):
     pass
 
 
+# One pooled session so parallel batch workers reuse open connections
+# instead of each doing a new DNS lookup + TLS handshake per request.
+_session = requests.Session()
+_session.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=16))
+_RETRY_DELAYS = (2, 5)  # seconds before the 2nd and 3rd attempt
+
+
 # ---------------------------------------------------------------------------
 # Short-TTL response cache
 # ---------------------------------------------------------------------------
@@ -112,7 +119,23 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     params["api_key"] = settings.TMDB_API_KEY
 
     try:
-        r = requests.get(url, params=params, timeout=15)
+        r = None
+        for attempt in range(len(_RETRY_DELAYS) + 1):
+            try:
+                r = _session.get(url, params=params, timeout=15)
+            except (requests.ConnectionError, requests.Timeout) as e:
+                # DNS hiccups and dropped connections: a batch with several
+                # workers can hit one; the same lookup works seconds later.
+                if attempt == len(_RETRY_DELAYS):
+                    raise
+                logger.info("[TMDB] %s failed (%s), retrying in %ss", path, type(e).__name__, _RETRY_DELAYS[attempt])
+                time.sleep(_RETRY_DELAYS[attempt])
+                continue
+            if r.status_code in (429, 502, 503, 504) and attempt < len(_RETRY_DELAYS):
+                logger.info("[TMDB] %s returned %s, retrying in %ss", path, r.status_code, _RETRY_DELAYS[attempt])
+                time.sleep(_RETRY_DELAYS[attempt])
+                continue
+            break
         r.raise_for_status()
         # Mask API key in debug logging
         debug_params = {k: ("***" + v[-4:] if k == "api_key" and v else v) for k, v in params.items()}
