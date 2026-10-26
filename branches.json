@@ -10,7 +10,8 @@
       "description": "Development builds with the newest features"
     },
     "dev-overlays": {
-      "status": "active",
+      "status": "merged",
+      "move_to": "webui-overhaul-dev",
       "description": "Overlay engine work (Kometa import, MDBList, Overlay Refresh)"
     },
     "dev-jellyfin": {
