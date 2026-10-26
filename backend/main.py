@@ -27,6 +27,9 @@ async def startup_event():
     # first batch render of a preset is already fast.
     from .overlay_cache import warm_all
     threading.Thread(target=warm_all, daemon=True, name="overlay-cache-warm").start()
+    # Overlay Refresh no longer tracks posters sent without overlays; drop old ones.
+    from .overlay_refresh import prune_without_overlays
+    threading.Thread(target=prune_without_overlays, daemon=True, name="overlay-refresh-prune").start()
 
 # Shutdown the scheduler gracefully
 @app.on_event("shutdown")

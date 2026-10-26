@@ -7,6 +7,8 @@ import KometaImportModal from '@/components/overlay/KometaImportModal.vue'
 import OverlayPositionEditor from '@/components/overlay/OverlayPositionEditor.vue'
 import OverlayBadgeSets from '@/components/overlay/OverlayBadgeSets.vue'
 import LiveKometaFiles from '@/components/overlay/LiveKometaFiles.vue'
+import OverlayScheduler from '@/components/overlay/OverlayScheduler.vue'
+import OverlayWorkflowGuide from '@/components/overlay/OverlayWorkflowGuide.vue'
 import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels'
 import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
@@ -2050,6 +2052,17 @@ const setElementUrl = (el: OverlayElement, value: string) => {
 
 // Advanced section (live Kometa files), closed by default.
 const showAdvanced = ref(false)
+// Scheduler section (how often ratings/lists are re-fetched), closed by default.
+const showScheduler = ref(false)
+const schedulerCard = ref<HTMLElement | null>(null)
+const advancedCard = ref<HTMLElement | null>(null)
+// Links in the "How overlays work" guide open a section and scroll to it.
+const openSection = async (which: 'scheduler' | 'advanced') => {
+  if (which === 'scheduler') showScheduler.value = true
+  else showAdvanced.value = true
+  await nextTick()
+  ;(which === 'scheduler' ? schedulerCard.value : advancedCard.value)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 const openOverlayById = (id: string) => {
   const cfg = configs.value.find(c => c.id === id)
   if (cfg) editConfig(cfg)
@@ -2218,9 +2231,11 @@ onMounted(() => {
     <div class="page-header">
       <div>
         <h1>&#x1F9EA; Overlays <span style="font-size: 0.55em; opacity: 0.6; vertical-align: middle; font-weight: 400;">(experimental)</span></h1>
-        <p class="page-subtitle">Badges, images and text drawn on top of a poster. Build one here, then turn it on in a preset or in the editor's Extras tab.</p>
+        <p class="page-subtitle">Badges, images and text drawn on top of a poster, kept up to date when ratings, lists or labels change.</p>
       </div>
     </div>
+
+    <OverlayWorkflowGuide @open-scheduler="openSection('scheduler')" @open-advanced="openSection('advanced')" />
 
     <div class="content-grid">
       <!-- Left: Configs List -->
@@ -2315,8 +2330,20 @@ onMounted(() => {
     </div>
 
     <!-- Config Editor Modal -->
+    <!-- Scheduler: how often ratings and lists are re-fetched (hidden until opened) -->
+    <div ref="schedulerCard" class="section-card advanced-card">
+      <div class="section-header">
+        <button type="button" class="section-toggle" @click="showScheduler = !showScheduler">
+          <span class="section-chev" :class="{ open: showScheduler }">›</span>
+          <h2>Scheduler</h2>
+        </button>
+      </div>
+      <p v-if="!showScheduler" class="section-note">Step 4 of the guide above: how often ratings and lists are fetched again (API calls), and each library's Overlay Refresh schedule.</p>
+      <OverlayScheduler v-else />
+    </div>
+
     <!-- Advanced: live Kometa files (hidden until opened) -->
-    <div class="section-card advanced-card">
+    <div ref="advancedCard" class="section-card advanced-card">
       <div class="section-header">
         <button type="button" class="section-toggle" @click="showAdvanced = !showAdvanced">
           <span class="section-chev" :class="{ open: showAdvanced }">›</span>

@@ -10,8 +10,9 @@ Endpoints (the same ones Kometa uses, modules/mdblist.py):
        -> {"movies": [...], "shows": [...]} or a list; X-Has-More header pages
   GET  https://api.mdblist.com/lists/{user}/{slug}                 list title / item count
 
-Everything is cached in the DB (item_ratings, list_cache) for
-settings.mdblist.cacheDays, and requests are spaced out (MDBList's free tier
+Everything is cached in the DB (item_ratings, list_cache): ratings for the
+"re-check ratings" days and lists for the "re-check lists" hours (Overlay
+Manager > Scheduler, list_sources.get_refresh_settings()), and requests are spaced out (MDBList's free tier
 is a daily quota, so a render must never refetch what it already knows).
 A missing key or any API error returns "no data": an overlay that needs a
 rating or a list simply stays hidden, the render never fails.
@@ -73,11 +74,21 @@ def _mdblist_settings() -> Dict[str, Any]:
 
 
 def _cache_seconds() -> float:
+    """How long ratings are reused (Overlay Manager > Scheduler)."""
     try:
-        days = float(_mdblist_settings().get("cacheDays") or 7)
-    except (TypeError, ValueError):
-        days = 7
-    return max(days, 0.04) * 86400
+        from .list_sources import ratings_max_age
+        return ratings_max_age()
+    except Exception:
+        return 7 * 86400
+
+
+def _list_cache_seconds() -> float:
+    """How long a list's contents are reused (same setting for every list service)."""
+    try:
+        from .list_sources import lists_max_age
+        return lists_max_age()
+    except Exception:
+        return 24 * 3600
 
 
 def has_key() -> bool:
@@ -382,7 +393,7 @@ def get_list(url: str, fetch: bool = True, force: bool = False) -> Optional[Dict
     if not norm:
         return None
     cached = db.get_list_cache(norm)
-    if cached and not force and time.time() - cached["fetched_at"] < _cache_seconds():
+    if cached and not force and time.time() - cached["fetched_at"] < _list_cache_seconds():
         return cached
     if not fetch or not has_key():
         return cached

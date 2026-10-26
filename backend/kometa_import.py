@@ -1101,6 +1101,80 @@ def expand_file(
     return elements, report, file_messages
 
 
+def _is_type_condition(cond: Any) -> bool:
+    return isinstance(cond, dict) and cond.get("field") == "media_type" and cond.get("op") == "ne"
+
+
+def _without_type_rule(element: Dict[str, Any]) -> Dict[str, Any]:
+    out = copy.deepcopy(element)
+    conds = [c for c in out.get("conditions") or [] if not _is_type_condition(c)]
+    if conds:
+        out["conditions"] = conds
+    else:
+        out.pop("conditions", None)
+    return out
+
+
+def _only_for(element: Dict[str, Any], kind: str) -> Dict[str, Any]:
+    """The element limited to movies (kind="movie") or shows (kind="show")."""
+    out = _without_type_rule(element)
+    out.setdefault("conditions", []).append({"field": "media_type", "op": "ne", "value": "tv" if kind == "movie" else "movie"})
+    return out
+
+
+def expand_file_both(
+    text: str, yaml_files: Dict[str, str], config_vars: Optional[Dict[str, Any]] = None
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    """One overlay for movie and TV libraries, like a Kometa file both kinds of
+    library point to. The file is expanded once per library type (templates and
+    run_definition can differ by type), then merged: a layer that comes out the
+    same both ways is kept once with no movie/show rule; one that exists for
+    one type only, or differs, keeps a rule limiting it to that type. Elements
+    and report entries carry "_entry_key" so finalize_elements() can tell the
+    two versions of a differing layer apart."""
+    em, rm, fm = expand_file(text, "movie", yaml_files, config_vars)
+    es, rs, fs = expand_file(text, "show", yaml_files, config_vars)
+    movie_el = {e["name"]: e for e in em}
+    show_el = {e["name"]: e for e in es}
+    movie_rep = {r["name"]: r for r in rm}
+    show_rep = {r["name"]: r for r in rs}
+
+    names: List[str] = []
+    for r in rm + rs:
+        if r["name"] not in names:
+            names.append(r["name"])
+
+    elements: List[Dict[str, Any]] = []
+    report: List[Dict[str, Any]] = []
+    for name in names:
+        m, s = movie_el.get(name), show_el.get(name)
+        if m and s and _without_type_rule(m) == _without_type_rule(s):
+            elements.append(_without_type_rule(m))
+            report.append(movie_rep[name])
+            continue
+        if m:
+            el = _only_for(m, "movie")
+            el["_entry_key"] = f"{name}|movie"
+            entry = {**movie_rep[name], "_entry_key": el["_entry_key"]}
+            entry["messages"] = list(entry.get("messages") or []) + (["movie version (TV has its own)"] if s else ["movies only"])
+            elements.append(el)
+            report.append(entry)
+        if s:
+            el = _only_for(s, "show")
+            el["_entry_key"] = f"{name}|show"
+            entry = {**show_rep[name], "_entry_key": el["_entry_key"]}
+            entry["messages"] = list(entry.get("messages") or []) + (["TV version (movies have their own)"] if m else ["TV only"])
+            if m:
+                entry["name"] = f"{name} (TV)"
+            elements.append(el)
+            report.append(entry)
+        if not m and not s:
+            report.append(movie_rep.get(name) or show_rep[name])
+
+    file_messages = list(dict.fromkeys(fm + fs))
+    return elements, report, file_messages
+
+
 # --------------------------------------------------------------------------
 # Uploaded bundle (yml files, images, fonts, zips)
 # --------------------------------------------------------------------------

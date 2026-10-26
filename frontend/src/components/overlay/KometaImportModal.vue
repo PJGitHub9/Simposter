@@ -40,7 +40,7 @@ interface ImportResult {
 
 const apiBase = getApiBase()
 const picked = ref<Array<{ file: File; path: string }>>([])
-const libraryType = ref<'movie' | 'show'>('movie')
+const libraryType = ref<'movie' | 'show' | 'both'>('movie')
 const result = ref<ImportResult | null>(null)
 const busy = ref(false)
 const error = ref('')
@@ -283,9 +283,12 @@ const KIND_LABEL: Record<string, string> = {
               <select v-model="libraryType" @change="result = null">
                 <option value="movie">Movies</option>
                 <option value="show">TV Shows</option>
+                <option value="both">Movies and TV Shows</option>
               </select>
             </label>
-            <span class="hint">Overlays that Kometa only runs for the other type are skipped.</span>
+            <span class="hint">{{ libraryType === 'both'
+              ? 'One overlay for both kinds of library, like a Kometa file both libraries use. Layers that only apply to one kind (or look different) get a movie/show rule.'
+              : 'Overlays that Kometa only runs for the other type are skipped.' }}</span>
           </div>
 
           <div v-if="error" class="ki-error">{{ error }}</div>

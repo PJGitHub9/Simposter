@@ -136,7 +136,7 @@ onMounted(load)
       <div class="file-head">
         <div class="file-title">
           <strong>{{ f.name || fileName(f.path) }}</strong>
-          <span class="tag">{{ f.library_type === 'show' ? 'TV' : 'Movies' }}</span>
+          <span class="tag">{{ f.library_type === 'show' ? 'TV' : f.library_type === 'both' ? 'Movies + TV' : 'Movies' }}</span>
           <span v-if="!f.enabled" class="tag paused-tag">Paused</span>
         </div>
         <div class="file-actions">
@@ -175,6 +175,7 @@ onMounted(load)
         <select v-model="form.library_type">
           <option value="movie">Movies</option>
           <option value="show">TV shows</option>
+          <option value="both">Movies and TV shows</option>
         </select>
       </label>
       <label>
@@ -185,7 +186,7 @@ onMounted(load)
       </label>
       <label class="check full">
         <input v-model="form.refresh_posters" type="checkbox" />
-        <span>When it changes, re-render posters whose overlay now looks different (Overlay Refresh, in every {{ form.library_type === 'show' ? 'TV' : 'movie' }} library)</span>
+        <span>When it changes, re-render posters whose overlay now looks different (Overlay Refresh, in every {{ form.library_type === 'show' ? 'TV' : form.library_type === 'both' ? 'movie and TV' : 'movie' }} library)</span>
       </label>
       <p v-if="error" class="err full">{{ error }}</p>
       <div class="form-actions full">

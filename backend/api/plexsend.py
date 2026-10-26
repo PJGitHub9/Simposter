@@ -74,11 +74,19 @@ def api_plex_send(req: PlexSendRequest):
             if item is not None:
                 title = item.get('title', '')
                 year = item.get('year')
+                season_title = None
+                if item.get('type') == 'season' and item.get('parentTitle'):
+                    # A season's own title is just "Season 2": use the show's name
+                    # and year for {title}/{year}, History and notifications.
+                    season_title = title
+                    title = item.get('parentTitle')
+                    year = item.get('parentYear') or year
                 movie_details = {
                     'title': title,
                     'year': int(year) if year and year.isdigit() else None,
                     'library_id': req.library_id,
                     'parent_title': item.get('parentTitle'),
+                    'season_title': season_title,
                 }
     except Exception as plex_err:
         logger.debug("[PLEX] Failed to get metadata from Plex for template vars: %s", plex_err)
@@ -223,13 +231,18 @@ def api_plex_send(req: PlexSendRequest):
     except Exception as e:
         logger.debug("[CACHE] poster refresh after send failed for %s: %s", req.rating_key, e)
 
+    # "Show - Season 2" for a season, matching the other send paths' History rows.
+    history_title = movie_details.get("title")
+    if movie_details.get("season_title") and history_title:
+        history_title = f"{history_title} - {movie_details['season_title']}"
+
     # Record history entry for manual send (movie_details already fetched above)
     try:
         from .. import database as db
         db.record_poster_history(
             rating_key=req.rating_key,
             library_id=req.library_id or movie_details.get("library_id"),
-            title=movie_details.get("title"),
+            title=history_title,
             year=movie_details.get("year"),
             template_id=req.template_id,
             preset_id=req.preset_id,
@@ -256,7 +269,7 @@ def api_plex_send(req: PlexSendRequest):
 
     # Send notifications for manual send
     _notif_kwargs = dict(
-        title=movie_details.get("title", "Unknown"),
+        title=history_title or "Unknown",
         year=movie_details.get("year"),
         template_id=req.template_id,
         preset_id=req.preset_id or "",

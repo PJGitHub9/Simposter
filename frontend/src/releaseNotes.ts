@@ -10,6 +10,36 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.18',
+    date: '2026-10-26',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Kometa import and live Kometa files have a new library type, "Movies and TV Shows": one overlay for both kinds of library, like a Kometa file both libraries point to. Layers that are the same for both are kept once; layers for only one kind (or that look different) only show on that kind.',
+          'Overlays → Scheduler: set how often ratings (in days) and lists (in hours) are fetched again. These are the only overlay settings that use API calls. Ratings keep the value you had under MDBList; lists start at once a day. The section also lists every library\'s Overlay Refresh schedule with a link to it.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay Refresh first fetches any list or rating that is due, so a run right after a list\'s refresh time already uses the new list.',
+          'Overlay Refresh no longer tracks posters sent with a preset that has no overlays (they could never change). Existing ones are removed on startup.',
+          'The Overlays page starts with a short "How overlays work" guide: make an overlay, turn it on in a preset, send posters, and keep them up to date with the Scheduler and Overlay Refresh. It can be hidden.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'TV editor: sending a poster for a Plex show that also has a Jellyfin/Emby copy now goes to every server you pick. It was only sent to Plex. A selected season a picked server doesn\'t have is skipped and named in a message, instead of being sent to another server.',
+          'A season poster sent to Plex from the editor now shows in History as "Show - Season 2" with the show\'s year (it showed only "Season 2"), and {title} on the poster is the show\'s name, as in the preview.',
+          'Changing the Floppy server address now asks for the app token again, instead of keeping the saved token for the new address.',
+          'Importing a Kometa file again (for example the TV copy of one you imported for movies) without uploading its images now uses the images already in Your images with the same file name, instead of reporting them missing and importing the layers without images. Live Kometa files do the same when an image isn\'t on disk.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.17',
     date: '2026-10-26',
     sections: [

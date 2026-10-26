@@ -38,6 +38,22 @@ def _token(override: Optional[str] = None) -> str:
     return str(_settings().get("token") or "")
 
 
+def _origin(url: str):
+    """(scheme, host:port) of a URL, lower-case, for "same server" checks."""
+    p = urlparse(str(url or "").strip())
+    return (p.scheme.lower(), p.netloc.lower())
+
+
+def _blocked_host(url: str) -> bool:
+    """Floppy normally runs on your LAN, so private addresses are fine; but never
+    link-local / cloud metadata addresses (169.254.169.254 and the like)."""
+    try:
+        from .middleware.validation import _host_is_always_blocked
+        return _host_is_always_blocked(urlparse(url).hostname or "")
+    except Exception:
+        return False
+
+
 def normalize(raw: str) -> Optional[str]:
     s = raw.strip()
     if s.lower().startswith(KEY_PREFIX):
@@ -71,8 +87,10 @@ def _get(path_or_url: str, params: Optional[Dict[str, Any]] = None,
     url = path_or_url if path_or_url.startswith("http") else f"{root}{path_or_url}"
     # The token only ever goes to the Floppy server itself: a pagination "next"
     # link pointing elsewhere is refused, and redirects aren't followed.
-    if urlparse(url).netloc.lower() != urlparse(root).netloc.lower():
+    if _origin(url) != _origin(root):
         raise ListSourceError("Floppy pointed to a different server; refusing to send the token there")
+    if _blocked_host(url):
+        raise ListSourceError("That address isn't allowed (link-local / cloud metadata)")
     try:
         r = requests.get(url, params=params, timeout=20, allow_redirects=False,
                          headers={"Authorization": f"Bearer {tok}", "User-Agent": f"Simposter/{app_version()}"})
@@ -162,7 +180,7 @@ def test(payload: Dict[str, Any]) -> Dict[str, Any]:
     # the saved server: otherwise anyone could point the test at their own host.
     # A blank token falls back to the saved one too, so treat both the same.
     uses_saved = not raw_token or raw_token == SECRET_MASK
-    if uses_saved and urlparse(base).netloc.lower() != urlparse(saved_base).netloc.lower():
+    if uses_saved and _origin(base) != _origin(saved_base):
         return {"status": "error", "error": "Enter the token again when changing the server address"}
     token = _token() if uses_saved else raw_token
     if not base or not token:

@@ -13,7 +13,8 @@ conditions store and what list_cache is keyed by:
 
 The service is read from the key itself, so one condition field ("list") works
 for all of them. Contents (TMDb ids of the movies and shows on the list) are
-cached in list_cache for mdblist.cacheDays. A stale list is served from the
+cached in list_cache for the "re-check lists" hours (Overlay Manager >
+Scheduler, get_refresh_settings()). A stale list is served from the
 cache while a background thread refreshes it; only a list never fetched before
 is fetched during a render. Any error means "not on the list": a render never
 fails over a list.
@@ -48,12 +49,81 @@ def ui_settings(section: str) -> Dict[str, Any]:
         return {}
 
 
-def cache_seconds() -> float:
+# --------------------------------------------------------------------------
+# How often ratings and lists are re-fetched (Overlay Manager > Scheduler).
+# Kept in its own one-row table, not the settings table, which every Settings
+# save rebuilds from the page's copy. Ratings default to the old
+# mdblist.cacheDays value the first time it's read.
+# --------------------------------------------------------------------------
+
+_DEFAULT_LISTS_HOURS = 24.0
+_refresh_cache: Dict[str, Any] = {"at": 0.0, "data": None}
+
+
+def _refresh_conn():
+    import sqlite3
+    from . import database as db
+    conn = sqlite3.connect(str(db.DB_PATH), timeout=10)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS overlay_data_refresh ("
+        "id INTEGER PRIMARY KEY CHECK (id = 1), ratings_days REAL NOT NULL, lists_hours REAL NOT NULL)"
+    )
+    return conn
+
+
+def get_refresh_settings() -> Dict[str, float]:
+    """{"ratingsDays", "listsHours"}, cached for 30 seconds."""
+    if _refresh_cache["data"] is not None and time.time() - _refresh_cache["at"] < 30:
+        return _refresh_cache["data"]
     try:
-        days = float(ui_settings("mdblist").get("cacheDays") or 7)
-    except (TypeError, ValueError):
-        days = 7
-    return max(days, 0.04) * 86400
+        conn = _refresh_conn()
+        try:
+            row = conn.execute("SELECT ratings_days, lists_hours FROM overlay_data_refresh WHERE id = 1").fetchone()
+            if not row:
+                try:
+                    old = float(ui_settings("mdblist").get("cacheDays") or 7)
+                except (TypeError, ValueError):
+                    old = 7.0
+                row = (old, _DEFAULT_LISTS_HOURS)
+                conn.execute("INSERT INTO overlay_data_refresh (id, ratings_days, lists_hours) VALUES (1, ?, ?)", row)
+                conn.commit()
+        finally:
+            conn.close()
+        data = {"ratingsDays": float(row[0]), "listsHours": float(row[1])}
+    except Exception:
+        data = {"ratingsDays": 7.0, "listsHours": _DEFAULT_LISTS_HOURS}
+    _refresh_cache.update(at=time.time(), data=data)
+    return data
+
+
+def save_refresh_settings(ratings_days: float, lists_hours: float) -> Dict[str, float]:
+    ratings_days = min(max(float(ratings_days), 1.0), 90.0)
+    lists_hours = min(max(float(lists_hours), 1.0), 720.0)
+    conn = _refresh_conn()
+    try:
+        conn.execute(
+            "INSERT INTO overlay_data_refresh (id, ratings_days, lists_hours) VALUES (1, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET ratings_days = excluded.ratings_days, lists_hours = excluded.lists_hours",
+            (ratings_days, lists_hours),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _refresh_cache.update(at=0.0, data=None)
+    return get_refresh_settings()
+
+
+def ratings_max_age() -> float:
+    return get_refresh_settings()["ratingsDays"] * 86400
+
+
+def lists_max_age() -> float:
+    return get_refresh_settings()["listsHours"] * 3600
+
+
+def cache_seconds() -> float:
+    """How long a list's contents are reused (all services)."""
+    return lists_max_age()
 
 
 def app_version() -> str:
@@ -145,8 +215,10 @@ def _refresh_in_background(key: str) -> None:
     threading.Thread(target=run, name=f"list-refresh-{key[:40]}", daemon=True).start()
 
 
-def get_list(value: Any, fetch: bool = True, force: bool = False) -> Optional[Dict[str, Any]]:
-    """Cached contents {"title", "movie_ids", "show_ids", "fetched_at"} of any list."""
+def get_list(value: Any, fetch: bool = True, force: bool = False, wait: bool = False) -> Optional[Dict[str, Any]]:
+    """Cached contents {"title", "movie_ids", "show_ids", "fetched_at"} of any list.
+    An out-of-date list is returned as is and re-fetched in the background,
+    unless wait=True (Overlay Refresh), which fetches it before returning."""
     key = normalize_list_key(value)
     if not key:
         return None
@@ -159,7 +231,7 @@ def get_list(value: Any, fetch: bool = True, force: bool = False) -> Optional[Di
     fresh = cached and time.time() - cached["fetched_at"] < cache_seconds()
     if (fresh and not force) or not fetch or missing_setup(key):
         return cached
-    if cached and not force:
+    if cached and not force and not wait:
         _refresh_in_background(key)
         return cached
     try:
@@ -191,6 +263,26 @@ def lists_containing(values: Iterable[Any], media_type: str, tmdb_id: Any) -> Li
         if tid in ids:
             out.append(key)
     return out
+
+
+def refresh_due(values: Iterable[Any]) -> int:
+    """Fetch every one of these lists that is out of date, now (not in the
+    background). Returns how many were fetched. Used before an Overlay Refresh
+    run, so the run already sees lists past their refresh time."""
+    from . import database as db
+    fetched = 0
+    seen = set()
+    for value in values:
+        key = normalize_list_key(value)
+        if not key or key in seen or missing_setup(key):
+            continue
+        seen.add(key)
+        cached = db.get_list_cache(key)
+        if cached and time.time() - cached["fetched_at"] < cache_seconds():
+            continue
+        if get_list(key, wait=True) is not None:
+            fetched += 1
+    return fetched
 
 
 def setup_notes(values: Iterable[Any]) -> List[str]:

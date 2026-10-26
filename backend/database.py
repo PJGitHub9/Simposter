@@ -2448,6 +2448,13 @@ def get_overlay_states(pairs: List[tuple]) -> List[Dict[str, Any]]:
     return [_overlay_state_row(r) for r in rows]
 
 
+def get_all_overlay_states() -> List[Dict[str, Any]]:
+    """Every tracked poster, on every server."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM overlay_state").fetchall()
+    return [_overlay_state_row(r) for r in rows]
+
+
 def count_overlay_states(pairs: List[tuple]) -> int:
     if not pairs:
         return 0

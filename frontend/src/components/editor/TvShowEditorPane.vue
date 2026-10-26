@@ -2353,7 +2353,11 @@ async function sendPosterToServer(serverId: string, ratingKey: string): Promise<
         server_id: 'plex-1',
         library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
       }
-      await render.send(targetMovie, bgUrl.value, logoUrl.value, withBgAdjust(optionsPayload.value, bgUrl.value), Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, null, false)
+      // The season being sent is the one currently in context (doSend() switches
+      // to each selected item before calling this), so its number goes along,
+      // as the Plex-only loop does.
+      const seasonIndex = currentSeason.value && !currentSeason.value.isSeries ? currentSeason.value.index : null
+      await render.send(targetMovie, bgUrl.value, logoUrl.value, withBgAdjust(optionsPayload.value, bgUrl.value), Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, seasonIndex, false)
       return true
     } catch {
       return false
@@ -2513,10 +2517,16 @@ function onSendClick() {
   }
   doSend()
 }
+// The servers picked in the "send to" box for this one send. Unlike
+// sendTargetIds (which falls back to "all" when nothing matches), a season
+// that isn't on any picked server is skipped and reported, never sent
+// somewhere the user didn't pick.
+const pickedServerIds = ref<Set<string> | null>(null)
 function onSendModalConfirm(serverIds: string[]) {
   sendTargetIds.value = new Set(serverIds)
+  pickedServerIds.value = new Set(serverIds)
   showSendModal.value = false
-  doSend()
+  doSend().finally(() => { pickedServerIds.value = null })
 }
 
 const doSend = async () => {
@@ -2537,7 +2547,13 @@ const doSend = async () => {
   // getLinkedServersForItem() (a season's via resolveSeasonLinkedServers(),
   // the series' via the unconditional seriesLinkedServers), so the loop
   // itself needs no further per-item branching.
-  if (isNonPlexItem.value) {
+  //
+  // A Plex show with a linked copy elsewhere (other_servers) takes this
+  // path too, or the servers picked in the "send to" box are ignored and only
+  // Plex gets the poster (v1.8.18 fix: gating on isNonPlexItem alone dropped
+  // Plex-sourced shows). sendPosterToServer('plex-1', ...) still renders and
+  // sends through /api/plex/send, with the season number.
+  if (isNonPlexItem.value || (props.movie.other_servers || []).length > 0) {
     const selectedSeasonKeys = Array.from(selectedSeasons.value)
     if (selectedSeasonKeys.length === 0) {
       notifyError('No seasons selected')
@@ -2546,6 +2562,7 @@ const doSend = async () => {
     posterSending.value = true
     const succeeded: string[] = []
     const failed: string[] = []
+    const notOnServer: string[] = []  // picked a server that doesn't have this season
 
     // Preserve the currently-focused item so it can be restored once the
     // loop finishes, matching the Plex-only loop below.
@@ -2619,9 +2636,17 @@ const doSend = async () => {
           }
 
           const itemLinkedServers = await getLinkedServersForItem(season)
-          const targets = resolveSendTargetsFor(itemLinkedServers)
+          const picked = pickedServerIds.value
+          const targets = picked
+            ? itemLinkedServers.filter(s => picked.has(s.server_id))
+            : resolveSendTargetsFor(itemLinkedServers)
+          if (picked) {
+            const have = new Set(itemLinkedServers.map(s => s.server_id))
+            const absent = Array.from(picked).filter(id => !have.has(id)).map(serverTypeLabel)
+            if (absent.length) notOnServer.push(`${season.title} (not on ${absent.join(', ')})`)
+          }
           if (targets.length === 0) {
-            failed.push(season.title)
+            if (!picked) failed.push(season.title)
             continue
           }
 
@@ -2673,6 +2698,7 @@ const doSend = async () => {
 
       if (succeeded.length > 0) success(`Successfully sent ${succeeded.length} poster(s): ${succeeded.join(', ')}`)
       if (failed.length > 0) notifyError(`Failed to send ${failed.length} poster(s): ${failed.join(', ')}`)
+      if (notOnServer.length > 0) notifyError(`Skipped where the server doesn't have it (scan that library?): ${notOnServer.join('; ')}`)
       await new Promise(resolve => setTimeout(resolve, 600))
       await fetchExistingPoster()
       await fetchExistingLogo()

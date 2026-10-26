@@ -65,10 +65,19 @@ def _disk_finder(base: Path, allowed_ext: set):
     return find
 
 
+def _image_finder(base: Path):
+    """Images on disk (see _disk_finder), then the image library by file name."""
+    from .api.kometa_import import chain_finders, library_image_finder
+    return chain_finders(_disk_finder(base, _IMAGE_EXT), library_image_finder())
+
+
 def _matching_groups(library_type: str) -> List[dict]:
-    media = "tv" if library_type == "show" else "movie"
     groups = (db.get_ui_settings() or {}).get("libraryGroups") or []
-    return [g for g in groups if isinstance(g, dict) and g.get("id") and (g.get("mediaType") or "movie") == media]
+    groups = [g for g in groups if isinstance(g, dict) and g.get("id")]
+    if library_type == "both":
+        return groups
+    media = "tv" if library_type == "show" else "movie"
+    return [g for g in groups if (g.get("mediaType") or "movie") == media]
 
 
 def sync_file(file_id: str, force: bool = False, scheduled: bool = False) -> Dict[str, Any]:
@@ -103,9 +112,12 @@ def _sync(live: Dict[str, Any], force: bool, scheduled: bool) -> Dict[str, Any]:
     except UnicodeDecodeError:
         text = raw.decode("latin-1")
 
-    library_type = "show" if live.get("library_type") == "show" else "movie"
+    library_type = live.get("library_type") if live.get("library_type") in ("show", "both") else "movie"
     try:
-        elements, report, file_messages = ki.expand_file(text, library_type, {str(path): text})
+        if library_type == "both":
+            elements, report, file_messages = ki.expand_file_both(text, {str(path): text})
+        else:
+            elements, report, file_messages = ki.expand_file(text, library_type, {str(path): text})
     except ki.ImportError_ as e:
         return done("error", f"Couldn't read the file: {e}")
 
@@ -116,7 +128,7 @@ def _sync(live: Dict[str, Any], force: bool, scheduled: bool) -> Dict[str, Any]:
     available_fonts = {f.lower() for f in api_list_fonts().get("fonts", [])}
     missing: Dict[str, List[str]] = {}
     final_elements, _fonts = finalize_elements(
-        elements, report, _disk_finder(path.parent, _IMAGE_EXT), _disk_finder(path.parent, _FONT_EXT),
+        elements, report, _image_finder(path.parent), _disk_finder(path.parent, _FONT_EXT),
         saver, False, available_fonts, {}, missing,
     )
 

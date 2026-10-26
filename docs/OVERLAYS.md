@@ -12,6 +12,7 @@ This guide covers building overlays, the rules that decide which posters get whi
 - [Importing Kometa overlays](#importing-kometa-overlays)
 - [MDBList ratings and lists](#mdblist-ratings-and-lists)
 - [Lists from WeTrakr, SIMKL and Floppy](#lists-from-wetrakr-simkl-and-floppy)
+- [Scheduler](#scheduler)
 - [Overlay Refresh](#overlay-refresh)
 - [Live Kometa files](#live-kometa-files)
 - [Reading the overlay log](#reading-the-overlay-log)
@@ -141,7 +142,7 @@ Rename a layer with the pencil icon or by double-clicking its name. Hide rules f
 > **Beta.** Kometa import and live Kometa files work, but Kometa files vary a lot and some may still import slightly differently than Kometa draws them. Please report anything that looks off.
 
 1. Add the overlay `.yml` files, or **Paste YAML** to paste one in. Add the images and fonts they use alongside: loose files, a folder, or a zip.
-2. Pick the library type the files are for (**Movies** or **TV Shows**).
+2. Pick the library type the files are for: **Movies**, **TV Shows**, or **Movies and TV Shows** (one overlay for both kinds of library, like a Kometa file both libraries use; layers that only apply to one kind, or look different, get a movie/show rule so they only show there). Also add the images the files use, unless they're already in Your images from an earlier import: an image with the same file name is reused.
 3. **Check** shows a report per file and per overlay: what imported, what was skipped and why, and which images weren't found.
 4. **Import** saves the overlays. Re-importing a file updates the same overlay instead of creating a copy.
 
@@ -183,9 +184,8 @@ Overlay files from [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Show
 [MDBList](https://mdblist.com) provides ratings from many sources and user-made lists. Add a free API key in **Settings → General → MDBList** (get one at mdblist.com/preferences, API section; the free tier has a daily request limit). Then:
 
 - **Audience rating comes from** / **Critic rating comes from**: which source fills `audience_rating` and `critic_rating` (IMDb, Rotten Tomatoes critics or audience, TMDb, Trakt, Metacritic, Letterboxd, MyAnimeList, or the MDBList score). Both are scaled to 0–10.
-- **Keep ratings and lists for (days)**: how long fetched values are reused before fetching again.
 
-Simposter only contacts MDBList when an overlay actually uses a rating or list, and remembers the results for that many days. If MDBList is unreachable, the render still happens; layers that needed the missing value are left off.
+Simposter only contacts MDBList when an overlay actually uses a rating or list, and remembers the results; how often they are fetched again is set in [Scheduler](#scheduler). If MDBList is unreachable, the render still happens; layers that needed the missing value are left off.
 
 For a list rule, choose **On a list** and paste the list's URL (`https://mdblist.com/lists/user/list-name`).
 
@@ -197,9 +197,20 @@ For a list rule, choose **On a list** and paste the list's URL (`https://mdblist
 - **SIMKL**: a client ID from an app registered at simkl.com/settings/developer as **TV, devices & command line**, then **Connect account** (approve the code on simkl.com). Every SIMKL list needs the connection. Plan to Watch, Watching, Completed, On Hold and Dropped work on a free account; custom lists need SIMKL PRO or VIP.
 - **Floppy**: your server's address (e.g. `http://192.168.1.10:8000`) and an app token from Floppy's Settings → Integrations → App tokens, with the `lists:read` scope.
 
-In the rule, the dropdown lists your own lists from every connected service, grouped by service. To use someone else's public list, choose **Paste a list link…** and paste its link. Lists are matched by TMDb ID and kept for the same number of days as MDBList's; when that time is up, the old copy is used while a fresh one is fetched in the background. If a service can't be reached, layers that need its list stay off and the overlay log says why.
+In the rule, the dropdown lists your own lists from every connected service, grouped by service. To use someone else's public list, choose **Paste a list link…** and paste its link. Lists are matched by TMDb ID and re-fetched as often as [Scheduler](#scheduler) says; until then the stored copy is used, so a render never waits on a list service. If a service can't be reached, layers that need its list stay off and the overlay log says why.
 
 ---
+
+## Scheduler
+
+Overlay Manager → **Scheduler** sets how often the outside data overlays use is fetched again. These are the only settings that cost API calls:
+
+- **Re-check ratings every N days** (default 7, or your old MDBList setting): a rating older than this is fetched again, 100 items per request, only for items whose overlay uses a rating.
+- **Re-check lists every N hours** (default 24): a list older than this is downloaded again. That's one request per page of the list (100 to 1,000 items a page depending on the service), not one per item, and only for lists an overlay uses. It applies to MDBList, WeTrakr, SIMKL and Floppy lists.
+
+A file name, quality or edition doesn't need this: a library scan or webhook picks up those changes. Labels come from your last library scan.
+
+The section also lists every library group's **Overlay Refresh** schedule (below), with a link to each. Example: lists every 3 hours, ratings every 7 days and an hourly Overlay Refresh means lists are downloaded every 3 hours and each rating once a week, and the hourly run uses the stored values, fetching whatever is due first, so it makes no other API calls.
 
 ## Overlay Refresh
 
@@ -225,7 +236,7 @@ How it works and its limits:
 Some tools rewrite their Kometa overlay files every day (UMTK and TSSK update their item lists). **📐 Overlays → Advanced → Live Kometa files** (beta) keeps an overlay in step with such a file:
 
 - **File path on the Simposter server**: the `.yml` file. **Browse…** lists the folders on the Simposter server so you can pick it. In Docker, mount the folder with the file into the Simposter container (for example `- /mnt/user/appdata/kometa/config:/kometa/config:ro`) and use the path inside the container.
-- **Overlay name** (optional), **Library type** (Movies / TV shows), and **Check the file** (every hour to once a day).
+- **Overlay name** (optional), **Library type** (Movies / TV shows / Movies and TV shows), and **Check the file** (every hour to once a day).
 - **When it changes, re-render posters whose overlay now looks different**: runs Overlay Refresh for every library of that type after the file changes.
 
 Each entry shows when it was last checked and last changed, with **Check now**, **Open overlay**, **Edit**, **Pause/Resume** and **Remove** (removing keeps the overlay it made). Images and fonts the file uses are looked for next to the file and in the folders above it, as Kometa's own paths are relative to its config folder.

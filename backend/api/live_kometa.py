@@ -47,7 +47,8 @@ def api_save_live_file(req: LiveKometaSaveRequest):
         raise HTTPException(400, "Check every 15 minutes to 7 days")
     file_id = req.id or uuid.uuid4().hex[:12]
     is_new = db.get_live_kometa_file(file_id) is None
-    library_type = "show" if str(req.library_type).lower() in ("show", "tv") else "movie"
+    lt = str(req.library_type).lower()
+    library_type = "both" if lt == "both" else ("show" if lt in ("show", "tv") else "movie")
     db.save_live_kometa_file(file_id, str(path), (req.name or "").strip(), library_type, hours,
                              req.enabled, req.refresh_posters)
     from ..scheduler import schedule_live_kometa, cancel_live_kometa

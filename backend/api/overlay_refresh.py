@@ -122,3 +122,39 @@ def api_overlay_refresh_items(group_id: str):
 @router.get("/log")
 def api_overlay_refresh_log(group_id: str, limit: int = 300):
     return {"entries": db.get_overlay_refresh_log(group_id, max(1, min(limit, 2000)))}
+
+
+class DataRefreshRequest(BaseModel):
+    ratingsDays: float
+    listsHours: float
+
+
+@router.get("/data-refresh")
+def api_overlay_data_refresh():
+    """How often ratings and lists are re-fetched (Overlay Manager > Scheduler),
+    plus every library group's Overlay Refresh schedule for the overview."""
+    from .. import list_sources
+    from .. import scheduler as scheduler_module
+    groups = []
+    for group in (db.get_ui_settings() or {}).get("libraryGroups") or []:
+        cfg = group.get("overlayRefresh") or {}
+        groups.append({
+            "id": group.get("id"),
+            "name": group.get("name"),
+            "mediaType": group.get("mediaType"),
+            "members": group.get("members") or [],
+            "enabled": bool(cfg.get("enabled")),
+            "scheduleCron": cfg.get("scheduleCron") or "",
+            "lastRunAt": cfg.get("lastRunAt"),
+            "nextRun": (scheduler_module.get_overlay_refresh_schedule(group.get("id")) or {}).get("next_run_time"),
+        })
+    return {**list_sources.get_refresh_settings(), "groups": groups}
+
+
+@router.post("/data-refresh")
+def api_overlay_data_refresh_save(req: DataRefreshRequest):
+    from .. import list_sources
+    try:
+        return list_sources.save_refresh_settings(req.ratingsDays, req.listsHours)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Enter a number of days and hours")

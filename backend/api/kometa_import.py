@@ -90,6 +90,50 @@ class _AssetSaver:
         return asset_id
 
 
+def library_image_finder():
+    """find(wanted) for images already in the image library (Overlay Manager >
+    Your images), by file name: a re-import of just the .yml (or another library
+    type's copy) finds the images an earlier import saved, instead of reporting
+    them missing. Matches the name the asset saver gives an image
+    (assets/<sanitized stem><ext>), then the asset's own name. Returns the
+    library path and bytes, so the saver reuses the asset rather than copying it."""
+    assets_dir = _get_overlay_assets_dir()
+    by_file: Dict[str, str] = {}
+    by_name: Dict[str, str] = {}
+    for a in db.get_all_overlay_assets():
+        rel = str(a.get("file_path") or "")
+        fname = PurePosixPath(rel).name
+        if not fname:
+            continue
+        by_file.setdefault(fname.lower(), fname)
+        if a.get("name"):
+            by_name.setdefault(f"{_sanitize_filename(str(a['name']))}{PurePosixPath(fname).suffix.lower()}", fname)
+
+    def find(wanted: str) -> Optional[Tuple[str, bytes]]:
+        p = PurePosixPath(str(wanted).replace("\\", "/"))
+        key = f"{_sanitize_filename(p.stem)}{p.suffix.lower() or '.png'}"
+        fname = by_file.get(key) or by_name.get(key)
+        if not fname:
+            return None
+        path = assets_dir / fname
+        try:
+            return f"assets/{fname}", path.read_bytes()
+        except OSError:
+            return None
+    return find
+
+
+def chain_finders(*finders):
+    """The first finder that finds the file wins."""
+    def find(wanted: str):
+        for f in finders:
+            found = f(wanted)
+            if found:
+                return found
+        return None
+    return find
+
+
 _MAX_REMOTE_IMAGE_BYTES = 15 * 1024 * 1024
 _remote_cache: Dict[str, Optional[Tuple[str, bytes]]] = {}
 
@@ -140,10 +184,11 @@ def finalize_elements(
     find_font(wanted_path) return (name, bytes) or None. Shared by the upload
     import and live Kometa files. Returns (elements, fonts written)."""
     fonts_saved = 0
-    entries = {e["name"]: e for e in report}
+    # "_entry_key" tells the movie and TV versions of a layer apart (Both imports).
+    entries = {e.get("_entry_key", e["name"]): e for e in report}
     final_elements: List[Dict[str, Any]] = []
     for element in elements:
-        entry = entries.get(element["name"], {"messages": []})
+        entry = entries.get(element.pop("_entry_key", None) or element["name"], {"messages": []})
         # Image
         wanted = entry.get("image")
         if wanted:
@@ -211,6 +256,8 @@ def finalize_elements(
         except Exception as e:
             entry["status"] = "skipped"
             entry["messages"].append(f"invalid element: {e}")
+    for e in report:
+        e.pop("_entry_key", None)
     return final_elements, fonts_saved
 
 
@@ -223,7 +270,8 @@ async def api_kometa_import(
     selected: str = Form(""),
     overwrite: bool = Form(True),
 ):
-    library_type = "show" if str(library_type).lower() in ("show", "tv", "tv-show") else "movie"
+    lt = str(library_type).lower()
+    library_type = "both" if lt == "both" else ("show" if lt in ("show", "tv", "tv-show") else "movie")
     try:
         name_map: Dict[str, str] = json.loads(names or "{}") or {}
         selected_list: Optional[List[str]] = json.loads(selected) if selected else None
@@ -244,6 +292,7 @@ async def api_kometa_import(
     _remote_cache.clear()
     available_fonts = {f.lower() for f in api_list_fonts().get("fonts", [])}
     saver = _AssetSaver(dry_run)
+    library_images = library_image_finder()
     existing_configs = {c["name"]: c["id"] for c in db.get_all_overlay_configs()} if overwrite else {}
 
     fonts_saved = 0
@@ -270,7 +319,10 @@ async def api_kometa_import(
             continue
 
         try:
-            elements, report, file_messages = ki.expand_file(text, library_type, yaml_texts)
+            if library_type == "both":
+                elements, report, file_messages = ki.expand_file_both(text, yaml_texts)
+            else:
+                elements, report, file_messages = ki.expand_file(text, library_type, yaml_texts)
         except ki.ImportError_ as e:
             item.update(kind="error", error=str(e))
             results.append(item)
@@ -284,7 +336,7 @@ async def api_kometa_import(
             return find
 
         final_elements, added_fonts = finalize_elements(
-            elements, report, _find_upload("image"), _find_upload("font"), saver, dry_run,
+            elements, report, chain_finders(_find_upload("image"), library_images), _find_upload("font"), saver, dry_run,
             available_fonts, saved_font_names, missing_images,
         )
         fonts_saved += added_fonts

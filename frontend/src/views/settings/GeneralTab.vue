@@ -431,7 +431,8 @@ const timezones = computed(() => {
       <p class="section-description">
         Overlays can show ratings (IMDb, Rotten Tomatoes, TMDb, Trakt, Metacritic, Letterboxd and more) and only appear on
         items in an MDBList list (for example a "trending" ribbon). Kometa overlay files that use <code>audience_rating</code>,
-        <code>critic_rating</code> or <code>mdblist_list</code> need this. Results are cached, so a render rarely calls MDBList.
+        <code>critic_rating</code> or <code>mdblist_list</code> need this. Results are stored, so a render rarely calls MDBList;
+        how often they're re-fetched is set in Overlays → Scheduler.
       </p>
       <div class="api-keys-grid">
         <label>
@@ -465,11 +466,6 @@ const timezones = computed(() => {
             <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
           </select>
           <span class="help-text">Fills <code>critic_rating</code> (0–10).</span>
-        </label>
-        <label>
-          <span class="label-text">Keep ratings and lists for (days)</span>
-          <input v-model.number="settingsStore.mdblist.value.cacheDays" type="number" min="1" max="90" />
-          <span class="help-text">After this, fresh values are fetched. Also used for WeTrakr, SIMKL and Floppy lists.</span>
         </label>
       </div>
     </div>
@@ -562,7 +558,7 @@ const timezones = computed(() => {
         <label>
           <span class="label-text">Floppy server address</span>
           <input v-model="settingsStore.floppy.value.url" type="text" placeholder="http://192.168.1.10:8000" />
-          <span class="help-text">The address you open Floppy at, including the port.</span>
+          <span class="help-text">The address you open Floppy at, including the port. If you change it, enter the app token again (the saved one is only sent to the saved address).</span>
         </label>
         <label>
           <span class="label-text">Floppy App Token</span>

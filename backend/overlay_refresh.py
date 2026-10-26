@@ -36,8 +36,20 @@ _INJECTED_KEYS = {
 _INTERNAL_POSTER_MARKERS = ("/api/movie/", "/api/tv-show/")
 
 
-def _has_overlays(options: Dict[str, Any]) -> bool:
-    return bool(options.get("overlay_config_ids")) or bool(options.get("preset_id"))
+def _has_overlays(options: Dict[str, Any], template_id: Optional[str] = None) -> bool:
+    """Did this send use any overlay? Its own overlay lists, or the preset's old
+    single overlay link. A send with a preset but no overlays isn't tracked:
+    a tracked poster only ever has the overlays it was sent with, so it could
+    never change."""
+    if options.get("overlay_config_ids") or options.get("overlay_config_ids_below"):
+        return True
+    preset_id = options.get("preset_id")
+    if preset_id and template_id:
+        try:
+            return bool((db.get_preset(template_id, preset_id) or {}).get("overlay_config_id"))
+        except Exception:
+            return False
+    return False
 
 
 def _self_referencing_background(url: Optional[str]) -> bool:
@@ -106,7 +118,7 @@ def record_send(
         if not rating_key or not template_id:
             return
         opts = dict(options or {})
-        if not _has_overlays(opts):
+        if not _has_overlays(opts, template_id):
             db.delete_overlay_state(server_id, rating_key, season_index)
             return
         if _self_referencing_background(background_url):
@@ -431,6 +443,61 @@ def state_key(state: Dict[str, Any]) -> str:
     return f"{state['server_id']}:{state['rating_key']}:{-1 if si is None else si}"
 
 
+def prune_without_overlays(pairs: Optional[List[tuple]] = None) -> int:
+    """Stop tracking posters that were sent without any overlay (tracked by
+    versions before v1.8.17). They can never change, so they only clutter
+    Overlay Refresh. pairs limits it to some (server_id, library_id) pairs."""
+    removed = 0
+    try:
+        states = db.get_overlay_states(pairs) if pairs is not None else db.get_all_overlay_states()
+        for state in states:
+            if not state_overlay_ids(state):
+                db.delete_overlay_state(state["server_id"], state["rating_key"], state.get("season_index"))
+                removed += 1
+    except Exception as e:
+        logger.debug("[OVERLAY_REFRESH] Prune failed: %s", e)
+    if removed:
+        logger.info("[OVERLAY_REFRESH] Stopped tracking %d poster(s) that were sent without overlays", removed)
+    return removed
+
+
+def prepare_data(states: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Before a run checks posters: fetch the lists and ratings its overlays use
+    that are past their refresh time (Overlay Manager > Scheduler), so the run
+    sees them. Everything still fresh comes from the cache with no API call."""
+    out = {"lists": 0, "ratings": 0}
+    try:
+        from . import list_sources, overlay_engine
+        elements: List[Dict[str, Any]] = []
+        seen = set()
+        for state in states:
+            for cid in state_overlay_ids(state):
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                cfg = db.get_overlay_config(cid) or {}
+                elements.extend(e for e in cfg.get("elements") or [] if isinstance(e, dict))
+                if cfg.get("conditions"):
+                    elements.append({"conditions": cfg["conditions"]})
+        if not elements:
+            return out
+        needs = overlay_engine.needed_data(elements)
+        if needs["lists"]:
+            out["lists"] = list_sources.refresh_due(needs["lists"])
+        if needs["ratings"]:
+            from . import mdblist_client as mdb
+            if mdb.has_key():
+                for kind, media in (("movie", "movie"), ("show", "tv")):
+                    ids = [s.get("tmdb_id") for s in states if s.get("media_type") == media and s.get("tmdb_id")]
+                    if ids:
+                        out["ratings"] += mdb.prefetch_ratings(kind, ids)
+    except Exception as e:
+        logger.info("[OVERLAY_REFRESH] Updating lists/ratings before the run failed: %s", e)
+    if out["lists"] or out["ratings"]:
+        logger.info("[OVERLAY_REFRESH] Updated %d list(s) and %d rating(s) before checking", out["lists"], out["ratings"])
+    return out
+
+
 def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
               force: bool = False, scheduled: bool = False, remove: bool = False) -> Dict[str, Any]:
     """Check (apply=False) or check-and-refresh (apply=True) every tracked
@@ -450,10 +517,14 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
         group = find_group(group_id)
         if not group:
             raise ValueError("Library group not found")
+        prune_without_overlays(group_pairs(group))
         states = db.get_overlay_states(group_pairs(group))
         if only_keys is not None:
             wanted = set(only_keys)
             states = [s for s in states if state_key(s) in wanted]
+        if not remove:
+            _update_status(group_id, {"current": "Updating lists and ratings"})
+            prepare_data(states)
         _update_status(group_id, {"total": len(states)})
         items: List[Dict[str, Any]] = []
         counts = {"changed": 0, "updated": 0, "unchanged": 0, "failed": 0, "removed": 0}

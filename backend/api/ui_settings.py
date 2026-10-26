@@ -426,6 +426,18 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
         # The frontend never sees real secret values (GET returns SECRET_MASK) — if a
         # secret field still holds that placeholder, the user didn't change it, so keep
         # the real stored value rather than clobbering it with the literal placeholder.
+        # The stored Floppy token only belongs to the stored Floppy server: if the
+        # address changes and the token wasn't re-entered, drop it rather than
+        # keeping it for (and later sending it to) the new address.
+        _old_floppy = (current.get("floppy") or {})
+        _new_floppy = (incoming.get("floppy") or {})
+        if isinstance(_new_floppy, dict) and _new_floppy.get("token") in (SECRET_MASK, "", None):
+            from urllib.parse import urlparse
+            def _origin(u):
+                p = urlparse(str(u or "").strip())
+                return (p.scheme.lower(), p.netloc.lower())
+            if _origin(_new_floppy.get("url")) != _origin(_old_floppy.get("url")):
+                incoming["floppy"] = {**_new_floppy, "token": ""}
         incoming = _restore_unchanged_secrets(incoming, current)
         incoming = _restore_unchanged_media_server_secrets(incoming, current)
         merged = {**defaults, **current, **incoming}
