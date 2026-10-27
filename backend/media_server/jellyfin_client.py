@@ -514,6 +514,40 @@ class JellyfinClient(MediaServerClient):
             return os.path.basename(os.path.dirname(path))
         return os.path.basename(path.rstrip("/\\"))
 
+    def _stream_info(self, item: dict) -> dict:
+        """Resolution/codec/audio from an item's MediaStreams (first video and
+        first audio stream), in the value names get_item_metadata() uses."""
+        info: dict = {}
+        for stream in item.get("MediaStreams") or []:
+            stream_type = stream.get("Type")
+            if stream_type == "Video" and "video_resolution" not in info:
+                w = stream.get("Width") or item.get("Width")
+                info["video_resolution"] = self._classify_resolution(w) if w else None
+                info["video_codec"] = (stream.get("Codec") or "").lower() or None
+            elif stream_type == "Audio" and "audio_codec" not in info:
+                info["audio_codec"] = (stream.get("Codec") or "").lower() or None
+                channels = stream.get("Channels")
+                info["audio_channels"] = str(channels) if channels else None
+                info["audio_language"] = self._normalize_language(stream.get("Language"))
+        return {k: v for k, v in info.items() if v}
+
+    def list_episode_media(self, series_item_id: str) -> List[tuple]:
+        """[(season_id, info)] for every episode of a series, for show/season
+        quality on overlays (a series or season has no streams of its own)."""
+        try:
+            params = {
+                "ParentId": series_item_id,
+                "IncludeItemTypes": "Episode",
+                "Recursive": "true",
+                "Fields": "MediaStreams",
+            }
+            r = requests.get(f"{self.url}/Items", headers=self._headers(), params=params, timeout=30)
+            r.raise_for_status()
+            return [(item.get("SeasonId"), self._stream_info(item)) for item in r.json().get("Items", [])]
+        except Exception as e:
+            logger.debug("[JELLYFIN_CLIENT:%s] list_episode_media failed (series=%s): %s", self.server_id, series_item_id, e)
+            return []
+
     def list_seasons(self, series_item_id: str) -> List[dict]:
         # Same confirmed /Items?ParentId=...&IncludeItemTypes=Season query as
         # find_season_by_index() (Quirk #100), just returning every season

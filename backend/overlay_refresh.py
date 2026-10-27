@@ -91,9 +91,9 @@ def _refresh_label(group: Optional[dict]) -> str:
     return DEFAULT_LABEL if label is None else str(label).strip()
 
 
-def _summary(options: Dict[str, Any], template_id: str) -> List[dict]:
+def _summary(options: Dict[str, Any], template_id: str, facts: Optional[dict] = None) -> List[dict]:
     from .templates.universal import overlay_summary
-    return overlay_summary(options, template_id)
+    return overlay_summary(options, template_id, facts)
 
 
 def record_send(
@@ -124,7 +124,8 @@ def record_send(
         if _self_referencing_background(background_url):
             logger.debug("[OVERLAY_REFRESH] Not tracking %s: background is the server's own poster", rating_key)
             return
-        summary = _summary(opts, template_id)
+        facts: Dict[str, Any] = {}
+        summary = _summary(opts, template_id, facts)
         if not summary:
             # Overlays configured but nothing applied to this item: still track
             # it, so a later change (new resolution, rating) can add one.
@@ -133,6 +134,7 @@ def record_send(
         meta = opts.get("metadata") or {}
         stored_opts = {k: v for k, v in opts.items() if k != "metadata"}
         stored_opts["_base_metadata"] = {k: v for k, v in meta.items() if k not in _INJECTED_KEYS}
+        stored_opts["_facts"] = facts
         try:
             tmdb_val = int(tmdb_id) if tmdb_id not in (None, "") else (int(meta["tmdb_id"]) if meta.get("tmdb_id") else None)
         except (TypeError, ValueError):
@@ -185,6 +187,7 @@ def _fresh_options(state: Dict[str, Any]) -> Dict[str, Any]:
     from .config import inject_plex_media_metadata
     opts = dict(state.get("options") or {})
     base_meta = dict(opts.pop("_base_metadata", None) or {})
+    opts.pop("_facts", None)
     opts["metadata"] = base_meta
     inject_plex_media_metadata(
         opts,
@@ -194,6 +197,58 @@ def _fresh_options(state: Dict[str, Any]) -> Dict[str, Any]:
         log_prefix="[OVERLAY_REFRESH] ",
     )
     return opts
+
+
+def _list_name(key: str) -> str:
+    try:
+        cached = db.get_list_cache(key) or {}
+        if cached.get("title"):
+            return str(cached["title"])
+    except Exception:
+        pass
+    return key.rstrip("/").rsplit("/", 1)[-1] or key
+
+
+def _state_conditions(state: Dict[str, Any]) -> List[dict]:
+    """Every condition in the overlays this poster was sent with (layers and
+    whole overlays)."""
+    conds: List[dict] = []
+    for cid in state_overlay_ids(state):
+        cfg = db.get_overlay_config(cid) or {}
+        conds += [c for c in cfg.get("conditions") or [] if isinstance(c, dict)]
+        for el in cfg.get("elements") or []:
+            if isinstance(el, dict):
+                conds += [c for c in el.get("conditions") or [] if isinstance(c, dict)]
+    return conds
+
+
+def _describe_facts(old: Optional[Dict[str, Any]], new: Dict[str, Any], conditions: List[dict]) -> str:
+    """What changed in the data the overlays check, e.g. "now on list Trending;
+    Audience rating 8.4 → 8.6", limited to changes that flip one of the
+    overlays' rules (a rating moving within a band isn't named). Empty when
+    nothing was recorded before (posters sent before this was tracked)."""
+    if old is None:
+        return ""
+    from .overlay_engine import FIELD_LABELS, fields_that_flipped
+    flipped = fields_that_flipped(conditions, old, new)
+    parts = []
+    for field in list(new.keys()) + [f for f in old.keys() if f not in new]:
+        before, after = list(old.get(field) or []), list(new.get(field) or [])
+        if field not in flipped or before == after:
+            continue
+        gained = [v for v in after if v not in before]
+        lost = [v for v in before if v not in after]
+        if field == "list":
+            parts += [f"now on list {_list_name(v)}" for v in gained]
+            parts += [f"no longer on list {_list_name(v)}" for v in lost]
+        elif field == "label":
+            parts += [f"label {v} added" for v in gained] + [f"label {v} removed" for v in lost]
+        elif field == "filepath":
+            parts.append("file changed" + (f" to {after[0]}" if len(after) == 1 else ""))
+        else:
+            label = FIELD_LABELS.get(field, field.replace("_", " "))
+            parts.append(f"{label} {', '.join(before) or '—'} → {', '.join(after) or '—'}")
+    return "; ".join(parts)
 
 
 def _describe_change(old: List[dict], new: List[dict]) -> str:
@@ -236,15 +291,22 @@ def check_state(state: Dict[str, Any]) -> Dict[str, Any]:
     """Compare a tracked poster's recorded overlay with what it would get now."""
     from .templates.universal import overlay_signature
     opts = _fresh_options(state)
-    summary = _summary(opts, state["template_id"])
+    facts: Dict[str, Any] = {}
+    summary = _summary(opts, state["template_id"], facts)
     sig = overlay_signature(summary)
     changed = sig != state.get("signature")
+    reason = ""
+    if changed:
+        layers = _describe_change(state.get("summary") or [], summary)
+        cause = _describe_facts((state.get("options") or {}).get("_facts"), facts, _state_conditions(state))
+        reason = f"{cause}: {layers}" if cause else layers
     return {
         "changed": changed,
         "options": opts,
         "summary": summary,
         "signature": sig,
-        "reason": _describe_change(state.get("summary") or [], summary) if changed else "",
+        "facts": facts,
+        "reason": reason,
     }
 
 
@@ -321,6 +383,7 @@ def refresh_state(state: Dict[str, Any], checked: Optional[Dict[str, Any]] = Non
             _apply_plex_label(rating_key, label, bool(checked["summary"]))
 
     stored_opts = dict(state.get("options") or {})
+    stored_opts["_facts"] = checked.get("facts") or {}
     db.upsert_overlay_state({
         **state,
         "options": stored_opts,
@@ -555,6 +618,13 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                 checked = check_state(state)
                 if not checked["changed"] and not force:
                     counts["unchanged"] += 1
+                    # Posters tracked before the checked values were recorded:
+                    # record them now, so the next change can say what changed.
+                    if "_facts" not in (state.get("options") or {}):
+                        try:
+                            db.upsert_overlay_state({**state, "options": {**(state.get("options") or {}), "_facts": checked["facts"]}})
+                        except Exception as e:
+                            logger.debug("[OVERLAY_REFRESH] recording checked values for %s failed: %s", title, e)
                     continue
                 counts["changed"] += 1
                 entry["reason"] = checked["reason"] or "forced"

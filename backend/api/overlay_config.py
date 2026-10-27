@@ -311,6 +311,12 @@ def api_list_fonts():
     # Known Kometa default font names, listed even before first use fetches them
     font_names.update(Path(fname).stem for fname in _KOMETA_REMOTE_FONTS.values())
     font_names.update(Path(fname).stem for fname in _KOMETA_REPO_FONTS.values())
+    # Simposter's own font set (simposter-assets fonts.json), downloaded on first use
+    try:
+        from ..templates.universal import asset_font_names
+        font_names.update(asset_font_names())
+    except Exception as e:
+        logger.debug("[FONTS] simposter-assets font list unavailable: %s", e)
 
     return {"fonts": sorted(font_names, key=str.lower)}
 
@@ -340,6 +346,11 @@ def api_font_file(name: str):
         return None
 
     path = find()
+    if path is None:
+        # Simposter's own font set. A variable file holds every weight; the
+        # preview draws it at the file's default weight.
+        from ..templates.universal import asset_font_path
+        path = asset_font_path(wanted)
     if path is None and _load_remote_kometa_font(wanted, 12, False) is not None:
         path = find()
     if path is None:

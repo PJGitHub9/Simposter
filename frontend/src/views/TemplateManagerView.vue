@@ -4,6 +4,7 @@ import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useSettingsStore } from '@/stores/settings'
 import { copyToClipboard } from '@/services/clipboard'
+import PresetShareModal from '@/components/PresetShareModal.vue'
 
 type Preset = {
   id: string
@@ -301,11 +302,48 @@ const downloadImportText = () => {
   URL.revokeObjectURL(url)
 }
 
+// Share dialog (one preset, or the selected ones)
+const shareTarget = ref<{ keys: Array<{ template_id: string; preset_id: string }>; title: string } | null>(null)
+const openShare = (templateId: string, preset: Preset) => {
+  shareTarget.value = { keys: [{ template_id: templateId, preset_id: preset.id }], title: `"${preset.name || preset.id}"` }
+}
+const openShareSelected = () => {
+  const keys = [...selectedPresets.value]
+    .map((key) => {
+      const [template_id = '', preset_id = ''] = key.split('::')
+      return { template_id, preset_id }
+    })
+    .filter((k) => k.template_id && k.preset_id)
+  if (keys.length) shareTarget.value = { keys, title: `${keys.length} preset${keys.length === 1 ? '' : 's'}` }
+}
+
 const presetFileInput = ref<HTMLInputElement | null>(null)
 const onPresetFile = async (e: Event) => {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
+  // A shared .zip (preset + overlay images/fonts) is imported straight away.
+  if (file.name.toLowerCase().endsWith('.zip')) {
+    importing.value = true
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(`${apiBase}/api/presets/import-file`, { method: 'POST', body: form })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || `API error ${res.status}`)
+      await fetchPresets()
+      const extras = []
+      if (data.overlay_configs) extras.push(`${data.overlay_configs} overlay${data.overlay_configs === 1 ? '' : 's'}`)
+      if (data.fonts_saved) extras.push(`${data.fonts_saved} font${data.fonts_saved === 1 ? '' : 's'}`)
+      showSuccess(extras.length ? `Presets imported, with ${extras.join(' and ')}` : 'Presets imported')
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      importing.value = false
+      input.value = ''
+    }
+    return
+  }
   try {
     const text = await file.text()
     JSON.parse(text)
@@ -727,6 +765,9 @@ onMounted(async () => {
           <div class="section-header">
             <h3>Presets</h3>
             <div class="actions">
+              <button v-if="selectedPresets.size > 0" class="secondary tiny" @click="openShareSelected" title="Download the selected presets as a file, with their overlays if you like">
+                Share {{ selectedPresets.size }} selected
+              </button>
               <button class="secondary tiny" @click="handleExportSelected" :disabled="exporting">
                 {{ exporting ? 'Exporting…' : selectedPresets.size > 0 ? `Export ${selectedPresets.size} selected` : 'Export all' }}
               </button>
@@ -801,6 +842,9 @@ onMounted(async () => {
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                       </button>
                       <button class="icon-btn" @click.stop="openFallbackModal(templateId, preset)" title="Fallback rules">⚙</button>
+                      <button class="icon-btn" @click.stop="openShare(String(templateId), preset)" title="Share as a file">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                      </button>
                       <button
                         class="icon-btn"
                         @click.stop="duplicatePreset(templateId, preset)"
@@ -908,7 +952,7 @@ onMounted(async () => {
           <button class="section-toggle" @click="showImportExport = !showImportExport">
             <div class="toggle-left">
               <h3>Import / Export</h3>
-              <span class="help">Backup or transfer presets as JSON. Overlays a preset uses, and their images, are included.</span>
+              <span class="help">Backup or transfer presets as JSON (overlays and their images included). To share one preset, use its share button; Open file also takes a shared .zip.</span>
             </div>
             <svg class="acc-chevron" :class="{ open: showImportExport }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="6 9 12 15 18 9" />
@@ -928,8 +972,8 @@ onMounted(async () => {
               </button>
               <button class="secondary" @click="importText = ''" :disabled="!importText.trim()">Clear</button>
               <button class="secondary" @click="downloadImportText" :disabled="!importText.trim()" title="Save the JSON in the box as a file">Download file</button>
-              <button class="secondary" @click="presetFileInput?.click()" title="Load a preset JSON file into the box">Open file…</button>
-              <input ref="presetFileInput" type="file" accept=".json,application/json" style="display: none" @change="onPresetFile" />
+              <button class="secondary" @click="presetFileInput?.click()" title="Load a preset .json into the box, or import a shared .zip">Open file…</button>
+              <input ref="presetFileInput" type="file" accept=".json,application/json,.zip,application/zip" style="display: none" @change="onPresetFile" />
               <button class="secondary" @click="handleCopyCompact" :disabled="copyingCompact" title="Strip defaults and copy minified JSON to clipboard for sharing">
                 {{ copyingCompact ? 'Copying…' : 'Copy compact' }}
               </button>
@@ -1097,6 +1141,7 @@ onMounted(async () => {
       </div>
     </div>
   </div>
+  <PresetShareModal v-if="shareTarget" :keys="shareTarget.keys" :title="shareTarget.title" @close="shareTarget = null" />
 </template>
 
 <style scoped>

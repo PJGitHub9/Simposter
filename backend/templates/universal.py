@@ -9,6 +9,7 @@ import os
 import io
 import time
 import hashlib
+import threading
 from pathlib import Path
 from ..config import settings, logger, EXTERNAL_IMAGE_FETCH_HEADERS
 
@@ -336,7 +337,9 @@ _OPEN_SUBSTITUTES = {
 
 # Fonts downloaded when the Simposter defaults are imported, so they're ready
 # (and in the font list) before first use. All open licenses (OFL/Apache 2.0),
-# fetched from Kometa's GitHub repos rather than shipped with Simposter.
+# fetched from simposter-assets (Kometa's repos as a backup) rather than
+# shipped with Simposter. The defaults import also downloads the rest of
+# simposter-assets' fonts (prefetch_all_asset_fonts()).
 STARTER_FONTS = [
     "Arimo-Regular", "Arimo-Bold",
     "Roboto-Regular", "Roboto-Medium", "Roboto-Bold",
@@ -415,6 +418,149 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
         return None
 
 
+# Simposter's own font set (PJGitHub9/simposter-assets, fonts/): open-license
+# fonts with an index, fonts/fonts.json, mapping each font name to its file and,
+# for variable fonts (several weights in one file), the named weight to use.
+# Tried before Kometa's repos. Files go in fonts_cache/simposter-assets/, a
+# subfolder so the Kometa cache's match-by-file-name never picks up a variable
+# file under the wrong weight.
+_ASSET_FONTS_BASE_URL = "https://raw.githubusercontent.com/PJGitHub9/simposter-assets/main/fonts/"
+_ASSET_FONTS_INDEX_MAX_AGE = 24 * 3600
+_asset_fonts_lock = threading.Lock()
+_asset_fonts_index: Optional[Dict[str, dict]] = None  # normalized name -> entry
+_asset_fonts_index_checked = 0.0
+
+
+def _asset_fonts_dir() -> Path:
+    d = _kometa_fonts_cache_dir() / "simposter-assets"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def _asset_fonts_entries(refresh: bool = False) -> Dict[str, dict]:
+    """fonts.json, keyed by normalized font name. Cached on disk and re-fetched
+    once a day; a failed fetch keeps the stored copy (and waits 10 minutes)."""
+    global _asset_fonts_index, _asset_fonts_index_checked
+    import json
+    import time
+    with _asset_fonts_lock:
+        now = time.time()
+        path = _asset_fonts_dir() / "fonts.json"
+        if _asset_fonts_index is None and path.exists():
+            try:
+                _asset_fonts_index = {_normalize_font_token(f["name"]): f
+                                      for f in json.loads(path.read_text(encoding="utf-8")).get("fonts", [])
+                                      if f.get("name") and f.get("file")}
+                _asset_fonts_index_checked = path.stat().st_mtime
+            except Exception:
+                _asset_fonts_index = None
+        stale = now - _asset_fonts_index_checked > _ASSET_FONTS_INDEX_MAX_AGE
+        if _asset_fonts_index is None or stale or refresh:
+            try:
+                import requests
+                resp = requests.get(_ASSET_FONTS_BASE_URL + "fonts.json", timeout=10)
+                resp.raise_for_status()
+                fonts = resp.json().get("fonts", [])
+                index = {_normalize_font_token(f["name"]): f for f in fonts if f.get("name") and f.get("file")}
+                if index:
+                    path.write_text(resp.text, encoding="utf-8")
+                    _asset_fonts_index = index
+                _asset_fonts_index_checked = now
+            except Exception as e:
+                logger.debug("[FONT] Couldn't fetch simposter-assets fonts.json: %s", e)
+                # Retry in 10 minutes rather than on every render.
+                _asset_fonts_index_checked = now - _ASSET_FONTS_INDEX_MAX_AGE + 600
+        return _asset_fonts_index or {}
+
+
+def _asset_font_entry(font_family: str, boldish: bool = False) -> Optional[dict]:
+    entries = _asset_fonts_entries()
+    token = _normalize_font_token(font_family)
+    entry = entries.get(token)
+    # A bare family name ("Oswald") with bold asked for uses the family's Bold.
+    if entry and boldish and entry.get("style") in (None, "Regular") and _normalize_font_token(entry.get("family", "").replace(" ", "")) == token:
+        entry = entries.get(token + "bold") or entry
+    return entry
+
+
+def _ensure_asset_font_file(filename: str) -> Optional[Path]:
+    path = _asset_fonts_dir() / filename
+    if path.exists():
+        return path
+    if ("assets", filename) in _FAILED_FONT_FETCHES or "/" in filename or "\\" in filename:
+        return None
+    try:
+        import requests
+        resp = requests.get(_ASSET_FONTS_BASE_URL + filename, timeout=30)
+        resp.raise_for_status()
+        tmp = path.with_suffix(path.suffix + ".part")
+        tmp.write_bytes(resp.content)
+        tmp.replace(path)
+        logger.info("[FONT] Downloaded '%s' from simposter-assets", filename)
+        return path
+    except Exception as e:
+        logger.debug("[FONT] Failed to download '%s' from simposter-assets: %s", filename, e)
+        _FAILED_FONT_FETCHES.add(("assets", filename))
+        return None
+
+
+def _load_simposter_asset_font(font_family: str, font_size: int, boldish: bool = False):
+    """A font from Simposter's own set (fonts.json), downloaded on first use,
+    with the named weight applied for variable fonts. None if it isn't there."""
+    entry = _asset_font_entry(font_family, boldish)
+    if not entry:
+        return None
+    path = _ensure_asset_font_file(entry["file"])
+    if not path:
+        return None
+    try:
+        font = ImageFont.truetype(str(path), font_size)
+        if entry.get("style"):
+            try:
+                font.set_variation_by_name(entry["style"])
+            except Exception as e:
+                logger.debug("[FONT] '%s' has no named weight '%s': %s", entry["file"], entry["style"], e)
+        return font
+    except Exception as e:
+        logger.debug("[FONT] Failed to load %s: %s", path, e)
+        return None
+
+
+def asset_font_names() -> List[str]:
+    """Every font name in Simposter's own set (for the font list)."""
+    return [e["name"] for e in _asset_fonts_entries().values()]
+
+
+def asset_font_path(font_family: str) -> Optional[Path]:
+    """The downloaded file for a font in Simposter's own set (Overlay Manager preview)."""
+    entry = _asset_font_entry(font_family)
+    return _ensure_asset_font_file(entry["file"]) if entry else None
+
+
+def prefetch_all_asset_fonts() -> List[str]:
+    """Download every file in Simposter's own font set (when the Simposter
+    defaults are imported). Returns the files downloaded now."""
+    fetched = []
+    files = dict.fromkeys(e["file"] for e in _asset_fonts_entries(refresh=True).values())
+    for filename in files:
+        if (_asset_fonts_dir() / filename).exists():
+            continue
+        if _ensure_asset_font_file(filename):
+            fetched.append(filename)
+    if fetched:
+        logger.info("[FONT] Downloaded %d font file(s) from simposter-assets", len(fetched))
+    return fetched
+
+
+def _load_downloadable_font(font_family: str, font_size: int, boldish: bool):
+    """Simposter's own font set first, then Kometa's repos."""
+    return (_load_simposter_asset_font(font_family, font_size, boldish)
+            or _load_remote_kometa_font(font_family, font_size, boldish))
+
+
 def _have_font_file(name: str) -> bool:
     """A font file with exactly this name (any extension) is already on disk."""
     low = (name or "").strip().lower()
@@ -443,6 +589,11 @@ def prefetch_fonts(names) -> List[str]:
         wanted.extend(substitute if substitute else (name,))
     for name in dict.fromkeys(wanted):
         if _have_font_file(name):
+            continue
+        entry = _asset_font_entry(name)
+        if entry:
+            if not (_asset_fonts_dir() / entry["file"]).exists() and _ensure_asset_font_file(entry["file"]):
+                fetched.append(name)
             continue
         if _load_remote_kometa_font(name, 12, False) is not None:
             fetched.append(name)
@@ -565,8 +716,8 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     if font_obj:
         return font_obj
 
-    # 3) Kometa Creator default fonts (fetched + cached on first use, see below)
-    font_obj = _load_remote_kometa_font(font_family, font_size, boldish)
+    # 3) Simposter's own font set, then Kometa's (fetched + cached on first use)
+    font_obj = _load_downloadable_font(font_family, font_size, boldish)
     if font_obj:
         return font_obj
 
@@ -589,7 +740,7 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     # 4b) Open look-alike for a font that isn't free to ship (Arial -> Arimo)
     substitute = _OPEN_SUBSTITUTES.get(_normalize_font_token(font_family))
     if substitute:
-        font_obj = _load_remote_kometa_font(substitute[1] if boldish else substitute[0], font_size, boldish)
+        font_obj = _load_downloadable_font(substitute[1] if boldish else substitute[0], font_size, boldish)
         if font_obj:
             logger.debug("[FONT] Using %s in place of '%s'", substitute[1] if boldish else substitute[0], font_family)
             return font_obj
@@ -1390,6 +1541,8 @@ def _prepare_overlays(
     # Stand-ins so data the whole-overlay conditions use (ratings, lists, file paths) gets loaded.
     every_element = list(all_elements)
     ctx = overlay_engine.build_context(meta, elements=all_elements + [{"conditions": conds} for conds, _, _ in gated])
+    # Every condition the item is checked against (layers and whole overlays), for overlay_summary(facts=...).
+    ctx["_condition_elements"] = every_element + [{"conditions": conds} for conds, _, _ in gated]
     gated_reasons: dict = {}
     for conds, config_elements, config_name in gated:
         failed = next((c for c in conds if isinstance(c, dict) and not overlay_engine.check_condition(c, ctx)), None)
@@ -1579,11 +1732,14 @@ def _element_value(element: Dict[str, Any], meta: Dict[str, Any], ctx: Dict[str,
     return ""
 
 
-def overlay_summary(options: Dict[str, Any], template_id: str) -> list:
+def overlay_summary(options: Dict[str, Any], template_id: str, facts: Optional[dict] = None) -> list:
     """What the overlays would draw on this item right now: a list of
     {bucket, label, value, design} (design = short hash of the element's own
     settings, so editing an element also counts as a change). Uses the same
-    selection as the real render, below-logo bucket then above-logo."""
+    selection as the real render, below-logo bucket then above-logo.
+    `facts`, when given, is filled with the item's value for every field the
+    overlays' conditions check (kept out of the summary/signature, so a value
+    that changes without changing the poster isn't a change)."""
     import hashlib
     import json
     metadata = dict(options.get("metadata") or {})
@@ -1598,6 +1754,9 @@ def overlay_summary(options: Dict[str, Any], template_id: str) -> list:
         meta, ctx, selected = _prepare_overlays(bucket_preset, template_id, metadata, bucket_ids, log=False)
         if ctx is None:
             continue
+        if facts is not None:
+            from .. import overlay_engine
+            facts.update(overlay_engine.condition_facts(ctx.get("_condition_elements") or [], ctx))
         for el in selected:
             design = hashlib.sha1(json.dumps(el, sort_keys=True, default=str).encode()).hexdigest()[:12]
             out.append({

@@ -4,6 +4,7 @@ Overlays are badges, images and text drawn on top of a poster: a 4K or Dolby Vis
 
 This guide covers building overlays, the rules that decide which posters get which layers, importing Kometa overlay files, ratings and lists from MDBList, and keeping posters up to date when their overlay would change.
 
+- [What overlays can do](#what-overlays-can-do)
 - [How overlays fit in](#how-overlays-fit-in)
 - [Building an overlay](#building-an-overlay)
 - [Show when: rules](#show-when-rules)
@@ -15,7 +16,40 @@ This guide covers building overlays, the rules that decide which posters get whi
 - [Scheduler](#scheduler)
 - [Overlay Refresh](#overlay-refresh)
 - [Live Kometa files](#live-kometa-files)
+- [Sharing overlays](#sharing-overlays)
 - [Reading the overlay log](#reading-the-overlay-log)
+- [Limits](#limits)
+
+---
+
+## What overlays can do
+
+**Show information about the item**
+- Quality badges: resolution (4K, 1080p…), HDR/Dolby Vision (from the file name), video codec, audio codec, channels and language, with a different image or text per value.
+- Edition (Director's Cut, Extended, IMAX…), studio or TV network logo, and where the title streams.
+- Ratings from IMDb, Rotten Tomatoes, Metacritic, TMDb, Trakt, Letterboxd, MyAnimeList and the MDBList score, as a number on the poster or as a rule (e.g. a frame only above 8.5). Needs an MDBList key.
+- Any text, with values filled in per item: `{title}`, `{year}`, `{audience_rating}`, `{resolution}`…
+
+**Decide which posters get which layers**
+- Rules on resolution, codecs, audio, file name (patterns), edition, labels, year, title, studio, streaming service, ratings, days since added, show status, TMDb/TVDB ID lists, and membership of lists on MDBList, WeTrakr, SIMKL or Floppy.
+- Badge sets: show only the best match of several (e.g. "4K DV" over "4K HDR" over "4K").
+- Hide rules: one layer hides others when it's drawn.
+- Rules for a whole overlay (e.g. only for 4K items).
+
+**Work with movies, TV shows and seasons**
+- TV shows and seasons use their best episode's quality: a show with any 4K episode counts as 4K, as in Kometa, and each season poster uses its own episodes. Run a TV scan to fill this in.
+
+**Look the way you want**
+- Your own images, image links, full-poster frames, text in any font (yours, Simposter's font collection, or Kometa's), background boxes with rounded corners and borders, outlines, blur, and Kometa-style positions and queues.
+
+**Reuse what you have**
+- Import Kometa overlay files (including Kometa's own default templates, UMTK and TSSK), or keep an overlay in step with a file another tool rewrites daily.
+- Share a preset together with its overlays and images as a single file.
+
+**Stay current**
+- Overlay Refresh finds posters whose overlay would now look different (a new rating, a list, an upgrade, an edited overlay) and re-sends them, on a schedule or right after you edit an overlay, and says what changed.
+
+Works with Plex, Jellyfin and Emby. Labels and editions come from Plex only; see [Limits](#limits).
 
 ---
 
@@ -108,6 +142,7 @@ Notes on some fields:
 - **Label** and **edition** come from Plex only. On Jellyfin/Emby, match the file name instead (most edition tags are in the file name).
 - Rating fields only appear once an MDBList key is set in Settings → General; "On a list" appears once any list service is set up there.
 - A rule that can't be checked (missing data) doesn't match, so the layer stays off.
+- **TV shows and seasons**: a show or season has no file of its own, so resolution, codec and audio come from its best episode (highest resolution, then most audio channels). A show with one 4K episode counts as 4K, matching Kometa; each season uses its own episodes. These values are read during a TV scan (one extra request per show), so scan once after updating. On Plex, audio language isn't available this way. File-name rules on a show check the show's folder.
 
 ---
 
@@ -171,7 +206,7 @@ An ID list (`tmdb_movie: 123, 456`) is copied at import time. If another tool re
 
 ### Fonts
 
-Kometa overlay files name font files, and Kometa's default is `Roboto-Medium.ttf`. Fonts you add with the import are used first. Otherwise Simposter downloads the font from Kometa's own font collection the first time it's needed, so imported text looks the same as in Kometa. A font it can't find anywhere falls back to a regular-weight system font.
+Kometa overlay files name font files, and Kometa's default is `Roboto-Medium.ttf`. Fonts you add with the import are used first. Otherwise Simposter downloads the font the first time it's needed: from its own font collection (24 open-source families such as Roboto, Oswald, Poppins, Bebas Neue and Playfair Display, in every weight), then from Kometa's, so imported text looks the same as in Kometa. A font it can't find anywhere falls back to a regular-weight system font. Your own fonts go in `config/fonts`.
 
 ### UMTK and TSSK
 
@@ -216,18 +251,19 @@ The section also lists every library group's **Overlay Refresh** schedule (below
 
 A poster's overlay can change after it's been sent: a better rating, a new list membership, a 4K upgrade, an edited overlay. **Overlay Refresh** (🔁, in each library's sidebar menu) finds posters whose overlay would now come out differently and re-renders them.
 
-- **Check for changes** lists the posters that would change, with the reason ("Resolution: 1080 → 4K", "added NEW layer"). It doesn't send anything.
+- **Check for changes** lists the posters that would change, with the reason: what changed in the item's data, then the layers, e.g. "now on list Trending: added Trending frame" or "Audience rating 8.4 → 8.7: added High score". Only data that crossed one of the overlay's rules is named, so a rating moving from 8.4 to 8.5 without crossing a threshold isn't a change. It doesn't send anything.
 - **Refresh changed posters** re-renders and sends those posters. **Re-send all** re-sends every tracked poster.
 - **Schedule** runs it automatically (e.g. nightly). A scheduled run that changes nothing sends no notification.
 - **Plex label**: posters refreshed on Plex get this label (default `Simposter-Overlay`), like Kometa's `Overlay` label.
 - **Tracked posters** lists every poster Simposter is tracking, with the overlays each was sent with. Filter by an overlay to re-send just the posters that use it, or re-send one poster.
+- **After editing an overlay**: when you save a changed overlay in the Overlay Manager, Simposter lists the tracked posters sent with it, per library, and offers to refresh them. Only posters whose overlay now looks different are re-sent.
 
 How it works and its limits:
 
 - Only posters sent by Simposter since this feature existed are tracked. A poster is re-rendered from the artwork it was originally rendered from, not from what's on the server now.
 - A poster keeps the overlays it was sent with. Turning an overlay on or off in a preset reaches already-sent posters the next time they're sent (use Re-send in Tracked posters).
 - New data (resolution, file name, date added) arrives with library scans; ratings and lists arrive from MDBList.
-- Runs are logged and send a summary notification (toggle "Overlay Refresh" in Settings → Notifications).
+- Runs are logged and send a summary notification (toggle "Overlay Refresh" in Settings → Notifications). A poster sent to several servers is listed once, with the servers.
 
 ---
 
@@ -242,6 +278,17 @@ Some tools rewrite their Kometa overlay files every day (UMTK and TSSK update th
 Each entry shows when it was last checked and last changed, with **Check now**, **Open overlay**, **Edit**, **Pause/Resume** and **Remove** (removing keeps the overlay it made). Images and fonts the file uses are looked for next to the file and in the folders above it, as Kometa's own paths are relative to its config folder.
 
 Rules you add to the whole overlay ("Show overlay when") are kept when the file is re-imported. Edits to individual layers are replaced by the file's content on the next change.
+
+---
+
+## Sharing overlays
+
+To give someone a preset with its overlays, use the **share** button on the preset in Template Manager (or **Share selected** for several). Tick **Include overlays** and download:
+
+- a **.zip** when the overlays use images or fonts Simposter can't download by itself: `presets.json`, the images, and the fonts from your `config/fonts`;
+- a **.json** when nothing else is needed.
+
+The other install imports it with Template Manager → Import / Export → **Open file**. Overlays already there with identical layers are reused; a different overlay with the same id is imported under a new id, so nothing of theirs is overwritten. Fonts with a name they already have are kept as they are. Without "Include overlays", the shared preset has its overlays turned off.
 
 ---
 
@@ -261,3 +308,14 @@ Each poster rendered with overlays writes one block to the log (Settings → Log
 - **Skipped** lines give the first rule that didn't match with the item's actual value, another layer winning its badge set, or a hide rule. Up to 8 are listed; set the log level to DEBUG to see the rest.
 
 If a layer you expect isn't drawn, this is the first place to look.
+
+---
+
+## Limits
+
+- **Labels and editions** come from Plex only. On Jellyfin/Emby, use file-name rules (edition tags are usually in the file name).
+- **HDR and Dolby Vision** are read from the file name, as in Kometa's default overlays.
+- **Square Art and Thumb Art** use the preset's overlays too, but layers are placed for a 2:3 poster, so check how they sit on the square or wide image. Overlay Refresh only tracks posters. The Kometa collection template doesn't support overlays.
+- **Kometa builders** other than TMDb/TVDB ID lists and MDBList lists (Trakt, Plex searches, IMDb lists…) aren't supported; those layers import hidden.
+- **Overlay Refresh** only tracks posters sent since it existed, and re-renders from the artwork they were rendered from.
+- **Preview**: the Overlay Manager preview draws a variable font at its default weight; the real render uses the weight you picked.

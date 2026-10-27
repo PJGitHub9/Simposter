@@ -1976,6 +1976,15 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch tmdb/tvdb id for TV show {key}: {e}")
 
+            # Quality for overlays: a show has no file of its own, so it gets
+            # its best episode's (and each season its own best episode's).
+            episode_media = None
+            try:
+                from ..config import plex_show_media_info
+                episode_media = plex_show_media_info(key)
+            except Exception as e:
+                logger.debug(f"[SCAN] Failed to read episode quality for TV show {key}: {e}")
+
             return {
                 "rating_key": key,
                 "title": show.get("title"),
@@ -1990,6 +1999,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "labels": labels,
                 "library_id": lib_id,
                 "file_paths": file_paths,
+                "episode_media": episode_media,
             }
 
         if tv_shows:
@@ -2017,6 +2027,19 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 db.set_file_paths({s["rating_key"]: s.get("file_paths") for s in cached_shows}, is_tv=True)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to store file paths for TV library {lib_id}: {e}")
+            for s in cached_shows:
+                em = s.get("episode_media")
+                if not em:
+                    continue
+                try:
+                    info = em.get("show") or {}
+                    if info:
+                        db.update_tv_media_info(s["rating_key"], info.get("video_resolution"), info.get("audio_codec"),
+                                                info.get("audio_channels"), video_codec=info.get("video_codec"),
+                                                audio_language=info.get("audio_language"))
+                    db.set_season_media_info("plex-1", s["rating_key"], em.get("seasons") or {})
+                except Exception as e:
+                    logger.debug(f"[SCAN] Failed to store episode quality for TV show {s.get('rating_key')}: {e}")
             logger.info(f"[SCAN] Cached {len(cached_shows)} TV shows for library {lib_id} ({len(new_shows)} new)")
 
             # Mark every currently-present show as "still here" (series-level only --

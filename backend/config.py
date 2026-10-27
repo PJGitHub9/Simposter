@@ -901,6 +901,96 @@ def extract_media_info_from_metadata(xml_text: str) -> Dict[str, str]:
     return info
 
 
+def _resolution_rank(value: Optional[str]) -> int:
+    """Order resolutions so the best can be picked: 8k > 4k > 1440 > 1080 > 720 > SD."""
+    v = str(value or "").strip().lower().rstrip("p")
+    if not v:
+        return 0
+    if v.endswith("k"):
+        try:
+            return {8: 7, 4: 6, 2: 4}.get(int(v[:-1]), 4)
+        except ValueError:
+            return 0
+    if v == "sd":
+        return 1
+    try:
+        n = int(v)
+    except ValueError:
+        return 0
+    return 7 if n >= 4320 else 6 if n >= 2160 else 5 if n >= 1440 else 4 if n >= 1080 else 3 if n >= 720 else 2 if n >= 576 else 1
+
+
+def best_media_info(infos: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """A show's or season's media info: the highest-resolution episode's (more
+    audio channels breaks a tie). Like Kometa, which treats a show as 4K when
+    any of its episodes is."""
+    best: Dict[str, Any] = {}
+    best_key = (-1, -1)
+    for info in infos or []:
+        if not info:
+            continue
+        try:
+            channels = int(float(info.get("audio_channels") or 0))
+        except (TypeError, ValueError):
+            channels = 0
+        key = (_resolution_rank(info.get("video_resolution")), channels)
+        if key > best_key:
+            best, best_key = info, key
+    return dict(best)
+
+
+def _media_element_info(media) -> Dict[str, str]:
+    info: Dict[str, str] = {}
+    for attr, field in (("videoResolution", "video_resolution"), ("videoCodec", "video_codec"),
+                        ("audioCodec", "audio_codec")):
+        val = media.get(attr)
+        if val:
+            info[field] = val.lower()
+    if media.get("audioChannels"):
+        info["audio_channels"] = media.get("audioChannels")
+    for stream in media.iter("Stream"):
+        if stream.get("streamType") == "2":
+            lang = stream.get("languageTag") or stream.get("language")
+            if lang:
+                info["audio_language"] = lang.lower()
+            break
+    return info
+
+
+def extract_episode_media_infos(xml_text: str) -> List[tuple]:
+    """[(season_rating_key, info)] for every episode in a Plex episode list
+    (/allLeaves or a season's /children); an episode with several versions
+    counts as its best one."""
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return []
+    out = []
+    for video in root.iter("Video"):
+        infos = [_media_element_info(m) for m in video.findall("Media")]
+        out.append((video.get("parentRatingKey"), best_media_info(infos)))
+    return out
+
+
+def plex_show_media_info(rating_key: str, season: bool = False) -> Dict[str, Any]:
+    """Best-episode media info for a Plex show (or season), fetched live. Shows
+    and seasons have no file of their own, so Plex returns no <Media> for them.
+    Returns {"show": info, "seasons": {season_key: info}}."""
+    path = "children" if season else "allLeaves"
+    r = plex_session.get(f"{settings.PLEX_URL}/library/metadata/{rating_key}/{path}",
+                         headers=plex_headers(), timeout=20)
+    r.raise_for_status()
+    episodes = extract_episode_media_infos(r.text)
+    by_season: Dict[str, list] = {}
+    for season_key, info in episodes:
+        if season_key:
+            by_season.setdefault(str(season_key), []).append(info)
+    return {
+        "show": best_media_info([info for _, info in episodes]),
+        "seasons": {k: best_media_info(v) for k, v in by_season.items()},
+    }
+
+
 def get_plex_media_info(rating_key: str) -> Dict[str, str]:
     """Return media stream info for *rating_key*, using DB cache when available."""
     # 1. Check cache first
@@ -926,6 +1016,27 @@ def get_plex_media_info(rating_key: str) -> Dict[str, str]:
         r = plex_session.get(url, headers=plex_headers(), timeout=6)
         r.raise_for_status()
         info = extract_media_info_from_metadata(r.text)
+        if not info:
+            # A show or season has no file of its own: use its best episode's.
+            kind = ""
+            try:
+                node = ET.fromstring(r.text).find("Directory")
+                kind = (node.get("type") if node is not None else "") or ""
+            except Exception:
+                pass
+            if kind in ("show", "season"):
+                from . import database as db
+                result = plex_show_media_info(rating_key, season=kind == "season")
+                info = result["show"]
+                if kind == "show":
+                    if info:
+                        db.update_tv_media_info(rating_key, info.get("video_resolution"), info.get("audio_codec"),
+                                                info.get("audio_channels"), video_codec=info.get("video_codec"),
+                                                audio_language=info.get("audio_language"))
+                    db.set_season_media_info("plex-1", rating_key, result["seasons"])
+                elif info:
+                    db.set_season_media_info("plex-1", None, {str(rating_key): info})
+                return info
         if info:
             try:
                 from . import database as db

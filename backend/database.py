@@ -1071,6 +1071,23 @@ def init_database():
         # Jellyfin/Emby scans: the item's Etag (an MD5 of its DateLastSaved)
         # from the last scan that fetched its details, so an unchanged item's
         # metadata/logo/backdrop aren't requested again (api/media_server.py).
+        # Season-level media info (best episode per season), for overlays on
+        # season posters; a season has no file of its own. Keyed by the
+        # season's own id on its server; show_rating_key lets a re-scan replace
+        # a show's seasons.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS season_media_info (
+                rating_key TEXT PRIMARY KEY,
+                server_id TEXT NOT NULL DEFAULT 'plex-1',
+                show_rating_key TEXT,
+                video_resolution TEXT,
+                video_codec TEXT,
+                audio_codec TEXT,
+                audio_channels TEXT,
+                audio_language TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS media_server_item_etags (
                 server_id TEXT NOT NULL,
@@ -2614,6 +2631,17 @@ def get_cached_media_info(rating_key: str) -> Optional[Dict[str, str]]:
             )
             row = cursor.fetchone()
         if not row:
+            # A season: best-episode values stored by the TV scan
+            try:
+                cursor.execute(
+                    "SELECT video_resolution, audio_codec, audio_channels, video_codec, audio_language, "
+                    "NULL AS edition FROM season_media_info WHERE rating_key = ?",
+                    (rating_key,)
+                )
+                row = cursor.fetchone()
+            except sqlite3.OperationalError:
+                row = None
+        if not row:
             return None
         # Only return if at least one field is populated
         info: Dict[str, str] = {}
@@ -2621,6 +2649,36 @@ def get_cached_media_info(rating_key: str) -> Optional[Dict[str, str]]:
             if row[field]:
                 info[field] = row[field]
         return info if info else None
+
+
+def set_season_media_info(server_id: str, show_rating_key: Optional[str], seasons: Dict[str, Dict[str, Any]]) -> None:
+    """Store best-episode media info per season ({season_key: info}). With a
+    show_rating_key, that show's other stored seasons are removed (they no
+    longer exist)."""
+    with get_db() as conn:
+        if show_rating_key:
+            keys = [str(k) for k in seasons]
+            placeholders = ",".join("?" * len(keys))
+            conn.execute(
+                f"DELETE FROM season_media_info WHERE server_id = ? AND show_rating_key = ?"
+                + (f" AND rating_key NOT IN ({placeholders})" if keys else ""),
+                [server_id, str(show_rating_key), *keys],
+            )
+        for key, info in seasons.items():
+            info = info or {}
+            conn.execute("""
+                INSERT INTO season_media_info (rating_key, server_id, show_rating_key, video_resolution,
+                    video_codec, audio_codec, audio_channels, audio_language, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(rating_key) DO UPDATE SET
+                    server_id = excluded.server_id,
+                    show_rating_key = COALESCE(excluded.show_rating_key, season_media_info.show_rating_key),
+                    video_resolution = excluded.video_resolution, video_codec = excluded.video_codec,
+                    audio_codec = excluded.audio_codec, audio_channels = excluded.audio_channels,
+                    audio_language = excluded.audio_language, updated_at = CURRENT_TIMESTAMP
+            """, (str(key), server_id, str(show_rating_key) if show_rating_key else None,
+                  info.get("video_resolution"), info.get("video_codec"), info.get("audio_codec"),
+                  info.get("audio_channels"), info.get("audio_language")))
 
 
 def _cleanup_orphaned_posters(rating_keys: List[str]) -> None:
@@ -4861,7 +4919,7 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
         own_keys = sorted(keys - shared)
 
         for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue", "poster_fingerprints",
-                      "media_server_item_etags"):
+                      "media_server_item_etags", "season_media_info"):
             cursor.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
             counts[table] = cursor.rowcount
 

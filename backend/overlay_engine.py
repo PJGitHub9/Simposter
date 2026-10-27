@@ -766,6 +766,64 @@ def describe_failure(cond: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     return f"{label} is {actual}; {needs}"
 
 
+def condition_facts(elements: List[Dict[str, Any]], ctx: Dict[str, Any]) -> Dict[str, List[str]]:
+    """The item's current value for every field the elements' conditions check,
+    {field: [values]} (file paths as file names, lists as list keys). Stored
+    with a tracked poster so Overlay Refresh can say what changed."""
+    fields = []
+    for element in elements or []:
+        for cond in element.get("conditions") or []:
+            field = str((cond or {}).get("field") or "").strip().lower() if isinstance(cond, dict) else ""
+            if field and not field.startswith("_") and field not in fields:
+                fields.append(field)
+    facts: Dict[str, List[str]] = {}
+    for field in fields:
+        key = "list" if field in _LIST_FIELDS else "label" if field == "labels" else (
+            "filepath" if field in ("file_path", "filename") else field)
+        if key in facts:
+            continue
+        values = _field_values(field, ctx)
+        if key == "filepath":
+            values = [PurePosixPath(str(v).replace("\\", "/")).name for v in values]
+        facts[key] = sorted({str(v) for v in values if v not in (None, "")})
+    return facts
+
+
+def _ctx_from_facts(facts: Dict[str, Any]) -> Dict[str, Any]:
+    ctx: Dict[str, Any] = {}
+    for field, values in (facts or {}).items():
+        values = list(values or [])
+        if field == "list":
+            ctx["lists"] = values
+        elif field == "label":
+            ctx["labels"] = values
+        elif field == "filepath":
+            ctx["file_paths"] = values
+        else:
+            nums = [_as_number(v) for v in values]
+            ctx[field] = (nums[0] if nums and nums[0] is not None else values[0]) if len(values) == 1 else (values or None)
+    return ctx
+
+
+def fields_that_flipped(conditions: List[Dict[str, Any]], old: Dict[str, Any], new: Dict[str, Any]) -> set:
+    """Fields whose change between two condition_facts() snapshots changes the
+    outcome of at least one of `conditions` (e.g. joined a list a rule checks,
+    or a rating crossed a rule's threshold)."""
+    old_ctx, new_ctx = _ctx_from_facts(old), _ctx_from_facts(new)
+    flipped = set()
+    for cond in conditions or []:
+        if not isinstance(cond, dict):
+            continue
+        field = str(cond.get("field") or "").strip().lower()
+        key = "list" if field in _LIST_FIELDS else "label" if field == "labels" else (
+            "filepath" if field in ("file_path", "filename") else field)
+        if key in flipped or key not in old or key not in new:
+            continue
+        if check_condition(cond, old_ctx) != check_condition(cond, new_ctx):
+            flipped.add(key)
+    return flipped
+
+
 def explain_selection(elements: List[Dict[str, Any]], ctx: Dict[str, Any]) -> List[Tuple[Dict[str, Any], Optional[str]]]:
     """[(element, None if drawn else why not)], using the same rules as select_elements()."""
     reasons: Dict[int, Optional[str]] = {}

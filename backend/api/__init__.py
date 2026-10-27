@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from . import (
     presets,
+    preset_share,
     templates,
     movies,
     tv_shows,
@@ -37,6 +38,7 @@ from . import (
 router = APIRouter()
 
 router.include_router(presets.router)
+router.include_router(preset_share.router)
 router.include_router(templates.router)
 router.include_router(movies.router)
 router.include_router(tv_shows.router)

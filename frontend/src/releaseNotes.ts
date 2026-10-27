@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.20',
+    date: '2026-10-27',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'TV shows and seasons now have a quality for overlays: a show uses its best episode (a show with any 4K episode counts as 4K, like Kometa), and each season its own best episode. Run a TV scan to fill it in.',
+          'Share a preset as a file from Template Manager (the share button on a preset, or Share selected), with its overlays if you like. It downloads a .zip when overlay images or fonts need to go with it, otherwise a .json. Import it with Import / Export → Open file.',
+          'More fonts: Simposter downloads 24 open-source font families (Oswald, Anton, Poppins, Raleway, Playfair Display, Cinzel, Bebas Neue and more) from its own font collection. Importing the Simposter defaults downloads them all; the rest of the time they download on first use.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay Refresh now says what changed, for example "now on list Trending: added Trending frame" or "Audience rating 8.4 → 8.7: added High score", instead of only naming the layer.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.19',
     date: '2026-10-27',
     sections: [

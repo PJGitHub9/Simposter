@@ -570,7 +570,7 @@ _DEFAULT_PRESETS_TEMPLATE: dict = {
 }
 
 
-def _prefetch_preset_fonts(payload: dict, extra_fonts) -> None:
+def _prefetch_preset_fonts(payload: dict, extra_fonts, all_asset_fonts: bool = False) -> None:
     """Download, in the background, the fonts the imported presets use plus any
     listed under "_fonts" (the Simposter defaults' starter set), so they're
     ready before the first render. Only fonts Simposter knows how to fetch
@@ -585,13 +585,15 @@ def _prefetch_preset_fonts(payload: dict, extra_fonts) -> None:
             for opts in (preset.get("options") or {}, preset.get("season_options") or {}):
                 if isinstance(opts, dict) and isinstance(opts.get("font_family"), str):
                     names.append(opts["font_family"])
-    if not names:
+    if not names and not all_asset_fonts:
         return
 
     def _run():
         try:
-            from ..templates.universal import prefetch_fonts
+            from ..templates.universal import prefetch_fonts, prefetch_all_asset_fonts
             prefetch_fonts(names)
+            if all_asset_fonts:
+                prefetch_all_asset_fonts()
         except Exception as e:
             logger.debug("[PRESETS] Font download failed: %s", e)
 
@@ -609,6 +611,8 @@ def api_presets_default_template():
     # Fonts to download when these are imported (see api_presets_import).
     from ..templates.universal import STARTER_FONTS
     result["_fonts"] = list(STARTER_FONTS)
+    # ...and the rest of Simposter's font set (simposter-assets) after them.
+    result["_asset_fonts"] = True
     for template_id, tdata in _DEFAULT_PRESETS_TEMPLATE.items():
         presets = []
         for preset in tdata["presets"]:
@@ -755,6 +759,7 @@ async def api_presets_import(payload: dict = Body(...)):
 
         payload = dict(payload)
         extra_fonts = payload.pop("_fonts", None)
+        all_asset_fonts = bool(payload.pop("_asset_fonts", False))
         overlays = payload.pop("_overlays", None)
         restored_overlays = 0
         if isinstance(overlays, dict):
@@ -775,7 +780,7 @@ async def api_presets_import(payload: dict = Body(...)):
 
         db.merge_presets(payload)
         logger.info("[PRESETS] Imported and merged presets from JSON")
-        _prefetch_preset_fonts(payload, extra_fonts)
+        _prefetch_preset_fonts(payload, extra_fonts, all_asset_fonts)
 
         # Real root cause found while investigating a reported "every render of
         # the default 'simposter-main' preset takes 10+ seconds" — this import

@@ -404,6 +404,30 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
                 poster_drift.check_after_download(getattr(client, "server_id", None), rating_key, poster_path)
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Poster fetch failed for %s: %s", rating_key, e)
+        if is_tv and hasattr(client, "list_episode_media"):
+            # A series has no streams of its own: it gets its best episode's
+            # quality, and each season its own best episode's. Read every scan,
+            # since an upgraded episode needn't change the series' Etag.
+            try:
+                from ..config import best_media_info
+                episodes = client.list_episode_media(rating_key)
+                if episodes:
+                    info = best_media_info([i for _, i in episodes])
+                    by_season: dict = {}
+                    for season_id, ep_info in episodes:
+                        if season_id:
+                            by_season.setdefault(str(season_id), []).append(ep_info)
+                    update_media_info(
+                        rating_key,
+                        video_resolution=info.get("video_resolution"),
+                        audio_codec=info.get("audio_codec"),
+                        audio_channels=info.get("audio_channels"),
+                        video_codec=info.get("video_codec"),
+                        audio_language=info.get("audio_language"),
+                    )
+                    db.set_season_media_info(server_id, rating_key, {k: best_media_info(v) for k, v in by_season.items()})
+            except Exception as e:
+                logger.debug("[MEDIA_SERVER_SCAN] Episode quality failed for %s: %s", rating_key, e)
         if unchanged:
             skipped += 1
             return
@@ -439,6 +463,11 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
                 update_art(rating_key, _art_cache_url(rating_key, art_path))
         except Exception as e:
             logger.debug("[MEDIA_SERVER_SCAN] Backdrop fetch failed for %s: %s", rating_key, e)
+        if is_tv:
+            # Quality came from the episodes above; the series item has none.
+            if server_id and etag:
+                db.set_media_server_etag(server_id, rating_key, etag)
+            return
         try:
             meta = client.get_item_metadata(rating_key)
             update_media_info(
