@@ -887,17 +887,37 @@ def send_overlay_refresh_notification(
     if not send_discord and not send_apprise:
         return
 
+    # One line per title: the same poster on Plex and Jellyfin is two tracked
+    # rows, but one change from the user's point of view.
+    def _by_title(status: str) -> List[Dict[str, Any]]:
+        from ..media_server import get_server_label
+        merged: Dict[str, Dict[str, Any]] = {}
+        for i in items:
+            if i.get("status") != status:
+                continue
+            row = merged.setdefault(str(i.get("title")), {"title": i.get("title"), "reasons": [], "servers": []})
+            reason = i.get("reason")
+            if reason and reason not in row["reasons"]:
+                row["reasons"].append(reason)
+            label = get_server_label(i.get("server_id") or "")
+            if label not in row["servers"]:
+                row["servers"].append(label)
+        return list(merged.values())
+
+    updated = _by_title("updated")
+    removed = _by_title("removed")
+    n_updated = len(updated) or stats.get("updated", 0)
+    n_removed = len(removed) or stats.get("removed", 0)
     fields: List[tuple] = [("Library", (group or {}).get("name") or _get_library_name(library_id))]
     fields.append(("Checked", str(stats.get("checked", 0))))
     if stats.get("removed"):
-        fields.append(("Overlays removed", str(stats["removed"])))
+        fields.append(("Overlays removed", str(n_removed)))
     else:
-        fields.append(("Updated", str(stats.get("updated", 0))))
+        fields.append(("Updated", str(n_updated)))
     if stats.get("failed"):
         fields.append(("Failed", str(stats["failed"])))
-    updated = [i for i in items if i.get("status") == "updated"]
     if updated:
-        lines = [f"{i.get('title')}: {i.get('reason')}" for i in updated[:5]]
+        lines = [f"{r['title']}: {'; '.join(r['reasons'])} ({', '.join(r['servers'])})" for r in updated[:5]]
         if len(updated) > 5:
             lines.append(f"...and {len(updated) - 5} more")
         fields.append(("Changes", "\n".join(lines)[:1000]))
@@ -905,10 +925,10 @@ def send_overlay_refresh_notification(
         description = f"Finished with {stats['failed']} failed poster(s)"
         color = 0xFFA502
     elif stats.get("removed"):
-        description = f"Overlays removed from {stats['removed']} poster(s)"
+        description = f"Overlays removed from {n_removed} poster(s)"
         color = 0x3DD6B7
     elif stats.get("updated"):
-        description = f"{stats['updated']} poster(s) re-rendered with updated overlays"
+        description = f"{n_updated} poster(s) re-rendered with updated overlays"
         color = 0x3DD6B7
     else:
         description = f"Nothing changed ({stats.get('checked', 0)} poster(s) checked)"

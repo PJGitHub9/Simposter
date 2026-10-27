@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.19 (2026-10-27) — `webui-overhaul-dev` branch
+
+### New Features
+- **Refresh posters after editing an overlay** — saving a changed overlay in the Overlay Manager looks up tracked posters sent with it (`GET /api/overlay-refresh/by-overlay?config_id=`, per library group) and, when there are any, shows `OverlayRefreshPrompt.vue` listing them by title with their servers. "Refresh posters" calls `POST /api/overlay-refresh/run-overlay`, a normal (non-forced) Overlay Refresh limited to those posters per picked group, so only posters whose overlay now comes out differently are re-sent; a group already running is reported as skipped.
+
+### Improvements
+- **Overlay Refresh notification lists each title once** — the same poster on Plex and Jellyfin was two lines and counted twice; `send_overlay_refresh_notification()` now merges by title ("Title: reason (Plex, Jellyfin)") and counts titles.
+
 ## v1.8.18 (2026-10-26) — `webui-overhaul-dev` branch
 
 ### New Features

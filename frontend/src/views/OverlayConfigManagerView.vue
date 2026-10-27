@@ -9,6 +9,7 @@ import OverlayBadgeSets from '@/components/overlay/OverlayBadgeSets.vue'
 import LiveKometaFiles from '@/components/overlay/LiveKometaFiles.vue'
 import OverlayScheduler from '@/components/overlay/OverlayScheduler.vue'
 import OverlayWorkflowGuide from '@/components/overlay/OverlayWorkflowGuide.vue'
+import OverlayRefreshPrompt from '@/components/overlay/OverlayRefreshPrompt.vue'
 import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels'
 import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
@@ -396,8 +397,25 @@ const editConfig = (config: OverlayConfig) => {
   showEditor.value = true
 }
 
+// After saving an overlay that tracked posters were sent with, offer to refresh them.
+const refreshPrompt = ref<{ configId: string; configName: string; groups: any[] } | null>(null)
+
+const offerRefresh = async (configId: string, configName: string) => {
+  try {
+    const res = await fetch(`${apiBase}/api/overlay-refresh/by-overlay?config_id=${encodeURIComponent(configId)}`)
+    if (!res.ok) return
+    const data = await res.json()
+    if (data.total > 0) refreshPrompt.value = { configId, configName, groups: data.groups }
+  } catch (e) {
+    console.error('Failed to look up posters using this overlay:', e)
+  }
+}
+
 const saveConfig = async () => {
   if (!selectedConfig.value) return
+  const changed = hasUnsavedChanges()
+  const savedId = selectedConfig.value.id
+  const savedName = selectedConfig.value.name || 'this overlay'
   try {
     const res = await fetch(`${apiBase}/api/overlay-configs/save`, {
       method: 'POST',
@@ -410,6 +428,7 @@ const saveConfig = async () => {
       savedSnapshot = snapshotOf(selectedConfig.value)
       showEditor.value = false
       selectedConfig.value = null
+      if (changed && savedId) offerRefresh(savedId, savedName)
     } else {
       alert('Failed to save overlay')
     }
@@ -3520,6 +3539,13 @@ onMounted(() => {
       </div>
     </div>
     </Teleport>
+    <OverlayRefreshPrompt
+      v-if="refreshPrompt"
+      :config-id="refreshPrompt.configId"
+      :config-name="refreshPrompt.configName"
+      :groups="refreshPrompt.groups"
+      @close="refreshPrompt = null"
+    />
     <KometaImportModal v-if="showKometaImport" @close="showKometaImport = false" @imported="onKometaImported" />
   </div>
 </template>

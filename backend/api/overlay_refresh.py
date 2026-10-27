@@ -83,6 +83,56 @@ def api_overlay_refresh_run(req: RefreshRunRequest):
     return {"status": "started"}
 
 
+@router.get("/by-overlay")
+def api_overlay_refresh_by_overlay(config_id: str):
+    """Tracked posters sent with this overlay, per library group. Used by the
+    Overlay Manager to offer a refresh after the overlay is saved."""
+    from ..media_server import get_server_label
+    states = [s for s in db.get_all_overlay_states() if config_id in refresh.state_overlay_ids(s)]
+    groups = []
+    for group in (db.get_ui_settings() or {}).get("libraryGroups") or []:
+        pairs = set(refresh.group_pairs(group))
+        mine = [s for s in states if (s["server_id"], str(s.get("library_id"))) in pairs]
+        if not mine:
+            continue
+        titles: Dict[str, Dict[str, Any]] = {}
+        for s in mine:
+            name = refresh._display_title(s)
+            row = titles.setdefault(name, {"title": name, "servers": []})
+            label = get_server_label(s["server_id"])
+            if label not in row["servers"]:
+                row["servers"].append(label)
+        groups.append({
+            "group_id": group.get("id"),
+            "group_name": group.get("name") or group.get("id"),
+            "keys": [refresh.state_key(s) for s in mine],
+            "items": sorted(titles.values(), key=lambda r: str(r["title"]).lower()),
+            "running": refresh.get_status(group.get("id")).get("state") == "running",
+        })
+    return {"groups": groups, "total": sum(len(g["items"]) for g in groups)}
+
+
+class OverlayRunRequest(BaseModel):
+    config_id: str
+    group_ids: Optional[List[str]] = None  # default: every group that uses it
+
+
+@router.post("/run-overlay")
+def api_overlay_refresh_run_overlay(req: OverlayRunRequest):
+    """Refresh the posters sent with one overlay. Only posters whose overlay
+    now comes out differently are re-sent (a normal, non-forced refresh)."""
+    found = api_overlay_refresh_by_overlay(req.config_id)["groups"]
+    started, busy = [], []
+    for g in found:
+        if req.group_ids is not None and g["group_id"] not in req.group_ids:
+            continue
+        if refresh.start_run(g["group_id"], True, g["keys"]):
+            started.append(g["group_name"])
+        else:
+            busy.append(g["group_name"])
+    return {"started": started, "busy": busy}
+
+
 @router.get("/status")
 def api_overlay_refresh_status(group_id: str):
     return refresh.get_status(group_id)

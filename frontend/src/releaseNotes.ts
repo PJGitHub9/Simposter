@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.19',
+    date: '2026-10-27',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'After you change and save an overlay, Simposter lists the posters that were sent with it and offers to refresh them. Only posters whose overlay now looks different are re-sent.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.18',
     date: '2026-10-26',
     sections: [
