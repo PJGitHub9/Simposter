@@ -28,7 +28,7 @@ from urllib.parse import urlencode
 import requests
 
 from .config import logger, settings
-from .config import SECRET_MASK, redact_secrets
+from .config import SECRET_MASK, redact_secrets, api_user_agent
 
 API_URL = "https://api.mdblist.com/"
 LIST_URL_PREFIX = "https://mdblist.com/lists/"
@@ -113,9 +113,10 @@ def _request(path_or_url: str, params: Optional[Dict[str, Any]] = None, json_dat
         try:
             if json_data is not None:
                 sep = "&" if "?" in url else "?"
-                r = requests.post(f"{url}{sep}{urlencode(query)}", json=json_data, timeout=20)
+                r = requests.post(f"{url}{sep}{urlencode(query)}", json=json_data, timeout=20,
+                                  headers={"User-Agent": api_user_agent()})
             else:
-                r = requests.get(url, params=query, timeout=20)
+                r = requests.get(url, params=query, timeout=20, headers={"User-Agent": api_user_agent()})
         except requests.RequestException as e:
             raise MDBListError(f"MDBList request failed: {redact_secrets(e)}")
         finally:
@@ -287,9 +288,10 @@ def get_ratings(media_type: str, tmdb_id: Any = None, tvdb_id: Any = None, imdb_
     return data or None
 
 
-def prefetch_ratings(media_type: str, tmdb_ids: Iterable[Any]) -> int:
+def prefetch_ratings(media_type: str, tmdb_ids: Iterable[Any], force: bool = False) -> int:
     """Fetch ratings for many items with batch requests (100 per call), only for
-    ids not already cached. Returns how many were fetched."""
+    ids not already cached or out of date (every id with force=True). Returns
+    how many were fetched."""
     from . import database as db
 
     if not has_key():
@@ -299,7 +301,7 @@ def prefetch_ratings(media_type: str, tmdb_ids: Iterable[Any]) -> int:
     pending = []
     for tid in dict.fromkeys(t for t in tmdb_ids if t):
         cached = db.get_item_ratings(_item_key(media_type, "tmdb", tid))
-        if not cached or now - cached[1] >= max_age:
+        if force or not cached or now - cached[1] >= max_age:
             pending.append(tid)
     fetched = 0
     for start in range(0, len(pending), 100):

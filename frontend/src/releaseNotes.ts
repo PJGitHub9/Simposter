@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.21',
+    date: '2026-10-27',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Overlays → Scheduler has a "Refresh ratings & lists now" button (fetches them regardless of age) and a "Run now" button that runs Overlay Refresh for one library group.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Batch Edit and auto-generate fetch the ratings an overlay needs 100 at a time before rendering, instead of one MDBList request per poster. Ratings already stored are reused.',
+          'Ratings are now re-checked every 45 days by default (was 7), which saves MDBList calls. If you never changed it, it moves to 45; a value you set is kept.',
+          'Requests to MDBList, TMDb, Fanart.tv and TVDB now show up as Simposter on those services instead of "python-requests".'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.20',
     date: '2026-10-27',
     sections: [

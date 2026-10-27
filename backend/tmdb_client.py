@@ -5,7 +5,7 @@ import threading
 
 import requests
 
-from .config import logger, settings, redact_secrets
+from .config import logger, settings, redact_secrets, api_user_agent
 from . import database as db
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
@@ -122,7 +122,7 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         r = None
         for attempt in range(len(_RETRY_DELAYS) + 1):
             try:
-                r = _session.get(url, params=params, timeout=15)
+                r = _session.get(url, params=params, timeout=15, headers={"User-Agent": api_user_agent()})
             except (requests.ConnectionError, requests.Timeout) as e:
                 # DNS hiccups and dropped connections: a batch with several
                 # workers can hit one; the same lookup works seconds later.

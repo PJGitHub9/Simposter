@@ -4,7 +4,7 @@
 // group's Overlay Refresh schedule, which re-checks posters against that
 // stored data with no API calls of its own. See backend/list_sources.py
 // (get_refresh_settings) and backend/overlay_refresh.py (prepare_data).
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 
 interface GroupSchedule {
@@ -18,13 +18,19 @@ interface GroupSchedule {
   nextRun?: string | null
 }
 
-const ratingsDays = ref(7)
+const ratingsDays = ref(45)
 const listsHours = ref(24)
-const saved = ref({ ratingsDays: 7, listsHours: 24 })
+const saved = ref({ ratingsDays: 45, listsHours: 24 })
 const groups = ref<GroupSchedule[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const message = ref<{ ok: boolean; text: string } | null>(null)
+// "Refresh now" for lists/ratings, and per-group Overlay Refresh runs.
+const dataRefresh = ref<{ state?: string; lists?: number; ratings?: number; error?: string | null }>({})
+const runs = ref<Record<string, string | undefined>>({})
+const dataMessage = ref<{ ok: boolean; text: string } | null>(null)
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+const anyRunning = computed(() => dataRefresh.value.state === 'running' || Object.values(runs.value).includes('running'))
 
 const dirty = computed(() => ratingsDays.value !== saved.value.ratingsDays || listsHours.value !== saved.value.listsHours)
 
@@ -38,10 +44,68 @@ async function load() {
       listsHours.value = data.listsHours
       saved.value = { ratingsDays: data.ratingsDays, listsHours: data.listsHours }
       groups.value = data.groups || []
+      applyStatus(data)
     }
   } catch { /* leave defaults */ }
   loading.value = false
 }
+
+function applyStatus(data: { data_refresh?: typeof dataRefresh.value; runs?: Record<string, string | undefined> }) {
+  const wasRefreshing = dataRefresh.value.state === 'running'
+  dataRefresh.value = data.data_refresh || {}
+  runs.value = data.runs || {}
+  if (wasRefreshing && dataRefresh.value.state === 'done') {
+    dataMessage.value = { ok: true, text: `Fetched ${dataRefresh.value.lists || 0} list(s) and ${dataRefresh.value.ratings || 0} rating(s)` }
+  } else if (wasRefreshing && dataRefresh.value.state === 'error') {
+    dataMessage.value = { ok: false, text: dataRefresh.value.error || 'Refresh failed' }
+  }
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = anyRunning.value ? setTimeout(poll, 2000) : null
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`${getApiBase()}/api/overlay-refresh/data-refresh`)
+    if (res.ok) {
+      const data = await res.json()
+      groups.value = data.groups || groups.value
+      applyStatus(data)
+    }
+  } catch { /* try again on the next tick */ }
+}
+
+async function refreshDataNow() {
+  dataMessage.value = null
+  try {
+    const res = await fetch(`${getApiBase()}/api/overlay-refresh/data-refresh/now`, { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.detail || 'Could not start')
+    dataRefresh.value = { state: 'running' }
+    if (pollTimer) clearTimeout(pollTimer)
+    pollTimer = setTimeout(poll, 1500)
+  } catch (e) {
+    dataMessage.value = { ok: false, text: e instanceof Error ? e.message : 'Could not start' }
+  }
+}
+
+async function runGroupNow(g: GroupSchedule) {
+  try {
+    const res = await fetch(`${getApiBase()}/api/overlay-refresh/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group_id: g.id, apply: true }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.detail || 'Could not start')
+    runs.value = { ...runs.value, [g.id]: 'running' }
+    if (pollTimer) clearTimeout(pollTimer)
+    pollTimer = setTimeout(poll, 1500)
+  } catch (e) {
+    dataMessage.value = { ok: false, text: `${g.name || g.id}: ${e instanceof Error ? e.message : 'Could not start'}` }
+  }
+}
+
+onBeforeUnmount(() => { if (pollTimer) clearTimeout(pollTimer) })
 
 async function save() {
   saving.value = true
@@ -115,6 +179,14 @@ onMounted(load)
     <div class="actions">
       <button type="button" class="btn-primary" :disabled="!dirty || saving" @click="save">{{ saving ? 'Saving…' : 'Save' }}</button>
       <span v-if="message" class="msg" :class="{ bad: !message.ok }">{{ message.text }}</span>
+      <button
+        type="button"
+        class="btn-secondary"
+        :disabled="dataRefresh.state === 'running'"
+        title="Fetch every list your overlays use, and the ratings of every tracked poster, now (ignoring the times above). Doesn't change any poster: run Overlay Refresh for that."
+        @click="refreshDataNow"
+      >{{ dataRefresh.state === 'running' ? 'Refreshing ratings & lists…' : 'Refresh ratings & lists now' }}</button>
+      <span v-if="dataMessage" class="msg" :class="{ bad: !dataMessage.ok }">{{ dataMessage.text }}</span>
     </div>
 
     <h3 class="sub">Overlay Refresh schedules</h3>
@@ -133,7 +205,16 @@ onMounted(load)
           <td>{{ g.name || g.id }} <span class="kind">{{ g.mediaType === 'tv' ? 'TV' : 'Movies' }}</span></td>
           <td>{{ g.enabled && g.scheduleCron ? describeCron(g.scheduleCron) : 'Off' }}</td>
           <td>{{ g.enabled ? fmt(g.nextRun) : '' }}</td>
-          <td><router-link :to="refreshLink(g)" class="link">Open Overlay Refresh</router-link></td>
+          <td class="row-actions">
+            <button
+              type="button"
+              class="btn-small"
+              :disabled="runs[g.id] === 'running'"
+              title="Re-check this group's posters now and re-send the ones whose overlay would look different"
+              @click="runGroupNow(g)"
+            >{{ runs[g.id] === 'running' ? 'Running…' : 'Run now' }}</button>
+            <router-link :to="refreshLink(g)" class="link">Open Overlay Refresh</router-link>
+          </td>
         </tr>
       </tbody>
     </table>
@@ -160,6 +241,16 @@ onMounted(load)
   border-radius: 6px; font-weight: 600; cursor: pointer;
 }
 .btn-primary:disabled { opacity: 0.5; cursor: default; }
+.actions { flex-wrap: wrap; }
+.btn-secondary, .btn-small {
+  background: rgba(255, 255, 255, 0.04); color: var(--text-primary, #fff); border: 1px solid var(--border, #2a2f3e);
+  border-radius: 6px; cursor: pointer;
+}
+.btn-secondary { padding: 0.45rem 1rem; margin-left: auto; }
+.btn-small { padding: 0.2rem 0.6rem; font-size: 0.75rem; }
+.btn-secondary:hover:not(:disabled), .btn-small:hover:not(:disabled) { border-color: var(--accent, #3dd6b7); }
+.btn-secondary:disabled, .btn-small:disabled { opacity: 0.5; cursor: default; }
+.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; }
 .msg { font-size: 0.78rem; color: var(--accent, #3dd6b7); }
 .msg.bad { color: #f87171; }
 .sub { margin: 0.6rem 0 0; font-size: 0.95rem; color: var(--text-primary, #fff); }

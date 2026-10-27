@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.8.21 (2026-10-27) — `webui-overhaul-dev` branch
+
+### New Features
+- **Refresh now in Overlays → Scheduler** — "Refresh ratings & lists now" fetches every list any overlay uses and the ratings of every tracked poster whose overlay uses a rating, ignoring their age (`overlay_refresh.refresh_all_data()` in a background thread, `POST /api/overlay-refresh/data-refresh/now`; `list_sources.refresh_due()` and `mdblist_client.prefetch_ratings()` gained `force`, and one failing list no longer stops the rest). Each library group's row has "Run now" (a normal Overlay Refresh). `GET /api/overlay-refresh/data-refresh` returns the refresh and run states so the card can poll.
+
+### Improvements
+- **Ratings fetched in batches before Batch Edit and auto-generate** — when the preset's overlays use a rating, `overlay_engine.prefetch_ratings_for_render()` fetches the items with no fresh cached rating 100 per MDBList request before the renders start (Batch Edit's `_execute_batch()`, Plex and Jellyfin/Emby auto-generate), so the renders find them cached instead of making one request per item. Items with fresh ratings cost nothing; items MDBList doesn't have are remembered until the cache expires. Webhooks and the editor still look up a single item.
+- **Ratings kept 45 days by default** (was 7; Kometa uses 60). A stored 7 (the old default) is moved to 45 once (`applied_migrations` 'ratings_days_45'); any other value is kept.
+- **Simposter User-Agent** — MDBList, TMDb, Fanart.tv and TVDB requests now send `Simposter/<version> (+https://github.com/PJGitHub9/Simposter)` (`config.api_user_agent()`), so those services no longer list the calls as "python-requests".
+
 ## v1.8.20 (2026-10-27) — `webui-overhaul-dev` branch
 
 ### New Features

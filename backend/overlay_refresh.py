@@ -561,6 +561,67 @@ def prepare_data(states: List[Dict[str, Any]]) -> Dict[str, int]:
     return out
 
 
+data_refresh_status: Dict[str, Any] = {"state": "idle"}
+
+
+def refresh_all_data() -> Dict[str, Any]:
+    """Overlays → Scheduler → "Refresh now": fetch every list any overlay uses
+    and the ratings of every tracked poster whose overlays use a rating,
+    regardless of their age. Doesn't re-render anything."""
+    from . import list_sources, overlay_engine
+    out: Dict[str, Any] = {"lists": 0, "ratings": 0}
+    data_refresh_status.update({"state": "running", "lists": 0, "ratings": 0, "error": None,
+                                "started_at": datetime.now().isoformat(timespec="seconds")})
+    try:
+        elements: List[Dict[str, Any]] = []
+        for cfg in db.get_all_overlay_configs():
+            elements.extend(e for e in cfg.get("elements") or [] if isinstance(e, dict))
+            if cfg.get("conditions"):
+                elements.append({"conditions": cfg["conditions"]})
+        needs = overlay_engine.needed_data(elements)
+        if needs["lists"]:
+            out["lists"] = list_sources.refresh_due(needs["lists"], force=True)
+            data_refresh_status["lists"] = out["lists"]
+        from . import mdblist_client as mdb
+        if mdb.has_key():
+            states = db.get_all_overlay_states()
+            by_config: Dict[str, bool] = {}
+            for kind, media in (("movie", "movie"), ("show", "tv")):
+                ids = []
+                for s in states:
+                    if s.get("media_type") != media or not s.get("tmdb_id"):
+                        continue
+                    for cid in state_overlay_ids(s):
+                        if cid not in by_config:
+                            cfg = db.get_overlay_config(cid) or {}
+                            els = [e for e in cfg.get("elements") or [] if isinstance(e, dict)]
+                            if cfg.get("conditions"):
+                                els.append({"conditions": cfg["conditions"]})
+                            by_config[cid] = bool(overlay_engine.needed_data(els)["ratings"])
+                        if by_config[cid]:
+                            ids.append(s["tmdb_id"])
+                            break
+                if ids:
+                    out["ratings"] += mdb.prefetch_ratings(kind, ids, force=True)
+                    data_refresh_status["ratings"] = out["ratings"]
+        logger.info("[OVERLAY_REFRESH] Refreshed %d list(s) and %d rating(s) on request", out["lists"], out["ratings"])
+        data_refresh_status.update({"state": "done", **out, "finished_at": datetime.now().isoformat(timespec="seconds")})
+    except Exception as e:
+        logger.warning("[OVERLAY_REFRESH] Refreshing lists/ratings failed: %s", e)
+        data_refresh_status.update({"state": "error", "error": str(e)})
+    return out
+
+
+def start_data_refresh() -> bool:
+    """refresh_all_data() in a background thread. False if one is already running."""
+    with run_status_lock:
+        if data_refresh_status.get("state") == "running":
+            return False
+        data_refresh_status["state"] = "running"
+    threading.Thread(target=refresh_all_data, daemon=True).start()
+    return True
+
+
 def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
               force: bool = False, scheduled: bool = False, remove: bool = False) -> Dict[str, Any]:
     """Check (apply=False) or check-and-refresh (apply=True) every tracked

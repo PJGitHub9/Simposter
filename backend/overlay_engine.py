@@ -766,6 +766,54 @@ def describe_failure(cond: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     return f"{label} is {actual}; {needs}"
 
 
+def prefetch_ratings_for_render(template_id: Optional[str], preset_id: Optional[str],
+                                rating_keys: List[Any], is_tv: bool) -> int:
+    """Before rendering many items with one preset (Batch Edit, auto-generate):
+    when the preset's overlays use a rating, fetch the ratings of the items
+    that have none cached (or only an out-of-date one) in MDBList batches of
+    100, instead of one request per item during the renders. Items with fresh
+    cached ratings cost nothing. Returns how many were fetched; never raises."""
+    try:
+        from . import mdblist_client as mdb
+        from . import database as db
+        if not mdb.has_key() or not template_id or not preset_id or not rating_keys:
+            return 0
+        preset = db.get_preset(template_id, preset_id) or {}
+        config_ids: List[str] = []
+        for opts in (preset.get("options") or {}, preset.get("season_options") or {}):
+            for key in ("overlay_config_ids", "overlay_config_ids_below"):
+                for cid in opts.get(key) or []:
+                    if cid and cid not in config_ids:
+                        config_ids.append(cid)
+        if preset.get("overlay_config_id") and preset["overlay_config_id"] not in config_ids:
+            config_ids.append(preset["overlay_config_id"])
+        elements: List[Dict[str, Any]] = []
+        for cid in config_ids:
+            cfg = db.get_overlay_config(cid) or {}
+            elements += [e for e in cfg.get("elements") or [] if isinstance(e, dict)]
+            if cfg.get("conditions"):
+                elements.append({"conditions": cfg["conditions"]})
+        if not elements or not needed_data(elements)["ratings"]:
+            return 0
+        tmdb_ids = []
+        for rk in rating_keys:
+            tmdb_id, _tvdb = db.get_ids_for_rating_key(str(rk))
+            if tmdb_id:
+                tmdb_ids.append(tmdb_id)
+        if not tmdb_ids:
+            return 0
+        fetched = mdb.prefetch_ratings("show" if is_tv else "movie", tmdb_ids)
+        if fetched:
+            from .config import logger
+            logger.info("[MDBLIST] Fetched ratings for %d of %d item(s) in batches before rendering",
+                        fetched, len(tmdb_ids))
+        return fetched
+    except Exception as e:
+        from .config import logger
+        logger.debug("[MDBLIST] Ratings prefetch before rendering failed: %s", e)
+        return 0
+
+
 def condition_facts(elements: List[Dict[str, Any]], ctx: Dict[str, Any]) -> Dict[str, List[str]]:
     """The item's current value for every field the elements' conditions check,
     {field: [values]} (file paths as file names, lists as list keys). Stored

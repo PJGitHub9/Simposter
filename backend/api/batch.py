@@ -2449,6 +2449,11 @@ def _execute_batch(req: Union[BatchRequest, MovieBatchRequest, TVShowBatchReques
     # multi-server sync at all.
     batch_synced_server_ids: List[str] = []
 
+    # Ratings the preset's overlays need: fetch the uncached ones 100 at a
+    # time now, instead of one MDBList request per item during the renders.
+    from ..overlay_engine import prefetch_ratings_for_render
+    prefetch_ratings_for_render(req.template_id, req.preset_id, list(req.rating_keys), is_tv_batch)
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_idx = {}

@@ -57,6 +57,9 @@ def ui_settings(section: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 
 _DEFAULT_LISTS_HOURS = 24.0
+# Ratings rarely change enough to move a badge; Kometa keeps them 60 days.
+_DEFAULT_RATINGS_DAYS = 45.0
+_OLD_DEFAULT_RATINGS_DAYS = 7.0
 _refresh_cache: Dict[str, Any] = {"at": 0.0, "data": None}
 
 
@@ -81,17 +84,28 @@ def get_refresh_settings() -> Dict[str, float]:
             row = conn.execute("SELECT ratings_days, lists_hours FROM overlay_data_refresh WHERE id = 1").fetchone()
             if not row:
                 try:
-                    old = float(ui_settings("mdblist").get("cacheDays") or 7)
+                    old = float(ui_settings("mdblist").get("cacheDays") or _OLD_DEFAULT_RATINGS_DAYS)
                 except (TypeError, ValueError):
-                    old = 7.0
-                row = (old, _DEFAULT_LISTS_HOURS)
+                    old = _OLD_DEFAULT_RATINGS_DAYS
+                # The old MDBList setting carries over unless it was never changed from 7.
+                ratings = _DEFAULT_RATINGS_DAYS if old == _OLD_DEFAULT_RATINGS_DAYS else old
+                row = (ratings, _DEFAULT_LISTS_HOURS)
                 conn.execute("INSERT INTO overlay_data_refresh (id, ratings_days, lists_hours) VALUES (1, ?, ?)", row)
+                conn.commit()
+            # Once (v1.8.20): the default went from 7 to 45 days; a stored 7 is
+            # the old default, so move it. Any other value was chosen.
+            conn.execute("CREATE TABLE IF NOT EXISTS applied_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+            if not conn.execute("SELECT 1 FROM applied_migrations WHERE name = 'ratings_days_45'").fetchone():
+                if float(row[0]) == _OLD_DEFAULT_RATINGS_DAYS:
+                    conn.execute("UPDATE overlay_data_refresh SET ratings_days = ? WHERE id = 1", (_DEFAULT_RATINGS_DAYS,))
+                    row = (_DEFAULT_RATINGS_DAYS, row[1])
+                conn.execute("INSERT INTO applied_migrations (name) VALUES ('ratings_days_45')")
                 conn.commit()
         finally:
             conn.close()
         data = {"ratingsDays": float(row[0]), "listsHours": float(row[1])}
     except Exception:
-        data = {"ratingsDays": 7.0, "listsHours": _DEFAULT_LISTS_HOURS}
+        data = {"ratingsDays": _DEFAULT_RATINGS_DAYS, "listsHours": _DEFAULT_LISTS_HOURS}
     _refresh_cache.update(at=time.time(), data=data)
     return data
 
@@ -265,10 +279,11 @@ def lists_containing(values: Iterable[Any], media_type: str, tmdb_id: Any) -> Li
     return out
 
 
-def refresh_due(values: Iterable[Any]) -> int:
-    """Fetch every one of these lists that is out of date, now (not in the
-    background). Returns how many were fetched. Used before an Overlay Refresh
-    run, so the run already sees lists past their refresh time."""
+def refresh_due(values: Iterable[Any], force: bool = False) -> int:
+    """Fetch every one of these lists that is out of date (every one with
+    force=True), now (not in the background). Returns how many were fetched.
+    Used before an Overlay Refresh run, so the run already sees lists past
+    their refresh time, and by Scheduler's "Refresh now"."""
     from . import database as db
     fetched = 0
     seen = set()
@@ -278,10 +293,13 @@ def refresh_due(values: Iterable[Any]) -> int:
             continue
         seen.add(key)
         cached = db.get_list_cache(key)
-        if cached and time.time() - cached["fetched_at"] < cache_seconds():
+        if not force and cached and time.time() - cached["fetched_at"] < cache_seconds():
             continue
-        if get_list(key, wait=True) is not None:
-            fetched += 1
+        try:
+            if get_list(key, wait=True, force=force) is not None:
+                fetched += 1
+        except Exception as e:  # one list failing doesn't stop the others
+            logger.info("[LISTS] Refreshing %s failed: %s", key, e)
     return fetched
 
 

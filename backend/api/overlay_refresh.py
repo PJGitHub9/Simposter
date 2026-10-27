@@ -198,7 +198,17 @@ def api_overlay_data_refresh():
             "lastRunAt": cfg.get("lastRunAt"),
             "nextRun": (scheduler_module.get_overlay_refresh_schedule(group.get("id")) or {}).get("next_run_time"),
         })
-    return {**list_sources.get_refresh_settings(), "groups": groups}
+    return {**list_sources.get_refresh_settings(), "groups": groups,
+            "data_refresh": dict(refresh.data_refresh_status),
+            "runs": {g["id"]: refresh.get_status(g["id"]).get("state") for g in groups if g.get("id")}}
+
+
+@router.post("/data-refresh/now")
+def api_overlay_data_refresh_now():
+    """Fetch every list and rating overlays use now, regardless of age."""
+    if not refresh.start_data_refresh():
+        raise HTTPException(409, "Lists and ratings are already being refreshed")
+    return {"status": "started"}
 
 
 @router.post("/data-refresh")

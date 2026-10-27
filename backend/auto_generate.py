@@ -130,6 +130,9 @@ def process_new_content_for_library(
 
                 if template_id and preset_id:
                     logger.info(f"[AUTO_GEN] Processing {len(new_movies)} new movies for library {library_id} with {template_id}:{preset_id}")
+                    from .overlay_engine import prefetch_ratings_for_render
+                    prefetch_ratings_for_render(template_id, preset_id,
+                                                [m.get("rating_key") or m.get("key") for m in new_movies], False)
 
                     for movie in new_movies:
                         results["movies_processed"] += 1
@@ -290,6 +293,9 @@ def process_new_content_for_library(
 
                 if template_id and preset_id:
                     logger.info(f"[AUTO_GEN] Processing {len(new_tv_shows)} new TV shows for library {library_id} with {template_id}:{preset_id}")
+                    from .overlay_engine import prefetch_ratings_for_render
+                    prefetch_ratings_for_render(template_id, preset_id,
+                                                [s.get("rating_key") or s.get("key") for s in new_tv_shows], True)
 
                     for show in new_tv_shows:
                         results["tv_shows_processed"] += 1
@@ -654,6 +660,9 @@ def process_new_media_server_content(
 
         logger.info("[AUTO_GEN] Processing %d new %s item(s) from %s library %s with %s:%s",
                     len(remaining), media_type, server_id, library_id, cfg["template_id"], cfg["preset_id"])
+        from .overlay_engine import prefetch_ratings_for_render
+        prefetch_ratings_for_render(cfg["template_id"], cfg["preset_id"],
+                                    [i.get("rating_key") for i in remaining], media_type == "tv")
         for item in remaining:
             rating_key = item.get("rating_key")
             title = item.get("title") or rating_key

@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import requests
 
-from .config import logger, settings
+from .config import logger, settings, api_user_agent
 
 FANART_MOVIE_API_BASE = "https://webservice.fanart.tv/v3/movies"
 FANART_TV_API_BASE = "https://webservice.fanart.tv/v3/tv"
@@ -48,7 +48,7 @@ def _fanart_get(base_url: str, lookup_id: int) -> Dict[str, Any]:
 
     try:
         logger.info("[FANART] Fetching artwork for id=%s (key: %s)", lookup_id, api_key_redacted)
-        r = requests.get(url, params=params, timeout=15)
+        r = requests.get(url, params=params, timeout=15, headers={"User-Agent": api_user_agent()})
         r.raise_for_status()
         data = r.json()
 

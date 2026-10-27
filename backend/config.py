@@ -901,6 +901,24 @@ def extract_media_info_from_metadata(xml_text: str) -> Dict[str, str]:
     return info
 
 
+_API_USER_AGENT: Optional[str] = None
+
+
+def api_user_agent() -> str:
+    """User-Agent for Simposter's own API calls (MDBList, TMDb, Fanart.tv,
+    TVDB...), so services show "Simposter/<version>" instead of
+    "python-requests"."""
+    global _API_USER_AGENT
+    if _API_USER_AGENT is None:
+        try:
+            from .api.version_info import get_current_version
+            version = str(get_current_version() or "").lstrip("v") or "1"
+        except Exception:
+            version = "1"
+        _API_USER_AGENT = f"Simposter/{version} (+https://github.com/PJGitHub9/Simposter)"
+    return _API_USER_AGENT
+
+
 def _resolution_rank(value: Optional[str]) -> int:
     """Order resolutions so the best can be picked: 8k > 4k > 1440 > 1080 > 720 > SD."""
     v = str(value or "").strip().lower().rstrip("p")

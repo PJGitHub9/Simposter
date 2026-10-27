@@ -240,7 +240,7 @@ In the rule, the dropdown lists your own lists from every connected service, gro
 
 Overlay Manager → **Scheduler** sets how often the outside data overlays use is fetched again. These are the only settings that cost API calls:
 
-- **Re-check ratings every N days** (default 7, or your old MDBList setting): a rating older than this is fetched again, 100 items per request, only for items whose overlay uses a rating.
+- **Re-check ratings every N days** (default 45, or your old MDBList setting if you'd changed it): a rating older than this is fetched again, 100 items per request, only for items whose overlay uses a rating.
 - **Re-check lists every N hours** (default 24): a list older than this is downloaded again. That's one request per page of the list (100 to 1,000 items a page depending on the service), not one per item, and only for lists an overlay uses. It applies to MDBList, WeTrakr, SIMKL and Floppy lists.
 
 A file name, quality or edition doesn't need this: a library scan or webhook picks up those changes. Labels come from your last library scan.
