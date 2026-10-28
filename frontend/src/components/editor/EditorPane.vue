@@ -1226,6 +1226,20 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
   }
 }
 
+// After a send: refresh the grid thumbnail of every other server's copy that
+// got the poster. fetchExistingPoster() only refreshes the one on screen.
+const refreshSentThumbnails = async (sent: { server_id: string; rating_key: string }[]) => {
+  const kind = (props.movie.mediaType || 'movie') === 'tv-show' ? 'tv-show' : 'movie'
+  await Promise.all(sent.filter(t => t.rating_key && t.rating_key !== viewingRatingKey.value).map(async (t) => {
+    try {
+      const res = await fetch(`${apiBase}/api/${kind}/${t.rating_key}/poster?meta=1`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.url) updateGlobalPosterCache(t.rating_key, data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`)
+    } catch { /* the grid catches up on its next load */ }
+  }))
+}
+
 const fetchExistingLogo = async (forceRefresh = false) => {
   try {
     const ratingKey = viewingRatingKey.value
@@ -1454,6 +1468,7 @@ const doSend = async () => {
     // already fresh.
     await new Promise(resolve => setTimeout(resolve, 600))
     await fetchExistingPoster()
+    await refreshSentThumbnails(targets.filter((_, i) => results[i]))
     await fetchExistingLogo()
     await fetchLabels()
   } catch (err: unknown) {

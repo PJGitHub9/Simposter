@@ -1707,6 +1707,20 @@ const fetchLabels = async () => {
   }
 }
 
+// After a send: refresh the grid thumbnail of every other server's copy that
+// got the poster. fetchExistingPoster() only refreshes the one on screen.
+const refreshSentThumbnails = async (sent: { server_id: string; rating_key: string }[]) => {
+  const kind = 'tv-show'
+  await Promise.all(sent.filter(t => t.rating_key && t.rating_key !== viewingRatingKey.value).map(async (t) => {
+    try {
+      const res = await fetch(`${apiBase}/api/${kind}/${t.rating_key}/poster?meta=1`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.url) updateGlobalPosterCache(t.rating_key, data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`)
+    } catch { /* the grid catches up on its next load */ }
+  }))
+}
+
 const updateGlobalPosterCache = (key: string, url: string | null) => {
   if (typeof sessionStorage === 'undefined') return
   try {
@@ -2607,6 +2621,8 @@ const doSend = async () => {
       const notifyServers = new Set<string>()
       const notifyAssets = new Set<string>()
       let notifyImage: string | null = null
+      // The show's own copies that got the series poster, to refresh their grid thumbnails.
+      const sentSeries: { server_id: string; rating_key: string }[] = []
 
       for (const seasonKey of selectedSeasonKeys) {
         const season = seasons.value.find(s => s.key === seasonKey)
@@ -2659,9 +2675,11 @@ const doSend = async () => {
           const logoPromises = (sendLogo.value && logoUrl.value) ? targets.map(t => sendLogoToServer(t.server_id, t.rating_key)) : []
           const seasonTitle = season.title
           const itemImage = lastPreview.value
+          const isSeriesItem = !!season.isSeries
           pendingSends.push((async () => {
             try {
               const results = await Promise.all(posterPromises)
+              if (isSeriesItem) targets.forEach((t, i) => { if (results[i]) sentSeries.push(t) })
               const okCount = results.filter(Boolean).length
               const logoResults = logoPromises.length > 0 ? await Promise.all(logoPromises) : []
               targets.forEach((t, i) => {
@@ -2701,6 +2719,7 @@ const doSend = async () => {
       if (notOnServer.length > 0) notifyError(`Skipped where the server doesn't have it (scan that library?): ${notOnServer.join('; ')}`)
       await new Promise(resolve => setTimeout(resolve, 600))
       await fetchExistingPoster()
+      await refreshSentThumbnails(sentSeries)
       await fetchExistingLogo()
       await fetchLabels()
     } finally {

@@ -268,6 +268,72 @@ function nonPlexSearchGroups(
   return out
 }
 
+// Search sections, one per library group: copies of the same title on the
+// group's servers (same TMDb id, TVDB for shows) become one result led by the
+// group's preferred server (else Plex), with the others as other_servers, so
+// the editor can send to all of them -- like opening it from the merged grid.
+// Groups with "merge items" off keep one result per copy. Libraries in no
+// group keep the old per-library sections.
+function buildSearchGroups(items: any[], mediaType: 'movie' | 'tv-show', plexLibs: { id?: string | number; displayName?: string; title?: string }[]) {
+  const groupType = mediaType === 'tv-show' ? 'tv' : 'movie'
+  const lgroups = (settings.libraryGroups.value || []).filter(g => g.mediaType === groupType && (g.members || []).length)
+  const memberOf = new Map<string, any>()
+  for (const g of lgroups) for (const m of g.members) memberOf.set(`${m.serverId}:${m.libraryId}`, g)
+  const inGroup = new Map<string, any[]>()
+  const loose = new Map<string, any[]>()
+  for (const it of items) {
+    const g = memberOf.get(`${it.server_id || 'plex-1'}:${it.library_id}`)
+    if (g) {
+      if (!inGroup.has(g.id)) inGroup.set(g.id, [])
+      inGroup.get(g.id)!.push(it)
+    } else {
+      const lib = String(it.library_id || 'default')
+      if (!loose.has(lib)) loose.set(lib, [])
+      loose.get(lib)!.push(it)
+    }
+  }
+  const out: { libraryName: string; mediaType: string; items: any[] }[] = []
+  for (const g of lgroups) {
+    const groupItems = inGroup.get(g.id) || []
+    if (!groupItems.length) continue
+    let merged: any[] = groupItems
+    if (g.mergeItems !== false) {
+      const byId = new Map<string, any[]>()
+      merged = []
+      for (const it of groupItems) {
+        const id = mediaType === 'tv-show' ? (it.tvdb_id || it.tmdb_id) : it.tmdb_id
+        if (!id) { merged.push(it); continue }
+        if (!byId.has(String(id))) byId.set(String(id), [])
+        byId.get(String(id))!.push(it)
+      }
+      const prefer = g.preferredServerId || 'plex-1'
+      for (const copies of byId.values()) {
+        const lead = copies.find(c => (c.server_id || 'plex-1') === prefer)
+          || copies.find(c => (c.server_id || 'plex-1') === 'plex-1') || copies[0]
+        const others = copies.filter(c => c !== lead && (c.server_id || 'plex-1') !== (lead.server_id || 'plex-1'))
+        merged.push(others.length ? {
+          ...lead,
+          other_servers: others.map(c => ({ server_id: c.server_id || 'plex-1', rating_key: c.key })),
+          also_on: others.map(c => c.server_id || 'plex-1'),
+        } : lead)
+      }
+    }
+    const plexMember = g.members.find((m: any) => m.serverId === 'plex-1')
+    const plexLib = plexMember ? plexLibs.find(l => String(l.id) === String(plexMember.libraryId)) : undefined
+    out.push({ libraryName: g.name || plexLib?.displayName || plexLib?.title || 'Library', mediaType, items: merged })
+  }
+  // Libraries in no group: Plex mappings in their order, then the rest.
+  for (const lib of plexLibs) {
+    const libItems = loose.get(String(lib.id || 'default'))
+    if (libItems?.length) {
+      out.push({ libraryName: lib.displayName || lib.title || (mediaType === 'tv-show' ? 'TV Shows' : 'Movies'), mediaType, items: libItems })
+      loose.delete(String(lib.id || 'default'))
+    }
+  }
+  out.push(...nonPlexSearchGroups(loose, mediaType, []))
+  return out
+}
+
 // Fetch all movies and TV shows from all libraries for search
 const fetchAllLibrariesContent = async () => {
   const apiBase = getApiBase()
@@ -302,34 +368,7 @@ const fetchAllLibrariesContent = async () => {
         ? settings.plex.value.libraryMappings
         : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
 
-      // Group movies by library_id
-      const grouped = new Map<string, any[]>()
-      for (const movie of allMovies) {
-        const libId = movie.library_id || 'default'
-        if (!grouped.has(libId)) {
-          grouped.set(libId, [])
-        }
-        grouped.get(libId)!.push(movie)
-      }
-
-      // Convert to sorted array
-      const groups: { libraryName: string; mediaType: string; movies: any[] }[] = []
-      for (const lib of movieLibs) {
-        const libId = lib.id || 'default'
-        const movies = grouped.get(libId) || []
-        if (movies.length > 0) {
-          groups.push({
-            libraryName: lib.displayName || lib.title || 'Movies',
-            mediaType: 'movie',
-            movies
-          })
-        }
-      }
-      // Jellyfin/Emby libraries (in a Library Group, not a Plex mapping) --
-      // previously dropped from search entirely.
-      groups.push(...nonPlexSearchGroups(grouped, 'movie', movieLibs).map(g => ({ ...g, movies: g.items })))
-
-      allLibrariesMovies.value = groups
+      allLibrariesMovies.value = buildSearchGroups(allMovies, 'movie', movieLibs).map(g => ({ ...g, movies: g.items }))
     }
   } catch {
     /* ignore */
@@ -352,34 +391,7 @@ const fetchAllLibrariesContent = async () => {
         ? settings.plex.value.tvShowLibraryMappings
         : []
 
-      {
-        // Group shows by library_id
-        const grouped = new Map<string, any[]>()
-        for (const show of allShows) {
-          const libId = show.library_id || 'default'
-          if (!grouped.has(libId)) {
-            grouped.set(libId, [])
-          }
-          grouped.get(libId)!.push(show)
-        }
-
-        // Convert to sorted array
-        const groups: { libraryName: string; mediaType: string; shows: any[] }[] = []
-        for (const lib of tvLibs) {
-          const libId = lib.id || 'default'
-          const shows = grouped.get(libId) || []
-          if (shows.length > 0) {
-            groups.push({
-              libraryName: lib.displayName || lib.title || 'TV Shows',
-              mediaType: 'tv-show',
-              shows
-            })
-          }
-        }
-        groups.push(...nonPlexSearchGroups(grouped, 'tv-show', tvLibs).map(g => ({ ...g, shows: g.items })))
-
-        allLibrariesTvShows.value = groups
-      }
+      allLibrariesTvShows.value = buildSearchGroups(allShows, 'tv-show', tvLibs).map(g => ({ ...g, shows: g.items }))
     }
   } catch {
     /* ignore */

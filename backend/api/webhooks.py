@@ -1128,10 +1128,9 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                 # grid (Quirk #65/#67) reflects this without needing a rescan --
                 # mirrors media_server_send.py's identical post-upload pattern.
                 try:
-                    from .movies import _save_poster_cache, _poster_cache_url
-                    saved = _save_poster_cache(item_id, image_bytes, "image/jpeg")
-                    if saved:
-                        cache.update_poster(item_id, _poster_cache_url(item_id, saved))
+                    # TV shows/seasons use the TV poster cache (see _cache_poster_after_upload)
+                    from .media_server_send import _cache_poster_after_upload
+                    _cache_poster_after_upload(item_id, image_bytes, "image/jpeg", is_tv=(media_type == "tv-show"))
                 except Exception as cache_err:
                     logger.debug("[WEBHOOK_SYNC:%s] Failed to update local cache for item_id=%s: %s", client.server_id, item_id, cache_err)
                 try:

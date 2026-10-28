@@ -16,7 +16,10 @@ export const releaseNotes: ReleaseNote[] = [
       {
         title: 'Bug Fixes',
         items: [
-          'Poster editor: switching to a preset without overlays now unticks the overlays the previous preset had turned on (they stayed ticked). Switching between a show’s series and seasons still keeps the overlays you ticked.'
+          'Poster editor: switching to a preset without overlays now unticks the overlays the previous preset had turned on (they stayed ticked). Switching between a show’s series and seasons still keeps the overlays you ticked.',
+          'After sending from the poster editor, every server that got the poster shows it: the "current poster" for a Jellyfin/Emby show or season now updates (it kept the old one), and the grid thumbnails of the other servers’ copies refresh too, not just the one on screen.',
+          'Search shows a title once per library group, even when it’s on several servers, and opening it lets you send to all of them (it showed one result per server, each sending only to its own server). Groups with "merge items" off still list each copy.',
+          'History now shows a row for posters the editor sends to Jellyfin/Emby (only the Plex send was listed), and the Plex row has its library when the editor was opened on the Jellyfin copy.'
         ]
       }
     ]

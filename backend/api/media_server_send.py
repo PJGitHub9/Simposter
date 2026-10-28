@@ -378,19 +378,35 @@ def _upload_poster_and_verify(client, server_id: str, item_id: str, image_bytes:
         logger.debug("[MEDIA_SERVER_SEND:%s] Post-upload verification fetch failed (non-fatal): %s", server_id, e)
 
 
-def _cache_poster_after_upload(item_id: str, image_bytes: bytes, content_type: str) -> Optional[str]:
+def _cache_poster_after_upload(item_id: str, image_bytes: bytes, content_type: str, is_tv: Optional[bool] = None) -> Optional[str]:
     """Updates the local poster disk cache + the resend cache after a
     successful non-Plex poster upload -- factored out of api_send_poster()
     for the same reuse reason as _upload_poster_and_verify() above. Never
-    raises; returns the new cache URL, or None if either write failed."""
+    raises; returns the new cache URL, or None if either write failed.
+
+    TV shows and seasons live in the TV poster cache (tv_<id> files, served
+    by /api/tv-show/<id>/poster), not the movie one; writing the movie cache
+    for them left the editor's "current poster" for a Jellyfin/Emby show or
+    season stale after a send. is_tv=None looks the item up in tv_cache."""
     new_poster_url = None
     try:
-        from .movies import _save_poster_cache, _poster_cache_url
-        saved = _save_poster_cache(item_id, image_bytes, content_type)
-        if saved:
-            new_poster_url = _poster_cache_url(item_id, saved)
-            from .. import cache as cache_mod
-            cache_mod.update_poster(item_id, new_poster_url)
+        from .. import cache as cache_mod
+        from .. import database as db
+        if is_tv is None:
+            with db.get_db() as conn:
+                is_tv = conn.execute("SELECT 1 FROM tv_cache WHERE rating_key = ?", (str(item_id),)).fetchone() is not None
+        if is_tv:
+            from .tv_shows import _save_poster_cache as _tv_save, _poster_cache_url as _tv_url
+            saved = _tv_save(item_id, image_bytes, content_type)
+            if saved:
+                new_poster_url = _tv_url(item_id, saved)
+                cache_mod.update_tv_poster(item_id, new_poster_url)  # no-op for a season (no tv_cache row)
+        else:
+            from .movies import _save_poster_cache, _poster_cache_url
+            saved = _save_poster_cache(item_id, image_bytes, content_type)
+            if saved:
+                new_poster_url = _poster_cache_url(item_id, saved)
+                cache_mod.update_poster(item_id, new_poster_url)
     except Exception as e:
         logger.debug("[MEDIA_SERVER_SEND] Failed to update poster cache after upload for item_id=%s: %s", item_id, e)
 
@@ -499,7 +515,8 @@ def api_send_poster(req: MediaServerSendRequest):
         logger.error("[MEDIA_SERVER_SEND:%s] Poster upload failed rating_key=%s: %s", server_id, req.rating_key, e)
         raise HTTPException(500, f"Failed to upload poster: {e}")
 
-    new_poster_url = _cache_poster_after_upload(item_id, image_bytes, content_type)
+    new_poster_url = _cache_poster_after_upload(item_id, image_bytes, content_type,
+                                                is_tv=True if (req.is_tv or req.season_index is not None) else None)
 
     logger.info("[MEDIA_SERVER_SEND:%s] Poster sent for item_id=%s%s", server_id, item_id,
                 f" (season {req.season_index} of series {current_key})" if req.season_index is not None else "")
@@ -511,7 +528,39 @@ def api_send_poster(req: MediaServerSendRequest):
         _notify_manual_send(current_key, server_id, "poster")
     if req.render:
         _record_editor_render(req, server_id, item_id, current_key)
+        _record_editor_history(req, server_id, item_id, current_key, image_bytes)
     return {"status": "ok", "poster_url": new_poster_url, "item_id": item_id, "rating_key": current_key}
+
+
+def _record_editor_history(req: "MediaServerSendRequest", server_id: str, item_id: str,
+                           current_key: Optional[str], image_bytes: bytes) -> None:
+    """History row for a poster the editor sent to Jellyfin/Emby (Plex sends
+    write their own in plexsend.py). Only editor sends (they carry `render`):
+    other callers of api_send_poster() record their own rows. Never raises."""
+    try:
+        from .. import database as db
+        r = req.render or {}
+        key = str(current_key or req.rating_key)
+        title, year = db.get_title_for_rating_key(key)
+        title = title or r.get("title")
+        year = year or r.get("year")
+        season = req.season_index if req.season_index is not None else r.get("season_index")
+        if season is not None and title:
+            title = f"{title} - {'Specials' if season == 0 else f'Season {season}'}"
+        db.record_poster_history(
+            rating_key=item_id,
+            library_id=db.get_library_id_for_rating_key(key),
+            title=title,
+            year=year,
+            template_id=r.get("template_id"),
+            preset_id=r.get("preset_id"),
+            action="sent_to_media_server",
+            source="manual",
+            poster_data=image_bytes,
+            server_id=server_id,
+        )
+    except Exception as e:
+        logger.debug("[HISTORY] Failed to record manual send to %s: %s", server_id, e)
 
 
 @router.post("/send-logo")
@@ -671,7 +720,7 @@ def sync_render_to_linked_servers(
             did_something = False
             if poster_bytes:
                 _upload_poster_and_verify(client, server_id, item_id, poster_bytes, poster_content_type or "image/png")
-                _cache_poster_after_upload(item_id, poster_bytes, poster_content_type or "image/png")
+                _cache_poster_after_upload(item_id, poster_bytes, poster_content_type or "image/png", is_tv=(media_type == "tv"))
                 did_something = True
             if logo_bytes:
                 client.upload_image(item_id, ImageType.LOGO, logo_bytes, logo_content_type or "image/png")

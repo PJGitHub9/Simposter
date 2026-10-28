@@ -239,9 +239,11 @@ def api_plex_send(req: PlexSendRequest):
     # Record history entry for manual send (movie_details already fetched above)
     try:
         from .. import database as db
+        # This item's own library first: an editor opened on the Jellyfin copy
+        # sends the Plex copy without a (Plex) library id.
         db.record_poster_history(
             rating_key=req.rating_key,
-            library_id=req.library_id or movie_details.get("library_id"),
+            library_id=db.get_library_id_for_rating_key(req.rating_key) or req.library_id or movie_details.get("library_id"),
             title=history_title,
             year=movie_details.get("year"),
             template_id=req.template_id,
