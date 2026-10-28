@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.23',
+    date: '2026-10-28',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Resending a saved poster with the arrow on a grid card now shows in History, one row per server ("Resent to Plex", "Resent to Jellyfin"), plus a row per season resent to Plex. It wasn’t recorded at all.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.22',
     date: '2026-10-28',
     sections: [

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.23 (2026-10-28) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Grid resend wasn't in History** — `api_render_cache_resend()` (the card's resend arrow) wrote no History rows. It now records one per server reached: `resent_to_plex`, or a new `resent_to_media_server` for Jellyfin/Emby ("Resent to <server>" in History, with its own filter option and preview), plus one per Plex season (`Show - Season N`), with the template/preset of the last History row for that poster and the library from the scan cache. The new action counts as "sent" for drift tracking, the scan's already-sent check and the Batch Edit status pill.
+
 ## v1.8.22 (2026-10-28) — `webui-overhaul-dev` branch
 
 ### Bug Fixes

@@ -7,7 +7,7 @@ from io import BytesIO
 from pathlib import Path
 from PIL import Image
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..config import settings, plex_headers, plex_session, plex_remove_label, plex_add_label, get_label_to_add, logger, get_media_folder_name, EXTERNAL_IMAGE_FETCH_HEADERS
 from ..rendering import render_poster_image
@@ -852,6 +852,41 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
 
     sent_to: List[str] = []
     failed: List[str] = []
+
+    def _history(server_id: str, key: str, data: bytes, season_index: Optional[int] = None) -> None:
+        # The grid's resend arrow never wrote History, so resends were invisible there.
+        try:
+            title = _title_for_ctx
+            if season_index is not None and title:
+                title = f"{title} - {'Specials' if season_index == 0 else f'Season {season_index}'}"
+            db.record_poster_history(
+                rating_key=key,
+                library_id=db.get_library_id_for_rating_key(key) or library_id,
+                title=title,
+                year=_year_for_ctx,
+                template_id=_last_template.get("template_id"),
+                preset_id=_last_template.get("preset_id"),
+                action="resent_to_plex" if server_id == "plex-1" else "resent_to_media_server",
+                source="manual",
+                poster_data=data,
+                server_id=server_id,
+            )
+        except Exception as e:
+            logger.debug("[HISTORY] Failed to record resend of %s to %s: %s", key, server_id, e)
+
+    # Template/preset of the render being resent: the last History row that sent it.
+    _last_template: Dict[str, Any] = {}
+    try:
+        with db.get_db() as conn:
+            row = conn.execute(
+                "SELECT template_id, preset_id FROM poster_history WHERE rating_key = ? AND template_id IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT 1", (rating_key,)
+            ).fetchone()
+        if row:
+            _last_template = {"template_id": row["template_id"], "preset_id": row["preset_id"]}
+    except Exception:
+        pass
+
     for target in targets:
         if target.server_id == "plex-1":
             try:
@@ -868,6 +903,7 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                 _remove_labels_for_key(target.rating_key, req.is_tv, library_id, db)
                 _add_label_for_key(target.rating_key, req.is_tv, library_id, db)
                 sent_to.append(target.server_id)
+                _history("plex-1", target.rating_key, cached)
             except Exception as e:
                 logger.warning("[PLEXSEND] Failed to resend cached poster to Plex (%s): %s", target.rating_key, e)
                 failed.append(target.server_id)
@@ -879,6 +915,7 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                 api_send_poster(MediaServerSendRequest(rating_key=target.rating_key, image_data=data_url, is_tv=req.is_tv))
                 logger.info("[PLEXSEND] Resent cached poster to %s (%s)", target.server_id, target.rating_key)
                 sent_to.append(target.server_id)
+                _history(target.server_id, target.rating_key, cached)
             except Exception as e:
                 logger.warning("[PLEXSEND] Failed to resend cached poster to %s (%s): %s", target.server_id, target.rating_key, e)
                 failed.append(target.server_id)
@@ -922,6 +959,7 @@ def api_render_cache_resend(rating_key: str, req: ResendCachedRequest):
                     poster_drift.record_sent("plex-1", season_key, season_cached)
                     resent_seasons += 1
                     logger.info("[PLEXSEND] Resent cached season poster for %s", season_key)
+                    _history("plex-1", season_key, season_cached, season.get("index"))
                     _remove_labels_for_key(season_key, True, library_id, db)
                     _add_label_for_key(season_key, True, library_id, db)
                 except Exception as se:

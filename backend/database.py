@@ -4522,7 +4522,7 @@ def record_poster_history(
 
     # Remember what was sent, for poster drift detection (backend/poster_drift.py).
     if poster_data and status == 'success' and action in (
-        "sent_to_plex", "resent_to_plex", "sent_to_media_server", "overlay_refresh", "overlay_removed"
+        "sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server", "overlay_refresh", "overlay_removed"
     ):
         from . import poster_drift
         poster_drift.record_sent(server_id, rating_key, poster_data)
@@ -4683,7 +4683,7 @@ def poster_already_sent(server_id: str, rating_key: str) -> bool:
             cursor.execute(
                 """SELECT 1 FROM poster_history
                    WHERE server_id = ? AND rating_key = ?
-                     AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'overlay_refresh')
+                     AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh')
                      AND COALESCE(status, 'success') = 'success'
                    LIMIT 1""",
                 (server_id, str(rating_key)),
@@ -4784,7 +4784,7 @@ def get_poster_status(
         # direct upload, Quirk #110 -- exactly the case that made "Fallout"/
         # "The Grand Tour" show "Not sent" despite a real, successful,
         # verified send moments earlier).
-        if action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server") and result[rating_key]["sent"] is None:
+        if action in ("sent_to_plex", "resent_to_plex", "sent_to_media_server", "resent_to_media_server") and result[rating_key]["sent"] is None:
             result[rating_key]["sent"] = {
                 "template_id": template_id,
                 "preset_id": preset_id,

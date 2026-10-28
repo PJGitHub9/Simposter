@@ -429,6 +429,8 @@ const getActionLabel = (record: HistoryRecord) => {
       return 'Resent to Plex'
     case 'sent_to_media_server':
       return `Sent to ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
+    case 'resent_to_media_server':
+      return `Resent to ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'overlay_refresh':
       return `Overlay refreshed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'overlay_removed':
@@ -448,6 +450,7 @@ const getActionClass = (action: string) => {
     case 'sent_to_media_server':
       return 'action-plex'
     case 'resent_to_plex':
+    case 'resent_to_media_server':
     case 'overlay_refresh':
     case 'overlay_removed':
       return 'action-resent'
@@ -524,7 +527,7 @@ const clearFilters = () => {
 // Check if a record can be previewed
 const canPreview = (record: HistoryRecord): boolean => {
   // Can preview if we have a save_path (local file) or if it was sent to Plex (rating_key)
-  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'overlay_refresh' || record.action === 'overlay_removed') && record.rating_key))
+  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'resent_to_media_server' || record.action === 'overlay_refresh' || record.action === 'overlay_removed') && record.rating_key))
 }
 
 // Get the preview image URL for a record
@@ -735,6 +738,7 @@ onMounted(async () => {
             <option value="sent_to_plex">Sent to Plex</option>
             <option value="resent_to_plex">Resent to Plex</option>
             <option value="sent_to_media_server">Synced to Linked Server</option>
+            <option value="resent_to_media_server">Resent to Linked Server</option>
             <option value="overlay_refresh">Overlay Refreshed</option>
             <option value="overlay_removed">Overlays Removed</option>
             <option value="saved_local">Saved Locally</option>
