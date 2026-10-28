@@ -805,8 +805,10 @@ const reloadPreset = async () => {
     if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
     if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
     if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
-    if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
-    if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
+    // Always from the new preset (none = none), and copies, so ticking a box
+    // doesn't edit the loaded preset's own list.
+    options.value.overlayConfigIds = Array.isArray(o.overlay_config_ids) ? [...o.overlay_config_ids] : []
+    options.value.overlayConfigIdsBelow = Array.isArray(o.overlay_config_ids_below) ? [...o.overlay_config_ids_below] : []
     if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
       posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
     }
@@ -1627,8 +1629,10 @@ const applyPresetOptions = (id: string) => {
   if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
-  if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
-  if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
+  // Always from the new preset (none = none), and copies, so ticking a box
+  // doesn't edit the loaded preset's own list.
+  options.value.overlayConfigIds = Array.isArray(o.overlay_config_ids) ? [...o.overlay_config_ids] : []
+  options.value.overlayConfigIdsBelow = Array.isArray(o.overlay_config_ids_below) ? [...o.overlay_config_ids_below] : []
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }

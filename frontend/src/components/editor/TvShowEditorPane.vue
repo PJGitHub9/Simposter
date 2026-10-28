@@ -783,7 +783,7 @@ const restoreSettingsForCurrent = () => {
   const isSeason = currentSeason.value && !currentSeason.value.isSeries
 
   if (isSeason) {
-    applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true })
+    applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true, keepOverlays: true })
     if (cached) {
       // Apply all cached season edits so manual tweaks persist when returning
       applySettings(cached)
@@ -807,7 +807,7 @@ const restoreSettingsForCurrent = () => {
         delete options.value.season_number
       }
     } else {
-      applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false })
+      applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false, keepOverlays: true })
     }
   }
 
@@ -3137,6 +3137,9 @@ watch(logoPreference, () => {
 type PresetApplyOptions = {
   // Force applying season overrides even if we already have cached season edits
   forceSeasonOverrides?: boolean
+  // Keep the current overlay ticks (switching season/series): overlays aren't
+  // per-season, so only a preset change, reload or a new show resets them.
+  keepOverlays?: boolean
 }
 
 const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
@@ -3209,8 +3212,12 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
-  if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
-  if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
+  // Always from the new preset (none = none), and copies, so ticking a box
+  // doesn't edit the loaded preset's own list.
+  if (!opts.keepOverlays) {
+    options.value.overlayConfigIds = Array.isArray(o.overlay_config_ids) ? [...o.overlay_config_ids] : []
+    options.value.overlayConfigIdsBelow = Array.isArray(o.overlay_config_ids_below) ? [...o.overlay_config_ids_below] : []
+  }
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }

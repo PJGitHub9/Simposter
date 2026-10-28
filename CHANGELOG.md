@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.22 (2026-10-28) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Editor kept the previous preset's overlays** — `applyPresetOptions()` (both editors) and `reloadPreset()` (movie editor) only set `overlayConfigIds`/`overlayConfigIdsBelow` when the new preset had them, so switching to a preset with no overlays left the old ones ticked (and sent). They're now always set from the preset (empty when it has none), as copies, since the checkbox handler splices the array in place and used to edit the loaded preset's own list. The TV editor's season/series switch (`restoreSettingsForCurrent()`) passes `keepOverlays: true`, so overlays ticked but not yet saved survive switching seasons.
+
 ## v1.8.21 (2026-10-27) — `webui-overhaul-dev` branch
 
 ### Bug Fixes

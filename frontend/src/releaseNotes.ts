@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.22',
+    date: '2026-10-28',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Poster editor: switching to a preset without overlays now unticks the overlays the previous preset had turned on (they stayed ticked). Switching between a show’s series and seasons still keeps the overlays you ticked.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.21',
     date: '2026-10-27',
     sections: [
