@@ -246,7 +246,10 @@ def _process_single_movie(
         logo_preference = map_logo_mode_to_preference(logo_preference)
         logo_mode = base_logo_mode
 
-        logger.info("[BATCH] Start rating_key=%s [%s] template=%s", rating_key, title_hint, template_id)
+        if title_hint != rating_key:
+            logger.info("[BATCH] Start %s (rating_key=%s) template=%s", title_hint, rating_key, template_id)
+        else:  # not cached yet (e.g. a webhook's first sight of it): the title comes with TMDb below
+            logger.info("[BATCH] Start rating_key=%s template=%s", rating_key, template_id)
 
         # ---------------------------
         # TMDb Fetch
@@ -1040,8 +1043,9 @@ def _process_single_tv_show(
         season_poster_filter_final = season_poster_filter or base_poster_filter
         season_options_final = db.resolve_season_options(base_options, season_options)
 
-        logger.info("[BATCH TV] Start rating_key=%s [%s] template=%s include_seasons=%s season_poster_filter=%s",
-                    rating_key, title_hint, template_id, req.include_seasons, season_poster_filter_final)
+        logger.info("[BATCH TV] Start %s template=%s include_seasons=%s season_poster_filter=%s",
+                    f"{title_hint} (rating_key={rating_key})" if title_hint != rating_key else f"rating_key={rating_key}",
+                    template_id, req.include_seasons, season_poster_filter_final)
 
         # Fetch TV show TMDB/TVDB IDs from Plex
         _update_batch_status({

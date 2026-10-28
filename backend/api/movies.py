@@ -1712,6 +1712,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     if refresh:
                         _after_art_refresh("logo", movie_key, version, logo_path)
                     return movie_key, _logo_cache_url(movie_key, logo_path)
+                if refresh:
+                    # No image on the server: still record the version, or an item without one is re-checked every scan.
+                    record_asset_version("logo", movie_key, version)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch logo for movie {movie_key}: {e}")
             return movie_key, None
@@ -1720,6 +1723,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             try:
                 refresh, version = _art_refresh("backdrop", movie_key)
                 art_path = fetch_and_cache_backdrop(movie_key, force_refresh=refresh)
+                if not art_path and refresh:
+                    record_asset_version("backdrop", movie_key, version)  # none on the server: checked
                 if art_path:
                     if refresh:
                         _after_art_refresh("backdrop", movie_key, version, art_path)
@@ -1914,6 +1919,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 logo_version = show.get("thumb")
                 logo_refresh = _tv_art_refresh("logo", logo_version)
                 logo_path = fetch_and_cache_logo(key, force_refresh=logo_refresh)
+                if not logo_path and logo_refresh:
+                    # No image on the server: still record the version, or an item without one is re-checked every scan.
+                    record_asset_version("logo", key, logo_version)
                 if logo_path:
                     if logo_refresh:
                         record_asset_version("logo", key, logo_version)
@@ -1927,6 +1935,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 art_version = show.get("art")
                 art_refresh = _tv_art_refresh("backdrop", art_version)
                 art_path = fetch_and_cache_backdrop(key, force_refresh=art_refresh)
+                if not art_path and art_refresh:
+                    record_asset_version("backdrop", key, art_version)  # none on the server: checked
                 if art_path:
                     if art_refresh:
                         record_asset_version("backdrop", key, art_version)
@@ -2135,7 +2145,17 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             from .media_server import scan_all_linked_plex_libraries
             linked_result = scan_all_linked_plex_libraries(library_id)
             if linked_result.get("scanned"):
-                logger.info(f"[SCAN] Linked library scan: {linked_result['scanned']}")
+                from ..media_server import get_server_label
+                for entry in linked_result["scanned"]:
+                    kind = {"movie": "movies", "tv": "TV shows", "collection": "collections"}.get(entry.get("media_type"), "items")
+                    extra = []
+                    if entry.get("new_count"):
+                        extra.append(f"{entry['new_count']} new")
+                    if entry.get("removed"):
+                        extra.append(f"{entry['removed']} removed")
+                    logger.info("[SCAN] %s %s: %d %s%s", get_server_label(entry.get("server_id") or ""),
+                                entry.get("library_name") or entry.get("library_id"), entry.get("item_count") or 0,
+                                kind, f" ({', '.join(extra)})" if extra else "")
             if linked_result.get("errors"):
                 logger.warning(f"[SCAN] Linked library scan errors: {linked_result['errors']}")
         except Exception as e:

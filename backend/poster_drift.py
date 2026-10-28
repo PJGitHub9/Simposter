@@ -49,6 +49,8 @@ _MEAN_DELTA = 10.0   # or an average difference this large = drift
 
 _pending_lock = threading.Lock()
 _pending: List[Dict[str, Any]] = []
+# Every drift found since the last flush, for one summary log line per scan.
+_scan_found: List[str] = []
 
 
 # --------------------------------------------------------------------------
@@ -208,8 +210,15 @@ def check_after_download(server_id: Optional[str], rating_key: str, poster_path:
         if not result["drift"]:
             return None
         title = _title(rating_key)
-        logger.info("[DRIFT] %s for %s on %s was changed outside Simposter (difference %.1f, %d areas)",
-                    asset_type.capitalize(), title, server_id, result["score"], result["changed_cells"])
+        logger.debug("[DRIFT] %s for %s on %s was changed outside Simposter (difference %.1f, %d areas)",
+                     asset_type.capitalize(), title, server_id, result["score"], result["changed_cells"])
+        try:
+            from .media_server import get_server_label
+            where = get_server_label(server_id)
+        except Exception:
+            where = server_id
+        with _pending_lock:
+            _scan_found.append(f"{title} ({where}{'' if asset_type == 'poster' else ', ' + asset_type})")
         already = row[1] is not None
         with db.get_db() as conn:
             conn.cursor().execute(
@@ -351,6 +360,12 @@ def flush_notifications() -> None:
     with _pending_lock:
         items = list(_pending)
         _pending.clear()
+        found = list(_scan_found)
+        _scan_found.clear()
+    if found:
+        shown = ", ".join(found[:10]) + (f" and {len(found) - 10} more" if len(found) > 10 else "")
+        logger.info("[DRIFT] %d changed outside Simposter this scan: %s (History → Changed Outside Simposter)",
+                    len(found), shown)
     if not items:
         return
     try:

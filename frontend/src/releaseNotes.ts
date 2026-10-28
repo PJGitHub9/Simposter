@@ -24,7 +24,15 @@ export const releaseNotes: ReleaseNote[] = [
         items: [
           'Batch Edit and auto-generate fetch the ratings an overlay needs 100 at a time before rendering, instead of one MDBList request per poster. Ratings already stored are reused.',
           'Ratings are now re-checked every 45 days by default (was 7), which saves MDBList calls. If you never changed it, it moves to 45; a value you set is kept.',
-          'Requests to MDBList, TMDb, Fanart.tv and TVDB now show up as Simposter on those services instead of "python-requests".'
+          'Requests to MDBList, TMDb, Fanart.tv and TVDB now show up as Simposter on those services instead of "python-requests".',
+          'Clearer logs: Jellyfin/Emby uploads name the title, server and size; a resend says which servers got the poster; a Jellyfin/Emby item re-imported under a new id is called out; linked-library scans are one line per library; and posters changed outside Simposter are summed up in one line per scan.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'With "Items that already have a poster" set to resend, a webhook now also re-sends the poster to the other servers in the library group (it only went to Plex).',
+          'Scans no longer re-check the logo or backdrop of items that have none on every scan (a TV show without a logo was flagged as "changed" each time).'
         ]
       }
     ]

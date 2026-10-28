@@ -560,8 +560,12 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
                 )
             except Exception:
                 pass
-            logger.info("[AUTO_GEN] Sent %s%s's Plex poster to %s (it wasn't on that server when the poster was made)",
-                        item.get("title"), f" season {season_index}" if season_index is not None else "", server_id)
+            from .media_server import get_server_label
+            logger.info("[AUTO_GEN] Sent %s%s's Plex poster to %s (%s)",
+                        item.get("title"), f" season {season_index}" if season_index is not None else "",
+                        get_server_label(server_id),
+                        "re-imported there under a new item id" if item.get("reimported")
+                        else "it wasn't on that server when the poster was made")
         except Exception as e:
             logger.warning("[AUTO_GEN] Failed to send cached poster for %s to %s: %s", item.get("title"), server_id, e)
     return sent

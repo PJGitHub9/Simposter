@@ -227,11 +227,11 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     # Snapshot what this library already had cached, so genuinely new items
     # can be handed to auto-generate below (the non-Plex counterpart of the
     # Plex scan's own pre_scan_keys diff).
-    pre_scan_keys = {
-        r.get("rating_key")
-        for r in (db.get_cached_movies(library_id=library_id) if media_type == "movie" else db.get_cached_tv_shows(library_id=library_id))
+    pre_scan_rows = [
+        r for r in (db.get_cached_movies(library_id=library_id) if media_type == "movie" else db.get_cached_tv_shows(library_id=library_id))
         if r.get("server_id") == server_id
-    }
+    ]
+    pre_scan_keys = {r.get("rating_key") or r.get("key") for r in pre_scan_rows}
 
     items = client.list_items(library_id, media_type)
     rows = [
@@ -276,6 +276,24 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     # existing content, not new arrivals, and treating it as "new" would try
     # to re-render every poster in a freshly linked library at once.
     new_items = [r for r in rows if r["rating_key"] not in pre_scan_keys] if pre_scan_keys else []
+    # A "new" item whose TMDb/TVDB id belonged to an item that just left this
+    # library is the same title re-imported under a new id (e.g. after an
+    # upgrade): say so, rather than it looking like a second, unrelated send.
+    if new_items:
+        current_keys = {r["rating_key"] for r in rows}
+        gone_ids = {
+            (k, str(v)) for r in pre_scan_rows if (r.get("rating_key") or r.get("key")) not in current_keys
+            for k, v in (("tmdb", r.get("tmdb_id")), ("tvdb", r.get("tvdb_id"))) if v
+        }
+        from ..config import logger as _log
+        from ..media_server import get_server_label
+        for item in new_items:
+            ids = {(k, str(v)) for k, v in (("tmdb", item.get("tmdb_id")), ("tvdb", item.get("tvdb_id"))) if v}
+            if ids & gone_ids:
+                item["reimported"] = True
+                _log.info("[MEDIA_SERVER_SCAN] %s%s was re-imported on %s (new item id %s); its poster is sent again",
+                          item.get("title") or item["rating_key"], f" ({item['year']})" if item.get("year") else "",
+                          get_server_label(server_id), item["rating_key"])
     if new_items:
         try:
             from ..auto_generate import process_new_media_server_content_async
@@ -447,6 +465,9 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
             logo_version = getattr(item, "logo_version", None)
             logo_refresh = _art_refresh("logo", logo_version)
             logo_path = fetch_and_cache_logo(rating_key, force_refresh=logo_refresh)
+            if not logo_path and logo_refresh:
+                # No image on the server: still record the version, or an item without one is re-checked every scan.
+                record_asset_version("logo", rating_key, logo_version)
             if logo_path:
                 if logo_refresh:
                     _after_refresh("logo", logo_version, logo_path)
@@ -457,6 +478,8 @@ def _fetch_art_and_media_info_for_scan(items, media_type: str, client) -> None:
             art_version = getattr(item, "backdrop_version", None)
             art_refresh = _art_refresh("backdrop", art_version)
             art_path = fetch_and_cache_backdrop(rating_key, force_refresh=art_refresh)
+            if not art_path and art_refresh:
+                record_asset_version("backdrop", rating_key, art_version)  # none on the server: checked
             if art_path:
                 if art_refresh:
                     _after_refresh("backdrop", art_version, art_path)

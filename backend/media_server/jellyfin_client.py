@@ -417,9 +417,23 @@ class JellyfinClient(MediaServerClient):
         # size in particular, since a large poster upload silently not
         # applying while a small logo upload does is the first real report
         # of this class of bug.
+        # One readable line per upload: what, which item (by title when the
+        # scan cache knows it), where, and how big (the image itself, not the
+        # base64 body).
+        title = None
+        try:
+            from .. import database as db
+            title, year = db.get_title_for_rating_key(str(item_id))
+            if title and year:
+                title = f"{title} ({year})"
+        except Exception:
+            pass
+        from .registry import get_server_label
+        kind = {"Primary": "poster", "Logo": "logo", "Backdrop": "backdrop", "Thumb": "thumb art"}.get(jellyfin_image_type, jellyfin_image_type)
         logger.info(
-            "[JELLYFIN_CLIENT:%s] Upload response for %s item=%s: status=%s body_len=%d payload_bytes=%d",
-            self.server_id, jellyfin_image_type, item_id, r.status_code, len(r.content or b""), len(payload),
+            "[%s] Sent %s to %s: %s (%.1f MB, item %s, HTTP %s)",
+            "EMBY" if self.is_emby else "JELLYFIN", kind, get_server_label(self.server_id),
+            title or "untitled item", len(image_bytes) / 1048576, item_id, r.status_code,
         )
 
         _record_art_sent(self.server_id, item_id, image_type, image_bytes)

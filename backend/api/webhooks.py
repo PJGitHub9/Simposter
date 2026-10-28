@@ -991,7 +991,7 @@ def process_media_server_webhook_with_retry(
         )
 
 
-def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None, year: Optional[int] = None, season_title: Optional[str] = None) -> List[str]:
+def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None, year: Optional[int] = None, season_title: Optional[str] = None, image_bytes: Optional[bytes] = None, report: Optional[Dict[str, List[str]]] = None, history_action: str = "sent_to_media_server") -> List[str]:
     """Phase 6 (webhooks) -- after a webhook-triggered Plex render+send
     succeeds, check whether the same title also exists on any OTHER server
     that's actually linked to this Plex library via a Library Group
@@ -1095,10 +1095,14 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
             logger.debug("[WEBHOOK_SYNC] Plex library %s has no linked Library Group members -- skipping cross-server sync for tmdb_id=%s [%s]", library_id, tmdb_id, title_hint)
             return synced_server_ids
 
-        cache_path = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
-        if not cache_path.exists():
-            return synced_server_ids
-        image_bytes = cache_path.read_bytes()
+        # image_bytes: the caller's exact bytes (the resend path passes the
+        # poster it just re-sent to Plex); otherwise the render cached by tmdb id.
+        if image_bytes is None:
+            cache_path = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
+            if not cache_path.exists():
+                return synced_server_ids
+            image_bytes = cache_path.read_bytes()
+        from ..media_server import get_server_label
 
         for client in get_enabled_clients():
             if isinstance(client, PlexClient) or client.server_id not in allowed_servers:
@@ -1110,6 +1114,8 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                     # library scan delivers this cached render instead
                     # (auto_generate.process_new_media_server_content).
                     logger.info("[WEBHOOK_SYNC:%s] %s isn't on this server yet -- the poster will be sent after its next library scan", client.server_id, title_hint)
+                    if report is not None:
+                        report.setdefault("pending", []).append(get_server_label(client.server_id))
                     continue
                 item_id = series_item_id if season_index is None else client.find_season_by_index(series_item_id, season_index)
                 if not item_id:
@@ -1140,7 +1146,7 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                         year=year,
                         template_id=template_id,
                         preset_id=preset_id,
-                        action="sent_to_media_server",
+                        action=history_action,
                         source="webhook",
                         poster_data=image_bytes,
                         server_id=client.server_id,
@@ -1148,6 +1154,8 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                 except Exception as history_err:
                     logger.debug("[WEBHOOK_SYNC:%s] Failed to record history for item_id=%s: %s", client.server_id, item_id, history_err)
                 synced_server_ids.append(client.server_id)
+                if report is not None:
+                    report.setdefault("sent", []).append(get_server_label(client.server_id))
             except Exception as e:
                 logger.warning("[WEBHOOK_SYNC:%s] Failed to sync poster for tmdb_id=%s [%s]: %s", client.server_id, tmdb_id, title_hint, e)
     except Exception as e:
@@ -1229,9 +1237,23 @@ def process_webhook_poster_generation(
                             data=cached,
                             timeout=20,
                         ).raise_for_status()
-                        logger.info("[WEBHOOK] Resent cached poster for %s [%s] (existingContentMode=resend) in %.1fs",
-                                    rating_key, title_hint, time.time() - _wh_start)
                         _title, _year = db.get_title_for_rating_key(rating_key)
+                        # The same poster to the library group's other servers
+                        # (Jellyfin/Emby): resend used to stop at Plex.
+                        _report: Dict[str, List[str]] = {}
+                        try:
+                            _tmdb, _tvdb = db.get_ids_for_rating_key(str(rating_key))
+                            _sync_poster_to_other_servers(
+                                _tmdb, "tv-show" if is_tv else "movie", title_hint, library_id=library_id,
+                                tvdb_id=_tvdb, template_id=template_id, preset_id=preset_id, year=_year,
+                                image_bytes=cached, report=_report,
+                            )
+                        except Exception as sync_err:
+                            logger.debug("[WEBHOOK] Resend to linked servers failed for %s [%s]: %s", rating_key, title_hint, sync_err)
+                        _where = ["Plex"] + _report.get("sent", [])
+                        _note = f"; not yet imported on {', '.join(_report['pending'])} (sends after its next scan)" if _report.get("pending") else ""
+                        logger.info("[WEBHOOK] Resent cached poster for %s [%s] to %s (existingContentMode=resend) in %.1fs%s",
+                                    title_hint, rating_key, ", ".join(_where), time.time() - _wh_start, _note)
                         try:
                             db.record_poster_history(
                                 rating_key=rating_key,

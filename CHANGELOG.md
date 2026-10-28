@@ -2,6 +2,18 @@
 
 ## v1.8.21 (2026-10-27) — `webui-overhaul-dev` branch
 
+### Bug Fixes
+- **Webhook resend reached only Plex** — with `existingContentMode=resend`, `process_webhook_poster_generation()` re-sent the cached poster to Plex and returned before the linked-server sync, so Jellyfin/Emby in the library group got nothing. The resend now calls `_sync_poster_to_other_servers()` with the exact bytes it sent to Plex (new `image_bytes`/`report` parameters); a server that hasn't imported the item yet gets it on its next scan, as before.
+- **Logo/backdrop re-checked every scan when the server has none** — the scans only recorded an asset's version after an image came back, so an item with no logo kept its old version file and was flagged "Logo changed … refreshing" (and re-fetched) on every scan. The version is now recorded whenever the check ran (Plex movies and TV, Jellyfin/Emby).
+
+### Logging
+- Jellyfin/Emby uploads: `[JELLYFIN] Sent poster to <server name>: <title> (<size> MB, item <id>, HTTP <status>)` instead of `Upload response for Primary item=<id> … payload_bytes=<base64 size>`.
+- Webhook resend: `Resent cached poster for <title> [<key>] to Plex, <servers>` plus "not yet imported on …" when a server doesn't have it.
+- `[BATCH] Start` shows the title (or only the key when it isn't cached yet) instead of the key twice.
+- A Jellyfin/Emby scan logs when an item was re-imported under a new id (`_scan_one_library()`, matched by TMDb/TVDB id against items that left the library), and auto-generate's delivery line says so and uses the server name.
+- Linked-library scans: one line per library (`[SCAN] Jellyfin Movies: 622 movies (1 new)`) instead of a raw dict.
+- Drift: one `[DRIFT] N changed outside Simposter this scan: …` line per scan (`poster_drift.flush_notifications()`); the per-item line moved to DEBUG.
+
 ### New Features
 - **Refresh now in Overlays → Scheduler** — "Refresh ratings & lists now" fetches every list any overlay uses and the ratings of every tracked poster whose overlay uses a rating, ignoring their age (`overlay_refresh.refresh_all_data()` in a background thread, `POST /api/overlay-refresh/data-refresh/now`; `list_sources.refresh_due()` and `mdblist_client.prefetch_ratings()` gained `force`, and one failing list no longer stops the rest). Each library group's row has "Run now" (a normal Overlay Refresh). `GET /api/overlay-refresh/data-refresh` returns the refresh and run states so the card can poll.
 
