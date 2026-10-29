@@ -213,12 +213,46 @@ const titleSearch = ref<string>('')
 // Covers Plex mappings AND Jellyfin/Emby libraries (via Library Groups).
 const getLibraryName = (libraryId: string | null): string => libraryLabel(libraryId)
 
+// One option per library group (a group's Plex and Jellyfin/Emby libraries
+// are the same "Movies"/"TV Shows" to the user), or per library when it isn't
+// in a group. Value: "group:<id>" or the bare library id.
+const libraryOptionFor = (libraryId: string): { value: string; label: string; ids: string[] } => {
+  const id = String(libraryId)
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => String(m.libraryId) === id))
+  if (group) {
+    return {
+      value: `group:${group.id}`,
+      label: group.name || getLibraryName(id),
+      ids: (group.members || []).map(m => String(m.libraryId)),
+    }
+  }
+  return { value: id, label: getLibraryName(id), ids: [id] }
+}
+
 const libraries = computed(() => {
-  const libs = new Set<string>()
+  const opts = new Map<string, { value: string; label: string; ids: string[] }>()
   records.value.forEach(r => {
-    if (r.library_id) libs.add(r.library_id)
+    if (!r.library_id) return
+    const opt = libraryOptionFor(r.library_id)
+    if (!opts.has(opt.value)) opts.set(opt.value, opt)
   })
-  return Array.from(libs).sort()
+  // Keep the selected option even when the fetched records no longer list it.
+  const sel = selectedLibrary.value
+  if (sel !== 'all' && !opts.has(sel)) {
+    const groupId = sel.startsWith('group:') ? sel.slice(6) : null
+    const group = groupId ? (settings.libraryGroups.value || []).find(g => g.id === groupId) : null
+    if (group) opts.set(sel, { value: sel, label: group.name || groupId!, ids: (group.members || []).map(m => String(m.libraryId)) })
+    else if (!groupId) opts.set(sel, libraryOptionFor(sel))
+  }
+  return Array.from(opts.values()).sort((a, b) => a.label.localeCompare(b.label))
+})
+
+const selectedLibraryIds = computed<string[] | null>(() => {
+  const sel = selectedLibrary.value
+  if (sel === 'all') return null
+  const opt = libraries.value.find(o => o.value === sel)
+  return opt ? opt.ids : [sel]
 })
 
 const templates = computed(() => {
@@ -254,8 +288,9 @@ const serverFilterOptions = computed(() => {
 const filteredRecords = computed(() => {
   let filtered = records.value
 
-  if (selectedLibrary.value !== 'all') {
-    filtered = filtered.filter(r => r.library_id === selectedLibrary.value)
+  const libIds = selectedLibraryIds.value
+  if (libIds) {
+    filtered = filtered.filter(r => !!r.library_id && libIds.includes(String(r.library_id)))
   }
 
   if (selectedTemplate.value !== 'all') {
@@ -290,8 +325,8 @@ const fetchHistory = async () => {
   error.value = null
   try {
     const params = new URLSearchParams()
-    if (selectedLibrary.value !== 'all') {
-      params.append('library_id', selectedLibrary.value)
+    if (selectedLibraryIds.value) {
+      params.append('library_id', selectedLibraryIds.value.join(','))
     }
     if (selectedTemplate.value !== 'all') {
       params.append('template_id', selectedTemplate.value)
@@ -715,8 +750,8 @@ onMounted(async () => {
           <span>Library</span>
           <select v-model="selectedLibrary" @change="fetchHistory">
             <option value="all">All Libraries</option>
-            <option v-for="lib in libraries" :key="lib" :value="lib">
-              {{ getLibraryName(lib) }}
+            <option v-for="lib in libraries" :key="lib.value" :value="lib.value">
+              {{ lib.label }}
             </option>
           </select>
         </label>

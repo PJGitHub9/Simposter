@@ -516,16 +516,32 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
     if not targets:
         return False
 
-    # Which template/preset this render came from: the group's auto-generate
-    # config when there is one, else whatever Plex's copy was last sent with.
-    preset_info = cfg or db.get_last_plex_send_preset(media_type, tmdb_id) or {}
+    # A webhook that couldn't reach this server yet may still be waiting for
+    # it: take it over, so this is recorded (and notified) as that webhook.
+    pending = None
+    try:
+        from .api.webhooks import claim_pending_sync
+        pending = claim_pending_sync(server_id, "tv" if media_type == "tv" else "movie", tmdb_id)
+    except Exception:
+        pending = None
+    source = "webhook" if pending else "auto_generate"
+
+    # Which template/preset this render came from: the webhook's, the group's
+    # auto-generate config, else whatever Plex's copy was last sent with.
+    if pending and pending.get("template_id"):
+        preset_info = {"template_id": pending.get("template_id"), "preset_id": pending.get("preset_id")}
+    else:
+        preset_info = cfg or db.get_last_plex_send_preset(media_type, tmdb_id) or {}
 
     sent = False
+    notify_bytes = None
     for item_id, path, season_index in targets:
         try:
             data = path.read_bytes()
             client.upload_image(item_id, ImageType.POSTER, data, "image/jpeg")
             sent = True
+            if season_index is None or notify_bytes is None:
+                notify_bytes = data
             if season_index is None:
                 # Refresh the grid's cached thumbnail for the movie/show itself.
                 try:
@@ -554,7 +570,7 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
                     template_id=preset_info.get("template_id"),
                     preset_id=preset_info.get("preset_id"),
                     action="sent_to_media_server",
-                    source="auto_generate",
+                    source=source,
                     poster_data=data,
                     server_id=server_id,
                 )
@@ -568,6 +584,25 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
                         else "it wasn't on that server when the poster was made")
         except Exception as e:
             logger.warning("[AUTO_GEN] Failed to send cached poster for %s to %s: %s", item.get("title"), server_id, e)
+    if sent:
+        notif_kwargs = dict(
+            title=item.get("title") or rating_key,
+            year=item.get("year"),
+            template_id=preset_info.get("template_id") or "",
+            preset_id=preset_info.get("preset_id") or "",
+            library_id=str(library_id),
+            source=source,
+            action="sent_to_media_server",
+            server_id=server_id,
+        )
+        try:
+            send_discord_notification(**notif_kwargs, poster_data=notify_bytes)
+        except Exception as e:
+            logger.debug("[AUTO_GEN] Discord notification failed: %s", e)
+        try:
+            send_apprise_notification(**notif_kwargs, poster_data=notify_bytes)
+        except Exception as e:
+            logger.debug("[AUTO_GEN] Apprise notification failed: %s", e)
     return sent
 
 

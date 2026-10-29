@@ -10,6 +10,21 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.24',
+    date: '2026-10-29',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'When a Radarr/Sonarr webhook arrives before Jellyfin/Emby has imported the file, Simposter now checks again over the next ~40 minutes and sends the poster as soon as the item shows up, with its own notification. If the next library scan finds it first, the scan sends it and notifies instead. Before, it waited for the scan and sent no notification.',
+          'History records those later Jellyfin/Emby sends as the webhook (they showed as Auto), with the webhook’s template and preset.',
+          'History’s library filter lists each library group once (a group’s Plex and Jellyfin libraries both showed as "Movies"), and picking it shows every server’s rows.',
+          'Overlay Refresh lists a title on Plex and Jellyfin once, with both servers shown, instead of one row per server. Re-send and Remove overlays on that row apply to both copies, and check results are merged the same way.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.23',
     date: '2026-10-28',
     sections: [

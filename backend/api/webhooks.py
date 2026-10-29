@@ -991,6 +991,152 @@ def process_media_server_webhook_with_retry(
         )
 
 
+# ----------------------------------------------------------------------------
+# Webhook syncs waiting for a Jellyfin/Emby server to import the item.
+#
+# Radarr/Sonarr fire as soon as the file is in place; Jellyfin/Emby may not have
+# imported it yet (an upgrade often gets a new item id there). Instead of
+# waiting for Simposter's next library scan, a follow-up thread looks for the
+# item again a few times and sends the poster as soon as it shows up, recorded
+# as a webhook send with its own notification. A scan that finds the item
+# first takes the entry over (claim_pending_sync) and does the same.
+# ----------------------------------------------------------------------------
+_PENDING_SYNC_DELAYS = (60, 120, 300, 600, 1200)  # seconds between attempts (~38 min in total)
+_pending_syncs: Dict[tuple, Dict[str, Any]] = {}
+_pending_lock = threading.Lock()
+
+
+def _pending_key(server_id: str, find_media_type: str, tmdb_id) -> tuple:
+    return (str(server_id), find_media_type, str(tmdb_id))
+
+
+def claim_pending_sync(server_id: str, find_media_type: str, tmdb_id) -> Optional[Dict[str, Any]]:
+    """Take over a waiting webhook sync (used by the Jellyfin/Emby scan when it
+    finds the item first). Returns the entry, or None if nothing was waiting."""
+    if not tmdb_id:
+        return None
+    with _pending_lock:
+        return _pending_syncs.pop(_pending_key(server_id, find_media_type, tmdb_id), None)
+
+
+def _queue_pending_sync(server_id: str, member_library_id: Optional[str], plex_library_id: str, find_media_type: str,
+                        tmdb_id, tvdb_id, title: str, year, template_id, preset_id, history_action: str,
+                        season_index: Optional[int], season_title: Optional[str], image_bytes: bytes) -> None:
+    key = _pending_key(server_id, find_media_type, tmdb_id)
+    with _pending_lock:
+        entry = _pending_syncs.get(key)
+        start = entry is None
+        if start:
+            entry = {
+                "server_id": server_id, "member_library_id": member_library_id, "plex_library_id": plex_library_id,
+                "media_type": find_media_type, "tmdb_id": tmdb_id, "tvdb_id": tvdb_id, "title": title, "year": year,
+                "template_id": template_id, "preset_id": preset_id, "history_action": history_action,
+                "posters": {},
+            }
+            _pending_syncs[key] = entry
+        entry["posters"][season_index] = (image_bytes, season_title)
+    if start:
+        threading.Thread(target=_run_pending_sync, args=(key,), daemon=True,
+                         name=f"webhook-sync-{server_id}-{tmdb_id}").start()
+
+
+def _deliver_pending_posters(client, entry: Dict[str, Any], series_item_id: str) -> List[tuple]:
+    """Upload every waiting poster whose item (series or season) now exists.
+    Returns [(season_index, item_id, bytes)] for the ones sent."""
+    from ..media_server import ImageType
+    from .media_server_send import _cache_poster_after_upload
+    server_id = entry["server_id"]
+    is_tv = entry["media_type"] == "tv"
+    delivered = []
+    for season_index, (image_bytes, season_title) in list(entry["posters"].items()):
+        item_id = series_item_id if season_index is None else client.find_season_by_index(series_item_id, season_index)
+        if not item_id:
+            continue
+        if db.poster_already_sent(server_id, item_id):
+            delivered.append((season_index, item_id, None))
+            continue
+        client.upload_image(item_id, ImageType.POSTER, image_bytes, "image/jpeg")
+        try:
+            _cache_poster_after_upload(item_id, image_bytes, "image/jpeg", is_tv=is_tv)
+        except Exception:
+            pass
+        history_title = entry["title"]
+        if season_index is not None:
+            history_title = f"{history_title} - {season_title or ('Specials' if season_index == 0 else f'Season {season_index}')}"
+        try:
+            db.record_poster_history(
+                rating_key=item_id, library_id=str(entry["plex_library_id"] or ""), title=history_title,
+                year=entry["year"], template_id=entry["template_id"], preset_id=entry["preset_id"],
+                action=entry["history_action"], source="webhook", poster_data=image_bytes, server_id=server_id,
+            )
+        except Exception as history_err:
+            logger.debug("[WEBHOOK_SYNC:%s] Failed to record history for item_id=%s: %s", server_id, item_id, history_err)
+        delivered.append((season_index, item_id, image_bytes))
+    return delivered
+
+
+def _notify_pending_delivery(entry: Dict[str, Any], poster_data: Optional[bytes]) -> None:
+    kwargs = dict(
+        title=entry["title"], year=entry["year"], template_id=entry["template_id"] or "",
+        preset_id=entry["preset_id"] or "", library_id=entry["plex_library_id"], source="webhook",
+        action="resent_to_media_server" if entry["history_action"] == "resent_to_media_server" else "sent_to_media_server",
+        server_id=entry["server_id"],
+    )
+    try:
+        send_discord_notification(**kwargs, poster_data=poster_data)
+    except Exception as e:
+        logger.debug("[WEBHOOK_SYNC] Discord notification failed: %s", e)
+    try:
+        send_apprise_notification(**kwargs, poster_data=poster_data)
+    except Exception as e:
+        logger.debug("[WEBHOOK_SYNC] Apprise notification failed: %s", e)
+
+
+def _run_pending_sync(key: tuple) -> None:
+    from ..media_server import get_server_label
+    for delay in _PENDING_SYNC_DELAYS:
+        time.sleep(delay)
+        with _pending_lock:
+            entry = _pending_syncs.get(key)
+        if entry is None:
+            return  # a library scan took it over
+        server_id = entry["server_id"]
+        label = get_server_label(server_id)
+        try:
+            client = get_client(server_id)
+            if client is None:
+                break
+            series_item_id = client.find_item_by_external_id(entry["tmdb_id"], entry["tvdb_id"], entry["media_type"],
+                                                             library_id=entry["member_library_id"])
+            if not series_item_id:
+                continue
+            delivered = _deliver_pending_posters(client, entry, series_item_id)
+        except Exception as e:
+            logger.warning("[WEBHOOK_SYNC:%s] Follow-up for %s failed: %s", server_id, entry["title"], e)
+            continue
+        with _pending_lock:
+            if _pending_syncs.get(key) is not entry:
+                return
+            for season_index, _item_id, _data in delivered:
+                entry["posters"].pop(season_index, None)
+            done = not entry["posters"]
+            if done:
+                _pending_syncs.pop(key, None)
+        sent = [d for d in delivered if d[2] is not None]
+        if sent:
+            logger.info("[WEBHOOK_SYNC:%s] %s is on %s now; sent its poster%s", server_id, entry["title"], label,
+                        "" if len(sent) == 1 else f"s ({len(sent)})")
+            first = next((d[2] for d in sent if d[0] is None), sent[0][2])
+            _notify_pending_delivery(entry, first)
+        if done:
+            return
+    with _pending_lock:
+        entry = _pending_syncs.pop(key, None)
+    if entry is not None:
+        logger.info("[WEBHOOK_SYNC:%s] %s still isn't on %s; the poster will be sent after its next library scan",
+                    entry["server_id"], entry["title"], get_server_label(entry["server_id"]))
+
+
 def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title_hint: str = "?", library_id: Optional[str] = None, season_index: Optional[int] = None, tvdb_id: Optional[int] = None, template_id: Optional[str] = None, preset_id: Optional[str] = None, year: Optional[int] = None, season_title: Optional[str] = None, image_bytes: Optional[bytes] = None, report: Optional[Dict[str, List[str]]] = None, history_action: str = "sent_to_media_server") -> List[str]:
     """Phase 6 (webhooks) -- after a webhook-triggered Plex render+send
     succeeds, check whether the same title also exists on any OTHER server
@@ -1109,17 +1255,21 @@ def _sync_poster_to_other_servers(tmdb_id: Optional[int], media_type: str, title
                 continue
             try:
                 series_item_id = client.find_item_by_external_id(tmdb_id, tvdb_id, find_media_type, library_id=allowed_servers.get(client.server_id))
-                if not series_item_id:
-                    # Usually the server hasn't imported the file yet. Its next
-                    # library scan delivers this cached render instead
-                    # (auto_generate.process_new_media_server_content).
-                    logger.info("[WEBHOOK_SYNC:%s] %s isn't on this server yet -- the poster will be sent after its next library scan", client.server_id, title_hint)
+                item_id = None
+                if series_item_id:
+                    item_id = series_item_id if season_index is None else client.find_season_by_index(series_item_id, season_index)
+                if not item_id:
+                    # Usually the server hasn't imported the file yet (an upgrade
+                    # often gets a new item id there). A follow-up looks again a
+                    # few times over the next ~40 minutes; the server's next
+                    # library scan also delivers it (auto_generate).
+                    what = title_hint if season_index is None else f"{title_hint} season {season_index}"
+                    logger.info("[WEBHOOK_SYNC:%s] %s isn't on this server yet -- checking again over the next few minutes", client.server_id, what)
                     if report is not None:
                         report.setdefault("pending", []).append(get_server_label(client.server_id))
-                    continue
-                item_id = series_item_id if season_index is None else client.find_season_by_index(series_item_id, season_index)
-                if not item_id:
-                    logger.info("[WEBHOOK_SYNC:%s] %s season %s isn't on this server yet -- skipped", client.server_id, title_hint, season_index)
+                    _queue_pending_sync(client.server_id, allowed_servers.get(client.server_id), str(library_id), find_media_type,
+                                        tmdb_id, tvdb_id, title_hint, year, template_id, preset_id, history_action,
+                                        season_index, season_title, image_bytes)
                     continue
                 client.upload_image(item_id, ImageType.POSTER, image_bytes, "image/jpeg")
                 logger.info("[WEBHOOK_SYNC:%s] Synced poster for tmdb_id=%s [%s]%s -> item_id=%s", client.server_id, tmdb_id, title_hint,

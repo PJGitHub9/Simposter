@@ -4576,8 +4576,15 @@ def get_poster_history(
     params: List[Any] = []
 
     if library_id:
-        clauses.append("library_id = ?")
-        params.append(library_id)
+        # A comma-separated list = every library of a library group (History's
+        # group filter). Library ids never contain commas.
+        ids = [i.strip() for i in str(library_id).split(",") if i.strip()]
+        if len(ids) > 1:
+            clauses.append(f"library_id IN ({','.join('?' * len(ids))})")
+            params.extend(ids)
+        elif ids:
+            clauses.append("library_id = ?")
+            params.append(ids[0])
     if template_id:
         clauses.append("template_id = ?")
         params.append(template_id)

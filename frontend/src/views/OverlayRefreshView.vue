@@ -2,6 +2,8 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
+import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 
 // Overlay Refresh (Quirk #166): per library group, re-check the posters
 // Simposter sent with overlays and re-render the ones whose overlay would now
@@ -122,11 +124,45 @@ const progressPct = computed(() => {
   return t ? Math.round(((status.value.processed || 0) / t) * 100) : 0
 })
 const resultItems = computed(() => status.value.items || [])
+const settings = useSettingsStore()
+// Run results come one per server copy too; show one row per title and result.
+const resultRows = computed(() => {
+  const rows = new Map<string, RunItem & { servers: string[] }>()
+  for (const i of resultItems.value) {
+    const label = mediaServerLabel(i.server_id, settings.mediaServers.value || [])
+    const id = [i.title, i.season_index, i.status, i.reason, (i.overlay || []).join(',')].join('|')
+    const row = rows.get(id)
+    if (!row) rows.set(id, { ...i, servers: [label] })
+    else if (!row.servers.includes(label)) row.servers.push(label)
+  }
+  return [...rows.values()]
+})
 const pendingKeys = computed(() => resultItems.value.filter(i => i.status === 'changed').map(i => i.key))
+
+// The same title is tracked once per server (Plex and Jellyfin each get their
+// own copy). Show one row per title with every server listed; actions on the
+// row apply to all of its copies.
+type TrackedRow = TrackedItem & { keys: string[]; servers: string[] }
+const trackedRows = computed<TrackedRow[]>(() => {
+  const rows = new Map<string, TrackedRow>()
+  for (const i of trackedItems.value) {
+    const id = [i.title, i.year, i.season_index, i.overlays.map(o => o.id).sort().join(',')].join('|')
+    const row = rows.get(id)
+    if (!row) {
+      rows.set(id, { ...i, keys: [i.key], servers: [i.server], overlay: [...i.overlay] })
+      continue
+    }
+    row.keys.push(i.key)
+    if (!row.servers.includes(i.server)) row.servers.push(i.server)
+    for (const o of i.overlay) if (!row.overlay.includes(o)) row.overlay.push(o)
+    if ((i.updated_at || '') > (row.updated_at || '')) row.updated_at = i.updated_at
+  }
+  return [...rows.values()]
+})
 
 const filteredTracked = computed(() => {
   const q = trackedSearch.value.trim().toLowerCase()
-  let list = trackedItems.value
+  let list = trackedRows.value
   if (overlayFilter.value) list = list.filter(i => i.overlays.some(o => o.id === overlayFilter.value))
   if (q) {
     list = list.filter(i => (i.title || '').toLowerCase().includes(q)
@@ -138,19 +174,21 @@ const filteredTracked = computed(() => {
 const filterLabel = computed(() => overlayUsage.value.find(o => o.id === overlayFilter.value)?.name || '')
 
 /** Re-render and re-send the given tracked posters now, even if nothing changed. */
-const resendItems = (items: TrackedItem[], what: string) => {
+const resendItems = (items: TrackedRow[], what: string) => {
   if (!items.length) return
-  if (!confirm(`Re-render and re-send ${what}? This uploads ${items.length === 1 ? 'the poster' : `${items.length} posters`} to the media server now.`)) return
-  startRun(true, items.map(i => i.key), true, true)
+  const keys = items.flatMap(i => i.keys)
+  if (!confirm(`Re-render and re-send ${what}? This uploads ${keys.length === 1 ? 'the poster' : `${keys.length} posters`} to the media server${keys.length === 1 ? '' : 's'} now.`)) return
+  startRun(true, keys, true, true)
 }
 
 /** Re-send the given tracked posters with no overlays and stop tracking them. */
-const removeOverlays = (items: TrackedItem[], what: string) => {
+const removeOverlays = (items: TrackedRow[], what: string) => {
   if (!items.length) return
+  const keys = items.flatMap(i => i.keys)
   if (!confirm(`Remove the overlays from ${what}?
 
-${items.length === 1 ? 'The poster is' : `${items.length} posters are`} re-rendered from the original art without any overlays and sent to the media server now. They are no longer tracked here, so a refresh won't add the overlays back; sending them again with a preset that has overlays will.`)) return
-  startRun(true, items.map(i => i.key), false, true, true)
+${keys.length === 1 ? 'The poster is' : `${keys.length} posters are`} re-rendered from the original art without any overlays and sent to the media server now. They are no longer tracked here, so a refresh won't add the overlays back; sending them again with a preset that has overlays will.`)) return
+  startRun(true, keys, false, true, true)
 }
 
 const formatDate = (iso?: string | null) => {
@@ -423,8 +461,8 @@ onUnmounted(() => {
             <tr><th>Item</th><th>What changed</th><th>Overlay now</th><th></th></tr>
           </thead>
           <tbody>
-            <tr v-for="item in resultItems" :key="item.key">
-              <td>{{ item.title }}</td>
+            <tr v-for="item in resultRows" :key="item.key">
+              <td>{{ item.title }} <span class="server-list">({{ item.servers.join(', ') }})</span></td>
               <td>{{ item.reason }}</td>
               <td class="overlay-cell">{{ (item.overlay || []).join(', ') || 'none' }}</td>
               <td>
@@ -472,7 +510,7 @@ onUnmounted(() => {
             <tbody>
               <tr v-for="item in filteredTracked.slice(0, trackedLimit)" :key="item.key">
                 <td>{{ itemTitle(item.title, item.year, item.season_index) }}</td>
-                <td>{{ item.server }}</td>
+                <td>{{ item.servers.join(', ') }}</td>
                 <td class="overlay-cell">
                   <button
                     v-for="o in item.overlays"
@@ -834,4 +872,8 @@ button:disabled {
 .overlay-chip { display: inline-block; margin: 0 0.25rem 0.2rem 0; padding: 0.05rem 0.45rem; border-radius: 10px; border: 1px solid rgba(61, 214, 183, 0.35); background: rgba(61, 214, 183, 0.08); color: var(--accent, #3dd6b7); font-size: 0.72rem; cursor: pointer; }
 .overlay-chip.active { background: rgba(61, 214, 183, 0.25); }
 .overlay-chip.missing { border-style: dashed; border-color: #f87171; color: #f87171; background: transparent; }
+.server-list {
+  color: var(--text-secondary, #9aa4b2);
+  font-size: 0.85em;
+}
 </style>

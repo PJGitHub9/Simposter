@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.8.24 (2026-10-29) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Webhook posters that reached Jellyfin/Emby later had no notification and showed as Auto** — when a linked server hadn't imported the item yet, `_sync_poster_to_other_servers()` skipped it and the next scan sent the cached render via `_deliver_cached_plex_render()` as `auto_generate`, without a notification. The sync now queues the target (`_queue_pending_sync()`); a follow-up thread looks again after 1, 2, 5, 10 and 20 minutes and sends it as a webhook send with a notification. A scan that finds the item first takes the entry over (`claim_pending_sync()`) and records/notifies it as the webhook, with its template and preset; other scan deliveries now notify as auto-generate.
+- **History's library filter listed each group's libraries separately** — options are now one per library group (`group:<id>`); `GET /api/poster-history` accepts a comma-separated `library_id`.
+- **Overlay Refresh listed each title once per server** — tracked posters are grouped by title/year/season/overlays with all servers shown; actions send every copy's key. Check results are merged by title and result.
+
 ## v1.8.23 (2026-10-28) — `webui-overhaul-dev` branch
 
 ### Bug Fixes
