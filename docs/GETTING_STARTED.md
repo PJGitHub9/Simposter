@@ -165,6 +165,7 @@ For batches instead of one at a time, see **Batch Processing** in [COLLECTIONS_A
 ## Fonts
 
 - **Starter fonts**: importing the Simposter defaults (in the setup wizard, or Template Manager → **Import Simposter defaults**) also downloads a set of free fonts: Arimo, Roboto, Inter, Montserrat, Lato, Comfortaa and Bebas Neue. Fonts used by any presets you import are downloaded too.
+- **More free fonts**: Simposter can also download any font from its own font collection (24 open-licensed families such as Poppins, Oswald and Playfair Display) the first time a preset or overlay asks for it, so shared presets render the same on another install.
 - **Arial and Helvetica** aren't free to ship, and the Docker image doesn't have them. When a preset asks for one and it isn't installed, Simposter uses Arimo, a free font with the same shape and spacing as Arial.
 - **Your own fonts**: put `.ttf`/`.otf` files in `config/fonts` and use the file name (without extension) as the font name. They take priority over everything else, so you can use a font you own, like Helvetica.
 

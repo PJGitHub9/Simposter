@@ -245,7 +245,9 @@ Overlay Manager → **Scheduler** sets how often the outside data overlays use i
 
 A file name, quality or edition doesn't need this: a library scan or webhook picks up those changes. Labels come from your last library scan.
 
-The section also lists every library group's **Overlay Refresh** schedule (below), with a link to each. Example: lists every 3 hours, ratings every 7 days and an hourly Overlay Refresh means lists are downloaded every 3 hours and each rating once a week, and the hourly run uses the stored values, fetching whatever is due first, so it makes no other API calls.
+**Refresh ratings & lists now** fetches everything due right away instead of waiting.
+
+The section also lists every library group's **Overlay Refresh** schedule (below), with **Run now** and a link to each. Example: lists every 3 hours, ratings every 7 days and an hourly Overlay Refresh means lists are downloaded every 3 hours and each rating once a week, and the hourly run uses the stored values, fetching whatever is due first, so it makes no other API calls.
 
 ## Overlay Refresh
 

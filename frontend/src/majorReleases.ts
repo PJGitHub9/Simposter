@@ -201,6 +201,26 @@ export const majorReleases: MajorRelease[] = [
         description: 'Bring in your Kometa overlay files, or point Simposter at files another tool like UMTK keeps rewriting and it re-imports them on a schedule. It maps what it can and tells you what it skipped.',
       },
       {
+        icon: '📋',
+        title: 'Lists from more services',
+        description: 'Besides MDBList, "On a list" rules can use your lists from WeTrakr, SIMKL and Floppy, or anyone\'s public list by pasting its link.',
+      },
+      {
+        icon: '📺',
+        title: '4K and HDR badges for TV',
+        description: 'Shows and seasons now get quality badges too, taken from their best episode, so a 4K series shows up as 4K.',
+      },
+      {
+        icon: '⏱️',
+        title: 'Overlays → Scheduler',
+        description: 'Choose how often ratings and lists are fetched again, see every Overlay Refresh schedule in one place, and refresh on demand.',
+      },
+      {
+        icon: '📦',
+        title: 'Share presets',
+        description: 'Download presets as one file with their overlays, images and fonts included, and import it on another Simposter.',
+      },
+      {
         icon: '🔁',
         title: 'Overlay Refresh',
         description: 'Keep posters up to date when their overlay would change, e.g. a movie upgraded to 4K, on a schedule per library.',

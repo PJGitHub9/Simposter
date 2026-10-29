@@ -32,6 +32,7 @@ http://your-server:8003/api/webhook/radarr/uniformlogo/default?group=Movies
 
 - The item is looked up across the group's libraries, and the poster goes to **every library in the group**.
 - The group's libraries are searched in order (Plex first when the group has one) until one has the title.
+- If a Jellyfin/Emby server in the group hasn't imported the file yet when the webhook arrives (common with upgrades, which can get a new item there), Simposter looks for it again over the next ~40 minutes and sends the poster as soon as it shows up, with its own notification. That server's next library scan also delivers it, so nothing is lost after a restart.
 - The name is matched ignoring upper/lower case, among groups of the right type (movie groups for Radarr, TV groups for Sonarr). Renaming a group changes its URL, so update it in Radarr/Sonarr afterwards.
 
 Without a group, a webhook searches all your libraries: Plex's when Plex is configured, otherwise every Jellyfin/Emby library (from your library groups, or directly from the servers if you have none). A group URL is the more predictable choice.
