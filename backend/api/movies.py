@@ -198,6 +198,32 @@ def _save_poster_cache(rating_key: str, content: bytes, content_type: str) -> Op
         return None
 
 
+def poster_thumbnail(source: Path, max_height: int = 600, quality: int = 82) -> Optional[Path]:
+    """Small JPEG copy of a cached poster for grid tiles. A poster Simposter
+    sent is a 2000x3000 render of several MB, and Plex/Jellyfin return it at
+    that size, so a page of tiles used to download hundreds of MB. Stored in
+    the cache folder's thumbs/ subfolder, named after the source file, and
+    regenerated when the source is newer. Returns None on failure (callers then
+    serve the full file)."""
+    thumb_path = source.parent / "thumbs" / f"{source.stem}.jpg"
+    try:
+        if thumb_path.exists() and thumb_path.stat().st_mtime >= source.stat().st_mtime:
+            return thumb_path
+        from PIL import Image
+        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(source) as img:
+            img = img.convert("RGB")
+            if img.height > max_height:
+                img = img.resize((max(1, round(img.width * max_height / img.height)), max_height), Image.LANCZOS)
+            tmp = thumb_path.with_suffix(".tmp")
+            img.save(tmp, "JPEG", quality=quality, optimize=True)
+            tmp.replace(thumb_path)
+        return thumb_path
+    except Exception as e:
+        logger.debug("[CACHE] Could not make a poster thumbnail for %s: %s", source.name, e)
+        return None
+
+
 def _remove_poster_cache(rating_key: str):
     cache_dir = Path(POSTER_CACHE_DIR)
     removed = False
@@ -1320,7 +1346,7 @@ def api_tmdb_images(tmdb_id: int):
 
 
 @router.get("/movie/{rating_key}/poster")
-def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw: bool = False, force_refresh: bool = False, server_id: Optional[str] = None):
+def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw: bool = False, force_refresh: bool = False, server_id: Optional[str] = None, thumb: bool = False):
     """
     Return Plex poster, cached on disk. If `meta=1` (or Accept: application/json),
     returns {"url": "<cached endpoint>"} instead of bytes so the UI can show without re-download.
@@ -1346,6 +1372,9 @@ def api_movie_poster(rating_key: str, request: Request, meta: bool = False, raw:
     cached = fetch_and_cache_poster(rating_key, force_refresh=force_refresh, server_id_hint=server_id)
     cache_header = "miss" if force_refresh else ("hit" if cached else "miss")
 
+    if cached and thumb and not wants_json:
+        # Grid tiles: a small copy instead of the full-size poster.
+        return _return_file(poster_thumbnail(cached) or cached, cache_header)
     if cached:
         if raw and not wants_json:
             return _return_file(cached, cache_header)

@@ -84,7 +84,9 @@ def api_plex_send(req: PlexSendRequest):
                 movie_details = {
                     'title': title,
                     'year': int(year) if year and year.isdigit() else None,
-                    'library_id': req.library_id,
+                    # Plex's own section id first: an editor opened on the
+                    # Jellyfin copy sends no (or a Jellyfin) library id.
+                    'library_id': item.get('librarySectionID') or req.library_id,
                     'parent_title': item.get('parentTitle'),
                     'season_title': season_title,
                 }
@@ -243,7 +245,7 @@ def api_plex_send(req: PlexSendRequest):
         # sends the Plex copy without a (Plex) library id.
         db.record_poster_history(
             rating_key=req.rating_key,
-            library_id=db.get_library_id_for_rating_key(req.rating_key) or req.library_id or movie_details.get("library_id"),
+            library_id=db.get_library_id_for_rating_key(req.rating_key) or movie_details.get("library_id") or req.library_id,
             title=history_title,
             year=movie_details.get("year"),
             template_id=req.template_id,

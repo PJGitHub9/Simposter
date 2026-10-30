@@ -7,6 +7,7 @@ import { useNotification } from '@/composables/useNotification'
 import { useMovies } from '../composables/useMovies'
 import { useSettingsStore } from '@/stores/settings'
 import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
+import { posterThumbUrl } from '@/services/posterThumb'
 
 type Movie = {
   key: string
@@ -1383,7 +1384,7 @@ onMounted(async () => {
             </div>
             <div class="poster">
               <img
-                :src="movie.poster || `/api/movie/${movie.key}/poster?w=200${currentLibrary ? `&library_id=${encodeURIComponent(currentLibrary)}` : ''}`"
+                :src="posterThumbUrl(movie.poster || `/api/movie/${movie.key}/poster?w=200${currentLibrary ? `&library_id=${encodeURIComponent(currentLibrary)}` : ''}`)!"
                 :alt="movie.title"
                 loading="lazy"
               />
