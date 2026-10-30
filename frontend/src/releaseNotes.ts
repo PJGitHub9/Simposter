@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.27',
+    date: '2026-10-30',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Library grids, Collections and Batch Edit load much faster: tiles now use a small copy of each poster (around 50 KB) instead of the full-size poster Simposter sent (several MB each). The copy is made the first time a page is shown and remade when the poster changes. The editors still show the full-size poster.',
+          'Updated fastapi to 0.162.0, pydantic-settings to 2.16.1 and apprise to 2.1.0.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'History: a TV season sent to Jellyfin/Emby a second time showed as "Show - Season 1 - Season 1", and season rows had no library. Seasons now show the show\u2019s name once and its library, for Plex and Jellyfin/Emby.',
+          'History: clicking a title opened the library page instead of the poster editor. It now opens the editor, including for posters sent to Jellyfin/Emby.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.26',
     date: '2026-10-30',
     sections: [

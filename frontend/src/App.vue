@@ -671,10 +671,17 @@ const tryOpenEditItem = () => {
   if (!editId || ui.selectedMovie.value) return
   const mediaType = route.name === 'tv-shows' ? 'tv-show' : 'movie'
   const allItems = mediaType === 'tv-show' ? tvShows.value : movies.value
-  const item = allItems.find((m: any) => {
-    const itemId = mediaType === 'tv-show' ? (m.tvdb_id || m.key) : (m.tmdb_id || m.key)
-    return String(itemId) === String(editId)
-  })
+  const id = String(editId)
+  // History links pass the server's own item id (a Plex rating key or a
+  // Jellyfin/Emby id); the grid's own links pass the TMDb/TVDB id. Try the
+  // item id first, including a merged card's other server copies, then the
+  // TMDb/TVDB id.
+  const item = allItems.find((m: any) => String(m.key) === id
+      || (m.other_servers || []).some((o: any) => String(o.rating_key) === id))
+    || allItems.find((m: any) => {
+      const itemId = mediaType === 'tv-show' ? (m.tvdb_id || m.key) : (m.tmdb_id || m.key)
+      return String(itemId) === id
+    })
   if (item) {
     ui.setSelectedMovie({ ...item, mediaType })
   }

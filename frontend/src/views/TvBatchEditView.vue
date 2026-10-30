@@ -7,6 +7,7 @@ import { useNotification } from '@/composables/useNotification'
 import { useTvShows } from '../composables/useTvShows'
 import { useSettingsStore } from '@/stores/settings'
 import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
+import { posterThumbUrl } from '@/services/posterThumb'
 
 
 type TvShow = {
@@ -1834,7 +1835,7 @@ onMounted(async () => {
             </div>
             <div class="poster">
               <img
-                :src="movie.poster || `/api/tv-show/${movie.key}/poster?w=200${currentLibrary ? `&library_id=${encodeURIComponent(currentLibrary)}` : ''}`"
+                :src="posterThumbUrl(movie.poster || `/api/tv-show/${movie.key}/poster?w=200${currentLibrary ? `&library_id=${encodeURIComponent(currentLibrary)}` : ''}`)!"
                 :alt="movie.title"
                 loading="lazy"
               />

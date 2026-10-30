@@ -4356,6 +4356,16 @@ def get_library_id_for_rating_key(rating_key: str) -> Optional[str]:
             row = conn.execute(
                 "SELECT library_id FROM tv_cache WHERE rating_key = ? LIMIT 1", (rating_key,)
             ).fetchone()
+        if not row:
+            # A season isn't in tv_cache itself; scans record which show it
+            # belongs to in season_media_info, so use the show's library.
+            try:
+                row = conn.execute(
+                    "SELECT t.library_id FROM season_media_info s JOIN tv_cache t "
+                    "ON t.rating_key = s.show_rating_key WHERE s.rating_key = ? LIMIT 1", (rating_key,)
+                ).fetchone()
+            except sqlite3.Error:
+                row = None
     return row["library_id"] if row and row["library_id"] else None
 
 

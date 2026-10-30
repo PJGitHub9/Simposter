@@ -292,7 +292,7 @@ def api_all_tv_labels(library_id: str = None):
 
 
 @router.get("/tv-show/{rating_key}/poster")
-def api_tv_show_poster(rating_key: str, request: Request, meta: bool = False, raw: bool = False, force_refresh: bool = False):
+def api_tv_show_poster(rating_key: str, request: Request, meta: bool = False, raw: bool = False, force_refresh: bool = False, thumb: bool = False):
     """
     Return Plex TV show poster, cached on disk. If `meta=1` (or Accept: application/json),
     returns {"url": "<cached endpoint>"} instead of bytes so the UI can show without re-download.
@@ -318,6 +318,10 @@ def api_tv_show_poster(rating_key: str, request: Request, meta: bool = False, ra
             cache.update_tv_poster(rating_key, _cached_url(cached))
         except Exception:
             pass
+        if thumb and not wants_json:
+            # Grid tiles: a small copy instead of the full-size poster.
+            from .movies import poster_thumbnail
+            return _return_file(poster_thumbnail(cached) or cached, cache_header)
         if raw and not wants_json:
             return _return_file(cached, cache_header)
         if wants_json:

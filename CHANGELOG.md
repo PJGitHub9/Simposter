@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.8.27 (2026-10-30) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Small poster thumbnails for grids** — posters Simposter sends are 2000x3000 renders of 4-9 MB and Plex/Jellyfin return them at that size, so the poster cache (and every grid tile) held full renders. New `poster_thumbnail()` (movies.py) writes a 600px-high JPEG to `posters/thumbs/`, regenerated when the source is newer, served by `/api/movie|tv-show/{id}/poster?thumb=1`. `posterThumbUrl()` (`services/posterThumb.ts`) adds it in `MovieCard.vue` and both Batch Edit grids. Cleanup's poster category includes `thumbs/`.
+- **Dependencies** — fastapi 0.162.0, pydantic-settings 2.16.1, apprise 2.1.0 (Dependabot #83/#84/#82). Checked against FastAPI's breaking changes since 0.143 (form and body defaults, removed `**extra`); pydantic-settings now needs Python 3.11+ (Docker uses 3.12).
+
+### Bug Fixes
+- **Season History titles and library** — `_record_editor_history()` looked a season's title up by its own id, which fell through to `poster_history` and returned the previous row's already-suffixed title. Seasons now use the editor's show title. `get_library_id_for_rating_key()` also maps a season through `season_media_info.show_rating_key`; the Jellyfin row falls back to `library_in_group()`, and `api_plex_send()` prefers Plex's `librarySectionID`.
+- **History links didn't open the editor** — `tryOpenEditItem()` (App.vue) compared `?edit=` to the TMDb/TVDB id, but History passes the server's item id. It now tries the item id (own key, then a merged card's `other_servers`) first.
+
 ## v1.8.26 (2026-10-30) — `webui-overhaul-dev` branch
 
 ### Improvements

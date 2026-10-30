@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import ResendPreviewModal from './ResendPreviewModal.vue'
+import { posterThumbUrl } from '@/services/posterThumb'
 
 const props = defineProps<{
   title: string
@@ -129,7 +130,7 @@ async function doResend(includeSeasons: boolean, targetServerIds: string[]) {
 
 <template>
   <article class="card glass" @click="emit('select')">
-    <div class="thumb" :style="{ backgroundImage: `url(${poster})` }">
+    <div class="thumb" :style="{ backgroundImage: `url(${posterThumbUrl(poster)})` }">
       <button
         v-if="posterChanged"
         class="changed-badge"

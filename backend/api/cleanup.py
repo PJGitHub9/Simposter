@@ -139,7 +139,7 @@ def api_cleanup_scan(history_days: int = 180):
     add_file_category(
         "poster_cache", "Orphaned poster cache",
         "Cached posters for items no longer in your library, as of the last scan.",
-        Path(POSTER_CACHE_DIR),
+        Path(POSTER_CACHE_DIR), include_thumbs=True,
     )
     add_file_category(
         "logo_cache", "Orphaned logo cache",

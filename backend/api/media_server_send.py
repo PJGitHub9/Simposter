@@ -541,15 +541,32 @@ def _record_editor_history(req: "MediaServerSendRequest", server_id: str, item_i
         from .. import database as db
         r = req.render or {}
         key = str(current_key or req.rating_key)
-        title, year = db.get_title_for_rating_key(key)
-        title = title or r.get("title")
-        year = year or r.get("year")
         season = req.season_index if req.season_index is not None else r.get("season_index")
+        if season is not None:
+            # A season isn't cached under its own id, and a lookup would find
+            # this season's previous History row, which already has the
+            # " - Season N" suffix. The editor sends the show's own title.
+            title, year = r.get("title"), r.get("year")
+            if not title:
+                title, year = db.get_title_for_rating_key(key)
+                title = (title or "").split(" - Season ")[0].split(" - Specials")[0] or None
+        else:
+            title, year = db.get_title_for_rating_key(key)
+            title = title or r.get("title")
+            year = year or r.get("year")
         if season is not None and title:
             title = f"{title} - {'Specials' if season == 0 else f'Season {season}'}"
+        library_id = db.get_library_id_for_rating_key(key)
+        if not library_id and r.get("library_id"):
+            # The editor's library is the item's home server's; find this
+            # server's library in the same group.
+            from ..overlay_refresh import library_in_group
+            media_type = "tv" if (req.is_tv or r.get("media_type") == "tv") else "movie"
+            library_id = library_in_group(r.get("source_server_id") or "plex-1", str(r["library_id"]),
+                                          media_type, server_id) or str(r["library_id"])
         db.record_poster_history(
             rating_key=item_id,
-            library_id=db.get_library_id_for_rating_key(key),
+            library_id=library_id,
             title=title,
             year=year,
             template_id=r.get("template_id"),
