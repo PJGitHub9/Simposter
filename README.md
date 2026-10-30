@@ -2,7 +2,8 @@
 
 > **Template-based poster generation for Plex, Jellyfin and Emby** — Create clean, consistent custom posters with TMDb/TVDB/Fanart.tv artwork, overlay badges, and full batch automation.
 
-![Simposter UI](https://github.com/user-attachments/assets/fa22c97f-ad8c-4a7e-b6ef-1aaa3d7a5022)
+![Simposter UI](https://github.com/user-attachments/assets/2cc5cf6e-4aad-40e2-8ef5-03e4ce92f5ba)
+
 
 ---
 
