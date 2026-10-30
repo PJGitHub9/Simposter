@@ -62,35 +62,54 @@ def get_db_version() -> Optional[str]:
     return None
 
 
-def _backup_database(db_version: str) -> None:
+def _backup_database(db_version: str) -> Optional[Path]:
     """
     Create a versioned backup of the current database before migrations.
     Output file example: simposter_v1.4.3.db.bak
+    Uses SQLite's backup API rather than a file copy: the database runs in WAL
+    mode, so a plain copy of the main file can miss writes still in -wal.
+    Returns the backup path, or None if nothing was written.
     """
+    db_file = Path(DB_PATH)
+    if not db_file.exists():
+        logger.info("[DB] Skip backup: database file does not exist yet")
+        return None
+
+    safe_version = (db_version or "unknown").replace(" ", "_")
+    backup_name = f"simposter_{safe_version}.db.bak"
+    backup_path = db_file.parent / backup_name
+
+    # Avoid overwriting an existing backup: append numeric suffix if needed
+    if backup_path.exists():
+        idx = 1
+        while True:
+            candidate = db_file.parent / f"{backup_name}.{idx}"
+            if not candidate.exists():
+                backup_path = candidate
+                break
+            idx += 1
+
     try:
-        db_file = Path(DB_PATH)
-        if not db_file.exists():
-            logger.info("[DB] Skip backup: database file does not exist yet")
-            return
-
-        safe_version = (db_version or "unknown").replace(" ", "_")
-        backup_name = f"simposter_{safe_version}.db.bak"
-        backup_path = db_file.parent / backup_name
-
-        # Avoid overwriting an existing backup: append numeric suffix if needed
-        if backup_path.exists():
-            idx = 1
-            while True:
-                candidate = db_file.parent / f"{backup_name}.{idx}"
-                if not candidate.exists():
-                    backup_path = candidate
-                    break
-                idx += 1
-
-        shutil.copy2(db_file, backup_path)
+        src = sqlite3.connect(str(db_file), timeout=30.0)
+        try:
+            dst = sqlite3.connect(str(backup_path))
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
         logger.info("[DB] Backed up database to %s", backup_path)
+        return backup_path
+    except Exception as e:
+        logger.warning("[DB] SQLite backup failed (%s), copying the file instead", e)
+    try:
+        shutil.copy2(db_file, backup_path)
+        logger.info("[DB] Backed up database (file copy) to %s", backup_path)
+        return backup_path
     except Exception as e:
         logger.warning("[DB] Failed to back up database before migration: %s", e)
+        return None
 
 
 def set_db_version(version: str) -> None:
@@ -107,24 +126,64 @@ def set_db_version(version: str) -> None:
     logger.info(f"[DB] Set database version to {version}")
 
 
-def get_app_version() -> str:
-    """Get the current application version from the frontend version file."""
+def _detect_app_version() -> Optional[str]:
+    """The running app's version: frontend/src/version.ts in a source
+    checkout, else build-info.json written into the Docker image at build time
+    (the image only has the built frontend, not version.ts). None if neither
+    is found."""
+    root = Path(__file__).parent.parent
     try:
-        # Read version from the frontend version file
-        version_file = Path(__file__).parent.parent / "frontend" / "src" / "version.ts"
+        version_file = root / "frontend" / "src" / "version.ts"
         if version_file.exists():
-            content = version_file.read_text()
             # Parse: export const APP_VERSION = 'v1.4.4'
-            for line in content.split('\n'):
-                if 'APP_VERSION' in line and '=' in line:
-                    # Extract version between quotes
-                    version = line.split('=')[1].strip().strip("'\"")
-                    return version
+            m = re.search(r"APP_VERSION\s*=\s*['\"]([^'\"]+)['\"]", version_file.read_text(encoding="utf-8"))
+            if m:
+                return m.group(1)
     except Exception as e:
         logger.warning(f"[DB] Could not read app version from version.ts: {e}")
+    try:
+        build_info = root / "build-info.json"
+        if build_info.exists():
+            version = (json.loads(build_info.read_text(encoding="utf-8")) or {}).get("app_version")
+            if version and version != "unknown":
+                return str(version)
+    except Exception as e:
+        logger.warning(f"[DB] Could not read app version from build-info.json: {e}")
+    return None
 
-    # Fallback version
-    return "v1.0.0"
+
+def get_app_version() -> str:
+    """The running app's version, or "unknown" if it can't be found."""
+    return _detect_app_version() or "unknown"
+
+
+def _backup_before_upgrade() -> None:
+    """Back up the database when the app version changed since the last
+    start, BEFORE init_database() runs any migration, so the backup is the
+    real pre-upgrade copy. Reads the stored version with a plain connection
+    (the settings table may not exist yet on a very old database).
+
+    Docker images before v1.8.25 always stored "v1.0.0" (get_app_version()
+    only read version.ts, which the image doesn't contain), so the first
+    upgrade from such an image is backed up as simposter_v1.0.0.db.bak."""
+    current = _detect_app_version()
+    db_file = Path(DB_PATH)
+    if not current or not db_file.exists():
+        return
+    stored = None
+    try:
+        conn = sqlite3.connect(str(db_file), timeout=30.0)
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'app.version'").fetchone()
+            stored = row[0] if row else None
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        stored = None  # no settings table yet: a pre-settings database
+    if stored == current:
+        return
+    logger.info("[DB] Upgrading from %s to %s, backing up the database first", stored or "an unknown version", current)
+    _backup_database(stored or "pre-upgrade")
 
 
 def check_and_update_version() -> None:
@@ -133,17 +192,18 @@ def check_and_update_version() -> None:
     Log version changes and update the database version.
     This allows future migration logic based on version differences.
     """
-    current_app_version = get_app_version()
+    current_app_version = _detect_app_version()
+    if not current_app_version:
+        logger.warning("[DB] Could not determine the app version; the database version wasn't updated")
+        return
     db_version = get_db_version()
 
     if db_version is None:
         logger.info(f"[DB] New database - setting initial version to {current_app_version}")
         set_db_version(current_app_version)
     elif db_version != current_app_version:
+        # The backup was taken by _backup_before_upgrade() before migrations ran.
         logger.info(f"[DB] Version change detected: {db_version} -> {current_app_version}")
-        _backup_database(db_version)
-        # Future: Add migration logic here based on version comparison
-        # For now, just update the version
         set_db_version(current_app_version)
     else:
         logger.debug(f"[DB] Database version {db_version} matches app version")
@@ -154,6 +214,9 @@ def init_database():
     import time
     
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Back up before any migration below touches an older database.
+    _backup_before_upgrade()
 
     # Retry logic for database lock
     max_retries = 5

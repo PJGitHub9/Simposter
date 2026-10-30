@@ -27,6 +27,7 @@ export const releaseNotes: ReleaseNote[] = [
         title: 'Bug Fixes',
         items: [
           'Editing a layer’s "Show when" rules, for example UMTK rewriting a live Kometa file’s TMDb ID lists every day, no longer re-renders posters that look the same. Only settings that change how a layer looks count.',
+          'The automatic database backup on upgrade now works in Docker (it never ran there, because the image couldn’t tell which version it was) and is taken before the upgrade changes anything. Look for simposter_<old version>.db.bak in config/settings.',
           'Batch Edit with Plex and Jellyfin ticked now sends to Jellyfin for items shown under their Jellyfin copy (before, only Plex got them). When a ticked server is skipped, the log now says why.'
         ]
       }
