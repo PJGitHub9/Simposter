@@ -1,5 +1,5 @@
 import xml.etree.ElementTree as ET
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pathlib import Path
 import os
 import sqlite3
@@ -609,7 +609,7 @@ def _get_plex_collections(lib_ids: Optional[List[str]] = None) -> List[dict]:
         except Exception as e:
             logger.warning("[PLEX] Failed to fetch collections for library %s: %s", lib_id, e)
 
-    logger.info("[PLEX] Loaded %d collections from %d libraries (%s)", len(items), len(lib_ids), ",".join(lib_ids))
+    logger.debug("[PLEX] Loaded %d collections from %d libraries (%s)", len(items), len(lib_ids), ",".join(lib_ids))
     return items
 
 
@@ -1526,11 +1526,34 @@ def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
                 logger.debug(f"[BULK LABELS] Failed to fetch labels for {movie_key}: {e}")
                 results[movie_key] = []
                 
-        logger.info(f"[BULK LABELS] Successfully fetched labels for {len(results)} movies")
+        logger.debug(f"[BULK LABELS] Successfully fetched labels for {len(results)} movies")
         return {"labels": results}
     except Exception as e:
         logger.error(f"[BULK LABELS] Failed to fetch bulk labels: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch bulk labels: {e}")
+
+
+def _log_changed_in_plex(changed: Dict[str, List[str]]) -> None:
+    """One line per scan for the art that changed in Plex since the last scan,
+    e.g. "Re-downloaded art changed in Plex: 3 posters (Dune, Heat, Up), 2 logos"."""
+    names = {"poster": "poster", "logo": "logo", "art": "backdrop", "backdrop": "backdrop"}
+    parts = []
+    for kind, keys in changed.items():
+        keys = list(dict.fromkeys(keys))
+        if not keys:
+            continue
+        titles = []
+        for k in keys[:5]:
+            try:
+                t, _y = db.get_title_for_rating_key(str(k))
+            except Exception:
+                t = None
+            titles.append(t or str(k))
+        more = f" +{len(keys) - 5} more" if len(keys) > 5 else ""
+        noun = names.get(kind, kind) + ("s" if len(keys) != 1 else "")
+        parts.append(f"{len(keys)} {noun} ({', '.join(titles)}{more})")
+    if parts:
+        logger.info("[SCAN] Re-downloaded art changed in Plex: %s", "; ".join(parts))
 
 
 @router.post("/scan-library")
@@ -1562,6 +1585,9 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             library_id = None
         
         logger.info(f"[SCAN] Scan request for library_id={library_id}")
+        # Items whose art changed in Plex since the last scan (re-downloaded);
+        # logged as one line at the end instead of one per item.
+        changed_in_plex: Dict[str, List[str]] = {"poster": [], "logo": [], "backdrop": []}
 
         # Snapshot cache keys BEFORE fetching from Plex.
         # get_plex_movies() eagerly calls cache.refresh_from_list() as a side effect,
@@ -1652,7 +1678,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
         if movie_keys:
             try:
-                logger.info(f"[SCAN] Bulk fetching labels for {len(movie_keys)} movies (parallel)")
+                logger.debug(f"[SCAN] Bulk fetching labels for {len(movie_keys)} movies (parallel)")
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     label_futures = {executor.submit(_fetch_label_for_movie, key): key for key in movie_keys}
                     label_done = 0
@@ -1667,7 +1693,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                         # Without this, scan_status stayed unchanged (looking stalled)
                         # for the entire label-fetch phase.
                         scan_status.update({"current": f"Fetching labels ({label_done}/{len(movie_keys)})"})
-                logger.info(f"[SCAN] Successfully fetched labels for {len(bulk_labels)} movies")
+                logger.debug(f"[SCAN] Successfully fetched labels for {len(bulk_labels)} movies")
             except Exception as e:
                 logger.warning(f"[SCAN] Bulk label fetch failed, will skip labels: {e}")
 
@@ -1682,7 +1708,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 version = bulk_thumb_versions.get(movie_key)
                 refresh = force_poster_refresh or poster_changed_on_server(movie_key, version)
                 if refresh and not force_poster_refresh:
-                    logger.info("[SCAN] Poster changed in Plex for %s — refreshing", movie_key)
+                    changed_in_plex["poster"].append(movie_key)
                 poster_path = fetch_and_cache_poster(movie_key, force_refresh=refresh)
                 if poster_path:
                     if refresh:
@@ -1697,7 +1723,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             version = (bulk_art_versions.get(movie_key) or {}).get(kind)
             refresh = force_poster_refresh or asset_changed_on_server(kind, movie_key, version)
             if refresh and not force_poster_refresh:
-                logger.info("[SCAN] %s changed in Plex for %s — refreshing", kind.capitalize(), movie_key)
+                changed_in_plex.setdefault(kind, []).append(movie_key)
             return refresh, version
 
         def _after_art_refresh(kind: str, movie_key: str, version, path) -> None:
@@ -1751,7 +1777,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             return movie_key, None
 
         if movie_keys:
-            logger.info(f"[SCAN] Parallel fetching posters + logos + backdrops + square art for {len(movie_keys)} movies")
+            logger.debug(f"[SCAN] Parallel fetching posters + logos + backdrops + square art for {len(movie_keys)} movies")
             # This is typically the slowest phase of a scan (an image download per movie,
             # 4x'd for logos/backdrops/square art, especially with force_poster_refresh —
             # the default). Track completions as they land so scan_status.processed climbs
@@ -1826,7 +1852,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
             processed += 1
 
-        logger.info("[SCAN] Movies progress %d/%d", processed, len(movies))
+        logger.debug("[SCAN] Movies progress %d/%d", processed, len(movies))
         scan_status.update({"processed": processed, "current": ""})
 
         # Bulk refresh movie cache per library and detect new content
@@ -1896,7 +1922,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 version = show.get("thumb")
                 refresh = force_poster_refresh or poster_changed_on_server(key, version)
                 if refresh and not force_poster_refresh:
-                    logger.info("[SCAN] Poster changed in Plex for TV show %s — refreshing", key)
+                    changed_in_plex["poster"].append(key)
                 poster_path = fetch_and_cache_poster(key, force_refresh=refresh)
                 if poster_path:
                     if refresh:
@@ -1911,7 +1937,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             def _tv_art_refresh(kind: str, version):
                 refresh = force_poster_refresh or asset_changed_on_server(kind, key, version)
                 if refresh and not force_poster_refresh:
-                    logger.info("[SCAN] %s changed in Plex for TV show %s — refreshing", kind.capitalize(), key)
+                    changed_in_plex.setdefault(kind, []).append(key)
                 return refresh
 
             logo_url = None
@@ -2013,7 +2039,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             }
 
         if tv_shows:
-            logger.info(f"[SCAN] Fetching art/labels/ids for {len(tv_shows)} TV shows (parallel)")
+            logger.debug(f"[SCAN] Fetching art/labels/ids for {len(tv_shows)} TV shows (parallel)")
             with ThreadPoolExecutor(max_workers=10) as executor:
                 show_futures = {executor.submit(_fetch_tv_show_data, show): show for show in tv_shows}
                 for future in as_completed(show_futures):
@@ -2023,7 +2049,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
 
                     processed += 1
                     if processed % 50 == 0 or processed == total_items:
-                        logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
+                        logger.debug("[SCAN] Overall progress %d/%d", processed, total_items)
                     scan_status.update({"processed": processed, "current": show_result.get("title") or ""})
         
         # Bulk refresh TV cache per library and detect new content
@@ -2107,7 +2133,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             
             processed += 1
             if processed % 50 == 0 or processed == total_items:
-                logger.info("[SCAN] Overall progress %d/%d", processed, total_items)
+                logger.debug("[SCAN] Overall progress %d/%d", processed, total_items)
             scan_status.update({"processed": processed, "current": coll.get("title") or ""})
         
         # Bulk refresh collection cache per library. cache.refresh_collections_from_list()
@@ -2161,6 +2187,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         except Exception as e:
             logger.error(f"[SCAN] Failed to scan linked libraries: {e}")
 
+        _log_changed_in_plex(changed_in_plex)
         logger.info(f"[SCAN] Completed full library sync")
         poster_drift.flush_notifications()
         scan_status.update({

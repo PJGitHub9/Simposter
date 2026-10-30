@@ -150,7 +150,7 @@ def get_logos_for_movie(tmdb_id: int) -> List[Dict[str, Any]]:
         "source": "fanart"
     }
     """
-    logger.info("[FANART] Fetching logos for tmdb_id=%s", tmdb_id)
+    logger.debug("[FANART] Fetching logos for tmdb_id=%s", tmdb_id)
     data = _fanart_get(FANART_MOVIE_API_BASE, tmdb_id)
 
     if not data:

@@ -759,7 +759,7 @@ def get_plex_movies(library_ids: Optional[List[str]] = None):
                 )
             )
 
-    logger.info("[PLEX] Loaded %d movies from %d libraries (%s)", len(out), len(lib_ids), ",".join(lib_ids))
+    logger.debug("[PLEX] Loaded %d movies from %d libraries (%s)", len(out), len(lib_ids), ",".join(lib_ids))
     try:
         cache.refresh_from_list(out)
     except (sqlite3.Error, AttributeError) as e:

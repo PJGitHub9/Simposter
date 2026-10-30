@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.8.26 (2026-10-30) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Tracked posters as one list** — replaces v1.8.25's grouped view. Columns: item, preset (`/overlay-refresh/items` now returns `template_id` and `preset_name`), overlays sent with, server, last sent; sortable headers (title / preset / overlays / last sent, remembered in `localStorage`), preset and overlay filters, and the bulk Re-send/Remove act on the filtered list. The title's tooltip shows what's drawn on the poster now.
+- **Log cleanup** — `_log_overlay_summary()` writes one "Not drawn: N (rules didn't match / lost in a badge set / hidden by another layer)" line at INFO, with each layer's reason at DEBUG. Scans collect art changed in Plex into one "Re-downloaded art changed in Plex" line with titles (`_log_changed_in_plex()`), instead of one line per item with only its rating key. Moved to DEBUG: scan progress, label-fetch and fetch-start lines, `[PLEX] Loaded N movies/collections`, `[CACHE] refreshed N ...`, `[FANART] Fetching logos`, and the successful "Poster upload verified" check (a size mismatch is still a warning).
+
 ## v1.8.25 (2026-10-30) — `webui-overhaul-dev` branch
 
 ### Improvements

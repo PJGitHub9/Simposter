@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.26',
+    date: '2026-10-30',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay Refresh: tracked posters are one sorted list showing each poster\u2019s preset and the overlays it was sent with. Click a column heading to sort by title, preset, overlays or last sent, and filter by preset or overlay. Hover a title to see what\u2019s on the poster right now.',
+          'Quieter logs: each poster render now logs one "Not drawn" summary instead of a line per skipped layer (the reasons are still there at DEBUG level), a scan logs one line listing the art that changed in Plex instead of one line per item, and scan progress and other step-by-step lines moved to DEBUG.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.25',
     date: '2026-10-30',
     sections: [

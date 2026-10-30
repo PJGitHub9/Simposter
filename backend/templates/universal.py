@@ -1561,7 +1561,6 @@ def _prepare_overlays(
 
 # Missing overlay configs already reported this run (preset, config) -- once is enough.
 _missing_overlay_warned: set = set()
-_MAX_SKIPPED_LINES = 8
 
 
 def _warn_missing_overlay(preset_id: Optional[str], config_id: str) -> None:
@@ -1619,15 +1618,20 @@ def _log_overlay_summary(meta, ctx, config_names, every_element, eligible, gated
 
     skipped = [(e, gated_reasons.get(id(e)) or explained.get(id(e)) or "not drawn")
                for e in every_element if id(e) not in selected_ids]
-    for i, (e, why) in enumerate(skipped):
-        line = "[OVERLAY]   Skipped %s: %s"
-        if i < _MAX_SKIPPED_LINES:
-            logger.info(line, overlay_engine.element_label(e), why)
+    # One summary line at INFO (the per-layer reasons are at DEBUG): a
+    # 25-layer overlay used to add ~10 lines to every poster render.
+    kinds = {"rules didn't match": 0, "lost in a badge set": 0, "hidden by another layer": 0}
+    for e, why in skipped:
+        logger.debug("[OVERLAY]   Skipped %s: %s", overlay_engine.element_label(e), why)
+        if "another layer won" in why:
+            kinds["lost in a badge set"] += 1
+        elif why.startswith("hidden by"):
+            kinds["hidden by another layer"] += 1
         else:
-            logger.debug(line, overlay_engine.element_label(e), why)
-    if len(skipped) > _MAX_SKIPPED_LINES:
-        logger.info("[OVERLAY]   ...and %d more skipped (set the log level to DEBUG to list them all)",
-                    len(skipped) - _MAX_SKIPPED_LINES)
+            kinds["rules didn't match"] += 1
+    if skipped:
+        parts = ", ".join(f"{n} {k}" for k, n in kinds.items() if n)
+        logger.info("[OVERLAY]   Not drawn: %d (%s); set the log level to DEBUG to see why", len(skipped), parts)
 
 
 def apply_overlay_config(

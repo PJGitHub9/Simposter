@@ -145,6 +145,11 @@ def api_overlay_refresh_items(group_id: str):
     states = db.get_overlay_states(refresh.group_pairs(group))
     from ..media_server import get_server_label
     names = {c["id"]: c.get("name") or c["id"] for c in db.get_all_overlay_configs()}
+    preset_names = {
+        (tid, p["id"]): p.get("name") or p["id"]
+        for tid, block in db.get_all_presets().items()
+        for p in block.get("presets") or []
+    }
     out = []
     usage: dict = {}
     for s in states:
@@ -163,6 +168,8 @@ def api_overlay_refresh_items(group_id: str):
             "title": s.get("title"),
             "year": s.get("year"),
             "preset_id": s.get("preset_id"),
+            "template_id": s.get("template_id"),
+            "preset_name": preset_names.get((s.get("template_id"), s.get("preset_id"))) if s.get("preset_id") else None,
             "overlay": [e.get("label") + (f" = {e['value']}" if e.get("value") else "") for e in (s.get("summary") or [])],
             "updated_at": s.get("updated_at"),
         })

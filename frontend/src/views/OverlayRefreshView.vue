@@ -63,6 +63,8 @@ type TrackedItem = {
   year: number | null
   season_index: number | null
   preset_id: string | null
+  template_id?: string | null
+  preset_name?: string | null
   overlay: string[]
   updated_at: string | null
 }
@@ -171,64 +173,42 @@ const filteredTracked = computed(() => {
   }
   return list
 })
-const filterLabel = computed(() => overlayUsage.value.find(o => o.id === overlayFilter.value)?.name || '')
 
-// Group the tracked list so posters that look the same sit together instead of
-// one long list: by what the overlays draw on them, or by which overlays they
-// were sent with. Remembered per browser.
-type TrackedGroupBy = 'shown' | 'overlays' | 'none'
-type TrackedSort = 'title' | 'sent'
-const readPref = <T extends string>(key: string, allowed: T[], fallback: T): T => {
+// One organized list: sorted by title (or preset / overlays / last sent),
+// filterable by preset and overlay. The sort is remembered per browser.
+type TrackedSort = 'title' | 'preset' | 'overlays' | 'sent'
+const TRACKED_SORTS: TrackedSort[] = ['title', 'preset', 'overlays', 'sent']
+const trackedSort = ref<TrackedSort>((() => {
   try {
-    const v = localStorage.getItem(key) as T | null
-    return v && allowed.includes(v) ? v : fallback
+    const v = localStorage.getItem('simposter-tracked-sort') as TrackedSort | null
+    return v && TRACKED_SORTS.includes(v) ? v : 'title'
   } catch {
-    return fallback
+    return 'title'
   }
-}
-const trackedGroupBy = ref<TrackedGroupBy>(readPref('simposter-tracked-group', ['shown', 'overlays', 'none'], 'shown'))
-const trackedSort = ref<TrackedSort>(readPref('simposter-tracked-sort', ['title', 'sent'], 'title'))
-watch(trackedGroupBy, v => { try { localStorage.setItem('simposter-tracked-group', v) } catch { /* ignore */ } })
+})())
 watch(trackedSort, v => { try { localStorage.setItem('simposter-tracked-sort', v) } catch { /* ignore */ } })
 
-const sortedTracked = computed(() => {
-  const list = [...filteredTracked.value]
-  if (trackedSort.value === 'sent') list.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
-  else list.sort((a, b) => itemTitle(a.title, a.year, a.season_index).localeCompare(itemTitle(b.title, b.year, b.season_index)))
-  return list
+const presetLabel = (i: TrackedItem) => i.preset_name || i.preset_id || 'Editor (no preset)'
+const overlaysLabel = (i: TrackedItem) => i.overlays.map(o => o.name).join(', ')
+const presetFilter = ref('')
+const presetOptions = computed(() => {
+  const counts = new Map<string, number>()
+  for (const r of trackedRows.value) counts.set(presetLabel(r), (counts.get(presetLabel(r)) || 0) + 1)
+  return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, count]) => ({ name, count }))
 })
 
-type TrackedGroup = { id: string; label: string; empty: boolean; rows: TrackedRow[] }
-const trackedGroups = computed<TrackedGroup[]>(() => {
-  if (trackedGroupBy.value === 'none') return []
-  const groups = new Map<string, TrackedGroup>()
-  for (const row of sortedTracked.value) {
-    const parts = trackedGroupBy.value === 'shown'
-      ? [...row.overlay].sort()
-      : row.overlays.map(o => o.name + (o.missing ? ' (deleted)' : '')).sort()
-    const id = parts.join('\u0000')
-    let g = groups.get(id)
-    if (!g) {
-      const label = parts.length
-        ? parts.join(' + ')
-        : trackedGroupBy.value === 'shown' ? 'Nothing shown right now' : 'No overlays'
-      g = { id, label, empty: !parts.length, rows: [] }
-      groups.set(id, g)
-    }
-    g.rows.push(row)
+const sortedTracked = computed(() => {
+  const title = (i: TrackedRow) => itemTitle(i.title, i.year, i.season_index)
+  let list = [...filteredTracked.value]
+  if (presetFilter.value) list = list.filter(i => presetLabel(i) === presetFilter.value)
+  const by: Record<TrackedSort, (a: TrackedRow, b: TrackedRow) => number> = {
+    title: (a, b) => title(a).localeCompare(title(b)),
+    preset: (a, b) => presetLabel(a).localeCompare(presetLabel(b)) || title(a).localeCompare(title(b)),
+    overlays: (a, b) => overlaysLabel(a).localeCompare(overlaysLabel(b)) || title(a).localeCompare(title(b)),
+    sent: (a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''),
   }
-  // Biggest groups first; "nothing shown" last.
-  return [...groups.values()].sort((a, b) => Number(a.empty) - Number(b.empty) || b.rows.length - a.rows.length || a.label.localeCompare(b.label))
+  return list.sort(by[trackedSort.value])
 })
-const openGroups = ref<Set<string>>(new Set())
-const groupOpen = (id: string) => openGroups.value.has(id) || trackedGroups.value.length === 1 || !!trackedSearch.value.trim()
-const toggleGroup = (id: string) => {
-  const next = new Set(openGroups.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  openGroups.value = next
-}
-watch(trackedGroupBy, () => { openGroups.value = new Set() })
 
 /** Re-render and re-send the given tracked posters now, even if nothing changed. */
 const resendItems = (items: TrackedRow[], what: string) => {
@@ -541,6 +521,10 @@ onUnmounted(() => {
           </p>
           <div class="tracked-toolbar">
             <input v-model="trackedSearch" type="text" class="text-input search-input" placeholder="Search title or overlay..." />
+            <select v-model="presetFilter" class="text-input overlay-filter">
+              <option value="">All presets</option>
+              <option v-for="p in presetOptions" :key="p.name" :value="p.name">{{ p.name }} ({{ p.count }})</option>
+            </select>
             <select v-model="overlayFilter" class="text-input overlay-filter">
               <option value="">All overlays</option>
               <option v-for="o in overlayUsage" :key="o.id" :value="o.id">
@@ -548,121 +532,65 @@ onUnmounted(() => {
               </option>
             </select>
             <button
-              v-if="overlayFilter && filteredTracked.length"
+              v-if="(overlayFilter || presetFilter) && sortedTracked.length"
               class="btn-secondary"
               :disabled="running || starting"
-              @click="resendItems(filteredTracked, `every poster with '${filterLabel}' (${filteredTracked.length})`)"
-            >Re-send these {{ filteredTracked.length }}</button>
+              @click="resendItems(sortedTracked, `the ${sortedTracked.length} poster(s) shown`)"
+            >Re-send these {{ sortedTracked.length }}</button>
             <button
-              v-if="(overlayFilter || trackedSearch.trim()) && filteredTracked.length"
+              v-if="(overlayFilter || presetFilter || trackedSearch.trim()) && sortedTracked.length"
               class="btn-link"
               :disabled="running || starting"
-              @click="removeOverlays(filteredTracked, `these ${filteredTracked.length} poster(s)`)"
-            >Remove overlays from these {{ filteredTracked.length }}</button>
+              @click="removeOverlays(sortedTracked, `these ${sortedTracked.length} poster(s)`)"
+            >Remove overlays from these {{ sortedTracked.length }}</button>
+            <span class="state-msg small">{{ sortedTracked.length }} of {{ trackedRows.length }}</span>
           </div>
-          <div class="tracked-toolbar">
-            <label class="toolbar-label">Group by
-              <select v-model="trackedGroupBy" class="text-input small-select">
-                <option value="shown">What's on the poster</option>
-                <option value="overlays">Overlays sent with</option>
-                <option value="none">Don't group</option>
-              </select>
-            </label>
-            <label class="toolbar-label">Sort
-              <select v-model="trackedSort" class="text-input small-select">
-                <option value="title">Title</option>
-                <option value="sent">Last sent</option>
-              </select>
-            </label>
-            <span class="state-msg small">{{ filteredTracked.length }} poster{{ filteredTracked.length === 1 ? '' : 's' }}<template v-if="trackedGroups.length"> in {{ trackedGroups.length }} group{{ trackedGroups.length === 1 ? '' : 's' }}</template></span>
-          </div>
-
-          <template v-if="trackedGroupBy !== 'none'">
-            <div v-for="g in trackedGroups" :key="g.id" class="tracked-group" :class="{ empty: g.empty }">
-              <div class="tracked-group-header">
-                <button type="button" class="tracked-group-toggle" @click="toggleGroup(g.id)">
-                  <span class="caret">{{ groupOpen(g.id) ? '▾' : '▸' }}</span>
-                  <span class="tracked-group-label">{{ g.label }}</span>
-                  <span class="tracked-group-count">{{ g.rows.length }}</span>
-                </button>
-                <button class="btn-link" :disabled="running || starting" title="Re-render and re-send every poster in this group"
-                  @click="resendItems(g.rows, `the ${g.rows.length} poster(s) in '${g.label}'`)">Re-send</button>
-              </div>
-              <table v-if="groupOpen(g.id)" class="result-table tracked-table">
-                <thead>
-                  <tr>
-                    <th>Item</th><th>Server</th>
-                    <th v-if="trackedGroupBy === 'shown'">Overlays</th>
-                    <th v-else>On the poster</th>
-                    <th>Sent</th><th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="item in g.rows" :key="item.key">
-                    <td>{{ itemTitle(item.title, item.year, item.season_index) }}</td>
-                    <td>{{ item.servers.join(', ') }}</td>
-                    <td v-if="trackedGroupBy === 'shown'" class="overlay-cell">
-                      <button
-                        v-for="o in item.overlays"
-                        :key="o.id"
-                        type="button"
-                        class="overlay-chip"
-                        :class="{ missing: o.missing, active: o.id === overlayFilter }"
-                        :title="o.missing ? 'This overlay was deleted' : 'Show only posters with this overlay'"
-                        @click="overlayFilter = o.id"
-                      >{{ o.name }}</button>
-                      <span v-if="!item.overlays.length">none</span>
-                    </td>
-                    <td v-else class="overlay-cell">{{ item.overlay.join(', ') || 'nothing' }}</td>
-                    <td class="date-cell">{{ formatDate(item.updated_at) }}</td>
-                    <td class="actions-cell">
-                      <button class="btn-link" :disabled="running || starting" title="Re-render and re-send this poster now"
-                        @click="resendItems([item], itemTitle(item.title, item.year, item.season_index))">Re-send</button>
-                      <button class="btn-link" :disabled="running || starting" title="Re-send this poster without overlays and stop tracking it"
-                        @click="removeOverlays([item], itemTitle(item.title, item.year, item.season_index))">Remove overlays</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </template>
-
-          <template v-else>
-            <table class="result-table">
-              <thead>
-                <tr><th>Item</th><th>Server</th><th>Overlays</th><th>On the poster</th><th>Sent</th><th></th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in sortedTracked.slice(0, trackedLimit)" :key="item.key">
-                  <td>{{ itemTitle(item.title, item.year, item.season_index) }}</td>
-                  <td>{{ item.servers.join(', ') }}</td>
-                  <td class="overlay-cell">
-                    <button
-                      v-for="o in item.overlays"
-                      :key="o.id"
-                      type="button"
-                      class="overlay-chip"
-                      :class="{ missing: o.missing, active: o.id === overlayFilter }"
-                      :title="o.missing ? 'This overlay was deleted' : 'Show only posters with this overlay'"
-                      @click="overlayFilter = o.id"
-                    >{{ o.name }}</button>
-                    <span v-if="!item.overlays.length">none</span>
-                  </td>
-                  <td class="overlay-cell">{{ item.overlay.join(', ') || 'nothing' }}</td>
-                  <td class="date-cell">{{ formatDate(item.updated_at) }}</td>
-                  <td class="actions-cell">
-                    <button class="btn-link" :disabled="running || starting" title="Re-render and re-send this poster now"
-                      @click="resendItems([item], itemTitle(item.title, item.year, item.season_index))">Re-send</button>
-                    <button class="btn-link" :disabled="running || starting" title="Re-send this poster without overlays and stop tracking it"
-                      @click="removeOverlays([item], itemTitle(item.title, item.year, item.season_index))">Remove overlays</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <button v-if="sortedTracked.length > trackedLimit" class="btn-link" @click="trackedLimit += 100">
-              Show more ({{ sortedTracked.length - trackedLimit }} left)
-            </button>
-          </template>
+          <table class="result-table tracked-table">
+            <thead>
+              <tr>
+                <th><button type="button" class="sort-btn" :class="{ active: trackedSort === 'title' }" @click="trackedSort = 'title'">Item</button></th>
+                <th><button type="button" class="sort-btn" :class="{ active: trackedSort === 'preset' }" @click="trackedSort = 'preset'">Preset</button></th>
+                <th><button type="button" class="sort-btn" :class="{ active: trackedSort === 'overlays' }" @click="trackedSort = 'overlays'">Overlays sent with</button></th>
+                <th>Server</th>
+                <th><button type="button" class="sort-btn" :class="{ active: trackedSort === 'sent' }" @click="trackedSort = 'sent'">Last sent</button></th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in sortedTracked.slice(0, trackedLimit)" :key="item.key">
+                <td :title="item.overlay.length ? 'On the poster: ' + item.overlay.join(', ') : 'Nothing drawn right now'">
+                  {{ itemTitle(item.title, item.year, item.season_index) }}
+                </td>
+                <td>
+                  <button type="button" class="preset-link" :class="{ none: !item.preset_id }" title="Show only posters sent with this preset"
+                    @click="presetFilter = presetLabel(item)">{{ presetLabel(item) }}</button>
+                </td>
+                <td class="overlay-cell">
+                  <button
+                    v-for="o in item.overlays"
+                    :key="o.id"
+                    type="button"
+                    class="overlay-chip"
+                    :class="{ missing: o.missing, active: o.id === overlayFilter }"
+                    :title="o.missing ? 'This overlay was deleted' : 'Show only posters with this overlay'"
+                    @click="overlayFilter = o.id"
+                  >{{ o.name }}</button>
+                  <span v-if="!item.overlays.length">none</span>
+                </td>
+                <td>{{ item.servers.join(', ') }}</td>
+                <td class="date-cell">{{ formatDate(item.updated_at) }}</td>
+                <td class="actions-cell">
+                  <button class="btn-link" :disabled="running || starting" title="Re-render and re-send this poster now"
+                    @click="resendItems([item], itemTitle(item.title, item.year, item.season_index))">Re-send</button>
+                  <button class="btn-link" :disabled="running || starting" title="Re-send this poster without overlays and stop tracking it"
+                    @click="removeOverlays([item], itemTitle(item.title, item.year, item.season_index))">Remove overlays</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <button v-if="sortedTracked.length > trackedLimit" class="btn-link" @click="trackedLimit += 100">
+            Show more ({{ sortedTracked.length - trackedLimit }} left)
+          </button>
           <div v-if="!filteredTracked.length" class="state-msg small">No tracked posters.</div>
         </template>
       </div>
@@ -997,15 +925,12 @@ button:disabled {
 :root[data-theme='light'] .overlay-filter { color-scheme: light; }
 .overlay-chip { display: inline-block; margin: 0 0.25rem 0.2rem 0; padding: 0.05rem 0.45rem; border-radius: 10px; border: 1px solid rgba(61, 214, 183, 0.35); background: rgba(61, 214, 183, 0.08); color: var(--accent, #3dd6b7); font-size: 0.72rem; cursor: pointer; }
 .overlay-chip.active { background: rgba(61, 214, 183, 0.25); }
-.toolbar-label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--text-secondary, #9aa4b2); }
-.small-select { width: auto; margin: 0; padding: 0.25rem 0.5rem; font-size: 0.8rem; }
-.tracked-group { border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px; margin-bottom: 0.5rem; overflow: hidden; }
-.tracked-group.empty { opacity: 0.75; }
-.tracked-group-header { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem; background: rgba(255, 255, 255, 0.03); }
-.tracked-group-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.5rem; background: none; border: none; color: inherit; cursor: pointer; text-align: left; padding: 0.15rem 0; font-size: 0.85rem; }
-.tracked-group-toggle .caret { width: 0.8rem; color: var(--text-secondary, #9aa4b2); }
-.tracked-group-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tracked-group-count { margin-left: auto; padding: 0 0.5rem; border-radius: 10px; background: rgba(61, 214, 183, 0.15); color: var(--accent, #3dd6b7); font-size: 0.75rem; flex-shrink: 0; }
+.sort-btn { background: none; border: none; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.sort-btn.active { color: var(--accent, #3dd6b7); }
+.sort-btn.active::after { content: ' ▾'; }
+.preset-link { background: none; border: none; padding: 0; color: inherit; cursor: pointer; text-align: left; font-size: inherit; }
+.preset-link:hover { color: var(--accent, #3dd6b7); }
+.preset-link.none { color: var(--text-secondary, #9aa4b2); font-style: italic; }
 .tracked-table { margin: 0; }
 .actions-cell { white-space: nowrap; }
 .overlay-chip.missing { border-style: dashed; border-color: #f87171; color: #f87171; background: transparent; }

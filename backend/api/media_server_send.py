@@ -370,7 +370,7 @@ def _upload_poster_and_verify(client, server_id: str, item_id: str, image_bytes:
                 server_id, got_len, sent_len, item_id,
             )
         else:
-            logger.info(
+            logger.debug(
                 "[MEDIA_SERVER_SEND:%s] Poster upload verified -- re-fetched %d bytes vs. %d bytes sent for item_id=%s",
                 server_id, got_len, sent_len, item_id,
             )
