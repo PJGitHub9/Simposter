@@ -91,9 +91,17 @@ def _refresh_label(group: Optional[dict]) -> str:
     return DEFAULT_LABEL if label is None else str(label).strip()
 
 
-def _summary(options: Dict[str, Any], template_id: str, facts: Optional[dict] = None) -> List[dict]:
+def _summary(options: Dict[str, Any], template_id: str, facts: Optional[dict] = None,
+             designs: Optional[dict] = None) -> List[dict]:
     from .templates.universal import overlay_summary
-    return overlay_summary(options, template_id, facts)
+    return overlay_summary(options, template_id, facts, designs)
+
+
+def _drawn_designs(summary: List[dict], designs: Dict[str, Any]) -> Dict[str, Any]:
+    """Look settings of the layers the summary draws, keyed by design hash
+    (stored with the send so a later check can say what was restyled)."""
+    wanted = {e.get("design") for e in summary}
+    return {k: v for k, v in designs.items() if k in wanted}
 
 
 def record_send(
@@ -125,7 +133,8 @@ def record_send(
             logger.debug("[OVERLAY_REFRESH] Not tracking %s: background is the server's own poster", rating_key)
             return
         facts: Dict[str, Any] = {}
-        summary = _summary(opts, template_id, facts)
+        designs: Dict[str, Any] = {}
+        summary = _summary(opts, template_id, facts, designs)
         if not summary:
             # Overlays configured but nothing applied to this item: still track
             # it, so a later change (new resolution, rating) can add one.
@@ -135,6 +144,7 @@ def record_send(
         stored_opts = {k: v for k, v in opts.items() if k != "metadata"}
         stored_opts["_base_metadata"] = {k: v for k, v in meta.items() if k not in _INJECTED_KEYS}
         stored_opts["_facts"] = facts
+        stored_opts["_designs"] = _drawn_designs(summary, designs)
         try:
             tmdb_val = int(tmdb_id) if tmdb_id not in (None, "") else (int(meta["tmdb_id"]) if meta.get("tmdb_id") else None)
         except (TypeError, ValueError):
@@ -188,6 +198,7 @@ def _fresh_options(state: Dict[str, Any]) -> Dict[str, Any]:
     opts = dict(state.get("options") or {})
     base_meta = dict(opts.pop("_base_metadata", None) or {})
     opts.pop("_facts", None)
+    opts.pop("_designs", None)
     opts["metadata"] = base_meta
     inject_plex_media_metadata(
         opts,
@@ -251,29 +262,68 @@ def _describe_facts(old: Optional[Dict[str, Any]], new: Dict[str, Any], conditio
     return "; ".join(parts)
 
 
-def _describe_change(old: List[dict], new: List[dict]) -> str:
-    def key(e: dict) -> str:
-        return f"{e.get('label')}" + (f" = {e.get('value')}" if e.get("value") else "")
+# What a changed layer setting means to a person, by key (first match wins).
+_DESIGN_WORDS = [
+    ("position", ("position_x", "position_y", "anchor", "horizontal_align", "vertical_align",
+                  "horizontal_offset", "vertical_offset", "queue", "queue_positions")),
+    ("size", ("scale", "max_width", "max_height", "font_size", "addon_scale", "width", "height")),
+    ("image", ("asset_id", "url", "image", "badge_assets", "full_cover")),
+    ("text", ("text",)),
+    ("font", ("font_family", "font_path", "font_weight", "font_style")),
+    ("outline", ("stroke_width", "stroke_color")),
+    ("background box", ("back_",)),
+    ("color", ("color", "font_color", "text_color", "opacity")),
+]
 
-    old_keys = [key(e) for e in old]
-    new_keys = [key(e) for e in new]
-    added = [k for k in new_keys if k not in old_keys]
-    removed = [k for k in old_keys if k not in new_keys]
-    parts = []
-    # Same element, different value: "Resolution: 1080 → 4k".
-    old_by_label = {e.get("label"): e.get("value") for e in old}
-    new_by_label = {e.get("label"): e.get("value") for e in new}
-    for label, value in new_by_label.items():
-        if label in old_by_label and old_by_label[label] != value:
-            parts.append(f"{label}: {old_by_label[label] or '—'} → {value or '—'}")
-            added = [k for k in added if not (k == label or k.startswith(f"{label} = "))]
-            removed = [k for k in removed if not (k == label or k.startswith(f"{label} = "))]
-    if added:
-        parts.append("added " + ", ".join(added))
-    if removed:
-        parts.append("removed " + ", ".join(removed))
+
+def _design_change_words(old: Optional[dict], new: Optional[dict]) -> List[str]:
+    """Which kinds of settings differ between two layer looks, e.g.
+    ["position", "color"]. Empty when either side is unknown."""
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return []
+    words: List[str] = []
+    for k in sorted(set(old) | set(new)):
+        if old.get(k) == new.get(k):
+            continue
+        word = "settings"
+        for name, keys in _DESIGN_WORDS:
+            if any(k == key or (key.endswith("_") and k.startswith(key)) for key in keys):
+                word = name
+                break
+        if word not in words:
+            words.append(word)
+    return words
+
+
+def _describe_change(old: List[dict], new: List[dict],
+                     old_designs: Optional[Dict[str, Any]] = None,
+                     new_designs: Optional[Dict[str, Any]] = None) -> str:
+    """What the overlays draw differently, e.g. "now shows bg_mid; no longer
+    shows bg_low; Resolution: 1080 → 4k; Trending restyled (position)"."""
+    old_designs = old_designs or {}
+    new_designs = new_designs or {}
+    old_by = {e.get("label"): e for e in old}
+    new_by = {e.get("label"): e for e in new}
+    parts: List[str] = []
+    for label, e in new_by.items():
+        before = old_by.get(label)
+        if before is None:
+            continue
+        if before.get("value") != e.get("value"):
+            parts.append(f"{label}: {before.get('value') or '—'} → {e.get('value') or '—'}")
+        elif before.get("design") != e.get("design"):
+            words = _design_change_words(old_designs.get(before.get("design")), new_designs.get(e.get("design")))
+            parts.append(f"{label} restyled" + (f" ({', '.join(words)})" if words else ""))
+    shown = [str(lbl) for lbl in new_by if lbl not in old_by]
+    gone = [str(lbl) for lbl in old_by if lbl not in new_by]
+    lead = []
+    if shown:
+        lead.append("now shows " + ", ".join(shown))
+    if gone:
+        lead.append("no longer shows " + ", ".join(gone))
+    parts = lead + parts
     if not parts:
-        parts.append("overlay design changed")
+        parts.append("layer order changed")
     return "; ".join(parts)
 
 
@@ -292,22 +342,43 @@ def check_state(state: Dict[str, Any]) -> Dict[str, Any]:
     from .templates.universal import overlay_signature
     opts = _fresh_options(state)
     facts: Dict[str, Any] = {}
-    summary = _summary(opts, state["template_id"], facts)
+    designs: Dict[str, Any] = {}
+    summary = _summary(opts, state["template_id"], facts, designs)
+    designs = _drawn_designs(summary, designs)
     sig = overlay_signature(summary)
+    stored_opts = state.get("options") or {}
     changed = sig != state.get("signature")
     reason = ""
+    if changed and "_designs" not in stored_opts and _same_layers(state.get("summary") or [], summary):
+        # Recorded before layer looks were stored (and before show-when rules
+        # were left out of the look): the same layers with the same values is
+        # treated as unchanged and the record is moved to the new form.
+        changed = False
+        try:
+            db.upsert_overlay_state({**state, "options": {**stored_opts, "_facts": facts, "_designs": designs},
+                                     "summary": summary, "signature": sig})
+            state["signature"] = sig
+        except Exception as e:
+            logger.debug("[OVERLAY_REFRESH] could not update record for %s: %s", state.get("rating_key"), e)
     if changed:
-        layers = _describe_change(state.get("summary") or [], summary)
-        cause = _describe_facts((state.get("options") or {}).get("_facts"), facts, _state_conditions(state))
-        reason = f"{cause}: {layers}" if cause else layers
+        layers = _describe_change(state.get("summary") or [], summary, stored_opts.get("_designs"), designs)
+        cause = _describe_facts(stored_opts.get("_facts"), facts, _state_conditions(state))
+        reason = f"{cause} → {layers}" if cause else layers
     return {
         "changed": changed,
         "options": opts,
         "summary": summary,
         "signature": sig,
         "facts": facts,
+        "designs": designs,
         "reason": reason,
     }
+
+
+def _same_layers(old: List[dict], new: List[dict]) -> bool:
+    def key(e: dict) -> tuple:
+        return (e.get("bucket"), e.get("label"), e.get("value"))
+    return [key(e) for e in old] == [key(e) for e in new]
 
 
 def _upload_tracked(client, server_id: str, state: Dict[str, Any], payload: bytes, content_type: str) -> str:
@@ -384,6 +455,7 @@ def refresh_state(state: Dict[str, Any], checked: Optional[Dict[str, Any]] = Non
 
     stored_opts = dict(state.get("options") or {})
     stored_opts["_facts"] = checked.get("facts") or {}
+    stored_opts["_designs"] = checked.get("designs") or {}
     db.upsert_overlay_state({
         **state,
         "options": stored_opts,
@@ -681,9 +753,14 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                     counts["unchanged"] += 1
                     # Posters tracked before the checked values were recorded:
                     # record them now, so the next change can say what changed.
-                    if "_facts" not in (state.get("options") or {}):
+                    if "_facts" not in (state.get("options") or {}) or "_designs" not in (state.get("options") or {}):
                         try:
-                            db.upsert_overlay_state({**state, "options": {**(state.get("options") or {}), "_facts": checked["facts"]}})
+                            db.upsert_overlay_state({
+                                **state,
+                                "options": {**(state.get("options") or {}), "_facts": checked["facts"], "_designs": checked["designs"]},
+                                "summary": checked["summary"],
+                                "signature": checked["signature"],
+                            })
                         except Exception as e:
                             logger.debug("[OVERLAY_REFRESH] recording checked values for %s failed: %s", title, e)
                     continue

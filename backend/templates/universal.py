@@ -1732,14 +1732,30 @@ def _element_value(element: Dict[str, Any], meta: Dict[str, Any], ctx: Dict[str,
     return ""
 
 
-def overlay_summary(options: Dict[str, Any], template_id: str, facts: Optional[dict] = None) -> list:
+# Element keys that only decide WHETHER a layer is drawn, not how it looks.
+# Left out of the design hash: whether a layer is drawn is already in the
+# summary, so a changed rule (e.g. a tool rewriting a TMDb ID list every day)
+# must not count as a new look for posters it doesn't affect.
+_SELECTION_ONLY_KEYS = {"conditions", "group", "weight", "suppress", "show_if_label", "hide_if_label", "name"}
+
+
+def element_design(el: Dict[str, Any]) -> Dict[str, Any]:
+    """The settings of an overlay element that change how it looks."""
+    return {k: v for k, v in el.items() if k not in _SELECTION_ONLY_KEYS and not str(k).startswith("_")}
+
+
+def overlay_summary(options: Dict[str, Any], template_id: str, facts: Optional[dict] = None,
+                    designs: Optional[dict] = None) -> list:
     """What the overlays would draw on this item right now: a list of
-    {bucket, label, value, design} (design = short hash of the element's own
-    settings, so editing an element also counts as a change). Uses the same
-    selection as the real render, below-logo bucket then above-logo.
+    {bucket, label, value, design} (design = short hash of the element's
+    look settings, so restyling an element also counts as a change; its
+    show-when rules are left out). Uses the same selection as the real render,
+    below-logo bucket then above-logo.
     `facts`, when given, is filled with the item's value for every field the
     overlays' conditions check (kept out of the summary/signature, so a value
-    that changes without changing the poster isn't a change)."""
+    that changes without changing the poster isn't a change).
+    `designs`, when given, is filled with {design hash: look settings}, so a
+    later check can say what was restyled."""
     import hashlib
     import json
     metadata = dict(options.get("metadata") or {})
@@ -1758,7 +1774,10 @@ def overlay_summary(options: Dict[str, Any], template_id: str, facts: Optional[d
             from .. import overlay_engine
             facts.update(overlay_engine.condition_facts(ctx.get("_condition_elements") or [], ctx))
         for el in selected:
-            design = hashlib.sha1(json.dumps(el, sort_keys=True, default=str).encode()).hexdigest()[:12]
+            look = element_design(el)
+            design = hashlib.sha1(json.dumps(look, sort_keys=True, default=str).encode()).hexdigest()[:12]
+            if designs is not None:
+                designs[design] = json.loads(json.dumps(look, default=str))
             out.append({
                 "bucket": bucket,
                 "label": _element_label(el),

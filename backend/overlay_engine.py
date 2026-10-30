@@ -761,6 +761,9 @@ def describe_failure(cond: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         notes = ctx.get("_notes") or {}
         key = "ratings" if field in _rating_field_names() else "lists" if field in _LIST_FIELDS else field
         why = notes.get(key) or notes.get("filepath" if key in ("file_path", "filename") else key)
+        if key == "lists" and not why:
+            # The lists were checked; the item just isn't on any of them.
+            return f"not on any list it checks; {needs}"
         return f"{label} is unknown{f' ({why})' if why else ''}; {needs}"
     actual = _short([PurePosixPath(str(v)).name if field in ("filepath", "file_path", "filename") else v for v in values])
     return f"{label} is {actual}; {needs}"

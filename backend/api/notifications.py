@@ -917,10 +917,30 @@ def send_overlay_refresh_notification(
     if stats.get("failed"):
         fields.append(("Failed", str(stats["failed"])))
     if updated:
-        lines = [f"{r['title']}: {'; '.join(r['reasons'])} ({', '.join(r['servers'])})" for r in updated[:5]]
-        if len(updated) > 5:
-            lines.append(f"...and {len(updated) - 5} more")
-        fields.append(("Changes", "\n".join(lines)[:1000]))
+        # One line per reason with the titles it affected, e.g.
+        # "now shows bg_mid (3): Buddy, Clayface, Drive -- Plex, Jellyfin".
+        by_reason: Dict[str, Dict[str, Any]] = {}
+        for r in updated:
+            reason = "; ".join(r["reasons"]) or "re-rendered"
+            entry = by_reason.setdefault(reason, {"titles": [], "servers": []})
+            entry["titles"].append(str(r["title"]))
+            for s in r["servers"]:
+                if s not in entry["servers"]:
+                    entry["servers"].append(s)
+        lines = []
+        for reason, entry in sorted(by_reason.items(), key=lambda kv: -len(kv[1]["titles"])):
+            titles = entry["titles"]
+            shown = ", ".join(titles[:6]) + (f" +{len(titles) - 6} more" if len(titles) > 6 else "")
+            count = f" ({len(titles)})" if len(titles) > 1 else ""
+            lines.append(f"**{reason}**{count}: {shown} — {', '.join(entry['servers'])}")
+        text = ""
+        for i, line in enumerate(lines):
+            rest = len(lines) - i
+            if len(text) + len(line) + 1 > 960:
+                text += f"...and {rest} more change{'s' if rest != 1 else ''}"
+                break
+            text += line + "\n"
+        fields.append(("Changes", text.strip()))
     if stats.get("failed"):
         description = f"Finished with {stats['failed']} failed poster(s)"
         color = 0xFFA502
@@ -973,6 +993,7 @@ def send_overlay_refresh_notification(
                 for url in other_urls:
                     ap.add(url)
                 body = description + "".join(f"\n{n}: {v}" for n, v in fields)
+                body = body.replace("**", "")
                 if len(ap) > 0 and not ap.notify(title=f"{title} — Simposter", body=body):
                     logger.warning("[APPRISE] One or more Apprise services failed (overlay refresh)")
             except Exception as e:

@@ -39,7 +39,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import logger
-from ..media_server import get_client, ImageType
+from ..media_server import get_client, get_server_label, ImageType
 from ..save_paths import save_or_cache_render
 
 router = APIRouter(prefix="/media-server", tags=["media-server"])
@@ -604,6 +604,7 @@ def sync_render_to_linked_servers(
     season_index: Optional[int] = None,
     tvdb_id: Optional[int] = None,
     source_server_id: str = "plex-1",
+    known_item_ids: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, str]]:
     """Sends already-rendered poster/logo bytes (whichever are given -- both
     are optional and independent) to whichever of `target_ids` are BOTH
@@ -669,8 +670,15 @@ def sync_render_to_linked_servers(
     "plex-1" here meant that pair could never match any group member, so
     this function silently returned [] for every batch item browsed from
     a Plex-less group's own tab, no matter how correctly everything else
-    was configured."""
-    if not tmdb_id or not target_ids:
+    was configured.
+
+    `known_item_ids`: {server_id: item id} the caller already has, e.g. the
+    batch item's own rating_key on its own server. Used as-is instead of a
+    TMDb/TVDB lookup, and that server is always allowed (it's where the item
+    came from). Without this, an item browsed under its Jellyfin copy only
+    reached Jellyfin if the TMDb lookup there succeeded."""
+    known_item_ids = {k: str(v) for k, v in (known_item_ids or {}).items() if k and v}
+    if not target_ids or (not tmdb_id and not known_item_ids):
         return []
     from ..config import get_library_group_members
     linked = get_library_group_members(source_server_id, str(library_id or ""), media_type) if library_id else None
@@ -690,6 +698,8 @@ def sync_render_to_linked_servers(
     # itself was never the risk.
     if library_id and source_server_id:
         allowed.setdefault(source_server_id, str(library_id))
+    for sid in known_item_ids:
+        allowed.setdefault(sid, None)
     requested = {t for t in target_ids if t}
     to_sync = requested & allowed.keys()
     if not to_sync:
@@ -700,17 +710,30 @@ def sync_render_to_linked_servers(
             )
         return []
 
+    skipped = sorted(requested - to_sync)
+    if skipped:
+        logger.info("[MEDIA_SERVER_SEND] Not sending [%s] to %s: not linked to library %s",
+                    title_hint, ", ".join(get_server_label(s) for s in skipped), library_id)
+
     synced: List[Dict[str, str]] = []
     for server_id in to_sync:
         client = get_client(server_id)
         if not client:
+            logger.info("[MEDIA_SERVER_SEND] Not sending [%s] to %s: that server isn't configured or is disabled",
+                        title_hint, server_id)
             continue
         try:
-            series_item_id = client.find_item_by_external_id(tmdb_id, tvdb_id, media_type, library_id=allowed.get(server_id))
-            if not series_item_id:
-                logger.debug("[MEDIA_SERVER_SEND:%s] No matching item for tmdb_id=%s [%s] -- skipping", server_id, tmdb_id, title_hint)
-                continue
-            item_id = _resolve_season_item_id(client, series_item_id, season_index, title_hint)
+            if server_id in known_item_ids:
+                # The caller's own item on this server: already the right item
+                # (for a season, the season itself), no lookup needed.
+                item_id = known_item_ids[server_id]
+            else:
+                series_item_id = client.find_item_by_external_id(tmdb_id, tvdb_id, media_type, library_id=allowed.get(server_id)) if tmdb_id or tvdb_id else None
+                if not series_item_id:
+                    logger.info("[MEDIA_SERVER_SEND:%s] Not sending [%s]: no item with TMDb %s%s in its linked library",
+                                server_id, title_hint, tmdb_id, f" / TVDB {tvdb_id}" if tvdb_id else "")
+                    continue
+                item_id = _resolve_season_item_id(client, series_item_id, season_index, title_hint)
             if not item_id:
                 # Series resolved fine, but this specific season didn't --
                 # skip this server for this sync rather than falling back to

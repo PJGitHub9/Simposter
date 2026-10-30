@@ -710,6 +710,7 @@ def _process_single_movie(
                     logo_bytes=logo_bytes_for_sync, logo_content_type=logo_ct_for_sync,
                     title_hint=title_hint,
                     source_server_id=getattr(req, 'source_server_id', None) or "plex-1",
+                    known_item_ids={item_source_server_id: rating_key} if not is_plex_item and item_source_server_id else None,
                 )
                 if synced:
                     logger.info("[BATCH] Synced to linked server(s) %s for %s [%s]", [s["server_id"] for s in synced], rating_key, title_hint)
@@ -1838,7 +1839,8 @@ def _render_and_save_poster(
     # _render_all_tv_seasons()) pass server_id_hint explicitly instead of relying
     # on that lookup, matching the established server_id_hint pattern already used
     # by fetch_and_cache_poster()/_resolve_non_plex_client() (Quirk #90).
-    is_plex_item = (server_id_hint or db.get_server_id_for_rating_key(rating_key)) == "plex-1"
+    item_server_id = server_id_hint or db.get_server_id_for_rating_key(rating_key)
+    is_plex_item = item_server_id == "plex-1"
     # Create a combined display title for history (e.g., "Show Name - Season 1" for TV seasons)
     display_title = f"{title} - {season_title}" if season_title else title
 
@@ -2106,6 +2108,7 @@ def _render_and_save_poster(
                 season_index=season_index,
                 tvdb_id=tvdb_id,
                 source_server_id=getattr(req, 'source_server_id', None) or "plex-1",
+                known_item_ids={item_server_id: rating_key} if not is_plex_item and item_server_id else None,
             )
             if synced:
                 logger.info("[BATCH] Synced to linked server(s) %s for %s", [s["server_id"] for s in synced], display_title)

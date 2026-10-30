@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.8.25 (2026-10-30) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Tracked posters grouped** — Overlay Refresh's tracked list is grouped by what's on the poster (default), by overlays sent with, or not at all, with title/last-sent sorting and a Re-send per group (remembered in `localStorage`).
+- **Clearer refresh reasons** — `_describe_change()` writes "now shows X; no longer shows Y; Resolution: 1080 → 4k; X restyled (position, color)" (changed setting keys mapped to words), joined to the data cause with " → ". The summary notification groups titles by reason.
+- **Render log** — `describe_failure()` says "not on any list it checks" instead of "List is unknown" when lists loaded and the item isn't on one.
+- **Dependencies** — fastapi 0.143.0 (its one breaking change, opt-in OpenTelemetry setup, doesn't affect Simposter) and numpy 2.5.4 (Dependabot #78/#77).
+
+### Bug Fixes
+- **Changed show-when rules re-rendered unchanged posters** — the per-layer design hash in `overlay_summary()` covered the whole element, including `conditions`, so a rewritten TMDb ID list (e.g. UMTK's daily live-file rewrite) marked every poster drawing that layer as changed. `element_design()` now leaves out selection-only keys; the look settings are stored as `options["_designs"]`. Existing records with the same layers are moved to the new form without a re-render.
+- **Batch Edit didn't send to Jellyfin for items shown under their Jellyfin copy** — `sync_render_to_linked_servers()` looked the item up by TMDb id even when the batch item was already the Jellyfin item, and a failed lookup was only logged at debug. New `known_item_ids` sends to the item's own server without a lookup; every skipped target is logged at INFO with the reason.
+
 ## v1.8.24 (2026-10-29) — `webui-overhaul-dev` branch
 
 ### Bug Fixes

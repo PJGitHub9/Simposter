@@ -10,6 +10,29 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.25',
+    date: '2026-10-30',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay Refresh: tracked posters are grouped by what’s on the poster (or by the overlays they were sent with), with sorting by title or last sent and a Re-send button per group, instead of one long list.',
+          'Overlay Refresh says what changed: "now shows Trending", "no longer shows bg_low", "Resolution: 1080 → 4k" or "Trending restyled (position, color)", with the reason (e.g. "now on list Trending") first.',
+          'The Overlay Refresh notification lists each change once with the titles it affected, so every updated poster fits instead of five plus "and 11 more".',
+          'The overlay render log says "not on any list it checks" instead of "List is unknown" when the lists were checked and the item isn’t on one.',
+          'Updated fastapi to 0.143.0 and numpy to 2.5.4.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Editing a layer’s "Show when" rules, for example UMTK rewriting a live Kometa file’s TMDb ID lists every day, no longer re-renders posters that look the same. Only settings that change how a layer looks count.',
+          'Batch Edit with Plex and Jellyfin ticked now sends to Jellyfin for items shown under their Jellyfin copy (before, only Plex got them). When a ticked server is skipped, the log now says why.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.24',
     date: '2026-10-29',
     sections: [
