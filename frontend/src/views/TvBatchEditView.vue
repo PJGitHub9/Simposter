@@ -6,6 +6,7 @@ import { compareTitles } from '@/services/sortTitle'
 import { useNotification } from '@/composables/useNotification'
 import { useTvShows } from '../composables/useTvShows'
 import { useSettingsStore } from '@/stores/settings'
+import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
 
 
 type TvShow = {
@@ -49,7 +50,7 @@ type PosterStatus = {
 type BatchResult = {
   rating_key: string
   title: string
-  status: 'ok' | 'error'
+  status: 'ok' | 'error' | 'cancelled'
   error?: string
   poster_fallback?: boolean
   logo_fallback?: boolean
@@ -63,11 +64,16 @@ const BATCH_RESULTS_KEY = 'simposter-batch-results-tv'
 const batchResults = ref<BatchResult[]>([])
 const showBatchResults = ref(false)
 const batchResultsShowFailed = ref(true)
+const batchResultsShowCancelled = ref(false)
 const batchResultsShowFallback = ref(false)
 const batchResultsTimestamp = ref<number | null>(null)
 
 const batchFailed = computed(() => batchResults.value.filter(r => r.status === 'error'))
 const batchSucceeded = computed(() => batchResults.value.filter(r => r.status === 'ok'))
+// A "cancelled" result only ever comes from the batch being stopped mid-run --
+// distinct from a real failure, so it gets its own bucket rather than
+// silently disappearing from every count.
+const batchCancelled = computed(() => batchResults.value.filter(r => r.status === 'cancelled'))
 const batchPosterFallback = computed(() => batchResults.value.filter(r => r.status === 'ok' && r.poster_fallback))
 const batchLogoFallback = computed(() => batchResults.value.filter(r => r.status === 'ok' && r.logo_fallback))
 
@@ -130,6 +136,8 @@ const currentSeasonIndex = ref<number>(0)
 // Get current library from route query params
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || '')
+// Phase 8a -- see App.vue's resolveLibraryTarget() for where this comes from.
+const currentServer = computed(() => (route.query.server as string) || '')
 
 // Label cache (library-specific)
 const getLabelsCacheKey = () => {
@@ -186,16 +194,19 @@ watch(currentLibrary, async (newLib, oldLib) => {
   posterStatus.value = {}
   tvShowsLoadedFlag.value = false
   labelsToRemove.value = new Set()
-  
+  selectedTargets.value = new Set()
+
   // Clear any stale data from previous library to prevent contamination
   if (oldLib && typeof sessionStorage !== 'undefined') {
     const oldLabelKey = `simposter-labels-cache-${oldLib}`
     const oldPosterKey = `simposter-poster-cache-${oldLib}`
     // Don't remove from sessionStorage, but clear from memory
   }
-  
+
   // Load caches for new library only if we have a valid library ID
   if (newLib) {
+    await libraryGroupPref.load(newLib)
+    applySendDefaultsFromPreference()
     await fetchMovies()
     // Use efficient bulk cache loading first
     await fetchAllAvailableLabels() // Fetch all labels for library first
@@ -216,6 +227,60 @@ const selectedPreset = ref('')
 const sendToPlex = ref(true)
 const saveLocally = ref(false)
 const sendLogos = ref(false)
+// Multi-server send targets (Quirk #95's follow-up, Batch Edit punch-list item 1) --
+// covers both series and season posters (Quirk #100 added real season-level
+// Jellyfin/Emby resolution; sync_render_to_linked_servers() resolves each
+// season on every linked server via find_season_by_index()). See
+// BatchEditView.vue's identical block for the full design note.
+const libraryGroupPref = useLibraryGroupPreference('tv')
+const selectedTargets = ref<Set<string>>(new Set())
+// Excludes both 'plex-1' and '' -- the latter is the "All" filter pseudo-option
+// useLibraryGroupPreference adds to `options` when a group has merging turned
+// off (Quirk #121); it's a display-filter choice, never a real, sendable
+// server, so it must never leak into this send-target checkbox list.
+const otherServerOptions = computed(() => libraryGroupPref.options.value.filter(o => o.id !== 'plex-1' && o.id !== ''))
+const hasAnySendTarget = computed(() => sendToPlex.value || selectedTargets.value.size > 0)
+// Which server's poster/identity the grid displays (Quirk #85's exact pattern,
+// reused from MoviesView.vue/BatchEditView.vue) -- re-fetches so merged items
+// resolve under the newly-preferred server's rating_key/poster.
+async function onPreferredServerChange(serverId: string) {
+  if (!currentLibrary.value) return
+  const ok = await libraryGroupPref.setPreferred(currentLibrary.value, serverId)
+  // forceRefresh=true -- see the identical note in BatchEditView.vue's version.
+  if (ok) await fetchMovies(true)
+}
+// The "Send to:" defaults were always sendToPlex=true / selectedTargets={} regardless
+// of which server the currently selected/visible items actually live on -- fine for
+// every pre-Jellyfin install, but a real, silent no-op for any batch whose items
+// aren't Plex-sourced. A first pass at this (Quirk #107) tried deriving the default
+// from the "Show posters from" preference (libraryGroupPref.preferredServerId) --
+// wrong, because that preference only controls which row WINS the display when an
+// item exists on BOTH servers; it says nothing about which server(s) the items
+// actually being batch-processed live on. A Jellyfin-only show (no Plex counterpart
+// at all -- the exact, reported, real-world case) still displays regardless of the
+// preference's value, so deriving from it still left the "Plex" checkbox on and
+// nothing else checked -- the identical silent no-op this was meant to fix.
+//
+// The correct default: check EVERY destination that could possibly apply -- Plex
+// plus every linked server -- and let the render pipeline's own already-established
+// per-item safety nets sort out what's actually deliverable: Quirk #106 makes a
+// checked-but-inapplicable "Send to: Plex" a harmless per-item skip (not an error),
+// and sync_render_to_linked_servers() (Quirk #95/#96) already only syncs to a
+// server a given item's tmdb_id actually resolves on, silently skipping the rest.
+// Checking everything by default costs nothing extra for an item that only lives on
+// one server, and is the only way to guarantee a mixed-source batch (some items
+// Plex, some Jellyfin, some both) actually delivers everywhere it can without the
+// user having to know in advance which item lives where.
+function applySendDefaultsFromPreference() {
+  sendToPlex.value = true
+  selectedTargets.value = new Set(otherServerOptions.value.map(o => o.id))
+}
+const toggleTarget = (serverId: string) => {
+  const next = new Set(selectedTargets.value)
+  if (next.has(serverId)) next.delete(serverId)
+  else next.add(serverId)
+  selectedTargets.value = next
+}
 const sentFilter = ref<'all' | 'sent' | 'unsent'>('all')
 const savedFilter = ref<'all' | 'saved' | 'unsaved'>('all')
 const labelsToRemove = ref<Set<string>>(new Set())
@@ -381,14 +446,6 @@ const filteredPresets = computed(() => {
   return presets.value.filter(p => p.template_id === selectedTemplate.value)
 })
 
-const templateNameMap = computed(() => {
-  const map: Record<string, string> = {}
-  templates.value.forEach(t => {
-    map[t.id] = t.name || t.id
-  })
-  return map
-})
-
 const presetNameMap = computed(() => {
   const map: Record<string, string> = {}
   presets.value.forEach(p => {
@@ -396,11 +453,6 @@ const presetNameMap = computed(() => {
   })
   return map
 })
-
-const getTemplateName = (id?: string | null) => {
-  if (!id) return '—'
-  return templateNameMap.value[id] || id
-}
 
 const getPresetName = (id?: string | null) => {
   if (!id) return '—'
@@ -417,9 +469,7 @@ const formatDate = (value?: string | null) => {
 const getTemplatePresetText = (movieKey: string) => {
   const status = posterStatus.value[movieKey]
   const source = status?.sent || status?.saved
-  const tpl = getTemplateName(source?.template_id)
-  const pre = getPresetName(source?.preset_id)
-  return `${tpl}/${pre}`
+  return getPresetName(source?.preset_id)
 }
 
 const getSentText = (movieKey: string) => {
@@ -455,12 +505,15 @@ const getSavedTooltip = (movieKey: string) => {
   return saved?.created_at ? `Saved on ${formatDateTime(saved.created_at)}` : 'Not saved'
 }
 
-const fetchMovies = async () => {
+const fetchMovies = async (forceRefresh = false) => {
   loading.value = true
   error.value = null
   try {
-    if (!tvShowsLoadedFlag.value) {
-      const res = await fetch(`${apiBase}/api/tv-shows${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`)
+    if (!tvShowsLoadedFlag.value || forceRefresh) {
+      const tvParams = new URLSearchParams()
+      if (currentLibrary.value) tvParams.set('library_id', currentLibrary.value)
+      if (currentServer.value) tvParams.set('server_id', currentServer.value)
+      const res = await fetch(`${apiBase}/api/tv-shows${tvParams.toString() ? '?' + tvParams.toString() : ''}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const data = (await res.json()) as TvShow[]
       tvShowsCache.value = data
@@ -484,10 +537,17 @@ const fetchPosters = async () => {
   const results = await Promise.all(
     missing.map(async m => {
       try {
-        const posterUrl = `${apiBase}/api/tv-show/${m.key}/poster${currentLibrary.value ? `?library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
-        const res = await fetch(posterUrl)
+        // meta=1 -- see the identical, fuller comment in BatchEditView.vue's
+        // own fetchPosters() (Quirk #114): the bare unversioned form used
+        // here previously returned the exact same immutable-cached URL
+        // regardless of content, so the browser kept serving the pre-batch
+        // poster until a hard refresh cleared its own HTTP cache.
+        const metaUrl = `${apiBase}/api/tv-show/${m.key}/poster?meta=1${currentLibrary.value ? `&library_id=${encodeURIComponent(currentLibrary.value)}` : ''}`
+        const res = await fetch(metaUrl)
         if (res.ok) {
-          return { key: m.key, url: posterUrl }
+          const data = await res.json()
+          const url = data.url ? (data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`) : null
+          return { key: m.key, url }
         }
         return { key: m.key, url: null }
       } catch {
@@ -715,8 +775,8 @@ const processBatch = async () => {
     return
   }
 
-  if (!sendToPlex.value && !saveLocally.value) {
-    showError('Please select at least one action (Send to Plex or Save locally)')
+  if (!sendToPlex.value && !saveLocally.value && selectedTargets.value.size === 0) {
+    showError('Please select at least one action (Send to Plex, save locally, or a linked server)')
     return
   }
 
@@ -756,6 +816,8 @@ const processBatch = async () => {
       send_logos_to_plex: sendToPlex.value && sendLogos.value,
       labels: sendToPlex.value ? Array.from(labelsToRemove.value) : [],
       library_id: currentLibrary.value || undefined,
+      targets: Array.from(selectedTargets.value),
+      source_server_id: currentServer.value || undefined,
       include_series: includeSeries.value,
       include_seasons: includeSeasons.value,
       // Include fallback settings so batch endpoint can handle template fallbacks
@@ -780,7 +842,11 @@ const processBatch = async () => {
     }
 
     const data = await response.json()
-    batchResults.value = data.results || []
+    // TV batch results come back with `show_title`, not `title` (matching
+    // every _process_single_tv_show() result shape server-side) -- normalize
+    // here so the Failed/Stopped lists below show the real show name instead
+    // of "Unknown" for every single TV item.
+    batchResults.value = (data.results || []).map((r: any) => ({ ...r, title: r.title || r.show_title || '' }))
     batchResultsTimestamp.value = Date.now()
     showBatchResults.value = true
     batchResultsShowFailed.value = true
@@ -1455,10 +1521,12 @@ onMounted(async () => {
   if (currentLibrary.value) {
     // Load templates/presets first
     await loadTemplatesAndPresets()
-    
+    await libraryGroupPref.load(currentLibrary.value)
+    applySendDefaultsFromPreference()
+
     // Then fetch fresh data
     await fetchMovies()
-    
+
     // Try to load labels from backend cache first (much faster for bulk)
     await fetchLabelsFromCache()
     
@@ -1504,14 +1572,34 @@ onMounted(async () => {
 
       <!-- Actions -->
       <div class="actions-row">
-        <div class="checkboxes">
+        <!-- "Send to:" -- Plex and any linked Jellyfin/Emby server render as peer
+             checkboxes in one row, covering both series and season posters (see
+             the note next to selectedTargets' declaration). See
+             BatchEditView.vue's identical block for the full design note. -->
+        <div class="send-targets-group">
+          <span class="targets-label">Send to:</span>
           <label class="checkbox-label">
             <input type="checkbox" v-model="sendToPlex" />
-            Send to Plex
+            Plex
           </label>
-          <label class="checkbox-label" :class="{ 'disabled-label': !sendToPlex }">
-            <input type="checkbox" v-model="sendLogos" :disabled="!sendToPlex" />
-            Send logos to Plex
+          <label
+            v-for="opt in otherServerOptions"
+            :key="opt.id"
+            class="checkbox-label"
+          >
+            <input
+              type="checkbox"
+              :checked="selectedTargets.has(opt.id)"
+              @change="toggleTarget(opt.id)"
+            />
+            {{ opt.label }}
+          </label>
+        </div>
+
+        <div class="checkboxes">
+          <label class="checkbox-label" :class="{ 'disabled-label': !hasAnySendTarget }">
+            <input type="checkbox" v-model="sendLogos" :disabled="!hasAnySendTarget" />
+            Send logos
           </label>
           <label class="checkbox-label">
             <input type="checkbox" v-model="saveLocally" />
@@ -1549,7 +1637,7 @@ onMounted(async () => {
         <button
           class="btn-process"
           @click="processBatch"
-          :disabled="selectedShows.size === 0 || !selectedTemplate || !selectedPreset || (!sendToPlex && !saveLocally) || processing"
+          :disabled="selectedShows.size === 0 || !selectedTemplate || !selectedPreset || (!sendToPlex && !saveLocally && selectedTargets.size === 0) || processing"
         >
           <span v-if="!processing">Process {{ selectedShows.size }} TV Shows</span>
           <span v-else>Processing {{ currentIndex }} / {{ selectedShows.size }}...</span>
@@ -1582,6 +1670,10 @@ onMounted(async () => {
           <span class="stat-num">{{ batchFailed.length }}</span>
           <span class="stat-label">Failed</span>
         </div>
+        <div class="summary-stat cancelled" v-if="batchCancelled.length">
+          <span class="stat-num">{{ batchCancelled.length }}</span>
+          <span class="stat-label">Stopped</span>
+        </div>
         <div class="summary-stat fallback" v-if="batchPosterFallback.length">
           <span class="stat-num">{{ batchPosterFallback.length }}</span>
           <span class="stat-label">Poster Fallback</span>
@@ -1602,6 +1694,20 @@ onMounted(async () => {
           <div v-for="item in batchFailed" :key="item.rating_key" class="result-item result-error">
             <span class="result-title">{{ item.title || 'Unknown' }}</span>
             <span class="result-reason">{{ shortError(item.error || '', item.rating_key) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stopped items (only ever populated when the batch was cancelled mid-run) -->
+      <div v-if="batchCancelled.length" class="results-section">
+        <button class="section-toggle" @click="batchResultsShowCancelled = !batchResultsShowCancelled">
+          <span class="toggle-icon">{{ batchResultsShowCancelled ? '▾' : '▸' }}</span>
+          Stopped ({{ batchCancelled.length }})
+        </button>
+        <div v-if="batchResultsShowCancelled" class="results-list">
+          <div v-for="item in batchCancelled" :key="item.rating_key" class="result-item result-cancelled">
+            <span class="result-title">{{ item.title || 'Unknown' }}</span>
+            <span class="result-reason">Skipped -- batch was stopped before this item started</span>
           </div>
         </div>
       </div>
@@ -1666,6 +1772,21 @@ onMounted(async () => {
             <option value="saved">Saved</option>
             <option value="unsaved">Not Saved</option>
           </select>
+          <!-- Only shown once this library is actually linked to another
+               server via a Library Group (Quirk #62/#64) -- see the identical
+               control in BatchEditView.vue. -->
+          <div v-if="libraryGroupPref.hasChoice.value" class="server-view-control">
+            <label for="server-view-select">Show posters from:</label>
+            <select
+              id="server-view-select"
+              :value="libraryGroupPref.preferredServerId.value"
+              class="filter-select"
+              :disabled="libraryGroupPref.saving.value"
+              @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+            </select>
+          </div>
         </div>
         <input
           v-model="searchQuery"
@@ -1722,7 +1843,7 @@ onMounted(async () => {
               <p class="title">{{ movie.title }}</p>
               <p class="year">{{ movie.year }}</p>
               <div class="status-row">
-                <span class="pill pill-template" :title="`Template/Preset: ${getTemplatePresetText(movie.key)}`">
+                <span class="pill pill-template" :title="`Preset: ${getTemplatePresetText(movie.key)}`">
                   {{ getTemplatePresetText(movie.key) }}
                 </span>
                 <span
@@ -1922,6 +2043,7 @@ onMounted(async () => {
 }
 .summary-stat.ok    { background: rgba(61, 214, 183, 0.12); border: 1px solid rgba(61, 214, 183, 0.3); }
 .summary-stat.error { background: rgba(239, 68, 68, 0.12);  border: 1px solid rgba(239, 68, 68, 0.3); }
+.summary-stat.cancelled { background: rgba(148, 163, 184, 0.1); border: 1px solid rgba(148, 163, 184, 0.3); }
 .summary-stat.fallback { background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); }
 
 .stat-num {
@@ -1931,6 +2053,7 @@ onMounted(async () => {
 }
 .summary-stat.ok .stat-num     { color: #3dd6b7; }
 .summary-stat.error .stat-num  { color: #ef4444; }
+.summary-stat.cancelled .stat-num { color: #94a3b8; }
 .summary-stat.fallback .stat-num { color: #fbbf24; }
 
 .stat-label {
@@ -1979,6 +2102,7 @@ onMounted(async () => {
   font-size: 13px;
 }
 .result-error   { background: rgba(239, 68, 68, 0.08); }
+.result-cancelled { background: rgba(148, 163, 184, 0.08); }
 .result-fallback { background: rgba(251, 191, 36, 0.07); }
 
 .result-title {
@@ -1992,6 +2116,7 @@ onMounted(async () => {
   max-width: 280px;
 }
 .result-error .result-title   { color: #fca5a5; }
+.result-cancelled .result-title { color: #cbd5e1; }
 .result-fallback .result-title { color: #fde68a; }
 
 .result-reason {
@@ -2175,6 +2300,19 @@ onMounted(async () => {
 }
 
 .sort-control label {
+  color: var(--text-secondary, #aaa);
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.server-view-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.server-view-control label {
   color: var(--text-secondary, #aaa);
   font-size: 0.9rem;
   font-weight: 500;
@@ -2592,6 +2730,25 @@ onMounted(async () => {
   border-radius: 6px;
   border: 1px solid var(--border, #2a2f3e);
   flex: 1;
+}
+
+.send-targets-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  row-gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-alt, #242933);
+  border-radius: 6px;
+  border: 1px solid var(--border, #2a2f3e);
+  border-left: 3px solid var(--accent, #3dd6b7);
+}
+
+.targets-label {
+  color: var(--text-primary, #fff);
+  font-weight: 500;
+  font-size: 0.9rem;
 }
 
 .label-selector-title {

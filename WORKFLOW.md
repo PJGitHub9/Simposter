@@ -101,6 +101,20 @@ This isn't a trigger in the same sense as the four above — it's a follow-up pa
 
 ---
 
+## Multiple Media Servers (Plex / Jellyfin / Emby)
+
+Library groups link the same library across servers. Every flow above works per group:
+
+- **Browsing**: the grid unions the group's libraries and merges the same title (TMDb/TVDB id; collections by name or a manual match) into one card.
+- **Sending**: the poster is rendered once, then uploaded to each chosen server, finding the item's copy on each by its external id.
+- **Webhooks**: a `group` URL looks the item up across the group's libraries (Plex first when present), then delivers to every member.
+- **Scans/auto-generate**: Jellyfin/Emby scans also detect new items and auto-generate posters for them; titles that Plex also has are handled from the Plex side.
+- **Media Mirror**: copies artwork from a source server to the group's other servers, skipping images that haven't changed.
+
+See [docs/MEDIA_SERVERS.md](docs/MEDIA_SERVERS.md) for the user-facing guide.
+
+---
+
 ## Collections & the Kometa Template
 
 Collections have no TMDb/TVDB entry of their own, so they skip the metadata-lookup and Plex-media-info steps every other item goes through. Two things distinguish their pipeline:
@@ -114,7 +128,7 @@ See [COLLECTIONS_AND_POSTERS.md](docs/COLLECTIONS_AND_POSTERS.md) for the two cr
 
 ## How Overlays Get Applied
 
-Overlays are the badge system (resolution, studio, streaming platform, etc.). They run **after** the base poster is composed, for the Uniform Logo template only — Kometa/collection posters have no badge metadata to apply.
+Overlays are badges, images and text drawn into the poster (resolution, studio, streaming platform, ratings, imported Kometa overlays, ...). They apply to the Uniform Logo template only — Kometa/collection posters have no badge metadata to apply. The user guide is [docs/OVERLAYS.md](docs/OVERLAYS.md).
 
 ```
 Base poster render (matte + fade + vignette + logo)
@@ -124,23 +138,35 @@ Overlay pass (universal.py)
 
 **Step by step in `backend/templates/universal.py`:**
 
-1. **Load overlay config(s)** — reads from DB using `overlay_config_ids` (and `overlay_config_ids_below`, for elements placed under the logo/text instead of over it) from the preset
+1. **Load overlay config(s)** — reads from DB using `overlay_config_ids` (and `overlay_config_ids_below`, for overlays placed under the logo/text instead of over it) from the preset
 
-2. **Pre-pass** (resolves dynamic fields before the element loop):
+2. **Data and selection** (`_prepare_overlays()`, using `backend/overlay_engine.py`):
+   - `needed_data()` works out which extra data the rules and `{text}` values use; `build_context()` loads only that: file paths from the scan cache, TMDb/TVDB ids, MDBList ratings and lists, days since added, TMDb show status
+   - Overlays whose whole-overlay conditions fail are dropped
+   - `select_elements()` applies each layer's conditions (plus the legacy `show_if_label`/`hide_if_label`), badge sets (`group` + `weight`, first match wins) and hide rules (`suppress`)
+   - One log block per render lists the data, the layers drawn and why the others were skipped
+
+3. **Pre-pass** (resolves dynamic fields before the element loop):
    - If any element is `studio_badge` + `tmdb_id` available → calls `get_studio_name()` + `get_studio_company_id()` → injects `metadata["studio"]` / `metadata["studio_company_id"]`
    - If any element is `streaming_platform_badge` → calls `get_watch_providers(tmdb_id, media_type, region)` → picks highest-priority `flatrate` provider → injects `metadata["streaming_platform"]`
 
-3. **Element loop** — for each element in the config:
-   - Check `show_if_label` / `hide_if_label` against Plex labels → skip if condition not met
+4. **Element loop** — for each selected element:
    - Get the metadata value for this element type (e.g. `metadata["video_resolution"]` → `"4k"`)
    - Look up `badge_modes[value]` — what should happen for this specific value?
      - `"none"` → skip, render nothing
      - `"text"` → draw text directly onto poster with configured font/color/size
      - `"image"` → composite a user-uploaded PNG from the `overlay_assets` DB table
      - `"asset"` → call `get_asset_url(slug, company_id)` → fetch PNG from the simposter-assets GitHub repo → composite it
-   - Position the badge at `(position_x * poster_width, position_y * poster_height)`
+   - Position the badge at `(position_x * poster_width, position_y * poster_height)`, or with Kometa placement (align + offsets in a 1000x1500 space, optional back box and outline)
+   - Text layers get their `{values}` filled; a layer with a missing value is skipped
 
-4. **Overlay cache** — the base template effects (matte/fade/top-matte/top-fade/vignette layers) are cached as a PNG per template/preset. On cache hit, the base render is skipped and only the dynamic parts (logo, badges) are recomposed. This is what gives batch mode its 3-5x speedup over the manual editor's uncached render.
+5. **Overlay cache** — the base template effects (matte/fade/top-matte/top-fade/vignette layers) are cached as a PNG per preset and effect settings (`config/overlays/{template}/{preset}--{signature}.png`, built at startup and on preset save). On cache hit, the base render is skipped and only the dynamic parts (logo, badges) are recomposed. This is what gives batch mode its 3-5x speedup over the manual editor's uncached render.
+
+---
+
+## Overlay Refresh
+
+Every poster sent with overlays is recorded (`overlay_state`: template, preset, source art URLs, options and an overlay signature). Overlay Refresh (per library group, manual or on a schedule) rebuilds the item's data, recomputes the signature, and re-renders and re-uploads only the posters whose overlay would now come out differently, from the same source art. Live Kometa files (`backend/live_kometa.py`) can start a refresh when a watched overlay file changes.
 
 ---
 

@@ -4,6 +4,7 @@ import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useSettingsStore } from '@/stores/settings'
 import { copyToClipboard } from '@/services/clipboard'
+import PresetShareModal from '@/components/PresetShareModal.vue'
 
 type Preset = {
   id: string
@@ -248,24 +249,111 @@ const savePresetFallback = async () => {
   }
 }
 
-const stripId = (preset: Preset) => {
-  const { id: _id, ...rest } = preset
-  return rest
+// Selected presets are exported by the backend so the overlay configs they use
+// (and those configs' badge images) come along under "_overlays".
+const handleExportSelected = async () => {
+  const keys = [...selectedPresets.value]
+    .map((key) => {
+      const [template_id, preset_id] = key.split('::')
+      return { template_id, preset_id }
+    })
+    .filter((k) => k.template_id && k.preset_id)
+  if (keys.length === 0) { handleExportAll(); return }
+  exporting.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/presets/export-selected`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys })
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}`)
+    importText.value = JSON.stringify(await res.json(), null, 2)
+    showImportExport.value = true
+  } catch (e) {
+    showError(e instanceof Error ? e.message : 'Export failed')
+  } finally {
+    exporting.value = false
+  }
 }
 
-const handleExportSelected = () => {
-  const map: TemplatePresets = {}
-  selectedPresets.value.forEach((key) => {
-    const [tpl, pid] = key.split('::')
-    if (!tpl || !pid) return
-    const preset = presets.value[tpl]?.presets.find((p) => p.id === pid)
-    if (!preset) return
-    if (!map[tpl]) map[tpl] = { presets: [] }
-    map[tpl].presets.push(stripId(preset) as Preset)
-  })
-  if (Object.keys(map).length === 0) { handleExportAll(); return }
-  importText.value = JSON.stringify(map, null, 2)
-  showImportExport.value = true
+// How many overlay configs/images the JSON currently in the box carries.
+const importOverlayInfo = computed(() => {
+  if (!importText.value.trim()) return ''
+  try {
+    const d = JSON.parse(importText.value)
+    const o = d && d._overlays
+    if (!o) return ''
+    const c = (o.configs || []).length
+    const a = (o.assets || []).length
+    return `Includes ${c} overlay${c === 1 ? '' : 's'} and ${a} overlay image${a === 1 ? '' : 's'}.`
+  } catch {
+    return ''
+  }
+})
+
+const downloadImportText = () => {
+  if (!importText.value.trim()) return
+  const blob = new Blob([importText.value], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `simposter-presets-${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Share dialog (one preset, or the selected ones)
+const shareTarget = ref<{ keys: Array<{ template_id: string; preset_id: string }>; title: string } | null>(null)
+const openShare = (templateId: string, preset: Preset) => {
+  shareTarget.value = { keys: [{ template_id: templateId, preset_id: preset.id }], title: `"${preset.name || preset.id}"` }
+}
+const openShareSelected = () => {
+  const keys = [...selectedPresets.value]
+    .map((key) => {
+      const [template_id = '', preset_id = ''] = key.split('::')
+      return { template_id, preset_id }
+    })
+    .filter((k) => k.template_id && k.preset_id)
+  if (keys.length) shareTarget.value = { keys, title: `${keys.length} preset${keys.length === 1 ? '' : 's'}` }
+}
+
+const presetFileInput = ref<HTMLInputElement | null>(null)
+const onPresetFile = async (e: Event) => {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  // A shared .zip (preset + overlay images/fonts) is imported straight away.
+  if (file.name.toLowerCase().endsWith('.zip')) {
+    importing.value = true
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch(`${apiBase}/api/presets/import-file`, { method: 'POST', body: form })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.detail || `API error ${res.status}`)
+      await fetchPresets()
+      const extras = []
+      if (data.overlay_configs) extras.push(`${data.overlay_configs} overlay${data.overlay_configs === 1 ? '' : 's'}`)
+      if (data.fonts_saved) extras.push(`${data.fonts_saved} font${data.fonts_saved === 1 ? '' : 's'}`)
+      showSuccess(extras.length ? `Presets imported, with ${extras.join(' and ')}` : 'Presets imported')
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      importing.value = false
+      input.value = ''
+    }
+    return
+  }
+  try {
+    const text = await file.text()
+    JSON.parse(text)
+    importText.value = text
+    showImportExport.value = true
+  } catch {
+    showError('Could not read this file as JSON')
+  } finally {
+    input.value = ''
+  }
 }
 
 const toggleSelected = (tplId: string, presetId: string) => {
@@ -391,8 +479,11 @@ const handleImport = async () => {
       body: JSON.stringify(json)
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
+    const data = await res.json().catch(() => ({}))
     importText.value = ''
     await fetchPresets()
+    const n = data?.overlay_configs || 0
+    showSuccess(n ? `Presets imported, with ${n} overlay${n === 1 ? '' : 's'}` : 'Presets imported')
   } catch (e) {
     showError(e instanceof Error ? e.message : 'Invalid JSON')
   } finally {
@@ -513,22 +604,50 @@ const clearSelectedPreviewMovie = () => {
   previewError.value = ''
 }
 
+// Kometa presets are collection templates -- they have no photo background
+// (a flat color/texture canvas from the preset's own options), so previewing
+// one over a random movie poster was misleading. Sample a collection's title
+// for {title} text instead; the logo is the preset's own saved one, if any.
+const collectionTitles = ref<string[]>([])
+const fetchCollectionTitles = async () => {
+  if (collectionTitles.value.length) return
+  try {
+    const res = await fetch(`${apiBase}/api/collections`)
+    if (res.ok) {
+      const data = await res.json()
+      collectionTitles.value = Array.isArray(data) ? data.map((c: { title?: string }) => c.title || '').filter(Boolean) : []
+    }
+  } catch { /* ignore -- falls back to a generic title */ }
+}
+
 const previewPreset = async (templateId: string, preset: Preset) => {
-  const movie = resolvePreviewMovie()
-  if (!movie) { previewError.value = 'No movies available to preview'; return }
+  const isKometa = templateId === 'kometa'
+  let movie: { key: string; title: string } | null
+  if (isKometa) {
+    await fetchCollectionTitles()
+    const titles = collectionTitles.value
+    const title = titles.length ? titles[Math.floor(Math.random() * titles.length)] || 'Sample Collection' : 'Sample Collection'
+    movie = { key: '', title }
+  } else {
+    movie = resolvePreviewMovie()
+    if (!movie) { previewError.value = 'No movies available to preview'; return }
+  }
   previewMovie.value = movie
   previewTemplate.value = { templateId, presetName: preset.name || preset.id }
   previewUrl.value = ''
   previewLoading.value = true
   previewError.value = ''
+  const kometaLogo = isKometa && typeof preset.options?.kometa_logo_url === 'string' && preset.options.kometa_logo_url
+    ? (preset.options.kometa_logo_url.startsWith('/') ? `${apiBase}${preset.options.kometa_logo_url}` : preset.options.kometa_logo_url)
+    : null
   try {
     const res = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         template_id: templateId,
-        background_url: `${apiBase}/api/movie/${movie.key}/poster`,
-        logo_url: null,
+        background_url: isKometa ? '' : `${apiBase}/api/movie/${movie.key}/poster`,
+        logo_url: kometaLogo,
         options: preset.options || {},
         preset_id: preset.id,
         movie_title: movie.title,
@@ -646,6 +765,9 @@ onMounted(async () => {
           <div class="section-header">
             <h3>Presets</h3>
             <div class="actions">
+              <button v-if="selectedPresets.size > 0" class="secondary tiny" @click="openShareSelected" title="Download the selected presets as a file, with their overlays if you like">
+                Share {{ selectedPresets.size }} selected
+              </button>
               <button class="secondary tiny" @click="handleExportSelected" :disabled="exporting">
                 {{ exporting ? 'Exporting…' : selectedPresets.size > 0 ? `Export ${selectedPresets.size} selected` : 'Export all' }}
               </button>
@@ -720,6 +842,9 @@ onMounted(async () => {
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                       </button>
                       <button class="icon-btn" @click.stop="openFallbackModal(templateId, preset)" title="Fallback rules">⚙</button>
+                      <button class="icon-btn" @click.stop="openShare(String(templateId), preset)" title="Share as a file">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                      </button>
                       <button
                         class="icon-btn"
                         @click.stop="duplicatePreset(templateId, preset)"
@@ -827,7 +952,7 @@ onMounted(async () => {
           <button class="section-toggle" @click="showImportExport = !showImportExport">
             <div class="toggle-left">
               <h3>Import / Export</h3>
-              <span class="help">Backup or transfer presets as JSON</span>
+              <span class="help">Backup or transfer presets as JSON (overlays and their images included). To share one preset, use its share button; Open file also takes a shared .zip.</span>
             </div>
             <svg class="acc-chevron" :class="{ open: showImportExport }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="6 9 12 15 18 9" />
@@ -840,11 +965,15 @@ onMounted(async () => {
               rows="8"
               class="import-box"
             ></textarea>
+            <p v-if="importOverlayInfo" class="help overlay-info">{{ importOverlayInfo }}</p>
             <div class="actions" style="justify-content:flex-start;">
               <button class="primary" @click="handleImport" :disabled="importing || !importText.trim()">
                 {{ importing ? 'Importing…' : 'Import JSON' }}
               </button>
               <button class="secondary" @click="importText = ''" :disabled="!importText.trim()">Clear</button>
+              <button class="secondary" @click="downloadImportText" :disabled="!importText.trim()" title="Save the JSON in the box as a file">Download file</button>
+              <button class="secondary" @click="presetFileInput?.click()" title="Load a preset .json into the box, or import a shared .zip">Open file…</button>
+              <input ref="presetFileInput" type="file" accept=".json,application/json,.zip,application/zip" style="display: none" @change="onPresetFile" />
               <button class="secondary" @click="handleCopyCompact" :disabled="copyingCompact" title="Strip defaults and copy minified JSON to clipboard for sharing">
                 {{ copyingCompact ? 'Copying…' : 'Copy compact' }}
               </button>
@@ -1012,6 +1141,7 @@ onMounted(async () => {
       </div>
     </div>
   </div>
+  <PresetShareModal v-if="shareTarget" :keys="shareTarget.keys" :title="shareTarget.title" @close="shareTarget = null" />
 </template>
 
 <style scoped>
@@ -1109,6 +1239,7 @@ onMounted(async () => {
   font-size: 0.85rem;
 }
 .help.small { display: block; font-size: 0.8rem; margin-top: 4px; }
+.help.overlay-info { display: block; margin: 6px 0 0; color: #3dd6b7; }
 
 .grid {
   display: grid;

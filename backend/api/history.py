@@ -250,3 +250,107 @@ def api_apply_retry_settings(enabled: bool = Query(...), interval_hours: float =
         cancel_poster_retry()
     return {"status": "ok"}
 
+
+
+# ============================================================================
+# Posters changed outside Simposter (backend/poster_drift.py)
+# ============================================================================
+
+class PosterDriftConfigRequest(BaseModel):
+    action: str
+
+
+def _current_poster_path(server_id: str, rating_key: str, is_tv: bool):
+    """The poster the last scan downloaded for this item (no server call)."""
+    try:
+        if is_tv and server_id != "plex-1":
+            from .tv_shows import fetch_and_cache_tv_poster
+            path = fetch_and_cache_tv_poster(rating_key)
+            if path:
+                return path
+        from .movies import fetch_and_cache_poster
+        return fetch_and_cache_poster(rating_key)
+    except Exception:
+        return None
+
+
+@router.get("/poster-drift")
+def api_get_poster_drift():
+    from .. import poster_drift
+    return {
+        "action": poster_drift.get_action(),
+        "actions": list(poster_drift.ACTIONS),
+        "tracked": poster_drift.tracked_count(),
+        "items": poster_drift.list_drifted(),
+    }
+
+
+@router.post("/poster-drift/config")
+def api_set_poster_drift_config(req: PosterDriftConfigRequest):
+    from .. import poster_drift
+    try:
+        return {"action": poster_drift.set_action(req.action)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+def _drift_asset(asset: Optional[str]) -> str:
+    from .. import poster_drift
+    asset = (asset or "poster").lower()
+    if asset not in poster_drift.ASSET_TYPES:
+        raise HTTPException(400, f"asset must be one of {', '.join(poster_drift.ASSET_TYPES)}")
+    return asset
+
+
+def _current_art_path(asset: str, server_id: str, rating_key: str, is_tv: bool):
+    """The poster/logo/backdrop the last scan downloaded (no server call)."""
+    if asset == "poster":
+        return _current_poster_path(server_id, rating_key, is_tv)
+    try:
+        from .movies import _logo_cache_path, _art_cache_path
+        return (_logo_cache_path if asset == "logo" else _art_cache_path)(rating_key)
+    except Exception:
+        return None
+
+
+@router.get("/poster-drift/keys")
+def api_poster_drift_keys():
+    """Items currently marked as changed outside Simposter, for grid badges."""
+    from .. import poster_drift
+    return {"items": poster_drift.drifted_keys()}
+
+
+@router.get("/poster-drift/{server_id}/{rating_key}/sent")
+def api_poster_drift_sent_copy(server_id: str, rating_key: str, asset: str = "logo"):
+    """The logo/backdrop Simposter last sent to this item (posters: use the
+    resend cache preview instead)."""
+    from .. import poster_drift
+    asset = _drift_asset(asset)
+    if asset == "poster":
+        raise HTTPException(400, "Posters use /api/render-cache/{rating_key}/preview")
+    path = poster_drift.sent_copy_path(server_id, rating_key, asset)
+    if not path.exists():
+        raise HTTPException(404, "No saved copy")
+    data = path.read_bytes()
+    media_type = "image/png" if data[1:4] == b"PNG" else "image/jpeg"
+    return FileResponse(str(path), media_type=media_type, headers={"Cache-Control": "no-cache"})
+
+
+@router.post("/poster-drift/{server_id}/{rating_key}/resend")
+def api_poster_drift_resend(server_id: str, rating_key: str, asset: str = "poster"):
+    """Put Simposter's last poster/logo/backdrop back on the server."""
+    from .. import poster_drift
+    asset = _drift_asset(asset)
+    if not poster_drift.resend(server_id, rating_key, asset):
+        raise HTTPException(502, f"Couldn't re-send: no saved {asset} for this item, or the upload failed (see the log).")
+    return {"status": "ok"}
+
+
+@router.post("/poster-drift/{server_id}/{rating_key}/dismiss")
+def api_poster_drift_dismiss(server_id: str, rating_key: str, asset: str = "poster"):
+    """Keep the server's version and stop reporting it."""
+    from .. import poster_drift
+    asset = _drift_asset(asset)
+    path = _current_art_path(asset, server_id, rating_key, poster_drift._is_tv(rating_key))
+    poster_drift.dismiss(server_id, rating_key, path, asset)
+    return {"status": "ok"}

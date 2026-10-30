@@ -2,6 +2,12 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { APP_VERSION } from '@/version'
 import { getApiBase } from '@/services/apiBase'
+import { useSettingsStore } from '@/stores/settings'
+// Aliased to avoid colliding with this file's own local `mediaServerLabel`
+// function below (a different signature, for the /api/media-server/status
+// per-server badges) -- see CLAUDE.md Quirk #79 on why a same-named local
+// binding silently shadows an import in <script setup>.
+import { mediaServerLabel as sharedMediaServerLabel } from '@/services/mediaServerLabel'
 
 type Movie = { key: string; title: string; year?: number | string; poster?: string | null; mediaType?: 'movie' | 'tv-show' }
 type GroupedMovies = { libraryName: string; mediaType?: string; movies: Movie[] }[]
@@ -19,6 +25,10 @@ interface VersionInfo {
   update_available: boolean
   latest_version: string | null
   update_url: string | null
+  /** active | merged | retired | missing | unknown (from GitHub, see backend/api/version_info.py) */
+  branch_status?: string
+  branch_move_to?: string | null
+  branch_message?: string | null
 }
 
 const MAINTAINED_TAGS = ['latest', 'webui-overhaul-dev']
@@ -58,12 +68,84 @@ const checkPlexStatus = async () => {
   }
 }
 
+const settingsStore = useSettingsStore()
+// Honors a custom name set on the primary Plex entry (Quirk #81's Name field),
+// same as every other place a server gets labeled -- previously hardcoded
+// "Plex" here regardless of what was configured.
+const plexServerLabel = computed(() => sharedMediaServerLabel('plex-1', settingsStore.mediaServers.value))
+
 const plexStatusTitle = computed(() => {
   if (plexStatus.value === 'up') return 'Plex server is online'
   if (plexStatus.value === 'down') return 'Plex server is unreachable — check that it\'s running and PLEX_URL is correct'
   if (plexStatus.value === 'unconfigured') return 'Plex URL not configured yet'
   return 'Checking Plex server status...'
 })
+
+// Per-server badges for any configured Jellyfin/Emby servers, alongside the
+// existing Plex badge above. Stays an empty array (renders nothing) for any
+// install with no non-Plex server configured -- purely additive.
+interface MediaServerStatus {
+  server_id: string
+  type: string
+  name?: string | null
+  status: 'up' | 'down'
+}
+const mediaServerStatuses = ref<MediaServerStatus[]>([])
+
+const checkMediaServerStatus = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/media-server/status`)
+    if (res.ok) {
+      const data = await res.json()
+      mediaServerStatuses.value = data.servers || []
+    }
+  } catch {
+    // Leave the last-known statuses in place on a transient fetch failure,
+    // matching checkPlexStatus's own "down" fallback intent but without
+    // flashing every badge to down on a single missed poll.
+  }
+}
+
+const mediaServerLabel = (s: MediaServerStatus) => {
+  if (s.name && s.name.trim()) return s.name.trim()
+  return s.type === 'jellyfin' ? 'Jellyfin' : s.type === 'emby' ? 'Emby' : s.type
+}
+
+const mediaServerTitle = (s: MediaServerStatus) => {
+  const label = mediaServerLabel(s)
+  return s.status === 'up' ? `${label} server is online` : `${label} server is unreachable`
+}
+
+// One unified list (Plex first, then every other configured server) rendered
+// through a SINGLE template loop below -- previously Plex had its own
+// hand-written <div> and the others came from a separate v-for over
+// mediaServerStatuses, two independently-maintained blocks of markup that
+// could (and did -- user-reported: "the status pills arent the same")
+// silently drift apart from each other over time. One shared shape/loop
+// makes that structurally impossible instead of relying on remembering to
+// keep two copies in sync.
+interface ServerStatusEntry {
+  key: string
+  label: string
+  status: PlexStatus | MediaServerStatus['status']
+  title: string
+}
+const allServerStatuses = computed<ServerStatusEntry[]>(() => [
+  // 'unconfigured' means Plex was never set up at all (a genuinely Jellyfin/
+  // Emby-only install, Phase 8a) -- not the same as 'down' (configured but
+  // currently unreachable, which SHOULD still show a red pill). Omitting the
+  // whole entry for 'unconfigured' avoids showing a permanent, meaningless
+  // "Plex" pill for a server the user never set up in the first place.
+  ...(plexStatus.value === 'unconfigured' ? [] : [
+    { key: 'plex-1', label: plexServerLabel.value, status: plexStatus.value, title: plexStatusTitle.value },
+  ]),
+  ...mediaServerStatuses.value.map(s => ({
+    key: s.server_id,
+    label: mediaServerLabel(s),
+    status: s.status,
+    title: mediaServerTitle(s),
+  })),
+])
 
 const normalizePoster = (url: string | null | undefined) => {
   if (!url) return null
@@ -164,10 +246,31 @@ const displayVersion = computed(() => {
 })
 
 const versionTitle = computed(() => {
-  if (versionInfo.value?.update_available) {
-    return `Update available: ${versionInfo.value.latest_version}\nClick to view changelog`
+  const v = versionInfo.value
+  if (v?.update_available) {
+    const where = v.branch ? ` on ${v.branch}` : ''
+    const how = v.docker_tag ? `Pull the "${v.docker_tag}" image to update.` : 'Pull the latest code to update.'
+    return `Update available${where}: ${v.latest_version}\n${how}\nClick to view changelog`
   }
   return 'View changelog'
+})
+
+/** The running branch was merged, retired or deleted on GitHub: say where to go instead. */
+const branchNotice = computed(() => {
+  const v = versionInfo.value
+  if (!v || !['merged', 'retired', 'missing'].includes(v.branch_status || '')) return null
+  const target = v.branch_move_to || 'main'
+  const why = v.branch_status === 'merged'
+    ? `"${v.branch}" has been merged into "${target}".`
+    : v.branch_status === 'retired'
+      ? `"${v.branch}" is no longer maintained.`
+      : `"${v.branch}" no longer exists on GitHub.`
+  const latest = v.latest_version ? ` "${target}" is at ${v.latest_version}.` : ''
+  return {
+    label: `Move to ${target}`,
+    url: v.update_url || '',
+    title: `${why}${v.branch_message ? ' ' + v.branch_message : ''}${latest}\nSwitch to "${target}" to keep getting updates.`,
+  }
 })
 
 const isUnsupportedTag = computed(() => {
@@ -183,11 +286,13 @@ const unsupportedTagTitle = computed(() => {
 
 let posterCacheInterval: number | null = null
 let plexStatusInterval: number | null = null
+let mediaServerStatusInterval: number | null = null
 
 onMounted(() => {
   loadPosterCache()
   fetchVersionInfo()
   checkPlexStatus()
+  checkMediaServerStatus()
   // Watch for changes to the poster cache in sessionStorage every 500ms
   posterCacheInterval = window.setInterval(() => {
     loadPosterCache()
@@ -195,6 +300,9 @@ onMounted(() => {
   // Poll Plex reachability every 30s so a downed server shows up quickly
   plexStatusInterval = window.setInterval(() => {
     checkPlexStatus()
+  }, 30000)
+  mediaServerStatusInterval = window.setInterval(() => {
+    checkMediaServerStatus()
   }, 30000)
 })
 
@@ -204,6 +312,9 @@ onUnmounted(() => {
   }
   if (plexStatusInterval !== null) {
     clearInterval(plexStatusInterval)
+  }
+  if (mediaServerStatusInterval !== null) {
+    clearInterval(mediaServerStatusInterval)
   }
 })
 
@@ -274,9 +385,23 @@ onUnmounted(() => {
           {{ displayVersion }}
           <span v-if="versionInfo?.update_available" class="update-dot"></span>
         </button>
-        <div class="plex-status-badge" :class="plexStatus" :title="plexStatusTitle">
+        <a
+          v-if="branchNotice"
+          class="branch-notice-badge"
+          :href="branchNotice.url || undefined"
+          target="_blank"
+          rel="noopener"
+          :title="branchNotice.title"
+        >↪ {{ branchNotice.label }}</a>
+        <div
+          v-for="s in allServerStatuses"
+          :key="s.key"
+          class="plex-status-badge"
+          :class="s.status"
+          :title="s.title"
+        >
           <span class="plex-status-dot"></span>
-          <span class="plex-status-label">Plex</span>
+          <span class="plex-status-label">{{ s.label }}</span>
         </div>
       </div>
     </div>
@@ -412,6 +537,22 @@ onUnmounted(() => {
   0%, 100% { border-color: rgba(239, 68, 68, 0.45); }
   50% { border-color: rgba(239, 68, 68, 0.85); }
 }
+
+.branch-notice-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.branch-notice-badge:hover { background: rgba(251, 191, 36, 0.25); color: #f59e0b; }
 
 .version-badge {
   font-size: 12px;

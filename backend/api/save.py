@@ -46,7 +46,7 @@ def get_output_format_settings() -> dict:
 _PLEX_UPLOAD_SIZE_LIMIT = 9_500_000
 
 
-def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
+def encode_poster_for_plex(img: Image.Image, for_plex: bool = True) -> Tuple[bytes, str]:
     """Encode a freshly-rendered poster for upload to Plex's /posters endpoint.
 
     PNG (lossless) by default, regardless of the user's local save format
@@ -67,7 +67,11 @@ def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
     falls back to a high-quality JPEG, which reliably stays well under the limit
     (this is the one genuinely lossy step, unchanged from before, and unaffected
     by any of this — it's Plex's ~10MB upload cap that forces it, not the PNG
-    encode being fast or slow)."""
+    encode being fast or slow).
+
+    `for_plex=False` (a Jellyfin/Emby-only upload) only changes the log line
+    below: the size cap is Plex's, so the JPEG fallback is logged quietly
+    there. The encoded bytes are identical either way."""
     from .. import database as db
 
     jpg_quality = 95
@@ -93,10 +97,13 @@ def encode_poster_for_plex(img: Image.Image) -> Tuple[bytes, str]:
     if len(png_bytes_slow) <= _PLEX_UPLOAD_SIZE_LIMIT:
         return png_bytes_slow, "image/png"
 
-    logger.warning(
-        "[PLEX] Rendered PNG (%.1fMB even at max compression) exceeds Plex's upload size limit, falling back to JPEG",
-        len(png_bytes_slow) / 1_000_000,
-    )
+    if for_plex:
+        logger.warning(
+            "[PLEX] Rendered PNG (%.1fMB even at max compression) exceeds Plex's upload size limit, falling back to JPEG",
+            len(png_bytes_slow) / 1_000_000,
+        )
+    else:
+        logger.debug("[ENCODE] PNG is %.1fMB at max compression, using JPEG", len(png_bytes_slow) / 1_000_000)
     buf2 = BytesIO()
     rgb.save(buf2, "JPEG", quality=max(jpg_quality, 98), subsampling=0)
     return buf2.getvalue(), "image/jpeg"
@@ -124,7 +131,7 @@ def normalize_logo_for_plex(logo_bytes: bytes, fallback_content_type: str = "ima
         return logo_bytes, fallback_content_type
 
 
-def normalize_backdrop_for_plex(backdrop_bytes: bytes, fallback_content_type: str = "image/jpeg") -> Tuple[bytes, str]:
+def normalize_backdrop_for_plex(backdrop_bytes: bytes, fallback_content_type: str = "image/jpeg", for_plex: bool = True) -> Tuple[bytes, str]:
     """Normalize backdrop bytes through PIL before upload to Plex's /art endpoint.
 
     Unlike a logo (small, transparent), a backdrop is an opaque photographic image
@@ -134,7 +141,7 @@ def normalize_backdrop_for_plex(backdrop_bytes: bytes, fallback_content_type: st
     always-PNG approach, which would be the wrong tradeoff here."""
     try:
         img = Image.open(BytesIO(backdrop_bytes)).convert("RGB")
-        return encode_poster_for_plex(img)
+        return encode_poster_for_plex(img, for_plex=for_plex)
     except Exception as e:
         logger.warning("[PLEX] Failed to normalize backdrop image, uploading raw bytes instead: %s", e)
         return backdrop_bytes, fallback_content_type
@@ -210,33 +217,18 @@ def api_save(req: SaveRequest):
     if req.preset_id:
         render_options["preset_id"] = req.preset_id
 
-    # Inject Plex media metadata for overlay badge rendering
+    # Inject Plex media metadata (resolution/codec/audio/edition) plus
+    # tmdb_id/media_type for studio/streaming-platform badges. is_tv is passed
+    # straight from the request (already known) instead of re-fetching and
+    # re-parsing metadata just to re-derive it, which this call site used to do.
     if req.rating_key:
         try:
-            from ..config import get_plex_media_info, extract_tmdb_id_from_metadata
-            import requests as _requests
-            import xml.etree.ElementTree as ET
-            plex_media = get_plex_media_info(req.rating_key)
-            if plex_media:
-                existing_meta = render_options.get("metadata") or {}
-                render_options["metadata"] = {**existing_meta, **plex_media}
-                logger.info("[SAVE] Injected media info for rating_key=%s: %s", req.rating_key, plex_media)
-
-            # Also inject tmdb_id + media_type for studio/streaming platform badge resolution
-            from ..config import settings as _cfg, plex_headers
-            meta_resp = _requests.get(
-                f"{_cfg.PLEX_URL}/library/metadata/{req.rating_key}",
-                headers=plex_headers(), timeout=5
+            from ..config import inject_plex_media_metadata
+            inject_plex_media_metadata(
+                render_options, req.rating_key,
+                is_tv=req.is_tv,
+                log_prefix="[SAVE] ",
             )
-            if meta_resp.ok:
-                tmdb_id = extract_tmdb_id_from_metadata(meta_resp.text)
-                if tmdb_id:
-                    root = ET.fromstring(meta_resp.text)
-                    is_tv = root.find('.//Directory') is not None
-                    render_options.setdefault("metadata", {})
-                    render_options["metadata"]["tmdb_id"] = tmdb_id
-                    render_options["metadata"]["media_type"] = "tv" if is_tv else "movie"
-                    logger.info("[SAVE] Injected tmdb_id=%s media_type=%s for studio/streaming badge resolution", tmdb_id, render_options["metadata"]["media_type"])
         except Exception as e:
             logger.debug("[SAVE] Failed to inject media info: %s", e)
 

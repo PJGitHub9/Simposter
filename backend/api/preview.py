@@ -62,9 +62,9 @@ def api_preview(req: PreviewRequest):
         ui_settings_data = db.get_ui_settings()
         if ui_settings_data:
             use_overlay_cache = ui_settings_data.get("performance", {}).get("useOverlayCache", True)
-            logger.info(f"[PREVIEW] Global overlay cache setting: {use_overlay_cache}")
+            logger.debug(f"[PREVIEW] Global overlay cache setting: {use_overlay_cache}")
         else:
-            logger.info("[PREVIEW] No UI settings found, using default: overlay cache enabled")
+            logger.debug("[PREVIEW] No UI settings found, using default: overlay cache enabled")
 
         # Load white logo fallback setting
         white_logo_fallback = db.get_setting("fallback.white_logo_fallback") or "use_next"
@@ -101,9 +101,9 @@ def api_preview(req: PreviewRequest):
         template_id = req.template_id
 
         if req.preset_id:
-            logger.info("[PREVIEW] Loading preset '%s' for template '%s'", req.preset_id, template_id)
-            logger.info("[PREVIEW] Incoming request options keys: %s", list(render_options.keys()))
-            logger.info("[PREVIEW] season_text in request: %s", render_options.get("season_text"))
+            logger.debug("[PREVIEW] Loading preset '%s' for template '%s'", req.preset_id, template_id)
+            logger.debug("[PREVIEW] Incoming request options keys: %s", list(render_options.keys()))
+            logger.debug("[PREVIEW] season_text in request: %s", render_options.get("season_text"))
             presets = load_presets()
 
             if template_id in presets:
@@ -126,19 +126,19 @@ def api_preview(req: PreviewRequest):
                     if is_season and isinstance(preset.get("season_options"), dict):
                         preset_options = db.resolve_season_options(preset.get("options", {}), preset.get("season_options", {}))
                         logger.info("[PREVIEW] Using season_options for preset '%s' (season_text='%s')", req.preset_id, st)
-                        logger.info("[PREVIEW] season_options from DB: text_overlay_enabled=%s custom_text=%s logo_mode=%s", 
+                        logger.debug("[PREVIEW] season_options from DB: text_overlay_enabled=%s custom_text=%s logo_mode=%s", 
                                     preset_options.get("text_overlay_enabled"), 
                                     preset_options.get("custom_text"), 
                                     preset_options.get("logo_mode"))
                     else:
                         preset_options = preset.get("options", {})
-                        logger.info("[PREVIEW] Using regular options for preset '%s' (is_season=%s)", req.preset_id, is_season)
+                        logger.debug("[PREVIEW] Using regular options for preset '%s' (is_season=%s)", req.preset_id, is_season)
                     
                     # Remove deprecated disableOverlayCache flag from preset options
                     # (overlay cache now respects global settings)
                     if "disableOverlayCache" in preset_options:
                         del preset_options["disableOverlayCache"]
-                        logger.info("[PREVIEW] Removed deprecated disableOverlayCache flag from preset '%s'", req.preset_id)
+                        logger.debug("[PREVIEW] Removed deprecated disableOverlayCache flag from preset '%s'", req.preset_id)
                     
                     # Merge preset options (request options take precedence so sliders work)
                     render_options = {**preset_options, **render_options}
@@ -146,7 +146,7 @@ def api_preview(req: PreviewRequest):
                     logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or preset_options.get("logo_preference") or preset_options.get("logo_mode") or "first"
                     logo_preference = map_logo_mode_to_preference(logo_preference)
                     logger.debug("[PREVIEW] Applied preset '%s' options (is_season=%s): %s", req.preset_id, is_season, preset_options)
-                    logger.info("[PREVIEW] Effective opts: text_overlay_enabled=%s custom_text=%s logo_mode=%s", render_options.get("text_overlay_enabled"), render_options.get("custom_text"), render_options.get("logo_mode"))
+                    logger.debug("[PREVIEW] Effective opts: text_overlay_enabled=%s custom_text=%s logo_mode=%s", render_options.get("text_overlay_enabled"), render_options.get("custom_text"), render_options.get("logo_mode"))
                     logo_override = render_options.get("logo_url") or render_options.get("logoUrl")
                     if logo_override:
                         logo_url = logo_override
@@ -184,9 +184,9 @@ def api_preview(req: PreviewRequest):
         
         if disable_overlay_cache is True:  # Explicitly True, not just falsy
             use_overlay_cache = False
-            logger.info(f"[PREVIEW] Overlay cache disabled via preset/request flag (disableOverlayCache={disable_overlay_cache})")
+            logger.debug(f"[PREVIEW] Overlay cache disabled via preset/request flag (disableOverlayCache={disable_overlay_cache})")
         else:
-            logger.info(f"[PREVIEW] Using global overlay cache setting: {use_overlay_cache}")
+            logger.debug(f"[PREVIEW] Using global overlay cache setting: {use_overlay_cache}")
 
         # If background_url contains a rating key pattern, try TMDB lookup
         background_url = req.background_url
@@ -196,7 +196,14 @@ def api_preview(req: PreviewRequest):
 
         # Check if this is a Plex URL or API URL - if so, extract rating key and fetch from TMDB
         rating_key = None
-        is_tv_show = False
+        # Trust an explicit is_tv when the caller sent one (render.ts's
+        # preview() now does, matching save()/send()) -- the background_url
+        # pattern-sniffing below is a real but fragile fallback: it silently
+        # guesses wrong whenever the background is a raw external TMDb/
+        # Fanart/TVDB URL rather than Simposter's own /api/tv-show/.../poster
+        # cache URL, which is exactly what picking a specific candidate
+        # poster looks like. See PreviewRequest.is_tv's own docstring.
+        is_tv_show = bool(req.is_tv) if req.is_tv is not None else False
         tmdb_id = None
         if background_url:
             if "/library/metadata/" in background_url and "/thumb" in background_url:
@@ -219,7 +226,7 @@ def api_preview(req: PreviewRequest):
         # Fallback: use rating_key from request body (sent by frontend for media info lookup)
         if req.rating_key and not rating_key:
             rating_key = req.rating_key
-            logger.info("[PREVIEW] Using rating_key from request body: %s", rating_key)
+            logger.debug("[PREVIEW] Using rating_key from request body: %s", rating_key)
 
         # Best-effort display title for log readability — a cheap local DB cache lookup
         # (movie_cache/tv_cache from the last library scan, or poster_history as a last
@@ -235,14 +242,43 @@ def api_preview(req: PreviewRequest):
                 display_title = None
         _dt = f" [{display_title}]" if display_title else ""
 
-        logger.info("[PREVIEW] Detected rating_key=%s%s is_tv_show=%s", rating_key, _dt, is_tv_show)
+        logger.info("[PREVIEW] %s: %s, preset '%s' (key %s)", "TV show" if is_tv_show else "Movie",
+                    display_title or "unknown title", req.preset_id or "none", rating_key)
 
         if rating_key and not is_tv_show:
             try:
                 logger.debug("[PREVIEW] Detected rating_key=%s%s from URL", rating_key, _dt)
 
-                # Get TMDB ID
-                tmdb_id = get_movie_tmdb_id(rating_key)
+                # Get TMDB ID -- server-aware: get_movie_tmdb_id() is Plex-only
+                # (a direct /library/metadata/{rating_key} fetch), which always
+                # 404s for a Jellyfin/Emby item id, since that id was never a
+                # real Plex rating_key to begin with. This endpoint independently
+                # re-derives tmdb_id rather than trusting a client-supplied one,
+                # so it needs the same fix Quirk #90 already applied to
+                # api_movie_tmdb() -- reuse the tmdb_id already cached from the
+                # last scan instead of a doomed live Plex fetch. Without this,
+                # every preview for a Jellyfin-sourced item silently fell all the
+                # way through to the "no tmdb_id found, use whatever poster the
+                # server currently has" fallback below -- which for a
+                # Simposter-managed item is already-composited output, not raw
+                # source art (the exact class of bug Quirk #43 already fixed for
+                # Square Art, recurring here via a different code path).
+                if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+                    tmdb_id, _ = db.get_ids_for_rating_key(rating_key)
+                    if tmdb_id:
+                        logger.debug("[PREVIEW] Resolved tmdb_id=%s for non-Plex rating_key=%s%s from DB cache", tmdb_id, rating_key, _dt)
+                else:
+                    # Also prefer the cached tmdb_id over a live fetch for a
+                    # genuine Plex item, same as batch.py's own fix -- the
+                    # scan already resolves and caches tmdb_id for Plex items
+                    # too (Quirk #120), so re-fetching it live on every single
+                    # preview is both slow (a real Plex round-trip/timeout per
+                    # click) and, when Plex happens to be unreachable, fails
+                    # outright -- even for a preview that has nothing to do
+                    # with Plex being reachable right now. Only falls through
+                    # to the live fetch when nothing's cached yet.
+                    cached_tmdb_id, _ = db.get_ids_for_rating_key(rating_key)
+                    tmdb_id = cached_tmdb_id or get_movie_tmdb_id(rating_key)
                 if tmdb_id:
                     logger.debug("[PREVIEW] Found tmdb_id=%s for rating_key=%s%s", tmdb_id, rating_key, _dt)
 
@@ -313,7 +349,7 @@ def api_preview(req: PreviewRequest):
                         else:
                             raise HTTPException(status_code=404, detail="No valid poster found (even after fallback).")
                     else:
-                        logger.info("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
+                        logger.debug("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
 
                     # Pick logo based on preference (only if logo_mode is not 'none')
                     logo_mode = render_options.get("logo_mode", "first")
@@ -380,8 +416,16 @@ def api_preview(req: PreviewRequest):
                         logger.debug("[PREVIEW] Skipping logo fetch because logo_mode='none'")
                 else:
                     logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s%s, trying Plex poster", rating_key, _dt)
-                    # Fallback: Try Plex poster directly
-                    if not background_url:
+                    # Fallback: Try Plex poster directly. Also treated as
+                    # "not yet resolved" when background_url is still the
+                    # frontend's own internal marker URL (/api/movie/.../poster)
+                    # -- a bare `not background_url` check never fires here for
+                    # Batch Edit's preview panel, which always sends that
+                    # marker URL non-empty, so this fallback silently never ran
+                    # and the marker URL itself got treated as a literal image
+                    # source downstream (a confusing self-referential 404,
+                    # not a real Plex/TMDb failure).
+                    if not background_url or "/api/movie/" in background_url or "/api/tv-show/" in background_url:
                         try:
                             from ..config import settings as config_settings
                             plex_base = config_settings.PLEX_URL.rstrip('/')
@@ -392,8 +436,10 @@ def api_preview(req: PreviewRequest):
                             logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
                 logger.warning("[PREVIEW] TMDB lookup failed: %s", e)
-                # Fallback: try to fetch poster directly from Plex
-                if not background_url and rating_key:
+                # Fallback: try to fetch poster directly from Plex -- same
+                # marker-URL-aware check as above, still requiring rating_key
+                # (matching the original condition's own requirement).
+                if rating_key and (not background_url or "/api/movie/" in background_url or "/api/tv-show/" in background_url):
                     try:
                         from ..config import settings as config_settings
                         plex_base = config_settings.PLEX_URL.rstrip('/')
@@ -414,13 +460,29 @@ def api_preview(req: PreviewRequest):
 
                 logger.debug("[PREVIEW] Detected TV show rating_key=%s%s season_index=%s from URL", rating_key, _dt, req.season_index)
 
-                # Fetch TV show metadata from Plex
-                url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
-                r = plex_session.get(url, headers=plex_headers(), timeout=6)
-                r.raise_for_status()
+                # Fetch TV show metadata -- server-aware, matching the identical
+                # movie-branch fix above (and Quirk #90's api_tv_show_tmdb()):
+                # the Plex XML fetch below always 404s for a Jellyfin/Emby item
+                # id, so use the tmdb_id/tvdb_id already cached from the last
+                # scan for a non-Plex item instead.
+                if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+                    tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+                    if tmdb_id or tvdb_id:
+                        logger.debug("[PREVIEW] Resolved tmdb_id=%s tvdb_id=%s for non-Plex TV rating_key=%s%s from DB cache", tmdb_id, tvdb_id, rating_key, _dt)
+                else:
+                    # Also prefer the cached tmdb_id/tvdb_id over a live fetch
+                    # for a genuine Plex show, same as the movie branch above --
+                    # the TV scan already resolves and caches both for Plex
+                    # shows too (Quirk #120). Only falls through to the live
+                    # fetch when nothing's cached yet.
+                    tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+                    if not tmdb_id:
+                        url = f"{config_settings.PLEX_URL}/library/metadata/{rating_key}"
+                        r = plex_session.get(url, headers=plex_headers(), timeout=6)
+                        r.raise_for_status()
 
-                tmdb_id = extract_tmdb_id_from_metadata(r.text)
-                tvdb_id = extract_tvdb_id_from_metadata(r.text)
+                        tmdb_id = extract_tmdb_id_from_metadata(r.text)
+                        tvdb_id = extract_tvdb_id_from_metadata(r.text)
 
                 if tmdb_id and not tvdb_id:
                     try:
@@ -520,7 +582,7 @@ def api_preview(req: PreviewRequest):
                                 logger.warning("[PREVIEW] No valid TV show poster found (even after fallback)")
                     else:
                         # background_url is already a direct image URL (from frontend /select-poster)
-                        logger.info("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
+                        logger.debug("[PREVIEW] Using pre-selected poster URL from frontend: %s", background_url[:100] if background_url else None)
 
                     # Fetch logos (always from series, not season-specific)
                     show_imgs = get_images_for_tv_show(tmdb_id, original_language)
@@ -579,8 +641,11 @@ def api_preview(req: PreviewRequest):
                         except Exception as tvdb_err:
                             logger.warning("[PREVIEW] TVDB lookup failed: %s", tvdb_err)
 
-                    # Fallback 2: Try Plex poster directly
-                    if not background_url:
+                    # Fallback 2: Try Plex poster directly -- also treated as
+                    # "not yet resolved" when background_url is still the
+                    # frontend's own internal marker URL, same reasoning as
+                    # the movie branch above.
+                    if not background_url or "/api/movie/" in background_url or "/api/tv-show/" in background_url:
                         try:
                             plex_base = config_settings.PLEX_URL.rstrip('/')
                             plex_poster_url = f"{plex_base}/library/metadata/{rating_key}/thumb?X-Plex-Token={config_settings.PLEX_TOKEN}"
@@ -590,8 +655,9 @@ def api_preview(req: PreviewRequest):
                             logger.warning("[PREVIEW] Failed to construct Plex poster URL: %s", plex_err)
             except Exception as e:
                 logger.warning("[PREVIEW] TV show lookup failed: %s", e)
-                # Fallback: try to fetch poster directly from Plex
-                if not background_url and rating_key:
+                # Fallback: try to fetch poster directly from Plex -- same
+                # marker-URL-aware check as above.
+                if rating_key and (not background_url or "/api/movie/" in background_url or "/api/tv-show/" in background_url):
                     try:
                         from ..config import settings as config_settings
                         plex_base = config_settings.PLEX_URL.rstrip('/')
@@ -611,23 +677,16 @@ def api_preview(req: PreviewRequest):
             raise HTTPException(status_code=400, detail="Could not find a poster image. Check that the item has a valid TMDB/TVDB ID or Plex poster.")
 
         # Inject real Plex media metadata (video_resolution, audio_codec, etc.)
-        # for overlay badge rendering. Always inject when we have a rating_key,
+        # for overlay badge rendering, plus tmdb_id/media_type for studio/
+        # streaming-platform badges. Always inject when we have a rating_key,
         # because overlays can come from preset-linked configs OR explicit IDs.
         if rating_key:
-            from ..config import get_plex_media_info
-            plex_media = get_plex_media_info(rating_key)
-            if plex_media:
-                existing_meta = render_options.get("metadata") or {}
-                render_options["metadata"] = {**existing_meta, **plex_media}
-                logger.info("[PREVIEW] Injected Plex media info for rating_key=%s%s: %s", rating_key, _dt, plex_media)
-            else:
-                logger.info("[PREVIEW] No media info found for rating_key=%s%s", rating_key, _dt)
-
-        # Inject tmdb_id and media_type for streaming platform badge resolution
-        if tmdb_id:
-            render_options.setdefault("metadata", {})
-            render_options["metadata"]["tmdb_id"] = tmdb_id
-            render_options["metadata"]["media_type"] = "tv" if is_tv_show else "movie"
+            from ..config import inject_plex_media_metadata
+            inject_plex_media_metadata(
+                render_options, rating_key,
+                tmdb_id=tmdb_id, is_tv=is_tv_show,
+                log_prefix="[PREVIEW] ",
+            )
 
         # Pass preset_id so the template renderer can look up linked overlay configs
         if req.preset_id:

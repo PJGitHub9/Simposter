@@ -15,14 +15,15 @@ export function useArtLibraryCache<T extends { key: string }>(namespace: string)
   // isTV/libraryId again just to patch one item.
   let lastIsTV = false
   let lastLibraryId = ''
+  let lastServerId = ''
 
-  const cacheKey = (isTV: boolean, libraryId: string) =>
-    `simposter-${namespace}-cache-${isTV ? 'tv' : 'movie'}-${libraryId || 'all'}-v${CACHE_VERSION}`
+  const cacheKey = (isTV: boolean, libraryId: string, serverId?: string) =>
+    `simposter-${namespace}-cache-${isTV ? 'tv' : 'movie'}-${libraryId || 'all'}${serverId ? `-${serverId}` : ''}-v${CACHE_VERSION}`
 
-  function loadFromCache(isTV: boolean, libraryId: string): boolean {
+  function loadFromCache(isTV: boolean, libraryId: string, serverId?: string): boolean {
     if (typeof sessionStorage === 'undefined') return false
     try {
-      const raw = sessionStorage.getItem(cacheKey(isTV, libraryId))
+      const raw = sessionStorage.getItem(cacheKey(isTV, libraryId, serverId))
       if (!raw) return false
       const cached = JSON.parse(raw)
       if (!Array.isArray(cached) || cached.length === 0) return false
@@ -33,19 +34,22 @@ export function useArtLibraryCache<T extends { key: string }>(namespace: string)
     }
   }
 
-  function saveToCache(isTV: boolean, libraryId: string) {
+  function saveToCache(isTV: boolean, libraryId: string, serverId?: string) {
     if (typeof sessionStorage === 'undefined') return
     try {
-      sessionStorage.setItem(cacheKey(isTV, libraryId), JSON.stringify(items.value))
+      sessionStorage.setItem(cacheKey(isTV, libraryId, serverId), JSON.stringify(items.value))
     } catch {
       /* quota exceeded -- fine to skip, next visit just misses the cache */
     }
   }
 
-  async function fetchItems(isTV: boolean, libraryId: string, mapFn?: (raw: any) => T) {
+  // Phase 8a -- serverId is which server libraryId belongs to (omitted/"plex-1" for
+  // every existing Plex-derived call site, so this is a strict no-op there).
+  async function fetchItems(isTV: boolean, libraryId: string, mapFn?: (raw: any) => T, serverId?: string) {
     lastIsTV = isTV
     lastLibraryId = libraryId
-    const hadCache = loadFromCache(isTV, libraryId)
+    lastServerId = serverId || ''
+    const hadCache = loadFromCache(isTV, libraryId, serverId)
     if (!hadCache) {
       loading.value = true
       items.value = []
@@ -53,12 +57,15 @@ export function useArtLibraryCache<T extends { key: string }>(namespace: string)
     const apiBase = getApiBase()
     try {
       const endpoint = isTV ? 'tv-shows' : 'movies'
-      const params = libraryId ? `?library_id=${libraryId}` : ''
+      const qs = new URLSearchParams()
+      if (libraryId) qs.set('library_id', libraryId)
+      if (serverId) qs.set('server_id', serverId)
+      const params = qs.toString() ? `?${qs.toString()}` : ''
       const res = await fetch(`${apiBase}/api/${endpoint}${params}`)
       if (res.ok) {
         const data = await res.json()
         items.value = mapFn ? (data as any[]).map(mapFn) : (data as T[])
-        saveToCache(isTV, libraryId)
+        saveToCache(isTV, libraryId, serverId)
       }
     } catch {
       /* keep whatever we had (cache or empty) on a failed revalidation */
@@ -79,7 +86,7 @@ export function useArtLibraryCache<T extends { key: string }>(namespace: string)
     const next = items.value.slice() as T[]
     next[idx] = { ...next[idx], ...patch } as T
     items.value = next as T[]
-    saveToCache(lastIsTV, lastLibraryId)
+    saveToCache(lastIsTV, lastLibraryId, lastServerId)
   }
 
   return { items, loading, fetchItems, updateItem }

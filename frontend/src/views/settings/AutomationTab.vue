@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { copyToClipboard } from '@/services/clipboard'
+import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
 
 interface Preset {
   id: string
@@ -108,15 +110,68 @@ onMounted(() => {
 })
 
 const webhookType = ref<'radarr' | 'sonarr' | 'tautulli'>('radarr')
-const webhookTemplate = ref('universal')
+// 'universal' was never a real template_id (backend/templates/universal.py
+// is a shared rendering-utility module, not a template -- the two real ids
+// are 'uniformlogo' and 'kometa') -- with no option matching this default,
+// the Template <select> below rendered permanently blank until the user
+// touched it themselves. Defaults to 'uniformlogo' now, the only template
+// that ever makes sense here: Radarr/Sonarr/Tautulli webhooks always
+// generate movie/TV posters, never collections, so 'kometa' (collections-
+// only, per this app's own Testing Checklist precedent for the Retry Queue
+// picker) is excluded from webhookTemplates below rather than offered.
+const webhookTemplate = ref('uniformlogo')
 const webhookPreset = ref('default')
 const webhookIncludeSeasons = ref(true)
 const webhookEventTypes = ref('added,watched')
 const copiedWebhook = ref(false)
 
-const webhookTemplates = computed(() => {
-  return Object.keys(availablePresets.value)
+// The webhook's target is a Library Group (Settings -> Libraries), not an
+// individual server library: a group's whole point is "these libraries are
+// the same content", so a webhook for it looks the item up across the
+// group's libraries and delivers the poster to every one of them (see
+// _resolve_webhook_target()'s group_id handling in webhooks.py). '' = no
+// group -- the backend's default lookup (Plex's libraries when Plex is
+// configured, otherwise every Jellyfin/Emby library in your groups).
+// Tautulli handles both media types in one webhook, so it isn't offered a
+// picker here.
+const settingsStore = useSettingsStore()
+const webhookGroupId = ref('')
+
+interface WebhookGroupOption {
+  id: string
+  label: string
+  destinations: string[]
+}
+const webhookGroupOptions = computed((): WebhookGroupOption[] => {
+  const mediaType = webhookType.value === 'sonarr' ? 'tv' : 'movie'
+  return settingsStore.libraryGroups.value
+    .filter(g => g.mediaType === mediaType && g.members.length > 0)
+    .map(g => ({
+      id: g.id,
+      label: g.name || g.members[0]?.libraryName || g.id,
+      destinations: g.members.map(m =>
+        `${mediaServerLabel(m.serverId, settingsStore.mediaServers.value)}: ${m.libraryName || m.libraryId}`
+      ),
+    }))
 })
+const selectedWebhookGroup = computed(() =>
+  webhookGroupOptions.value.find(o => o.id === webhookGroupId.value)
+)
+// A group picked for Radarr doesn't exist under Sonarr (and vice versa).
+watch(webhookType, () => { webhookGroupId.value = '' })
+
+
+const webhookTemplates = computed(() => {
+  return Object.keys(availablePresets.value).filter(t => t !== 'kometa')
+})
+// availablePresets loads asynchronously (onMounted fetch) -- once the real
+// list is in, make sure webhookTemplate actually points at something valid
+// rather than staying on its initial default if that default ever drifts.
+watch(webhookTemplates, (templates) => {
+  if (templates.length > 0 && !templates.includes(webhookTemplate.value)) {
+    webhookTemplate.value = templates.includes('uniformlogo') ? 'uniformlogo' : templates[0]!
+  }
+}, { immediate: true })
 
 const webhookPresets = computed((): Preset[] => {
   const templateData = availablePresets.value[webhookTemplate.value]
@@ -127,11 +182,24 @@ const webhookPresets = computed((): Preset[] => {
 
 const generatedWebhookUrl = computed(() => {
   const baseUrl = window.location.origin.replace(':5173', ':8003') // Replace frontend port with API port
+  // Readable ?group=<name> when the name is unique for this media type
+  // (the backend matches it case-insensitively); the long internal id only
+  // when two groups share a name. Note: renaming the group changes the URL.
+  let extraSuffix = ''
+  const g = selectedWebhookGroup.value
+  if (g) {
+    const sameName = webhookGroupOptions.value.filter(o => o.label.trim().toLowerCase() === g.label.trim().toLowerCase())
+    extraSuffix = sameName.length === 1
+      ? `group=${encodeURIComponent(g.label.trim())}`
+      : `group_id=${encodeURIComponent(g.id)}`
+  }
 
   if (webhookType.value === 'radarr') {
-    return `${baseUrl}/api/webhook/radarr/${webhookTemplate.value}/${webhookPreset.value}`
+    const base = `${baseUrl}/api/webhook/radarr/${webhookTemplate.value}/${webhookPreset.value}`
+    return extraSuffix ? `${base}?${extraSuffix}` : base
   } else if (webhookType.value === 'sonarr') {
-    return `${baseUrl}/api/webhook/sonarr/${webhookTemplate.value}/${webhookPreset.value}?include_seasons=${webhookIncludeSeasons.value}`
+    const base = `${baseUrl}/api/webhook/sonarr/${webhookTemplate.value}/${webhookPreset.value}?include_seasons=${webhookIncludeSeasons.value}`
+    return extraSuffix ? `${base}&${extraSuffix}` : base
   } else if (webhookType.value === 'tautulli') {
     return `${baseUrl}/api/webhook/tautulli?template_id=${webhookTemplate.value}&preset_id=${webhookPreset.value}&event_types=${webhookEventTypes.value}`
   }
@@ -175,90 +243,28 @@ const webhookInstructions = computed(() => {
   <div class="tab-content">
     <h2>Automation</h2>
 
-    <!-- Automatic Poster Generation -->
+    <!-- Webhooks -->
     <div class="section" :class="{ 'unsaved-changes': automationChanged }">
-      <h3>Automatic Poster Generation</h3>
+      <h3>Webhooks</h3>
       <p class="section-description">
-        Configure automatic poster generation and delivery via webhooks (Radarr, Sonarr, Tautulli).
-        Webhooks automatically trigger poster generation when new media is added.
+        Radarr, Sonarr and Tautulli can tell Simposter when something is added, and Simposter makes a poster for it.
+        Create the URL to paste into them with the generator below.
       </p>
-
       <label class="checkbox-label">
         <input type="checkbox" v-model="localWebhookAutoSend" />
-        <span>Automatically Send to Plex</span>
+        <span>Send webhook posters to your media servers</span>
       </label>
       <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, webhook-generated posters are automatically sent to Plex and replace the existing poster
+        When on, the poster is sent to the servers in the item's library group (Plex, Jellyfin, Emby) and replaces the current one.
+        When off, it's only made and saved.
       </p>
-
       <label class="checkbox-label">
         <input type="checkbox" v-model="localWebhookAlwaysRegenerateSeason" />
-        <span>Always Regenerate Season Poster</span>
+        <span>Always regenerate season posters</span>
       </label>
       <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, a new season poster is generated every time a new episode webhook is received. When disabled, season posters that have already been sent to Plex are skipped.
+        When on, every new-episode webhook makes a new season poster. When off, seasons that already have a Simposter poster are skipped.
       </p>
-
-      <label>
-        <span class="label-text">Existing Content — Poster Behaviour</span>
-        <select v-model="localExistingContentMode">
-          <option value="regenerate">Regenerate — always create a new poster</option>
-          <option value="resend">Resend — reuse the last sent poster if available</option>
-        </select>
-        <span class="help-text">
-          When a webhook or scheduled scan fires for a title that already has a Simposter-generated poster,
-          <strong>Resend</strong> pushes the cached rendered poster straight back to Plex without regenerating.
-          Useful when you have manually tuned a poster and don't want it overwritten by future Radarr/Sonarr events.
-        </span>
-      </label>
-
-      <label class="checkbox-label">
-        <input type="checkbox" v-model="localRetryUntilTemplateMet" />
-        <span>Retry Poster Generation Until Ideal Template Is Met</span>
-      </label>
-      <p class="help-text" style="margin: -8px 0 16px 0;">
-        When enabled, if a poster is generated but the ideal template conditions weren't met (e.g. a logo was required but none was available, or a textless poster was needed), Simposter will keep a retry queue and attempt to regenerate on the interval below. Once the ideal poster is created it stops retrying. A manual send always overrides and stops retries for that title.
-      </p>
-
-      <template v-if="localRetryUntilTemplateMet">
-        <label>
-          <span class="label-text">Retry Interval (hours)</span>
-          <input type="number" v-model.number="localRetryIntervalHours" min="1" max="720" step="1" style="width:100px" />
-          <span class="help-text">How often (in hours) to check the retry queue and attempt regeneration.</span>
-        </label>
-
-        <label>
-          <span class="label-text">Max Retry Attempts (0 = unlimited)</span>
-          <input type="number" v-model.number="localRetryMaxAttempts" min="0" max="9999" step="1" style="width:100px" />
-          <span class="help-text">Stop retrying after this many attempts. Set to 0 to retry indefinitely.</span>
-        </label>
-      </template>
-
-      <label>
-        <span class="label-text">Reuse Cached Poster For (days, 0 = disabled)</span>
-        <input type="number" v-model.number="localReuseCachedPosterDays" min="0" max="365" step="1" style="width:100px" />
-        <span class="help-text">
-          If a webhook or scheduled scan discovers what looks like a brand-new item, but a poster was already sent for the same TMDb title within this many days, Simposter resends that cached poster instead of generating a fresh one. Protects against a tool like Radarr/Sonarr (or something re-grabbing a trailer file) causing Plex to re-match an item under a new internal ID — which otherwise looks identical to a genuinely new library addition, and would silently overwrite a poster you already tuned. Only applies to webhook/auto-generate — manual batch, save, and send always render fresh.
-        </span>
-      </label>
-
-      <!-- The global "Labels to Remove After Sending" field (webhookAutoLabels) was removed
-           from this UI — it duplicated Settings → Libraries' per-library "Default Labels to
-           Remove", which is the actually-used mechanism (and more precise, since it's scoped
-           per library). The underlying webhookAutoLabels setting/merge logic is untouched
-           server-side for any install that already has a value stored there; it's just no
-           longer editable from this tab. -->
-
-      <label>
-        <span class="label-text">Label to Add After Sending</span>
-        <input
-          type="text"
-          v-model="localLabelToAdd"
-          placeholder="e.g. Simposter"
-        />
-        <span class="help-text">Optional — tags an item with this label after Simposter successfully sends a poster to Plex, so you can see (or filter/smart-collection on) which items got a Simposter-generated poster. Leave blank to disable. Applies to every send path: manual, batch, webhook, auto-generate, and resend.</span>
-      </label>
-
       <label>
         <span class="label-text">Webhook Secret (optional)</span>
         <input
@@ -299,11 +305,16 @@ const webhookInstructions = computed(() => {
 
           <label>
             <span class="label-text">Template</span>
-            <select v-model="webhookTemplate">
+            <!-- Only ever offered as a real choice once a 2nd non-Kometa
+                 template exists -- today there's exactly one (uniformlogo),
+                 so a one-item dropdown would just be clutter with nothing
+                 to actually choose. -->
+            <select v-if="webhookTemplates.length > 1" v-model="webhookTemplate">
               <option v-for="template in webhookTemplates" :key="template" :value="template">
                 {{ template }}
               </option>
             </select>
+            <div v-else class="webhook-static-field">{{ webhookTemplate }}</div>
           </label>
 
           <label>
@@ -314,6 +325,25 @@ const webhookInstructions = computed(() => {
               </option>
             </select>
           </label>
+
+          <!-- Radarr/Sonarr only -- Tautulli covers both media types in one
+               webhook, so a single group picker doesn't map to it. -->
+          <label v-if="webhookType === 'radarr' || webhookType === 'sonarr'">
+            <span class="label-text">Library group</span>
+            <select v-model="webhookGroupId">
+              <option value="">Any (search all libraries)</option>
+              <option v-for="g in webhookGroupOptions" :key="g.id" :value="g.id">{{ g.label }}</option>
+            </select>
+            <span class="help-text">
+              Posters from this webhook go to every library in the chosen group.
+              Manage groups in Settings &rarr; Libraries. Renaming a group changes
+              its webhook URL, so update it in Radarr/Sonarr afterwards.
+            </span>
+          </label>
+
+          <div v-if="(webhookType === 'radarr' || webhookType === 'sonarr') && selectedWebhookGroup" class="webhook-cross-server-note">
+            <strong>Delivers to:</strong> {{ selectedWebhookGroup.destinations.join(', ') }}
+          </div>
 
           <!-- Sonarr-specific option -->
           <label v-if="webhookType === 'sonarr'" class="checkbox-label">
@@ -370,6 +400,80 @@ const webhookInstructions = computed(() => {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Items that already have a poster -->
+    <div class="section" :class="{ 'unsaved-changes': automationChanged }">
+      <h3>Items that already have a poster</h3>
+      <p class="section-description">
+        What webhooks and library scans do when they find something Simposter has already made a poster for.
+      </p>
+      <label>
+        <span class="label-text">When an item already has a Simposter poster</span>
+        <select v-model="localExistingContentMode">
+          <option value="regenerate">Regenerate — always create a new poster</option>
+          <option value="resend">Resend — reuse the last sent poster if available</option>
+        </select>
+        <span class="help-text">
+          When a webhook or scheduled scan fires for a title that already has a Simposter-generated poster,
+          <strong>Resend</strong> sends the last poster Simposter made for it again, without regenerating.
+          Useful when you have manually tuned a poster and don't want it overwritten by future Radarr/Sonarr events.
+        </span>
+      </label>
+      <label>
+        <span class="label-text">Reuse Cached Poster For (days, 0 = disabled)</span>
+        <input type="number" v-model.number="localReuseCachedPosterDays" min="0" max="365" step="1" style="width:100px" />
+        <span class="help-text">
+          If a webhook or scheduled scan discovers what looks like a brand-new item, but a poster was already sent for the same TMDb title within this many days, Simposter resends that cached poster instead of generating a fresh one. Protects against a tool like Radarr/Sonarr (or something re-grabbing a trailer file) causing the media server to re-match an item under a new internal ID — which otherwise looks identical to a genuinely new library addition, and would silently overwrite a poster you already tuned. Only applies to webhook/auto-generate — manual batch, save, and send always render fresh.
+        </span>
+      </label>
+    </div>
+
+    <!-- Retry queue -->
+    <div class="section" :class="{ 'unsaved-changes': automationChanged }">
+      <h3>Retry queue</h3>
+      <p class="section-description">
+        Try again later when a poster couldn't follow its preset, for example when the logo or textless poster it needs doesn't exist yet.
+        Queued items are listed under History &rarr; Retry Queue.
+      </p>
+      <label class="checkbox-label">
+        <input type="checkbox" v-model="localRetryUntilTemplateMet" />
+        <span>Retry Poster Generation Until Ideal Template Is Met</span>
+      </label>
+      <p class="help-text" style="margin: -8px 0 16px 0;">
+        When enabled, if a poster is generated but the ideal template conditions weren't met (e.g. a logo was required but none was available, or a textless poster was needed), Simposter will keep a retry queue and attempt to regenerate on the interval below. Once the ideal poster is created it stops retrying. A manual send always overrides and stops retries for that title.
+      </p>
+
+      <template v-if="localRetryUntilTemplateMet">
+        <label>
+          <span class="label-text">Retry Interval (hours)</span>
+          <input type="number" v-model.number="localRetryIntervalHours" min="1" max="720" step="1" style="width:100px" />
+          <span class="help-text">How often (in hours) to check the retry queue and attempt regeneration.</span>
+        </label>
+
+        <label>
+          <span class="label-text">Max Retry Attempts (0 = unlimited)</span>
+          <input type="number" v-model.number="localRetryMaxAttempts" min="0" max="9999" step="1" style="width:100px" />
+          <span class="help-text">Stop retrying after this many attempts. Set to 0 to retry indefinitely.</span>
+        </label>
+      </template>
+    </div>
+
+    <!-- Plex labels -->
+    <div class="section" :class="{ 'unsaved-changes': automationChanged }">
+      <h3>Plex labels <span class="plex-only-tag">Plex only</span></h3>
+      <p class="section-description">
+        Jellyfin and Emby don't use labels, so this only affects Plex. Labels to remove after sending are set per library in Settings &rarr; Libraries.
+      </p>
+      <label>
+        <span class="label-text">Label to add after sending</span>
+        <input
+          type="text"
+          v-model="localLabelToAdd"
+          placeholder="e.g. Simposter"
+        />
+        <span class="help-text">Optional — tags an item with this label after Simposter successfully sends a poster to Plex, so you can see (or filter/smart-collection on) which items got a Simposter-generated poster. Leave blank to disable. Applies to every send path: manual, batch, webhook, auto-generate, and resend.</span>
+      </label>
     </div>
 
     <div class="actions">
@@ -481,6 +585,18 @@ input[type="number"] {
   font-size: 14px;
 }
 
+.webhook-static-field {
+  width: 100%;
+  max-width: 400px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-muted);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
 select:focus,
 input:focus {
   outline: none;
@@ -498,6 +614,23 @@ input:focus {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
+}
+
+.webhook-cross-server-note {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  line-height: 1.5;
+}
+
+.webhook-cross-server-note strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin-right: 6px;
 }
 
 .webhook-url-output {
@@ -636,5 +769,18 @@ button.primary:hover:not(:disabled) {
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.plex-only-tag {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(229, 160, 13, 0.15);
+  color: #e5a00d;
 }
 </style>

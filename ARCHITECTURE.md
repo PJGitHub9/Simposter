@@ -85,6 +85,7 @@ This document explains how Simposter starts, how the backend and frontend intera
 - `get_current_version()`: Reads from `frontend/src/version.ts`, falls back to `build-info.json` (Docker builds)
 - `get_git_branch()`: Checks `GIT_BRANCH` env var → `git rev-parse` → `.git/HEAD` → `build-info.json`
 - `get_docker_tag()`: Checks `DOCKER_TAG` env var → `build-info.json`
+- `check_for_updates()`: reads `frontend/src/version.ts` for the running branch from `raw.githubusercontent.com` and compares versions. Also reads `branches.json` from `main`, so users of a merged, retired or deleted branch are told where to move (`branch_status`, `branch_move_to`, `branch_message`). Cached for an hour; `DISABLE_UPDATE_CHECK=1` turns it off, `SIMPOSTER_GITHUB_REPO` overrides the repo
 - **`build-info.json`**: Written at Docker build time (`RUN ... echo {...} > /app/build-info.json`) with `git_branch`, `app_version`, `docker_tag`; read at runtime when git/version.ts are unavailable
 
 #### `movies.py`
@@ -117,14 +118,17 @@ This document explains how Simposter starts, how the backend and frontend intera
 - Logo/poster fallback logic matching preview behavior, plus overlay-cache reuse for a 3-5x speedup over the manual editor's uncached render
 
 #### `overlay_config.py`
-- `api_list_overlay_configs` — List all overlay configurations
-- `api_create_overlay_config` — Create new overlay config
-- `api_update_overlay_config` — Update existing overlay config (includes `streaming_region` field)
-- `api_delete_overlay_config` — Delete overlay config
-- `api_list_overlay_assets` — List uploaded badge assets
-- `api_upload_overlay_asset` — Upload new badge asset (PNG/JPG)
-- `GET /api/asset-image` — Proxy for simposter-assets badge image, accepts optional `company_id` for TMDb ID lookup
-- `GET /api/overlay-preview-metadata` — Returns metadata for canvas preview (studio slug, studio_company_id, streaming_platform)
+- `/overlay-configs` — list, get, save, usage (which presets use it), delete. A config holds its layers, `streaming_region` and whole-overlay `conditions`
+- `/overlay-assets` — list, upload, serve the file, delete, rescan the folder (overlay images)
+- `GET /fonts` — fonts text layers can use (system fonts plus `config/fonts`)
+- `GET /asset-image` — simposter-assets badge image, optional `company_id` for TMDb lookup; `GET /proxy-image` — relays an external image for the preview (strict SSRF guard)
+- `GET /overlay-preview-metadata` — an item's data for the editor preview: media info, labels, file paths, ids, studio/streaming, and on request MDBList ratings/lists, days since added and show status
+
+#### `kometa_import.py` / `live_kometa.py` / `mdblist.py` / `overlay_refresh.py`
+- `POST /overlay-configs/kometa-import` — import Kometa overlay YAML (plus images, fonts, zips); `dry_run` returns the report only. The logic is in `backend/kometa_import.py` (Kometa template expansion, filter and placement mapping)
+- `/live-kometa-files` — list, add/edit, `POST /{id}/sync`, delete. Server-side overlay files re-imported on a schedule (`backend/live_kometa.py`)
+- `POST /test-mdblist`, `GET /mdblist/ratings`, `GET /mdblist/lists`, `POST /mdblist/lists/refresh`, `DELETE /mdblist/cache` — MDBList ratings and lists (`backend/mdblist_client.py`)
+- `/overlay-refresh/group`, `/config`, `/run`, `/status`, `/items`, `/log` — re-render tracked posters whose overlay would now come out differently (`backend/overlay_refresh.py`)
 
 #### `scheduler.py`
 - `api_schedule_library_scan` (POST) — Schedule library scans with cron expression
@@ -152,6 +156,24 @@ This document explains how Simposter starts, how the backend and frontend intera
 - `api_poster_history` — List poster generation history with filtering
 - Tracks manual, batch, webhook, and auto-generate operations
 - Filterable by library, template, preset, action, source
+
+---
+
+### Overlay modules
+
+- **`overlay_engine.py`**: rule checking (`check_condition()`; `select_elements()` with badge sets and hide rules), per-render data loading (`needed_data()` decides what's needed, `build_context()` loads it: file paths, ids, MDBList ratings/lists, days since added, show status), Kometa-style placement (`render_kometa_element()`), `{value}` text filling (`fill_text()`), and the log explanations (`explain_selection()`, `data_summary()`). `frontend/src/services/overlayEngine.ts` is the preview's copy of the selection logic; keep the two in step.
+- **`overlay_cache.py`**: pre-rendered effect layers, one file per preset and settings signature, built at startup and when a preset is saved.
+- **`overlay_bundle.py`**: packs overlay configs and their images into preset exports and database backups, and restores them.
+
+### Media servers (`backend/media_server/`)
+
+Every Plex/Jellyfin/Emby call that isn't legacy Plex-only code goes through a `MediaServerClient` (`base.py`): `PlexClient` and `JellyfinClient` (which also serves Emby) implement library listing, item lookup by TMDb/TVDB id, season resolution, and image download/upload. `registry.py`'s `get_client(server_id)` builds one from the `mediaServers` setting. Cached rows (`movie_cache`, `tv_cache`, `collection_cache`, history, retry queue) carry a `server_id`; library groups (`libraryGroups` setting) link libraries across servers.
+
+Related routers:
+- `media_server.py` — server tests, library discovery, per-library scans, library-group preferences, collection matching, cache purge for a removed server
+- `media_server_send.py` — sending posters/logos/backdrops to Jellyfin/Emby, and syncing a render to a group's other servers
+- `media_mirror.py` — Media Mirror config, mappings, runs and schedules
+- `cleanup.py` — Simposter cache cleanup, plus Plex maintenance and Jellyfin/Emby scheduled tasks
 
 ---
 
@@ -194,26 +216,24 @@ User selects movies/TV shows + template/preset → Frontend calls /api/batch-mov
 → Return progress updates to frontend (polled via /api/batch-progress)
 ```
 
-### 4. Overlay Badge Rendering
+### 4. Overlay Rendering
 ```
 Backend receives render request with preset_id
-→ Load preset options from database
-→ If overlayConfigId present, load overlay config
-→ Pre-pass resolves dynamic metadata fields:
-  - studio_badge present + tmdb_id available → call get_studio_name() + get_studio_company_id() → inject metadata["studio"] + metadata["studio_company_id"]
-  - streaming_platform_badge present + tmdb_id available → call get_watch_providers(tmdb_id, media_type, region) → inject metadata["streaming_platform"]
-→ Fetch Plex media metadata for item:
-  - rating_key → /library/metadata/{rating_key}
-  - Extract: videoResolution, videoCodec, audioCodec, audioChannels, audioLanguageCode, editionTitle
-→ For each overlay element (video_badge, audio_badge, edition_badge, studio_badge, streaming_platform_badge, custom_image, text_label):
-  - Check show_if_label / hide_if_label conditions (case-insensitive)
-  - Get metadata value (e.g., resolution='4k', codec='hevc', studio='a24')
-  - Check badge_modes[value] (none/text/image/asset)
-  - If 'text': render text with custom font/color/size
-  - If 'image': composite badge asset from overlay_assets table (user-uploaded)
-  - If 'asset': fetch from simposter-assets repo via get_asset_url(slug, company_id)
-  - Position at element.position_x, element.position_y
-→ Composite all badges onto poster
+→ Load preset options: overlay_config_ids (drawn above logo/text) and overlay_config_ids_below
+→ inject_plex_media_metadata(): media info from the scan cache (Plex, Jellyfin or Emby), tmdb_id, rating_key
+→ _prepare_overlays() (templates/universal.py):
+  - needed_data(): which extra data the rules and {text} values use (file paths, ids,
+    MDBList ratings/lists, date added, show status); build_context() loads only that and
+    records why anything is missing
+  - pre-pass for studio / streaming platform badges (TMDb)
+  - drop overlays whose whole-overlay conditions fail
+  - select_elements(): each layer's conditions, legacy show_if_label/hide_if_label,
+    badge sets (group + weight, first match wins), hide rules (suppress)
+  - log one block: data used, layers drawn, why the rest were skipped
+→ Draw the below bucket before the logo/text and the above bucket after:
+  - badges: badge_modes[value] → none / text / image (overlay_assets) / url / asset (simposter-assets)
+  - placement "kometa": align + offsets in a 1000x1500 space, optional back box and outline
+  - text: {value} placeholders filled; a layer with a missing value is skipped
 ```
 
 **Element types:**
@@ -226,7 +246,9 @@ Backend receives render request with preset_id
 - `full_cover_image` — Image stretched to fill the whole canvas, placed below or above the logo/text
 - `text_label` — Custom text overlay
 
-Every element can also be placed **below** the logo/text instead of the default above, via `overlay_config_ids_below` on the preset.
+- `box_only` — a background box with nothing in it (from Kometa `backdrop` overlays)
+
+Every element can have `conditions`, `group`/`weight`, `suppress`, a `name`, and Kometa placement keys. A whole overlay can be placed **below** the logo/text instead of the default above, via `overlay_config_ids_below` on the preset.
 
 **Legacy aliases (still render for old configs, hidden from the UI):** `resolution_badge` → `video_badge`, `codec_badge` → `audio_badge`, `label_badge` → removed from the UI entirely
 
@@ -262,10 +284,13 @@ Every element can also be placed **below** the logo/text instead of the default 
 - Kometa Creator pulls background textures and a categorized logo library live from the `Kometa-Team/Defaults-Image-Creation` GitHub repo — no vendoring, updates there show up automatically
 
 #### `OverlayConfigManagerView.vue`
-- Visual overlay editor with drag-and-drop positioning
-- Badge asset library (upload/manage badge images)
-- Live canvas preview with metadata value switcher
-- Per-value badge modes (none/text/image)
+- Overlay editor: layers (top of the list is drawn on top), badge sets, whole-overlay conditions; each layer has Look / Position / Show when tabs
+- Live canvas preview with example values or a real item, compare on several posters, drag to move
+- Image library, Kometa import (`KometaImportModal.vue`), live Kometa files (`LiveKometaFiles.vue`)
+- Rule fields and text values come from `frontend/src/services/overlayFields.ts`
+
+#### `OverlayRefreshView.vue`
+- Per library group: schedule, Plex label, check and refresh runs, tracked posters with their overlays, run log
 
 #### `SettingsView.vue`
 - Plex/TMDb/TVDB/Fanart API key configuration
@@ -295,8 +320,12 @@ Every element can also be placed **below** the logo/text instead of the default 
   - `poster_cache` / `tv_poster_cache` — Poster metadata (URL, width, height)
   - `label_cache` / `tv_label_cache` — Plex labels per item
   - `media_metadata_cache` — Plex media metadata (resolution, codec, audio)
+  - `item_ratings` / `list_cache` — MDBList ratings and list members, kept for the configured number of days
+  - `overlay_state` / `overlay_refresh_log` — what each sent poster was rendered with, for Overlay Refresh
+  - `live_kometa_files` — watched Kometa overlay files
+  - `mirror_sync_state` — Media Mirror change detection
 - **Disk cache**: Downloaded poster/logo files in `POSTER_CACHE_DIR`
-- **Overlay cache**: Pre-rendered template effect layers (matte/fade/vignette) for faster batch rendering
+- **Overlay cache**: Pre-rendered template effect layers (matte/fade/vignette) in `config/overlays/{template}/{preset}--{signature}.png`, built at startup and when a preset is saved (`overlay_cache.py`)
 
 ### Cache Invalidation
 - **Manual**: "Refresh Cache" button in Settings
@@ -340,6 +369,8 @@ PLEX_TV_LIBRARY_NAME=TV Shows    # TV library name (or use library_id)
 TVDB_API_KEY=xxxxxxxxxxxx        # TVDB API key (for TV shows)
 FANART_API_KEY=xxxxxxxxxxxx      # Fanart.tv API key (for logos)
 CONFIG_DIR=/config               # Config directory path (Docker)
+DISABLE_UPDATE_CHECK=1           # Turn off the GitHub update check
+SIMPOSTER_GITHUB_REPO=owner/repo # Repo the update check reads from
 ```
 
 ### Docker Deployment

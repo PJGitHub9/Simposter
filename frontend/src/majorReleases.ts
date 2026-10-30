@@ -118,4 +118,128 @@ export const majorReleases: MajorRelease[] = [
       },
     ],
   },
+  {
+    version: 'v1.7.0',
+    title: 'Jellyfin & Emby Support',
+    intro: "Simposter now works with Jellyfin and Emby as well as Plex — use any one of them, or several at once. Here's the highlight reel; the full changelog is still one click away below.",
+    highlights: [
+      {
+        icon: '🖥️',
+        title: 'Plex, Jellyfin and Emby',
+        description: 'Add any mix of servers in Settings → Media Servers, test the connection, and give each one a name. Plex is no longer required — a Jellyfin-only or Emby-only setup works on its own.',
+      },
+      {
+        icon: '🔗',
+        title: 'Library groups',
+        description: 'Group the same library across servers (for example Plex "Movies" + Jellyfin "Movies") in Settings → Libraries. A group shares one set of settings, scans together, and can show each title once or once per server.',
+      },
+      {
+        icon: '📤',
+        title: 'Send to any server',
+        description: 'The editors, Batch Edit, resend and Local Assets let you pick which servers get a poster, logo or backdrop — with one notification per send. Server icons on each card show where a title lives.',
+      },
+      {
+        icon: '🪞',
+        title: 'Media Mirror',
+        description: 'Copy posters, logos, backdrops and collection art from one server to the others in a group, on demand or on a schedule. Only changed images are copied again.',
+      },
+      {
+        icon: '🪝',
+        title: 'Webhooks and auto-generate everywhere',
+        description: 'Radarr/Sonarr webhooks can target a library group by name, and new items found by a Jellyfin or Emby scan get posters automatically, just like Plex.',
+      },
+      {
+        icon: '🌄',
+        title: 'Thumb Art for Jellyfin & Emby',
+        description: "A new page for Jellyfin/Emby's 16:9 Thumb image — the counterpart to Plex's Square Art — built from your existing templates.",
+      },
+      {
+        icon: '📚',
+        title: 'Collections, backups and cleanup across servers',
+        description: 'Jellyfin collections show up next to Plex ones (with manual matching when names differ), Backup/Restore works on Jellyfin, and Cleanup can run each server\'s own maintenance tasks.',
+      },
+      {
+        icon: '🔄',
+        title: 'Scans that keep up',
+        description: 'Library scans are much faster and now pick up posters changed outside Simposter (for example by Kometa) without a force refresh.',
+      },
+      {
+        icon: '✏️',
+        title: 'A tidier poster editor',
+        description: 'Settings in tabs and collapsible cards, separate logo and text boxes you can drag right on the preview, guides, and backdrops as poster backgrounds.',
+      },
+    ],
+  },
+  {
+    version: 'v1.8.0',
+    title: 'Overlays, rebuilt',
+    intro: "This update is mostly about overlays: what you can put on a poster, when it shows, and how easy it is to build. Here's the short version; the full changelog is one click away below.",
+    highlights: [
+      {
+        icon: '🧱',
+        title: 'A friendlier overlay editor',
+        description: 'Layers listed top-down, Look / Position / Show when tabs for each one, grouped settings, warnings when a layer would show nothing, and a preview that can compare several posters at once.',
+      },
+      {
+        icon: '🎯',
+        title: 'Show when',
+        description: 'Put a layer, or a whole overlay, only on the posters that match: 4K only, Atmos only, remux files, highly rated movies, items on an MDBList list, and more.',
+      },
+      {
+        icon: '🏷️',
+        title: 'Badge sets',
+        description: "Group badges that shouldn't appear together, like 4K, 1080p and 720p, and only the first match is drawn.",
+      },
+      {
+        icon: '⭐',
+        title: 'Ratings on posters',
+        description: 'With an MDBList API key, show IMDb, Rotten Tomatoes, Metacritic and other ratings as text or use them in conditions.',
+      },
+      {
+        icon: '📥',
+        title: 'Kometa import (beta)',
+        description: 'Bring in your Kometa overlay files, or point Simposter at files another tool like UMTK keeps rewriting and it re-imports them on a schedule. It maps what it can and tells you what it skipped.',
+      },
+      {
+        icon: '📋',
+        title: 'Lists from more services',
+        description: 'Besides MDBList, "On a list" rules can use your lists from WeTrakr, SIMKL and Floppy, or anyone\'s public list by pasting its link.',
+      },
+      {
+        icon: '📺',
+        title: '4K and HDR badges for TV',
+        description: 'Shows and seasons now get quality badges too, taken from their best episode, so a 4K series shows up as 4K.',
+      },
+      {
+        icon: '⏱️',
+        title: 'Overlays → Scheduler',
+        description: 'Choose how often ratings and lists are fetched again, see every Overlay Refresh schedule in one place, and refresh on demand.',
+      },
+      {
+        icon: '📦',
+        title: 'Share presets',
+        description: 'Download presets as one file with their overlays, images and fonts included, and import it on another Simposter.',
+      },
+      {
+        icon: '🔁',
+        title: 'Overlay Refresh',
+        description: 'Keep posters up to date when their overlay would change, e.g. a movie upgraded to 4K, on a schedule per library.',
+      },
+      {
+        icon: '🔔',
+        title: 'Changed outside Simposter',
+        description: 'Simposter notices when a poster, logo or backdrop it sent was changed on the server by something else. A badge marks it on the grid, and History lets you put Simposter\'s version back or keep the new one.',
+      },
+      {
+        icon: '🔤',
+        title: 'Starter presets and fonts',
+        description: 'Two new starter presets, a set of free fonts that comes with the Simposter defaults, and Kometa\'s own fonts for imported overlays.',
+      },
+      {
+        icon: '🔔',
+        title: 'Branch-aware updates',
+        description: 'The version badge now shows updates for the branch you run, and tells you when that branch was merged and where to move.',
+      },
+    ],
+  },
 ]

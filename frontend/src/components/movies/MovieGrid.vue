@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import MovieCard from './MovieCard.vue'
+import { useDriftKeys } from '@/composables/useDriftKeys'
 
 type Entry = {
   title: string
@@ -9,14 +11,49 @@ type Entry = {
   poster?: string | null
   key: string
   edition?: string | null
+  server_id?: string | null
+  also_on?: string[] | null
+  other_servers?: { server_id: string; rating_key: string }[] | null
 }
 
-defineProps<{
+const props = defineProps<{
   heading: string
   items: Entry[]
   cachedKeys?: Set<string>
   isTV?: boolean
 }>()
+
+// A card's own `.key` is whichever server currently "wins" the merged-grid
+// dedup (Quirk #67/#74/#84 -- the preferred-server toggle changes which
+// server's rating_key a merged item displays under). A resend cache entry
+// is written per rating_key, not per tmdb_id -- so a poster rendered/sent
+// back when the item only had a Plex rating_key still only has a cache
+// entry under THAT rating_key, even after linking a Jellyfin server and
+// switching "Show posters from" to prefer it. Checking only `item.key`
+// against `cachedKeys` then misses a genuinely resendable render sitting
+// under a sibling server's rating_key (`item.other_servers`) -- exactly
+// what the multi-server resend picker (Quirk #76) already lets you target.
+// User-reported directly: the resend arrow disappeared switching a merged
+// library's preferred server from Plex to Jellyfin, even for items already
+// sent to Plex.
+//
+// Resolves to the ACTUAL rating_key the cached bytes live under (home key,
+// or whichever sibling's), not just whether one exists -- MovieCard needs
+// this real key, not a boolean, because /api/render-cache/{rating_key}/resend
+// and /preview both look the cache up by URL-path rating_key. Passing the
+// currently-displayed (possibly cache-less) key there would 404 even though
+// a cache genuinely exists under a sibling server's key.
+function cacheSourceKey(item: Entry): string | null {
+  if (!props.cachedKeys) return null
+  if (props.cachedKeys.has(item.key)) return item.key
+  const match = (item.other_servers || []).find(s => props.cachedKeys!.has(s.rating_key))
+  return match ? match.rating_key : null
+}
+
+// Poster changed outside Simposter on any of the item's servers.
+const drift = useDriftKeys()
+onMounted(() => { drift.load() })
+const posterChanged = (item: Entry) => drift.changed([item.key, ...(item.other_servers || []).map(s => s.rating_key)])
 
 const emit = defineEmits<{
   (e: 'select', movie: Entry): void
@@ -41,9 +78,14 @@ const emit = defineEmits<{
         :poster="item.poster"
         :status="item.status"
         :ratingKey="item.key"
+        :cacheRatingKey="cacheSourceKey(item)"
         :edition="item.edition"
-        :hasCachedPoster="cachedKeys?.has(item.key) ?? false"
+        :hasCachedPoster="!!cacheSourceKey(item)"
+        :posterChanged="posterChanged(item)"
         :isTV="isTV"
+        :serverId="item.server_id"
+        :alsoOn="item.also_on"
+        :otherServers="item.other_servers"
         @select="emit('select', item)"
         @refresh="emit('refresh', item.key)"
         @resend-done="emit('resend-done', item.key)"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, type WritableComputedRef } from 'vue'
 
 const props = defineProps<{
   movieSaveLocation: string
@@ -99,21 +99,21 @@ const PRESETS: SavePreset[] = [
   {
     key: 'default',
     label: 'Default',
-    description: 'Simposter\'s original layout — movies and TV shows saved by library.',
+    description: 'One file per item in each library folder.',
     movie: '/config/output/{library}/{title}.jpg',
     tv: '/config/output/{library}/{title} ({year}).jpg',
   },
   {
     key: 'flat',
     label: 'Flat',
-    description: 'Everything as flat "Title (Year) filename.ext" files in one folder per library — no per-title subfolders.',
+    description: 'Title (Year) files in each library folder, no subfolders.',
     movie: '/config/output/{library}/{title} ({year}).jpg',
     tv: '/config/output/{library}/{title} ({year}) {filename}.jpg',
   },
   {
     key: 'assetFolders',
-    label: 'Asset folders (Kometa)',
-    description: 'Every movie and show gets its own folder with poster.ext / SeasonNN.ext — Kometa\'s asset-folder convention.',
+    label: 'Kometa asset folders',
+    description: 'A folder per movie or show, ready for Kometa.',
     movie: '/config/output/{library}/{title} ({year})/{filename}.jpg',
     tv: '/config/output/{library}/{title} ({year})/{filename}.jpg',
   },
@@ -145,242 +145,272 @@ const unlockCustom = () => {
 // {filename} token — Kometa presets always include it, so the toggle would have no
 // effect there and is hidden to avoid implying it does something.
 const showTvStructureMode = computed(() => !localTvShowSaveLocation.value.includes('{filename}'))
+
+// ---- Live examples -------------------------------------------------------
+// A faithful port of backend/save_paths.py's apply_save_location_variables(),
+// _sanitize() and resolve_save_path()'s extension handling, so the examples
+// show exactly the file a save would write. Keep the two in step.
+
+interface SampleCtx {
+  title: string
+  year?: number
+  season?: number | null
+  isTv: boolean
+  library: string
+  key: string
+  folder?: string
+}
+
+const SAMPLE_MOVIE: SampleCtx = { title: 'Inception', year: 2010, isTv: false, library: 'Movies', key: '12345', folder: 'Inception (2010)' }
+const SAMPLE_SHOW: SampleCtx = { title: 'Breaking Bad', year: 2008, isTv: true, library: 'TV Shows', key: '67890', folder: 'Breaking Bad (2008)', season: null }
+const SAMPLE_SEASON: SampleCtx = { ...SAMPLE_SHOW, season: 1 }
+const SAMPLE_COLLECTION: SampleCtx = { title: 'The Dark Knight Collection', isTv: false, library: 'Movies', key: '555' }
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+const replaceAll = (s: string, find: string, rep: string) => s.split(find).join(rep)
+
+function substitute(template: string, ctx: SampleCtx, tvMode: string): string {
+  let r = template
+  r = replaceAll(r, '{library}', ctx.library)
+  r = replaceAll(r, '{year}', ctx.year ? String(ctx.year) : '')
+  r = replaceAll(r, '{key}', ctx.key)
+  r = replaceAll(r, '{folder}', ctx.folder || ctx.title)
+  const season = ctx.isTv && ctx.season != null ? ctx.season : null
+  if (r.includes('{filename}')) {
+    r = replaceAll(r, '{filename}', season != null ? `Season${pad2(season)}` : 'poster')
+    r = replaceAll(r, '{title}', ctx.title)
+    r = replaceAll(r, '{season}', season != null ? `s${pad2(season)}` : '')
+  } else if (ctx.isTv) {
+    const nested = tvMode === 'nested'
+    if (season != null) {
+      const s = `s${pad2(season)}`
+      r = replaceAll(r, '{title}', nested ? `${ctx.title}/${s}` : `${ctx.title} - ${s}`)
+      r = replaceAll(r, '{season}', s)
+    } else {
+      r = replaceAll(r, '{title}', nested ? `${ctx.title}/series` : `${ctx.title} - series`)
+      r = replaceAll(r, '{season}', '')
+    }
+  } else {
+    r = replaceAll(r, '{title}', ctx.title)
+    r = replaceAll(r, '{season}', ctx.season ? `s${pad2(ctx.season)}` : '')
+  }
+  r = replaceAll(r, '//', '/')
+  r = r.split(/\s+/).filter(Boolean).join(' ')
+  r = r.replace(/\s*[-_]\s*\./g, '.')
+  r = r.replace(/\s*\(\s*\)/g, '')
+  r = r.replace(/\s*\[\s*\]/g, '')
+  r = r.replace(/\s{2,}/g, ' ')
+  return r
+}
+
+const outputExt = computed(() => '.' + (localOutputFormat.value || 'jpg'))
+
+// Characters the backend's _sanitize() removes (Windows/Linux-illegal + control).
+const ILLEGAL_CHARS = new Set(['<', '>', ':', '"', '\\', '|', '?', '*'])
+
+function resolveExample(template: string, ctx: SampleCtx): string {
+  if (!template) return ''
+  const substituted = substitute(template, ctx, localTvShowSaveMode.value)
+  const safe = Array.from(substituted).filter(c => !ILLEGAL_CHARS.has(c) && c.charCodeAt(0) >= 32).join('').trim()
+  const parts = safe.split('/')
+  const name = parts.pop() || ''
+  const dot = name.lastIndexOf('.')
+  const file = dot > 0 ? name.slice(0, dot) + outputExt.value : `${name}/poster${outputExt.value}`
+  const full = [...parts, file].join('/')
+  return full.startsWith('/config/output/') ? full.slice('/config/output/'.length) : full
+}
+
+function examplesFor(movieTpl: string, tvTpl: string) {
+  return [
+    { label: 'Movie', path: resolveExample(movieTpl, SAMPLE_MOVIE) },
+    { label: 'Show', path: resolveExample(tvTpl, SAMPLE_SHOW) },
+    { label: 'Season', path: resolveExample(tvTpl, SAMPLE_SEASON) },
+  ]
+}
+
+// ---- Custom templates ----------------------------------------------------
+
+type FieldKey = 'movie' | 'tv' | 'collection'
+
+const VAR_HELP: Record<string, string> = {
+  '{library}': 'Library name, e.g. "Movies"',
+  '{title}': 'Title, e.g. "Inception"',
+  '{year}': 'Release year, e.g. 2010',
+  '{folder}': "The item's real folder name on disk (from the media server); falls back to the title. Show level only for TV.",
+  '{key}': "The item's id on the media server",
+  '{filename}': '"poster", or "Season01" for a season poster (Kometa asset naming)',
+  '{season}': 'Season as "s01" (season posters only)',
+}
+
+const TEMPLATE_FIELDS: { key: FieldKey; label: string; placeholder: string; vars: string[] }[] = [
+  { key: 'movie', label: 'Movies', placeholder: '/config/output/{library}/{title} ({year}).jpg', vars: ['{library}', '{title}', '{year}', '{folder}', '{key}', '{filename}'] },
+  { key: 'tv', label: 'TV shows and seasons', placeholder: '/config/output/{library}/{title} ({year})/{filename}.jpg', vars: ['{library}', '{title}', '{year}', '{folder}', '{season}', '{filename}'] },
+  { key: 'collection', label: 'Collections', placeholder: '/config/output/{library}/Collections/{title}.jpg', vars: ['{library}', '{title}', '{key}', '{filename}'] },
+]
+
+function templateModel(key: FieldKey): WritableComputedRef<string> {
+  return key === 'movie' ? localMovieSaveLocation : key === 'tv' ? localTvShowSaveLocation : localCollectionSaveLocation
+}
+
+function fieldExample(key: FieldKey): string {
+  const tpl = templateModel(key).value
+  if (key === 'movie') return resolveExample(tpl, SAMPLE_MOVIE)
+  if (key === 'collection') return resolveExample(tpl, SAMPLE_COLLECTION)
+  return `${resolveExample(tpl, SAMPLE_SHOW)}  ·  ${resolveExample(tpl, SAMPLE_SEASON)}`
+}
+
+const inputRefs: Partial<Record<FieldKey, HTMLInputElement>> = {}
+function setInputRef(key: FieldKey, el: unknown) {
+  if (el instanceof HTMLInputElement) inputRefs[key] = el
+}
+
+function insertVar(key: FieldKey, token: string) {
+  const model = templateModel(key)
+  const el = inputRefs[key]
+  const value = model.value || ''
+  const start = el?.selectionStart ?? value.length
+  const end = el?.selectionEnd ?? value.length
+  model.value = value.slice(0, start) + token + value.slice(end)
+  nextTick(() => {
+    if (!el) return
+    el.focus()
+    const pos = start + token.length
+    el.setSelectionRange(pos, pos)
+  })
+}
 </script>
 
 <template>
   <div class="tab-content">
     <h2>Output</h2>
 
-    <!-- Image Quality Settings -->
+    <!-- Image Quality -->
     <div class="section" :class="{ 'unsaved-changes': imageQualityChanged }">
       <h3>Image Quality</h3>
       <p class="section-description">
-        Configure output format and compression settings. <strong>This only affects the live Preview and "Save to Disk"</strong> — it does not control the quality of a fresh "Send to Plex".
+        Applies to the Preview and Save to Disk. Sending to a media server always uses the best quality that fits.
+        <span
+          class="info-dot"
+          title="A send uses PNG when it's under the server's upload size limit, otherwise a high-quality JPEG. Resending an already-saved file (e.g. from Local Assets) reuses that file as it is, so a file saved at a lower quality here is resent at that quality."
+        >ⓘ</span>
       </p>
-      <p class="section-description">
-        Sending to Plex always uses the best quality that fits (PNG when it's under Plex's upload size limit, otherwise a high-quality JPEG), regardless of what's configured here. The one exception: <em>resending</em> an already-saved file (e.g. bulk resend from Local Assets) reuses that file's original bytes as-is — so if you saved it at a lower quality here, a later resend of that same file will still be that lower quality.
-      </p>
 
-      <label>
-        <span class="label-text">Output Format</span>
-        <select v-model="localOutputFormat">
-          <option value="jpg">JPEG</option>
-          <option value="png">PNG</option>
-          <option value="webp">WebP</option>
-        </select>
-      </label>
-
-      <div v-if="localOutputFormat === 'jpg'" class="quality-control">
-        <label>
-          <span class="label-text">JPEG Quality: {{ localJpgQuality }}%</span>
-          <input
-            type="range"
-            v-model.number="localJpgQuality"
-            min="1"
-            max="100"
-            step="1"
-          />
-          <span class="help-text">Higher = better quality, larger file size</span>
+      <div class="quality-row">
+        <label class="inline-field">
+          <span class="label-text">Format</span>
+          <select v-model="localOutputFormat">
+            <option value="jpg">JPEG</option>
+            <option value="png">PNG</option>
+            <option value="webp">WebP</option>
+          </select>
         </label>
-      </div>
 
-      <div v-if="localOutputFormat === 'png'" class="quality-control">
-        <label>
-          <span class="label-text">PNG Compression: {{ localPngCompression }}</span>
-          <input
-            type="range"
-            v-model.number="localPngCompression"
-            min="0"
-            max="9"
-            step="1"
-          />
-          <span class="help-text">0 = no compression (fast), 9 = max compression (slow)</span>
+        <label v-if="localOutputFormat === 'jpg'" class="inline-field grow">
+          <span class="label-text">Quality: {{ localJpgQuality }}%</span>
+          <input type="range" v-model.number="localJpgQuality" min="1" max="100" step="1" />
         </label>
-      </div>
-
-      <div v-if="localOutputFormat === 'webp'" class="quality-control">
-        <label>
-          <span class="label-text">WebP Quality: {{ localWebpQuality }}</span>
-          <input
-            type="range"
-            v-model.number="localWebpQuality"
-            min="1"
-            max="100"
-            step="1"
-          />
-          <span class="help-text">Higher = better quality, larger file size</span>
+        <label v-else-if="localOutputFormat === 'png'" class="inline-field grow">
+          <span class="label-text">Compression: {{ localPngCompression }} <span class="muted">(0 fast, 9 smallest)</span></span>
+          <input type="range" v-model.number="localPngCompression" min="0" max="9" step="1" />
+        </label>
+        <label v-else class="inline-field grow">
+          <span class="label-text">Quality: {{ localWebpQuality }}</span>
+          <input type="range" v-model.number="localWebpQuality" min="1" max="100" step="1" />
         </label>
       </div>
     </div>
 
+    <!-- Saving -->
     <div class="section">
-      <h3>Local Asset Save Paths</h3>
-      <p class="section-description">
-        Configure where generated posters are saved when using the "Save to Disk" feature.
-        Pick a layout below, or choose Custom to hand-edit the templates.
-      </p>
+      <h3>Saving</h3>
+      <p class="section-description">How Save to Disk names its files. The examples update as you choose.</p>
 
-      <div class="preset-row">
+      <div class="layout-grid">
         <button
           v-for="preset in PRESETS"
           :key="preset.key"
           type="button"
-          class="preset-btn"
+          class="layout-card"
           :class="{ active: !isCustomActive && activePresetKey === preset.key }"
           @click="applyPreset(preset)"
         >
-          {{ preset.label }}
+          <span class="layout-title">{{ preset.label }}</span>
+          <span class="layout-desc">{{ preset.description }}</span>
+          <span class="layout-example">
+            <span v-for="line in examplesFor(preset.movie, preset.tv)" :key="line.label" class="example-line">
+              <span class="example-kind">{{ line.label }}</span>
+              <code>{{ line.path }}</code>
+            </span>
+          </span>
         </button>
+
         <button
           type="button"
-          class="preset-btn"
+          class="layout-card"
           :class="{ active: isCustomActive }"
           @click="unlockCustom"
         >
-          Custom
+          <span class="layout-title">Custom</span>
+          <span class="layout-desc">Write your own naming with variables like {title} and {year}.</span>
+          <span v-if="isCustomActive" class="layout-example">
+            <span v-for="line in examplesFor(localMovieSaveLocation, localTvShowSaveLocation)" :key="line.label" class="example-line">
+              <span class="example-kind">{{ line.label }}</span>
+              <code>{{ line.path }}</code>
+            </span>
+          </span>
         </button>
       </div>
-      <p class="help-text preset-description">
-        {{ isCustomActive
-          ? 'Hand-edit the templates below.'
-          : PRESETS.find(p => p.key === activePresetKey)?.description }}
-      </p>
+      <p class="help-text root-note">Paths are shown inside <code>/config/output</code>.</p>
 
-      <label>
-        <span class="label-text">Movie Save Location</span>
-        <input
-          v-model="localMovieSaveLocation"
-          type="text"
-          placeholder="/config/output/{library}/{title}.jpg"
-          :readonly="!isCustomActive"
-        />
-        <span class="help-text">
-          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{folder}</code>, <code>{year}</code>, <code>{key}</code>, <code>{filename}</code>
-        </span>
-        <span class="help-text extra-note">
-          <code>{folder}</code> resolves to the real on-disk folder name Plex knows for this movie or TV show (show-level only, not individual seasons)
-          (independent of Plex's display-language title) — falls back to <code>{title}</code> if it
-          can't be resolved.
-        </span>
-      </label>
-
-      <label>
-        <span class="label-text">TV Show Save Location</span>
-        <input
-          v-model="localTvShowSaveLocation"
-          type="text"
-          placeholder="/config/output/{library}/{title} ({year}).jpg"
-          :readonly="!isCustomActive"
-        />
-        <span class="help-text">
-          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{folder}</code>, <code>{year}</code>, <code>{season}</code>, <code>{filename}</code>
-        </span>
-        <span class="help-text extra-note">
-          <code>{filename}</code> resolves to <code>poster</code> (movie or show poster) or <code>SeasonNN</code> (a season
-          poster) — Kometa's exact asset-naming convention. Templates without <code>{filename}</code> fall back to the
-          "TV Show File Structure" setting below instead.
-        </span>
-      </label>
-
-      <label>
-        <span class="label-text">Collection Save Location</span>
-        <input
-          v-model="localCollectionSaveLocation"
-          type="text"
-          placeholder="/config/output/{library}/Collections/{title}.jpg"
-          :readonly="!isCustomActive"
-        />
-        <span class="help-text">
-          Available variables: <code>{library}</code>, <code>{title}</code>, <code>{key}</code>, <code>{filename}</code>
-        </span>
-        <span class="help-text extra-note">
-          Used when saving or sending a Plex collection poster (Simposter Creator or Kometa Creator).
-          <code>{title}</code> is the collection's name — collections have no year or season.
-        </span>
-      </label>
-
-      <label v-if="showTvStructureMode">
-        <span class="label-text">TV Show File Structure</span>
+      <label v-if="showTvStructureMode" class="inline-field structure-field">
+        <span class="label-text">Show and season posters</span>
         <select v-model="localTvShowSaveMode">
-          <option value="flat">Flat - All in one folder (e.g., "Show - series (Year).jpg", "Show - s01 (Year).jpg")</option>
-          <option value="nested">Nested - Each show in its own folder (e.g., "Show (Year)/series.jpg", "Show (Year)/s01.jpg")</option>
+          <option value="flat">All in the library folder</option>
+          <option value="nested">In a folder per show</option>
         </select>
-        <span class="help-text">
-          Only used when the TV Show Save Location above doesn't include <code>{filename}</code>.
+      </label>
+
+      <!-- Templates: only when Custom is chosen -->
+      <div v-if="isCustomActive" class="custom-fields">
+        <div v-for="field in TEMPLATE_FIELDS" :key="field.key" class="template-field">
+          <span class="label-text">{{ field.label }}</span>
+          <input
+            :ref="el => setInputRef(field.key, el)"
+            :value="templateModel(field.key).value"
+            type="text"
+            :placeholder="field.placeholder"
+            @input="templateModel(field.key).value = ($event.target as HTMLInputElement).value"
+          />
+          <div class="var-chips">
+            <button
+              v-for="v in field.vars"
+              :key="v"
+              type="button"
+              class="var-chip"
+              :title="VAR_HELP[v]"
+              @click="insertVar(field.key, v)"
+            >{{ v }}</button>
+          </div>
+          <span class="help-text">e.g. <code>{{ fieldExample(field.key) }}</code></span>
+        </div>
+      </div>
+
+      <div class="options">
+        <label class="checkbox-label">
+          <input type="checkbox" v-model="localSaveToAssetFolderOnSend" />
+          <span>Also save a copy when sending to a media server</span>
+        </label>
+        <span class="help-text checkbox-help">
+          Writes the sent poster here too, so tools like Kometa can use it. Off: sent posters stay in Simposter's own cache (still resendable).
         </span>
-      </label>
 
-      <label class="checkbox-label">
-        <input type="checkbox" v-model="localSaveBatchInSubfolder" />
-        <span>Save batch operations in timestamped subfolder</span>
-      </label>
-      <span class="help-text checkbox-help">
-        When enabled, every item in the same batch run is saved under one shared folder like "batch-2025-01-08-143022".
-      </span>
-    </div>
-
-    <div class="section">
-      <h3>Send to Plex</h3>
-      <label class="checkbox-label">
-        <input type="checkbox" v-model="localSaveToAssetFolderOnSend" />
-        <span>Also save to the local asset folder when sending to Plex</span>
-      </label>
-      <span class="help-text checkbox-help">
-        When enabled, sending a poster to Plex also writes it to your configured save location above (using the
-        same template) — so other tools like Kometa can reuse the file, and so you can resend it later straight
-        from that file. When disabled (default), sent posters are kept in an internal cache instead, invisible to
-        other tools but still resendable from the library grid.
-      </span>
-    </div>
-
-    <div class="section info-section">
-      <h3>Path Variable Examples</h3>
-      <div class="examples">
-        <div class="example-item">
-          <div class="example-label">Default — movie:</div>
-          <code>/config/output/{library}/{title}.jpg</code>
-          <div class="example-result">→ /config/output/4K Movies/The Matrix.jpg</div>
-        </div>
-
-        <div class="example-item">
-          <div class="example-label">Default — TV show (flat structure):</div>
-          <code>/config/output/{library}/{title} ({year}).jpg</code>
-          <div class="example-result">→ /config/output/TV Shows/Breaking Bad - series (2008).jpg</div>
-          <div class="example-result">→ /config/output/TV Shows/Breaking Bad - s01 (2008).jpg</div>
-        </div>
-
-        <div class="example-item">
-          <div class="example-label">Flat — movie:</div>
-          <code>/config/output/{library}/{title} ({year}).jpg</code>
-          <div class="example-result">→ /config/output/Movies/Inception (2010).jpg</div>
-        </div>
-
-        <div class="example-item">
-          <div class="example-label">Flat — TV show:</div>
-          <code>/config/output/{library}/{title} ({year}) {filename}.jpg</code>
-          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008) poster.jpg</div>
-          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008) Season01.jpg</div>
-        </div>
-
-        <div class="example-item">
-          <div class="example-label">Asset folders (Kometa) — movie and TV:</div>
-          <code>/config/output/{library}/{title} ({year})/{filename}.jpg</code>
-          <div class="example-result">→ /config/output/Movies/Inception (2010)/poster.jpg</div>
-          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008)/poster.jpg</div>
-          <div class="example-result">→ /config/output/TV Shows/Breaking Bad (2008)/Season01.jpg</div>
-        </div>
-
-        <div class="example-item">
-          <div class="example-label">Organized by year folder (Custom):</div>
-          <code>/config/output/{library}/{year}/{title}.jpg</code>
-          <div class="example-result">→ /config/output/Movies/2024/Dune Part Two.jpg</div>
-        </div>
-
-        <div class="example-item">
-          <div class="example-label">Using the real on-disk folder name (Custom):</div>
-          <code>/config/output/{library}/{folder}/poster.jpg</code>
-          <div class="example-result">→ /config/output/Films/Before Sunrise (1995)/poster.jpg</div>
-        </div>
+        <label class="checkbox-label">
+          <input type="checkbox" v-model="localSaveBatchInSubfolder" />
+          <span>Put each batch run in its own folder</span>
+        </label>
+        <span class="help-text checkbox-help">
+          e.g. <code>batch-2025-01-08-143022/Movies/…</code>
+        </span>
       </div>
     </div>
 
@@ -433,10 +463,6 @@ h3 {
   line-height: 1.5;
 }
 
-.info-section {
-  background: rgba(100, 200, 255, 0.03);
-  border-color: rgba(100, 200, 255, 0.2);
-}
 
 label {
   display: flex;
@@ -466,9 +492,6 @@ label {
   color: var(--accent);
 }
 
-.extra-note {
-  margin-top: 4px;
-}
 
 .checkbox-label {
   flex-direction: row;
@@ -543,48 +566,11 @@ input[type="range"]::-moz-range-thumb {
   border: none;
 }
 
-.quality-control {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
 
-.examples {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
 
-.example-item {
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-}
 
-.example-label {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
 
-.example-item code {
-  display: block;
-  background: rgba(255, 255, 255, 0.08);
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
-  color: var(--accent);
-  margin: 6px 0;
-}
 
-.example-result {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-style: italic;
-  margin-top: 6px;
-}
 
 .actions {
   display: flex;
@@ -624,31 +610,160 @@ button:disabled {
   cursor: not-allowed;
 }
 
-.preset-row {
+
+
+
+
+
+.muted {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.info-dot {
+  cursor: help;
+  color: var(--accent);
+  margin-left: 4px;
+}
+
+.quality-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 20px;
+  align-items: flex-end;
 }
 
-.preset-btn {
-  padding: 8px 16px;
-  font-size: 13px;
+.inline-field {
+  margin-bottom: 0;
+  min-width: 160px;
 }
 
-.preset-btn.active {
-  background: var(--accent);
+.inline-field.grow {
+  flex: 1;
+  min-width: 220px;
+}
+
+.inline-field select {
+  width: auto;
+  min-width: 160px;
+}
+
+.layout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.layout-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  text-align: left;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-weight: 400;
+}
+
+.layout-card:hover:not(:disabled) {
   border-color: var(--accent);
-  color: white;
+  transform: none;
 }
 
-.preset-description {
-  margin-top: 0;
-  margin-bottom: 20px;
+.layout-card.active {
+  border-color: var(--accent);
+  background: rgba(61, 214, 183, 0.08);
+  box-shadow: 0 0 0 1px var(--accent) inset;
 }
 
-input[type="text"][readonly] {
-  opacity: 0.7;
-  cursor: not-allowed;
+.layout-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.layout-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.layout-example {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.example-line {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.example-kind {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.example-line code {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.root-note {
+  margin-top: 8px;
+}
+
+.structure-field {
+  margin-top: 16px;
+}
+
+.custom-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.template-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.var-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.var-chip {
+  padding: 3px 8px;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--accent);
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.options .checkbox-help {
+  margin-bottom: 10px;
 }
 </style>

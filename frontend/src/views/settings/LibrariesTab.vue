@@ -1,6 +1,27 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import { useSettingsStore, type LibraryGroup } from '@/stores/settings'
+import LibraryGroupCard from '@/components/settings/LibraryGroupCard.vue'
+
+interface DiscoveredLibrary {
+  serverId: string
+  serverType: string
+  libraryId: string
+  libraryName: string
+  mediaType: string
+}
+const discoveredLibraries = ref<DiscoveredLibrary[]>([])
+
+async function fetchDiscoveredLibraries() {
+  try {
+    const res = await fetch(`${apiBase}/api/media-server/libraries`)
+    const data = await res.json()
+    discoveredLibraries.value = (data.libraries || []).filter((l: DiscoveredLibrary) => l.serverId !== 'plex-1')
+  } catch (e) {
+    console.error('Failed to fetch discovered libraries:', e)
+  }
+}
 
 interface LibraryMapping {
   id: string
@@ -36,14 +57,16 @@ interface TVShow {
 }
 
 const props = defineProps<{
+  // plexUrl/plexToken are read-only here (gating fetchLibraryLabels() below) --
+  // the actual Plex Connection card (URL/Token/Test Connection) now lives in
+  // Settings -> Media Servers, styled to match what used to be here; see
+  // CLAUDE.md's Settings-cleanup Quirk.
   plexUrl: string
   plexToken: string
   libraries: LibraryMapping[]
   tvShowLibraries: LibraryMapping[]
   savedLibraryIds: Set<string>
   savedTvShowLibraryIds: Set<string>
-  testConnection: string
-  testConnectionLoading: boolean
   plexLibraries: PlexLibrary[]
   scanCooldown: boolean
   scanningLibraryId: string | null
@@ -55,9 +78,13 @@ const props = defineProps<{
   defaultTvLabelsToRemove: Record<string, string[]>
   unsavedChanges: boolean
   schedulerChanged?: boolean
-  plexConnectionChanged?: boolean
   movieLibrariesChanged?: boolean
   tvLibrariesChanged?: boolean
+  // The last-SAVED libraryGroups list (not the live store) -- lets each
+  // LibraryGroupCard show its own per-field "unsaved" dot instead of only
+  // the whole-section yellow border above, which a user can miss when
+  // there are several groups and only one of them actually changed.
+  initialLibraryGroups?: any[]
   sendLogosToPlex: boolean
   kometaCompatibility: boolean
 }>()
@@ -67,8 +94,6 @@ const availablePresets = ref<Record<string, Preset[]>>({})
 const presetsLoading = ref(false)
 
 const emit = defineEmits<{
-  'update:plexUrl': [value: string]
-  'update:plexToken': [value: string]
   'update:libraries': [value: LibraryMapping[]]
   'update:tvShowLibraries': [value: LibraryMapping[]]
   'update:schedulerEnabled': [value: boolean]
@@ -78,21 +103,33 @@ const emit = defineEmits<{
   'update:defaultTvLabelsToRemove': [value: Record<string, string[]>]
   'update:sendLogosToPlex': [value: boolean]
   'update:kometaCompatibility': [value: boolean]
-  'test-connection': []
-  'scan-library': [libraryId?: string]
+  'scan-library': [libraryId?: string, forceRefresh?: boolean]
   'save': []
   'library-removed': [libraryId: string]
 }>()
 
-const localPlexUrl = computed({
-  get: () => props.plexUrl,
-  set: (val) => emit('update:plexUrl', val)
-})
-
-const localPlexToken = computed({
-  get: () => props.plexToken,
-  set: (val) => emit('update:plexToken', val)
-})
+// Whether Plex is actually connected right now -- used to hide the handful
+// of genuinely Plex-only controls on this page (Scan All Libraries, Default
+// Labels to Remove, Kometa Compatibility -- none of these have any effect,
+// or any real target to act on, for a Jellyfin/Emby-only install) rather
+// than always showing them with just a "Plex only" text tag. The per-group
+// Plex/Emby link rows (LibraryGroupCard.vue) have their own identical,
+// independent check for the same reason.
+// Plex has a URL + token and its main server isn't switched off (Settings -> Media Servers).
+const plexConfigured = computed(() =>
+  !!(props.plexUrl && props.plexToken) &&
+  settingsStore.mediaServers.value.find(s => s.id === 'plex-1')?.enabled !== false
+)
+// Whether ANY server (Plex, Jellyfin, or Emby) is configured -- matches
+// App.vue's identical anyServerConfigured check. Scheduled Scans is no
+// longer Plex-only (the scheduler now also covers linked AND standalone
+// Jellyfin/Emby-only library groups, see backend/scheduler.py's
+// _scan_standalone_nonplex_groups()), so its own gate is broader than the
+// genuinely Plex-only controls above (Scan All Libraries, Default Labels to
+// Remove, Kometa Compatibility), which stay gated on plexConfigured alone.
+const anyServerConfigured = computed(() =>
+  plexConfigured.value || settingsStore.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
+)
 
 const localLibraries = computed({
   get: () => {
@@ -307,80 +344,239 @@ const toggleIgnoreLabel = (libraryIdx: number, label: string, isTv: boolean) => 
   }
 }
 
-const toggleLibrarySelection = (libraryId: string) => {
-  const current = [...localSchedulerLibraryIds.value]
-  const index = current.indexOf(libraryId)
-  if (index > -1) {
-    current.splice(index, 1)
+// The scan schedule picks library GROUPS ("group:<id>"), covering every server
+// in each group. Older saved selections were bare Plex library ids; a group is
+// shown as selected when its Plex library is in such a list, and the first
+// change rewrites the selection in the group form.
+const isLibrarySelected = (entryId: string) => {
+  if (localSchedulerLibraryIds.value.includes(entryId)) return true
+  const opt = availableLibrariesForScheduler.value.find(o => o.id === entryId)
+  return !!opt?.plexLibraryId && localSchedulerLibraryIds.value.includes(opt.plexLibraryId)
+}
+
+const toggleLibrarySelection = (entryId: string) => {
+  const selected = new Set(availableLibrariesForScheduler.value.filter(o => isLibrarySelected(o.id)).map(o => o.id))
+  if (selected.has(entryId)) selected.delete(entryId)
+  else selected.add(entryId)
+  localSchedulerLibraryIds.value = [...selected]
+}
+
+// ── Unified Library Groups (replaces the old separate "Plex-anchored card" /
+// "Jellyfin/Emby-Only Libraries" sections) ──────────────────────────────────
+// A LibraryGroup is just a LibraryGroup -- it can have a Plex member, a
+// Jellyfin/Emby member, both, or (while being built) none at all. The one
+// remaining wrinkle: backend automation (auto_generate.py/webhooks.py/
+// scheduler.py) still reads plex.libraryMappings/tvShowLibraryMappings
+// directly for a Plex library's own settings, not LibraryGroup -- so a group
+// with a Plex member needs BOTH updated together, in lockstep, every time.
+const settingsStore = useSettingsStore()
+
+// Deliberately no explicit `: LibraryMapping` return annotation -- that would
+// widen the object to the interface's own optional-key shape, which conflicts
+// with localLibraries/localTvShowLibraries' computed setter (its inferred
+// element type requires autoGeneratePresetId to be a present key, even though
+// it's optional on the interface). Letting TS infer the literal object type
+// instead keeps the key always-present, matching what's actually assigned.
+function newMappingEntry(id: string, title: string, group: LibraryGroup) {
+  return {
+    id,
+    title,
+    displayName: group.name || title,
+    autoGenerateEnabled: !!group.autoGenerateEnabled,
+    autoGeneratePresetId: group.autoGeneratePresetId ?? null,
+    autoGenerateTemplateId: group.autoGenerateTemplateId ?? null,
+  }
+}
+
+// Backfills a LibraryGroup for any Plex mapping that doesn't already have one
+// -- covers existing installs whose libraries predate this unified model, or
+// a library added via the settings API directly. Runs on mount and whenever
+// the mapping arrays change; naturally idempotent (a no-op once every
+// mapping already has a group).
+function ensureGroupsForMappings() {
+  const ensureFor = (mappings: LibraryMapping[], mediaType: 'movie' | 'tv') => {
+    let current = settingsStore.libraryGroups.value
+    let changed = false
+    for (const lib of mappings) {
+      if (!lib.id) continue
+      const exists = current.some(g =>
+        g.mediaType === mediaType && g.members.some(m => m.serverId === 'plex-1' && m.libraryId === String(lib.id))
+      )
+      if (!exists) {
+        current = [...current, {
+          id: `group-${mediaType}-${lib.id}`,
+          name: lib.displayName || lib.title || String(lib.id),
+          mediaType,
+          members: [{ serverId: 'plex-1', libraryId: String(lib.id), libraryName: lib.displayName || lib.title }],
+          autoGenerateEnabled: !!lib.autoGenerateEnabled,
+          autoGeneratePresetId: lib.autoGeneratePresetId ?? null,
+          autoGenerateTemplateId: lib.autoGenerateTemplateId ?? null,
+          labelsToRemove: [],
+        }]
+        changed = true
+      }
+    }
+    if (changed) settingsStore.libraryGroups.value = current
+  }
+  ensureFor(localLibraries.value, 'movie')
+  ensureFor(localTvShowLibraries.value, 'tv')
+}
+
+interface UnifiedCard { key: string; group: LibraryGroup; mappingIdx: number | null }
+
+function buildUnifiedCards(mappings: LibraryMapping[], mediaType: 'movie' | 'tv'): UnifiedCard[] {
+  const allGroups = settingsStore.libraryGroups.value.filter(g => g.mediaType === mediaType)
+  const cards: UnifiedCard[] = []
+  const usedGroupIds = new Set<string>()
+
+  // Key is ALWAYS group-{id} -- stable across a group gaining/losing its
+  // Plex mapping, never mapping-{lib.id}. A prior version keyed the two
+  // branches differently, which meant Vue's v-for saw a genuinely different
+  // key the instant a Plex library got linked (a group transitions from the
+  // second loop below to this one) -- forcing a full LibraryGroupCard.vue
+  // component DESTROY+RECREATE, not just a re-render, wiping any in-progress
+  // local state on it (a Jellyfin/Emby picker selection not yet submitted,
+  // an open name-edit, etc.) at exactly the moment a user is most likely to
+  // still be mid-edit (picking Plex, then immediately picking Jellyfin for
+  // the same new group). A real, reported symptom this contributed to: a
+  // freshly-created group ending up with neither library actually linked
+  // after saving.
+  mappings.forEach((lib, idx) => {
+    if (!lib.id) return
+    const group = allGroups.find(g => g.members.some(m => m.serverId === 'plex-1' && m.libraryId === String(lib.id)))
+    if (!group) return // backfilled by ensureGroupsForMappings() on the next tick
+    usedGroupIds.add(group.id)
+    cards.push({ key: `group-${group.id}`, group, mappingIdx: idx })
+  })
+
+  allGroups.forEach(g => {
+    if (usedGroupIds.has(g.id)) return
+    cards.push({ key: `group-${g.id}`, group: g, mappingIdx: null })
+  })
+
+  return cards
+}
+
+const movieUnifiedCards = computed(() => buildUnifiedCards(localLibraries.value, 'movie'))
+const tvUnifiedCards = computed(() => buildUnifiedCards(localTvShowLibraries.value, 'tv'))
+
+const usedPlexMovieLibraryIds = computed(() => new Set(localLibraries.value.map(l => String(l.id)).filter(Boolean)))
+const usedPlexTvLibraryIds = computed(() => new Set(localTvShowLibraries.value.map(l => String(l.id)).filter(Boolean)))
+
+function addNewGroup(mediaType: 'movie' | 'tv') {
+  const id = `group-${mediaType}-new-${Date.now()}`
+  settingsStore.libraryGroups.value = [...settingsStore.libraryGroups.value, {
+    id,
+    name: '',
+    mediaType,
+    members: [],
+    autoGenerateEnabled: false,
+    autoGeneratePresetId: null,
+    autoGenerateTemplateId: null,
+    labelsToRemove: [],
+  }]
+}
+
+function onLinkPlex(mediaType: 'movie' | 'tv', group: LibraryGroup, key: string, title: string) {
+  // This function's ONLY job is the localLibraries/localTvShowLibraries side
+  // (the plain mapping-array entry) -- LibraryGroupCard.vue's own linkPlex()
+  // ALREADY writes the new member directly into settingsStore.libraryGroups
+  // itself, synchronously, before it ever emits link-plex up to here. A
+  // prior version of this function ALSO wrote to libraryGroups a second
+  // time, reasoning (wrongly) that nothing else did -- a genuine regression,
+  // not a fix: two independent writers racing to update the same group
+  // based on two different snapshots of it is exactly what caused a group
+  // to end up with duplicate/lost members depending on timing. Single
+  // writer (the child) for libraryGroups; this function only ever owns the
+  // mapping-array side, which the child has no reason to know about.
+  const target = mediaType === 'movie' ? localLibraries : localTvShowLibraries
+  target.value = [...target.value, newMappingEntry(key, title, group)]
+}
+
+function onUnlinkPlex(mediaType: 'movie' | 'tv', group: LibraryGroup) {
+  // Every plex-1 member, not just the first -- self-healing for a group
+  // already corrupted by the pre-fix onLinkPlex() double-click race (a
+  // group is only ever meant to have one Plex member; the guard in
+  // onLinkPlex() above prevents a NEW one, but this needs to actually clean
+  // up whatever already got added before that guard existed, since the
+  // group's own "Link a Plex library..." picker stays hidden -- and the
+  // picker/chip UI only ever showed the FIRST one anyway -- for as long as
+  // ANY plex-1 member remains, so there was previously no way to reach a
+  // second, hidden duplicate through the normal UI at all).
+  const plexMembers = group.members.filter(m => m.serverId === 'plex-1')
+  if (!plexMembers.length) return
+  const target = mediaType === 'movie' ? localLibraries : localTvShowLibraries
+  const savedIds = mediaType === 'movie' ? props.savedLibraryIds : props.savedTvShowLibraryIds
+  const plexLibraryIds = new Set(plexMembers.map(m => m.libraryId))
+  const toRemove = target.value.filter(l => l.id && plexLibraryIds.has(String(l.id)))
+  if (toRemove.length) {
+    const anySaved = toRemove.some(l => savedIds.has(String(l.id)))
+    if (anySaved) {
+      const label = toRemove.length > 1
+        ? `these ${toRemove.length} libraries`
+        : `"${toRemove[0]!.displayName || toRemove[0]!.title || toRemove[0]!.id}"`
+      if (!window.confirm(`Remove ${label}? This also deletes cached posters/labels and pending retry-queue entries once you save (History is kept). This can't be undone.`)) {
+        return
+      }
+    }
+    target.value = target.value.filter(l => !(l.id && plexLibraryIds.has(String(l.id))))
+    for (const lib of toRemove) {
+      if (lib.id && savedIds.has(String(lib.id))) emit('library-removed', String(lib.id))
+    }
+  }
+  const remainingMembers = group.members.filter(m => m.serverId !== 'plex-1')
+  if (remainingMembers.length === 0) {
+    settingsStore.libraryGroups.value = settingsStore.libraryGroups.value.filter(g => g.id !== group.id)
   } else {
-    current.push(libraryId)
+    settingsStore.libraryGroups.value = settingsStore.libraryGroups.value.map(g => g.id === group.id ? { ...g, members: remainingMembers } : g)
   }
-  localSchedulerLibraryIds.value = current
 }
 
-const isLibrarySelected = (libraryId: string) => {
-  return localSchedulerLibraryIds.value.includes(libraryId)
-}
-
-const addLibrary = () => {
-  localLibraries.value = [...localLibraries.value, {
-    id: '',
-    title: '',
-    displayName: '',
-    autoGenerateEnabled: false,
-    autoGeneratePresetId: null,
-    autoGenerateTemplateId: null
-  }]
-}
-
-const removeLibrary = (idx: number) => {
-  const target = localLibraries.value[idx]
-  const wasSaved = target?.id && props.savedLibraryIds.has(String(target.id))
-  if (wasSaved) {
-    const label = target!.displayName || target!.title || target!.id
-    if (!window.confirm(`Remove "${label}"? This also deletes its cached posters/labels and pending retry-queue entries once you save (History is kept). This can't be undone.`)) {
+function onRemoveGroup(mediaType: 'movie' | 'tv', group: LibraryGroup) {
+  const plexMember = group.members.find(m => m.serverId === 'plex-1')
+  if (plexMember) {
+    const target = mediaType === 'movie' ? localLibraries : localTvShowLibraries
+    const savedIds = mediaType === 'movie' ? props.savedLibraryIds : props.savedTvShowLibraryIds
+    const idx = target.value.findIndex(l => String(l.id) === plexMember.libraryId)
+    if (idx === -1) return
+    const lib = target.value[idx]
+    const wasSaved = lib?.id && savedIds.has(String(lib.id))
+    const label = lib!.displayName || lib!.title || lib!.id
+    const extra = group.members.length > 1 ? ' and its linked libraries' : ''
+    if (!window.confirm(`Remove "${label}"${extra}? This also deletes its cached posters/labels and pending retry-queue entries once you save (History is kept). This can't be undone.`)) {
       return
     }
+    target.value = target.value.filter((_, i) => i !== idx)
+    if (wasSaved && lib?.id) emit('library-removed', String(lib.id))
   }
-  localLibraries.value = localLibraries.value.filter((_, i) => i !== idx)
-  if (wasSaved && target?.id) {
-    emit('library-removed', String(target.id))
-  }
+  settingsStore.libraryGroups.value = settingsStore.libraryGroups.value.filter(g => g.id !== group.id)
 }
 
-const addTvShowLibrary = () => {
-  localTvShowLibraries.value = [...localTvShowLibraries.value, {
-    id: '',
-    title: '',
-    displayName: '',
-    autoGenerateEnabled: false,
-    autoGeneratePresetId: null,
-    autoGenerateTemplateId: null
-  }]
+function onUpdateMapping(mediaType: 'movie' | 'tv', idx: number, patch: Partial<LibraryMapping>) {
+  const target = mediaType === 'movie' ? localLibraries : localTvShowLibraries
+  const libs = [...target.value]
+  const lib = libs[idx]
+  if (!lib) return
+  libs[idx] = { ...lib, ...patch }
+  target.value = libs
 }
 
-const removeTvShowLibrary = (idx: number) => {
-  const target = localTvShowLibraries.value[idx]
-  const wasSaved = target?.id && props.savedTvShowLibraryIds.has(String(target.id))
-  if (wasSaved) {
-    const label = target!.displayName || target!.title || target!.id
-    if (!window.confirm(`Remove "${label}"? This also deletes its cached posters/labels and pending retry-queue entries once you save (History is kept). This can't be undone.`)) {
-      return
-    }
-  }
-  localTvShowLibraries.value = localTvShowLibraries.value.filter((_, i) => i !== idx)
-  if (wasSaved && target?.id) {
-    emit('library-removed', String(target.id))
-  }
+function onScanPlex(mediaType: 'movie' | 'tv', idx: number) {
+  const target = mediaType === 'movie' ? localLibraries : localTvShowLibraries
+  const lib = target.value[idx]
+  if (lib?.id) emit('scan-library', lib.id)
 }
 
-const availableLibrariesForScheduler = computed(() => {
-  const allLibs = [
-    ...props.libraries.map(l => ({ id: l.id, name: l.displayName || l.title || l.id, type: 'Movie' })),
-    ...props.tvShowLibraries.map(l => ({ id: l.id, name: l.displayName || l.title || l.id, type: 'TV' }))
-  ].filter(l => l.id)
-  return allLibs
-})
+const availableLibrariesForScheduler = computed(() =>
+  settingsStore.libraryGroups.value
+    .filter(g => g.members.length > 0)
+    .map(g => ({
+      id: `group:${g.id}`,
+      name: g.name || g.members[0]?.libraryName || g.id,
+      type: g.mediaType === 'tv' ? 'TV' : 'Movie',
+      plexLibraryId: g.members.find(m => m.serverId === 'plex-1')?.libraryId || '',
+    }))
+)
 
 const formatNextRunTime = (timestamp: string | null) => {
   if (!timestamp) return 'Not scheduled'
@@ -410,6 +606,8 @@ const fetchPresets = async () => {
 const allPresets = computed(() => {
   const presets: Preset[] = []
   Object.entries(availablePresets.value).forEach(([templateId, templateData]) => {
+    // Kometa is a collections-only template; auto-generate renders movie/TV posters.
+    if (templateId === 'kometa') return
     const templatePresets = (templateData as any).presets
     if (Array.isArray(templatePresets)) {
       templatePresets.forEach(preset => {
@@ -425,6 +623,8 @@ const allPresets = computed(() => {
 
 onMounted(async () => {
   fetchPresets()
+  fetchDiscoveredLibraries()
+  ensureGroupsForMappings()
   // Fetch labels if we have Plex credentials and libraries
   if (props.plexUrl && props.plexToken && (props.libraries.length > 0 || props.tvShowLibraries.length > 0)) {
     await fetchLibraryLabels()
@@ -440,6 +640,7 @@ watch(
     () => props.plexToken
   ],
   () => {
+    ensureGroupsForMappings()
     // Only fetch if we have credentials and at least one library
     if (props.plexUrl && props.plexToken && (props.libraries.length > 0 || props.tvShowLibraries.length > 0)) {
       fetchLibraryLabels()
@@ -454,54 +655,9 @@ watch(
   <div class="tab-content">
     <h2>Libraries</h2>
 
-    <!-- Plex Connection -->
-    <div :class="['section', { 'section-unsaved': plexConnectionChanged }]">
-      <h3>Plex Connection</h3>
-
-      <div class="plex-connection-grid">
-        <label>
-          <span class="label-text">Plex URL</span>
-          <input
-            v-model="localPlexUrl"
-            type="text"
-            placeholder="http://localhost:32400"
-          />
-          <span class="help-text">Your Plex server URL</span>
-        </label>
-
-        <label>
-          <span class="label-text">Plex Token</span>
-          <input
-            v-model="localPlexToken"
-            type="password"
-            placeholder="X-Plex-Token"
-          />
-          <span class="help-text">Find your Plex token in Plex settings</span>
-        </label>
-      </div>
-
-      <div class="plex-actions">
-        <button
-          @click="emit('test-connection')"
-          :disabled="testConnectionLoading || !localPlexUrl || !localPlexToken"
-          class="secondary"
-        >
-          {{ testConnectionLoading ? 'Testing...' : 'Test Connection' }}
-        </button>
-
-        <button
-          @click="emit('scan-library')"
-          :disabled="scanCooldown"
-          class="secondary"
-        >
-          {{ scanCooldown ? 'Scanning...' : 'Scan All Libraries' }}
-        </button>
-
-        <div v-if="testConnection" class="status-message">
-          {{ testConnection }}
-        </div>
-      </div>
-    </div>
+    <p class="plex-connection-hint">
+      Manage your media servers in <router-link to="/settings?tab=media-servers">Settings → Media Servers</router-link>.
+    </p>
 
     <!-- Global Logo Settings -->
     <div class="section">
@@ -512,251 +668,127 @@ watch(
           :checked="sendLogosToPlex"
           @change="emit('update:sendLogosToPlex', ($event.target as HTMLInputElement).checked)"
         />
-        <span>Send logos to Plex by default</span>
+        <span>Send logos to media servers by default</span>
       </label>
-      <p class="help-text">When enabled, the "Send logo to Plex" option will be pre-checked in the poster editor and batch edit screens.</p>
+      <p class="help-text">When enabled, the "Send logo" option will be pre-checked in the poster editor and batch edit screens. In the manual poster editor this already applies to whichever server(s) an item is linked to (Plex, Jellyfin, or Emby); Batch Edit's logo send is still Plex-only for now.</p>
     </div>
 
-    <!-- Libraries Grid -->
+    <div v-if="plexConfigured" class="scan-all-row">
+      <button
+        @click="emit('scan-library')"
+        :disabled="scanCooldown"
+        class="secondary"
+      >
+        {{ scanCooldown ? 'Scanning...' : 'Scan All Libraries' }}
+      </button>
+      <button
+        @click="emit('scan-library', undefined, true)"
+        :disabled="scanCooldown"
+        class="secondary-small"
+        title="A normal scan skips any item whose poster/logo/backdrop/square art is already cached, for speed. Use this instead after changing posters directly in Plex, to force everything to re-download."
+      >
+        {{ scanCooldown ? 'Scanning...' : '🔄 Force Refresh All Art' }}
+      </button>
+    </div>
+    <p v-if="plexConfigured" class="help-text">Scans now skip art that's already cached, for speed — "Force Refresh All Art" re-downloads everything from Plex, same as scans always used to.</p>
+
+    <!-- Libraries Grid -- two main groups, Movies and TV Shows. Each one lists
+         Library Groups: a group can contain any combination of Plex/Jellyfin/
+         Emby libraries -- one of any of them, several, or (mid-setup) none
+         yet. There's no separate "Jellyfin/Emby-only" section anymore; a
+         group with no Plex member is just a group like any other. -->
     <div class="libraries-grid">
       <!-- Movie Libraries -->
       <div :class="['section', { 'section-unsaved': movieLibrariesChanged }]">
         <div class="section-header-inline">
           <h3>Movie Libraries</h3>
-          <button @click="addLibrary" class="secondary-small">
-            + Add
+          <button @click="addNewGroup('movie')" class="secondary-small">
+            + New Group
           </button>
         </div>
 
-        <div v-for="(lib, idx) in localLibraries" :key="idx" class="library-card">
-        <div class="library-fields">
-          <label>
-            <span class="label-text">Library ID</span>
-            <select
-              v-model="lib.id"
-              :disabled="savedLibraryIds.has(String(lib.id))"
-              @change="updateLibraries"
-            >
-              <option value="">Select a library...</option>
-              <option
-                v-for="plexLib in plexLibraries.filter(l => l.type === 'movie')"
-                :key="plexLib.key"
-                :value="plexLib.key"
-              >
-                {{ plexLib.title }} ({{ plexLib.key }})
-              </option>
-            </select>
-          </label>
-
-          <label>
-            <span class="label-text">Display Name</span>
-            <input
-              v-model="lib.displayName"
-              type="text"
-              placeholder="Custom display name"
-              @input="updateLibraries"
-            />
-          </label>
-        </div>
-
-        <!-- Auto-Generation Settings -->
-        <div v-if="lib.id" class="auto-gen-section">
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="lib.autoGenerateEnabled" @change="updateLibraries" />
-            <span>Enable automatic poster generation for new content</span>
-          </label>
-
-          <div v-if="lib.autoGenerateEnabled" class="preset-selection">
-            <label>
-              <span class="label-text">Template & Preset</span>
-              <select v-model="lib.autoGeneratePresetId" @change="updateLibraries">
-                <option value="">Select a preset...</option>
-                <option
-                  v-for="preset in allPresets"
-                  :key="preset.id"
-                  :value="preset.id"
-                >
-                  {{ preset.name }}
-                </option>
-              </select>
-              <span class="help-text">Choose which template/preset to use for auto-generation</span>
-            </label>
-          </div>
-        </div>
-
-        <!-- Webhook Ignore Labels -->
-        <div v-if="lib.id" class="webhook-ignore-section">
-          <label>
-            <span class="label-text">Webhook Ignore Labels</span>
-            <span class="help-text">Items with these labels will be skipped when webhooks trigger poster generation</span>
-          </label>
-          <div v-if="(availableLabels[lib.id] || []).length > 0" class="ignore-labels-grid">
-            <label
-              v-for="label in availableLabels[lib.id] || []"
-              :key="`ignore-${lib.id}-${label}`"
-              class="label-checkbox ignore-label-checkbox"
-            >
-              <input
-                type="checkbox"
-                :checked="(lib.webhookIgnoreLabels || []).includes(label)"
-                @change="toggleIgnoreLabel(idx, label, false)"
-              />
-              <span>{{ label }}</span>
-            </label>
-          </div>
-          <p v-else class="no-labels-hint">
-            No labels available. Scan the library and click "Refresh Labels" in the Labels section below.
-          </p>
-        </div>
-
-        <div class="library-actions">
-          <button
-            v-if="lib.id"
-            @click="emit('scan-library', lib.id)"
-            :disabled="scanCooldown || scanningLibraryId === lib.id"
-            class="scan-btn"
-            :title="`Scan ${lib.displayName || lib.title || lib.id}`"
-          >
-            {{ scanningLibraryId === lib.id ? 'Scanning...' : 'Scan' }}
-          </button>
-
-          <button
-            v-if="localLibraries.length > 1"
-            @click="removeLibrary(idx)"
-            class="remove-btn"
-          >
-            Remove
-          </button>
-        </div>
-      </div>
+        <LibraryGroupCard
+          v-for="card in movieUnifiedCards"
+          :key="card.key"
+          :group="card.group"
+          :initial-group="(props.initialLibraryGroups || []).find(g => g && g.id === card.group.id) || null"
+          media-type="movie"
+          :discovered="discoveredLibraries"
+          :plex-libraries="plexLibraries"
+          :used-plex-library-ids="usedPlexMovieLibraryIds"
+          :all-presets="allPresets"
+          :mapping="card.mappingIdx !== null ? localLibraries[card.mappingIdx] : undefined"
+          :saved-library-ids="savedLibraryIds"
+          :available-labels="card.mappingIdx !== null ? (availableLabels[localLibraries[card.mappingIdx]!.id] || []) : []"
+          :scan-cooldown="scanCooldown"
+          :scanning-library-id="scanningLibraryId"
+          @link-plex="(key, title) => onLinkPlex('movie', card.group, key, title)"
+          @unlink-plex="onUnlinkPlex('movie', card.group)"
+          @update:mapping="patch => card.mappingIdx !== null && onUpdateMapping('movie', card.mappingIdx, patch)"
+          @toggle-ignore-label="label => card.mappingIdx !== null && toggleIgnoreLabel(card.mappingIdx, label, false)"
+          @scan-plex="card.mappingIdx !== null && onScanPlex('movie', card.mappingIdx)"
+          @remove-group="onRemoveGroup('movie', card.group)"
+        />
+        <p v-if="!movieUnifiedCards.length" class="no-labels-hint">
+          No movie library groups yet — click "+ New Group" to add one.
+        </p>
       </div>
 
       <!-- TV Show Libraries -->
       <div :class="['section', { 'section-unsaved': tvLibrariesChanged }]">
         <div class="section-header-inline">
           <h3>TV Show Libraries</h3>
-          <button @click="addTvShowLibrary" class="secondary-small">
-            + Add
+          <button @click="addNewGroup('tv')" class="secondary-small">
+            + New Group
           </button>
         </div>
 
-        <div v-for="(lib, idx) in localTvShowLibraries" :key="idx" class="library-card">
-        <div class="library-fields">
-          <label>
-            <span class="label-text">Library ID</span>
-            <select
-              v-model="lib.id"
-              :disabled="savedTvShowLibraryIds.has(String(lib.id))"
-              @change="updateTvShowLibraries"
-            >
-              <option value="">Select a library...</option>
-              <option
-                v-for="plexLib in plexLibraries.filter(l => l.type === 'show')"
-                :key="plexLib.key"
-                :value="plexLib.key"
-              >
-                {{ plexLib.title }} ({{ plexLib.key }})
-              </option>
-            </select>
-          </label>
-
-          <label>
-            <span class="label-text">Display Name</span>
-            <input
-              v-model="lib.displayName"
-              type="text"
-              placeholder="Custom display name"
-              @input="updateTvShowLibraries"
-            />
-          </label>
-        </div>
-
-        <div v-if="lib.id" class="auto-gen-section">
-          <label class="checkbox-label">
-            <input type="checkbox" v-model="lib.autoGenerateEnabled" @change="updateTvShowLibraries" />
-            <span>Enable automatic poster generation for new content</span>
-          </label>
-
-          <div v-if="lib.autoGenerateEnabled" class="preset-selection">
-            <label>
-              <span class="label-text">Template & Preset</span>
-              <select v-model="lib.autoGeneratePresetId" @change="updateTvShowLibraries">
-                <option value="">Select a preset...</option>
-                <option
-                  v-for="preset in allPresets"
-                  :key="preset.id"
-                  :value="preset.id"
-                >
-                  {{ preset.name }}
-                </option>
-              </select>
-              <span class="help-text">Choose which template/preset to use for auto-generation</span>
-            </label>
-          </div>
-        </div>
-
-        <!-- Webhook Ignore Labels -->
-        <div v-if="lib.id" class="webhook-ignore-section">
-          <label>
-            <span class="label-text">Webhook Ignore Labels</span>
-            <span class="help-text">Items with these labels will be skipped when webhooks trigger poster generation</span>
-          </label>
-          <div v-if="(availableLabels[lib.id] || []).length > 0" class="ignore-labels-grid">
-            <label
-              v-for="label in availableLabels[lib.id] || []"
-              :key="`ignore-tv-${lib.id}-${label}`"
-              class="label-checkbox ignore-label-checkbox"
-            >
-              <input
-                type="checkbox"
-                :checked="(lib.webhookIgnoreLabels || []).includes(label)"
-                @change="toggleIgnoreLabel(idx, label, true)"
-              />
-              <span>{{ label }}</span>
-            </label>
-          </div>
-          <p v-else class="no-labels-hint">
-            No labels available. Scan the library and click "Refresh Labels" in the Labels section below.
-          </p>
-        </div>
-
-        <div class="library-actions">
-          <button
-            v-if="lib.id"
-            @click="emit('scan-library', lib.id)"
-            :disabled="scanCooldown || scanningLibraryId === lib.id"
-            class="scan-btn"
-            :title="`Scan ${lib.displayName || lib.title || lib.id}`"
-          >
-            {{ scanningLibraryId === lib.id ? 'Scanning...' : 'Scan' }}
-          </button>
-
-          <button
-            v-if="localTvShowLibraries.length > 1"
-            @click="removeTvShowLibrary(idx)"
-            class="remove-btn"
-          >
-            Remove
-          </button>
-        </div>
-      </div>
+        <LibraryGroupCard
+          v-for="card in tvUnifiedCards"
+          :key="card.key"
+          :group="card.group"
+          :initial-group="(props.initialLibraryGroups || []).find(g => g && g.id === card.group.id) || null"
+          media-type="tv"
+          :discovered="discoveredLibraries"
+          :plex-libraries="plexLibraries"
+          :used-plex-library-ids="usedPlexTvLibraryIds"
+          :all-presets="allPresets"
+          :mapping="card.mappingIdx !== null ? localTvShowLibraries[card.mappingIdx] : undefined"
+          :saved-library-ids="savedTvShowLibraryIds"
+          :available-labels="card.mappingIdx !== null ? (availableLabels[localTvShowLibraries[card.mappingIdx]!.id] || []) : []"
+          :scan-cooldown="scanCooldown"
+          :scanning-library-id="scanningLibraryId"
+          @link-plex="(key, title) => onLinkPlex('tv', card.group, key, title)"
+          @unlink-plex="onUnlinkPlex('tv', card.group)"
+          @update:mapping="patch => card.mappingIdx !== null && onUpdateMapping('tv', card.mappingIdx, patch)"
+          @toggle-ignore-label="label => card.mappingIdx !== null && toggleIgnoreLabel(card.mappingIdx, label, true)"
+          @scan-plex="card.mappingIdx !== null && onScanPlex('tv', card.mappingIdx)"
+          @remove-group="onRemoveGroup('tv', card.group)"
+        />
+        <p v-if="!tvUnifiedCards.length" class="no-labels-hint">
+          No TV show library groups yet — click "+ New Group" to add one.
+        </p>
       </div>
     </div>
 
-    <!-- Default Labels to Remove -->
-    <div class="section">
+    <!-- Default Labels to Remove -- Plex-only by nature (label removal has no
+         Jellyfin/Emby equivalent, and Kometa only ever runs against Plex), so
+         the whole section is hidden rather than shown-but-inert for an
+         install with no Plex configured at all. -->
+    <div v-if="plexConfigured" class="section">
       <div class="section-header-inline">
         <div>
-          <h3 style="margin-bottom: 4px;">Default Labels to Remove</h3>
+          <h3 style="margin-bottom: 4px;">Default Labels to Remove <span class="plex-only-tag">Plex only</span></h3>
           <p class="section-description" style="margin-bottom: 0;">
-            When sending to Plex, these labels will be removed by default for each library
+            When sending to Plex, these labels will be removed by default for each library. Label removal has no
+            Jellyfin/Emby equivalent, so this has no effect on a linked non-Plex library.
           </p>
           <label class="checkbox-label" style="margin-top: 10px;">
             <input type="checkbox" v-model="localKometaCompatibility" />
-            <span>Kometa Compatibility</span>
+            <span>Kometa Compatibility</span> <span class="plex-only-tag">Plex only</span>
           </label>
           <p class="section-description" style="margin: 2px 0 0 0;">
-            When enabled, any library you add from now on automatically gets "Overlay" checked here too — matching what the "Using Kometa?" step in the startup wizard does for libraries selected during onboarding, but for libraries added afterward.
+            When enabled, any library you add from now on automatically gets "Overlay" checked here too — matching what the "Using Kometa?" step in the startup wizard does for libraries selected during onboarding, but for libraries added afterward. Kometa itself only ever runs against Plex, so this doesn't apply to Jellyfin/Emby libraries either.
           </p>
         </div>
         <button @click="fetchLibraryLabels" class="refresh-labels-btn" :disabled="labelsLoading">
@@ -810,8 +842,22 @@ watch(
       </div>
     </div>
 
-    <!-- Scheduled Scans -->
-    <div :class="['section', { 'section-unsaved': schedulerChanged }]">
+    <!-- Scheduled Scans -- covers Plex and/or Jellyfin and/or Emby (the
+         scheduler scans configured Plex libraries by the checklist below,
+         PLUS every linked and standalone Jellyfin/Emby library group
+         automatically, same as the manual "Scan" button already does per
+         group -- backend/scheduler.py's _scan_linked_libraries_for_
+         scheduled_scan()/_scan_standalone_nonplex_groups()). Only hidden
+         when nothing at all is configured yet, matching this page's own
+         established "state the real limitation, don't just show nothing"
+         convention for the genuine no-server case. -->
+    <div v-if="!anyServerConfigured" class="section">
+      <h3>Scheduled Scans</h3>
+      <p class="section-description" style="margin: 0;">
+        Connect a media server above (or in Settings → Media Servers) before setting up a scan schedule.
+      </p>
+    </div>
+    <div v-else :class="['section', { 'section-unsaved': schedulerChanged }]">
       <h3>Scheduled Scans</h3>
 
       <div class="scheduler-header">
@@ -838,7 +884,9 @@ watch(
       <div v-if="localSchedulerEnabled" class="scheduler-config">
         <div class="library-selection">
           <span class="label-text">Libraries to Scan</span>
-          <span class="help-text">Select libraries to scan automatically (leave all unchecked for all libraries)</span>
+          <span class="help-text">
+            Leave all unchecked to scan every library on every server. Tick groups to scan only those — each group is scanned on every server it includes.
+          </span>
 
           <div class="library-checkboxes-horizontal">
             <label
@@ -911,18 +959,51 @@ h4 {
   background: rgba(255, 193, 7, 0.05);
 }
 
-.plex-connection-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 16px;
+/* Used by the "Default Labels to Remove" section's descriptive paragraphs but
+   never actually defined here -- borrowed from CleanupTab.vue's own
+   identically-named class, which (being scoped) never applied across the
+   component boundary. Left as plain unstyled <p> text until now. */
+.section-description {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-bottom: 20px;
+  line-height: 1.5;
 }
 
-.plex-actions {
+.section-description:last-child {
+  margin-bottom: 0;
+}
+
+/* Small honest-disclosure tag for settings that genuinely only affect Plex --
+   matches this app's established "state the real limitation plainly" style
+   (see Media Servers' own multi-Plex-send disclosure) rather than a fancier
+   badge component. */
+.plex-only-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: rgba(229, 160, 13, 0.12);
+  color: #e5a00d;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.plex-connection-hint {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: -8px 0 20px 0;
+}
+
+.plex-connection-hint a {
+  color: var(--accent);
+}
+
+.scan-all-row {
   display: flex;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
 }
 
 .scheduler-header {
@@ -965,16 +1046,6 @@ h4 {
 
 .section-header-inline h3 {
   margin: 0;
-}
-
-.subsection {
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.subsection h4 {
-  margin-bottom: 16px;
 }
 
 label {
@@ -1033,136 +1104,11 @@ select:disabled {
   color: var(--text-primary);
 }
 
-.library-card {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  padding: 14px;
-  margin-bottom: 12px;
-  transition: all 0.2s;
-}
-
-.library-card:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(61, 214, 183, 0.3);
-}
-
-.library-card:last-of-type {
-  margin-bottom: 0;
-}
-
-.auto-gen-section {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.preset-selection {
-  margin-top: 10px;
-  margin-left: 24px;
-}
-
-.webhook-ignore-section {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.webhook-ignore-section > label {
-  margin-bottom: 10px;
-}
-
-.ignore-labels-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.ignore-label-checkbox {
-  background: rgba(255, 107, 107, 0.08);
-  border: 1px solid rgba(255, 107, 107, 0.2);
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  transition: all 0.2s;
-}
-
-.ignore-label-checkbox:has(input:checked) {
-  background: rgba(255, 107, 107, 0.2);
-  border-color: rgba(255, 107, 107, 0.5);
-}
-
-.ignore-label-checkbox:hover {
-  border-color: rgba(255, 107, 107, 0.4);
-}
-
 .no-labels-hint {
   font-size: 12px;
   color: var(--text-muted);
   font-style: italic;
   margin: 0;
-}
-
-.library-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 0;
-}
-
-.library-fields label {
-  margin-bottom: 0;
-}
-
-.library-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.scan-btn {
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(61, 214, 183, 0.1);
-  color: var(--accent);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.scan-btn:hover:not(:disabled) {
-  background: rgba(61, 214, 183, 0.2);
-  border-color: var(--accent);
-}
-
-.scan-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.remove-btn {
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(255, 0, 0, 0.1);
-  color: #ff6b6b;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.remove-btn:hover:not(:disabled) {
-  background: rgba(255, 0, 0, 0.2);
-  border-color: #ff6b6b;
-}
-
-.remove-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
 }
 
 button.secondary-small {

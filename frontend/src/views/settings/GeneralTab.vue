@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
+import { getApiBase } from '@/services/apiBase'
 
 const props = defineProps<{
   theme: string
@@ -62,6 +64,155 @@ const localTvdbApiKey = computed({
   get: () => props.tvdbApiKey,
   set: (val) => emit('update:tvdbApiKey', val)
 })
+
+const settingsStore = useSettingsStore()
+const ratingSources = [
+  { value: 'imdb', label: 'IMDb' },
+  { value: 'tomatoes', label: 'Rotten Tomatoes (critics)' },
+  { value: 'tomatoesaudience', label: 'Rotten Tomatoes (audience)' },
+  { value: 'tmdb', label: 'TMDb' },
+  { value: 'trakt', label: 'Trakt' },
+  { value: 'metacritic', label: 'Metacritic' },
+  { value: 'metacriticuser', label: 'Metacritic (users)' },
+  { value: 'letterboxd', label: 'Letterboxd' },
+  { value: 'myanimelist', label: 'MyAnimeList' },
+  { value: 'score', label: 'MDBList score' },
+]
+// Planned rating/list sources, shown greyed out (no settings yet).
+const upcomingSources = [
+  { name: 'AniList', note: 'Anime scores and lists.' },
+  { name: 'MyAnimeList', note: 'Anime scores and lists.' },
+  { name: 'WeTrakr, SIMKL, Floppy ratings', note: 'Their lists work now (above); ratings come later.' },
+]
+
+// ---- List sources (WeTrakr, SIMKL, Floppy): key tests and "approve this code" sign-ins.
+// Sign-in tokens live server-side (list_source_auth table), never in this page.
+type ListProvider = 'wetrakr' | 'simkl' | 'floppy'
+type SourceStatus = { configured: boolean; connected: boolean; username?: string | null }
+type ConnectState = { userCode: string; url: string; urlComplete?: string | null }
+const sourceStatus = ref<Record<string, SourceStatus>>({})
+const sourceTest = ref<Record<string, { ok: boolean; message: string } | null>>({})
+const sourceTesting = ref<Record<string, boolean>>({})
+const connectState = ref<Record<string, ConnectState | null>>({})
+const connectError = ref<Record<string, string>>({})
+const pollTimers: Record<string, number> = {}
+
+async function loadSourceStatus() {
+  try {
+    const res = await fetch(`${getApiBase()}/api/list-sources/status`)
+    if (res.ok) sourceStatus.value = await res.json()
+  } catch { /* keep what we have */ }
+}
+
+async function testSource(provider: ListProvider) {
+  sourceTesting.value = { ...sourceTesting.value, [provider]: true }
+  sourceTest.value = { ...sourceTest.value, [provider]: null }
+  const body = provider === 'floppy'
+    ? { url: settingsStore.floppy.value.url, token: settingsStore.floppy.value.token }
+    : { client_id: provider === 'wetrakr' ? settingsStore.wetrakr.value.clientId : settingsStore.simkl.value.clientId }
+  let result: { ok: boolean; message: string }
+  try {
+    const res = await fetch(`${getApiBase()}/api/list-sources/${provider}/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json()
+    result = data.status === 'ok'
+      ? { ok: true, message: '✓ ' + (data.message || 'Valid') }
+      : { ok: false, message: 'Error: ' + (data.error || 'Invalid') }
+  } catch {
+    result = { ok: false, message: 'Error: could not reach the server' }
+  }
+  sourceTest.value = { ...sourceTest.value, [provider]: result }
+  sourceTesting.value = { ...sourceTesting.value, [provider]: false }
+}
+
+function stopPolling(provider: string) {
+  if (pollTimers[provider]) window.clearTimeout(pollTimers[provider])
+  delete pollTimers[provider]
+}
+
+function setConnectError(provider: string, message: string) {
+  connectError.value = { ...connectError.value, [provider]: message }
+}
+
+async function connectSource(provider: ListProvider) {
+  setConnectError(provider, '')
+  stopPolling(provider)
+  let data: { user_code?: string; verification_url?: string; verification_url_complete?: string | null; interval?: number; detail?: string }
+  try {
+    const res = await fetch(`${getApiBase()}/api/list-sources/${provider}/connect`, { method: 'POST' })
+    data = await res.json()
+    if (!res.ok) {
+      setConnectError(provider, data.detail || 'Could not start the sign-in')
+      return
+    }
+  } catch {
+    setConnectError(provider, 'Could not reach the server')
+    return
+  }
+  connectState.value = {
+    ...connectState.value,
+    [provider]: { userCode: data.user_code || '', url: data.verification_url || '', urlComplete: data.verification_url_complete },
+  }
+  const interval = Math.max(Number(data.interval) || 5, 2) * 1000
+  const poll = async () => {
+    try {
+      const r = await fetch(`${getApiBase()}/api/list-sources/${provider}/connect/poll`, { method: 'POST' })
+      const d = await r.json()
+      if (d.status === 'pending') {
+        pollTimers[provider] = window.setTimeout(poll, interval)
+        return
+      }
+      stopPolling(provider)
+      connectState.value = { ...connectState.value, [provider]: null }
+      if (d.status === 'connected') await loadSourceStatus()
+      else setConnectError(provider, d.error || 'The sign-in did not finish')
+    } catch {
+      pollTimers[provider] = window.setTimeout(poll, interval)
+    }
+  }
+  pollTimers[provider] = window.setTimeout(poll, interval)
+}
+
+function cancelConnect(provider: ListProvider) {
+  stopPolling(provider)
+  connectState.value = { ...connectState.value, [provider]: null }
+}
+
+async function disconnectSource(provider: ListProvider) {
+  if (!window.confirm('Disconnect this account? Lists that need the sign-in stop updating until you connect again.')) return
+  await fetch(`${getApiBase()}/api/list-sources/${provider}/connect`, { method: 'DELETE' }).catch(() => null)
+  await loadSourceStatus()
+}
+
+onMounted(loadSourceStatus)
+// A key can only be used for a sign-in once it's saved, so refresh the status after a save.
+watch(() => props.unsavedChanges, (now, before) => { if (before && !now) loadSourceStatus() })
+onBeforeUnmount(() => { Object.keys(pollTimers).forEach(stopPolling) })
+
+const mdblistTesting = ref(false)
+const mdblistResult = ref<{ ok: boolean; message: string } | null>(null)
+async function testMdblist() {
+  mdblistTesting.value = true
+  mdblistResult.value = null
+  try {
+    const res = await fetch(`${getApiBase()}/api/test-mdblist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: settingsStore.mdblist.value.apiKey }),
+    })
+    const data = await res.json()
+    mdblistResult.value = data.status === 'ok'
+      ? { ok: true, message: `✓ ${data.message || 'Valid'}` }
+      : { ok: false, message: `Error: ${data.error || 'Invalid key'}` }
+  } catch {
+    mdblistResult.value = { ok: false, message: 'Error: could not reach the server' }
+  } finally {
+    mdblistTesting.value = false
+  }
+}
 
 const localFanartApiKey = computed({
   get: () => props.fanartApiKey,
@@ -276,6 +427,167 @@ const timezones = computed(() => {
     </div>
 
     <div class="section">
+      <h3>MDBList (overlay ratings &amp; lists)</h3>
+      <p class="section-description">
+        Overlays can show ratings (IMDb, Rotten Tomatoes, TMDb, Trakt, Metacritic, Letterboxd and more) and only appear on
+        items in an MDBList list (for example a "trending" ribbon). Kometa overlay files that use <code>audience_rating</code>,
+        <code>critic_rating</code> or <code>mdblist_list</code> need this. Results are stored, so a render rarely calls MDBList;
+        how often they're re-fetched is set in Overlays → Scheduler.
+      </p>
+      <div class="api-keys-grid">
+        <label>
+          <span class="label-text">MDBList API Key</span>
+          <div class="input-with-button">
+            <input v-model="settingsStore.mdblist.value.apiKey" type="password" placeholder="Enter your MDBList API key" />
+            <button
+              @click="testMdblist"
+              class="secondary"
+              :disabled="!settingsStore.mdblist.value.apiKey || mdblistTesting"
+              type="button"
+            >
+              {{ mdblistTesting ? 'Testing...' : 'Test' }}
+            </button>
+          </div>
+          <span v-if="mdblistResult" :class="['api-test-result', mdblistResult.ok ? 'success' : 'error']">
+            {{ mdblistResult.message }}
+          </span>
+          <span class="help-text">Free key at <a href="https://mdblist.com/preferences/" target="_blank">mdblist.com/preferences</a> (API section). The free tier has a daily request limit.</span>
+        </label>
+        <label>
+          <span class="label-text">Audience rating comes from</span>
+          <select v-model="settingsStore.mdblist.value.audienceRatingSource">
+            <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+          </select>
+          <span class="help-text">Fills <code>audience_rating</code> (0–10). In Kometa this is your Plex library's audience rating; pick the source your library uses.</span>
+        </label>
+        <label>
+          <span class="label-text">Critic rating comes from</span>
+          <select v-model="settingsStore.mdblist.value.criticRatingSource">
+            <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+          </select>
+          <span class="help-text">Fills <code>critic_rating</code> (0–10).</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>WeTrakr (overlay lists)</h3>
+      <p class="section-description">
+        Show an overlay layer only on items in a WeTrakr list. Public lists work with just the Client ID. Your own private
+        lists and your tracking lists (Watchlist, Watching, ...) need you to connect your account once.
+      </p>
+      <div class="api-keys-grid">
+        <label>
+          <span class="label-text">WeTrakr Client ID</span>
+          <div class="input-with-button">
+            <input v-model="settingsStore.wetrakr.value.clientId" type="password" placeholder="Paste the Client ID (not the secret)" />
+            <button class="secondary" type="button" :disabled="!settingsStore.wetrakr.value.clientId || sourceTesting.wetrakr" @click="testSource('wetrakr')">
+              {{ sourceTesting.wetrakr ? 'Testing...' : 'Test' }}
+            </button>
+          </div>
+          <span v-if="sourceTest.wetrakr" :class="['api-test-result', sourceTest.wetrakr.ok ? 'success' : 'error']">{{ sourceTest.wetrakr.message }}</span>
+          <span class="help-text">Create an app at <a href="https://wetrakr.com/profile/settings/api" target="_blank">wetrakr.com → Settings → API</a> and copy its <strong>Client ID</strong>. Simposter doesn't need the client secret or the redirect URL (any value works there). Free for personal use.</span>
+        </label>
+        <div class="connect-box">
+          <span class="label-text">Your account</span>
+          <template v-if="connectState.wetrakr">
+            <p class="connect-code">Go to <a :href="connectState.wetrakr.url" target="_blank">{{ connectState.wetrakr.url }}</a> and enter <strong>{{ connectState.wetrakr.userCode }}</strong></p>
+            <span class="help-text">Waiting for you to approve it on WeTrakr…</span>
+            <button class="secondary" type="button" @click="cancelConnect('wetrakr')">Cancel</button>
+          </template>
+          <template v-else-if="sourceStatus.wetrakr?.connected">
+            <p class="connect-ok">✓ Connected{{ sourceStatus.wetrakr.username ? ' as ' + sourceStatus.wetrakr.username : '' }}</p>
+            <button class="secondary" type="button" @click="disconnectSource('wetrakr')">Disconnect</button>
+          </template>
+          <template v-else>
+            <button class="secondary" type="button" :disabled="!sourceStatus.wetrakr?.configured || unsavedChanges" @click="connectSource('wetrakr')">Connect account</button>
+            <span class="help-text">{{ !sourceStatus.wetrakr?.configured || unsavedChanges ? 'Save the Client ID first.' : 'Only needed for your private lists and tracking lists.' }}</span>
+          </template>
+          <span v-if="connectError.wetrakr" class="api-test-result error">{{ connectError.wetrakr }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>SIMKL (overlay lists)</h3>
+      <p class="section-description">
+        Show an overlay layer only on items in your SIMKL Plan to Watch, Watching, Completed, On Hold or Dropped list, or in a
+        SIMKL custom list. Every SIMKL list needs you to connect your account, and custom lists need SIMKL PRO or VIP.
+      </p>
+      <div class="api-keys-grid">
+        <label>
+          <span class="label-text">SIMKL Client ID</span>
+          <div class="input-with-button">
+            <input v-model="settingsStore.simkl.value.clientId" type="password" placeholder="Enter your SIMKL client ID" />
+            <button class="secondary" type="button" :disabled="!settingsStore.simkl.value.clientId || sourceTesting.simkl" @click="testSource('simkl')">
+              {{ sourceTesting.simkl ? 'Testing...' : 'Test' }}
+            </button>
+          </div>
+          <span v-if="sourceTest.simkl" :class="['api-test-result', sourceTest.simkl.ok ? 'success' : 'error']">{{ sourceTest.simkl.message }}</span>
+          <span class="help-text">Register an app at <a href="https://simkl.com/settings/developer/" target="_blank">simkl.com/settings/developer</a> as a new app of type <strong>TV, devices &amp; command line</strong>, and copy its <strong>Client ID</strong>. That type has no secret and supports the code sign-in; Client IDs of older SIMKL apps don't work.</span>
+        </label>
+        <div class="connect-box">
+          <span class="label-text">Your account</span>
+          <template v-if="connectState.simkl">
+            <p class="connect-code">
+              Open <a :href="connectState.simkl.urlComplete || connectState.simkl.url" target="_blank">{{ connectState.simkl.url }}</a>
+              and approve code <strong>{{ connectState.simkl.userCode }}</strong>
+            </p>
+            <span class="help-text">Waiting for you to approve it on SIMKL…</span>
+            <button class="secondary" type="button" @click="cancelConnect('simkl')">Cancel</button>
+          </template>
+          <template v-else-if="sourceStatus.simkl?.connected">
+            <p class="connect-ok">✓ Connected{{ sourceStatus.simkl.username ? ' as ' + sourceStatus.simkl.username : '' }}</p>
+            <button class="secondary" type="button" @click="disconnectSource('simkl')">Disconnect</button>
+          </template>
+          <template v-else>
+            <button class="secondary" type="button" :disabled="!sourceStatus.simkl?.configured || unsavedChanges" @click="connectSource('simkl')">Connect account</button>
+            <span class="help-text">{{ !sourceStatus.simkl?.configured || unsavedChanges ? 'Save the client ID first.' : 'Needed for every SIMKL list.' }}</span>
+          </template>
+          <span v-if="connectError.simkl" class="api-test-result error">{{ connectError.simkl }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Floppy (overlay lists)</h3>
+      <p class="section-description">
+        Show an overlay layer only on items in a list on your own Floppy server.
+      </p>
+      <div class="api-keys-grid">
+        <label>
+          <span class="label-text">Floppy server address</span>
+          <input v-model="settingsStore.floppy.value.url" type="text" placeholder="http://192.168.1.10:8000" />
+          <span class="help-text">The address you open Floppy at, including the port. If you change it, enter the app token again (the saved one is only sent to the saved address).</span>
+        </label>
+        <label>
+          <span class="label-text">Floppy App Token</span>
+          <div class="input-with-button">
+            <input v-model="settingsStore.floppy.value.token" type="password" placeholder="flp_..." />
+            <button class="secondary" type="button" :disabled="!settingsStore.floppy.value.url || !settingsStore.floppy.value.token || sourceTesting.floppy" @click="testSource('floppy')">
+              {{ sourceTesting.floppy ? 'Testing...' : 'Test' }}
+            </button>
+          </div>
+          <span v-if="sourceTest.floppy" :class="['api-test-result', sourceTest.floppy.ok ? 'success' : 'error']">{{ sourceTest.floppy.message }}</span>
+          <span class="help-text">In Floppy: Settings → Integrations → App tokens, with the <code>lists:read</code> scope.</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="section section-coming-soon" aria-disabled="true">
+      <h3>More rating &amp; list sources <span class="coming-soon-badge">Coming soon</span></h3>
+      <p class="section-description">
+        More places to get ratings and lists for overlays, alongside MDBList.
+      </p>
+      <div class="source-grid">
+        <div v-for="src in upcomingSources" :key="src.name" class="source-card">
+          <span class="source-name">{{ src.name }}</span>
+          <span class="help-text">{{ src.note }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
       <button @click="emit('save')" class="primary" :disabled="!unsavedChanges">
         {{ unsavedChanges ? 'Save Changes' : 'No Changes' }}
       </button>
@@ -284,6 +596,77 @@ const timezones = computed(() => {
 </template>
 
 <style scoped>
+.connect-box {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.connect-code {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.connect-code strong {
+  font-family: monospace;
+  font-size: 1.1em;
+  letter-spacing: 1px;
+}
+
+.connect-ok {
+  margin: 0;
+  color: #3dd6b7;
+}
+
+.section-coming-soon {
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+}
+
+.coming-soon-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #9aa4b2);
+}
+
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.source-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.section-description code,
+.help-text code {
+  font-size: 0.85em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
 .tab-content {
   padding: 20px;
   max-width: 1600px;

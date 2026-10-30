@@ -1,9 +1,454 @@
 # Changelog
 
-## v1.6.110 (2026-09-26)
+## v1.8.26 (2026-10-30) — `webui-overhaul-dev` branch
+
 ### Improvements
-- **Sorting by title now ignores a leading "The"/"A"/"An"** (GitHub issue #70) — "The Matrix" sorts under M, "A Bug's Life" under B, "An American Werewolf in London" under A, matching the convention Plex/Kodi/iTunes/etc. libraries already use for title sorting. Titles that only happen to start with those letters as a real word (e.g. "Theory of Everything", "Athena") are correctly left alone — the regex requires a trailing space after the article, so only a genuine leading article word is stripped, and only the first word is ever removed.
-- **Sorting was confirmed entirely client-side** (no backend changes needed) but was independently duplicated across 7 live views with three different naming conventions for the sort-order value (`title`+separate `asc`/`desc`; combined `title_asc`/`title_desc`; combined `title-asc`/`title-desc`) and zero shared helper. Added one new shared function instead of patching each comparator ad hoc: `frontend/src/services/sortTitle.ts` (`sortableTitle()`/`compareTitles()`), wired into `MoviesView.vue`, `TvShowsView.vue`, `LogosView.vue`, `BackdropsView.vue`, `SquareArtView.vue`, `BatchEditView.vue`, and `TvBatchEditView.vue`. `BatchEditModal.vue` has the identical old-style comparator but is confirmed dead code (not imported anywhere in the app) — deliberately left untouched rather than wiring up unreferenced code.
+- **Tracked posters as one list** — replaces v1.8.25's grouped view. Columns: item, preset (`/overlay-refresh/items` now returns `template_id` and `preset_name`), overlays sent with, server, last sent; sortable headers (title / preset / overlays / last sent, remembered in `localStorage`), preset and overlay filters, and the bulk Re-send/Remove act on the filtered list. The title's tooltip shows what's drawn on the poster now.
+- **Log cleanup** — `_log_overlay_summary()` writes one "Not drawn: N (rules didn't match / lost in a badge set / hidden by another layer)" line at INFO, with each layer's reason at DEBUG. Scans collect art changed in Plex into one "Re-downloaded art changed in Plex" line with titles (`_log_changed_in_plex()`), instead of one line per item with only its rating key. Moved to DEBUG: scan progress, label-fetch and fetch-start lines, `[PLEX] Loaded N movies/collections`, `[CACHE] refreshed N ...`, `[FANART] Fetching logos`, and the successful "Poster upload verified" check (a size mismatch is still a warning).
+
+## v1.8.25 (2026-10-30) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Tracked posters grouped** — Overlay Refresh's tracked list is grouped by what's on the poster (default), by overlays sent with, or not at all, with title/last-sent sorting and a Re-send per group (remembered in `localStorage`).
+- **Clearer refresh reasons** — `_describe_change()` writes "now shows X; no longer shows Y; Resolution: 1080 → 4k; X restyled (position, color)" (changed setting keys mapped to words), joined to the data cause with " → ". The summary notification groups titles by reason.
+- **Render log** — `describe_failure()` says "not on any list it checks" instead of "List is unknown" when lists loaded and the item isn't on one.
+- **Dependencies** — fastapi 0.143.0 (its one breaking change, opt-in OpenTelemetry setup, doesn't affect Simposter) and numpy 2.5.4 (Dependabot #78/#77).
+
+### Bug Fixes
+- **No database backup on upgrade in Docker, and a backup taken after migrating** — `get_app_version()` only read `frontend/src/version.ts`, which the Docker image doesn't contain, so it always returned "v1.0.0" and a version change was never seen. It now falls back to `build-info.json`. The backup moved to `_backup_before_upgrade()`, run at the start of `init_database()` before any migration (it used to run after), and uses SQLite's backup API so writes still in the WAL file are included. The first upgrade from an older image is saved as `simposter_v1.0.0.db.bak`.
+- **Changed show-when rules re-rendered unchanged posters** — the per-layer design hash in `overlay_summary()` covered the whole element, including `conditions`, so a rewritten TMDb ID list (e.g. UMTK's daily live-file rewrite) marked every poster drawing that layer as changed. `element_design()` now leaves out selection-only keys; the look settings are stored as `options["_designs"]`. Existing records with the same layers are moved to the new form without a re-render.
+- **Batch Edit didn't send to Jellyfin for items shown under their Jellyfin copy** — `sync_render_to_linked_servers()` looked the item up by TMDb id even when the batch item was already the Jellyfin item, and a failed lookup was only logged at debug. New `known_item_ids` sends to the item's own server without a lookup; every skipped target is logged at INFO with the reason.
+
+## v1.8.24 (2026-10-29) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Webhook posters that reached Jellyfin/Emby later had no notification and showed as Auto** — when a linked server hadn't imported the item yet, `_sync_poster_to_other_servers()` skipped it and the next scan sent the cached render via `_deliver_cached_plex_render()` as `auto_generate`, without a notification. The sync now queues the target (`_queue_pending_sync()`); a follow-up thread looks again after 1, 2, 5, 10 and 20 minutes and sends it as a webhook send with a notification. A scan that finds the item first takes the entry over (`claim_pending_sync()`) and records/notifies it as the webhook, with its template and preset; other scan deliveries now notify as auto-generate.
+- **History's library filter listed each group's libraries separately** — options are now one per library group (`group:<id>`); `GET /api/poster-history` accepts a comma-separated `library_id`.
+- **Overlay Refresh listed each title once per server** — tracked posters are grouped by title/year/season/overlays with all servers shown; actions send every copy's key. Check results are merged by title and result.
+
+## v1.8.23 (2026-10-28) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Grid resend wasn't in History** — `api_render_cache_resend()` (the card's resend arrow) wrote no History rows. It now records one per server reached: `resent_to_plex`, or a new `resent_to_media_server` for Jellyfin/Emby ("Resent to <server>" in History, with its own filter option and preview), plus one per Plex season (`Show - Season N`), with the template/preset of the last History row for that poster and the library from the scan cache. The new action counts as "sent" for drift tracking, the scan's already-sent check and the Batch Edit status pill.
+
+## v1.8.22 (2026-10-28) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Jellyfin/Emby TV "current poster" stayed old after a send** — `media_server_send._cache_poster_after_upload()` always wrote the movie poster cache (`<id>.jpg`, `movie_cache`), but TV shows and seasons are served from the TV cache (`tv_<id>.jpg`, `tv_cache`, `/api/tv-show/<id>/poster`). It now writes the TV cache for a show or season (`is_tv`, or looked up in `tv_cache`); the webhook linked-server sync uses the same helper instead of its own movie-only copy.
+- **Search listed a title once per server** — the top search built one section per library from the unmerged `/api/movies`/`/api/tv-shows`, so a title on Plex and Jellyfin showed twice and each result's editor only knew its own server. New `buildSearchGroups()` (App.vue) makes one section per library group and merges copies with the same TMDb id (TVDB first for shows), led by the group's `preferredServerId` (else Plex), with the rest as `other_servers`/`also_on`, so the editor's send picker lists every server. Groups with `mergeItems: false` and libraries in no group are unchanged.
+- **History missed editor sends to Jellyfin/Emby, and the Plex row had no library** — `api_send_poster()` wrote no History row; editor sends (those carrying `render`) now get a `sent_to_media_server` row with title (`Show - Season N` for a season), library, template and preset (`_record_editor_history()`). `api_plex_send()`'s row now takes the library from the scan cache first, since an editor opened on the Jellyfin copy sends the Plex copy without a Plex library id.
+- **Other servers' grid thumbnails after an editor send** — both editors only refreshed the server on screen; `refreshSentThumbnails()` now re-reads the poster of every other server copy that got it and updates its grid thumbnail.
+- **Editor kept the previous preset's overlays** — `applyPresetOptions()` (both editors) and `reloadPreset()` (movie editor) only set `overlayConfigIds`/`overlayConfigIdsBelow` when the new preset had them, so switching to a preset with no overlays left the old ones ticked (and sent). They're now always set from the preset (empty when it has none), as copies, since the checkbox handler splices the array in place and used to edit the loaded preset's own list. The TV editor's season/series switch (`restoreSettingsForCurrent()`) passes `keepOverlays: true`, so overlays ticked but not yet saved survive switching seasons.
+
+## v1.8.21 (2026-10-27) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Webhook resend reached only Plex** — with `existingContentMode=resend`, `process_webhook_poster_generation()` re-sent the cached poster to Plex and returned before the linked-server sync, so Jellyfin/Emby in the library group got nothing. The resend now calls `_sync_poster_to_other_servers()` with the exact bytes it sent to Plex (new `image_bytes`/`report` parameters); a server that hasn't imported the item yet gets it on its next scan, as before.
+- **Logo/backdrop re-checked every scan when the server has none** — the scans only recorded an asset's version after an image came back, so an item with no logo kept its old version file and was flagged "Logo changed … refreshing" (and re-fetched) on every scan. The version is now recorded whenever the check ran (Plex movies and TV, Jellyfin/Emby).
+
+### Logging
+- Jellyfin/Emby uploads: `[JELLYFIN] Sent poster to <server name>: <title> (<size> MB, item <id>, HTTP <status>)` instead of `Upload response for Primary item=<id> … payload_bytes=<base64 size>`.
+- Webhook resend: `Resent cached poster for <title> [<key>] to Plex, <servers>` plus "not yet imported on …" when a server doesn't have it.
+- `[BATCH] Start` shows the title (or only the key when it isn't cached yet) instead of the key twice.
+- A Jellyfin/Emby scan logs when an item was re-imported under a new id (`_scan_one_library()`, matched by TMDb/TVDB id against items that left the library), and auto-generate's delivery line says so and uses the server name.
+- Linked-library scans: one line per library (`[SCAN] Jellyfin Movies: 622 movies (1 new)`) instead of a raw dict.
+- Drift: one `[DRIFT] N changed outside Simposter this scan: …` line per scan (`poster_drift.flush_notifications()`); the per-item line moved to DEBUG.
+
+### New Features
+- **Refresh now in Overlays → Scheduler** — "Refresh ratings & lists now" fetches every list any overlay uses and the ratings of every tracked poster whose overlay uses a rating, ignoring their age (`overlay_refresh.refresh_all_data()` in a background thread, `POST /api/overlay-refresh/data-refresh/now`; `list_sources.refresh_due()` and `mdblist_client.prefetch_ratings()` gained `force`, and one failing list no longer stops the rest). Each library group's row has "Run now" (a normal Overlay Refresh). `GET /api/overlay-refresh/data-refresh` returns the refresh and run states so the card can poll.
+
+### Improvements
+- **Ratings fetched in batches before Batch Edit and auto-generate** — when the preset's overlays use a rating, `overlay_engine.prefetch_ratings_for_render()` fetches the items with no fresh cached rating 100 per MDBList request before the renders start (Batch Edit's `_execute_batch()`, Plex and Jellyfin/Emby auto-generate), so the renders find them cached instead of making one request per item. Items with fresh ratings cost nothing; items MDBList doesn't have are remembered until the cache expires. Webhooks and the editor still look up a single item.
+- **Ratings kept 45 days by default** (was 7; Kometa uses 60). A stored 7 (the old default) is moved to 45 once (`applied_migrations` 'ratings_days_45'); any other value is kept.
+- **Simposter User-Agent** — MDBList, TMDb, Fanart.tv and TVDB requests now send `Simposter/<version> (+https://github.com/PJGitHub9/Simposter)` (`config.api_user_agent()`), so those services no longer list the calls as "python-requests".
+
+## v1.8.20 (2026-10-27) — `webui-overhaul-dev` branch
+
+### New Features
+- **Quality overlays for TV shows and seasons** — a show or season has no file of its own, so resolution/codec/audio were always empty for them and "4K" rules and resolution badges never matched on TV. A show now takes its best episode's values (highest resolution, then most audio channels), and each season its own best episode's, matching Kometa (a show is 4K when any episode is). Plex: the TV scan reads `/library/metadata/{show}/allLeaves` (one extra request per show, every episode version counted), and a show/season rendered before a scan reaches it is looked up live (`config.plex_show_media_info()`, from `get_plex_media_info()`). Jellyfin/Emby: the scan lists each series' episodes with their streams (`JellyfinClient.list_episode_media()`), every scan, since an upgraded episode needn't change the series' Etag; the empty series-level metadata fetch is skipped. Season values are stored in a new `season_media_info` table, read by `get_cached_media_info()`. Audio language is only filled where the episode list includes streams (Jellyfin/Emby; Plex's episode list doesn't).
+- **Share presets as a file** — a share button on each preset in Template Manager, and "Share N selected", open `PresetShareModal.vue`: include the preset's overlays or not, and leave out default settings or not. `POST /api/presets/share` returns a `.json` when nothing else is needed, or a `.zip` (`presets.json` + `assets/` overlay images + `fonts/`) when overlay images or fonts must go with it. Fonts are taken from `config/fonts` only when the other install can't download them (Simposter's font set and Kometa's fonts are left out). Without overlays, the overlay ids are removed from the shared preset. `POST /api/presets/share-info` feeds the dialog. Import / Export → Open file takes the `.zip` (`POST /api/presets/import-file`, which also takes a `.json`); images go through the normal overlay import (identical overlays reused, conflicting ones renamed), fonts are saved to `config/fonts` unless a font with that name exists.
+- **Fonts from simposter-assets** — Simposter now downloads fonts from its own repo (`PJGitHub9/simposter-assets`, `fonts/`): 24 open-license families (180 names, e.g. `Oswald-Bold`, `Raleway-SemiBoldItalic`) indexed by `fonts/fonts.json`. Tried before Kometa's repos (now a backup) in `_load_font()`, the Arial look-alike and `prefetch_fonts()`; the named weight is applied on variable files. Index cached in `config/fonts_cache/simposter-assets/` and re-checked daily; files downloaded on first use. Importing the Simposter defaults downloads the whole set in the background (`_asset_fonts` in the default template, `prefetch_all_asset_fonts()`). The names are in the font list, and the Overlay Manager preview loads them (variable files at their default weight).
+
+### Improvements
+- **Overlay Refresh says what changed** — each tracked poster now also stores the values its overlays' rules check (lists it's on, ratings, resolution, file name, labels; `overlay_engine.condition_facts()`, kept outside the change signature). The reason names only the values that flipped a rule, then the layers: "now on list Trending Now: added Trending frame", "Audience rating 8.4 → 8.7: added High score". Posters tracked earlier get the values recorded the next time a check finds them unchanged.
+
+## v1.8.19 (2026-10-27) — `webui-overhaul-dev` branch
+
+### New Features
+- **Refresh posters after editing an overlay** — saving a changed overlay in the Overlay Manager looks up tracked posters sent with it (`GET /api/overlay-refresh/by-overlay?config_id=`, per library group) and, when there are any, shows `OverlayRefreshPrompt.vue` listing them by title with their servers. "Refresh posters" calls `POST /api/overlay-refresh/run-overlay`, a normal (non-forced) Overlay Refresh limited to those posters per picked group, so only posters whose overlay now comes out differently are re-sent; a group already running is reported as skipped.
+
+### Improvements
+- **Overlay Refresh notification lists each title once** — the same poster on Plex and Jellyfin was two lines and counted twice; `send_overlay_refresh_notification()` now merges by title ("Title: reason (Plex, Jellyfin)") and counts titles.
+
+## v1.8.18 (2026-10-26) — `webui-overhaul-dev` branch
+
+### New Features
+- **Kometa import for movies and TV at once** — library type `both` in the import modal and live Kometa files. `kometa_import.expand_file_both()` expands the file as movie and as show (templates and `run_definition` can differ by type) and merges: a layer identical both ways (ignoring the movie/show rule) is kept once without that rule; a one-type or differing layer keeps a `media_type ne …` rule (the TV version of a differing layer is reported as "Name (TV)"). Elements/report entries carry a temporary `_entry_key` so `finalize_elements()` matches each version to its own image/font. Live files with `both` refresh every library group.
+- **Overlays → Scheduler** (`OverlayScheduler.vue`, a collapsible card on the Overlay Manager page): "Re-check ratings every N days" and "Re-check lists every N hours", stored in a new one-row `overlay_data_refresh` table (`list_sources.get_refresh_settings()`/`save_refresh_settings()`, `GET`/`POST /api/overlay-refresh/data-refresh`), kept out of the settings table so a Settings save can't reset it. Ratings start from the old `mdblist.cacheDays`; lists default to 24 hours. MDBList ratings use the ratings time, and every list service (MDBList, WeTrakr, SIMKL, Floppy) uses the lists time. The card also lists each library group's Overlay Refresh schedule and next run with a link. The "Keep ratings and lists for" field is gone from Settings → General → MDBList.
+
+### Improvements
+- **Overlay Refresh fetches due data first** — `overlay_refresh.prepare_data()` runs before a check/refresh run: it collects the lists and ratings the group's overlays use, re-fetches lists past their time synchronously (`list_sources.refresh_due()`, `get_list(wait=True)`) and prefetches due MDBList ratings in batches. Fresh data comes from the cache with no API call. A render outside a run still serves a stale list and refreshes it in the background.
+- **"How overlays work" guide** (`OverlayWorkflowGuide.vue`) at the top of the Overlay Manager: the four steps (make an overlay or live Kometa file, tick it in the editor's Extras → Overlays and Save Preset, send, keep current with Scheduler + Overlay Refresh), with links that open the Scheduler/Advanced cards. Hideable, remembered in `localStorage` (`simposter-overlay-guide-hidden`).
+- **Floppy token security** — saving Settings with a changed Floppy address (scheme or host) and the token left masked/blank now clears the stored token instead of keeping it for the new address (`save_ui_settings_endpoint`); the Floppy client compares scheme as well as host and refuses link-local/metadata addresses.
+- **TV editor sent only to Plex for a Plex show with linked servers** — `TvShowEditorPane.vue`'s `doSend()` took the multi-server loop only when `isNonPlexItem` (changed from `showMultiServerSend` in `98f2fbc` to allow multi-season sends), so a Plex-sourced show's picked Jellyfin/Emby targets were ignored and the Plex-only loop ran. It now also takes the loop when the show has `other_servers`; `sendPosterToServer('plex-1', …)` passes the season index to `render.send()` like the Plex-only loop.
+- **Running without Plex (from an audit)** — the retry queue (scheduled and Retry Now) and auto-generate's helpers built requests with only `send_to_plex`, so a Jellyfin/Emby item's retry rendered and sent nowhere and was still marked resolved; `batch._route_to_item_servers()` now targets the item's own server plus its library group (Plex items unchanged). The retry job's existence check (`scheduler._plex_item_exists()`) asks the item's own server, and returns "unknown" instead of asking an unset Plex. `JellyfinClient.item_exists()` no longer reports a network/server error as "deleted" (which dropped queued items). Overlay Manager's "A real movie or show" picker lists every server's libraries (`/api/media-server/libraries`). `test_plex_connection()` answers `not_configured` without a request when no Plex URL is set. `.env.example` marks Plex optional with its lines commented out.
+- **Season sent to Plex titled "Season 2"** — `api_plex_send()` took the title/year from the season item's own metadata, so History, notifications, `{title}` in the rendered poster and the asset-folder save path all used "Season 2" with no year. For a `type="season"` item it now uses `parentTitle`/`parentYear`; History and notifications read "Show - Season 2".
+- **Kometa re-import finds library images** — the upload import only matched images against files uploaded with the YAML, so importing a file again with just the `.yml` (e.g. a TV copy of a movie import) reported every image missing and saved layers without images. `library_image_finder()` (api/kometa_import.py) looks up Your images by the name the asset saver gives a file (`assets/<sanitized stem><ext>`) or the asset's name, after the uploads (`chain_finders()`); the returned library path makes the saver reuse the asset. Live Kometa files use it after the disk lookup (`live_kometa._image_finder()`).
+- **TMDb requests retry on network errors** — `tmdb_client._tmdb_get()` had no retry, so a DNS lookup that timed out failed the item (a 10-movie batch with 8 workers lost 5 at once to `Temporary failure in name resolution`). It now uses one pooled `requests.Session` (connections reused across workers) and retries connection errors/timeouts and 429/502/503/504 twice (after 2s, then 5s); other HTTP errors fail at once as before.
+- **Jellyfin/Emby-only Batch Edit notification said "Saved locally"** — the completion notification's action was `sent_to_plex` when Plex was ticked and `saved` otherwise; a run that only synced to Jellyfin/Emby now uses `sent_to_media_server` (Action "Sent", Servers from the synced list).
+- **Posters sent without overlays aren't tracked** — `_has_overlays()` counted any send with a preset; it now needs the send's own overlay lists or the preset's legacy `overlay_config_id`. `prune_without_overlays()` removes the old rows at startup and before each run.
+
+## v1.8.17 (2026-10-26) — `dev-overlays` branch
+
+### New Features
+- **WeTrakr, SIMKL and Floppy lists for overlays** — new `backend/list_sources.py` turns any list link or key into one canonical key (MDBList and WeTrakr/SIMKL list URLs, `wetrakr:<status>`, `simkl:<status>`, `floppy:list:<id>`), so the existing "list" condition field works for every service. Clients: `wetrakr_client.py` (app key in the `wetrakr-api-key` header; public lists need only the key, private lists and tracking lists use the device-code sign-in), `simkl_client.py` (AUTH V2 device flow, every list read signed in; watchlist buckets re-fetched only when `/sync/activities` says something changed; custom lists are PRO/VIP and a free account's `premium_only` answer becomes a clear error), `floppy_client.py` (server address + app token, `/api/v1/lists/`). Contents (TMDb ids) share `list_cache` and MDBList's cache days; a stale list is served from cache while a background thread refreshes it.
+- Sign-in tokens are kept in a new `list_source_auth` table, not the settings table, so a Settings save never drops them. New settings `wetrakr.clientId`, `simkl.clientId`, `floppy.url`, `floppy.token` (the keys masked like other secrets); `Bearer` tokens and these keys are masked in logs.
+- Endpoints: `GET /api/list-sources/status`, `POST /api/list-sources/{provider}/test`, `POST /api/list-sources/{provider}/connect` (+ `/connect/poll`, `DELETE`), `GET /api/list-sources/my-lists`, `POST /api/list-sources/resolve`.
+- Settings → General has WeTrakr, SIMKL and Floppy sections with Test and Connect account. The overlay rule editor's "On a list" offers your lists grouped by service, or a pasted link (looked up through `/resolve`).
+
+## v1.8.16 (2026-10-25) — `dev-overlays` branch
+
+### Bug Fixes
+- **Several TMDb ids on one Plex item** — `extract_tmdb_id_from_metadata()` used the first `tmdb://` GUID; Plex can keep an old one (seen: an entry for the film's working title). With more than one, `_pick_tmdb_id()` uses the id TMDb's `/find/{imdb}` returns for the item's IMDb GUID (`tmdb_client.find_tmdb_ids_by_imdb()`); no IMDb id or no match keeps the first. Picks are cached per process and logged. Stored rows are corrected by the next Plex scan.
+
+## v1.8.15 (2026-10-23) — `dev-overlays` branch
+
+### New Features
+- **Two new starter presets** (`_DEFAULT_PRESETS_TEMPLATE` in presets.py): `budget-mm2k` and `budget-cl2k`, both 26px white border, textless posters and fixed text boxes; mm2k draws `{title}` as text, cl2k uses the logo with a `{season}` caption on season posters. Shipped without overlay links.
+- **Starter fonts** — `/api/presets/default-template` now includes `_fonts` (`STARTER_FONTS` in universal.py: Arimo, Roboto, Inter, Montserrat, Lato, Comfortaa, Bebas Neue; all OFL/Apache 2.0, fetched from Kometa's GitHub repos, not shipped). `/api/presets/import` downloads those plus every `font_family` the imported presets use, in a background thread (`prefetch_fonts()`); fonts already on disk or unknown names are skipped.
+
+### Bug Fixes
+- **Arial on Docker** — Arial isn't free to ship and isn't in the image, so presets using "Arial"/"Arial Bold" (the starters included) fell back to DejaVu Sans. `_OPEN_SUBSTITUTES` maps Arial/Helvetica to Arimo (metric-compatible, Apache 2.0) when the real font isn't installed; it's tried after local and system fonts.
+- Kometa Creator font names: `Bebas-Regular` now points to upstream's renamed `BebasNeue-Regular.ttf`, `Helvetica-Bold` (commercial, removed upstream) falls back to Arimo Bold, and `PlusJakartaSans-Bold` was added. A font already in `config/fonts_cache/` is always used first by exact name, so installs that downloaded `Helvetica-Bold.ttf` or `Bebas-Regular.ttf` earlier keep using them. A failed download isn't retried on every render (until restart).
+
+## v1.8.14 (2026-10-23) — `dev-overlays` branch
+
+### New Features
+- **Drift detection for logos and backdrops** — `poster_fingerprints` gains an `asset_type` column (rebuilt once from the v1.8.11-13 `(server_id, rating_key)` key). Logo/backdrop sends are fingerprinted in `PlexClient`/`JellyfinClient.upload_image()` and the direct Plex posts (plexsend, Batch Edit's logo upload, Backup restore); the sent bytes are kept in `config/cache/drift_sent/` so "Put back" can re-upload them. Scans compare a re-downloaded logo/backdrop the same way as posters. History's tab shows the asset type and the right images; `GET /api/poster-drift/{server}/{key}/sent?asset=` serves the kept copy; resend/dismiss take `?asset=`. Notifications say "Art Changed Outside Simposter".
+- **"Changed" badges** on Movies/TV Shows cards and the Logos/Backdrops grids (`GET /api/poster-drift/keys`, `useDriftKeys.ts`), linking to History → Changed Outside Simposter (`?tab=drift`).
+- **Thumb Art in Media Mirror and Backup** — `thumb_art` asset type (Jellyfin/Emby only: offered in Media Mirror when the source and a target are Jellyfin/Emby; on Backup for a Jellyfin/Emby library, where Plex items are skipped). Backup shows Square Art only for Plex libraries.
+
+### Improvements
+- **Scans re-check logos and backdrops** — `asset_changed_on_server()`/`record_asset_version()` generalize the poster version files (`.logover`/`.artver`). Plex: the movie scan reads the `clearLogo` Image URL and `art` from the metadata it already fetches; TV uses the listing's `art` and the poster path (Plex stamps every image of an item with the same update time). Jellyfin/Emby: `ImageTags.Logo` and `BackdropImageTags[0]` from the listing.
+- **Overlay Manager preview fonts** — new `GET /api/fonts/file?name=` (same folders as the render, fetches Kometa fonts on first use); the preview loads them with `FontFace` and draws text with them.
+
+### Bug Fixes
+- **Kometa text rendered bold** — imported text names Kometa's font files (default `Roboto-Medium.ttf`), which Simposter didn't have, so `_load_font()` fell through to a bold system font (its default weight is 700). Kometa's own `fonts/` folder (117 files, `_KOMETA_REPO_FONTS` in universal.py) is now fetched from GitHub and cached on first use like the Kometa Creator fonts, and listed by `/api/fonts`. Imported text layers get `font_weight: "400"` (new `OverlayElement.font_weight`, used by `_load_element_font()`), so a font that still isn't found falls back to a regular weight. Existing imports need a re-import (live files: Check now).
+
+### Security
+- Live Kometa files: the folder picker (`/live-kometa-files/browse`) and `validate_path()` refuse UNC/network paths (`\\host\share`, `//host/share`), since opening one makes Windows connect to that host with the account's credentials; folder errors no longer echo the OS error text.
+
+## v1.8.13 (2026-10-22) — `dev-overlays` branch
+
+### New Features
+- **Server file picker for live Kometa files** — new `GET /api/live-kometa-files/browse?path=` lists the subfolders and `.yml`/`.yaml` files of a folder on the Simposter server (hidden entries skipped, max 2000 entries), plus starting points (drives or `/`, and `/config`, `/kometa`, `/umtk`, `/tssk`, `/data`, `/mnt`, home and the config folder when they exist). New `ServerFilePicker.vue`, opened by a Browse… button next to the live-file path.
+
+### Improvements
+- Live-file status lists skipped overlays grouped by reason (e.g. text overlays with no `horizontal_offset`/`vertical_offset`).
+- The Kometa importer warns when a `backdrop` overlay has no `back_color`, since it draws nothing.
+- Overlay Manager: box-only (`backdrop`) layers are named "Background box", their Look tab shows only the box settings, and a layer warning appears when the box has no color or border.
+
+## v1.8.12 (2026-10-22) — `dev-overlays` branch
+
+### Improvements
+- **Faster Jellyfin/Emby scans** — the library listing now asks for each item's `Etag` (an MD5 of the item's `DateLastSaved` in Jellyfin's source). New table `media_server_item_etags`; `_fetch_art_and_media_info_for_scan()` skips the metadata/logo/backdrop requests for items whose Etag hasn't changed since the scan that last fetched them (the poster-version check still runs for every item). The Etag is stored only after a successful metadata fetch, so failures are retried.
+- Settings → Media Servers has a greyed-out **Silo** section marked "Future update" (placeholder only).
+- **Settings → Output redesigned** — save layouts are cards with a live example (movie, show, season) computed by a port of `save_paths.apply_save_location_variables()`/`_sanitize()`/`resolve_save_path()`; templates, clickable variable chips and per-field examples only under Custom; "Send to Plex" folded into the Saving section ("Also save a copy when sending to a media server"); the Path Variable Examples section is gone. Stored settings are unchanged.
+- Settings → Media Servers shows a "Testing required" tag and note on the Emby section (Emby support assumes the Jellyfin API and is untested on a real Emby server).
+
+### Bug Fixes
+- **Re-imported Jellyfin/Emby items** — when Jellyfin re-imports a file it gives the item a new id, and every send to the old id returned 404 until the next scan. New `upload_with_stale_retry()`/`refresh_stale_item_id()` (media_server_send.py): on a 404 (or a season that can't be found under the cached series id), the item is looked up again by TMDb/TVDB id in the same library, its cached rows are moved to the new id (`db.rekey_media_server_item()`: movie/TV cache, overlay refresh state, poster fingerprints, scan Etags) and the upload is retried once. Used by the poster/logo/backdrop/thumb-art send endpoints, Media Mirror target uploads and Overlay Refresh.
+- **Jellyfin/Emby media info in Plex's vocabulary** — resolution is now `4k`/`1080`/`720`/`sd` (was `1080p`/`720p`) and audio language a 2-letter code (`en`, was `eng`), so per-value overlay badges set up in the Overlay Manager match Jellyfin items too. Existing rows are corrected by the next Jellyfin scan.
+- **Overlay Manager preview** — studio and streaming badges for a Jellyfin/Emby item (or a TV show) now use the scanned TMDb id instead of asking Plex.
+- A Jellyfin/Emby scan with auto-generate on no longer regenerates (or re-sends) a poster for an item that a Radarr/Sonarr webhook or a cross-server sync already sent one to. New `db.poster_already_sent()` checks History for a successful send to that item on that server; `process_new_media_server_content()` skips those items.
+
+## v1.8.11 (2026-10-22) — `dev-overlays` branch
+
+### New Features
+- **Poster drift detection** — new `backend/poster_drift.py`. Every successful poster send stores a 16x24 RGB fingerprint per (server, item) in the new `poster_fingerprints` table (hooked into `record_poster_history()` for send actions, `_upload_poster_and_verify()` and the Plex resend paths). When a scan re-downloads a poster whose server version changed (Quirk #152; Plex and Jellyfin/Emby), it is compared with the stored one; a change beyond re-encoding/resizing noise is marked. The action is a preference (own table `poster_drift_config`, so a Settings save can't reset it): off, list, notify (one Discord/Apprise summary per scan) or resend (re-uploads the resend cache via `api_render_cache_resend()`). History has a "Changed Outside Simposter" tab with both posters side by side, "Put Simposter's back" and "Keep server's" (adopts the current poster as the new baseline). Endpoints `GET /api/poster-drift`, `POST /api/poster-drift/config`, `POST /api/poster-drift/{server}/{key}/resend|dismiss`. Items Simposter never sent are never reported.
+- **Kometa blur** — `blur(N)` imports as a `blur` layer (`blur_amount`, 1-100, default 50); the strongest blur among a bucket's drawn layers is applied once (`GaussianBlur(N × canvas scale)`) before its other layers. Also addable in the Overlay Manager.
+- **Kometa `font_style`** — stored on the layer and applied with `set_variation_by_name()` for variable fonts; other fonts ignore it.
+- **Text addon images** — a `text(...)` overlay with an image keeps it (`asset_id`/`url`, `addon_position`, `addon_offset`, `addon_scale`), laid out like Kometa's `get_backdrop` (side by side top-aligned, or stacked and centered). Editable under "Image next to the text".
+- **Kometa queues** — `parse_queues()` reads a file's `queues:` (lists, named lists with `settings` position/overlay_limit/default/dynamic_position; conditionals use their defaults), and queued overlays get `queue` + `queue_positions`. At render, selected layers of a queue take its positions by weight (highest first); extra layers aren't drawn. Same logic in the preview (`queuePlacements()`).
+- **Remove overlays** (Overlay Refresh) and **Days since added / Show status** text values — see CLAUDE.md Quirk #174.
+
+### Bug Fixes
+- Media Mirror config is kept on a Settings save (stored `mirror` preserved per group; a removed server is still dropped).
+
+### Security
+- Pillow 13.0.0 on Python 3.11+ (12.3.0 kept for 3.10); `npm audit fix` (vite 8.3.5). A database restore only fills a media server's stored key when its URL matches.
+
+## v1.8.10 (2026-10-21) — `dev-overlays` branch
+
+Numbered 1.8.10 rather than 1.8.1: versions are compared part by part as numbers, so 1.8.1 would sort before 1.8.04.
+
+### Security
+- **Secrets in logs and errors** — new `redact_secrets()` (config.py) masks `api_key=`/`apikey=`/`api_token=`/`token=`/`x-plex-token=`/`secret=` values, `Token="..."` headers and every saved credential (settings keys plus each `mediaServers` token/apiKey). Used by `RedactingFormatter` for all log lines (simposter and uvicorn) and by the TMDb/TVDB/MDBList client errors and the key-test endpoints. Before, only the Plex token and TMDb key were masked, and `requests` errors carried the full URL with the key. Plex force-refresh fetches no longer put `X-Plex-Token` in the URL (it is already sent as a header).
+- **Redirects re-checked** — new `safe_get()` (middleware/validation.py) follows redirects one hop at a time and runs the SSRF check on each (max 5). Used by the render image download, Kometa remote image downloads, URL badges (and the proxy that uses them), media-server send/notify image URLs and Plex logo/backdrop/square-art URL sends. Before, only the first URL was checked, so a public link could redirect to a LAN or cloud-metadata address.
+
+### Documentation
+- New `docs/OVERLAYS.md` (overlay guide). README, GETTING_STARTED, MEDIA_SERVERS, COLLECTIONS_AND_POSTERS, ARCHITECTURE and WORKFLOW updated for overlays, Kometa import, MDBList, Overlay Refresh and live Kometa files.
+
+## v1.8.04 (2026-10-21) — `dev-overlays` branch
+
+### New Features
+- **Paste YAML** — the Kometa import modal has a "Paste YAML" box; the pasted text (must have a top-level `overlays:` or `templates:` line) becomes a `<name>.yml` file in the browser and goes through the same import as uploads, so images/fonts/zips can still be added alongside. Pasting again under the same name replaces the earlier paste.
+- **Days since added / Show status** — new condition fields `days_since_added` (whole days since the cached `added_at`; `get_added_at_for_rating_key()`) and `show_status` (TMDb TV `status` mapped to continuing/ended/canceled/upcoming; `get_tv_show_details()` now returns `status`). Loaded only when a condition uses them (`needed_data()` keys `added`/`status`), with a reason in the overlay log when missing; listed in Show when, the preview's example values and `/overlay-preview-metadata`.
+
+### Bug Fixes
+- **TSSK filters** — `tvdb_status`/`tmdb_status` map to `show_status` (TMDb values translated) and `added: N` to `days_since_added lte N` (`added.not` → `gt`), instead of a hidden `_unsupported_*` condition.
+- **Comma-separated filter values** — `label.not: A, B` (and other string/tag filters) are split into separate values as Kometa's `get_list` does; previously the whole string was one value, so the condition never matched. Regex filters are left whole.
+- **`backdrop` overlays** — any overlay name starting with "backdrop" becomes a box, matching Kometa's `overlay.py`, instead of an image lookup.
+- **Empty overlay files** — an empty/comment-only file, or `overlays:` with nothing under it, returns no layers plus a message instead of an error; an upload import skips it, a live Kometa file saves the empty overlay (clearing its layers).
+- **ID-list note** — the "list only updates on re-import" note for `tmdb_movie`/`tmdb_show`/`tvdb_show` is reported as info, so those overlays show as ok.
+
+## v1.8.03 (2026-10-20) — `dev-overlays` branch
+
+### Bug Fixes
+- **Remote overlay images** — a Kometa overlay with `url:`/`git:`/default images was imported as a link only: it rendered (fetched each time) but the editor's Image list showed nothing and the link wasn't visible. `finalize_elements()` now downloads it (`download_remote_image()`: SSRF guard, 15 MB cap, image check, once per URL per import) and saves it as an overlay asset (reused on re-import), keeping the link as a fallback; a failed download is reported and the layer keeps the link. Image and full-poster image layers show an "Image link" field in the editor. Applies to uploads and live Kometa files.
+
+## v1.8.02 (2026-10-20) — `dev-overlays` branch
+
+### Improvements
+- **Overlays per poster in Overlay Refresh** — Tracked posters shows the overlays each poster was sent with (`state_overlay_ids()`: its stored `overlay_config_ids`, `overlay_config_ids_below` and the preset's legacy link; deleted ones flagged), a filter by overlay with counts, "Re-send these N" for the filtered posters and a per-poster "Re-send" (a forced apply run limited to those keys).
+- **Readable overlay logs** — each overlay render logs one block: the item and overlays applied, the data the rules were checked against (resolution, codecs, TMDb/TVDB ID, labels, file name, MDBList ratings used or why they weren't loaded), the layers drawn (badges with their value) and a reason per skipped layer (failed condition with the item's actual value, lost in a badge set, hidden by another layer, or the overlay's own conditions); up to 8 skipped lines at INFO, the rest at DEBUG (`overlay_engine.explain_selection()`, `describe_failure()`, `data_summary()`). A preset pointing at a deleted overlay is warned about once per run with how to fix it. Per-layer drawing details and preview plumbing (option keys, cache flags, injected metadata, TMDb fetches) moved to DEBUG.
+- **Overlay effect cache built ahead of time** — new `backend/overlay_cache.py`. At startup (background thread), after a database restore, and on preset save / season save / import, every preset's effect layers are generated from its stored options (series and season settings); deleting a preset removes its files.
+
+### Bug Fixes
+- **Wrong cached effects** — the cache file was `config/overlays/{template}/{preset}.png`, one per preset, and a cache miss generated it from whatever was being rendered. A season config with its own matte/fade/vignette, or a Square Art (square canvas) render, could put its layer there and every other render of that preset would then use it. Files are now `{preset}--{signature}.png`, where the signature covers the effect options and canvas size; old-style files are removed at startup and flagged by Cleanup.
+
+## v1.8.01 (2026-10-19) — `dev-overlays` branch
+
+### New Features
+- **Live Kometa files** — Overlay Manager → Advanced. A server-side overlay YAML is re-read on an interval (`live_kometa_files` table, `backend/live_kometa.py`, `/api/live-kometa-files`, APScheduler job per file); when its contents change it is re-imported into the same overlay config (whole-overlay conditions kept), and optionally Overlay Refresh runs for every library group of that type. Local images/fonts are found next to the file or in the folders above it.
+- **ID-list builders** — Kometa `tmdb_movie`, `tmdb_show` and `tvdb_show` import as `tmdb_id`/`tvdb_id` conditions instead of a hidden layer; the engine fills a missing id from the scan cache when a condition needs it, and "TMDb ID"/"TVDB ID" are Show when fields.
+
+### Changes
+- The Kometa importer's image/font matching and validation moved into a shared `finalize_elements()` used by uploads and live files; an image that can't be matched is now reported as "wasn't found".
+
+## v1.8.0 (2026-10-19) — `dev-overlays` branch
+
+### New Features
+- **Overlay engine v2** — per-layer conditions (`conditions`: resolution, codecs, channels, language, edition, file path regex, labels, year, title, studio, streaming platform, MDBList ratings and lists), badge sets (`group` + `weight`, first match wins) and hide rules (`suppress`), plus Kometa-style placement (align + offset in a 1000x1500 space) with background boxes and outlines. Shared by `backend/overlay_engine.py` and the preview's `frontend/src/services/overlayEngine.ts`.
+- **Whole-overlay conditions** — new `overlay_configs.conditions_json`; when they fail, none of the overlay's layers draw (real renders, Overlay Refresh and preview).
+- **Kometa overlay importer** — Overlay Manager → Import Kometa expands Kometa's templates, maps what Simposter supports and reports the rest.
+- **MDBList** — ratings and list membership for conditions and text, cached in the database (Settings → General).
+- **Overlay Refresh** — per-library-group page that re-renders posters whose overlay would now come out differently, with a schedule, Plex label and log.
+- **File paths from scans** — scans store each item's media file path for file-name conditions.
+- **Overlay Manager redesign** — tabs for Layers / Badge sets / Show overlay when; per-layer Look / Position / Show when tabs; one pin-and-distance position control in pixels; plain-English layer titles; rename layers; warnings on layers that draw nothing; compare the overlay on several example or real posters; "Insert value" list for text; a larger editor; unsaved-changes prompt.
+- **Branch-aware update check** — `/api/version-info` reads the running branch's `frontend/src/version.ts` from GitHub (cached for an hour) and `branches.json` from `main`, so the version badge shows an update on any branch, and a "Move to …" badge when the branch was merged, retired or deleted.
+
+### Bug Fixes
+- **Text variables** — plain (non-Kometa) text layers drew `{audience_rating}` literally; they now fill values and skip the layer when one is missing.
+- **Preview badge size** — the preview capped image badges at half the canvas width; real renders never did.
+- **Update check** — it only ran on `main` and queried a placeholder repository (`YOUR_USERNAME/simposter`), so it never reported anything.
+
+## v1.7.12 (2026-10-16) — `webui-overhaul-dev` branch
+
+### New Features
+- **Preset exports carry their overlays** — Export all, Export selected (now `POST /api/presets/export-selected`) and Copy compact include an `_overlays` block: the overlay configs the presets use and their asset files (base64). Import recreates them; an identical existing config is reused, a different one with the same id is saved under a new id and the presets are repointed, and an asset file is never overwritten by a different one with the same name. Template Manager gained Download file / Open file. Shared code lives in `backend/overlay_bundle.py`.
+- **Full database backup** — Settings → Advanced export now includes settings, presets, overlay configs and overlay assets (format `simposter-db-backup` v2); media-server keys are left out unless "include API keys" is ticked. Import takes a file, keeps current keys the backup doesn't have, clears the overlay effect cache, and applies settings and schedules without a restart. Caches, history and the retry queue aren't included.
+
+### Bug Fixes
+- **Database export/import never worked** — they queried preset columns that don't exist (`template_options`, `is_default`) and a nonexistent `templates` table.
+- **Clearing overlays on save** — saving a preset with no overlays selected kept its previous overlays, because the empty list was sent as `undefined` and the backend merges with the stored options. The editors now always send the lists.
+
+## v1.7.11 (2026-10-15) — `webui-overhaul-dev` branch
+
+### New Features
+- **Preview overlay** — new `PreviewOverlay.vue` in both editors: a corner toolbar (Boxes, Guides), logo/text boxes drawn on the preview that can be dragged to move or resized from a corner handle (writes back to the same settings as the sliders), and center lines plus a 5% safe-area guide. Replaces the "Show boxes on preview" checkboxes in the Logo/Text tabs.
+- **Preview status** — "Rendering..." / "Not up to date" / "Up to date"; the stale state is set when settings change after the shown render.
+- **Tidier preview column** — the Current poster/logo column can be collapsed (remembered), and Add to Retry Queue moved into a ⋯ menu after the Send button.
+
+### Bug Fixes
+- **Unmerged library on first load** — the root URL redirected to `/movies` with no `?library=`, so the page loaded every movie library without library-group merging (duplicate Plex/Jellyfin cards, no "Show posters from" dropdown) while the sidebar highlighted the first tab. Library pages opened without a library now switch to the first tab of that kind.
+
+## v1.7.10 (2026-10-14) — `webui-overhaul-dev` branch
+
+### New Features
+- **Manual editor refresh** — both editors' left panel is now tabbed (Image / Logo / Text / Extras) with the preset bar pinned at the top and Preview pinned at the bottom. Less-used settings are collapsible groups (`EditorCard.vue`) showing a one-line summary when closed; open/closed state and the active tab are remembered. Sliders render on one line, Images/Filter and Logo Mode/Style share rows, per-source counts sit on the TMDb/Fanart/TVDB checkboxes, and the upload drop zones became an Upload button (an uploaded image is the first thumbnail; dropping a file on the thumbnails still works). Labels to remove are pinned above Preview on every tab.
+- **Separate logo and text bounding boxes** — Custom Text always fits its own box (`text_box_*`), separate from the logo box (`uniform_logo_*`), each with its own preview outline. One-time migrations (`text_box_split`, `text_box_always`, recorded in a new `applied_migrations` table) give every Uniform Logo preset config an explicit text box that renders the same as before. Kometa presets are untouched.
+- **Backdrops as poster backgrounds** — an Images switch (Posters/Backdrops) in the editors, a backdrop text filter, editor-only zoom and left/right pan (`poster_shift_x`), and a "View all" picker for posters and backdrops.
+
+### Bug Fixes
+- **Season config reset on save** — Save Preset and Save As no longer overwrite a preset's season config with the defaults (No Logo); a saved season config is marked `season_saved` so an identical-to-series season isn't treated as unset.
+
+### Improvements
+- **Starter presets** — text shadow is off in all imported Simposter defaults; simposter-main's season text uses Comfortaa-Medium with letter spacing 0.
+
+## v1.7.08 (2026-10-13) — `dev-jellyfin` branch
+
+### New Features
+- **Thumb Art (Jellyfin/Emby)** — a new Thumb Art page for Jellyfin/Emby's 16:9 `Thumb` image, listed in a library's menu only when its group has a Jellyfin or Emby library. It lists the titles that exist on Jellyfin/Emby. The editor renders your template/preset on a 2000×1125 canvas (`canvas_mode: "thumb"`) from a TMDb/Fanart backdrop and logo, with backdrop position and logo size sliders, and sends to Jellyfin/Emby's Thumb slot (`POST /api/media-server/send-thumb-art`) or saves `thumb.jpg` to disk. Tiles load on demand from `GET /api/thumb-art/{id}` and are cached on disk; Thumb Art isn't part of library scans. Plex has no Thumb slot.
+
+### Improvements
+- **Server icons on Square Art / Thumb Art** — Square Art shows a Plex icon in its header when the library's group also has Jellyfin/Emby; Thumb Art shows the Jellyfin and/or Emby icon.
+
+## v1.7.07 (2026-10-09) — `dev-jellyfin` branch
+
+### Improvements
+- **Scans refresh posters changed on the server** — a normal scan used to skip every item that already had a cached poster, so posters changed by Kometa or by hand only showed after "Force Refresh All Art". The scan now compares each poster's version on the server (Plex's `thumb` timestamp, Jellyfin/Emby's `ImageTags.Primary`) with the one saved when it was cached, and re-downloads only the changed ones. No extra requests: the scan already reads these values. The first scan after updating just records the versions. Logos, backdrops, square art and collections aren't covered yet.
+
+## v1.7.06 (2026-10-09) — `dev-jellyfin` branch
+
+### New Features
+- **Media Mirror notifications** — a Discord/Apprise summary when a mirror run finishes or fails: library, source → target servers, and per asset type how many items were copied out of how many the source had (e.g. "Posters: 3/40 copied (37 unchanged)"), plus collections and the unmapped count. Manual runs always notify; scheduled runs only when something was copied or failed. New "Media Mirror" toggle under both Discord and Apprise in Settings → Notifications (on by default).
+
+### Bug Fixes
+- **Season rows in History** — posters synced to Jellyfin/Emby by a Sonarr webhook were recorded with only the show name and no year. They now read "Show - Season N" (or "Specials") with the year, like the Plex rows. Same fix for posters delivered to a server after it imports the show, which also now record the preset Plex's copy was sent with instead of "—".
+
+## v1.7.05 (2026-10-09) — `dev-jellyfin` branch
+
+### Bug Fixes
+- **Notification thumbnails for picked logos/backdrops** — a logo or backdrop chosen from TMDb/Fanart has no upload bytes, so its notification had no image. `POST /api/media-server/notify-send` gained `image_url` (used only when there's no `image_data`), fetched with the SSRF guard and capped at 8MB. The Logo/Backdrop editors and the movie, TV and Kometa editors' "Send Logo Only" pass it.
+- **"Preset: N/A"** — the Preset field is left out of notifications when no preset or template was used (logo/backdrop sends).
+
+## v1.7.04 (2026-10-08) — `dev-jellyfin` branch
+
+### New Features
+- **Multi-server Logo/Backdrop send** — `LogoEditorModal.vue`/`BackdropEditorModal.vue` send to the item's own server plus any linked copies (`other_servers`), via a new `useAssetServerSend` composable. With more than one server, Send opens `SendToServerModal.vue`. Uploads go out in parallel with `notify: false`, followed by one combined notification. `PlexBackdropSendRequest` gained `notify`, and `/api/media-server/send-backdrop` now honors it.
+- **Local Assets** — resend a saved poster to any server in its library group (`POST /api/local-assets/resend` gained `targets`), rename files (`POST /api/local-assets/rename`), and a thumbnail-size slider.
+
+### Improvements
+- **Notification layout** — Discord embeds, Apprise text and batch completion messages now show Library / Preset (the preset's display name) / Action (Sent, Resent, Saved locally) / Servers (every server reached) / Asset, replacing Template and "Also synced to".
+- **Late-importing servers** — when a Jellyfin/Emby scan finds a new item that Plex also has, it now uploads the poster Plex last received (series and cached seasons) instead of skipping it. This covers a Radarr/Sonarr webhook that fired before that server had imported the file. The webhook sync also logs when a target doesn't have the item yet.
+- **Quieter logs** — the "PNG exceeds Plex's upload size limit, falling back to JPEG" warning is logged at debug level for Jellyfin/Emby-only uploads (Media Mirror and the media-server send endpoints). Encoded output is unchanged.
+
+### Bug Fixes
+- Every Sonarr webhook failed with HTTP 500 (`name 'plex_fallback' is not defined`): its target-resolution block had been placed in the Radarr handler instead.
+- Local Assets' library filter hid posters saved under another library in the same group, and its no-metadata fallback never matched.
+
+## v1.7.03 (2026-10-07) — `dev-jellyfin` branch
+
+### Improvements
+- **One notification per editor send** — the movie, TV and Kometa editors now send each upload with `notify: false` and then call a new `POST /api/media-server/notify-send` once, so a poster + logo sent to Plex and Jellyfin produces a single Discord/Apprise notification (previously up to four). It shows "Sent to" the first server (Plex first when included), "Also synced to" the rest, "Asset: Poster + Logo", the library and template/preset, with the rendered poster attached. `PlexSendRequest`, `PlexLogoSendRequest` and `MediaServerSendRequest` gained `notify` (default `true`), so batch, webhook and other callers are unchanged.
+- **Group-aware notification library filter** — a library passes the Discord/Apprise library filter when it or any library in its library group is picked. Previously a Jellyfin/Emby send was dropped when only the group's Plex library was selected.
+- **Auto-generate presets** — Kometa (collections-only) presets are no longer offered in a library group's auto-generate preset list.
+
+### Bug Fixes
+- Logo sends from the editors didn't pass the library, so their notifications showed "Unknown Library".
+- Docker: the entrypoint now creates the settings folder and database before changing ownership, fixing "attempt to write a readonly database" on a fresh install (shipped in the v1.7.02 quick-fix build).
+- A group with a Plex library showed a blank auto-generate preset dropdown after picking a preset (shipped in the v1.7.02 quick-fix build).
+
+## v1.7.02 (2026-10-07) — `dev-jellyfin` branch
+
+### Improvements
+- **Servers treated evenly** — Plex, Jellyfin and Emby are all just media servers:
+  - The setup wizard's separate "Connect your Plex server" and "Connect your media server(s)" steps are now one "Connect your servers" step with identical sections. You need at least one picked server to connect; untested ones are skipped. Its library step lists every server's libraries together, each tagged by server.
+  - Library group cards show every server's libraries as identical chips ("Server: Library" with ✕), with one shared "+ Link a library..." picker grouped by server.
+  - Help text and wording no longer frame Jellyfin/Emby as add-ons to Plex.
+- **Scheduled scans by library group** — Settings → Libraries' schedule picker lists library groups (saved as `group:<id>`) and scans each chosen group on every server it includes. Older Plex-only selections still work. The setup wizard offers a scan schedule without Plex too (it previously hid it).
+- **Main Plex server Enabled checkbox** — switches Plex off app-wide while keeping its URL/token, honored by the backend at startup and on save. The "Primary" badge only appears when a second Plex server exists.
+- **Docs** — new `docs/MEDIA_SERVERS.md`. README, Getting Started, Webhooks, the Collections guide, WORKFLOW and ARCHITECTURE now cover Jellyfin/Emby.
+
+### Bug Fixes
+- A Jellyfin/Emby-only group's Scan button didn't know about other scans, so it stayed clickable during Force Refresh All Art and then failed with "A scan is already in progress". Every group now has one Scan button that follows the shared scan status.
+- Scheduled scans ran the linked Jellyfin/Emby libraries' scan twice per run.
+- A library from a second Plex server could be linked to a group but was never displayed on it.
+
+## v1.7.01 (2026-10-07) — `dev-jellyfin` branch
+
+### New Features
+- **Collection matching** — a "Collection matching" window on the Collections page (shown when the library's group spans more than one server) overrides the automatic name-based matching of collections across servers: pick the matching collection on each server, choose "— none —" to split a wrong match, or reset a row to automatic. Saved per library group as `collectionMatchOverrides` and used everywhere collections are matched across servers: the merged Collections grid, the collection editors' send picker, and Media Mirror's collection mapping.
+- **Media Server Maintenance** (Settings → Cleanup) — one subsection per configured server, titled with its name. Jellyfin servers can run their built-in cleanup tasks (Optimize database, Clean Cache Directory, Clean Transcode Directory, Clean Log Directory, Clean Activity Log), showing each task's last run/result and live progress. Emby uses the same API but its task names are unverified.
+
+### Improvements
+- Plex maintenance actions now work for additional Plex servers (each uses its own saved URL/token), not only the primary connection.
+- Removed the outdated "Kometa Creator can't send to Jellyfin/Emby yet" note from the Collections page.
+
+## v1.7.0 (2026-10-07) — `dev-jellyfin` branch — Jellyfin/Emby Support
+
+First full release of multi-server support (Plex, Jellyfin and/or Emby). Builds on the v1.6.2 beta; Plex is no longer required. Moving to 1.7 also fixes version ordering: `v1.6.2` compared as older than `v1.6.114`, because each part of a version number is compared as a whole number.
+
+### New Features
+- **Collections on Jellyfin/Emby** — linked servers' collections are scanned and merged (matched by name, ignoring a trailing "Collection"), with a "Show posters from" switch, search/filter/sort, and a multi-server send picker in both collection editors.
+- **Media Mirror** — copies artwork from a source server to the other members of a group; manual or scheduled, paginated mapping tables with Movies/TV and Collections tabs, and change detection so only changed images are re-copied ("Re-copy everything" forces a full pass).
+- **Webhooks by library group** — `?group=<name>` (or `group_id=`) looks the item up across the group's libraries and delivers to every library in it, falling back to the group's Jellyfin/Emby libraries if Plex doesn't have the title. The Webhook URL Generator now lists groups instead of individual server libraries.
+- **Webhooks without Plex** — a URL that names no server is resolved against your Jellyfin/Emby libraries (from your groups, or directly from the servers if there are none) instead of an unconfigured Plex.
+- **Jellyfin/Emby-origin webhooks and auto-generate reach every server in the group**, Plex included.
+- **Auto-generate on Jellyfin/Emby scans** — new items found by a Jellyfin/Emby scan (manual or scheduled) get posters automatically, using the group's settings. A library's first scan counts as an import, not new arrivals.
+- **Poster/logo upload window** — choose a local file or paste an image URL, with a live preview (from `webui-overhaul-dev` v1.6.111).
+- **Removing a media server purges its cache** — its cached posters/logos/backdrops/square art, thumbnails, scan rows, label cache, retry-queue entries and Media Mirror state are deleted after the save. History and saved poster files are kept.
+
+### Improvements
+- Library/group names instead of IDs in History, Local Assets, global search, notifications and backup folder names.
+- Removing Plex now persists across restarts even when `PLEX_URL`/`PLEX_TOKEN` env vars are set.
+- The primary Plex server can be removed from Settings → Media Servers like any other.
+- Linking a library to a group no longer needs a separate "+ Add" click.
+- Scheduled scans skip Plex quietly when it isn't configured, and wait for a manual scan to finish instead of failing.
+- The streaming-provider cache warm-up after a scan runs in the background and only when a streaming badge is in use.
+
+### Bug Fixes
+- Webhooks for a single-library group rendered but never delivered.
+- A scan with many new items stalled silently after the movies step (the progress bar froze).
+- Save Changes appeared to need two clicks when adding a library to a group (the page waited for the follow-up scan before marking itself saved).
+- Removing the last media server was silently undone on save.
+- The "recently handled by a webhook" check matched the wrong items (a substring match) and never matched real Radarr/Sonarr events.
+- "Show posters from" never appeared for a Jellyfin/Emby-only library.
+- Local poster/logo uploads could fail with "URL resolves to a blocked network range" (from `webui-overhaul-dev` v1.6.112).
+- Kometa presets in Template Manager previewed over a random movie poster.
+- Removed dead code: the never-scheduled `check_recently_added()` Plex poll.
+
+## v1.6.2 (2026-09-30) — `dev-jellyfin` branch — Beta: Jellyfin/Emby Support
+
+**First versioned release of the Jellyfin/Emby multi-server work.** Everything below has been building up unversioned on this branch since the previous entry (v1.6.113/114) — see CLAUDE.md Quirks #56 onward for the full, detailed build history. This is a beta: multi-server support is genuinely usable, but has known gaps (see below) and hasn't had extensive real-world testing yet — please report anything that looks wrong.
+
+### New Features
+- **Connect one or more media servers** — Plex, Jellyfin, and/or Emby, any combination, all at once (Settings → Media Servers). An install can now run Plex-only (unchanged from before), Jellyfin/Emby-only (no Plex required at all), or any mix.
+- **Library Groups** (Settings → Libraries) — link the same logical library across servers (e.g. Plex "Movies" + Jellyfin "Movies") into one group. A group can have any combination of members, including just a single Jellyfin/Emby library with no Plex at all.
+- **Merged browsing** — the same movie/show found on more than one linked server shows as a single card by default (toggle per-library via "Show posters from," or per-group via "Merge items" in Settings → Libraries).
+- **Multi-server send** — the manual editor, the grid's resend button, and Batch Edit can all send posters/logos/backdrops to Plex and/or Jellyfin/Emby, including for a merged item reaching its counterpart on another server.
+- **Media Mirror** — designate one linked server's library as "the truth" and copy its posters/logos/backdrops/square art to other linked servers, either manually ("Run Now") or on a schedule.
+- **Scheduled Scans** now cover Plex and/or Jellyfin and/or Emby — a single global schedule scans configured Plex libraries, every linked Jellyfin/Emby library, and every standalone Jellyfin/Emby-only group.
+- **Scan All Libraries / a single library's "Scan" button** now both correctly scan any linked Jellyfin/Emby library too, not just the Plex side.
+
+### Known Limitations (beta)
+- Webhook-triggered automation (Radarr/Sonarr/Tautulli) and the "recently added" auto-generate poll are still Plex-first-class — a webhook-triggered poster does sync to linked servers afterward, but the initial trigger itself still needs a Plex-anchored library.
+- Discord/Apprise notifications are not yet fully multi-server aware.
+- TV season-level sends to Jellyfin/Emby are supported; some edge cases around season resolution are still being verified against real servers.
+- Labels (removal after sending, Kometa compatibility) remain a Plex-only concept — Jellyfin/Emby have no equivalent mechanism.
+
+### Bug Fixes (this release)
+- A genuinely standalone Jellyfin/Emby-only library group was never covered by "Scan All Libraries" or the scheduled scan — only libraries linked to a Plex library were. Both now cover every linked and standalone group.
+- The "Rescanning library..." overlay could freeze mid-scan if you navigated away from Settings — the polling that kept it updated was tied to that page's own lifecycle instead of the overlay's actual global visibility. It now updates correctly regardless of which page you're on.
+- Linking a Plex library into an existing Library Group from Settings → Libraries could silently create a duplicate/incorrect entry instead of joining the group you picked it from, due to a race between two places independently writing the same data. Fixed to a single, correct writer.
+- Testing a Plex connection no longer auto-populates every discovered library as "tracked" — library tracking now only ever happens through the explicit per-group linking picker, matching the "pick what you want tracked" model the rest of Settings → Libraries already uses.
+- Onboarding re-runs (Settings → Advanced → "Run Startup Wizard") no longer auto-create or auto-scan Library Groups — that now only happens on a genuine first-time setup; a re-run only touches what you explicitly edit and save.
+
+## v1.6.114 (2026-09-23) — `dev-jellyfin` branch
+### New Features
+- **Settings → Media Servers**: a new tab to add, enable, test-connect, and remove Plex/Jellyfin/Emby entries in the `mediaServers` setting through the actual UI, replacing the direct-SQL workaround the Phase 3 debug endpoints required.
+- **New permanent endpoint `POST /api/media-server/test-connection`** backs the tab's Test Connection buttons — validates a server before it's saved.
+
+### Bug Fixes
+- **Found and fixed a real data-loss bug before it could ship**: `mediaServers` had no corresponding field on the `UISettings` Pydantic model, and the settings save path fully rebuilds the `settings` table from that model on every save — meaning saving *any* unrelated setting (a theme change, anything) would have silently deleted the `mediaServers` entry the first time it happened. Added the missing schema field; verified directly that a seeded `mediaServers` value now survives an unrelated settings save.
+- Plex/Jellyfin/Emby credentials in `mediaServers` now get the same never-leaked-in-GET, never-clobbered-by-the-mask-placeholder-on-save treatment every other secret field already gets, via dedicated masking logic for the list shape.
+
+See CLAUDE.md Quirk #60 for the full detail.
+
+## v1.6.113 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added `JellyfinClient`** (`backend/media_server/jellyfin_client.py`) — Phase 3 of the Jellyfin-integration plan, the first non-Plex `MediaServerClient` implementation. Also serves Emby via an `is_emby` flag rather than a separate class see CLAUDE.md Quirk #59 for exactly what's confirmed vs. still needs real-instance verification.
+- **Added temporary diagnostic endpoints** (`/api/media-server-debug/...`) so `JellyfinClient` can be tested directly against a real Jellyfin server before the rest of the app is wired through it (Phase 4) and before a real Settings UI exists to configure one (Phase 5). Not intended as permanent API surface.
+- `ImageType.SQUARE_ART` and label add/remove are deliberate no-ops for Jellyfin/Emby (no confirmed mechanism exists for either — see plan doc §13/§10), rather than guessed-at implementations.
+
+## v1.6.112 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added a `MediaServerClient` abstraction (`backend/media_server/`)** — Phase 2 of the Jellyfin-integration plan. `PlexClient` is the first real implementation, built as a pure-addition delegation layer over Simposter's existing, already-tested Plex code rather than an extract-and-replace refactor — nothing in the running app calls into it yet, so this carries zero regression risk. Verified against mocked Plex responses to confirm it reproduces the app's exact existing endpoint behavior (collection-aware poster uploads, logo uploads always metadata-routed, exact TMDb-GUID matching).
+- See CLAUDE.md Quirk #58 for the full detail, including a known, deliberate limitation (only correctly represents the single globally-configured Plex server for now) and the plan for `JellyfinClient` next.
+
+## v1.6.111 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Added `server_id` (default `'plex-1'`) to `movie_cache`, `tv_cache`, `collection_cache`, `poster_history`, and `poster_retry_queue`** — Phase 1 of the Jellyfin-integration plan, the database groundwork for the multi-server model. Purely additive: every existing row/query on an upgrading install behaves identically, verified directly against real pre-migration databases (including one with actual data in it), not just a clean-schema check.
+- **Seeded a `mediaServers` setting for existing installs** — one auto-migrated entry (`{id: "plex-1", type: "plex", url, token, enabled: true}`) built from the install's existing `plex.url`/`plex.token`, using the same "existing vs. fresh install" seed pattern already established for `onboarding_completed`/`scheduler.cleanupEnabled`. Not yet exposed through Settings — this is DB groundwork only, nothing reads it yet.
+- **Deliberately did not change any table's primary key** to a composite `(server_id, rating_key)`, despite that being the plan doc's original literal design — SQLite has no in-place way to do that short of a full table rebuild, which is real risk for a theoretical benefit (a Plex rating_key and a Jellyfin/Emby item GUID essentially can't collide as strings). See CLAUDE.md Quirk #57 for the full reasoning.
+- See CLAUDE.md Quirk #57 for the complete detail, including every verification scenario tested.
+
+## v1.6.110 (2026-09-23) — `dev-jellyfin` branch
+### Improvements
+- **Consolidated 4 duplicated Plex-metadata-injection call sites into one shared function**, `inject_plex_media_metadata()` (`backend/config.py`). `preview.py`, `batch.py` (×2 — movie and TV/season paths), `save.py`, and `plexsend.py` had all independently accumulated the same "fetch Plex media info, merge into `options['metadata']`, also inject `tmdb_id`/`media_type`" logic. No user-facing behavior change — verified directly against 5 mocked scenarios covering every call site's exact prior behavior, not just an import check.
+- **`save.py` no longer does a redundant second Plex metadata fetch just to re-derive `is_tv`** — that value was already available on the request (`SaveRequest.is_tv`) and simply never read; now passed straight through instead.
+- This is Phase 0 of the Jellyfin-integration plan (see `ai_repo/simposter/jellyfin-upgrade-plan.md`) — a prerequisite so a future `MediaServerClient`/`JellyfinClient` abstraction has one seam to generalize instead of several scattered copies. See CLAUDE.md Quirk #56 for the full detail, including one site (`overlay_config.py`) that turned out on closer read *not* to be a real duplicate and was deliberately left alone.
 
 ## v1.6.109 (2026-09-23)
 ### Improvements
@@ -99,7 +544,7 @@ See the new CLAUDE.md Quirk #48 for the full root-cause writeup.
 
 ## v1.6.98 (2026-09-19)
 ### New Features
-- **Square Art can now Send to Plex.** Initially shipped save-to-disk only after concluding Plex had no square-art upload slot — the user pushed back twice, citing real usage in Poster Tools/Posterizarr. First-pass research (Fanart.tv resource types, Plex's local-media-assets docs) still came up short; the actual proof came from `python-plexapi`'s real source (`SquareArtMixin` in `plexapi/mixins/resources.py`, fetched directly from GitHub): Plex has a genuinely separate, dedicated slot — `POST /library/metadata/{ratingKey}/squareArts` (image type `backgroundSquare`), fully distinct from both the regular poster (`/posters`) and background/art (`/arts`). New `POST /api/plex/send-square-art` (`backend/api/plexsend.py`, new `PlexSquareArtSendRequest` schema) mirrors the existing backdrop-send endpoint's shape (resolve bytes from `art_data`/`art_url`, normalize via the same `normalize_backdrop_for_plex()`, upload) targeting this new path. `SquareArtModal.vue` gained a "Send to Plex" button alongside Save to Disk — since the slot is genuinely separate, sending square art can never overwrite the item's actual poster or backdrop, which had been the whole reason it was held back.
+- **Square Art can now Send to Plex.** Initially shipped save-to-disk only after concluding Plex had no square-art upload slot — the user pushed back twice. First-pass research (Fanart.tv resource types, Plex's local-media-assets docs) still came up short; the actual proof came from `python-plexapi`'s real source (`SquareArtMixin` in `plexapi/mixins/resources.py`, fetched directly from GitHub): Plex has a genuinely separate, dedicated slot — `POST /library/metadata/{ratingKey}/squareArts` (image type `backgroundSquare`), fully distinct from both the regular poster (`/posters`) and background/art (`/arts`). New `POST /api/plex/send-square-art` (`backend/api/plexsend.py`, new `PlexSquareArtSendRequest` schema) mirrors the existing backdrop-send endpoint's shape (resolve bytes from `art_data`/`art_url`, normalize via the same `normalize_backdrop_for_plex()`, upload) targeting this new path. `SquareArtModal.vue` gained a "Send to Plex" button alongside Save to Disk — since the slot is genuinely separate, sending square art can never overwrite the item's actual poster or backdrop, which had been the whole reason it was held back.
 - **Backdrop's upload endpoint simplified while confirming the above**: the same `python-plexapi` source confirms `ArtMixin.uploadArt()` only ever POSTs to `/library/metadata/{ratingKey}/arts` (plural) — no singular `/art` write path exists at all. The v1.6.95 dual-attempt fallback (`/arts` then `/art`) was a reasonable hedge without firm evidence at the time; now removed in favor of the single confirmed-correct path. This also fully explains the original dropped-SSL-connection failure: `/art` (singular) was never a real Plex write route to begin with.
 
 ### Bug Fixes

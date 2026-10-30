@@ -6,6 +6,7 @@ injection attacks and ensure data integrity.
 """
 
 import ipaddress
+import posixpath
 import re
 import socket
 from urllib.parse import urlparse
@@ -35,6 +36,13 @@ _SAFE_INTERNAL_PATH_PREFIXES = (
     "/api/tv-show/",
     "/api/logo/",       # served by movies.py's logo cache — a sibling of /api/movie/, not nested under it
     "/api/backdrop/",   # served by movies.py's backdrop cache (art_cache.py) — same trust class as /api/logo/
+    "/api/square-art/", # same trust class/factory (art_cache.py) as /api/logo//api/backdrop/ -- was
+                         # never added here at all (found auditing this list during Phase 5/Jellyfin
+                         # work, unrelated to Jellyfin itself -- see CLAUDE.md Quirk #72). Not yet a
+                         # live bug (nothing currently feeds a /api/square-art/ URL back into another
+                         # render the way Quirk #42 found for /api/logo/), but the exact same latent
+                         # gap that Quirk explicitly warned future code shouldn't have to rediscover.
+    "/api/thumb-art/",  # Jellyfin/Emby Thumb Art cache (art_cache.py), same trust class as /api/square-art/
     "/api/local-assets/",
     "/library/metadata/",  # Plex's own API — reached only via the resolved-host check below
 )
@@ -88,6 +96,24 @@ def check_ssrf_safe(url: str, strict: bool = False) -> Optional[str]:
     if not hostname:
         return "URL is missing a host"
 
+    # Normalize before the prefix check so a crafted "../" can't make an unsafe path
+    # (e.g. a cloud metadata path) masquerade as one of our own safe prefixes.
+    normalized_path = posixpath.normpath(parsed.path or "/")
+    is_safe_internal_path = normalized_path.startswith(_SAFE_INTERNAL_PATH_PREFIXES)
+
+    # This app's own known-safe serving paths are trusted regardless of what IP the
+    # hostname happens to resolve to. This matters on deployments (seedboxes, VPN
+    # tunnels, Docker networking quirks) where the app's own public-facing hostname
+    # can resolve -- from the backend's own network vantage point -- to a link-local
+    # address, which would otherwise unconditionally hit the always-blocked check
+    # below and incorrectly reject a request for a file this app itself just served
+    # (e.g. a freshly-uploaded poster/logo, reported as "upload shows in the UI but
+    # can't be selected" -- the very next /api/preview call rejects the uploaded
+    # file's own URL). Never applies in strict mode -- the external-URL image proxy
+    # has no legitimate reason to ever request one of these paths from a third party.
+    if not strict and is_safe_internal_path:
+        return None
+
     if _host_is_always_blocked(hostname):
         return "URL resolves to a blocked network range"
 
@@ -98,8 +124,7 @@ def check_ssrf_safe(url: str, strict: bool = False) -> Optional[str]:
         from ..config import settings
         plex_host = (urlparse(settings.PLEX_URL).hostname or "").lower()
         is_configured_plex = bool(plex_host) and hostname.lower() == plex_host
-        is_safe_internal_path = parsed.path.startswith(_SAFE_INTERNAL_PATH_PREFIXES)
-        if not (is_configured_plex or is_safe_internal_path):
+        if not is_configured_plex:
             return "Private/internal network URLs are not allowed for this host"
 
     return None
@@ -124,6 +149,31 @@ def assert_external_fetch_safe(url: str) -> None:
     reason = check_ssrf_safe(url, strict=True)
     if reason:
         raise ValueError(f"Refusing to fetch URL ({reason}): {url[:120]}")
+
+
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
+def safe_get(url: str, strict: bool = False, max_redirects: int = 5, **kwargs):
+    """requests.get() that applies the SSRF check to the first URL and to every
+    redirect it follows. A plain requests.get() only checks what we hand it, so a
+    public URL that redirects to a LAN or metadata address would get through.
+    strict matches assert_external_fetch_safe() (no private hosts at all), else
+    assert_fetch_url_safe(). Raises ValueError for a blocked URL or too many redirects."""
+    import requests
+    from urllib.parse import urljoin
+
+    kwargs["allow_redirects"] = False
+    check = assert_external_fetch_safe if strict else assert_fetch_url_safe
+    for _ in range(max_redirects + 1):
+        check(url)
+        resp = requests.get(url, **kwargs)
+        location = resp.headers.get("Location")
+        if resp.status_code not in _REDIRECT_CODES or not location:
+            return resp
+        resp.close()
+        url = urljoin(url, location)
+    raise ValueError(f"Too many redirects: {url[:120]}")
 
 
 def validate_rating_key(rating_key: str) -> str:

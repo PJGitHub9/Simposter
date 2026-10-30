@@ -23,6 +23,13 @@ async def startup_event():
     import threading
     from .simposter_assets import _fetch_logos
     threading.Thread(target=_fetch_logos, daemon=True, name="simposter-assets-prewarm").start()
+    # Overlay effect caches for every preset (series and season settings), so the
+    # first batch render of a preset is already fast.
+    from .overlay_cache import warm_all
+    threading.Thread(target=warm_all, daemon=True, name="overlay-cache-warm").start()
+    # Overlay Refresh no longer tracks posters sent without overlays; drop old ones.
+    from .overlay_refresh import prune_without_overlays
+    threading.Thread(target=prune_without_overlays, daemon=True, name="overlay-refresh-prune").start()
 
 # Shutdown the scheduler gracefully
 @app.on_event("shutdown")

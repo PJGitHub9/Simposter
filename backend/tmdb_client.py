@@ -5,7 +5,7 @@ import threading
 
 import requests
 
-from .config import logger, settings
+from .config import logger, settings, redact_secrets, api_user_agent
 from . import database as db
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
@@ -14,6 +14,13 @@ TMDB_IMG_BASE = "https://image.tmdb.org/t/p"
 
 class TMDBError(Exception):
     pass
+
+
+# One pooled session so parallel batch workers reuse open connections
+# instead of each doing a new DNS lookup + TLS handshake per request.
+_session = requests.Session()
+_session.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=16))
+_RETRY_DELAYS = (2, 5)  # seconds before the 2nd and 3rd attempt
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +100,12 @@ def _apply_rate_limit():
         _rate_limit_requests.append(now)
 
 
+def find_tmdb_ids_by_imdb(imdb_id: str) -> List[int]:
+    """TMDb ids (movies, then shows) that TMDb links to this IMDb id."""
+    data = _cached_tmdb_get(f"/find/{imdb_id}", {"external_source": "imdb_id"})
+    return [int(r["id"]) for key in ("movie_results", "tv_results") for r in (data.get(key) or []) if r.get("id")]
+
+
 def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if not settings.TMDB_API_KEY:
         logger.error("[TMDB] TMDB_API_KEY not set")
@@ -106,7 +119,23 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     params["api_key"] = settings.TMDB_API_KEY
 
     try:
-        r = requests.get(url, params=params, timeout=15)
+        r = None
+        for attempt in range(len(_RETRY_DELAYS) + 1):
+            try:
+                r = _session.get(url, params=params, timeout=15, headers={"User-Agent": api_user_agent()})
+            except (requests.ConnectionError, requests.Timeout) as e:
+                # DNS hiccups and dropped connections: a batch with several
+                # workers can hit one; the same lookup works seconds later.
+                if attempt == len(_RETRY_DELAYS):
+                    raise
+                logger.info("[TMDB] %s failed (%s), retrying in %ss", path, type(e).__name__, _RETRY_DELAYS[attempt])
+                time.sleep(_RETRY_DELAYS[attempt])
+                continue
+            if r.status_code in (429, 502, 503, 504) and attempt < len(_RETRY_DELAYS):
+                logger.info("[TMDB] %s returned %s, retrying in %ss", path, r.status_code, _RETRY_DELAYS[attempt])
+                time.sleep(_RETRY_DELAYS[attempt])
+                continue
+            break
         r.raise_for_status()
         # Mask API key in debug logging
         debug_params = {k: ("***" + v[-4:] if k == "api_key" and v else v) for k, v in params.items()}
@@ -117,7 +146,7 @@ def _tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if hasattr(e, "response") and e.response is not None:
             text = str(e.response.text)[:200]
         logger.warning("[TMDB] Request failed url=%s status=%s err=%s body=%s", url, getattr(e, "response", None), e, text)
-        raise TMDBError(f"TMDb request failed: {e}") from e
+        raise TMDBError(f"TMDb request failed: {redact_secrets(e)}") from e
 
 
 def get_tv_external_ids(tmdb_id: int) -> Dict[str, Any]:
@@ -192,7 +221,7 @@ def _build_lang_param(language_preference: Optional[str], original_language: Opt
 
 
 def get_images_for_movie(tmdb_id: int, original_language: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
-    logger.info("[TMDB] Fetching images tmdb_id=%s", tmdb_id)
+    logger.debug("[TMDB] Fetching images tmdb_id=%s", tmdb_id)
     language_pref = db.get_setting("pref.language") or "en"
     include_lang = _build_lang_param(language_pref, original_language)
     data = _cached_tmdb_get(
@@ -276,7 +305,7 @@ def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
     """
     Fetch movie details from TMDb (title, year, etc.)
     """
-    logger.info("[TMDB] Fetching movie details tmdb_id=%s", tmdb_id)
+    logger.debug("[TMDB] Fetching movie details tmdb_id=%s", tmdb_id)
     data = _cached_tmdb_get(f"/movie/{tmdb_id}", {})
 
     title = data.get("title", "")
@@ -362,6 +391,7 @@ def get_tv_show_details(tmdb_id: int) -> Dict[str, Any]:
         "year": year,
         "first_air_date": first_air_date,
         "number_of_seasons": number_of_seasons,
+        "status": data.get("status", ""),
     }
 
 

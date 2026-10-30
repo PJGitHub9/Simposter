@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, nextTick } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import type { MovieInput } from '../../services/types'
 import { useRenderService } from '../../services/render'
@@ -8,9 +8,16 @@ import { useNotification } from '../../composables/useNotification'
 import { useSettingsStore } from '../../stores/settings'
 import { useMovies } from '../../composables/useMovies'
 import TextOverlayPanel from './TextOverlayPanel.vue'
+import EditorCard from './EditorCard.vue'
+import PreviewOverlay from './PreviewOverlay.vue'
 import ExternalLinksRow from './ExternalLinksRow.vue'
 import AddToRetryQueueModal from '../AddToRetryQueueModal.vue'
+import SendToServerModal from './SendToServerModal.vue'
+import ImagePickerModal from './ImagePickerModal.vue'
+import UploadPosterModal from './UploadPosterModal.vue'
 import { getApiBase } from '../../services/apiBase'
+import { notifySendSummary } from '../../services/sendNotify'
+import { mediaServerLabel } from '../../services/mediaServerLabel'
 
 // Simple debounce helper
 function debounce<T extends (...args: any[]) => any>(fn: T, delay: number): (...args: Parameters<T>) => void {
@@ -29,6 +36,26 @@ const route = useRoute()
 
 const apiBase = getApiBase()
 
+// See EditorPane.vue's identical computed for the full reasoning -- a
+// Jellyfin/Emby-sourced show (server_id !== 'plex-1') has no real Plex
+// rating_key for /api/plex/send to look up, so a merged item's OTHER
+// linked server(s) are what doSend() actually targets for it instead
+// (getLinkedServersForItem(), see doSend()'s own comment).
+const isNonPlexItem = computed(() => !!props.movie.server_id && props.movie.server_id !== 'plex-1')
+// `showServerPreviewToggle`/`showMultiServerSend` are declared further down
+// (after `selectedPosterType`/`selectedSeasons`, which these depend on) --
+// safe to reference here since computed() getters are lazy and never
+// actually run until the whole module's top-level script has finished
+// executing (i.e. well after every const below is initialized).
+const currentPosterLabel = computed(() => {
+  if (showServerPreviewToggle.value) return `Current Poster (${serverTypeLabel(viewingServerId.value)})`
+  return isNonPlexItem.value ? 'Current Poster' : 'Current Plex Poster'
+})
+const currentLogoLabel = computed(() => {
+  if (showServerPreviewToggle.value) return `Current Logo (${serverTypeLabel(viewingServerId.value)})`
+  return isNonPlexItem.value ? 'Current Logo' : 'Current Plex Logo'
+})
+
 const tmdbId = ref<number | null>(null)
 const tvdbId = ref<number | null>(null)
 const posters = ref<{ url: string; thumb?: string; has_text?: boolean; language?: string; source?: string }[]>([])
@@ -40,6 +67,15 @@ const existingLogo = ref<string | null>(null)
 const logoRefreshKey = ref(0)
 
 const posterFilter = ref<'all' | 'textless' | 'text'>('all')
+// Backdrops offered as poster backgrounds (show-level, shared by every season).
+// Editor-only: which list is shown and the per-image zoom/pan are never saved to a preset.
+const candidateKind = ref<'posters' | 'backdrops'>('posters')
+const showImagePicker = ref(false)
+// Separate from posterFilter on purpose: posterFilter is a preset field that Batch Edit
+// uses to auto-pick posters; the backdrop filter is editor-only.
+const backdropFilter = ref<'all' | 'textless' | 'text'>('all')
+const matchesTextFilter = (p: { has_text?: boolean; language?: string }, f: 'all' | 'textless' | 'text') =>
+  f === 'textless' ? p.has_text === false || !p.language : f === 'text' ? p.has_text === true : true
 const posterLanguageFilter = ref<'all' | 'en' | 'with_lang'>('all')
 const showTmdbPosters = ref(true)
 const showFanartPosters = ref(true)
@@ -92,12 +128,6 @@ const uploadPosterFile = async (file: File) => {
   }
 }
 
-const onPosterFileInput = (e: Event) => {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) uploadPosterFile(file)
-  ;(e.target as HTMLInputElement).value = ''
-}
-
 const onPosterDrop = (e: DragEvent) => {
   posterDropActive.value = false
   const file = e.dataTransfer?.files?.[0]
@@ -134,12 +164,6 @@ const uploadLogoFile = async (file: File) => {
   }
 }
 
-const onLogoFileInput = (e: Event) => {
-  const file = (e.target as HTMLInputElement).files?.[0]
-  if (file) uploadLogoFile(file)
-  ;(e.target as HTMLInputElement).value = ''
-}
-
 const onLogoDrop = (e: DragEvent) => {
   logoDropActive.value = false
   const file = e.dataTransfer?.files?.[0]
@@ -151,12 +175,49 @@ const clearUploadedLogo = () => {
   uploadedLogoUrl.value = null
   if (wasSelected) selectedLogo.value = filteredLogos.value[0]?.url || null
 }
+
+// Upload-choice modal (local file or remote URL) for both poster and logo —
+// replaces clicking the drop zone opening a native file dialog directly.
+// Dragging a file straight onto the zone still uploads immediately via
+// uploadPosterFile()/uploadLogoFile() above, unaffected by this.
+const showPosterUploadModal = ref(false)
+const showLogoUploadModal = ref(false)
+const onPosterUploaded = (url: string) => {
+  uploadedPosterUrl.value = url
+  selectedPoster.value = url
+  showPosterUploadModal.value = false
+}
+const onLogoUploaded = (url: string) => {
+  uploadedLogoUrl.value = url
+  selectedLogo.value = url
+  showLogoUploadModal.value = false
+}
+
 // Cache full settings per season/series to prevent cross-contamination
 const settingsCache = ref<Record<string, any>>({})
 const POSTER_CACHE_KEY = 'simposter-poster-cache'
 
 const showBoundingBox = ref(false)
 const previewImgRef = ref<HTMLImageElement | null>(null)
+
+// Preview status: true when settings changed after the shown render.
+const previewDirty = ref(false)
+let previewChangeSeq = 0
+
+// Collapsible "Current poster/logo" column, remembered across sessions.
+const CURRENT_COLLAPSED_KEY = 'simposter-editor-current-collapsed'
+const currentCollapsed = ref((() => {
+  try { return localStorage.getItem(CURRENT_COLLAPSED_KEY) === '1' } catch { return false }
+})())
+watch(currentCollapsed, (v) => {
+  try { localStorage.setItem(CURRENT_COLLAPSED_KEY, v ? '1' : '0') } catch { /* storage unavailable */ }
+})
+
+// "More actions" menu next to the send buttons.
+const moreMenuOpen = ref(false)
+const closeMoreMenu = () => { moreMenuOpen.value = false }
+onMounted(() => window.addEventListener('click', closeMoreMenu))
+onBeforeUnmount(() => window.removeEventListener('click', closeMoreMenu))
 const posterRefreshKey = ref(0)
 
 // TV Show Season Management
@@ -194,6 +255,140 @@ type PosterType = 'series' | 'season'
 const selectedPosterType = computed<PosterType>(() => {
   const season = currentSeason.value
   return season && !season.isSeries ? 'season' : 'series'
+})
+
+// ── Multi-server preview + send — series AND season (Phase 6c + Quirk #100) ─
+// Originally shipped series-only (Phase 6c), on the wrongly-unverified
+// assumption that Jellyfin has no season-level item resolution at all --
+// corrected the same session after the user pushed back and a live check
+// against a real Jellyfin server confirmed season items ARE individually
+// addressable (see MediaServerClient.find_season_by_index()'s own docstring,
+// CLAUDE.md Quirk #100). `other_servers` (Quirk #67's dedup output) is still
+// only ever populated at the SHOW level though -- a season's own item id on
+// each linked server has to be resolved on demand via a new backend
+// endpoint (GET /api/media-server/resolve-season-item), cached per season
+// key so switching back to an already-resolved season doesn't re-fetch.
+type LinkedServer = { server_id: string; rating_key: string }
+const seasonLinkedServersCache = ref<Record<string, LinkedServer[]>>({})
+async function resolveSeasonLinkedServers(seasonKey: string, seasonIndex: number) {
+  if (seasonLinkedServersCache.value[seasonKey]) return
+  const others = props.movie.other_servers || []
+  if (!others.length) {
+    seasonLinkedServersCache.value = { ...seasonLinkedServersCache.value, [seasonKey]: [] }
+    return
+  }
+  const resolved: LinkedServer[] = []
+  await Promise.all(others.map(async (s) => {
+    try {
+      const url = `${apiBase}/api/media-server/resolve-season-item?server_id=${encodeURIComponent(s.server_id)}&series_item_id=${encodeURIComponent(s.rating_key)}&season_index=${seasonIndex}`
+      const res = await fetch(url)
+      if (res.ok) {
+        const data = await res.json()
+        if (data.item_id) resolved.push({ server_id: s.server_id, rating_key: data.item_id })
+      }
+    } catch { /* ignore -- that server just won't appear as an option for this season */ }
+  }))
+  seasonLinkedServersCache.value = { ...seasonLinkedServersCache.value, [seasonKey]: resolved }
+}
+// Kicks off resolution the moment a season with potential linked servers is
+// focused, so the ‹ › toggle/send picker are ready (or correctly absent) by
+// the time the user looks at the preview area, not after an extra click.
+watch(currentSeason, (season) => {
+  if (season && !season.isSeries && (props.movie.other_servers || []).length > 0) {
+    resolveSeasonLinkedServers(season.key, season.index)
+  }
+}, { immediate: true })
+
+// Series-level linked servers, unconditional -- `other_servers` is always
+// show-level regardless of which season is focused. Used directly whenever
+// viewing the series, and separately by fetchExistingLogo() below (logos
+// are always series-level in this app's model, by design -- season posters
+// don't have their own separate logo concept -- so logo preview needs the
+// SERIES' cross-server mapping even while a season poster is focused).
+const seriesLinkedServers = computed<LinkedServer[]>(() => {
+  const current: LinkedServer = { server_id: props.movie.server_id || 'plex-1', rating_key: props.movie.key }
+  const others = (props.movie.other_servers || []).map(s => ({ server_id: s.server_id, rating_key: s.rating_key }))
+  return [current, ...others]
+})
+const linkedServers = computed<LinkedServer[]>(() => {
+  const season = currentSeason.value
+  if (season && !season.isSeries) {
+    // The season's OWN item id on the show's home server is just its own
+    // key (already correct, no resolution needed -- it lives on whichever
+    // server the show itself is on). Any OTHER linked server's copy of this
+    // season comes from the async resolution above.
+    const current: LinkedServer = { server_id: props.movie.server_id || 'plex-1', rating_key: season.key }
+    return [current, ...(seasonLinkedServersCache.value[season.key] || [])]
+  }
+  return seriesLinkedServers.value
+})
+function serverTypeLabel(serverId: string): string {
+  return mediaServerLabel(serverId, settings.mediaServers.value)
+}
+// Preview toggle (‹ ›) is available whenever the currently-focused season/
+// series actually has more than one resolved server -- for a season, this
+// can briefly be false while resolution is still in flight (the toggle
+// simply appears a moment later once it resolves, rather than needing a
+// separate loading state).
+const showServerPreviewToggle = computed(() => linkedServers.value.length > 1)
+// Purely a display concern now, not a gate on whether sending is allowed --
+// shown whenever the currently-viewed season/series has more than one
+// resolved server, so the "which server(s)" picker/label makes sense to
+// look at. Used to also require selectedSeasons.size === 1 (a sole
+// selection matching the current view), which blocked sending altogether
+// whenever series+season (or several seasons) were selected together on a
+// non-Plex show -- user-reported directly: "cant send when both
+// season/series is selected." doSend()/doSendLogoOnly() no longer depend on
+// this for whether the send itself can proceed (they now branch on
+// isNonPlexItem and loop over every selected item, each resolving its own
+// servers via getLinkedServersForItem()) -- only on whether a specific-
+// server-vs-"all" choice is worth surfacing for the item currently in view.
+const showMultiServerSend = computed(() => linkedServers.value.length > 1)
+
+const viewingServerId = ref(props.movie.server_id || 'plex-1')
+watch(() => props.movie.key, () => { viewingServerId.value = props.movie.server_id || 'plex-1' })
+// Switching seasons can leave viewingServerId pointed at a server that
+// hasn't resolved (or doesn't exist) for the NEW season -- reset back to
+// the show's own home server rather than silently showing a stale/empty
+// preview for a server that no longer applies here.
+watch(currentSeason, () => { viewingServerId.value = props.movie.server_id || 'plex-1' })
+const viewingRatingKey = computed(() =>
+  linkedServers.value.find(s => s.server_id === viewingServerId.value)?.rating_key || currentSeason.value?.key || props.movie.key
+)
+// True whenever the poster/logo currently being fetched is the item's own
+// home-server copy (series or season alike) -- gates whether
+// fetchExistingPoster()/fetchExistingLogo() are allowed to write into the
+// shared cross-component poster cache (grid thumbnails must never flip just
+// because a linked server's art is being previewed here) -- mirrors
+// EditorPane.vue's identical `isOwnServer` guard.
+const isOwnServerView = computed(() => viewingServerId.value === (props.movie.server_id || 'plex-1'))
+function cycleViewingServer(direction: 1 | -1) {
+  const ids = linkedServers.value.map(s => s.server_id)
+  const idx = ids.indexOf(viewingServerId.value)
+  viewingServerId.value = ids[(idx + direction + ids.length) % ids.length]!
+}
+// Replaces the old single-string sendTarget ('all' or one specific
+// server_id) with a real multi-select set, driven by SendToServerModal.vue
+// -- the inline dropdown + separate checkbox + button row this used to be
+// felt cluttered (user-reported directly). Defaults to every currently-
+// known linked server, matching the old 'all' default exactly, so a
+// Send Logo Only click (which never opens the modal) still reaches every
+// linked server by default without the user having to pick anything first.
+const sendTargetIds = ref<Set<string>>(new Set())
+watch(linkedServers, (servers) => {
+  const validIds = new Set(servers.map(s => s.server_id))
+  const stillValid = Array.from(sendTargetIds.value).filter(id => validIds.has(id))
+  if (stillValid.length === 0) {
+    sendTargetIds.value = validIds
+  } else {
+    sendTargetIds.value = new Set(stillValid)
+  }
+}, { immediate: true })
+const showSendModal = ref(false)
+const sendModalOptions = computed(() => linkedServers.value.map(s => ({ server_id: s.server_id, label: serverTypeLabel(s.server_id) })))
+const sendButtonLabel = computed(() => {
+  if (!showMultiServerSend.value) return isNonPlexItem.value ? 'Send Poster' : 'Send to Plex'
+  return 'Send to Media Server'
 })
 
 // Rendered preview carousel
@@ -347,7 +542,50 @@ const shadowOpacity = ref(80)
 const strokeEnabled = ref(false)
 const strokeWidth = ref(4)
 const strokeColor = ref('#000000')
-const textBboxEnabled = ref(false)
+// Custom Text always fits its own box now; kept as a ref for the saved option/season tracking.
+const textBboxEnabled = ref(true)
+// Custom Text's own bounding box (text_box_*), separate from the logo box (uniform_logo_*).
+// A preset saved before the two were split has no text_box_* values; each one falls back
+// to the logo box, which is also how the backend renders it.
+type TextBox = {
+  maxW: number
+  maxH: number
+  offsetX: number
+  offsetY: number
+  hAlign: 'left' | 'center' | 'right'
+  vAlign: 'top' | 'center' | 'bottom'
+}
+const defaultTextBox = (): TextBox => ({ maxW: 500, maxH: 200, offsetX: 50, offsetY: 78, hAlign: 'center', vAlign: 'center' })
+const textBox = ref<TextBox>(defaultTextBox())
+const TEXT_BOX_KEYS = ['text_box_max_w', 'text_box_max_h', 'text_box_offset_x', 'text_box_offset_y', 'text_box_h_align', 'text_box_v_align']
+const textBoxPayloadFrom = (tb: TextBox) => ({
+  text_box_max_w: tb.maxW,
+  text_box_max_h: tb.maxH,
+  text_box_offset_x: tb.offsetX / 100,
+  text_box_offset_y: tb.offsetY / 100,
+  text_box_h_align: tb.hAlign,
+  text_box_v_align: tb.vAlign
+})
+const textBoxPayload = () => textBoxPayloadFrom(textBox.value)
+function loadTextBox(o: Record<string, any>) {
+  const tb = defaultTextBox()
+  const hasTextBox = ['max_w', 'max_h', 'offset_x', 'offset_y', 'h_align', 'v_align'].some((n) => o[`text_box_${n}`] != null)
+  if (!hasTextBox && !o.text_bbox_enabled) {
+    // A preset from before the text box: full-width text at its old vertical position,
+    // the same box the backend migration gives it.
+    const y = typeof o.position_y === 'number' ? o.position_y : 0.75
+    textBox.value = { maxW: 1800, maxH: 2800, offsetX: 50, offsetY: Math.round(y * 100), hAlign: 'center', vAlign: 'center' }
+    return
+  }
+  const pick = (name: string) => o[`text_box_${name}`] ?? o[`uniform_logo_${name}`]
+  if (pick('max_w')) tb.maxW = Number(pick('max_w'))
+  if (pick('max_h')) tb.maxH = Number(pick('max_h'))
+  if (typeof pick('offset_x') === 'number') tb.offsetX = Math.round(pick('offset_x') * 100)
+  if (typeof pick('offset_y') === 'number') tb.offsetY = Math.round(pick('offset_y') * 100)
+  if (typeof pick('h_align') === 'string') tb.hAlign = pick('h_align') as TextBox['hAlign']
+  if (typeof pick('v_align') === 'string') tb.vAlign = pick('v_align') as TextBox['vAlign']
+  textBox.value = tb
+}
 const availableFonts = ref<string[]>([])
 
 // Overlay configs
@@ -397,6 +635,7 @@ const getCurrentSettings = () => ({
   strokeWidth: strokeWidth.value,
   strokeColor: strokeColor.value,
   textBboxEnabled: textBboxEnabled.value,
+  textBox: { ...textBox.value },
 })
 
 const applySettings = (s: any) => {
@@ -437,7 +676,7 @@ const applySettings = (s: any) => {
   if (s.strokeEnabled !== undefined) strokeEnabled.value = s.strokeEnabled
   if (s.strokeWidth !== undefined) strokeWidth.value = s.strokeWidth
   if (s.strokeColor !== undefined) strokeColor.value = s.strokeColor
-  if (s.textBboxEnabled !== undefined) textBboxEnabled.value = s.textBboxEnabled
+  if (s.textBox !== undefined) textBox.value = { ...defaultTextBox(), ...s.textBox }
 }
 
 const currentTargetKey = computed(() => currentSeason.value?.key || props.movie.key)
@@ -455,7 +694,7 @@ const saveCurrentSettings = () => {
       'logoMode', 'textOverlayEnabled', 'customText', 'fontFamily', 'fontSize',
       'shadowEnabled', 'letterSpacing', 'positionY', 'posterZoom', 'posterShiftY',
       'matteHeight', 'fadeHeight', 'topMatteHeight', 'topFadeHeight', 'vignette', 'grain', 'logoScale', 'logoOffset',
-      'textBboxEnabled', 'textColor',
+      'textBboxEnabled', 'textBox', 'textColor',
       'uniformLogoShadowEnabled', 'uniformLogoShadowOpacity', 'uniformLogoShadowAngle',
       'uniformLogoShadowDistance', 'uniformLogoShadowSize', 'uniformLogoShadowColor'
     ]
@@ -511,7 +750,11 @@ const applyCachedPresetFields = (target: Record<string, any>, cached: any) => {
   if (cached.shadowEnabled !== undefined) target.shadow_enabled = cached.shadowEnabled
   if (cached.letterSpacing !== undefined) target.letter_spacing = cached.letterSpacing
   if (cached.positionY !== undefined) target.position_y = cached.positionY / 100
-  if (cached.textBboxEnabled !== undefined) target.text_bbox_enabled = cached.textBboxEnabled
+  target.text_bbox_enabled = true
+  if (cached.textBox) {
+    TEXT_BOX_KEYS.forEach((k) => delete target[k])
+    Object.assign(target, textBoxPayloadFrom(cached.textBox))
+  }
   if (cached.textColor) target.text_color = cached.textColor
   const o = cached.options
   if (o) {
@@ -540,7 +783,7 @@ const restoreSettingsForCurrent = () => {
   const isSeason = currentSeason.value && !currentSeason.value.isSeries
 
   if (isSeason) {
-    applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true })
+    applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: true, keepOverlays: true })
     if (cached) {
       // Apply all cached season edits so manual tweaks persist when returning
       applySettings(cached)
@@ -564,7 +807,7 @@ const restoreSettingsForCurrent = () => {
         delete options.value.season_number
       }
     } else {
-      applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false })
+      applyPresetOptions(selectedPreset.value, { forceSeasonOverrides: false, keepOverlays: true })
     }
   }
 
@@ -667,9 +910,26 @@ const sectionOpen = ref({
   boundingBox: false,
   overlay: false,
 })
-const toggleSection = (key: keyof typeof sectionOpen.value) => {
-  sectionOpen.value[key] = !sectionOpen.value[key]
+// Left-panel tabs. The chosen tab is remembered across items and both editors.
+type EditorTab = 'image' | 'logo' | 'text' | 'extras'
+const editorTabs: { id: EditorTab; label: string }[] = [
+  { id: 'image', label: 'Image' },
+  { id: 'logo', label: 'Logo' },
+  { id: 'text', label: 'Text' },
+  { id: 'extras', label: 'Extras' },
+]
+const EDITOR_TAB_KEY = 'simposter-editor-tab'
+const readEditorTab = (): EditorTab => {
+  try {
+    const v = localStorage.getItem(EDITOR_TAB_KEY)
+    if (v === 'image' || v === 'logo' || v === 'text' || v === 'extras') return v
+  } catch { /* ignore */ }
+  return 'image'
 }
+const activeTab = ref<EditorTab>(readEditorTab())
+watch(activeTab, (v) => {
+  try { localStorage.setItem(EDITOR_TAB_KEY, v) } catch { /* ignore */ }
+})
 
 // State persistence
 const EDITOR_STATE_KEY = 'simposter_editor_state'
@@ -715,7 +975,8 @@ const saveEditorStateImmediate = () => {
         strokeEnabled: strokeEnabled.value,
         strokeWidth: strokeWidth.value,
         strokeColor: strokeColor.value,
-        bboxEnabled: textBboxEnabled.value
+        bboxEnabled: textBboxEnabled.value,
+        textBox: textBox.value
       }
     }
     localStorage.setItem(EDITOR_STATE_KEY, JSON.stringify(state))
@@ -797,69 +1058,53 @@ const loadEditorState = () => {
       strokeEnabled.value = state.textOverlay.strokeEnabled ?? false
       strokeWidth.value = state.textOverlay.strokeWidth ?? 4
       strokeColor.value = state.textOverlay.strokeColor ?? '#000000'
-      textBboxEnabled.value = state.textOverlay.bboxEnabled ?? false
+      textBboxEnabled.value = true
+      if (state.textOverlay.textBox) textBox.value = { ...defaultTextBox(), ...state.textOverlay.textBox }
     }
   } catch (e) {
     console.warn('Failed to load editor state:', e)
   }
 }
 
-const boundingBoxStyle = computed(() => {
-  if (!previewImgRef.value || !showBoundingBox.value || !isUniformLogo.value) return {}
+// Logo box as the preview overlay sees it; dragging it on the preview writes back here.
+const logoBoxValue = computed(() => ({
+  maxW: options.value.uniformLogoMaxW,
+  maxH: options.value.uniformLogoMaxH,
+  offsetX: options.value.uniformLogoOffsetX,
+  offsetY: options.value.uniformLogoOffsetY
+}))
+const setLogoBox = (b: { maxW: number; maxH: number; offsetX: number; offsetY: number }) => {
+  options.value.uniformLogoMaxW = b.maxW
+  options.value.uniformLogoMaxH = b.maxH
+  options.value.uniformLogoOffsetX = b.offsetX
+  options.value.uniformLogoOffsetY = b.offsetY
+}
+const setTextBox = (b: { maxW: number; maxH: number; offsetX: number; offsetY: number }) => {
+  textBox.value = { ...textBox.value, ...b }
+}
 
-  const img = previewImgRef.value
-  const container = img.parentElement as HTMLElement | null
-  if (!container) return {}
-
-  const imgRect = img.getBoundingClientRect()
-  const containerRect = container.getBoundingClientRect()
-
-  const imgWidth = imgRect.width
-  const imgHeight = imgRect.height
-
-  if (!imgWidth || !imgHeight) return {}
-
-  // Get the actual rendered poster dimensions (2000x3000 typical)
-  // The preview is scaled down, so we need to calculate scale factor
-  const naturalWidth = img.naturalWidth || 2000
-  const naturalHeight = img.naturalHeight || 3000
-  const scaleX = imgWidth / naturalWidth
-  const scaleY = imgHeight / naturalHeight
-
-  // Calculate bounding box dimensions in pixels (from backend perspective)
-  const maxW = options.value.uniformLogoMaxW
-  const maxH = options.value.uniformLogoMaxH
-
-  // Scale the box dimensions to match the preview
-  const boxWidth = maxW * scaleX
-  const boxHeight = maxH * scaleY
-
-  // Position offsets (percentages from backend)
-  const offsetX = options.value.uniformLogoOffsetX / 100
-  const offsetY = options.value.uniformLogoOffsetY / 100
-
-  // Position (centered on offset point) relative to container
-  const imageOffsetLeft = imgRect.left - containerRect.left
-  const imageOffsetTop = imgRect.top - containerRect.top
-  const left = imageOffsetLeft + (imgWidth * offsetX) - (boxWidth / 2)
-  const top = imageOffsetTop + (imgHeight * offsetY) - (boxHeight / 2)
-
-  return {
-    width: `${boxWidth}px`,
-    height: `${boxHeight}px`,
-    left: `${left}px`,
-    top: `${top}px`
+// Per-source counts shown on the TMDb/Fanart/TVDB checkboxes
+const countBySource = (items: { source?: string }[]) => {
+  const c = { tmdb: 0, fanart: 0, tvdb: 0 } as Record<'tmdb' | 'fanart' | 'tvdb', number>
+  for (const i of items) {
+    const s = (i.source || 'tmdb').toLowerCase() as 'tmdb' | 'fanart' | 'tvdb'
+    if (s in c) c[s]++
   }
-})
-
-const posterCounts = computed(() => {
-  const tmdb = posters.value.filter(p => (p.source || 'tmdb').toLowerCase() === 'tmdb').length
-  const fanart = posters.value.filter(p => (p.source || 'tmdb').toLowerCase() === 'fanart').length
-  const tvdb = posters.value.filter(p => (p.source || 'tmdb').toLowerCase() === 'tvdb').length
-  return { tmdb, fanart, tvdb, total: posters.value.length }
-})
+  return c
+}
+const imageSourceCounts = computed(() => countBySource(candidateKind.value === 'backdrops' ? (showLevelAssets.value.backdrops || []) : posters.value))
+const logoSourceCounts = computed(() => countBySource(logos.value))
 
 const filteredPosters = computed(() => {
+  if (candidateKind.value === 'backdrops') {
+    return (showLevelAssets.value.backdrops || []).filter((p: any) => {
+      if (!matchesTextFilter(p, backdropFilter.value)) return false
+      const src = (p.source || 'tmdb').toLowerCase()
+      if (src === 'fanart') return showFanartPosters.value
+      if (src === 'tvdb') return showTvdbPosters.value
+      return showTmdbPosters.value
+    })
+  }
   let items = posters.value
   if (posterFilter.value === 'textless') {
     // Treat posters with no language or has_text=false as textless
@@ -884,13 +1129,6 @@ const filteredPosters = computed(() => {
   })
 
   return items
-})
-
-const logoCounts = computed(() => {
-  const tmdb = logos.value.filter(l => (l.source || 'tmdb').toLowerCase() === 'tmdb').length
-  const fanart = logos.value.filter(l => (l.source || 'tmdb').toLowerCase() === 'fanart').length
-  const tvdb = logos.value.filter(l => (l.source || 'tmdb').toLowerCase() === 'tvdb').length
-  return { tmdb, fanart, tvdb, total: logos.value.length }
 })
 
 // TMDb serves `thumb` as a resized w300 PNG and `url` as the original file -- for
@@ -1010,8 +1248,9 @@ const optionsPayload = computed(() => {
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    ...textBoxPayload(),
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   // Only include season_text/season_number if they're not empty (for seasons, not series)
@@ -1024,6 +1263,33 @@ const optionsPayload = computed(() => {
 })
 
 const bgUrl = computed(() => selectedPoster.value || '')
+
+// Zoom (%) and horizontal pan (%) per background image, editor-only (not preset fields).
+// Applied at each render call with THAT render's own background -- not baked into
+// optionsPayload, which is copied into other seasons' renders.
+const bgAdjust = ref<Record<string, { zoom: number; shiftX: number }>>({})
+// Zoom/pan are only offered (and only applied) when the background is a backdrop.
+const isBackdropUrl = (url: string | null | undefined) =>
+  !!url && (showLevelAssets.value.backdrops || []).some((b: any) => b.url === url)
+const isBackdropBg = computed(() => isBackdropUrl(bgUrl.value))
+const bgZoom = computed<number>({
+  get: () => (isBackdropBg.value ? bgAdjust.value[bgUrl.value]?.zoom ?? 100 : 100),
+  set: (v) => { bgAdjust.value = { ...bgAdjust.value, [bgUrl.value]: { zoom: Number(v) || 100, shiftX: bgShiftX.value } } },
+})
+const bgShiftX = computed<number>({
+  get: () => (isBackdropBg.value ? bgAdjust.value[bgUrl.value]?.shiftX ?? 0 : 0),
+  set: (v) => { bgAdjust.value = { ...bgAdjust.value, [bgUrl.value]: { zoom: bgZoom.value, shiftX: Number(v) || 0 } } },
+})
+const resetBgAdjust = () => {
+  const next = { ...bgAdjust.value }
+  delete next[bgUrl.value]
+  bgAdjust.value = next
+}
+const withBgAdjust = <T extends Record<string, any>>(opts: T, url: string | null | undefined): T => {
+  const adj = url && isBackdropUrl(url) ? bgAdjust.value[url] : undefined
+  if (!adj) return opts
+  return { ...opts, poster_zoom: (Number(opts.poster_zoom) || 1) * (adj.zoom / 100), poster_shift_x: adj.shiftX / 100 }
+}
 const logoUrl = computed(() => (logoMode.value === 'none' ? '' : selectedLogo.value || ''))
 
 const reloadPreset = async () => {
@@ -1097,8 +1363,9 @@ const saveCurrentPreset = async () => {
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    ...textBoxPayload(),
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   // When editing season options, we need to save to season_options_json
@@ -1208,24 +1475,27 @@ const saveAsNewPreset = async () => {
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    ...textBoxPayload(),
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
-  // "Save As" always creates a brand-new preset from the currently-effective options —
-  // whether that's the series' own options or a season's resolved (options + season_options
-  // diff) view. A new preset has no season_options of its own yet, so when saving from a
-  // season tab, this season's effective settings become the new preset's base `options`
-  // (not a season-specific override) — there's nothing to diff against for a preset that
-  // doesn't exist yet. See Quirk #13's `resolve_season_options()` pattern for why season
-  // views always show fully-resolved values, which is exactly what makes this safe to reuse
-  // as a new preset's base.
-  await presetService.savePresetAs(slugified, backendOptions)
+  // "Save As" from a season tab keeps the preset's two configs apart: the new preset's series
+  // config is the current preset's saved series options, and its season config is this
+  // season's current settings. (It used to make the season settings the series config and
+  // reset the season config to the defaults, which dropped the logo.)
+  if (selectedPosterType.value === 'season') {
+    // Series config = the source preset's saved series options; season config = this season.
+    const source = presets.value.find((p) => p.id === selectedPreset.value)
+    await presetService.savePresetAs(slugified, (source?.options as any) ?? backendOptions, backendOptions as any)
+  } else {
+    await presetService.savePresetAs(slugified, backendOptions)
+  }
   if (!presetService.error.value) {
     selectedPreset.value = slugified
     success(
       selectedPosterType.value === 'season'
-        ? 'Preset saved as new! (using this season\'s settings as the base template)'
+        ? 'Preset saved as new! (series settings copied from the current preset, season settings from this season)'
         : 'Preset saved as new!'
     )
     newPresetId.value = ''
@@ -1279,6 +1549,7 @@ const fetchTmdbAssets = async () => {
   logos.value = []
   selectedPoster.value = null
   selectedLogo.value = null
+  bgAdjust.value = {}
   seasonAssetsCache.value = {}
   showLevelAssets.value = { posters: [], logos: [], backdrops: [] }
   try {
@@ -1436,6 +1707,20 @@ const fetchLabels = async () => {
   }
 }
 
+// After a send: refresh the grid thumbnail of every other server's copy that
+// got the poster. fetchExistingPoster() only refreshes the one on screen.
+const refreshSentThumbnails = async (sent: { server_id: string; rating_key: string }[]) => {
+  const kind = 'tv-show'
+  await Promise.all(sent.filter(t => t.rating_key && t.rating_key !== viewingRatingKey.value).map(async (t) => {
+    try {
+      const res = await fetch(`${apiBase}/api/${kind}/${t.rating_key}/poster?meta=1`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data.url) updateGlobalPosterCache(t.rating_key, data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`)
+    } catch { /* the grid catches up on its next load */ }
+  }))
+}
+
 const updateGlobalPosterCache = (key: string, url: string | null) => {
   if (typeof sessionStorage === 'undefined') return
   try {
@@ -1456,14 +1741,21 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
     const refreshFlag = typeof forceRefresh === 'boolean'
       ? forceRefresh
       : (forceRefresh instanceof Event ? true : false)
-    
-    // Use current season key if available, otherwise use series key
-    const targetKey = currentSeason.value?.key || props.movie.key
-    
-    const res = await fetch(`${apiBase}/api/movie/${targetKey}/poster?meta=1${refreshFlag ? '&force_refresh=1' : ''}`)
+
+    // Multi-server-aware for both series and season now (Quirk #100) --
+    // viewingRatingKey resolves correctly either way, reducing to the
+    // season's/series' own key (an exact no-op) for any show with no
+    // resolved linked servers, same as before season support existed.
+    const targetKey = viewingRatingKey.value
+
+    // A season's own rating_key is never individually scanned/cached (only
+    // the series-level item is), so the backend's rating_key -> server_id
+    // DB lookup can't resolve it and silently defaults to Plex -- passing
+    // the server we already know we're viewing sidesteps that entirely.
+    const res = await fetch(`${apiBase}/api/movie/${targetKey}/poster?meta=1&server_id=${encodeURIComponent(viewingServerId.value)}${refreshFlag ? '&force_refresh=1' : ''}`)
     if (!res.ok) {
       existingPoster.value = null
-      updateGlobalPosterCache(targetKey, null)
+      if (isOwnServerView.value) updateGlobalPosterCache(targetKey, null)
       posterRefreshKey.value += 1
       return
     }
@@ -1473,28 +1765,37 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
       existingPoster.value = data.url.startsWith('http')
         ? data.url
         : `${apiBase}${data.url}`
-      updateGlobalPosterCache(targetKey, existingPoster.value)
-
-      // Update the thumbnail for the target season/series in the left list
-      seasons.value = seasons.value.map(s => s.key === targetKey ? { ...s, thumb: existingPoster.value || s.thumb } : s)
+      if (isOwnServerView.value) {
+        updateGlobalPosterCache(targetKey, existingPoster.value)
+        // Update the thumbnail for the target season/series in the left list
+        seasons.value = seasons.value.map(s => s.key === targetKey ? { ...s, thumb: existingPoster.value || s.thumb } : s)
+      }
     } else {
       existingPoster.value = null
-      updateGlobalPosterCache(targetKey, null)
+      if (isOwnServerView.value) updateGlobalPosterCache(targetKey, null)
     }
     // Force re-render by toggling key
     posterRefreshKey.value += 1
   } catch (err) {
     console.error('Failed to fetch existing poster:', err)
     existingPoster.value = null
-    updateGlobalPosterCache(props.movie.key, null)
+    if (isOwnServerView.value) updateGlobalPosterCache(props.movie.key, null)
     posterRefreshKey.value += 1
   }
 }
 
 const fetchExistingLogo = async (forceRefresh = false) => {
   try {
+    // Always resolves against the SERIES' own linked-server mapping,
+    // regardless of whether a season is currently focused -- logos are
+    // series-level only in this app's model (Quirk #99's original note,
+    // still true), so a season poster being previewed on a linked server
+    // doesn't change which logo/server this fetches. viewingServerId still
+    // applies -- previewing the series logo on a different linked server
+    // works the same while a season is focused as while the series is.
+    const targetKey = seriesLinkedServers.value.find(s => s.server_id === viewingServerId.value)?.rating_key || props.movie.key
     const params = `${forceRefresh ? 'force_refresh=1&' : ''}v=${Date.now()}`
-    const url = `${apiBase}/api/logo/${props.movie.key}?${params}`
+    const url = `${apiBase}/api/logo/${targetKey}?${params}`
     const res = await fetch(url)
     existingLogo.value = res.ok ? url : null
     logoRefreshKey.value += 1
@@ -1502,6 +1803,15 @@ const fetchExistingLogo = async (forceRefresh = false) => {
     existingLogo.value = null
   }
 }
+
+// Switching which linked server's poster/logo is being previewed re-fetches
+// both against that server's own rating_key -- works for series or season
+// alike now (Quirk #100); showServerPreviewToggle already gates the ‹ › UI
+// itself, so this only ever fires from a user action that's actually visible.
+watch(viewingServerId, () => {
+  fetchExistingPoster()
+  fetchExistingLogo()
+})
 
 const toggleLabel = (label: string) => {
   const set = new Set(selectedLabels.value)
@@ -1511,6 +1821,7 @@ const toggleLabel = (label: string) => {
 }
 
 const doPreview = async (skipBackgroundRender = false) => {
+  const capturedChangeSeq = previewChangeSeq
   if (!bgUrl.value) return
   // Cache current settings before rendering
   saveCurrentSettings()
@@ -1593,8 +1904,9 @@ const doPreview = async (skipBackgroundRender = false) => {
     stroke_width: strokeWidth.value,
     stroke_color: strokeColor.value,
     text_bbox_enabled: textBboxEnabled.value,
-    overlay_config_ids: options.value.overlayConfigIds.length > 0 ? options.value.overlayConfigIds : undefined,
-    overlay_config_ids_below: options.value.overlayConfigIdsBelow.length > 0 ? options.value.overlayConfigIdsBelow : undefined
+    ...textBoxPayload(),
+    overlay_config_ids: [...options.value.overlayConfigIds],
+    overlay_config_ids_below: [...options.value.overlayConfigIdsBelow]
   }
 
   // Only include season_text/season_number if they're not empty (for seasons, not series)
@@ -1604,11 +1916,13 @@ const doPreview = async (skipBackgroundRender = false) => {
   }
 
   // Generate cache key based on captured settings
+  Object.assign(capturedOptionsPayload, withBgAdjust({ ...capturedOptionsPayload }, capturedBgUrl))
   const cacheKey = season ? `${season.key}_${capturedBgUrl}_${capturedLogoUrl}_${JSON.stringify(capturedOptionsPayload)}` : ''
 
   // Check if we have a cached render for these exact settings
   if (cacheKey && renderedPreviewCache.value[cacheKey]) {
     lastPreview.value = renderedPreviewCache.value[cacheKey]
+    if (previewChangeSeq === capturedChangeSeq) previewDirty.value = false
     return
   }
 
@@ -1646,6 +1960,7 @@ const doPreview = async (skipBackgroundRender = false) => {
         const idx = renderedPreviews.value.findIndex(p => p.seasonKey === season.key)
         activePreviewIndex.value = idx >= 0 ? idx : renderedPreviews.value.length - 1
         lastPreview.value = imageUrl
+        if (previewChangeSeq === capturedChangeSeq) previewDirty.value = false
       }
     }
   }
@@ -1770,7 +2085,7 @@ const renderAllSelectedSeasons = async () => {
         'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
         'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
         'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color',
-        'text_bbox_enabled'
+        'text_bbox_enabled', ...TEXT_BOX_KEYS
       ]
       seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
         if (!fieldsToRemove.includes(key)) {
@@ -1790,6 +2105,8 @@ const renderAllSelectedSeasons = async () => {
     }
 
     const seasonLogoUrl = cachedSettings?.selectedLogo || currentLogoUrl
+
+    seasonOptions = withBgAdjust(seasonOptions, seasonBgUrl)
 
     // Generate cache key
     const cacheKey = `${seasonKey}_${seasonBgUrl}_${seasonLogoUrl}_${JSON.stringify(seasonOptions)}`
@@ -1962,7 +2279,7 @@ const doSave = async () => {
         'font_weight', 'text_color', 'text_align', 'text_transform', 'letter_spacing', 'line_height',
         'position_y', 'shadow_enabled', 'shadow_blur', 'shadow_offset_x', 'shadow_offset_y',
         'shadow_color', 'shadow_opacity', 'stroke_enabled', 'stroke_width', 'stroke_color',
-        'text_bbox_enabled'
+        'text_bbox_enabled', ...TEXT_BOX_KEYS
       ]
       seasonOptions = Object.keys(seasonOptions).reduce((acc, key) => {
         if (!fieldsToRemove.includes(key)) {
@@ -2007,7 +2324,7 @@ const doSave = async () => {
       seasonMovie,
       seasonBgUrl,
       seasonLogoUrl,
-      seasonOptions,
+      withBgAdjust(seasonOptions, seasonBgUrl),
       currentTemplate,
       currentPreset,
       libraryId,
@@ -2024,6 +2341,139 @@ const doSave = async () => {
 
 const sendLogo = ref((settings.plex.value as any).sendLogosToPlex ?? false)
 const logoSending = ref(false)
+// Nothing previously reflected send-in-progress for the poster Send button --
+// `loading` (render.loading) only ever gets set by render.preview()/save()/
+// send()'s own post() wrapper, never by the raw fetch() calls
+// sendPosterToServer()/sendLogoToServer() make for a non-Plex target, so
+// during a Jellyfin/Emby send the button gave zero visual feedback at all.
+// User-reported directly: "the 'send to server' button doesnt indicate when
+// something is being sent." Set around the whole of doSend() below,
+// covering both the non-Plex loop and the existing Plex-only season loop.
+const posterSending = ref(false)
+
+// Series-level-only multi-server send helpers (Phase 6c) -- direct port of
+// EditorPane.vue's identical functions (Quirk #69/#75). Plex still goes
+// through render.send() (a genuine server-side re-render); Jellyfin/Emby
+// reuse the already-rendered client preview, matching that established
+// pattern rather than building a second render pipeline for a non-Plex
+// destination.
+async function sendPosterToServer(serverId: string, ratingKey: string): Promise<boolean> {
+  if (serverId === 'plex-1') {
+    if (!bgUrl.value) return false
+    try {
+      const targetMovie = {
+        ...props.movie,
+        key: ratingKey,
+        server_id: 'plex-1',
+        library_id: ratingKey === props.movie.key ? props.movie.library_id : undefined,
+      }
+      // The season being sent is the one currently in context (doSend() switches
+      // to each selected item before calling this), so its number goes along,
+      // as the Plex-only loop does.
+      const seasonIndex = currentSeason.value && !currentSeason.value.isSeries ? currentSeason.value.index : null
+      await render.send(targetMovie, bgUrl.value, logoUrl.value, withBgAdjust(optionsPayload.value, bgUrl.value), Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, false, seasonIndex, false)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (!lastPreview.value) return false
+  try {
+    // server_id is required for a season item id -- it's never individually
+    // cached with its own server_id row (only the series-level item is), so
+    // the backend's rating_key -> server_id lookup would otherwise always
+    // misresolve it to 'plex-1' and reject the send outright.
+    const res = await fetch(`${apiBase}/api/media-server/send-poster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rating_key: ratingKey, image_data: lastPreview.value, is_tv: true, server_id: serverId, notify: false,
+        // What the preview was rendered from, for overlay refresh tracking.
+        render: {
+          template_id: selectedTemplate.value, preset_id: selectedPreset.value,
+          background_url: bgUrl.value, logo_url: logoUrl.value || null,
+          options: withBgAdjust(optionsPayload.value, bgUrl.value),
+          library_id: props.movie.library_id ?? null, source_server_id: props.movie.server_id || 'plex-1',
+          meta_rating_key: props.movie.key, media_type: 'tv',
+          season_index: currentSeason.value && !currentSeason.value.isSeries ? currentSeason.value.index : null,
+          title: props.movie.title, year: props.movie.year ?? null, tmdb_id: tmdbId.value,
+        },
+      })
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+async function sendLogoToServer(serverId: string, ratingKey: string): Promise<boolean> {
+  if (!logoUrl.value) return false
+  try {
+    const endpoint = serverId === 'plex-1' ? '/api/plex/send-logo' : '/api/media-server/send-logo'
+    const body: Record<string, unknown> = serverId === 'plex-1'
+      ? { rating_key: ratingKey, logo_url: logoUrl.value, is_tv: true, notify: false }
+      : { rating_key: ratingKey, image_url: logoUrl.value, is_tv: true, server_id: serverId, notify: false }
+    const res = await fetch(`${apiBase}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+// Filters to whichever server_ids the SendToServerModal selection named --
+// falls back to every server this specific item actually resolved when the
+// intersection is empty (e.g. a season that never resolved a server_id the
+// modal's selection, built from the currently-viewed item, happened to
+// include), rather than silently sending to nothing for that item.
+// One notification for a whole send (every item, every server, poster and/or
+// logo) instead of one per upload -- see services/sendNotify.ts.
+function sendSummaryNotification(serverIds: Iterable<string>, assets: Set<string>, itemTitles: string[], imageData: string | null) {
+  const servers = Array.from(new Set(serverIds))
+  const onlySeries = itemTitles.length === 1 && itemTitles[0] === seasons.value.find(s => s.isSeries)?.title
+  const title = itemTitles.length && !onlySeries
+    ? `${props.movie.title} — ${itemTitles.join(', ')}`
+    : props.movie.title
+  const sentPoster = assets.has('poster')
+  void notifySendSummary({
+    ratingKey: props.movie.key,
+    serverIds: servers,
+    assets: ['poster', 'logo'].filter(a => assets.has(a)),
+    templateId: sentPoster ? selectedTemplate.value : '',
+    presetId: sentPoster ? selectedPreset.value : '',
+    libraryId: props.movie.library_id ?? null,
+    title,
+    year: props.movie.year ?? null,
+    imageData: sentPoster ? imageData : null,
+    imageUrl: logoUrl.value || null, // logo-only send: show the logo
+  })
+}
+
+function resolveSendTargetsFor(servers: LinkedServer[]): LinkedServer[] {
+  if (servers.length === 0) return []
+  const filtered = servers.filter(s => sendTargetIds.value.has(s.server_id))
+  return filtered.length > 0 ? filtered : servers
+}
+
+function resolveSendTargets(): LinkedServer[] {
+  return resolveSendTargetsFor(linkedServers.value)
+}
+
+// Resolves whichever item (series or a specific season) is actually being
+// sent to its own linked-server targets -- a season's via
+// resolveSeasonLinkedServers() (async, cached per season key), the series'
+// via the already-unconditional seriesLinkedServers computed. Needed so the
+// non-Plex send loop below (doSend()) can resolve each SELECTED item's own
+// servers, not just whichever one happens to be currently focused/viewed.
+async function getLinkedServersForItem(season: Season): Promise<LinkedServer[]> {
+  if (season.isSeries) return seriesLinkedServers.value
+  await resolveSeasonLinkedServers(season.key, season.index)
+  const home: LinkedServer = { server_id: props.movie.server_id || 'plex-1', rating_key: season.key }
+  return [home, ...(seasonLinkedServersCache.value[season.key] || [])]
+}
 
 const doSendLogoOnly = async () => {
   if (!logoUrl.value) {
@@ -2032,6 +2482,23 @@ const doSendLogoOnly = async () => {
   }
   logoSending.value = true
   try {
+    // isNonPlexItem, not showMultiServerSend -- the latter is now purely a
+    // "does the picker dropdown make sense to show" display concern
+    // (linkedServers.length > 1), and would be false for a non-Plex show
+    // with no OTHER linked server, wrongly falling through to the
+    // Plex-only /api/plex/send-logo call below for an item that was never
+    // on Plex to begin with. sendPosterToServer()/sendLogoToServer() handle
+    // a single-target (send-to-its-own-home-server) case just fine.
+    if (isNonPlexItem.value) {
+      const targets = resolveSendTargets()
+      const results = await Promise.all(targets.map(t => sendLogoToServer(t.server_id, t.rating_key)))
+      const okCount = results.filter(Boolean).length
+      sendSummaryNotification(targets.filter((_, i) => results[i]).map(t => t.server_id), new Set(['logo']), [], null)
+      if (okCount === 0) throw new Error('Failed to send logo')
+      success(okCount === targets.length ? 'Logo sent!' : `Logo sent to ${okCount}/${targets.length} server(s)`)
+      await fetchExistingLogo()
+      return
+    }
     const res = await fetch(`${apiBase}/api/plex/send-logo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2039,6 +2506,7 @@ const doSendLogoOnly = async () => {
         rating_key: props.movie.key,
         logo_url: logoUrl.value,
         is_tv: true,
+        library_id: props.movie.library_id ?? null,
       }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -2052,8 +2520,213 @@ const doSendLogoOnly = async () => {
   }
 }
 
+// Only opens the picker modal when there's an actual choice to make
+// (linkedServers.length > 1) -- the overwhelming common case, a plain Plex
+// item or an unlinked Jellyfin/Emby item, sends immediately with no extra
+// click, same as before this redesign.
+function onSendClick() {
+  if (showMultiServerSend.value) {
+    showSendModal.value = true
+    return
+  }
+  doSend()
+}
+// The servers picked in the "send to" box for this one send. Unlike
+// sendTargetIds (which falls back to "all" when nothing matches), a season
+// that isn't on any picked server is skipped and reported, never sent
+// somewhere the user didn't pick.
+const pickedServerIds = ref<Set<string> | null>(null)
+function onSendModalConfirm(serverIds: string[]) {
+  sendTargetIds.value = new Set(serverIds)
+  pickedServerIds.value = new Set(serverIds)
+  showSendModal.value = false
+  doSend().finally(() => { pickedServerIds.value = null })
+}
+
 const doSend = async () => {
   if (!bgUrl.value) return
+
+  // Every selected season/series on a non-Plex-sourced show needs the
+  // multi-server send path, no matter how many are selected -- the
+  // Plex-only season loop below always calls render.send(), which
+  // unconditionally POSTs to /api/plex/send and would fail for every item
+  // here, since isNonPlexItem is a show-level property (every season lives
+  // on the same server as its show; there's no per-season Plex/non-Plex
+  // split to make). This used to only run when showMultiServerSend was true
+  // (exactly one item selected AND currently viewed), which is why sending
+  // series+season together was blocked outright -- reported directly:
+  // "for some reason i cant send when both season/series is selected."
+  // Fixed by looping here instead of gating on a single-selection check:
+  // each item resolves its OWN linked-server targets via
+  // getLinkedServersForItem() (a season's via resolveSeasonLinkedServers(),
+  // the series' via the unconditional seriesLinkedServers), so the loop
+  // itself needs no further per-item branching.
+  //
+  // A Plex show with a linked copy elsewhere (other_servers) takes this
+  // path too, or the servers picked in the "send to" box are ignored and only
+  // Plex gets the poster (v1.8.18 fix: gating on isNonPlexItem alone dropped
+  // Plex-sourced shows). sendPosterToServer('plex-1', ...) still renders and
+  // sends through /api/plex/send, with the season number.
+  if (isNonPlexItem.value || (props.movie.other_servers || []).length > 0) {
+    const selectedSeasonKeys = Array.from(selectedSeasons.value)
+    if (selectedSeasonKeys.length === 0) {
+      notifyError('No seasons selected')
+      return
+    }
+    posterSending.value = true
+    const succeeded: string[] = []
+    const failed: string[] = []
+    const notOnServer: string[] = []  // picked a server that doesn't have this season
+
+    // Preserve the currently-focused item so it can be restored once the
+    // loop finishes, matching the Plex-only loop below.
+    saveCurrentSettings()
+    const originalKey = currentTargetKey.value
+    const originalSettings = getCurrentSettings()
+    const originalPoster = selectedPoster.value
+
+    try {
+      // Context-switching (fetchImagesForCurrentSeason/restoreSettingsForKey)
+      // has to stay sequential -- it mutates the shared bgUrl/optionsPayload/
+      // logoUrl/lastPreview refs every item's send reads from, so two items
+      // switching at once would corrupt each other (the exact class of bug
+      // this file's own doSend() already fixed once, see the comment above).
+      // But the actual network round trips (render+upload for Plex, upload
+      // for Jellyfin/Emby) don't need to wait on each other AT ALL once an
+      // item's values are captured -- and previously they did, because each
+      // item's sendPosterToServer()/sendLogoToServer() calls were awaited
+      // before the loop moved on to the next item's context switch. That
+      // made a 2-item send take roughly the SUM of each item's send time
+      // (~6s + ~14s = ~20s in a real user-reported log) instead of close to
+      // the slower item's own time alone. User-reported: "i feel like it
+      // takes a long time to render/send."
+      //
+      // Fix: still switch context one item at a time, but INVOKE (not
+      // await) each item's poster/logo send calls the moment its context is
+      // ready, then immediately move on to the next item's context switch.
+      // This is safe specifically because sendPosterToServer()/
+      // sendLogoToServer() both read every live ref they need (bgUrl,
+      // logoUrl, optionsPayload, etc.) SYNCHRONOUSLY at the moment they're
+      // called -- before their own first `await` -- so calling them here,
+      // synchronously, right after this item's context switch and before
+      // the next one's, captures this item's values correctly regardless of
+      // when the resulting promise actually settles. Every item's pending
+      // work is collected into `pendingSends` and awaited together at the
+      // very end, so the actual render/upload time for a multi-item send is
+      // now bounded by the single slowest item, not their sum -- pure I/O
+      // concurrency, nothing about what gets rendered or how it's encoded
+      // changes (see CLAUDE.md Quirk #17's established boundary for this
+      // class of fix).
+      const pendingSends: Promise<{ title: string; ok: boolean }>[] = []
+      const notifyServers = new Set<string>()
+      const notifyAssets = new Set<string>()
+      let notifyImage: string | null = null
+      // The show's own copies that got the series poster, to refresh their grid thumbnails.
+      const sentSeries: { server_id: string; rating_key: string }[] = []
+
+      for (const seasonKey of selectedSeasonKeys) {
+        const season = seasons.value.find(s => s.key === seasonKey)
+        if (!season) continue
+        try {
+          // Switch editing context to THIS item before doing anything else --
+          // without this, every item in the loop reused whatever was still
+          // sitting in bgUrl/optionsPayload/lastPreview from whichever
+          // season was last focused when Send was clicked, so every target
+          // silently got the SAME (wrong) image. User-reported directly:
+          // "it sent the season poster to the series poster."
+          const idxInSelected = Array.from(selectedSeasons.value).findIndex(k => k === seasonKey)
+          if (idxInSelected >= 0) currentSeasonIndex.value = idxInSelected
+          await fetchImagesForCurrentSeason()
+          await restoreSettingsForKey(seasonKey)
+
+          // Reuse an already-rendered preview for this item when one exists
+          // (the common case -- selecting a season already triggers a
+          // background render via renderAllSelectedSeasons()) instead of
+          // paying for a redundant re-render; only render fresh here if
+          // nothing's cached yet for it.
+          const cachedImage = renderedPreviews.value.find(p => p.seasonKey === seasonKey)?.imageUrl
+          if (cachedImage) {
+            lastPreview.value = cachedImage
+          } else {
+            await doPreview(true)
+          }
+
+          const itemLinkedServers = await getLinkedServersForItem(season)
+          const picked = pickedServerIds.value
+          const targets = picked
+            ? itemLinkedServers.filter(s => picked.has(s.server_id))
+            : resolveSendTargetsFor(itemLinkedServers)
+          if (picked) {
+            const have = new Set(itemLinkedServers.map(s => s.server_id))
+            const absent = Array.from(picked).filter(id => !have.has(id)).map(serverTypeLabel)
+            if (absent.length) notOnServer.push(`${season.title} (not on ${absent.join(', ')})`)
+          }
+          if (targets.length === 0) {
+            if (!picked) failed.push(season.title)
+            continue
+          }
+
+          // Both of these .map() calls invoke sendPosterToServer()/
+          // sendLogoToServer() immediately (synchronously) -- this is the
+          // capture point for this item's bgUrl/logoUrl/optionsPayload/
+          // lastPreview, happening before the loop's next iteration can
+          // switch context again.
+          const posterPromises = targets.map(t => sendPosterToServer(t.server_id, t.rating_key))
+          const logoPromises = (sendLogo.value && logoUrl.value) ? targets.map(t => sendLogoToServer(t.server_id, t.rating_key)) : []
+          const seasonTitle = season.title
+          const itemImage = lastPreview.value
+          const isSeriesItem = !!season.isSeries
+          pendingSends.push((async () => {
+            try {
+              const results = await Promise.all(posterPromises)
+              if (isSeriesItem) targets.forEach((t, i) => { if (results[i]) sentSeries.push(t) })
+              const okCount = results.filter(Boolean).length
+              const logoResults = logoPromises.length > 0 ? await Promise.all(logoPromises) : []
+              targets.forEach((t, i) => {
+                if (results[i]) { notifyServers.add(t.server_id); notifyAssets.add('poster'); notifyImage = notifyImage || itemImage }
+                if (logoResults[i]) { notifyServers.add(t.server_id); notifyAssets.add('logo') }
+              })
+              return { title: seasonTitle, ok: okCount > 0 }
+            } catch (err) {
+              console.error(`[SEND] ${seasonTitle} - Failed:`, err)
+              return { title: seasonTitle, ok: false }
+            }
+          })())
+        } catch (err) {
+          failed.push(season.title)
+          console.error(`[SEND] ${season.title} - Failed:`, err)
+        }
+      }
+
+      const settled = await Promise.all(pendingSends)
+      for (const r of settled) {
+        if (r.ok) succeeded.push(r.title)
+        else failed.push(r.title)
+      }
+      sendSummaryNotification(notifyServers, notifyAssets, succeeded, notifyImage)
+
+      // Restore original editing context, matching the Plex-only loop below.
+      if (originalKey) {
+        settingsCache.value[originalKey] = originalSettings
+        if (originalPoster) selectedPosterCache.value[originalKey] = originalPoster
+        await restoreSettingsForKey(originalKey)
+        const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
+        if (origIdx >= 0) currentSeasonIndex.value = origIdx
+      }
+
+      if (succeeded.length > 0) success(`Successfully sent ${succeeded.length} poster(s): ${succeeded.join(', ')}`)
+      if (failed.length > 0) notifyError(`Failed to send ${failed.length} poster(s): ${failed.join(', ')}`)
+      if (notOnServer.length > 0) notifyError(`Skipped where the server doesn't have it (scan that library?): ${notOnServer.join('; ')}`)
+      await new Promise(resolve => setTimeout(resolve, 600))
+      await fetchExistingPoster()
+      await refreshSentThumbnails(sentSeries)
+      await fetchExistingLogo()
+      await fetchLabels()
+    } finally {
+      posterSending.value = false
+    }
+    return
+  }
 
   // Get selected seasons or use the movie itself if no seasons
   const selectedSeasonKeys = Array.from(selectedSeasons.value)
@@ -2063,6 +2736,7 @@ const doSend = async () => {
     return
   }
 
+  posterSending.value = true
   const succeeded: string[] = []
   const failed: string[] = []
 
@@ -2075,6 +2749,7 @@ const doSend = async () => {
     const originalSettings = getCurrentSettings()
     const originalPoster = selectedPoster.value
 
+    let plexNotifyImage: string | null = null
     // Send for each selected season
     for (const seasonKey of selectedSeasonKeys) {
       const season = seasons.value.find(s => s.key === seasonKey)
@@ -2091,9 +2766,10 @@ const doSend = async () => {
         // name -- see the identical fix/comment in doSave()'s equivalent line.
         const seasonMovie = { ...props.movie, key: seasonKey, title: props.movie.title }
         const seasonIndex = season.isSeries ? null : season.index
-        await render.send(seasonMovie, bgUrl.value, logoUrl.value, optionsPayload.value, Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex)
+        await render.send(seasonMovie, bgUrl.value, logoUrl.value, withBgAdjust(optionsPayload.value, bgUrl.value), Array.from(selectedLabels.value), selectedTemplate.value, selectedPreset.value, sendLogo.value, seasonIndex, false)
 
         succeeded.push(season.title)
+        plexNotifyImage = plexNotifyImage || renderedPreviews.value.find(p => p.seasonKey === seasonKey)?.imageUrl || null
       } catch (err) {
         failed.push(season.title)
         console.error(`[SEND TO PLEX] ${season.title} - Failed:`, err)
@@ -2108,6 +2784,10 @@ const doSend = async () => {
       // Restore current season index to the original selection if possible
       const origIdx = Array.from(selectedSeasons.value).findIndex(k => k === originalKey)
       if (origIdx >= 0) currentSeasonIndex.value = origIdx
+    }
+
+    if (succeeded.length > 0) {
+      sendSummaryNotification(['plex-1'], new Set(sendLogo.value && logoUrl.value ? ['poster', 'logo'] : ['poster']), succeeded, plexNotifyImage)
     }
 
     // Show results
@@ -2132,6 +2812,8 @@ const doSend = async () => {
     const message = err instanceof Error ? err.message : 'Failed to send posters to Plex'
     notifyError(message)
     console.error('[SEND TO PLEX] Fatal error:', err)
+  } finally {
+    posterSending.value = false
   }
 }
 
@@ -2441,7 +3123,8 @@ watch([
   strokeEnabled,
   strokeWidth,
   strokeColor,
-  textBboxEnabled
+  textBboxEnabled,
+  textBox
 ], () => {
   saveEditorState()
 }, { deep: true })
@@ -2473,6 +3156,9 @@ watch(logoPreference, () => {
 type PresetApplyOptions = {
   // Force applying season overrides even if we already have cached season edits
   forceSeasonOverrides?: boolean
+  // Keep the current overlay ticks (switching season/series): overlays aren't
+  // per-season, so only a preset change, reload or a new show resets them.
+  keepOverlays?: boolean
 }
 
 const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
@@ -2514,7 +3200,8 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   strokeEnabled.value = false
   strokeWidth.value = 4
   strokeColor.value = '#000000'
-  textBboxEnabled.value = false
+  textBboxEnabled.value = true
+  textBox.value = defaultTextBox()
 
   options.value.posterZoom = Math.round((Number(o.poster_zoom) || 1) * 100)
   options.value.posterShiftY = Math.round((Number(o.poster_shift_y) || 0) * 100)
@@ -2544,8 +3231,12 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (o.overlay_file) options.value.overlayFile = String(o.overlay_file)
   if (typeof o.overlay_opacity === 'number') options.value.overlayOpacity = Math.round(o.overlay_opacity * 100)
   if (o.overlay_mode) options.value.overlayMode = String(o.overlay_mode)
-  if (Array.isArray(o.overlay_config_ids)) options.value.overlayConfigIds = o.overlay_config_ids
-  if (Array.isArray(o.overlay_config_ids_below)) options.value.overlayConfigIdsBelow = o.overlay_config_ids_below
+  // Always from the new preset (none = none), and copies, so ticking a box
+  // doesn't edit the loaded preset's own list.
+  if (!opts.keepOverlays) {
+    options.value.overlayConfigIds = Array.isArray(o.overlay_config_ids) ? [...o.overlay_config_ids] : []
+    options.value.overlayConfigIdsBelow = Array.isArray(o.overlay_config_ids_below) ? [...o.overlay_config_ids_below] : []
+  }
   if (typeof o.poster_filter === 'string' && ['all', 'textless', 'text'].includes(o.poster_filter)) {
     posterFilter.value = o.poster_filter as 'all' | 'textless' | 'text'
   }
@@ -2578,7 +3269,8 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
   if (typeof o.stroke_enabled === 'boolean') strokeEnabled.value = o.stroke_enabled
   if (typeof o.stroke_width === 'number') strokeWidth.value = o.stroke_width
   if (typeof o.stroke_color === 'string') strokeColor.value = o.stroke_color
-  textBboxEnabled.value = !!o.text_bbox_enabled
+  textBboxEnabled.value = true
+  loadTextBox(o)
 
   // Season-specific overrides: apply AFTER loading from baseOptions
   // Only needed if season_options don't exist in the preset (legacy presets)
@@ -2593,6 +3285,7 @@ const applyPresetOptions = (id: string, opts: PresetApplyOptions = {}) => {
     shadowBlur.value = 0
     letterSpacing.value = 1
     positionY.value = 85
+    textBox.value = { maxW: 1800, maxH: 600, offsetX: 50, offsetY: 85, hAlign: 'center', vAlign: 'center' }
   }
 
   applyPosterFilter()
@@ -2640,6 +3333,7 @@ watch(shadowEnabled, () => markFieldModified('shadowEnabled'))
 watch(letterSpacing, () => markFieldModified('letterSpacing'))
 watch(positionY, () => markFieldModified('positionY'))
 watch(textBboxEnabled, () => markFieldModified('textBboxEnabled'))
+watch(textBox, () => markFieldModified('textBox'), { deep: true })
 watch(textColor, () => markFieldModified('textColor'))
 
 // Track modifications to options fields
@@ -2666,6 +3360,7 @@ watch(
   [
     bgUrl,
     logoUrl,
+    bgAdjust,
     options,
     posterFilter,
     logoPreference,
@@ -2694,12 +3389,16 @@ watch(
     strokeWidth,
     strokeColor,
     textBboxEnabled,
+    textBox,
     currentSeason
   ],
   () => {
     if (suppressAutoPreview) {
+      previewDirty.value = false
       return // Don't auto-preview when switching to rendered preview
     }
+    previewChangeSeq++
+    previewDirty.value = true
     if (previewTimer) clearTimeout(previewTimer)
     previewTimer = setTimeout(() => {
       doPreview()
@@ -2777,56 +3476,61 @@ watch(tmdbId, () => {
 
       <div class="controls-scroll">
 
-        <!-- 1. Preset -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('template')">
-            <span>Preset</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.template }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.template" class="acc-body">
-            <div class="preset-row">
-              <label class="field-label preset-select">
-                Preset
-                <select v-model="selectedPreset">
-                  <option v-if="presetLoading">Loading…</option>
-                  <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
-                </select>
-              </label>
-              <button class="reload-preset-btn" @click="reloadPreset" title="Reload preset values">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="23 4 23 10 17 10" />
-                  <polyline points="1 20 1 14 7 14" />
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                </svg>
-              </button>
-              <button class="save-preset-btn" @click="saveCurrentPreset" title="Save current settings to preset">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                  <polyline points="17 21 17 13 7 13 7 21"/>
-                  <polyline points="7 3 7 8 15 8"/>
-                </svg>
-              </button>
-            </div>
-            <div class="preset-row new-preset-row">
-              <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
-              <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
-            </div>
+        <div class="preset-bar">
+          <div class="preset-row">
+            <label class="field-label preset-select">
+              Preset
+              <select v-model="selectedPreset">
+                <option v-if="presetLoading">Loading…</option>
+                <option v-for="p in presets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+              </select>
+            </label>
+            <button class="reload-preset-btn" @click="reloadPreset" title="Reload preset values">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10" />
+                <polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+            <button class="save-preset-btn" @click="saveCurrentPreset" title="Save current settings to preset">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </button>
+          </div>
+          <div class="preset-row new-preset-row">
+            <input v-model="newPresetId" type="text" placeholder="New preset id" class="new-preset-input" />
+            <button class="save-preset-btn wide" @click="saveAsNewPreset" title="Save as a new preset">Save As</button>
           </div>
         </div>
 
-        <!-- 2. Poster -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('poster')">
-            <span>Poster</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.poster }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
+        <div class="editor-tabs" role="tablist">
+          <button
+            v-for="tab in editorTabs"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.id"
+            :class="['editor-tab', { active: activeTab === tab.id }]"
+            @click="activeTab = tab.id"
+          >
+            {{ tab.label }}
+            <span v-if="tab.id === 'text' && textOverlayEnabled" class="editor-tab-dot" title="Custom Text is on"></span>
           </button>
-          <div v-show="sectionOpen.poster" class="acc-body">
-            <div class="sub-section-title" style="margin-top: 0">Source</div>
+        </div>
+
+        <div v-show="activeTab === 'image'" class="tab-panel">
+          <div class="field-row">
             <label class="field-label">
+              Images
+              <select v-model="candidateKind">
+                <option value="posters">Posters</option>
+                <option value="backdrops">Backdrops ({{ (showLevelAssets.backdrops || []).length }})</option>
+              </select>
+            </label>
+            <label class="field-label" v-if="candidateKind === 'posters'">
               Filter
               <select v-model="posterFilter">
                 <option value="all">All Posters</option>
@@ -2834,70 +3538,84 @@ watch(tmdbId, () => {
                 <option value="text">With Text</option>
               </select>
             </label>
-            <div class="inline-controls">
-              <label class="inline-field" v-if="posterFilter !== 'textless'">
-                <span>Language</span>
-                <select v-model="posterLanguageFilter">
-                  <option value="all">All</option>
-                  <option value="en">English</option>
-                </select>
-              </label>
-              <label class="inline-field checkbox">
-                <input type="checkbox" v-model="showTmdbPosters" />
-                <span>TMDb</span>
-              </label>
-              <label class="inline-field checkbox">
-                <input type="checkbox" v-model="showFanartPosters" />
-                <span>Fanart</span>
-              </label>
-              <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
-                <input type="checkbox" v-model="showTvdbPosters" />
-                <span>TVDB</span>
-              </label>
-            </div>
-            <div class="poster-counts">TMDb: {{ posterCounts.tmdb }} · Fanart: {{ posterCounts.fanart }} · TVDB: {{ posterCounts.tvdb }}</div>
+            <label class="field-label" v-else>
+              Filter
+              <select v-model="backdropFilter">
+                <option value="all">All Backdrops</option>
+                <option value="textless">Textless Only</option>
+                <option value="text">With Text</option>
+              </select>
+            </label>
+          </div>
+          <div class="inline-controls">
+            <label class="inline-field" v-if="candidateKind === 'posters' && posterFilter !== 'textless'">
+              <span>Language</span>
+              <select v-model="posterLanguageFilter">
+                <option value="all">All</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showTmdbPosters" />
+              <span>TMDb <span class="src-count">{{ imageSourceCounts.tmdb }}</span></span>
+            </label>
+            <label class="inline-field checkbox">
+              <input type="checkbox" v-model="showFanartPosters" />
+              <span>Fanart <span class="src-count">{{ imageSourceCounts.fanart }}</span></span>
+            </label>
+            <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
+              <input type="checkbox" v-model="showTvdbPosters" />
+              <span>TVDB <span class="src-count">{{ imageSourceCounts.tvdb }}</span></span>
+            </label>
+          </div>
 
-            <div class="sub-section-title">Upload &amp; Selection</div>
-            <!-- Custom upload -->
+          <div
+            class="thumb-strip"
+            :class="{ 'drag-over': posterDropActive }"
+            @dragover.prevent="posterDropActive = true"
+            @dragleave="posterDropActive = false"
+            @drop.prevent="onPosterDrop"
+          >
             <div
-              class="poster-upload-zone"
-              :class="{ 'drag-over': posterDropActive, 'has-upload': !!uploadedPosterUrl }"
-              @dragover.prevent="posterDropActive = true"
-              @dragleave="posterDropActive = false"
-              @drop.prevent="onPosterDrop"
-              @click="!uploadedPosterUrl && ($refs.posterFileInput as HTMLInputElement)?.click()"
+              v-if="uploadedPosterUrl"
+              class="thumb poster-thumb"
+              :class="{ active: selectedPoster === uploadedPosterUrl }"
+              title="Your uploaded image"
+              @click="selectedPoster = uploadedPosterUrl"
             >
-              <template v-if="uploadedPosterUrl">
-                <img :src="uploadedPosterUrl" class="upload-preview" alt="Uploaded poster" />
-                <div class="upload-overlay">
-                  <button class="upload-reselect" @click.stop="selectedPoster = uploadedPosterUrl" :class="{ active: selectedPoster === uploadedPosterUrl }">Use this</button>
-                  <button class="upload-replace" @click.stop="($refs.posterFileInput as HTMLInputElement)?.click()">Replace</button>
-                  <button class="upload-remove" @click.stop="clearUploadedPoster">✕</button>
-                </div>
-              </template>
-              <template v-else>
-                <div class="upload-prompt">
-                  <span v-if="posterUploading">Uploading…</span>
-                  <span v-else>&#8679; Drop image or click to upload</span>
-                </div>
-              </template>
+              <img :src="uploadedPosterUrl" alt="" referrerpolicy="no-referrer" />
+              <div class="source-badge">UPLOAD</div>
+              <button type="button" class="thumb-remove" title="Remove upload" @click.stop="clearUploadedPoster">✕</button>
             </div>
-            <input ref="posterFileInput" type="file" accept="image/*" style="display:none" @change="onPosterFileInput" />
-
-            <div class="thumb-strip">
-              <div
-                v-for="p in filteredPosters"
-                :key="p.url"
-                class="thumb poster-thumb"
-                :class="{ active: selectedPoster === p.url }"
-                @click="selectedPoster = p.url"
-              >
-                <img :src="p.thumb || p.url" alt="" />
-                <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
-              </div>
+            <div
+              v-for="p in filteredPosters"
+              :key="p.url"
+              class="thumb poster-thumb"
+              :class="{ active: selectedPoster === p.url, 'backdrop-thumb': candidateKind === 'backdrops' }"
+              @click="selectedPoster = p.url"
+            >
+              <img :src="p.thumb || p.url" alt="" />
+              <div class="source-badge">{{ (p.source || 'tmdb').toUpperCase() }}</div>
             </div>
+          </div>
+          <div class="asset-actions">
+            <button v-if="filteredPosters.length" type="button" class="view-all-btn" @click="showImagePicker = true">View all {{ candidateKind === 'backdrops' ? 'backdrops' : 'posters' }} ({{ filteredPosters.length }})</button>
+            <button type="button" class="view-all-btn" :disabled="posterUploading" title="Upload a local file or enter a URL. You can also drop an image on the thumbnails." @click="showPosterUploadModal = true">
+              {{ posterUploading ? 'Uploading…' : (uploadedPosterUrl ? '📤 Replace upload' : '📤 Upload') }}
+            </button>
+          </div>
+          <ImagePickerModal
+            v-if="showImagePicker"
+            :title="candidateKind === 'backdrops' ? 'Backdrops' : 'Posters'"
+            :images="filteredPosters"
+            :selected="selectedPoster"
+            :wide="candidateKind === 'backdrops'"
+            @select="(url) => (selectedPoster = url)"
+            @close="showImagePicker = false"
+          />
 
-            <div class="sub-section-title">Position</div>
+
+          <EditorCard :summary="`Shift ${options.posterShiftY}%` + (isBackdropBg ? ` · zoom ${bgZoom}%` : '')" title="Position &amp; zoom">
             <div class="slider">
               <label>Poster Shift Y %</label>
               <div class="slider-row">
@@ -2905,8 +3623,30 @@ watch(tmdbId, () => {
                 <input v-model.number="options.posterShiftY" type="number" min="-50" max="50" class="slider-num" />
               </div>
             </div>
+            <template v-if="isBackdropBg">
+            <div class="slider">
+              <label>Zoom %</label>
+              <div class="slider-row">
+                <input v-model.number="bgZoom" type="range" min="25" max="300" />
+                <input v-model.number="bgZoom" type="number" min="25" max="300" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Pan Left/Right %</label>
+              <div class="slider-row">
+                <input v-model.number="bgShiftX" type="range" min="-50" max="50" />
+                <input v-model.number="bgShiftX" type="number" min="-50" max="50" class="slider-num" />
+              </div>
+            </div>
+            <div class="bg-adjust-note">
+              Zoom and pan apply to this backdrop only and are not saved to presets.
+              <button v-if="bgZoom !== 100 || bgShiftX !== 0" type="button" class="bg-adjust-reset" @click="resetBgAdjust">Reset</button>
+            </div>
+            </template>
 
-            <div class="sub-section-title">Top Fade</div>
+
+          </EditorCard>
+          <EditorCard :summary="`${options.topMatteHeight}% matte · ${options.topFadeHeight}% fade`" title="Top fade">
             <div class="slider">
               <label>Top Matte Height %</label>
               <div class="slider-row">
@@ -2922,7 +3662,9 @@ watch(tmdbId, () => {
               </div>
             </div>
 
-            <div class="sub-section-title">Bottom Fade</div>
+
+          </EditorCard>
+          <EditorCard :summary="`${options.matteHeight}% matte · ${options.fadeHeight}% fade`" title="Bottom fade">
             <div class="slider">
               <label>Bottom Matte Height %</label>
               <div class="slider-row">
@@ -2938,7 +3680,9 @@ watch(tmdbId, () => {
               </div>
             </div>
 
-            <div class="sub-section-title">Effects</div>
+
+          </EditorCard>
+          <EditorCard :summary="`Vignette ${options.vignette} · grain ${options.grain}`" title="Vignette &amp; grain">
             <div class="slider">
               <label>Vignette</label>
               <div class="slider-row">
@@ -2953,19 +3697,11 @@ watch(tmdbId, () => {
                 <input v-model.number="options.grain" type="number" min="0" max="60" class="slider-num" />
               </div>
             </div>
-          </div>
+          </EditorCard>
         </div>
 
-        <!-- 3. Logo -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('logo')">
-            <span>Logo</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.logo }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.logo" class="acc-body">
-            <div class="sub-section-title" style="margin-top: 0">Preset / Batch / Webhook</div>
+        <div v-show="activeTab === 'logo'" class="tab-panel">
+          <div class="field-row">
             <label class="field-label">
               Logo Mode
               <select v-model="logoMode">
@@ -2975,221 +3711,93 @@ watch(tmdbId, () => {
                 <option value="none">No Logo</option>
               </select>
             </label>
+            <label v-if="!isLogoNone" class="field-label">
+              Logo Style
+              <select v-model="logoPreference">
+                <option value="first">First Available</option>
+                <option value="white">White Logos</option>
+                <option value="color">Colored Logos</option>
+              </select>
+            </label>
             <label v-if="logoMode === 'hex'" class="field-label">
               Logo Color
               <input v-model="logoHex" type="color" />
             </label>
+          </div>
 
-            <div class="sub-section-title">Preview Logo (Manual Selection)</div>
-            <template v-if="!isLogoNone">
-              <label class="field-label">
-                Logo Style
-                <select v-model="logoPreference">
-                  <option value="first">First Available</option>
-                  <option value="white">White Logos</option>
-                  <option value="color">Colored Logos</option>
+          <div class="sub-section-title">Choose Logo (this item)</div>
+          <template v-if="!isLogoNone">
+            <div class="inline-controls">
+              <label class="inline-field">
+                <span>Language</span>
+                <select v-model="logoLanguageFilter">
+                  <option value="all">All</option>
+                  <option value="en">English</option>
                 </select>
               </label>
-              <div class="inline-controls">
-                <label class="inline-field">
-                  <span>Language</span>
-                  <select v-model="logoLanguageFilter">
-                    <option value="all">All</option>
-                    <option value="en">English</option>
-                  </select>
-                </label>
-                <label class="inline-field">
-                  <span>Clearart</span>
-                  <input type="checkbox" v-model="showClearArt" />
-                </label>
-                <label class="inline-field checkbox">
-                  <input type="checkbox" v-model="showTmdbLogos" />
-                  <span>TMDb</span>
-                </label>
-                <label class="inline-field checkbox">
-                  <input type="checkbox" v-model="showFanartLogos" />
-                  <span>Fanart</span>
-                </label>
-                <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
-                  <input type="checkbox" v-model="showTvdbLogos" />
-                  <span>TVDB</span>
-                </label>
-              </div>
-              <div class="poster-counts">TMDb: {{ logoCounts.tmdb }} · Fanart: {{ logoCounts.fanart }} · TVDB: {{ logoCounts.tvdb }}</div>
-
-              <!-- Custom upload -->
-              <div
-                class="logo-upload-zone"
-                :class="{ 'drag-over': logoDropActive, 'has-upload': !!uploadedLogoUrl }"
-                @dragover.prevent="logoDropActive = true"
-                @dragleave="logoDropActive = false"
-                @drop.prevent="onLogoDrop"
-                @click="!uploadedLogoUrl && ($refs.logoFileInput as HTMLInputElement)?.click()"
-              >
-                <template v-if="uploadedLogoUrl">
-                  <img :src="uploadedLogoUrl" class="upload-preview" alt="Uploaded logo" />
-                  <div class="upload-overlay">
-                    <button class="upload-reselect" @click.stop="selectedLogo = uploadedLogoUrl" :class="{ active: selectedLogo === uploadedLogoUrl }">Use this</button>
-                    <button class="upload-replace" @click.stop="($refs.logoFileInput as HTMLInputElement)?.click()">Replace</button>
-                    <button class="upload-remove" @click.stop="clearUploadedLogo">✕</button>
-                  </div>
-                </template>
-                <template v-else>
-                  <div class="upload-prompt">
-                    <span v-if="logoUploading">Uploading…</span>
-                    <span v-else>&#8679; Drop image or click to upload</span>
-                  </div>
-                </template>
-              </div>
-              <input ref="logoFileInput" type="file" accept="image/*" style="display:none" @change="onLogoFileInput" />
-
-              <div class="thumb-strip logo-strip">
-                <div
-                  v-for="l in filteredLogos"
-                  :key="l.url"
-                  class="thumb logo-thumb"
-                  :class="{ active: selectedLogo === l.url }"
-                  @click="selectedLogo = l.url"
-                >
-                  <img :src="logoThumbSrc(l)" alt="" @error="onLogoThumbError(l)" />
-                  <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
-                  <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
-                </div>
-                <button class="no-logo-btn" :class="{ active: isLogoNone }" @click="logoMode = 'none'">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-                  </svg>
-                  <span>No Logo</span>
-                </button>
-              </div>
-            </template>
-
-            <!-- Drop Shadow: Uniform Logo templates only — box geometry for the logo itself
-                 lives in the separate "Bounding Box" section (shared with Custom Text), but the
-                 shadow effect only ever applies to the logo, so it lives here instead. -->
-            <template v-if="isUniformLogo">
-              <div class="sub-section-title">Drop Shadow</div>
-              <label class="checkbox-label">
-                <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
-                <span>Drop shadow</span>
+              <label class="inline-field">
+                <span>Clearart</span>
+                <input type="checkbox" v-model="showClearArt" />
               </label>
-              <template v-if="options.uniformLogoShadowEnabled">
-                <div class="slider">
-                  <label>Shadow Color</label>
-                  <input v-model="options.uniformLogoShadowColor" type="color" />
-                </div>
-                <div class="slider">
-                  <label>Opacity (%)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Angle (°)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowAngle" type="range" min="-180" max="180" />
-                    <input v-model.number="options.uniformLogoShadowAngle" type="number" min="-180" max="180" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Distance (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowDistance" type="range" min="0" max="100" />
-                    <input v-model.number="options.uniformLogoShadowDistance" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Size / Blur (px)</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
-                    <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
-                  </div>
-                </div>
-              </template>
-            </template>
-
-            <!-- Position & Size only applies to non-Uniform-Logo templates now — Uniform Logo
-                 geometry moved to its own "Bounding Box" section, since that box is shared
-                 between Logo and Custom Text, not a Logo-only concept. -->
-              <template v-if="!isUniformLogo">
-                <div class="sub-section-title">Position &amp; Size</div>
-                <div class="slider">
-                  <label>Logo Scale %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.logoScale" type="range" min="20" max="120" />
-                    <input v-model.number="options.logoScale" type="number" min="20" max="120" class="slider-num" />
-                  </div>
-                </div>
-                <div class="slider">
-                  <label>Logo Position %</label>
-                  <div class="slider-row">
-                    <input v-model.number="options.logoOffset" type="range" min="0" max="100" />
-                    <input v-model.number="options.logoOffset" type="number" min="0" max="100" class="slider-num" />
-                  </div>
-                </div>
-              </template>
-          </div>
-        </div>
-
-        <!-- 4. Custom Text -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('text')">
-            <span>Custom Text</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.text }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.text" class="acc-body">
-            <TextOverlayPanel
-              v-model:enabled="textOverlayEnabled"
-              v-model:customText="customText"
-              v-model:fontFamily="fontFamily"
-              v-model:fontSize="fontSize"
-              v-model:fontWeight="fontWeight"
-              v-model:textColor="textColor"
-              v-model:textAlign="textAlign"
-              v-model:textTransform="textTransform"
-              v-model:letterSpacing="letterSpacing"
-              v-model:lineHeight="lineHeight"
-              v-model:positionY="positionY"
-              v-model:shadowEnabled="shadowEnabled"
-              v-model:shadowBlur="shadowBlur"
-              v-model:shadowOffsetX="shadowOffsetX"
-              v-model:shadowOffsetY="shadowOffsetY"
-              v-model:shadowColor="shadowColor"
-              v-model:shadowOpacity="shadowOpacity"
-              v-model:strokeEnabled="strokeEnabled"
-              v-model:strokeWidth="strokeWidth"
-              v-model:strokeColor="strokeColor"
-              :availableFonts="availableFonts"
-            />
-          </div>
-        </div>
-
-        <!-- 5. Bounding Box (Uniform Logo templates only) -->
-        <div v-if="isUniformLogo" class="acc-section">
-          <button class="acc-header" @click="toggleSection('boundingBox')">
-            <span>Bounding Box</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.boundingBox }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.boundingBox" class="acc-body">
-            <div class="field-hint" style="margin-bottom: 12px;">
-              This box defines where the logo sits. Custom Text can optionally fit itself inside
-              the same box instead of overflowing — handy for a season poster with Logo Mode set
-              to "No Logo" where text takes its place.
+              <label class="inline-field checkbox">
+                <input type="checkbox" v-model="showTmdbLogos" />
+                <span>TMDb <span class="src-count">{{ logoSourceCounts.tmdb }}</span></span>
+              </label>
+              <label class="inline-field checkbox">
+                <input type="checkbox" v-model="showFanartLogos" />
+                <span>Fanart <span class="src-count">{{ logoSourceCounts.fanart }}</span></span>
+              </label>
+              <label class="inline-field checkbox" title="TV-specific metadata source (TheTVDB)">
+                <input type="checkbox" v-model="showTvdbLogos" />
+                <span>TVDB <span class="src-count">{{ logoSourceCounts.tvdb }}</span></span>
+              </label>
             </div>
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="showBoundingBox" />
-              <span>Show bounding box on preview</span>
-            </label>
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="textBboxEnabled" />
-              <span>Restrict Custom Text to this box</span>
-            </label>
+
+            <div
+              class="thumb-strip logo-strip"
+              :class="{ 'drag-over': logoDropActive }"
+              @dragover.prevent="logoDropActive = true"
+              @dragleave="logoDropActive = false"
+              @drop.prevent="onLogoDrop"
+            >
+              <div
+                v-if="uploadedLogoUrl"
+                class="thumb logo-thumb"
+                :class="{ active: selectedLogo === uploadedLogoUrl }"
+                title="Your uploaded logo"
+                @click="selectedLogo = uploadedLogoUrl"
+              >
+                <img :src="uploadedLogoUrl" alt="" referrerpolicy="no-referrer" />
+                <div class="source-badge">UPLOAD</div>
+                <button type="button" class="thumb-remove" title="Remove upload" @click.stop="clearUploadedLogo">✕</button>
+              </div>
+              <div
+                v-for="l in filteredLogos"
+                :key="l.url"
+                class="thumb logo-thumb"
+                :class="{ active: selectedLogo === l.url }"
+                @click="selectedLogo = l.url"
+              >
+                <img :src="logoThumbSrc(l)" alt="" @error="onLogoThumbError(l)" />
+                <div class="source-badge">{{ (l.source || 'tmdb').toUpperCase() }}</div>
+                <div v-if="l.type && l.type !== 'logo'" class="type-badge">{{ l.type }}</div>
+              </div>
+              <button class="no-logo-btn" :class="{ active: isLogoNone }" @click="logoMode = 'none'">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                </svg>
+                <span>No Logo</span>
+              </button>
+            </div>
+            <div class="asset-actions">
+              <button type="button" class="view-all-btn" :disabled="logoUploading" title="Upload a local file or enter a URL. You can also drop an image on the logos." @click="showLogoUploadModal = true">
+                {{ logoUploading ? 'Uploading…' : (uploadedLogoUrl ? '📤 Replace upload' : '📤 Upload') }}
+              </button>
+            </div>
+          </template>
+          <EditorCard v-if="isUniformLogo" title="Logo box" :summary="`${options.uniformLogoMaxW}×${options.uniformLogoMaxH} at ${options.uniformLogoOffsetX}%, ${options.uniformLogoOffsetY}%`">
+            <div class="field-hint" style="margin-bottom: 8px;">The logo is scaled to fit this box (yellow outline on the preview).</div>
             <div class="slider">
               <label>Max Width (px)</label>
               <div class="slider-row">
@@ -3240,18 +3848,152 @@ watch(tmdbId, () => {
                 >{{ opt }}</button>
               </div>
             </div>
-          </div>
+          </EditorCard>
+          <EditorCard v-if="!isUniformLogo" title="Position &amp; size" :summary="`Scale ${options.logoScale}% · ${options.logoOffset}%`">
+            <div class="slider">
+              <label>Logo Scale %</label>
+              <div class="slider-row">
+                <input v-model.number="options.logoScale" type="range" min="20" max="120" />
+                <input v-model.number="options.logoScale" type="number" min="20" max="120" class="slider-num" />
+              </div>
+            </div>
+            <div class="slider">
+              <label>Logo Position %</label>
+              <div class="slider-row">
+                <input v-model.number="options.logoOffset" type="range" min="0" max="100" />
+                <input v-model.number="options.logoOffset" type="number" min="0" max="100" class="slider-num" />
+              </div>
+            </div>
+
+          </EditorCard>
+          <EditorCard v-if="isUniformLogo" title="Drop shadow" :summary="options.uniformLogoShadowEnabled ? 'On' : 'Off'">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="options.uniformLogoShadowEnabled" />
+              <span>Drop shadow</span>
+            </label>
+            <template v-if="options.uniformLogoShadowEnabled">
+              <div class="slider">
+                <label>Shadow Color</label>
+                <input v-model="options.uniformLogoShadowColor" type="color" />
+              </div>
+              <div class="slider">
+                <label>Opacity (%)</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowOpacity" type="range" min="0" max="100" />
+                  <input v-model.number="options.uniformLogoShadowOpacity" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Angle (°)</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowAngle" type="range" min="-180" max="180" />
+                  <input v-model.number="options.uniformLogoShadowAngle" type="number" min="-180" max="180" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Distance (px)</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowDistance" type="range" min="0" max="100" />
+                  <input v-model.number="options.uniformLogoShadowDistance" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Size / Blur (px)</label>
+                <div class="slider-row">
+                  <input v-model.number="options.uniformLogoShadowSize" type="range" min="0" max="250" />
+                  <input v-model.number="options.uniformLogoShadowSize" type="number" min="0" max="250" class="slider-num" />
+                </div>
+              </div>
+            </template>
+
+          </EditorCard>
         </div>
 
-        <!-- 6. Overlay & Border -->
-        <div class="acc-section">
-          <button class="acc-header" @click="toggleSection('overlay')">
-            <span>Overlay &amp; Border</span>
-            <svg class="acc-chevron" :class="{ open: sectionOpen.overlay }" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-          <div v-show="sectionOpen.overlay" class="acc-body">
+        <div v-show="activeTab === 'text'" class="tab-panel">
+          <TextOverlayPanel
+            v-model:enabled="textOverlayEnabled"
+            v-model:customText="customText"
+            v-model:fontFamily="fontFamily"
+            v-model:fontSize="fontSize"
+            v-model:fontWeight="fontWeight"
+            v-model:textColor="textColor"
+            v-model:textAlign="textAlign"
+            v-model:textTransform="textTransform"
+            v-model:letterSpacing="letterSpacing"
+            v-model:lineHeight="lineHeight"
+            v-model:positionY="positionY"
+            v-model:shadowEnabled="shadowEnabled"
+            v-model:shadowBlur="shadowBlur"
+            v-model:shadowOffsetX="shadowOffsetX"
+            v-model:shadowOffsetY="shadowOffsetY"
+            v-model:shadowColor="shadowColor"
+            v-model:shadowOpacity="shadowOpacity"
+            v-model:strokeEnabled="strokeEnabled"
+            v-model:strokeWidth="strokeWidth"
+            v-model:strokeColor="strokeColor"
+            :availableFonts="availableFonts"
+            :hidePosition="isUniformLogo"
+          >
+            <EditorCard v-if="isUniformLogo" title="Text box" :default-open="true" :summary="`${textBox.maxW}×${textBox.maxH} at ${textBox.offsetX}%, ${textBox.offsetY}%`">
+              <div class="field-hint" style="margin-bottom: 8px;">
+                Custom Text always sits in this box (blue outline on the preview) and shrinks to fit it. It's separate from the logo box.
+              </div>
+              <div class="slider">
+                <label>Max Width (px)</label>
+                <div class="slider-row">
+                  <input v-model.number="textBox.maxW" type="range" min="50" max="1800" />
+                  <input v-model.number="textBox.maxW" type="number" min="50" max="1800" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Max Height (px)</label>
+                <div class="slider-row">
+                  <input v-model.number="textBox.maxH" type="range" min="50" max="2800" />
+                  <input v-model.number="textBox.maxH" type="number" min="50" max="2800" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Box X %</label>
+                <div class="slider-row">
+                  <input v-model.number="textBox.offsetX" type="range" min="0" max="100" />
+                  <input v-model.number="textBox.offsetX" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Box Y %</label>
+                <div class="slider-row">
+                  <input v-model.number="textBox.offsetY" type="range" min="0" max="100" />
+                  <input v-model.number="textBox.offsetY" type="number" min="0" max="100" class="slider-num" />
+                </div>
+              </div>
+              <div class="slider">
+                <label>Horizontal Align</label>
+                <div class="align-btn-group">
+                  <button
+                    v-for="opt in (['left', 'center', 'right'] as const)"
+                    :key="opt"
+                    :class="['align-btn', { active: textBox.hAlign === opt }]"
+                    @click="textBox.hAlign = opt"
+                  >{{ opt }}</button>
+                </div>
+              </div>
+              <div class="slider">
+                <label>Vertical Align</label>
+                <div class="align-btn-group">
+                  <button
+                    v-for="opt in (['top', 'center', 'bottom'] as const)"
+                    :key="opt"
+                    :class="['align-btn', { active: textBox.vAlign === opt }]"
+                    @click="textBox.vAlign = opt"
+                  >{{ opt }}</button>
+                </div>
+              </div>
+            </EditorCard>
+          </TextOverlayPanel>
+        </div>
+
+        <div v-show="activeTab === 'extras'" class="tab-panel">
+          <EditorCard title="Border" :default-open="true" :summary="options.borderEnabled ? `${options.borderThickness}px` : 'Off'">
             <div class="slider">
               <label class="checkbox-label">
                 <input v-model="options.borderEnabled" type="checkbox" />
@@ -3269,9 +4011,10 @@ watch(tmdbId, () => {
               <label>Border Color</label>
               <input v-model="options.borderColor" type="color" />
             </div>
+          </EditorCard>
+          <EditorCard v-if="overlayConfigs.length > 0" title="Overlays" :default-open="true" :summary="options.overlayConfigIds.length ? `${options.overlayConfigIds.length} on` : 'None'">
             <div v-if="overlayConfigs.length > 0" class="slider">
-              <label>Overlay Configs</label>
-              <div class="overlay-config-checkboxes">
+                            <div class="overlay-config-checkboxes">
                 <div v-for="cfg in overlayConfigs" :key="cfg.id" class="overlay-config-item">
                   <label class="checkbox-label">
                     <input
@@ -3292,19 +4035,24 @@ watch(tmdbId, () => {
                 </div>
               </div>
             </div>
-            <div class="sub-section-title" style="margin-top: 12px">Labels to Remove</div>
-            <div class="label-chips">
-              <label v-for="l in labels" :key="l" class="chip">
-                <input type="checkbox" :checked="selectedLabels.has(l)" @change="toggleLabel(l)" />
-                <span>{{ l }}</span>
-              </label>
-              <p v-if="!labels.length" class="muted-text">No labels found</p>
-            </div>
-          </div>
+          </EditorCard>
         </div>
 
         <!-- Actions -->
         <div class="acc-actions">
+          <div class="pinned-labels">
+            <div class="pinned-labels-title">
+              Labels to remove on send
+              <span v-if="selectedLabels.size" class="pinned-labels-count">{{ selectedLabels.size }} selected</span>
+            </div>
+            <div v-if="labels.length" class="label-chips">
+              <label v-for="l in labels" :key="l" class="chip" :class="{ checked: selectedLabels.has(l) }">
+                <input type="checkbox" :checked="selectedLabels.has(l)" @change="toggleLabel(l)" />
+                <span>{{ l }}</span>
+              </label>
+            </div>
+            <p v-else class="muted-text">No labels on this item</p>
+          </div>
           <button class="btn-primary" :disabled="loading" @click="() => doPreview()">Preview</button>
           <span v-if="error" class="error-text">{{ error }}</span>
         </div>
@@ -3401,9 +4149,16 @@ watch(tmdbId, () => {
 
     <div class="preview-pane">
       <div class="preview-inner">
-        <div class="preview-existing">
+        <button v-if="currentCollapsed" type="button" class="current-expand" title="Show the current poster and logo" @click="currentCollapsed = false">Current ›</button>
+        <div v-else class="preview-existing">
+          <button type="button" class="current-collapse" title="Hide this column" @click="currentCollapsed = true">‹ Hide</button>
+          <div v-if="showServerPreviewToggle" class="server-toggle-row">
+            <button class="server-toggle-btn" title="Previous server" @click="cycleViewingServer(-1)">‹</button>
+            <span class="server-toggle-label">{{ serverTypeLabel(viewingServerId) }}</span>
+            <button class="server-toggle-btn" title="Next server" @click="cycleViewingServer(1)">›</button>
+          </div>
           <div class="preview-label">
-            Current Plex Poster
+            {{ currentPosterLabel }}
             <button class="refresh-btn" title="Refresh poster" @click="fetchExistingPoster(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
@@ -3416,8 +4171,8 @@ watch(tmdbId, () => {
           <div v-else class="empty-preview">No poster</div>
 
           <div class="preview-label" style="margin-top: 14px;">
-            Current Plex Logo
-            <button class="refresh-btn" title="Fetch logo from Plex" @click="fetchExistingLogo(true)">
+            {{ currentLogoLabel }}
+            <button class="refresh-btn" title="Fetch logo" @click="fetchExistingLogo(true)">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
@@ -3429,40 +4184,49 @@ watch(tmdbId, () => {
             <img v-if="existingLogo" :key="logoRefreshKey" :src="existingLogo" alt="Existing logo" class="existing-logo-img" />
             <div v-else class="empty-preview small">No logo</div>
           </div>
-
-          <button
-            title="Queue this show to automatically retry with a template/preset of your choice once a textless poster is available (applies to the whole show, not just this season)"
-            class="btn-inline btn-retry-queue"
-            @click="showRetryQueueModal = true"
-          >⏳ <span class="btn-label">Add to Retry Queue</span></button>
         </div>
 
         <div class="preview-content-wrapper">
           <div class="preview-main">
-          <div class="preview-label">
-            <div class="preview-title-row">
-              <span>Preview</span>
+          <div class="preview-header-row">
+            <div class="preview-label">
+              <div class="preview-title-row">
+                <span>Preview</span>
+              </div>
+              <div v-if="currentSeason" class="current-season-label">{{ currentSeason.title }}</div>
+              <span v-if="loading" class="status-badge">Rendering...</span>
+              <span v-else-if="lastPreview && previewDirty" class="status-badge stale" title="Settings changed since this render. It re-renders on its own after a moment; click Preview if it does not.">Not up to date</span>
+              <span v-else-if="lastPreview" class="status-badge success">Up to date</span>
             </div>
-            <div v-if="currentSeason" class="current-season-label">{{ currentSeason.title }}</div>
-            <span v-if="loading" class="status-badge">Rendering...</span>
-            <span v-else-if="lastPreview" class="status-badge success">Rendered</span>
-            <div class="preview-actions float-right">
-              <label class="send-logo-toggle" title="Also send the selected logo to Plex">
-                <input type="checkbox" v-model="sendLogo" />
-                <span>Send logo</span>
-              </label>
-              <button title="Send Logo to Plex" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
+            <div class="preview-actions">
+              <button title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
-                <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo' }}</span>
+                <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo Only' }}</span>
               </button>
               <button title="Save to Disk" class="btn-save btn-inline" :disabled="loading" @click="doSave">💾 <span class="btn-label">Save to Disk</span></button>
-              <button title="Send to Plex" class="btn-plex btn-inline" :disabled="loading" @click="doSend">📺 <span class="btn-label">Send to Plex</span></button>
+              <button :title="sendButtonLabel" class="btn-plex btn-inline" :disabled="loading || posterSending" @click="onSendClick">
+                <svg v-if="posterSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                <span v-else>📺</span>
+                <span class="btn-label">{{ posterSending ? 'Sending...' : sendButtonLabel }}</span>
+              </button>
+              <div class="more-menu" @click.stop>
+                <button type="button" class="btn-inline btn-more" title="More actions" @click="moreMenuOpen = !moreMenuOpen">⋯</button>
+                <div v-if="moreMenuOpen" class="more-dropdown">
+                  <button type="button" title="Queue this show to retry automatically with a template/preset of your choice once a textless poster is available (applies to the whole show)" @click="moreMenuOpen = false; showRetryQueueModal = true">⏳ Add to Retry Queue</button>
+                </div>
+              </div>
             </div>
           </div>
+          <SendToServerModal
+            v-if="showSendModal"
+            :options="sendModalOptions"
+            @close="showSendModal = false"
+            @send="onSendModalConfirm"
+          />
           <div class="preview-container">
             <img v-if="lastPreview" ref="previewImgRef" :src="lastPreview" alt="Preview" class="preview-img" />
             <div v-else-if="selectedPoster" class="placeholder-state">
-              <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" />
+              <img :src="selectedPoster" alt="Selected poster" class="placeholder-img" referrerpolicy="no-referrer" />
               <div class="placeholder-overlay">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
@@ -3486,8 +4250,16 @@ watch(tmdbId, () => {
               <p>Rendering...</p>
             </div>
 
-            <!-- Bounding Box (Uniform Logo template) — same box for logo placement and text-bbox mode -->
-            <div v-if="isUniformLogo && showBoundingBox && lastPreview" class="bounding-box" :style="boundingBoxStyle"></div>
+            <PreviewOverlay
+              v-if="lastPreview"
+              v-model:show-boxes="showBoundingBox"
+              :img="previewImgRef"
+              :can-show-boxes="isUniformLogo"
+              :logo-box="isUniformLogo ? logoBoxValue : null"
+              :text-box="isUniformLogo && textOverlayEnabled ? textBox : null"
+              @update:logo-box="setLogoBox"
+              @update:text-box="setTextBox"
+            />
           </div>
 
           </div>
@@ -3532,6 +4304,19 @@ watch(tmdbId, () => {
     :current-preset="selectedPreset"
     @close="showRetryQueueModal = false"
     @queued="onRetryQueued"
+  />
+
+  <UploadPosterModal
+    v-if="showPosterUploadModal"
+    kind="poster"
+    @close="showPosterUploadModal = false"
+    @uploaded="onPosterUploaded"
+  />
+  <UploadPosterModal
+    v-if="showLogoUploadModal"
+    kind="logo"
+    @close="showLogoUploadModal = false"
+    @uploaded="onLogoUploaded"
   />
 </template>
 
@@ -3768,70 +4553,6 @@ watch(tmdbId, () => {
   text-transform: uppercase;
 }
 
-/* Custom poster/logo upload zone */
-.poster-upload-zone, .logo-upload-zone {
-  position: relative;
-  border: 1.5px dashed var(--border, #2a2f3e);
-  border-radius: 8px;
-  height: 80px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
-  overflow: hidden;
-  margin-bottom: 6px;
-}
-.poster-upload-zone:hover, .poster-upload-zone.drag-over,
-.logo-upload-zone:hover, .logo-upload-zone.drag-over {
-  border-color: rgba(61, 214, 183, 0.6);
-  background: rgba(61, 214, 183, 0.05);
-}
-.poster-upload-zone.has-upload, .logo-upload-zone.has-upload {
-  height: 130px;
-  cursor: default;
-}
-.upload-preview {
-  height: 100%;
-  width: auto;
-  object-fit: contain;
-  display: block;
-}
-.upload-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(0,0,0,0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-.poster-upload-zone.has-upload:hover .upload-overlay,
-.logo-upload-zone.has-upload:hover .upload-overlay { opacity: 1; }
-.upload-reselect, .upload-replace, .upload-remove {
-  border: 1px solid rgba(255,255,255,0.3);
-  background: rgba(255,255,255,0.15);
-  color: #fff;
-  border-radius: 5px;
-  padding: 4px 8px;
-  font-size: 0.75rem;
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.15s;
-}
-.upload-reselect:hover, .upload-replace:hover { background: rgba(61,214,183,0.35); }
-.upload-reselect.active { border-color: #3dd6b7; color: #3dd6b7; }
-.upload-remove { border-color: rgba(255,100,100,0.4); }
-.upload-remove:hover { background: rgba(255,100,100,0.3); }
-.upload-prompt {
-  color: var(--text-secondary, #9aa4b5);
-  font-size: 0.82rem;
-  text-align: center;
-  pointer-events: none;
-}
-
 .poster-thumb {
   width: 80px;
   height: 120px;
@@ -3841,6 +4562,101 @@ watch(tmdbId, () => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.poster-thumb.backdrop-thumb {
+  width: 160px;
+  height: 90px;
+}
+
+.view-all-btn {
+  margin: 6px 0 4px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: transparent;
+  color: var(--accent, #3dd6b7);
+  cursor: pointer;
+}
+
+.view-all-btn:hover {
+  background: rgba(61, 214, 183, 0.08);
+}
+
+.bg-adjust-note {
+  font-size: 11px;
+  color: var(--muted, #8a93a6);
+  margin: 2px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bg-adjust-reset {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.asset-actions .view-all-btn {
+  margin: 0;
+}
+.thumb-strip.drag-over {
+  outline: 1.5px dashed rgba(61, 214, 183, 0.7);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.thumb-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 100, 100, 0.5);
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.thumb-remove:hover {
+  background: rgba(255, 100, 100, 0.5);
+}
+.src-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Compact sliders: label, bar and number on one line */
+.slider:has(> .slider-row) {
+  display: grid;
+  grid-template-columns: minmax(0, 38%) minmax(0, 1fr) 56px;
+  align-items: center;
+  column-gap: 8px;
+  margin-bottom: 8px;
+}
+.slider:has(> .slider-row) > label {
+  margin-bottom: 0;
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+.slider:has(> .slider-row) > .slider-row {
+  display: contents;
+}
+.slider:has(> .slider-row) .slider-num {
+  padding: 4px;
 }
 
 .logo-strip {
@@ -4082,10 +4898,6 @@ watch(tmdbId, () => {
   gap: 10px;
 }
 
-.float-right {
-  margin-left: auto;
-}
-
 .btn-primary,
 .btn-secondary {
   width: 100%;
@@ -4120,27 +4932,42 @@ watch(tmdbId, () => {
   border-color: rgba(255, 255, 255, 0.15);
 }
 
-.send-logo-toggle {
-  display: inline-flex;
+/* Multi-server preview toggle (Phase 6c) -- Vue's scoped styles don't cross
+   component boundaries, so this needs its own copy here rather than
+   relying on EditorPane.vue's identical rule (see CLAUDE.md Quirk #86's
+   "borrowed but never defined" class of bug). The inline send-target
+   <select>/send-logo checkbox this section used to also style were both
+   replaced by SendToServerModal.vue's own picker -- see that component's
+   own <style> block. */
+.server-toggle-row {
+  display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #a8b3cf;
-  cursor: pointer;
-  user-select: none;
-  padding: 4px 8px;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.server-toggle-btn {
+  width: 22px;
+  height: 22px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.03);
-  transition: all 0.15s;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #c9d1e0;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.send-logo-toggle:has(input:checked) {
-  color: #eef2ff;
-  border-color: rgba(61, 214, 183, 0.35);
+.server-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
-.send-logo-toggle input {
-  margin: 0;
-  accent-color: var(--accent, #3dd6b7);
+.server-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a8b3cf;
+  min-width: 60px;
 }
 
 /* Override to ensure .btn-plex color wins when combined with btn-secondary */
@@ -4155,12 +4982,40 @@ watch(tmdbId, () => {
   box-shadow: 0 8px 22px rgba(255, 112, 67, 0.18);
 }
 
+/* Wraps .preview-label + .preview-actions as two independently-wrappable
+   flex children, instead of .preview-actions being nested INSIDE
+   .preview-label (the old float-right/margin-left:auto approach) with no
+   flex-wrap anywhere in the chain -- that's what let the toolbar's
+   ever-growing action group (now with the Quirk #100 send-target select on
+   top of everything already there) silently overflow/clip instead of
+   dropping to its own line.
+   width:100% is load-bearing, not decoration: .preview-main (this row's
+   parent) is a column flex container with align-items:center, not the
+   flexbox default of stretch -- without an explicit width, this row
+   shrink-wraps to its own content instead of being constrained to the
+   parent's actual width, so flex-wrap has no real boundary to wrap
+   against and the row just grows past the visible edge instead of
+   dropping to a second line. This is why the flex-wrap-only version of
+   this fix still showed cut-off buttons. */
+.preview-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+}
+
 /* Inline buttons for preview area */
 .preview-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   justify-content: flex-end;
+  min-width: 0;
 }
 .btn-inline {
   padding: 8px 12px;
@@ -4189,7 +5044,8 @@ watch(tmdbId, () => {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.btn-send-logo .spin {
+.btn-send-logo .spin,
+.btn-plex .spin {
   animation: spin-logo 0.9s linear infinite;
 }
 @keyframes spin-logo {
@@ -4554,10 +5410,21 @@ button:disabled {
   font-weight: 500;
 }
 
+/* align-items/justify-content deliberately flex-start, not center: this
+   pane's content (the toolbar + a full 2000x3000-ish rendered poster) is
+   routinely taller than the visible pane, and overflow:auto combined with
+   *centered* flex alignment is a known CSS trap -- the browser computes the
+   scrollable range around the centered position, so the top of an oversized
+   child (here, the toolbar row) gets clipped with no way to scroll up to
+   it. This is why every fix to .preview-header-row's own width/wrapping
+   never visibly changed anything -- the row was never actually broken,
+   it was just permanently scrolled out of view above the pane's reachable
+   scroll area. flex-start lets content start at the pane's own top-left and
+   flow downward, fully reachable by the pane's normal scrollbar. */
 .preview-pane {
   background: rgba(10, 12, 18, 0.6);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 12px;
   overflow: auto;
@@ -4628,6 +5495,86 @@ button:disabled {
   color: #3dd6b7;
 }
 
+.status-badge.stale {
+  background: rgba(255, 184, 77, 0.15);
+  color: #ffb84d;
+}
+
+.current-collapse {
+  display: block;
+  margin: 0 auto 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.current-collapse:hover,
+.current-expand:hover {
+  color: #eef2ff;
+  border-color: rgba(61, 214, 183, 0.35);
+}
+
+.current-expand {
+  writing-mode: vertical-rl;
+  padding: 10px 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.more-menu {
+  position: relative;
+}
+
+.btn-more {
+  background: rgba(255, 255, 255, 0.05);
+  color: #c9d1e0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-weight: 700;
+}
+
+.btn-more:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.more-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 190px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #141824;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  z-index: 30;
+}
+
+.more-dropdown button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #dce6ff;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.more-dropdown button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
 .existing-logo-area {
   width: 160px;
   background: #0a0b12;
@@ -4638,20 +5585,6 @@ button:disabled {
   justify-content: center;
   min-height: 48px;
   box-sizing: border-box;
-}
-
-.btn-retry-queue {
-  margin-top: 14px;
-  width: 160px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #c9d1e0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-
-.btn-retry-queue:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: rgba(61, 214, 183, 0.35);
-  color: #eef2ff;
 }
 
 .existing-logo-img {
@@ -4795,10 +5728,117 @@ button:disabled {
   }
 }
 
-.bounding-box {
+.text-box-settings {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  border-left: 2px solid rgba(0, 220, 255, 0.6);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.pinned-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pinned-labels-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.pinned-labels-count {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--accent);
+}
+
+.pinned-labels .label-chips {
+  max-height: 72px;
+  overflow-y: auto;
+}
+
+.chip.checked {
+  border-color: rgba(61, 214, 183, 0.5);
+  background: rgba(61, 214, 183, 0.1);
+}
+
+/* Pinned preset bar + tabs */
+.preset-bar {
+  padding: 14px 0 6px;
+}
+
+.preset-bar .preset-row + .preset-row {
+  margin-top: 8px;
+}
+
+.editor-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin: 8px -18px 0;
+  padding: 8px 18px;
+  background: rgba(17, 20, 30, 0.98);
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-tab {
+  position: relative;
+  padding: 8px 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: #a8b8e0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.editor-tab:hover {
+  color: #eef2ff;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.editor-tab.active {
+  color: var(--accent);
+  background: rgba(61, 214, 183, 0.1);
+  border-color: rgba(61, 214, 183, 0.35);
+}
+
+.editor-tab-dot {
   position: absolute;
-  border: 2px dashed rgba(255, 255, 0, 0.8);
-  pointer-events: none;
+  top: 6px;
+  right: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.tab-panel {
+  padding-top: 6px;
+}
+
+.tab-panel > .sub-section-title:first-child {
+  margin-top: 6px;
 }
 
 /* Accordion */
@@ -4847,7 +5887,13 @@ button:disabled {
 }
 
 .acc-actions {
-  padding: 16px 0 20px;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin: 12px -18px 0;
+  padding: 12px 18px 16px;
+  background: rgba(17, 20, 30, 0.98);
+  border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -4863,12 +5909,6 @@ button:disabled {
   margin-top: 14px;
   padding-bottom: 6px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.poster-counts {
-  font-size: 11px;
-  color: var(--muted);
-  margin-bottom: 6px;
 }
 
 /* Mobile season strip */
@@ -5148,7 +6188,8 @@ button:disabled {
     align-items: center;
   }
 
-  .preview-existing {
+  .preview-existing,
+  .current-expand {
     display: none;
   }
 

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from ..config import settings, plex_headers, logger, plex_session, POSTER_CACHE_DIR, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata
+from ..config import settings, plex_headers, logger, plex_session, POSTER_CACHE_DIR, extract_tmdb_id_from_metadata, extract_tvdb_id_from_metadata, get_library_group_members, get_library_group_preferred_server, get_library_group_merge_enabled
 from ..schemas import LabelsResponse
 from ..tmdb_client import get_images_for_tv_show, get_tv_show_details, get_tv_season_images, TMDBError, get_tv_external_ids
 from ..fanart_client import get_images_for_movie as get_fanart_images, get_images_for_tv_show as get_fanart_tv_images
@@ -47,7 +47,12 @@ def _get_plex_tv_shows(lib_ids: Optional[List[str]] = None) -> List[dict]:
                         "title": title,
                         "year": int(year) if year else None,
                         "addedAt": int(added_at) if added_at else None,
-                        "library_id": lib_id
+                        "library_id": lib_id,
+                        # Poster version (ends in an update timestamp) -- lets the
+                        # scan re-download only changed posters (Quirk #152).
+                        "thumb": directory.get("thumb"),
+                        # Backdrop version, same idea.
+                        "art": directory.get("art"),
                     })
         except Exception as e:
             logger.error(f"Failed to fetch TV shows from library {lib_id}: {e}")
@@ -114,6 +119,35 @@ def _remove_poster_cache(rating_key: str, prefix: str = "tv"):
     return removed
 
 
+def _fetch_and_cache_tv_poster_from_media_server(rating_key: str, server_id: str) -> Optional[Path]:
+    """TV-show mirror of movies.py's `_fetch_and_cache_poster_from_media_server()`
+    -- routes a non-Plex rating_key's poster fetch through
+    MediaServerClient.download_image() instead of the Plex-only logic below.
+    Deliberately NOT reused from movies.py: TV show posters use their own
+    tv_-prefixed cache filename and cache.update_tv_poster() (a different DB
+    table, tv_cache not movie_cache) -- reusing the movie version here would
+    have silently written a Jellyfin TV show's poster into movie_cache."""
+    try:
+        from ..media_server import get_client, ImageType
+        client = get_client(server_id)
+        if not client:
+            return None
+        data = client.download_image(rating_key, ImageType.POSTER)
+        if not data:
+            return None
+        saved = _save_poster_cache(rating_key, data, "image/jpeg", "tv")
+        if saved:
+            proxy_url = _poster_cache_url(rating_key, saved)
+            try:
+                cache.update_tv_poster(rating_key, proxy_url)
+            except Exception as e:
+                logger.debug("[CACHE] update_tv_poster failed for %s: %s", rating_key, e, exc_info=True)
+        return saved
+    except Exception as e:
+        logger.debug("Non-Plex TV poster fetch failed for %s (server=%s): %s", rating_key, server_id, e)
+        return None
+
+
 def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
     """
     Fetch poster from cache or Plex and store it. Returns cached file path or None.
@@ -126,9 +160,16 @@ def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> O
         if cached:
             return cached
 
+    # Non-Plex (Jellyfin/Emby) item -- this whole function below is otherwise
+    # Plex-only, exactly the same gap movies.py's fetch_and_cache_poster()
+    # already had fixed (Quirk #65) but this TV-show sibling never got.
+    server_id = db.get_server_id_for_rating_key(rating_key)
+    if server_id != "plex-1":
+        return _fetch_and_cache_tv_poster_from_media_server(rating_key, server_id)
+
     # Add cache-busting parameter when force refreshing to bypass Plex's cache
     import time
-    cache_buster = f"?X-Plex-Token={settings.PLEX_TOKEN}&t={int(time.time())}" if force_refresh else ""
+    cache_buster = f"?t={int(time.time())}" if force_refresh else ""
     direct = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb{cache_buster}"
 
     # Try direct poster URL
@@ -177,18 +218,35 @@ def fetch_and_cache_tv_poster(rating_key: str, force_refresh: bool = False) -> O
 
 
 @router.get("/tv-shows")
-def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: str = None):
+def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: str = None, server_id: str = "plex-1"):
     """
     Return TV shows from cache. Always returns from cache - use /scan-library to refresh.
     The force_refresh parameter is deprecated but kept for backwards compatibility.
+
+    server_id: which server `library_id` belongs to (Phase 8a) -- see api_movies()'s
+    identical parameter for the full reasoning. Defaults to "plex-1" for byte-identical
+    behavior on every existing caller/URL.
     """
     try:
         # Normalize library_id: treat "default" or empty string as None (fetch all libraries)
         if library_id in ("default", ""):
             library_id = None
 
-        # Always return from cache (which includes labels populated by scans)
-        cached = cache.get_cached_tv_shows(library_id=library_id)
+        # See api_movies()'s identical comment -- unions in a linked server's items
+        # (Quirk #62/#64) only when this library actually has one; otherwise falls
+        # through to the normal, unmodified single-library path.
+        group_members = get_library_group_members(server_id, library_id, "tv") if library_id else None
+        if group_members:
+            # Not coalesced to 'plex-1' here -- get_cached_tv_shows_multi() needs the
+            # raw None to tell "no merge-winner preference set" apart from "filter to
+            # only plex-1's items" when mergeItems is off (Quirk #121). It still
+            # resolves None to 'plex-1' itself for the merge-winner case internally.
+            preferred_server = get_library_group_preferred_server(server_id, library_id, "tv")
+            merge_enabled = get_library_group_merge_enabled(server_id, library_id, "tv")
+            cached = db.get_cached_tv_shows_multi(group_members, preferred_server, merge_enabled)
+        else:
+            # Always return from cache (which includes labels populated by scans)
+            cached = cache.get_cached_tv_shows(library_id=library_id)
         return [
             {
                 "key": s["rating_key"],
@@ -206,6 +264,9 @@ def api_tv_shows(force_refresh: bool = False, max_age: int = 900, library_id: st
                 "updated_at": s.get("updated_at"),
                 "library_id": s.get("library_id"),
                 "edition": s.get("edition"),
+                "server_id": s.get("server_id"),
+                "also_on": s.get("also_on"),
+                "other_servers": s.get("other_servers"),
             }
             for s in cached
         ]
@@ -279,16 +340,27 @@ def api_tv_show_select_poster(
     """
     from ..assets.selection import pick_poster
 
-    # Get TMDB/TVDB IDs for the show
-    url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
-    try:
-        r = plex_session.get(url, headers=plex_headers(), timeout=6)
-        r.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch TV show metadata: {e}")
+    # Get TMDB/TVDB IDs for the show. Prefer whatever's already cached (works
+    # for both Plex and Jellyfin/Emby items) before ever attempting a live
+    # Plex-only fetch -- a Jellyfin item has no Plex metadata to fetch at all,
+    # and used to hard-crash this endpoint with a 500 (see CLAUDE.md Quirk
+    # audit -- same class of bug as api_tv_show_tmdb()/preview.py, just never
+    # fixed here since this route wasn't touched by those earlier passes).
+    cached_tmdb_id, cached_tvdb_id = db.get_ids_for_rating_key(rating_key)
+    is_plex_show = db.get_server_id_for_rating_key(rating_key) == "plex-1"
 
-    tmdb_id = extract_tmdb_id_from_metadata(r.text)
-    tvdb_id = extract_tvdb_id_from_metadata(r.text)
+    tmdb_id = cached_tmdb_id
+    tvdb_id = cached_tvdb_id
+
+    if is_plex_show and not (tmdb_id or tvdb_id):
+        url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
+        try:
+            r = plex_session.get(url, headers=plex_headers(), timeout=6)
+            r.raise_for_status()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch TV show metadata: {e}")
+        tmdb_id = extract_tmdb_id_from_metadata(r.text)
+        tvdb_id = extract_tvdb_id_from_metadata(r.text)
 
     if tmdb_id and not tvdb_id:
         try:
@@ -384,6 +456,12 @@ def api_tv_show_select_poster(
 
 @router.get("/tv-show/{rating_key}/labels", response_model=LabelsResponse)
 def api_tv_show_labels(rating_key: str):
+    # Labels are a Plex-only concept (Quirk #59/#93) -- same fix as the
+    # movie-side api_movie_labels(): skip the doomed live fetch entirely for
+    # a Jellyfin/Emby item instead of wasting a real Plex round-trip/timeout
+    # on every grid label fetch for it.
+    if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+        return LabelsResponse(labels=[])
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=10)
@@ -421,7 +499,6 @@ def api_tv_show_labels(rating_key: str):
         from ..config import extract_media_info_from_metadata
         media_info = extract_media_info_from_metadata(r.text)
         if media_info:
-            from .. import database as db
             db.update_tv_media_info(
                 rating_key,
                 media_info.get("video_resolution"),
@@ -440,6 +517,15 @@ def api_tv_show_labels(rating_key: str):
 @router.get("/tv-show/{rating_key}/tmdb")
 def api_tv_show_tmdb(rating_key: str):
     """Get TMDB ID for a TV show."""
+    # This endpoint is otherwise Plex-only (a direct /library/metadata/{rating_key}
+    # fetch below) -- for a Jellyfin/Emby item id it always fails, silently
+    # starving the manual editor of poster/logo candidates (EditorPane.vue bails
+    # out entirely once tmdb_id comes back null). Already known from whatever
+    # scan/merge cached this row -- no live fetch needed for a non-Plex item.
+    if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+        tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+        return {"tmdb_id": tmdb_id, "tvdb_id": tvdb_id}
+
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
 
     try:
@@ -491,6 +577,22 @@ def api_tv_show_seasons(rating_key: str, force_refresh: bool = False):
         cached = db.get_cached_tv_show(rating_key)
         if cached and cached.get("seasons"):
             return {"seasons": cached["seasons"]}
+
+    # Real bug, same class as Quirk #90/#97: this endpoint was unconditionally
+    # Plex-only, with no server_id check at all -- a Jellyfin-sourced show's
+    # rating_key was never a real Plex id, so this always 500'd
+    # ("Failed to fetch seasons"). Season enumeration for Jellyfin wasn't even
+    # buildable until Quirk #100 confirmed it's possible; wired up here the
+    # same session that capability landed.
+    server_id = db.get_server_id_for_rating_key(rating_key)
+    if server_id != "plex-1":
+        from ..media_server import get_client
+        client = get_client(server_id)
+        if not client:
+            raise HTTPException(404, f"No configured/enabled media server for server_id={server_id}")
+        seasons = client.list_seasons(rating_key) if hasattr(client, "list_seasons") else []
+        cache.update_tv_seasons(rating_key, seasons)
+        return {"seasons": seasons}
 
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/children"
 

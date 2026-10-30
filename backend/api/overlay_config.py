@@ -65,7 +65,8 @@ def api_save_overlay_config(req: OverlayConfigSaveRequest):
     """Save or update an overlay configuration."""
     try:
         elements = [elem.model_dump() for elem in req.elements]
-        db.save_overlay_config(req.id, req.name, elements, streaming_region=req.streaming_region)
+        db.save_overlay_config(req.id, req.name, elements, streaming_region=req.streaming_region,
+                               conditions=req.conditions)
         return {"status": "ok", "id": req.id}
     except Exception as e:
         logger.error(f"[OVERLAY] Error saving overlay config {req.id}: {e}")
@@ -289,7 +290,7 @@ def api_list_fonts():
     (fetched-and-cached on first actual use — see universal.py's
     _load_remote_kometa_font() — so they're listed as selectable immediately
     even before that first fetch happens)."""
-    from ..templates.universal import _KOMETA_REMOTE_FONTS, _kometa_fonts_cache_dir
+    from ..templates.universal import _KOMETA_REMOTE_FONTS, _KOMETA_REPO_FONTS, _kometa_fonts_cache_dir
 
     font_extensions = {'.ttf', '.otf', '.ttc'}
     font_names: set[str] = set()
@@ -309,8 +310,53 @@ def api_list_fonts():
 
     # Known Kometa default font names, listed even before first use fetches them
     font_names.update(Path(fname).stem for fname in _KOMETA_REMOTE_FONTS.values())
+    font_names.update(Path(fname).stem for fname in _KOMETA_REPO_FONTS.values())
+    # Simposter's own font set (simposter-assets fonts.json), downloaded on first use
+    try:
+        from ..templates.universal import asset_font_names
+        font_names.update(asset_font_names())
+    except Exception as e:
+        logger.debug("[FONTS] simposter-assets font list unavailable: %s", e)
 
     return {"fonts": sorted(font_names, key=str.lower)}
+
+
+_FONT_MEDIA_TYPES = {".ttf": "font/ttf", ".otf": "font/otf", ".ttc": "font/collection"}
+
+
+@router.get("/fonts/file")
+def api_font_file(name: str):
+    """The font file for a font name, so the Overlay Manager preview can draw
+    with the same font as the render. Looks in the same folders as the render
+    (exact file name, case-insensitive) and fetches a Kometa font on first use."""
+    from ..templates.universal import _kometa_fonts_cache_dir, _load_remote_kometa_font
+    wanted = (name or "").strip()
+    if not wanted or "/" in wanted or "\\" in wanted or ".." in wanted:
+        raise HTTPException(400, "Invalid font name")
+    dirs = [Path(settings.CONFIG_DIR) / "fonts", BASE_DIR / "config" / "fonts", _kometa_fonts_cache_dir()]
+
+    def find():
+        low = wanted.lower()
+        for d in dirs:
+            if not d.is_dir():
+                continue
+            for f in d.iterdir():
+                if f.is_file() and f.suffix.lower() in _FONT_MEDIA_TYPES and f.stem.lower() == low:
+                    return f
+        return None
+
+    path = find()
+    if path is None:
+        # Simposter's own font set. A variable file holds every weight; the
+        # preview draws it at the file's default weight.
+        from ..templates.universal import asset_font_path
+        path = asset_font_path(wanted)
+    if path is None and _load_remote_kometa_font(wanted, 12, False) is not None:
+        path = find()
+    if path is None:
+        raise HTTPException(404, "Font not found")
+    return FileResponse(str(path), media_type=_FONT_MEDIA_TYPES[path.suffix.lower()],
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -352,50 +398,131 @@ def api_overlay_preview_metadata(
     rating_key: str,
     config_id: Optional[str] = None,
     media_type: str = "movie",
+    ratings: bool = False,
+    lists: Optional[str] = None,
+    badge_types: Optional[str] = None,
+    fields: Optional[str] = None,
 ):
     """Return Plex media metadata for a given rating_key for use in the overlay config preview.
 
     If config_id is provided, also resolves streaming_platform and studio via the same
     TMDb pre-pass that apply_overlay_config uses, so item-mode preview reflects real values.
+
+    The editor also says what its current, possibly unsaved, layers use (ratings=1,
+    lists=comma-separated list URLs, badge_types=comma-separated element types,
+    fields=other data fields its rules use, e.g. days_since_added,show_status), so
+    the preview doesn't wait for a save before fetching that data.
     """
     try:
         from ..config import get_plex_media_info, get_movie_tmdb_id
         info = get_plex_media_info(rating_key) or {}
 
-        if config_id:
+        saved_cfg = db.get_overlay_config(config_id) if config_id else None
+        extra_types = {t.strip() for t in (badge_types or "").split(",") if t.strip()}
+        if saved_cfg or extra_types:
             try:
-                cfg = db.get_overlay_config(config_id)
-                if cfg:
-                    element_types = {e.get("type") for e in cfg.get("elements", [])}
-                    tmdb_id = get_movie_tmdb_id(rating_key)
+                cfg = saved_cfg or {}
+                element_types = {e.get("type") for e in cfg.get("elements", [])} | extra_types
+                tmdb_id = None
+                if element_types & {"streaming_platform_badge", "studio_badge"}:
+                    # Scanned id first: a Jellyfin/Emby item (or a TV show) has
+                    # no Plex movie metadata to read it from.
+                    tmdb_id = db.get_ids_for_rating_key(str(rating_key))[0]
+                    if not tmdb_id and db.get_server_id_for_rating_key(str(rating_key)) == "plex-1":
+                        tmdb_id = get_movie_tmdb_id(rating_key)
 
-                    if tmdb_id and "streaming_platform_badge" in element_types:
-                        try:
-                            from ..tmdb_client import get_watch_providers, normalize_provider_name
-                            region = cfg.get("streaming_region") or "US"
-                            providers = get_watch_providers(tmdb_id, media_type, region)
-                            if providers:
-                                slug = normalize_provider_name(providers[0].get("provider_name", ""))
-                                if slug:
-                                    info["streaming_platform"] = slug
-                        except Exception as sp_err:
-                            logger.debug(f"[OVERLAY] Preview streaming platform error: {sp_err}")
-
-                    if tmdb_id and "studio_badge" in element_types:
-                        try:
-                            from ..tmdb_client import get_studio_name, get_studio_company_id
-                            slug = get_studio_name(tmdb_id, media_type)
+                if tmdb_id and "streaming_platform_badge" in element_types:
+                    try:
+                        from ..tmdb_client import get_watch_providers, normalize_provider_name
+                        region = cfg.get("streaming_region") or "US"
+                        providers = get_watch_providers(tmdb_id, media_type, region)
+                        if providers:
+                            slug = normalize_provider_name(providers[0].get("provider_name", ""))
                             if slug:
-                                info["studio"] = slug
-                            cid = get_studio_company_id(tmdb_id, media_type)
-                            if cid is not None:
-                                info["studio_company_id"] = str(cid)
-                        except Exception as st_err:
-                            logger.debug(f"[OVERLAY] Preview studio error: {st_err}")
+                                info["streaming_platform"] = slug
+                    except Exception as sp_err:
+                        logger.debug(f"[OVERLAY] Preview streaming platform error: {sp_err}")
+
+                if tmdb_id and "studio_badge" in element_types:
+                    try:
+                        from ..tmdb_client import get_studio_name, get_studio_company_id
+                        slug = get_studio_name(tmdb_id, media_type)
+                        if slug:
+                            info["studio"] = slug
+                        cid = get_studio_company_id(tmdb_id, media_type)
+                        if cid is not None:
+                            info["studio_company_id"] = str(cid)
+                    except Exception as st_err:
+                        logger.debug(f"[OVERLAY] Preview studio error: {st_err}")
             except Exception as pre_err:
                 logger.debug(f"[OVERLAY] Preview pre-pass error: {pre_err}")
 
-        return {"metadata": info}
+        # TMDb/TVDB ids, for conditions that match fixed id lists (imported tmdb_movie etc.).
+        try:
+            cached_tmdb, cached_tvdb = db.get_ids_for_rating_key(rating_key)
+            if cached_tmdb and not info.get("tmdb_id"):
+                info["tmdb_id"] = str(cached_tmdb)
+            if cached_tvdb and not info.get("tvdb_id"):
+                info["tvdb_id"] = str(cached_tvdb)
+        except Exception:
+            pass
+
+        # Labels and file paths for previewing element conditions (overlay engine v2).
+        labels: list = []
+        file_paths: list = []
+        try:
+            labels = (db.get_tv_labels(rating_key) if media_type == "tv" else db.get_movie_labels(rating_key)) or []
+            file_paths = db.get_file_paths(rating_key)
+        except Exception:
+            pass
+        # MDBList ratings and list membership, only when this config uses them.
+        lists_out: list = []
+        extra_lists = [u.strip() for u in (lists or "").split(",") if u.strip()]
+        if saved_cfg or ratings or extra_lists:
+            try:
+                from .. import overlay_engine
+                elements = [e for e in (saved_cfg or {}).get("elements", []) if isinstance(e, dict)]
+                # Stand-in layers for what the unsaved editor uses.
+                if ratings:
+                    elements.append({"type": "text_label", "text": "{audience_rating}"})
+                if extra_lists:
+                    elements.append({"type": "text_label", "conditions": [{"field": "list", "op": "in", "value": extra_lists}]})
+                needs = overlay_engine.needed_data(elements)
+                if needs["ratings"] or needs["lists"]:
+                    tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+                    ctx = overlay_engine.build_context(
+                        {"rating_key": rating_key, "tmdb_id": tmdb_id, "tvdb_id": tvdb_id, "media_type": media_type},
+                        elements=elements,
+                    )
+                    for key in ctx:
+                        if key.endswith("_rating") and ctx[key] is not None and key not in info:
+                            info[key] = ctx[key]
+                    lists_out = ctx.get("lists") or []
+            except Exception as mdb_err:
+                logger.debug(f"[OVERLAY] Preview MDBList error: {mdb_err}")
+        # Date added and show status, when the layers' rules use them.
+        wanted = {f.strip() for f in (fields or "").split(",") if f.strip()}
+        if saved_cfg:
+            for e in saved_cfg.get("elements", []):
+                for c in (e.get("conditions") or []) if isinstance(e, dict) else []:
+                    if isinstance(c, dict) and c.get("field") in ("days_since_added", "show_status"):
+                        wanted.add(c["field"])
+        wanted &= {"days_since_added", "show_status"}
+        if wanted:
+            try:
+                from .. import overlay_engine
+                tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
+                stand_in = [{"type": "text_label", "conditions": [{"field": f, "op": "exists"} for f in wanted]}]
+                ctx = overlay_engine.build_context(
+                    {"rating_key": rating_key, "tmdb_id": tmdb_id, "tvdb_id": tvdb_id, "media_type": media_type},
+                    elements=stand_in,
+                )
+                for f in wanted:
+                    if ctx.get(f) not in (None, ""):
+                        info[f] = ctx[f]
+            except Exception as extra_err:
+                logger.debug(f"[OVERLAY] Preview extra fields error: {extra_err}")
+        return {"metadata": info, "labels": labels, "file_paths": file_paths, "lists": lists_out}
     except Exception as e:
         logger.warning(f"[OVERLAY] Failed to fetch preview metadata for {rating_key}: {e}")
         return {"metadata": {}}

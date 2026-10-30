@@ -18,6 +18,19 @@ class Movie(BaseModel):
     labels: Optional[List[str]] = None
     updated_at: Optional[str] = None
     edition: Optional[str] = None
+    server_id: Optional[str] = None  # which configured media server this item came from
+                                      # (Quirk #57) -- 'plex-1' for every pre-multi-server
+                                      # row, a real value once a scan/Library Group union
+                                      # (Quirk #62/#64) includes non-Plex rows.
+    also_on: Optional[List[str]] = None  # other server_ids this same title (by tmdb_id) was
+                                          # also found on within a merged Library Group,
+                                          # collapsed into this one card by _dedupe_by_tmdb_id()
+                                          # (Quirk #65/#67) -- empty/None for every non-merged item.
+    other_servers: Optional[List[Dict[str, str]]] = None  # {server_id, rating_key} for each
+                                          # dropped duplicate above -- lets the manual editor
+                                          # fetch/send against a linked title's OTHER servers
+                                          # directly, without a second API round-trip to
+                                          # resolve which rating_key belongs to which server.
 
 
 class MovieTMDbResponse(BaseModel):
@@ -46,6 +59,16 @@ class PreviewRequest(BaseModel):
     disableOverlayCache: Optional[bool] = None
     skip_fallback: Optional[bool] = None  # When True, never apply poster/logo fallback (for manual editor preview)
     is_collection: Optional[bool] = False  # True for Plex collection posters (Kometa Creator or Simposter Creator on a collection)
+    # Explicit TV-show flag -- SaveRequest/api_plex_send() already have this
+    # (render.ts's save()/send() both send it), but /api/preview never did,
+    # leaving it to guess via background_url string-pattern-matching
+    # (does it look like "/api/tv-show/{key}/poster"?). That guess silently
+    # fails whenever the background is a raw external TMDb/Fanart/TVDB
+    # candidate URL instead of Simposter's own internal poster-cache URL --
+    # i.e. the common case of picking a specific candidate poster, not just
+    # a Jellyfin-specific issue. None (the default) preserves the exact
+    # original guessing behavior for any caller that doesn't send this.
+    is_tv: Optional[bool] = None
 
 
 class SaveRequest(PreviewRequest):
@@ -71,6 +94,19 @@ class PresetDeleteRequest(BaseModel):
     preset_id: str
 
 
+class MediaServerEntry(BaseModel):
+    id: str
+    type: str  # "plex" | "jellyfin" | "emby"
+    name: Optional[str] = None  # user-supplied display label (e.g. "jellyfin-main") so
+                                 # multiple same-type servers can be told apart in the UI --
+                                 # falls back to a generic type label ("Jellyfin"/"Emby")
+                                 # everywhere it's displayed when unset/blank.
+    url: str = ""
+    token: Optional[str] = None    # Plex
+    apiKey: Optional[str] = None   # Jellyfin/Emby
+    enabled: bool = True
+
+
 class PlexSettings(BaseModel):
     url: str = ""
     token: str = ""
@@ -81,6 +117,12 @@ class PlexSettings(BaseModel):
     tvShowLibraryNames: List[str] = Field(default_factory=list)
     tvShowLibraryMappings: List[Dict[str, Any]] = Field(default_factory=list)
     sendLogosToPlex: bool = False
+    # Set automatically when the user removes Plex in Settings → Media Servers
+    # (a previously-saved URL is saved as empty). While true, PLEX_URL/PLEX_TOKEN
+    # environment variables are ignored, so a removed Plex can't silently come
+    # back on the next container restart. Cleared again as soon as a Plex URL
+    # is saved. Managed server-side -- the frontend never needs to send it.
+    ignoreEnvCredentials: bool = False
 
 
 class TMDBSettings(BaseModel):
@@ -94,6 +136,33 @@ class TVDBSettings(BaseModel):
 
 class FanartSettings(BaseModel):
     apiKey: str = ""
+
+
+class MDBListSettings(BaseModel):
+    apiKey: str = ""
+    # Which MDBList rating fills the overlay fields audience_rating / critic_rating
+    # (0-10 scale, like Kometa's). Sources: imdb, tmdb, trakt, tomatoes,
+    # tomatoesaudience, metacritic, metacriticuser, letterboxd, myanimelist, score.
+    audienceRatingSource: str = "imdb"
+    criticRatingSource: str = "tomatoes"
+    cacheDays: int = 7  # how long ratings and lists are reused before refetching
+
+
+class WeTrakrSettings(BaseModel):
+    # App key (client_id) from wetrakr.com Settings -> API. Reads public lists;
+    # the sign-in for private lists is stored in list_source_auth, not here.
+    clientId: str = ""
+
+
+class SimklSettings(BaseModel):
+    # client_id of an AUTH V2 app registered as "TV, devices & command line"
+    # (simkl.com/settings/developer). Every SIMKL list read needs a sign-in.
+    clientId: str = ""
+
+
+class FloppySettings(BaseModel):
+    url: str = ""    # e.g. http://192.168.1.10:8000
+    token: str = ""  # App token (Settings -> Integrations -> App tokens), scope lists:read
 
 
 class ImageQualitySettings(BaseModel):
@@ -158,6 +227,15 @@ class AutomationSettings(BaseModel):
                                        # rating_key, which otherwise looks identical to a
                                        # genuinely new library addition. See
                                        # get_reuse_cached_poster_days() in config.py.
+    preferredPosterServer: str = "plex-1"  # DEPRECATED, no longer read by anything -- superseded
+                                             # by the per-group LibraryGroup.preferredServerId
+                                             # field (a single global choice applied to every
+                                             # merged group at once wasn't granular enough once
+                                             # a real install had more than one linked group).
+                                             # Field kept only so an existing stored value on an
+                                             # already-upgraded install round-trips harmlessly
+                                             # through GET/POST /api/ui-settings; no UI edits it
+                                             # anymore.
 
 
 class NotificationSettings(BaseModel):
@@ -169,6 +247,8 @@ class NotificationSettings(BaseModel):
     discordNotifyManual: bool = True
     discordNotifyWebhook: bool = True
     discordNotifyAutoGenerate: bool = True
+    discordNotifyMediaMirror: bool = True
+    discordNotifyOverlayRefresh: bool = True
     appriseEnabled: bool = False
     appriseUrls: List[str] = Field(default_factory=list)
     appriseNotifyLibraries: List[str] = Field(default_factory=list)
@@ -176,6 +256,116 @@ class NotificationSettings(BaseModel):
     appriseNotifyManual: bool = True
     appriseNotifyWebhook: bool = True
     appriseNotifyAutoGenerate: bool = True
+    appriseNotifyMediaMirror: bool = True
+    appriseNotifyOverlayRefresh: bool = True
+
+
+class LibraryGroupMember(BaseModel):
+    """One (server, library) pair inside a LibraryGroup -- e.g. Plex's
+    'Movies' library, or Jellyfin's 'Movies-HD' library."""
+    serverId: str
+    libraryId: str
+    libraryName: str = ""  # Display-only snapshot from the last time this member was
+                            # added/refreshed -- never used for matching, only so the
+                            # UI can show a name without a live per-server lookup.
+
+
+class MediaMirrorConfig(BaseModel):
+    """Media Mirror (Quirk #123) -- designates one member of a LibraryGroup as
+    "the truth" and one or more other members as mirror targets, so the
+    same poster/logo/backdrop/square-art a user maintains on their primary
+    server automatically gets copied to every other linked server, instead
+    of each server's art drifting independently. Nested directly on the
+    owning LibraryGroup (not a separate top-level settings list) -- mirroring
+    is inherently a property of one specific group's membership, matching
+    how mergeItems/preferredServerId already live on the group itself."""
+    enabled: bool = False
+    sourceServerId: Optional[str] = None
+    targetServerIds: List[str] = Field(default_factory=list)
+    assetTypes: List[str] = Field(default_factory=list)  # subset of poster/logo/backdrop/square_art/thumb_art
+    scheduleEnabled: bool = False
+    scheduleCron: Optional[str] = None
+    lastRunAt: Optional[str] = None
+    lastRunStats: Optional[dict] = None  # {"checked", "updated", "skipped", "unmapped", "failed"}
+    # Movie-group-only (Collections ride on the owning "movie" LibraryGroup,
+    # not a separate media_type -- see api_collections()). Off by default so
+    # every existing Media Mirror config is a strict no-op for this. Reuses
+    # the SAME sourceServerId/targetServerIds above (same reasoning as the
+    # original comment here: mirroring collections in a different direction
+    # than the movies they belong to wouldn't make sense) -- but gets its
+    # OWN assetTypes list (`collectionAssetTypes`, defaults empty), not the
+    # movie `assetTypes` above. A user who wants to mirror ONLY collections
+    # (testing the feature, or a group where movies aren't ready to mirror
+    # yet) previously had no way to do that -- `assetTypes` being empty
+    # correctly meant "nothing to copy" for BOTH movies and collections,
+    # since they shared the one list; unchecking every movie asset type
+    # (the only way to say "skip movies") also silently zeroed out
+    # collections. User-reported directly: "Media Mirror is missing a
+    # source server, target server(s), or asset type(s)" with "Also mirror
+    # Collections" checked and every movie asset type deliberately
+    # unchecked.
+    mirrorCollections: bool = False
+    collectionAssetTypes: List[str] = Field(default_factory=list)
+    lastRunCollectionStats: Optional[dict] = None
+
+
+class OverlayRefreshConfig(BaseModel):
+    """Scheduled overlay refresh for one Library Group (Quirk #166): re-checks
+    every poster Simposter sent with overlays and re-renders the ones whose
+    overlay would now come out differently. Edited only from the group's
+    Overlay Refresh page; Settings saves keep the stored value."""
+    enabled: bool = False
+    scheduleCron: Optional[str] = None
+    plexLabel: str = "Simposter-Overlay"  # added to Plex items that get an overlay; "" = none
+    lastRunAt: Optional[str] = None
+    lastRunStats: Optional[dict] = None
+
+
+class LibraryGroup(BaseModel):
+    """A user-defined set of libraries across different media servers that
+    represent 'the same logical library' -- e.g. Plex 'Movies' + Jellyfin
+    'Movies-HD' both feeding one merged 'Movies' view. Settings (auto-generate,
+    labels) are unified across the whole group, not kept per-member -- the
+    user explicitly chose this over independent per-server-library settings.
+    See CLAUDE.md's Jellyfin-integration Quirks for the full design rationale."""
+    id: str
+    name: str
+    mediaType: str  # "movie" | "tv"
+    members: List[LibraryGroupMember] = Field(default_factory=list)
+    autoGenerateEnabled: bool = False
+    autoGeneratePresetId: Optional[str] = None
+    autoGenerateTemplateId: Optional[str] = None
+    labelsToRemove: List[str] = Field(default_factory=list)
+    preferredServerId: Optional[str] = None  # Which member's row wins when this group's
+                                              # merged grid finds the same tmdb_id on more
+                                              # than one server (database.py's
+                                              # _dedupe_by_tmdb_id()). None = the function's
+                                              # own default ('plex-1' if a Plex member
+                                              # exists, else most-recently-updated) --
+                                              # replaces the old global
+                                              # automation.preferredPosterServer setting,
+                                              # which applied the same choice to every
+                                              # group at once; this is scoped per-group
+                                              # instead, edited from that group's own
+                                              # Linked Libraries section in Settings.
+    mergeItems: bool = True  # Whether a title present on more than one of this group's
+                              # linked servers collapses into a single card (True, the
+                              # original/default behavior -- database.py's
+                              # _dedupe_by_tmdb_id()) or shows as one card per server
+                              # (False -- every server's copy of an item stays its own
+                              # card). Per-group, not global, matching preferredServerId's
+                              # own precedent -- a user may want one group merged and
+                              # another kept separate. See CLAUDE.md's Jellyfin-integration
+                              # Quirks.
+    mirror: Optional[MediaMirrorConfig] = None
+    overlayRefresh: Optional[OverlayRefreshConfig] = None
+    # Manual cross-server collection matching. Collections match across a
+    # group's servers by normalized title; this overrides that per collection.
+    # Keyed "serverId:ratingKey" -> a match key: collections sharing a key are
+    # treated as the same collection (merged card, send targets, Media Mirror),
+    # and a collection with its own unique key is split from its title match.
+    # Edited from the Collections page's "Collection matching" window.
+    collectionMatchOverrides: Dict[str, str] = Field(default_factory=dict)
 
 
 class UISettings(BaseModel):
@@ -199,6 +389,10 @@ class UISettings(BaseModel):
     tmdb: TMDBSettings = Field(default_factory=TMDBSettings)
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)
     fanart: FanartSettings = Field(default_factory=FanartSettings)
+    mdblist: MDBListSettings = Field(default_factory=MDBListSettings)
+    wetrakr: WeTrakrSettings = Field(default_factory=WeTrakrSettings)
+    simkl: SimklSettings = Field(default_factory=SimklSettings)
+    floppy: FloppySettings = Field(default_factory=FloppySettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
@@ -206,6 +400,8 @@ class UISettings(BaseModel):
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     apiOrder: List[str] = Field(default_factory=lambda: ["tmdb", "fanart", "tvdb"])
     onboarding_completed: bool = False
+    mediaServers: List[MediaServerEntry] = Field(default_factory=list)
+    libraryGroups: List[LibraryGroup] = Field(default_factory=list)
 
 class PlexLogoSendRequest(BaseModel):
     rating_key: str
@@ -213,6 +409,7 @@ class PlexLogoSendRequest(BaseModel):
     logo_data: Optional[str] = None  # base64 data URL (for uploads)
     is_tv: bool = False
     library_id: Optional[str] = None
+    notify: bool = True  # False when the editor sends one combined notification itself
 
 
 class PlexBackdropSendRequest(BaseModel):
@@ -222,6 +419,7 @@ class PlexBackdropSendRequest(BaseModel):
     is_tv: bool = False
     is_collection: bool = False
     library_id: Optional[str] = None
+    notify: bool = True  # False when the editor sends one combined notification itself
 
 
 class PlexSquareArtSendRequest(BaseModel):
@@ -248,6 +446,7 @@ class PlexSendRequest(BaseModel):
     is_tv: bool = False  # Needed for the "save to asset folder on send" template resolution
     is_collection: bool = False  # True when sending a Plex collection poster (uses /library/collections/ instead of /library/metadata/)
     season_index: Optional[int] = None  # Set when sending a specific season's poster
+    notify: bool = True  # False when the editor sends one combined notification itself
 
 
 class LabelsResponse(BaseModel):
@@ -282,6 +481,23 @@ class MovieBatchRequest(BaseModel):
     # RETRY_REASON_MANUAL_TEXTLESS retry item (database.py), since the ordinary needs_retry check
     # doesn't catch a missing textless poster when fallbackPosterAction is "continue" (the default).
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
+    targets: List[str] = []  # Non-Plex server_ids to ALSO sync the rendered poster/logo to, in
+    # addition to whatever send_to_plex already does (or doesn't) -- purely additive, does not
+    # replace send_to_plex (unlike ResendTarget/ResendCachedRequest's single-list model, since
+    # send_to_plex already gates a large block of Plex-only side effects -- label add/remove,
+    # retry-queue resolution, "sent_to_plex" history -- that shouldn't change shape here). Each
+    # requested target is further scoped server-side to only the servers actually linked to this
+    # batch's library via a Library Group (see CLAUDE.md Quirk #95's identical webhook-sync fix)
+    # -- a target that isn't linked is silently skipped, never blindly synced to. 'plex-1' in this
+    # list is a no-op (Plex already has its own real send path via send_to_plex).
+    source_server_id: Optional[str] = None  # Which server `library_id` itself belongs to -- i.e. the
+    # server of the LIBRARY GROUP ANCHOR this batch is being browsed/sent from, not necessarily the
+    # server any one selected item's rating_key resolves to (a merged item can display under a
+    # different server's identity than the group's own anchor). None/omitted defaults to "plex-1" at
+    # the call site, matching every pre-Phase-8a caller's implicit assumption. Required (non-"plex-1")
+    # for `targets` to resolve anything at all when browsing a Plex-less, Jellyfin/Emby-anchored
+    # LibraryGroup (Quirk #116/#132) -- without it, sync_render_to_linked_servers() looks for a
+    # ("plex-1", library_id) member pair that can never exist for that group.
 
 
 class TVShowBatchRequest(BaseModel):
@@ -304,6 +520,10 @@ class TVShowBatchRequest(BaseModel):
     send_only_if_ideal: bool = False  # Skip Plex upload if the render still needs_retry (used by the retry queue)
     require_textless_poster: bool = False  # See MovieBatchRequest's field of the same name.
     batch_subfolder: Optional[str] = None  # Server-computed once per batch run; any client value is overwritten
+    targets: List[str] = []  # See MovieBatchRequest.targets -- covers both series- and season-level
+    # posters/logos (JellyfinClient gained real season-level item resolution in Quirk #100; the
+    # earlier "series-level only" limitation this comment used to describe is closed).
+    source_server_id: Optional[str] = None  # See MovieBatchRequest.source_server_id.
 
 
 # Legacy batch request - kept for backward compatibility
@@ -338,6 +558,7 @@ class OverlayElement(BaseModel):
     text: Optional[str] = None  # For text_label: the text to display
     font_family: Optional[str] = None  # For text_label
     font_size: Optional[int] = None  # For text_label
+    font_weight: Optional[str] = None  # For Kometa-placed text: "400"/"700" (default "700"); Kometa imports set "400" since Kometa has no weight
     font_color: Optional[str] = None  # For text_label
     label_name: Optional[str] = None  # For label_badge: Plex label to check
     show_if_label: Optional[str] = None  # Show only if this Plex label is present
@@ -352,12 +573,48 @@ class OverlayElement(BaseModel):
     slug_aliases: Optional[Dict[str, str]] = None  # Maps TMDb slug -> canonical asset slug (e.g., {"cj-enm-studios": "cj-entertainment-studios"})
     text_align: Optional[str] = None  # "left" | "center" | "right" (default: "center")
 
+    # --- Overlay engine v2 (backend/overlay_engine.py); all optional ---
+    name: Optional[str] = None  # Element name, used by suppress
+    group: Optional[str] = None  # Only the highest-weight element of a group renders
+    weight: Optional[float] = None
+    suppress: Optional[List[str]] = None  # Names of elements hidden when this one renders
+    conditions: Optional[List[Dict[str, Any]]] = None  # [{"field", "op", "value"}], all must pass
+    placement: Optional[str] = None  # "kometa" = align/offset placement below; default = position_x/y
+    horizontal_align: Optional[str] = None  # left | center | right
+    vertical_align: Optional[str] = None  # top | center | bottom
+    horizontal_offset: Optional[Union[int, float, str]] = None  # Kometa 1000x1500 units, or "10%"
+    vertical_offset: Optional[Union[int, float, str]] = None
+    back_color: Optional[str] = None  # #RRGGBB or #RRGGBBAA
+    back_width: Optional[float] = None
+    back_height: Optional[float] = None
+    back_radius: Optional[float] = None
+    back_padding: Optional[float] = None
+    back_align: Optional[str] = None  # where content sits inside the back box (default center)
+    back_line_color: Optional[str] = None
+    back_line_width: Optional[float] = None
+    url: Optional[str] = None  # External image for a kometa-placed element
+    font_path: Optional[str] = None  # Font file, relative to the config dir
+    stroke_width: Optional[float] = None
+    stroke_color: Optional[str] = None
+    box_only: Optional[bool] = None  # Kometa "backdrop": draw only the back box
+    font_style: Optional[str] = None  # Named style of a variable font (Kometa font_style)
+    # Image drawn next to a text layer (Kometa text addon); the image is asset_id/url
+    addon_position: Optional[str] = None  # left | right | top | bottom
+    addon_offset: Optional[float] = None  # gap between text and image, Kometa px
+    addon_scale: Optional[float] = None
+    blur_amount: Optional[float] = None  # type "blur": Kometa blur(N), 1-100
+    # Kometa queue: selected layers take these positions, highest weight first
+    queue: Optional[str] = None
+    queue_positions: Optional[List[Dict[str, Any]]] = None
+
 
 class OverlayConfigSaveRequest(BaseModel):
     id: str
     name: str
     elements: List[OverlayElement]
     streaming_region: str = "US"  # ISO 3166-1 alpha-2 region for TMDb watch provider lookups
+    # Conditions for the whole overlay: when any fails, none of its layers draw.
+    conditions: Optional[List[Dict[str, Any]]] = None
 
 
 class OverlayConfigDeleteRequest(BaseModel):

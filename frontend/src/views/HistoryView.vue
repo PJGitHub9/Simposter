@@ -3,6 +3,8 @@ import { ref, onMounted, computed, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
+import { mediaServerLabel } from '@/services/mediaServerLabel'
+import { libraryInfo, libraryLabel } from '@/services/libraryLabel'
 
 interface HistoryRecord {
   id: number
@@ -24,6 +26,7 @@ interface HistoryRecord {
   created_at: string
   status: string | null
   error_message: string | null
+  server_id: string | null
 }
 
 interface RetryQueueItem {
@@ -45,16 +48,14 @@ const apiBase = getApiBase()
 const settings = useSettingsStore()
 const router = useRouter()
 
-const isTvLibrary = (libraryId: string | null): boolean => {
-  if (!libraryId) return false
-  return !!(settings.plex.value.tvShowLibraryMappings?.some((m: any) => m.id === libraryId))
-}
-
 const openItem = (rating_key: string, library_id: string | null, media_type?: string) => {
-  const isTV = media_type === 'tv' || (!media_type && isTvLibrary(library_id))
+  const info = libraryInfo(library_id)
+  const isTV = media_type === 'tv' || (!media_type && info?.mediaType === 'tv')
+  // Jellyfin/Emby libraries need ?server= too, or the grid queries Plex.
+  const server = info?.serverId && info.serverId !== 'plex-1' ? info.serverId : undefined
   router.push({
     path: isTV ? '/tv-shows' : '/movies',
-    query: { library: library_id || undefined, edit: rating_key },
+    query: { library: library_id || undefined, server, edit: rating_key },
   })
 }
 const records = ref<HistoryRecord[]>([])
@@ -87,7 +88,102 @@ const resolvePresetName = (templateId: string | null, presetId: string | null): 
 }
 
 // Tab state
-const activeTab = ref<'history' | 'retry-queue'>('history')
+const activeTab = ref<'history' | 'retry-queue' | 'drift'>('history')
+
+// Posters changed outside Simposter (backend/poster_drift.py)
+interface DriftItem {
+  server_id: string
+  rating_key: string
+  asset_type?: 'poster' | 'logo' | 'backdrop'
+  title: string
+  is_tv: boolean
+  sent_at: string
+  drift_detected_at: string
+  drift_score: number | null
+  drift_action: string | null
+}
+const driftItems = ref<DriftItem[]>([])
+const driftAction = ref('list')
+const driftTracked = ref(0)
+const driftLoading = ref(false)
+const driftBusy = ref<string | null>(null)
+const driftMessage = ref('')
+const DRIFT_ACTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: 'off', label: "Don't check", hint: 'Scans never compare posters, logos or backdrops.' },
+  { value: 'list', label: 'Only list them here', hint: 'Changed posters, logos and backdrops show up in this tab.' },
+  { value: 'notify', label: 'List and notify', hint: 'Also one Discord/Apprise message per scan that finds changes.' },
+  { value: 'resend', label: "Put Simposter's version back", hint: "Re-sends what Simposter last sent (and notifies). If another tool keeps changing it, they'll take turns." },
+]
+const driftHint = computed(() => DRIFT_ACTIONS.find(a => a.value === driftAction.value)?.hint || '')
+
+const fetchDrift = async () => {
+  driftLoading.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/poster-drift`)
+    if (!res.ok) throw new Error(`Failed to load: ${res.status}`)
+    const data = await res.json()
+    driftItems.value = data.items || []
+    driftAction.value = data.action || 'list'
+    driftTracked.value = data.tracked || 0
+  } catch (e: any) {
+    console.error('[DRIFT] Error:', e)
+  } finally {
+    driftLoading.value = false
+  }
+}
+
+const switchToDrift = () => {
+  activeTab.value = 'drift'
+  fetchDrift()
+}
+
+const setDriftAction = async (action: string) => {
+  const res = await fetch(`${apiBase}/api/poster-drift/config`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+  })
+  if (res.ok) driftAction.value = action
+}
+
+const driftAsset = (item: DriftItem) => item.asset_type || 'poster'
+const driftKey = (item: DriftItem) => `${item.server_id}:${item.rating_key}:${driftAsset(item)}`
+
+const driftDo = async (item: DriftItem, what: 'resend' | 'dismiss') => {
+  driftBusy.value = `${what}:${driftKey(item)}`
+  driftMessage.value = ''
+  try {
+    const res = await fetch(
+      `${apiBase}/api/poster-drift/${encodeURIComponent(item.server_id)}/${encodeURIComponent(item.rating_key)}/${what}?asset=${driftAsset(item)}`,
+      { method: 'POST' },
+    )
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || `Failed: ${res.status}`)
+    }
+    if (what === 'resend') driftMessage.value = `Re-sent Simposter's ${driftAsset(item)} for ${item.title}.`
+    await fetchDrift()
+  } catch (e: any) {
+    driftMessage.value = e.message || String(e)
+  } finally {
+    driftBusy.value = null
+  }
+}
+
+const driftSentUrl = (item: DriftItem) => {
+  const v = encodeURIComponent(item.sent_at || '')
+  if (driftAsset(item) !== 'poster') {
+    return `${apiBase}/api/poster-drift/${encodeURIComponent(item.server_id)}/${encodeURIComponent(item.rating_key)}/sent?asset=${driftAsset(item)}&v=${v}`
+  }
+  return `${apiBase}/api/render-cache/${encodeURIComponent(item.rating_key)}/preview?v=${v}`
+}
+const driftCurrentUrl = (item: DriftItem) => {
+  const key = encodeURIComponent(item.rating_key)
+  const v = encodeURIComponent(item.drift_detected_at || '')
+  if (driftAsset(item) === 'logo') return `${apiBase}/api/logo/${key}?raw=1&v=${v}`
+  if (driftAsset(item) === 'backdrop') return `${apiBase}/api/backdrop/${key}?raw=1&v=${v}`
+  const kind = item.is_tv && item.server_id !== 'plex-1' ? 'tv-show' : 'movie'
+  return `${apiBase}/api/${kind}/${key}/poster?raw=1&v=${v}`
+}
+const DRIFT_ASSET_LABELS: Record<string, string> = { poster: 'Poster', logo: 'Logo', backdrop: 'Backdrop' }
 
 // Retry queue state
 const retryItems = ref<RetryQueueItem[]>([])
@@ -110,33 +206,53 @@ const selectedLibrary = ref<string>('all')
 const selectedTemplate = ref<string>('all')
 const selectedAction = ref<string>('all')
 const selectedSource = ref<string>('all')
+const selectedServer = ref<string>('all')
 const titleSearch = ref<string>('')
 
 // Map library IDs to display names
-const getLibraryName = (libraryId: string | null): string => {
-  if (!libraryId) return '—'
+// Covers Plex mappings AND Jellyfin/Emby libraries (via Library Groups).
+const getLibraryName = (libraryId: string | null): string => libraryLabel(libraryId)
 
-  // Check movie libraries
-  const movieLib = settings.plex.value.libraryMappings?.find(m => m.id === libraryId)
-  if (movieLib) {
-    return movieLib.displayName || movieLib.title || libraryId
+// One option per library group (a group's Plex and Jellyfin/Emby libraries
+// are the same "Movies"/"TV Shows" to the user), or per library when it isn't
+// in a group. Value: "group:<id>" or the bare library id.
+const libraryOptionFor = (libraryId: string): { value: string; label: string; ids: string[] } => {
+  const id = String(libraryId)
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => String(m.libraryId) === id))
+  if (group) {
+    return {
+      value: `group:${group.id}`,
+      label: group.name || getLibraryName(id),
+      ids: (group.members || []).map(m => String(m.libraryId)),
+    }
   }
-
-  // Check TV libraries
-  const tvLib = settings.plex.value.tvShowLibraryMappings?.find(m => m.id === libraryId)
-  if (tvLib) {
-    return tvLib.displayName || tvLib.title || libraryId
-  }
-
-  return libraryId
+  return { value: id, label: getLibraryName(id), ids: [id] }
 }
 
 const libraries = computed(() => {
-  const libs = new Set<string>()
+  const opts = new Map<string, { value: string; label: string; ids: string[] }>()
   records.value.forEach(r => {
-    if (r.library_id) libs.add(r.library_id)
+    if (!r.library_id) return
+    const opt = libraryOptionFor(r.library_id)
+    if (!opts.has(opt.value)) opts.set(opt.value, opt)
   })
-  return Array.from(libs).sort()
+  // Keep the selected option even when the fetched records no longer list it.
+  const sel = selectedLibrary.value
+  if (sel !== 'all' && !opts.has(sel)) {
+    const groupId = sel.startsWith('group:') ? sel.slice(6) : null
+    const group = groupId ? (settings.libraryGroups.value || []).find(g => g.id === groupId) : null
+    if (group) opts.set(sel, { value: sel, label: group.name || groupId!, ids: (group.members || []).map(m => String(m.libraryId)) })
+    else if (!groupId) opts.set(sel, libraryOptionFor(sel))
+  }
+  return Array.from(opts.values()).sort((a, b) => a.label.localeCompare(b.label))
+})
+
+const selectedLibraryIds = computed<string[] | null>(() => {
+  const sel = selectedLibrary.value
+  if (sel === 'all') return null
+  const opt = libraries.value.find(o => o.value === sel)
+  return opt ? opt.ids : [sel]
 })
 
 const templates = computed(() => {
@@ -147,11 +263,34 @@ const templates = computed(() => {
   return Array.from(tmpls).sort()
 })
 
+// A genuinely separate dimension from the Action filter -- a Plex delivery
+// can now come from either action="sent_to_plex" (the direct upload path)
+// or action="sent_to_media_server" (the multi-server sync path, taken for a
+// merged item displayed under a non-Plex identity, Quirk #110) with
+// server_id='plex-1', so filtering by Action alone can no longer answer
+// "show me everything that went to Plex." Options list every server_id ever
+// seen in the fetched history (always including plex-1 if present, even
+// though mediaServers may not explicitly list it), labeled via the same
+// shared mediaServerLabel() helper used everywhere else a server_id needs
+// a human name (Quirk #79). Only shown when there's more than one distinct
+// server present -- matches this app's established "invisible for any
+// single-server install" convention for every other multi-server control.
+const serverFilterOptions = computed(() => {
+  const ids = new Set<string>()
+  records.value.forEach(r => {
+    if (r.server_id) ids.add(r.server_id)
+  })
+  return Array.from(ids)
+    .sort()
+    .map(id => ({ id, label: mediaServerLabel(id, settings.mediaServers.value) }))
+})
+
 const filteredRecords = computed(() => {
   let filtered = records.value
 
-  if (selectedLibrary.value !== 'all') {
-    filtered = filtered.filter(r => r.library_id === selectedLibrary.value)
+  const libIds = selectedLibraryIds.value
+  if (libIds) {
+    filtered = filtered.filter(r => !!r.library_id && libIds.includes(String(r.library_id)))
   }
 
   if (selectedTemplate.value !== 'all') {
@@ -169,6 +308,10 @@ const filteredRecords = computed(() => {
     })
   }
 
+  if (selectedServer.value !== 'all') {
+    filtered = filtered.filter(r => (r.server_id || 'plex-1') === selectedServer.value)
+  }
+
   if (titleSearch.value.trim()) {
     const term = titleSearch.value.trim().toLowerCase()
     filtered = filtered.filter(r => r.title?.toLowerCase().includes(term))
@@ -182,8 +325,8 @@ const fetchHistory = async () => {
   error.value = null
   try {
     const params = new URLSearchParams()
-    if (selectedLibrary.value !== 'all') {
-      params.append('library_id', selectedLibrary.value)
+    if (selectedLibraryIds.value) {
+      params.append('library_id', selectedLibraryIds.value.join(','))
     }
     if (selectedTemplate.value !== 'all') {
       params.append('template_id', selectedTemplate.value)
@@ -305,26 +448,46 @@ const formatDate = computed(() => (timestamp: string) => {
   }
 })
 
-const getActionLabel = (action: string) => {
-  switch (action) {
+// 'sent_to_media_server' (Quirk #112) is the multi-server sync path's own
+// action -- distinct from 'sent_to_plex' (the direct upload, with its own
+// label add/remove/retry-queue side effects, Quirk #110) so History can
+// tell the two apart. Its label is derived from the row's own server_id via
+// the shared mediaServerLabel() helper (also used by the editor's send
+// picker, resend modal, TopNav badge -- Quirk #79) rather than a fixed
+// string, so it reads "Sent to Jellyfin"/"Sent to <custom name>"/"Sent to
+// Plex" correctly regardless of which server the row is actually for.
+const getActionLabel = (record: HistoryRecord) => {
+  switch (record.action) {
     case 'sent_to_plex':
       return 'Sent to Plex'
     case 'resent_to_plex':
       return 'Resent to Plex'
+    case 'sent_to_media_server':
+      return `Sent to ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
+    case 'resent_to_media_server':
+      return `Resent to ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
+    case 'overlay_refresh':
+      return `Overlay refreshed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
+    case 'overlay_removed':
+      return `Overlays removed on ${mediaServerLabel(record.server_id || 'plex-1', settings.mediaServers.value)}`
     case 'saved_local':
       return 'Saved Locally'
     case 'failed':
       return 'Failed'
     default:
-      return action
+      return record.action
   }
 }
 
 const getActionClass = (action: string) => {
   switch (action) {
     case 'sent_to_plex':
+    case 'sent_to_media_server':
       return 'action-plex'
     case 'resent_to_plex':
+    case 'resent_to_media_server':
+    case 'overlay_refresh':
+    case 'overlay_removed':
       return 'action-resent'
     case 'saved_local':
       return 'action-local'
@@ -392,13 +555,14 @@ const clearFilters = () => {
   selectedTemplate.value = 'all'
   selectedAction.value = 'all'
   selectedSource.value = 'all'
+  selectedServer.value = 'all'
   titleSearch.value = ''
 }
 
 // Check if a record can be previewed
 const canPreview = (record: HistoryRecord): boolean => {
   // Can preview if we have a save_path (local file) or if it was sent to Plex (rating_key)
-  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex') && record.rating_key))
+  return !!(record.save_path || ((record.action === 'sent_to_plex' || record.action === 'resent_to_plex' || record.action === 'sent_to_media_server' || record.action === 'resent_to_media_server' || record.action === 'overlay_refresh' || record.action === 'overlay_removed') && record.rating_key))
 }
 
 // Get the preview image URL for a record
@@ -537,9 +701,13 @@ onMounted(async () => {
     await settings.load()
   }
   fetchHistory()
+  // Opened from a grid "Changed" badge.
+  if (router.currentRoute.value.query.tab === 'drift') switchToDrift()
   fetchPresetNames()
   // Load retry count for badge indicator (non-blocking)
   fetchRetryQueue()
+  // Count for the Changed Outside Simposter tab badge
+  fetchDrift()
 })
 </script>
 
@@ -558,6 +726,10 @@ onMounted(async () => {
       <button :class="['tab-btn', { active: activeTab === 'retry-queue' }]" @click="switchToRetry">
         Retry Queue
         <span v-if="retryCount > 0" class="retry-count-badge">{{ retryCount }}</span>
+      </button>
+      <button :class="['tab-btn', { active: activeTab === 'drift' }]" @click="switchToDrift">
+        Changed Outside Simposter
+        <span v-if="driftItems.length > 0" class="retry-count-badge">{{ driftItems.length }}</span>
       </button>
     </div>
 
@@ -578,8 +750,8 @@ onMounted(async () => {
           <span>Library</span>
           <select v-model="selectedLibrary" @change="fetchHistory">
             <option value="all">All Libraries</option>
-            <option v-for="lib in libraries" :key="lib" :value="lib">
-              {{ getLibraryName(lib) }}
+            <option v-for="lib in libraries" :key="lib.value" :value="lib.value">
+              {{ lib.label }}
             </option>
           </select>
         </label>
@@ -600,6 +772,10 @@ onMounted(async () => {
             <option value="all">All Actions</option>
             <option value="sent_to_plex">Sent to Plex</option>
             <option value="resent_to_plex">Resent to Plex</option>
+            <option value="sent_to_media_server">Synced to Linked Server</option>
+            <option value="resent_to_media_server">Resent to Linked Server</option>
+            <option value="overlay_refresh">Overlay Refreshed</option>
+            <option value="overlay_removed">Overlays Removed</option>
             <option value="saved_local">Saved Locally</option>
             <option value="failed">Failed</option>
           </select>
@@ -613,6 +789,14 @@ onMounted(async () => {
             <option value="batch">Batch</option>
             <option value="webhook">Webhook</option>
             <option value="auto">Auto</option>
+          </select>
+        </label>
+
+        <label v-if="serverFilterOptions.length > 1">
+          <span>Server</span>
+          <select v-model="selectedServer">
+            <option value="all">All Servers</option>
+            <option v-for="opt in serverFilterOptions" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
           </select>
         </label>
 
@@ -705,7 +889,7 @@ onMounted(async () => {
             </td>
             <td class="action-cell">
               <span :class="['action-badge', getActionClass(record.action)]">
-                {{ getActionLabel(record.action) }}
+                {{ getActionLabel(record) }}
               </span>
             </td>
             <td class="fallback-cell">
@@ -828,6 +1012,69 @@ onMounted(async () => {
         </table>
       </div>
     </template><!-- end retry-queue tab -->
+
+    <!-- Changed outside Simposter -->
+    <template v-if="activeTab === 'drift'">
+      <div class="retry-queue-header">
+        <div class="retry-queue-info">
+          <span class="retry-pending-count" :class="{ 'retry-none': driftItems.length === 0 }">
+            {{ driftItems.length ? `${driftItems.length} item${driftItems.length !== 1 ? 's' : ''} changed outside Simposter` : 'Nothing changed outside Simposter' }}
+          </span>
+          <span class="retry-info-hint">
+            After Simposter sends a poster, logo or backdrop it remembers what it looked like. When a library scan sees the
+            server's copy changed (Kometa overlays, a manual edit, another tool), it compares the two. {{ driftTracked }} tracked.
+          </span>
+        </div>
+        <button @click="fetchDrift" class="btn-refresh" :disabled="driftLoading">
+          {{ driftLoading ? 'Loading...' : 'Refresh' }}
+        </button>
+      </div>
+
+      <div class="drift-setting">
+        <label>
+          <span>When a scan finds a changed poster, logo or backdrop</span>
+          <select :value="driftAction" @change="setDriftAction(($event.target as HTMLSelectElement).value)">
+            <option v-for="a in DRIFT_ACTIONS" :key="a.value" :value="a.value">{{ a.label }}</option>
+          </select>
+        </label>
+        <small>{{ driftHint }} Saved right away.</small>
+      </div>
+
+      <p v-if="driftMessage" class="drift-message">{{ driftMessage }}</p>
+
+      <div v-if="driftLoading && driftItems.length === 0" class="loading">Loading...</div>
+      <div v-else-if="driftItems.length === 0" class="empty-state">
+        <p>Nothing changed outside Simposter.</p>
+        <p class="hint">Only art Simposter sent is tracked, and it's checked when a scan sees the server's copy change.</p>
+      </div>
+      <div v-else class="drift-grid">
+        <div v-for="item in driftItems" :key="driftKey(item)" class="drift-card">
+          <div class="drift-title">{{ item.title }} <span class="drift-asset">{{ DRIFT_ASSET_LABELS[driftAsset(item)] }}</span></div>
+          <div class="drift-meta">
+            {{ mediaServerLabel(item.server_id, settings.mediaServers.value) }} · noticed {{ formatDate(item.drift_detected_at) }}
+            <template v-if="item.drift_action === 'resend'"> · re-send was tried</template>
+          </div>
+          <div class="drift-images" :class="{ wide: driftAsset(item) !== 'poster' }">
+            <figure>
+              <img :src="driftSentUrl(item)" alt="" loading="lazy" @error="($event.target as HTMLImageElement).style.visibility = 'hidden'" />
+              <figcaption>Simposter sent</figcaption>
+            </figure>
+            <figure>
+              <img :src="driftCurrentUrl(item)" alt="" loading="lazy" />
+              <figcaption>On the server now</figcaption>
+            </figure>
+          </div>
+          <div class="drift-actions">
+            <button class="btn-retry-now" :disabled="driftBusy !== null" @click="driftDo(item, 'resend')">
+              {{ driftBusy === `resend:${driftKey(item)}` ? '...' : "Put Simposter's back" }}
+            </button>
+            <button class="btn-dismiss" :disabled="driftBusy !== null" :title="`Keep the server's ${driftAsset(item)} and stop reporting this change`" @click="driftDo(item, 'dismiss')">
+              Keep server's
+            </button>
+          </div>
+        </div>
+      </div>
+    </template>
 
     <!-- Preview Popup -->
     <Teleport to="body">
@@ -1390,6 +1637,41 @@ onMounted(async () => {
 }
 
 /* Retry queue styles */
+.drift-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 14px;
+}
+.drift-setting label { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.9rem; }
+.drift-setting select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.drift-setting small, .drift-meta { color: var(--text-secondary, #9aa4b2); font-size: 0.8rem; }
+.drift-message { margin: 0 0 12px; font-size: 0.85rem; }
+.drift-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.drift-card {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.drift-title { font-weight: 600; }
+.drift-images { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.drift-images figure { margin: 0; }
+.drift-images img { width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 6px; background: rgba(0, 0, 0, 0.3); }
+.drift-images figcaption { font-size: 0.75rem; text-align: center; color: var(--text-secondary, #9aa4b2); margin-top: 4px; }
+.drift-images.wide img { aspect-ratio: 16 / 9; object-fit: contain; background: repeating-conic-gradient(rgba(255, 255, 255, 0.06) 0% 25%, transparent 0% 50%) 50% / 16px 16px; }
+.drift-asset { margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 0.68rem; font-weight: 600; background: rgba(61, 214, 183, 0.15); color: var(--accent, #3dd6b7); vertical-align: middle; }
+.drift-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 .retry-queue-header {
   display: flex;
   align-items: center;

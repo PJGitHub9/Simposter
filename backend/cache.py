@@ -59,12 +59,14 @@ def refresh_from_list(movies):
                     "title": m.get("title"),
                     "year": m.get("year"),
                     "added_at": m.get("added_at") or m.get("addedAt"),
+                    "tmdb_id": m.get("tmdb_id"),
                     "poster_url": m.get("poster_url"),
                     "logo_url": m.get("logo_url"),
                     "art_url": m.get("art_url"),
                     "square_art_url": m.get("square_art_url"),
                     "labels": m.get("labels") or [],
                     "library_id": m.get("library_id") or "default",
+                    "edition": m.get("edition"),
                 })
             else:
                 # Movie object
@@ -82,7 +84,7 @@ def refresh_from_list(movies):
             by_lib.setdefault(m["library_id"], []).append(m)
         for lib_id, items in by_lib.items():
             db.bulk_refresh_cache(items, library_id=lib_id)
-            log.info("[CACHE] refreshed %d movies for library %s", len(items), lib_id)
+            log.debug("[CACHE] refreshed %d movies for library %s", len(items), lib_id)
     except Exception as e:
         log.warning("[CACHE] refresh failed: %s", e)
 
@@ -176,7 +178,7 @@ def refresh_tv_from_list(shows: List[Dict]):
             by_lib.setdefault(item["library_id"], []).append(item)
         for lib_id, items in by_lib.items():
             db.bulk_refresh_tv_cache(items, library_id=lib_id)
-            log.info("[CACHE] refreshed %d tv shows for library %s", len(items), lib_id)
+            log.debug("[CACHE] refreshed %d tv shows for library %s", len(items), lib_id)
     except Exception as e:
         log.warning("[CACHE] tv refresh failed: %s", e)
 
@@ -221,7 +223,7 @@ def refresh_collections_from_list(collections: List[Dict]):
             by_lib.setdefault(item["library_id"], []).append(item)
         for lib_id, items in by_lib.items():
             db.bulk_refresh_collection_cache(items, library_id=lib_id)
-            log.info("[CACHE] refreshed %d collections for library %s", len(items), lib_id)
+            log.debug("[CACHE] refreshed %d collections for library %s", len(items), lib_id)
     except Exception as e:
         log.warning("[CACHE] collections refresh failed: %s", e)
 

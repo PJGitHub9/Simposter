@@ -14,6 +14,7 @@ type SquareArtItem = {
   tmdb_id?: number | null
   mediaType?: 'movie' | 'tv-show'
   library_id?: string | number | null
+  server_id?: string | null
 }
 
 type PresetRecord = { id: string; name?: string; options?: PresetOptions }
@@ -30,6 +31,8 @@ const render = useRenderService()
 const { loading: previewLoading, error: previewError, lastPreview } = render
 
 const isTv = computed(() => props.item.mediaType === 'tv-show')
+// See EditorPane.vue's identical computed (Quirk #65/#67/#68).
+const isNonPlexItem = computed(() => !!props.item.server_id && props.item.server_id !== 'plex-1')
 
 // "Current Square Art" -- what's actually cached/active in Plex right now, as
 // opposed to the freshly-generated preview below. Without this there was no way
@@ -514,7 +517,12 @@ onMounted(async () => {
           </svg>
           {{ saving ? 'Saving…' : '💾 Save to Disk' }}
         </button>
-        <button class="btn-send" :disabled="!lastPreview || sendingToPlex" @click="doSendToPlex">
+        <button
+          class="btn-send"
+          :disabled="!lastPreview || sendingToPlex || isNonPlexItem"
+          :title="isNonPlexItem ? 'This item is from a non-Plex server -- sending directly to it is not supported yet' : undefined"
+          @click="doSendToPlex"
+        >
           <svg v-if="sendingToPlex" class="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M21 12a9 9 0 11-6.219-8.56"/>
           </svg>

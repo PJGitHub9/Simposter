@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { useDriftKeys } from '@/composables/useDriftKeys'
 import LogoEditorModal from '@/components/LogoEditorModal.vue'
 import { useArtLibraryCache } from '@/composables/useArtLibraryCache'
 import { usePagedItems } from '@/composables/usePagedItems'
+import { useLibraryGroupPreference } from '@/composables/useLibraryGroupPreference'
 import { compareTitles } from '@/services/sortTitle'
 
 type LogoItem = {
@@ -28,6 +30,22 @@ const selectedItem = ref<LogoItem | null>(null)
 
 const isTV = computed(() => route.name === 'tv-logos')
 const libraryId = computed(() => (route.query.library as string) || '')
+// Phase 8a -- see App.vue's resolveLibraryTarget() for where this comes from.
+const serverId = computed(() => (route.query.server as string) || '')
+
+// Same "Show posters from" live-preference control Movies/TV Shows already
+// have (Quirk #85) -- this page's `logo_url` comes from the exact same
+// merged-grid dedup those two grids use, so which linked server's row wins
+// was already being decided by that same setting; this just lets it be
+// changed from here too, instead of only from Movies/TV Shows. `mediaType`
+// is fixed at this component's own creation (route.name doesn't change
+// without a full remount between /movies/logos and /tv-shows/logos).
+const libraryGroupPref = useLibraryGroupPreference(isTV.value ? 'tv' : 'movie')
+async function onPreferredServerChange(serverId: string) {
+  if (!libraryId.value) return
+  const ok = await libraryGroupPref.setPreferred(libraryId.value, serverId)
+  if (ok) refresh()
+}
 
 const withLogo = computed(() => items.value.filter(m => m.logo_url))
 const withoutLogo = computed(() => items.value.filter(m => !m.logo_url))
@@ -74,7 +92,7 @@ watch([filter, search, sortBy, filterLabel], resetPage)
 
 function refresh() {
   failedImages.value = new Set()
-  fetchItems(isTV.value, libraryId.value)
+  fetchItems(isTV.value, libraryId.value, undefined, serverId.value)
 }
 
 function openEditor(item: LogoItem) {
@@ -93,8 +111,22 @@ function onLogoUpdated(newLogoUrl: string | null) {
   }
 }
 
-watch(libraryId, refresh)
-onMounted(refresh)
+watch(libraryId, (newLib) => {
+  refresh()
+  libraryGroupPref.load(newLib || '')
+})
+// Logo changed on a server after Simposter sent it (poster_drift.py).
+const router = useRouter()
+const drift = useDriftKeys()
+const assetChanged = (item: { key: string; other_servers?: { rating_key: string }[] | null }) =>
+  drift.changed([item.key, ...(item.other_servers || []).map(s => s.rating_key)], 'logo')
+const openDrift = () => router.push({ name: 'history', query: { tab: 'drift' } })
+
+onMounted(() => {
+  drift.load()
+  refresh()
+  libraryGroupPref.load(libraryId.value)
+})
 </script>
 
 <template>
@@ -133,6 +165,20 @@ onMounted(refresh)
           <option value="added_desc">Date Added (Newest)</option>
           <option value="added_asc">Date Added (Oldest)</option>
         </select>
+        <!-- Only shown for a library actually linked to another server via a
+             Library Group (Quirk #62/#64) -- same live "prefer" control
+             Movies/TV Shows already have (Quirk #85). -->
+        <div v-if="libraryGroupPref.hasChoice.value" class="prefer-group">
+          <label class="toolbar-label">Show from:</label>
+          <select
+            :value="libraryGroupPref.preferredServerId.value"
+            class="toolbar-select"
+            :disabled="libraryGroupPref.saving.value"
+            @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+          </select>
+        </div>
         <button class="btn-refresh" @click="refresh" :disabled="loading">
           <svg v-if="loading" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
@@ -165,6 +211,12 @@ onMounted(refresh)
         @click="openEditor(item)"
       >
         <div class="logo-area">
+          <button
+            v-if="assetChanged(item)"
+            class="changed-badge"
+            title="This logo was changed on the server after Simposter sent it. Click to see it in History."
+            @click.stop="openDrift"
+          >Changed</button>
           <img
             v-if="item.logo_url && !failedImages.has(item.key)"
             :src="item.logo_url"
@@ -292,6 +344,18 @@ onMounted(refresh)
 .toolbar-select option {
   background: #1a1d2e;
   color: #c9d1e0;
+}
+
+.prefer-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-label {
+  font-size: 12px;
+  color: #a8b3cf;
+  white-space: nowrap;
 }
 
 .btn-refresh {
@@ -466,5 +530,20 @@ onMounted(refresh)
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 10px;
   }
+}
+
+.changed-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.6);
+  background: rgba(30, 22, 6, 0.75);
+  color: #fbbf24;
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 </style>

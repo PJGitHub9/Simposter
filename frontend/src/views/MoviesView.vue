@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import MovieGrid from '../components/movies/MovieGrid.vue'
 import { useSettingsStore } from '../stores/settings'
 import { useMovies } from '../composables/useMovies'
+import { useLibraryGroupPreference } from '../composables/useLibraryGroupPreference'
 import { getApiBase } from '@/services/apiBase'
 import { compareTitles } from '@/services/sortTitle'
 
@@ -16,6 +17,9 @@ type Movie = {
   mediaType?: 'movie' | 'tv-show'
   library_id?: string | number
   edition?: string | null
+  server_id?: string | null
+  also_on?: string[] | null
+  other_servers?: { server_id: string; rating_key: string }[] | null
 }
 
 // Simple module-level caches so navigating away/back does not refetch everything
@@ -27,6 +31,28 @@ const labelInFlight = new Set<string>()
 const moviesLoaded = moviesLoadedFlag
 const route = useRoute()
 const currentLibrary = computed(() => (route.query.library as string) || '')
+// Phase 8a -- which server currentLibrary belongs to. Absent for every existing
+// Plex-derived tab/URL (backend defaults to "plex-1"); set for a Jellyfin/Emby-only
+// tab, see App.vue's resolveLibraryTarget().
+const currentServer = computed(() => (route.query.server as string) || '')
+// Labels are a Plex-only concept (Quirk #59/#93) -- "Filter by Label" is
+// meaningless for a library with no Plex member at all. A plain Plex tab
+// (currentServer empty/'plex-1') always has one by construction; a
+// Jellyfin/Emby-only tab only does if its Library Group also links a Plex
+// library (a merged group).
+const currentGroupHasPlex = computed(() => {
+  if (!currentServer.value || currentServer.value === 'plex-1') return true
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === currentServer.value && m.libraryId === currentLibrary.value)
+  )
+  return !!group?.members?.some(m => m.serverId === 'plex-1')
+})
+const libraryGroupPref = useLibraryGroupPreference('movie')
+async function onPreferredServerChange(serverId: string) {
+  if (!currentLibrary.value) return
+  const ok = await libraryGroupPref.setPreferred(currentLibrary.value, serverId)
+  if (ok) await fetchMovies()
+}
 const POSTER_CACHE_KEY = computed(() => `simposter-poster-cache-${currentLibrary.value || 'all'}`)
 const LABELS_CACHE_KEY = computed(() => `simposter-labels-cache-${currentLibrary.value || 'all'}`)
 const MOVIES_CACHE_KEY = computed(() => `simposter-movies-cache-${currentLibrary.value || 'all'}`)
@@ -203,6 +229,7 @@ watch(currentLibrary, (newLib, oldLib) => {
     fetchPosters(paged.value)
     fetchLabels(paged.value)
   })
+  libraryGroupPref.load(newLib || '')
 })
 
 const props = defineProps<{
@@ -337,6 +364,7 @@ const fetchMovies = async (forceRefresh = false) => {
     // Always fetch to ensure we have the correct library's data
     const params = new URLSearchParams()
     if (currentLibrary.value) params.set('library_id', currentLibrary.value)
+    if (currentServer.value) params.set('server_id', currentServer.value)
     if (forceRefresh) params.set('force_refresh', 'true')
     if (settings.deduplicateMovies.value) params.set('deduplicate', 'true')
     const url = `${apiBase}/api/movies${params.toString() ? '?' + params.toString() : ''}`
@@ -520,6 +548,7 @@ onMounted(async () => {
   await fetchPosters(paged.value)
   await fetchLabels(paged.value)
   fetchCachedKeys()
+  libraryGroupPref.load(currentLibrary.value)
 })
 </script>
 
@@ -542,7 +571,7 @@ onMounted(async () => {
             <option value="desc">{{ sortBy === 'title' ? 'Z-A' : 'Newest First' }}</option>
           </select>
         </div>
-        <div class="control-group">
+        <div v-if="currentGroupHasPlex" class="control-group">
           <label for="label-select">Filter by Label:</label>
           <select id="label-select" v-model="filterLabel" class="control-select">
             <option value="">All Labels</option>
@@ -553,6 +582,22 @@ onMounted(async () => {
           <input type="checkbox" v-model="filterCached" @change="page = 1" />
           Generated{{ filterCached && cachedKeys.size ? ` (${cachedKeys.size})` : '' }}
         </label>
+        <!-- Only shown for a library actually linked to another server via a
+             Library Group (Quirk #62/#64) -- lets which server's poster wins
+             on a merged item be changed right where you're looking at the
+             posters, instead of buried in Settings (Quirk #85). -->
+        <div v-if="libraryGroupPref.hasChoice.value" class="control-group">
+          <label for="prefer-server-select">Show posters from:</label>
+          <select
+            id="prefer-server-select"
+            :value="libraryGroupPref.preferredServerId.value"
+            class="control-select"
+            :disabled="libraryGroupPref.saving.value"
+            @change="onPreferredServerChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="opt in libraryGroupPref.options.value" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+          </select>
+        </div>
         <button @click="refreshData" class="refresh-btn" :disabled="loading">
           {{ loading ? 'Refreshing...' : 'Refresh Cache' }}
         </button>

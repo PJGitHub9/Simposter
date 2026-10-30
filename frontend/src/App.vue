@@ -22,38 +22,142 @@ import { useSettingsStore } from './stores/settings'
 import { useScanStore } from './stores/scan'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
-import { onboardingLaunchRequested } from '@/composables/useOnboardingLauncher'
+import { libraryInfo } from '@/services/libraryLabel'
+import { onboardingLaunchRequested, notifyOnboardingSaved } from '@/composables/useOnboardingLauncher'
+
+// Phase 8a -- a LibraryGroup with at least one member but NO Plex member represents a
+// standalone Jellyfin/Emby-only library (created via Settings -> Libraries's "Jellyfin/
+// Emby Libraries" section). Gives each one its own sidebar tab, keyed
+// `movies-group-{id}`/`tv-shows-group-{id}` so handleTabSelect/handleSubmenuClick's
+// existing `tab.replace('movies-', '')`-style parsing naturally yields `group-{id}`,
+// which resolveLibraryTarget() below already knows how to turn into a real
+// {server, library} pair -- no prefix-branching needed at the call sites.
+// Media Mirror only makes sense once a group has a real source AND target to
+// copy between -- a single-library group has nothing to mirror to/from.
+// Shared by both the Plex-anchored tabs and the non-Plex group tabs below.
+const groupMemberCount = (serverId: string, libraryId: string): number => {
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libraryId)
+  )
+  return group?.members?.length ?? 1
+}
+
+// Thumb Art is Jellyfin/Emby-only (Plex has no such slot) -- the mirror of Square
+// Art being Plex-only -- so its submenu entry only shows when the library's group
+// has a Jellyfin or Emby member.
+const groupHasNonPlexMember = (serverId: string, libraryId: string): boolean => {
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libraryId)
+  )
+  return (group?.members || []).some(m => m.serverId !== 'plex-1')
+}
+
+const nonPlexGroupTabs = (mediaType: 'movie' | 'tv'): MenuItem[] => {
+  const groups = (settings.libraryGroups.value || []).filter(g =>
+    g.mediaType === mediaType &&
+    (g.members?.length ?? 0) > 0 &&
+    !(g.members || []).some(m => m.serverId === 'plex-1')
+  )
+  const prefix = mediaType === 'movie' ? 'movies' : 'tv-shows'
+  const icon = mediaType === 'movie' ? '\u{1F3AC}' : '\u{1F4FA}'
+  // Square Art is Plex-only (no Jellyfin/Emby equivalent, Quirk #44/#92) -- omit it
+  // from a non-Plex tab's submenu entirely rather than linking to a permanently-empty view.
+  const movieItems: [string, string][] = [
+    ['batch', '\u{270F}\uFE0F Batch Edit'],
+    ['collections', '\u{1F4DA} Collections'],
+    ['logos', '\u{1F5BC}\uFE0F Logos'],
+    ['backdrops', '\u{1F39E}\uFE0F Backdrops'],
+    ['thumb-art', '\u{1F304} Thumb Art'],
+    ['media-mirror', '\u{1FA9E} Media Mirror'],
+    ['overlay-refresh', '\u{1F501} Overlay Refresh'],
+    ['assets', '\u{1F4C1} Local Assets'],
+    ['backup', '\u{1F4E6} Backup / Restore'],
+  ]
+  const tvItems: [string, string][] = [
+    ['tv-batch', '\u{270F}\uFE0F Batch Edit'],
+    ['tv-logos', '\u{1F5BC}\uFE0F Logos'],
+    ['tv-backdrops', '\u{1F39E}\uFE0F Backdrops'],
+    ['tv-thumb-art', '\u{1F304} Thumb Art'],
+    ['tv-media-mirror', '\u{1FA9E} Media Mirror'],
+    ['tv-overlay-refresh', '\u{1F501} Overlay Refresh'],
+    ['tv-assets', '\u{1F4C1} Local Assets'],
+    ['tv-backup', '\u{1F4E6} Backup / Restore'],
+  ]
+  const items = mediaType === 'movie' ? movieItems : tvItems
+  return groups.map(g => ({
+    key: `${prefix}-group-${g.id}`,
+    label: `${icon} ${g.name || 'Library'}`,
+    submenu: items
+      .filter(([k]) => !k.includes('media-mirror') || g.members.length > 1)
+      .map(([k, label]) => ({ key: `${k}-group-${g.id}`, label }))
+  }))
+}
+
+// Resolves a tab-derived `libId` (either a raw Plex library id, as today, or
+// `group-{libraryGroupId}` for a Phase 8a non-Plex tab) into the {library, server}
+// query params a route push needs. Omits `server` entirely for the Plex case so every
+// existing URL/bookmark stays byte-identical (the backend already defaults to "plex-1"
+// when the param is absent).
+const resolveLibraryTarget = (libId: string): { library: string; server?: string } => {
+  if (libId.startsWith('group-')) {
+    const groupId = libId.slice('group-'.length)
+    const group = (settings.libraryGroups.value || []).find(g => g.id === groupId)
+    const member = group?.members?.[0]
+    if (member) return { library: member.libraryId, server: member.serverId }
+  }
+  return { library: libId }
+}
 
 const tabs = computed<MenuItem[]>(() => {
   // Check if Plex is configured
-  const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
+  const plexConfigured = settings.plexActive.value
+  // Phase 8a -- a Jellyfin/Emby-only install (no Plex at all) is no longer locked out
+  // of the app; it just has no Plex-derived tabs below. See onMounted()'s matching gate.
+  const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
 
-  // If Plex not configured, only show Settings
-  if (!plexConfigured) {
+  // If nothing at all is configured, only show Settings
+  if (!anyServerConfigured) {
     return [
       { key: 'settings', label: '\u{2699}\uFE0F Settings' }
     ]
   }
 
-  const libs = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings.length
+  // A Plex-configured install with no real library mappings yet gets ZERO
+  // Plex-derived tabs -- not a phantom "Movies" tab. That fallback used to
+  // synthesize one from the legacy movieLibraryName setting, from before
+  // library tracking went through explicit per-group linking
+  // (LibraryGroupCard.vue's "Link a Plex library..." picker) -- a real,
+  // reported bug once testPlexConnection() stopped auto-populating
+  // libraryMappings on a successful test (see SettingsView.vue): every
+  // Plex-configured-but-nothing-linked-yet install now hit this fallback
+  // and got a tab with no corresponding entry anywhere in Settings ->
+  // Libraries at all. A Plex-less install with only Jellyfin/Emby
+  // configured already correctly gets zero Plex-derived tabs here too --
+  // its libraries show up via nonPlexGroupTabs() below instead, and a
+  // linked Plex library shows up here the moment it's actually linked
+  // (settings.plex.value.libraryMappings gains a real entry then).
+  const libs = plexConfigured && settings.plex.value.libraryMappings
     ? settings.plex.value.libraryMappings
-    : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
+    : []
 
   const movieTabs: MenuItem[] = libs.map((lib, idx) => ({
     key: `movies-${lib.id || idx}`,
     label: `\u{1F3AC} ${lib.displayName || lib.title || `Library ${idx + 1}`}`,
     submenu: [
       { key: `batch-${lib.id || idx}`, label: '\u{270F}\uFE0F Batch Edit' },
-      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections (NEW)' },
+      { key: `collections-${lib.id || idx}`, label: '\u{1F4DA} Collections' },
       { key: `logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
       { key: `square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
+      ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
+      ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
+      { key: `overlay-refresh-${lib.id || idx}`, label: '\u{1F501} Overlay Refresh' },
       { key: `assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
   }))
 
-  const tvLibs = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings.length
+  const tvLibs = plexConfigured && settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings.length
     ? settings.plex.value.tvShowLibraryMappings
     : []
 
@@ -65,6 +169,9 @@ const tabs = computed<MenuItem[]>(() => {
       { key: `tv-logos-${lib.id || idx}`, label: '\u{1F5BC}\uFE0F Logos' },
       { key: `tv-backdrops-${lib.id || idx}`, label: '\u{1F39E}\uFE0F Backdrops' },
       { key: `tv-square-art-${lib.id || idx}`, label: '\u{1F533} Square Art' },
+      ...(groupHasNonPlexMember('plex-1', String(lib.id)) ? [{ key: `tv-thumb-art-${lib.id || idx}`, label: '\u{1F304} Thumb Art' }] : []),
+      ...(groupMemberCount('plex-1', String(lib.id)) > 1 ? [{ key: `tv-media-mirror-${lib.id || idx}`, label: '\u{1FA9E} Media Mirror' }] : []),
+      { key: `tv-overlay-refresh-${lib.id || idx}`, label: '\u{1F501} Overlay Refresh' },
       { key: `tv-assets-${lib.id || idx}`, label: '\u{1F4C1} Local Assets' },
       { key: `tv-backup-${lib.id || idx}`, label: '\u{1F4E6} Backup / Restore' }
     ]
@@ -72,9 +179,11 @@ const tabs = computed<MenuItem[]>(() => {
 
   return [
     ...movieTabs,
+    ...nonPlexGroupTabs('movie'),
     ...tvShowTabs,
+    ...nonPlexGroupTabs('tv'),
     { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
-    { key: 'overlay-config-manager', label: '\u{1F4D0} Overlay Config' },
+    { key: 'overlay-config-manager', label: '\u{1F4D0} Overlays' },
     { key: 'history', label: '\u{1F4CB} History' },
     { key: 'settings', label: '\u{2699}\uFE0F Settings' },
     { key: 'logs', label: '\u{1F4DD} Logs' }
@@ -103,6 +212,12 @@ const handleQuickGuideDone = () => {
   const firstLib = settings.plex.value.libraryMappings?.[0]
   if (firstLib?.id) {
     router.push({ name: 'movies', query: { library: firstLib.id } })
+    return
+  }
+  // Phase 8a -- no Plex library at all, fall back to the first Jellyfin/Emby-only group
+  const firstGroup = nonPlexGroupTabs('movie')[0]
+  if (firstGroup) {
+    router.push({ name: 'movies', query: resolveLibraryTarget(firstGroup.key.replace('movies-', '')) })
   } else {
     router.push({ name: 'movies' })
   }
@@ -133,6 +248,91 @@ let backupPoller: number | null = null
 const allLibrariesMovies = ref<{ libraryName: string; mediaType: string; movies: any[] }[]>([])
 const allLibrariesTvShows = ref<{ libraryName: string; mediaType: string; shows: any[] }[]>([])
 const allLibrariesLoaded = ref(false)
+
+// Search groups for libraries that aren't Plex mappings (Jellyfin/Emby
+// libraries in a Library Group), labeled via the shared libraryInfo() helper.
+// Libraries not tracked anywhere are skipped, matching the Plex loop above.
+function nonPlexSearchGroups(
+  grouped: Map<string, any[]>,
+  mediaType: 'movie' | 'tv-show',
+  plexLibs: { id?: string | number }[],
+): { libraryName: string; mediaType: string; items: any[] }[] {
+  const plexIds = new Set(plexLibs.map(l => String(l.id || 'default')))
+  const out: { libraryName: string; mediaType: string; items: any[] }[] = []
+  for (const [libId, items] of grouped) {
+    if (plexIds.has(String(libId)) || !items.length) continue
+    const info = libraryInfo(libId)
+    if (!info || info.serverId === 'plex-1') continue
+    out.push({ libraryName: info.label, mediaType, items })
+  }
+  return out
+}
+
+// Search sections, one per library group: copies of the same title on the
+// group's servers (same TMDb id, TVDB for shows) become one result led by the
+// group's preferred server (else Plex), with the others as other_servers, so
+// the editor can send to all of them -- like opening it from the merged grid.
+// Groups with "merge items" off keep one result per copy. Libraries in no
+// group keep the old per-library sections.
+function buildSearchGroups(items: any[], mediaType: 'movie' | 'tv-show', plexLibs: { id?: string | number; displayName?: string; title?: string }[]) {
+  const groupType = mediaType === 'tv-show' ? 'tv' : 'movie'
+  const lgroups = (settings.libraryGroups.value || []).filter(g => g.mediaType === groupType && (g.members || []).length)
+  const memberOf = new Map<string, any>()
+  for (const g of lgroups) for (const m of g.members) memberOf.set(`${m.serverId}:${m.libraryId}`, g)
+  const inGroup = new Map<string, any[]>()
+  const loose = new Map<string, any[]>()
+  for (const it of items) {
+    const g = memberOf.get(`${it.server_id || 'plex-1'}:${it.library_id}`)
+    if (g) {
+      if (!inGroup.has(g.id)) inGroup.set(g.id, [])
+      inGroup.get(g.id)!.push(it)
+    } else {
+      const lib = String(it.library_id || 'default')
+      if (!loose.has(lib)) loose.set(lib, [])
+      loose.get(lib)!.push(it)
+    }
+  }
+  const out: { libraryName: string; mediaType: string; items: any[] }[] = []
+  for (const g of lgroups) {
+    const groupItems = inGroup.get(g.id) || []
+    if (!groupItems.length) continue
+    let merged: any[] = groupItems
+    if (g.mergeItems !== false) {
+      const byId = new Map<string, any[]>()
+      merged = []
+      for (const it of groupItems) {
+        const id = mediaType === 'tv-show' ? (it.tvdb_id || it.tmdb_id) : it.tmdb_id
+        if (!id) { merged.push(it); continue }
+        if (!byId.has(String(id))) byId.set(String(id), [])
+        byId.get(String(id))!.push(it)
+      }
+      const prefer = g.preferredServerId || 'plex-1'
+      for (const copies of byId.values()) {
+        const lead = copies.find(c => (c.server_id || 'plex-1') === prefer)
+          || copies.find(c => (c.server_id || 'plex-1') === 'plex-1') || copies[0]
+        const others = copies.filter(c => c !== lead && (c.server_id || 'plex-1') !== (lead.server_id || 'plex-1'))
+        merged.push(others.length ? {
+          ...lead,
+          other_servers: others.map(c => ({ server_id: c.server_id || 'plex-1', rating_key: c.key })),
+          also_on: others.map(c => c.server_id || 'plex-1'),
+        } : lead)
+      }
+    }
+    const plexMember = g.members.find((m: any) => m.serverId === 'plex-1')
+    const plexLib = plexMember ? plexLibs.find(l => String(l.id) === String(plexMember.libraryId)) : undefined
+    out.push({ libraryName: g.name || plexLib?.displayName || plexLib?.title || 'Library', mediaType, items: merged })
+  }
+  // Libraries in no group: Plex mappings in their order, then the rest.
+  for (const lib of plexLibs) {
+    const libItems = loose.get(String(lib.id || 'default'))
+    if (libItems?.length) {
+      out.push({ libraryName: lib.displayName || lib.title || (mediaType === 'tv-show' ? 'TV Shows' : 'Movies'), mediaType, items: libItems })
+      loose.delete(String(lib.id || 'default'))
+    }
+  }
+  out.push(...nonPlexSearchGroups(loose, mediaType, []))
+  return out
+}
 
 // Fetch all movies and TV shows from all libraries for search
 const fetchAllLibrariesContent = async () => {
@@ -168,31 +368,7 @@ const fetchAllLibrariesContent = async () => {
         ? settings.plex.value.libraryMappings
         : [{ id: settings.plex.value.movieLibraryName || 'default', displayName: 'Movies', title: 'Movies' }]
 
-      // Group movies by library_id
-      const grouped = new Map<string, any[]>()
-      for (const movie of allMovies) {
-        const libId = movie.library_id || 'default'
-        if (!grouped.has(libId)) {
-          grouped.set(libId, [])
-        }
-        grouped.get(libId)!.push(movie)
-      }
-
-      // Convert to sorted array
-      const groups: { libraryName: string; mediaType: string; movies: any[] }[] = []
-      for (const lib of movieLibs) {
-        const libId = lib.id || 'default'
-        const movies = grouped.get(libId) || []
-        if (movies.length > 0) {
-          groups.push({
-            libraryName: lib.displayName || lib.title || 'Movies',
-            mediaType: 'movie',
-            movies
-          })
-        }
-      }
-
-      allLibrariesMovies.value = groups
+      allLibrariesMovies.value = buildSearchGroups(allMovies, 'movie', movieLibs).map(g => ({ ...g, movies: g.items }))
     }
   } catch {
     /* ignore */
@@ -215,33 +391,7 @@ const fetchAllLibrariesContent = async () => {
         ? settings.plex.value.tvShowLibraryMappings
         : []
 
-      if (tvLibs.length > 0) {
-        // Group shows by library_id
-        const grouped = new Map<string, any[]>()
-        for (const show of allShows) {
-          const libId = show.library_id || 'default'
-          if (!grouped.has(libId)) {
-            grouped.set(libId, [])
-          }
-          grouped.get(libId)!.push(show)
-        }
-
-        // Convert to sorted array
-        const groups: { libraryName: string; mediaType: string; shows: any[] }[] = []
-        for (const lib of tvLibs) {
-          const libId = lib.id || 'default'
-          const shows = grouped.get(libId) || []
-          if (shows.length > 0) {
-            groups.push({
-              libraryName: lib.displayName || lib.title || 'TV Shows',
-              mediaType: 'tv-show',
-              shows
-            })
-          }
-        }
-
-        allLibrariesTvShows.value = groups
-      }
+      allLibrariesTvShows.value = buildSearchGroups(allShows, 'tv-show', tvLibs).map(g => ({ ...g, shows: g.items }))
     }
   } catch {
     /* ignore */
@@ -331,20 +481,67 @@ const groupedContentForSearch = computed(() => {
   return groups
 })
 
+// Reverse of resolveLibraryTarget() above -- given the CURRENT route's
+// already-resolved library/server query params, finds which non-Plex-only
+// LibraryGroup (if any) they belong to and returns its `group-{id}` suffix,
+// matching the tab key nonPlexGroupTabs() generated for it. Without this,
+// activeTab/activeSubmenu below would rebuild a tab key straight from
+// route.query.library (correct for a Plex tab, where that query param IS
+// already the tab-key suffix) -- but for a Jellyfin/Emby-only group tab, the
+// URL carries the group's *resolved member's own* library id (e.g. a real
+// Jellyfin library id), never the group id itself, so the rebuilt key could
+// never match the tab's actual `group-{id}` key -- Sidebar.vue's
+// `tab.key === activeKey` check always failed, so a group tab's submenu
+// (Logos/Backdrops/etc) silently never rendered at all, and the tab never
+// showed as active/highlighted either. Plex tabs are unaffected (serverId
+// defaults to/equals 'plex-1', early-returns libQuery unchanged).
+const resolveTabSuffix = (libQuery: string, serverQuery: string): string => {
+  if (!libQuery) return libQuery
+  const serverId = serverQuery || 'plex-1'
+  if (serverId === 'plex-1') return libQuery
+  const group = (settings.libraryGroups.value || []).find(g =>
+    (g.members || []).some(m => m.serverId === serverId && m.libraryId === libQuery)
+  )
+  return group ? `group-${group.id}` : libQuery
+}
+
+// A library page opened without ?library= (e.g. the root URL redirects to a bare
+// /movies) used to load EVERY library of that type, unmerged, while the sidebar
+// highlighted the first tab. Fill in that first tab's library so the page matches
+// the sidebar and the library group's merge applies.
+const MOVIE_LIBRARY_ROUTES = new Set(['movies', 'batch-edit', 'collections', 'logos', 'backdrops', 'square-art', 'thumb-art', 'media-mirror', 'overlay-refresh', 'local-assets'])
+const TV_LIBRARY_ROUTES = new Set(['tv-shows', 'tv-batch-edit', 'tv-logos', 'tv-backdrops', 'tv-square-art', 'tv-thumb-art', 'tv-media-mirror', 'tv-overlay-refresh', 'tv-local-assets'])
+watch(
+  [() => route.name, () => route.query.library, () => settings.loaded.value, tabs],
+  () => {
+    if (!settings.loaded.value || route.query.library) return
+    const name = String(route.name || '')
+    let prefix: string | null = null
+    if (MOVIE_LIBRARY_ROUTES.has(name)) prefix = 'movies-'
+    else if (TV_LIBRARY_ROUTES.has(name)) prefix = 'tv-shows-'
+    else if (name === 'backup') prefix = route.query.type === 'tv-show' ? 'tv-shows-' : 'movies-'
+    if (!prefix) return
+    const first = tabs.value.find(t => t.key.startsWith(prefix as string))
+    if (!first) return
+    router.replace({ name: route.name as string, query: { ...route.query, ...resolveLibraryTarget(first.key.slice(prefix.length)) } })
+  },
+  { immediate: true }
+)
+
 const activeTab = computed<TabKey>(() => {
-  const libQuery = (route.query.library as string) || ''
+  const libQuery = resolveTabSuffix((route.query.library as string) || '', (route.query.server as string) || '')
   if (route.name === 'backup' && (route.query.type as string) === 'tv-show') {
     if (libQuery) return `tv-shows-${libQuery}`
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
     return `tv-shows-${firstTvLib?.id || 'default'}`
   }
-  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art') {
+  if (route.name === 'batch-edit' || route.name === 'local-assets' || route.name === 'movies' || route.name === 'collections' || route.name === 'backup' || route.name === 'logos' || route.name === 'backdrops' || route.name === 'square-art' || route.name === 'thumb-art' || route.name === 'media-mirror' || route.name === 'overlay-refresh') {
     if (libQuery) return `movies-${libQuery}`
     // fallback to first lib key
     const firstLib = settings.plex.value.libraryMappings && settings.plex.value.libraryMappings[0]
     return `movies-${firstLib?.id || 'default'}`
   }
-  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art') {
+  if (route.name === 'tv-shows' || route.name === 'tv-batch-edit' || route.name === 'tv-local-assets' || route.name === 'tv-logos' || route.name === 'tv-backdrops' || route.name === 'tv-square-art' || route.name === 'tv-thumb-art' || route.name === 'tv-media-mirror' || route.name === 'tv-overlay-refresh') {
     if (libQuery) return `tv-shows-${libQuery}`
     // fallback to first TV lib key
     const firstTvLib = settings.plex.value.tvShowLibraryMappings && settings.plex.value.tvShowLibraryMappings[0]
@@ -354,7 +551,7 @@ const activeTab = computed<TabKey>(() => {
 })
 
 const activeSubmenu = computed<string>(() => {
-  const libQuery = (route.query.library as string) || ''
+  const libQuery = resolveTabSuffix((route.query.library as string) || '', (route.query.server as string) || '')
   if (route.name === 'batch-edit') return `batch-${libQuery || 'default'}`
   if (route.name === 'tv-batch-edit') return `tv-batch-${libQuery || 'default'}`
   if (route.name === 'collections') return `collections-${libQuery || 'default'}`
@@ -364,6 +561,12 @@ const activeSubmenu = computed<string>(() => {
   if (route.name === 'tv-backdrops') return `tv-backdrops-${libQuery || 'default'}`
   if (route.name === 'square-art') return `square-art-${libQuery || 'default'}`
   if (route.name === 'tv-square-art') return `tv-square-art-${libQuery || 'default'}`
+  if (route.name === 'thumb-art') return `thumb-art-${libQuery || 'default'}`
+  if (route.name === 'tv-thumb-art') return `tv-thumb-art-${libQuery || 'default'}`
+  if (route.name === 'media-mirror') return `media-mirror-${libQuery || 'default'}`
+  if (route.name === 'tv-media-mirror') return `tv-media-mirror-${libQuery || 'default'}`
+  if (route.name === 'overlay-refresh') return `overlay-refresh-${libQuery || 'default'}`
+  if (route.name === 'tv-overlay-refresh') return `tv-overlay-refresh-${libQuery || 'default'}`
   if (route.name === 'local-assets') return `assets-${libQuery || 'default'}`
   if (route.name === 'tv-local-assets') return `tv-assets-${libQuery || 'default'}`
   if (route.name === 'backup') {
@@ -397,10 +600,10 @@ const handleTabSelect = (tab: TabKey) => {
   }
   if (tab.startsWith('movies-')) {
     const libId = tab.replace('movies-', '')
-    router.push({ name: 'movies', query: { library: libId } })
+    router.push({ name: 'movies', query: resolveLibraryTarget(libId) })
   } else if (tab.startsWith('tv-shows-')) {
     const libId = tab.replace('tv-shows-', '')
-    router.push({ name: 'tv-shows', query: { library: libId } })
+    router.push({ name: 'tv-shows', query: resolveLibraryTarget(libId) })
   } else {
     router.push({ name: tab })
   }
@@ -429,11 +632,14 @@ onMounted(async () => {
     await settings.load()
   }
 
-  // Check if Plex is configured — show onboarding for new users
-  const plexConfigured = !!(settings.plex.value.url && settings.plex.value.token)
+  // Check if any server is configured — show onboarding for new users. Phase 8a: an
+  // install with only Jellyfin/Emby configured (no Plex) is no longer redirected to
+  // Settings — matches the tabs computed's identical anyServerConfigured check above.
+  const plexConfigured = settings.plexActive.value
+  const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
   if (!settings.onboardingCompleted.value) {
     showOnboarding.value = true
-  } else if (!plexConfigured && route.path !== '/settings') {
+  } else if (!anyServerConfigured && route.path !== '/settings') {
     router.push('/settings')
   }
 
@@ -535,6 +741,23 @@ const stopScanPolling = () => {
   }
 }
 
+// App.vue never unmounts (it's the root component) -- polling ownership
+// lives here, driven purely by the shared scan store's own visibility,
+// instead of being tied to whichever page happened to trigger the scan
+// (SettingsView.vue used to run its own separate poller for this, started
+// only when ITS OWN scanLibrary() fired a scan and explicitly stopped by
+// onBeforeRouteLeave the moment the user navigated away -- but the overlay
+// itself is globally visible via this same shared store regardless of
+// route, so navigating away mid-scan froze it at whatever state that
+// component's poller last captured, even though the scan kept running
+// server-side the whole time). Watching scan.visible here means polling
+// starts/stops correctly regardless of which page started the scan or
+// whether that page is still mounted.
+watch(() => scan.visible.value, (visible) => {
+  if (visible) startScanPolling()
+  else stopScanPolling()
+})
+
 // Batch progress polling
 const fetchBatchStatus = async () => {
   const apiBase = getApiBase()
@@ -591,6 +814,25 @@ const stopBatchPolling = () => {
 
 // Export for use by BatchEditModal
 ;(window as any).startBatchPolling = startBatchPolling
+
+const batchStopping = ref(false)
+const stopBatch = async () => {
+  if (batchStopping.value) return
+  batchStopping.value = true
+  const apiBase = getApiBase()
+  try {
+    await fetch(`${apiBase}/api/batch-cancel`, { method: 'POST' })
+    // Doesn't wait for the batch to actually finish winding down -- the
+    // existing poller (already running at 200ms) picks up the resulting
+    // state=cancelled the same way it picks up state=done, no extra
+    // polling logic needed here.
+  } catch {
+    /* the regular poller will just keep showing "running" if this failed --
+       the button stays clickable to try again */
+  } finally {
+    batchStopping.value = false
+  }
+}
 
 // --- Backup progress polling (same pattern as batch) ---
 const fetchBackupStatus = async () => {
@@ -711,35 +953,49 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
   if (parentKey.startsWith('movies-')) {
     const libId = parentKey.replace('movies-', '')
+    const target = resolveLibraryTarget(libId)
     if (submenuKey.startsWith('batch-')) {
-      router.push({ name: 'batch-edit', query: { library: libId } })
+      router.push({ name: 'batch-edit', query: target })
     } else if (submenuKey.startsWith('collections-')) {
-      router.push({ name: 'collections', query: { library: libId } })
+      router.push({ name: 'collections', query: target })
     } else if (submenuKey.startsWith('logos-')) {
-      router.push({ name: 'logos', query: { library: libId } })
+      router.push({ name: 'logos', query: target })
     } else if (submenuKey.startsWith('backdrops-')) {
-      router.push({ name: 'backdrops', query: { library: libId } })
+      router.push({ name: 'backdrops', query: target })
     } else if (submenuKey.startsWith('square-art-')) {
-      router.push({ name: 'square-art', query: { library: libId } })
+      router.push({ name: 'square-art', query: target })
+    } else if (submenuKey.startsWith('thumb-art-')) {
+      router.push({ name: 'thumb-art', query: target })
+    } else if (submenuKey.startsWith('media-mirror-')) {
+      router.push({ name: 'media-mirror', query: target })
+    } else if (submenuKey.startsWith('overlay-refresh-')) {
+      router.push({ name: 'overlay-refresh', query: target })
     } else if (submenuKey.startsWith('assets-')) {
-      router.push({ name: 'local-assets', query: { library: libId } })
+      router.push({ name: 'local-assets', query: target })
     } else if (submenuKey.startsWith('backup-')) {
-      router.push({ name: 'backup', query: { library: libId, type: 'movie' } })
+      router.push({ name: 'backup', query: { ...target, type: 'movie' } })
     }
   } else if (parentKey.startsWith('tv-shows-')) {
     const libId = parentKey.replace('tv-shows-', '')
+    const target = resolveLibraryTarget(libId)
     if (submenuKey.startsWith('tv-batch-')) {
-      router.push({ name: 'tv-batch-edit', query: { library: libId } })
+      router.push({ name: 'tv-batch-edit', query: target })
     } else if (submenuKey.startsWith('tv-logos-')) {
-      router.push({ name: 'tv-logos', query: { library: libId } })
+      router.push({ name: 'tv-logos', query: target })
     } else if (submenuKey.startsWith('tv-backdrops-')) {
-      router.push({ name: 'tv-backdrops', query: { library: libId } })
+      router.push({ name: 'tv-backdrops', query: target })
     } else if (submenuKey.startsWith('tv-square-art-')) {
-      router.push({ name: 'tv-square-art', query: { library: libId } })
+      router.push({ name: 'tv-square-art', query: target })
+    } else if (submenuKey.startsWith('tv-thumb-art-')) {
+      router.push({ name: 'tv-thumb-art', query: target })
+    } else if (submenuKey.startsWith('tv-media-mirror-')) {
+      router.push({ name: 'tv-media-mirror', query: target })
+    } else if (submenuKey.startsWith('tv-overlay-refresh-')) {
+      router.push({ name: 'tv-overlay-refresh', query: target })
     } else if (submenuKey.startsWith('tv-assets-')) {
-      router.push({ name: 'tv-local-assets', query: { library: libId } })
+      router.push({ name: 'tv-local-assets', query: target })
     } else if (submenuKey.startsWith('tv-backup-')) {
-      router.push({ name: 'backup', query: { library: libId, type: 'tv-show' } })
+      router.push({ name: 'backup', query: { ...target, type: 'tv-show' } })
     }
   }
 }
@@ -748,7 +1004,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 <template>
   <div class="shell">
     <NotificationContainer />
-    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true" />
+    <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true; notifyOnboardingSaved()" />
     <QuickStartGuide v-if="showQuickGuide" @done="handleQuickGuideDone" />
     <UpdateAnnouncementModal @view-full-changelog="showChangelog = true" />
 
@@ -829,6 +1085,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
       <div v-if="operationStatus.state.value === 'running'" class="spinner"></div>
       <div v-else-if="operationStatus.state.value === 'done'" class="checkmark">✓</div>
       <div v-else-if="operationStatus.state.value === 'error'" class="error-icon">✕</div>
+      <div v-else-if="operationStatus.state.value === 'cancelled'" class="error-icon">■</div>
 
       <div class="operation-body">
         <p class="title">
@@ -837,7 +1094,8 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
           </span>
           <span v-else-if="operationStatus.type.value === 'batch'">
             {{ operationStatus.state.value === 'running' ? 'Processing batch...' :
-               operationStatus.state.value === 'error' ? 'Batch failed!' : 'Batch complete!' }}
+               operationStatus.state.value === 'error' ? 'Batch failed!' :
+               operationStatus.state.value === 'cancelled' ? 'Batch stopped.' : 'Batch complete!' }}
           </span>
           <span v-else-if="operationStatus.type.value === 'backup'">
             {{ operationStatus.state.value === 'running' ? 'Backup / Restore in progress...' :
@@ -851,6 +1109,15 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
           <span v-if="operationStatus.currentStep.value" class="batch-step">{{ operationStatus.currentStep.value }}</span>
           <span v-if="operationStatus.currentMovie.value" class="batch-movie">{{ operationStatus.currentMovie.value }}</span>
         </p>
+
+        <button
+          v-if="operationStatus.type.value === 'batch' && operationStatus.state.value === 'running'"
+          class="stop-batch-btn"
+          :disabled="batchStopping"
+          @click="stopBatch"
+        >
+          {{ batchStopping ? 'Stopping...' : 'Stop' }}
+        </button>
 
         <!-- For scan, show simpler format -->
         <template v-else>
@@ -1168,6 +1435,29 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   font-size: 12px;
   color: #ff6b6b;
   font-weight: 500;
+}
+
+.stop-batch-btn {
+  margin-top: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.stop-batch-btn:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.stop-batch-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* Mobile hamburger button */

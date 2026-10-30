@@ -4,7 +4,7 @@ import threading
 
 import requests
 
-from .config import logger, settings
+from .config import logger, settings, redact_secrets, api_user_agent
 
 TVDB_API_BASE = "https://api4.thetvdb.com/v4"
 
@@ -60,7 +60,7 @@ def _get_token() -> str:
             payload["pin"] = settings.TVDB_PIN
 
         try:
-            r = requests.post(f"{TVDB_API_BASE}/login", json=payload, timeout=10)
+            r = requests.post(f"{TVDB_API_BASE}/login", json=payload, timeout=10, headers={"User-Agent": api_user_agent()})
             r.raise_for_status()
             data = r.json().get("data") or {}
             token = data.get("token")
@@ -76,13 +76,13 @@ def _get_token() -> str:
             if hasattr(e, "response") and e.response is not None:
                 text = str(e.response.text)[:200]
             logger.warning("[TVDB] Login failed: %s body=%s", e, text)
-            raise TVDBError(f"TVDB login failed: {e}")
+            raise TVDBError(f"TVDB login failed: {redact_secrets(e)}")
 
 
 def _tvdb_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     token = _get_token()
     _apply_rate_limit()
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": api_user_agent()}
     url = f"{TVDB_API_BASE}{path}"
     try:
         r = requests.get(url, headers=headers, params=params or {}, timeout=12)
@@ -99,7 +99,7 @@ def _tvdb_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
         raise TVDBError(f"TVDB HTTP {e.response.status_code if e.response else 'error'}: {text}")
     except Exception as e:
         logger.warning("[TVDB] Request failed url=%s err=%s type=%s", url, e, type(e).__name__)
-        raise TVDBError(f"TVDB request failed: {e}")
+        raise TVDBError(f"TVDB request failed: {redact_secrets(e)}")
 
 
 def get_series_images(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
@@ -301,11 +301,11 @@ def get_movie_images(tvdb_id: int) -> Dict[str, List[Dict[str, Any]]]:
 def test_tvdb_key(api_key: str) -> Dict[str, Any]:
     """Simple key test: attempt login."""
     try:
-        r = requests.post(f"{TVDB_API_BASE}/login", json={"apikey": api_key}, timeout=10)
+        r = requests.post(f"{TVDB_API_BASE}/login", json={"apikey": api_key}, timeout=10, headers={"User-Agent": api_user_agent()})
         r.raise_for_status()
         return {"status": "ok", "message": "API key valid"}
     except Exception as e:
         text = ""
         if hasattr(e, "response") and e.response is not None:
             text = str(e.response.text)[:200]
-        return {"status": "error", "error": f"{e}", "body": text}
+        return {"status": "error", "error": redact_secrets(e), "body": redact_secrets(text)}

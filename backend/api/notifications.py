@@ -49,6 +49,31 @@ def _get_notification_settings() -> Dict[str, Any]:
         return {}
 
 
+def _library_passes_filter(notify_libraries: List[str], library_id: Optional[str]) -> bool:
+    """Library filter, group-aware. Settings -> Notifications stores picked
+    library groups as "group:<id>"; older installs stored plain library ids,
+    which still work. A library passes when its group is picked, or when it
+    (or any library in its group) is in the list. Without the group check, a
+    send to a group's Jellyfin/Emby library was dropped whenever only its Plex
+    library (or the other way round) had been picked."""
+    if not notify_libraries or not library_id:
+        return True
+    wanted = {str(x) for x in notify_libraries}
+    if str(library_id) in wanted:
+        return True
+    try:
+        ui_settings = db.get_ui_settings() or {}
+        for group in ui_settings.get("libraryGroups", []) or []:
+            ids = {str(m.get("libraryId")) for m in group.get("members", []) or []}
+            if str(library_id) not in ids:
+                continue
+            if f"group:{group.get('id')}" in wanted or ids & wanted:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> bool:
     """Check if an Apprise notification should be sent."""
     settings = _get_notification_settings()
@@ -63,7 +88,9 @@ def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> boo
         "batch": "appriseNotifyBatch",
         "manual": "appriseNotifyManual",
         "webhook": "appriseNotifyWebhook",
-        "auto_generate": "appriseNotifyAutoGenerate"
+        "auto_generate": "appriseNotifyAutoGenerate",
+        "media_mirror": "appriseNotifyMediaMirror",
+        "overlay_refresh": "appriseNotifyOverlayRefresh",
     }
 
     setting_key = source_map.get(source)
@@ -71,8 +98,7 @@ def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> boo
         return False
 
     # Check library filter
-    notify_libraries = settings.get("appriseNotifyLibraries", [])
-    if notify_libraries and library_id and library_id not in notify_libraries:
+    if not _library_passes_filter(settings.get("appriseNotifyLibraries", []), library_id):
         return False
 
     return True
@@ -102,7 +128,9 @@ def _should_notify(source: str, library_id: Optional[str] = None) -> bool:
         "batch": "discordNotifyBatch",
         "manual": "discordNotifyManual",
         "webhook": "discordNotifyWebhook",
-        "auto_generate": "discordNotifyAutoGenerate"
+        "auto_generate": "discordNotifyAutoGenerate",
+        "media_mirror": "discordNotifyMediaMirror",
+        "overlay_refresh": "discordNotifyOverlayRefresh",
     }
 
     setting_key = source_map.get(source)
@@ -110,15 +138,23 @@ def _should_notify(source: str, library_id: Optional[str] = None) -> bool:
         return False
 
     # Check library filter
-    notify_libraries = settings.get("discordNotifyLibraries", [])
-    if notify_libraries and library_id and library_id not in notify_libraries:
+    if not _library_passes_filter(settings.get("discordNotifyLibraries", []), library_id):
         return False
 
     return True
 
 
 def _get_library_name(library_id: Optional[str]) -> str:
-    """Get display name for a library."""
+    """Get display name for a library. Checks Plex's own libraryMappings/
+    tvShowLibraryMappings first (unchanged, original behavior), then falls
+    back to scanning libraryGroups for ANY member whose libraryId matches --
+    needed because a Jellyfin/Emby-only library (Phase 8a) has no Plex
+    mapping entry at all, so without this a Jellyfin/Emby manual-send or
+    sync notification showed a raw library id/GUID instead of a real name.
+    Doesn't need server_id/media_type to disambiguate -- a Plex library_id
+    (short digits) and a Jellyfin/Emby one (a GUID) don't realistically
+    collide, the same reasoning this app's db.get_cached_movies() docstring
+    already established for not needing server-scoped lookups elsewhere."""
     if not library_id:
         return "Unknown Library"
 
@@ -139,6 +175,16 @@ def _get_library_name(library_id: Optional[str]) -> str:
             if mapping.get("id") == library_id:
                 return mapping.get("displayName") or mapping.get("title") or library_id
 
+        # Fall back to a Jellyfin/Emby-only Library Group member (no Plex side
+        # to have a mapping entry for at all). Group name first, then the
+        # member's own library name -- the same priority the UI (History,
+        # Local Assets, search) and backup folders use, so a library is called
+        # the same thing everywhere.
+        for group in ui_settings.get("libraryGroups", []) or []:
+            for member in group.get("members", []) or []:
+                if str(member.get("libraryId")) == str(library_id):
+                    return group.get("name") or member.get("libraryName") or library_id
+
         return library_id
     except Exception:
         return library_id
@@ -150,7 +196,9 @@ def _get_source_emoji(source: str) -> str:
         "batch": "\U0001F4E6",  # Package
         "manual": "\U0001F3A8",  # Artist palette
         "webhook": "\U0001F517",  # Link
-        "auto_generate": "\U0001F504"  # Arrows
+        "auto_generate": "\U0001F504",  # Arrows
+        "media_mirror": "\U0001FA9E",  # Mirror
+        "overlay_refresh": "\U0001F501",  # Repeat
     }.get(source, "\U0001F3AC")  # Clapper board default
 
 
@@ -160,8 +208,33 @@ def _get_source_label(source: str) -> str:
         "batch": "Batch Edit",
         "manual": "Manual Send",
         "webhook": "Webhook",
-        "auto_generate": "Auto-Generate"
+        "auto_generate": "Auto-Generate",
+        "media_mirror": "Media Mirror",
+        "overlay_refresh": "Overlay Refresh",
     }.get(source, source)
+
+
+def _get_action_text(action: str, server_id: Optional[str] = None) -> str:
+    """Human-readable label for a notification's "Action" field/line,
+    server-aware. Consolidates what used to be 3 independently-duplicated
+    ternaries (native Discord, Discord-via-Apprise, plain-text Apprise) that
+    only ever distinguished "sent_to_plex" from everything else -- silently
+    collapsing "sent_to_media_server" (the real Jellyfin/Emby sync action,
+    see record_poster_history() call sites in media_server_send.py/webhooks.py)
+    and "resent_to_plex" into the same misleading "Saved locally" text. One
+    source of truth now, matching get_server_label()'s own "can't drift"
+    reasoning (registry.py) -- extend HERE if a new action string is ever
+    added, not by re-copying a ternary a 4th time."""
+    if action == "sent_to_plex":
+        return "Sent to Plex"
+    if action == "resent_to_plex":
+        return "Resent to Plex"
+    if action == "sent_to_media_server":
+        if server_id:
+            from ..media_server import get_server_label
+            return f"Sent to {get_server_label(server_id)}"
+        return "Sent to media server"
+    return "Saved locally"
 
 
 def _get_asset_type_label(asset_type: str) -> Optional[str]:
@@ -171,11 +244,111 @@ def _get_asset_type_label(asset_type: str) -> Optional[str]:
     "poster" (the default) so existing poster notifications are unchanged --
     no "Asset" field is added to the embed/body unless something OTHER than a
     poster was sent, which is the whole point of this field existing."""
-    return {
+    labels = {
+        "poster": "\U0001F3AC Poster",
         "logo": "\U0001F5BC️ Logo",
         "backdrop": "\U0001F39E️ Backdrop",
         "square_art": "\U0001F533 Square Art",
-    }.get(asset_type)
+        "thumb_art": "\U0001F304 Thumb Art",
+    }
+    # A combined send ("poster+logo") lists every asset, poster included.
+    parts = [p for p in (asset_type or "poster").split("+") if p]
+    if parts == ["poster"]:
+        return None
+    if len(parts) == 1:
+        return labels.get(parts[0])
+    return " + ".join(labels.get(p, p) for p in parts)
+
+
+def _get_synced_servers_label(synced_server_ids: Optional[List[str]]) -> Optional[str]:
+    """Readable "Also synced to: X, Y" value for a notification that ALSO
+    pushed to one or more linked Jellyfin/Emby servers alongside its primary
+    action (a manual Plex send with a linked library, a webhook/batch run
+    whose cross-server sync -- webhooks.py's _sync_poster_to_other_servers()
+    or media_server_send.py's sync_render_to_linked_servers() -- reached a
+    linked server too). Returns None (no field/line added at all) when the
+    list is empty, matching _get_asset_type_label()'s own "only add the field
+    when something non-default happened" convention. Deliberately excludes
+    'plex-1' -- a Plex delivery already has its own "Action: Sent to Plex"/
+    "Resent to Plex" text; this field exists only to surface the servers a
+    primary action's own action/server_id can't already express (which is
+    always exactly one), not to restate Plex a second time."""
+    if not synced_server_ids:
+        return None
+    from ..media_server import get_server_label
+    seen = []
+    for sid in synced_server_ids:
+        if sid and sid != "plex-1" and sid not in seen:
+            seen.append(sid)
+    if not seen:
+        return None
+    return ", ".join(get_server_label(sid) for sid in seen)
+
+
+def _get_preset_label(template_id: Optional[str], preset_id: Optional[str]) -> str:
+    """The preset's display name (falls back to its id, then the template)."""
+    if preset_id:
+        if template_id:
+            try:
+                preset = db.get_preset(template_id, preset_id)
+                if preset and preset.get("name"):
+                    return str(preset["name"])
+            except Exception:
+                pass
+        return str(preset_id)
+    return template_id or "N/A"
+
+
+def _get_servers_label(action: str, server_id: Optional[str], synced_server_ids: Optional[List[str]]) -> Optional[str]:
+    """Every server this notification's poster reached: the primary send's
+    server (Plex for sent/resent_to_plex, `server_id` for a media-server
+    send) followed by any linked servers it was also synced to."""
+    ids: List[str] = []
+    if action in ("sent_to_plex", "resent_to_plex"):
+        ids.append("plex-1")
+    elif action == "sent_to_media_server" and server_id:
+        ids.append(server_id)
+    for sid in synced_server_ids or []:
+        if sid and sid not in ids:
+            ids.append(sid)
+    if not ids:
+        return None
+    from ..media_server import get_server_label
+    return ", ".join(get_server_label(sid) for sid in ids)
+
+
+def _get_short_action(action: str) -> str:
+    if action == "resent_to_plex":
+        return "Resent"
+    if action in ("sent_to_plex", "sent_to_media_server"):
+        return "Sent"
+    return "Saved locally"
+
+
+def _summary_fields(
+    library_id: Optional[str],
+    template_id: Optional[str],
+    preset_id: Optional[str],
+    action: str,
+    server_id: Optional[str],
+    synced_server_ids: Optional[List[str]],
+    asset_type: str = "poster",
+) -> List[tuple]:
+    """(name, value) pairs shared by every notification layout:
+    Library / Preset / Action(s) / Servers (+ Asset for non-poster sends)."""
+    fields = [("Library", _get_library_name(library_id))]
+    # Logo/backdrop sends aren't rendered from a preset -- leave the field out
+    # rather than showing "N/A".
+    if preset_id or template_id:
+        fields.append(("Preset", _get_preset_label(template_id, preset_id)))
+    fields.append(("Action", _get_short_action(action)))
+    servers = _get_servers_label(action, server_id, synced_server_ids)
+    if servers:
+        fields.append(("Servers", servers))
+    asset_label = _get_asset_type_label(asset_type)
+    if asset_label:
+        fields.append(("Asset", asset_label))
+    return fields
 
 
 def send_discord_notification(
@@ -192,12 +365,17 @@ def send_discord_notification(
     success_count: int = 0,
     failed_count: int = 0,
     asset_type: str = "poster",
+    server_id: Optional[str] = None,
+    synced_server_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Send a Discord webhook notification for poster generation.
 
     Args:
         poster_data: Optional bytes of the poster image to attach directly to Discord
+        synced_server_ids: Linked Jellyfin/Emby server_ids ALSO reached this run
+            (webhook/batch cross-server sync), on top of whatever `action` already
+            says -- see _get_synced_servers_label()'s own docstring.
 
     Returns:
         True if notification was sent successfully, False otherwise
@@ -237,38 +415,19 @@ def send_discord_notification(
             year_str = f" ({year})" if year else ""
             description = f"**{title}**{year_str}"
 
-        action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
-
         embed = {
             "title": f"{emoji} {source_label} Complete",
             "description": description,
             "color": color,
             "fields": [
-                {
-                    "name": "Library",
-                    "value": library_name,
-                    "inline": True
-                },
-                {
-                    "name": "Template",
-                    "value": template_id or "N/A",
-                    "inline": True
-                },
-                {
-                    "name": "Action",
-                    "value": action_text,
-                    "inline": True
-                }
+                {"name": name, "value": value, "inline": True}
+                for name, value in _summary_fields(library_id, template_id, preset_id, action, server_id, synced_server_ids, asset_type)
             ],
             "footer": {
                 "text": "Simposter"
             },
             "timestamp": datetime.utcnow().isoformat()
         }
-
-        asset_label = _get_asset_type_label(asset_type)
-        if asset_label:
-            embed["fields"].append({"name": "Asset", "value": asset_label, "inline": True})
 
         # Add poster thumbnail - either from attached file or URL
         if poster_data:
@@ -350,12 +509,13 @@ def _build_notification_embed(
     failed_count: int,
     poster_data: Optional[bytes] = None,
     asset_type: str = "poster",
+    server_id: Optional[str] = None,
+    synced_server_ids: Optional[List[str]] = None,
+    preset_id: Optional[str] = None,
 ) -> dict:
     """Build a Discord embed dict — shared between native Discord and Apprise Discord paths."""
     emoji = _get_source_emoji(source)
     source_label = _get_source_label(source)
-    library_name = _get_library_name(library_id)
-    action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
 
     if failed_count > 0 and success_count == 0:
         color = 0xFF4757
@@ -377,17 +537,12 @@ def _build_notification_embed(
         "description": description,
         "color": color,
         "fields": [
-            {"name": "Library", "value": library_name, "inline": True},
-            {"name": "Template", "value": template_id or "N/A", "inline": True},
-            {"name": "Action", "value": action_text, "inline": True},
+            {"name": name, "value": value, "inline": True}
+            for name, value in _summary_fields(library_id, template_id, preset_id, action, server_id, synced_server_ids, asset_type)
         ],
         "footer": {"text": "Simposter"},
         "timestamp": datetime.utcnow().isoformat(),
     }
-
-    asset_label = _get_asset_type_label(asset_type)
-    if asset_label:
-        embed["fields"].append({"name": "Asset", "value": asset_label, "inline": True})
 
     if poster_data:
         embed["thumbnail"] = {"url": "attachment://poster.jpg"}
@@ -408,6 +563,8 @@ def send_apprise_notification(
     failed_count: int = 0,
     poster_data: Optional[bytes] = None,
     asset_type: str = "poster",
+    server_id: Optional[str] = None,
+    synced_server_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Send an Apprise notification for poster generation events.
@@ -426,7 +583,7 @@ def send_apprise_notification(
     emoji = _get_source_emoji(source)
     source_label = _get_source_label(source)
     library_name = _get_library_name(library_id)
-    action_text = "Sent to Plex" if action == "sent_to_plex" else "Saved locally"
+    action_text = _get_action_text(action, server_id)
 
     discord_urls: List[str] = []
     other_urls: List[str] = []
@@ -448,7 +605,8 @@ def send_apprise_notification(
             title=title, year=year, template_id=template_id,
             library_id=library_id, source=source, action=action,
             count=count, success_count=success_count, failed_count=failed_count,
-            poster_data=poster_data, asset_type=asset_type,
+            poster_data=poster_data, asset_type=asset_type, server_id=server_id,
+            synced_server_ids=synced_server_ids, preset_id=preset_id,
         )
         for webhook_url in discord_urls:
             try:
@@ -492,13 +650,8 @@ def send_apprise_notification(
                 else:
                     year_str = f" ({year})" if year else ""
                     body = f"{title}{year_str}"
-                body += f"\nLibrary: {library_name}"
-                if template_id:
-                    body += f"\nTemplate: {template_id}"
-                body += f"\nAction: {action_text}"
-                asset_label = _get_asset_type_label(asset_type)
-                if asset_label:
-                    body += f"\nAsset: {asset_label}"
+                for name, value in _summary_fields(library_id, template_id, preset_id, action, server_id, synced_server_ids, asset_type):
+                    body += f"\n{name}: {value}"
 
                 result = ap.notify(title=notify_title, body=body)
                 if result:
@@ -516,13 +669,346 @@ def send_apprise_notification(
     return overall_ok
 
 
+_MIRROR_ASSET_LABELS = [
+    ("poster", "Posters"),
+    ("logo", "Logos"),
+    ("backdrop", "Backdrops"),
+    ("square_art", "Square Art"),
+    ("thumb_art", "Thumb Art"),
+]
+
+
+def _mirror_count_lines(counts: Dict[str, Dict[str, int]], prefix: str = "") -> List[tuple]:
+    """("Posters", "3/40 copied (37 unchanged)") pairs, one per asset type that
+    the run actually checked."""
+    lines = []
+    for key, label in _MIRROR_ASSET_LABELS:
+        c = counts.get(key)
+        if not c or not c.get("total"):
+            continue
+        value = f"{c.get('copied', 0)}/{c['total']} copied"
+        extras = []
+        if c.get("unchanged"):
+            extras.append(f"{c['unchanged']} unchanged")
+        if c.get("failed"):
+            extras.append(f"{c['failed']} failed")
+        if extras:
+            value += f" ({', '.join(extras)})"
+        lines.append((f"{prefix}{label}" if not prefix else f"{prefix}{label.lower()}", value))
+    return lines
+
+
+def send_media_mirror_notification(
+    group_name: str,
+    library_id: Optional[str],
+    source_server_id: Optional[str],
+    target_server_ids: List[str],
+    asset_counts: Dict[str, Dict[str, int]],
+    collection_counts: Dict[str, Dict[str, int]],
+    totals: Dict[str, int],
+    scheduled: bool = False,
+    error: Optional[str] = None,
+) -> None:
+    """Run summary for a Media Mirror run (Quirk #151): which servers, and per
+    asset type how many items were copied out of how many the source had.
+    Sent to Discord and/or Apprise, controlled by their own "Media Mirror"
+    toggles in Settings -> Notifications plus the usual library filter.
+
+    A scheduled run that copied nothing and had no failures is not announced
+    -- a nightly "nothing changed" message would just be noise. A manual run
+    always is, and a failed run always is."""
+    nothing_happened = not error and not totals.get("updated") and not totals.get("failed")
+    if scheduled and nothing_happened:
+        logger.debug("[MIRROR] Scheduled run changed nothing -- no notification")
+        return
+
+    send_discord = _should_notify("media_mirror", library_id)
+    send_apprise = _should_notify_apprise("media_mirror", library_id)
+    if not send_discord and not send_apprise:
+        return
+
+    from ..media_server import get_server_label
+    group_label = group_name or _get_library_name(library_id)
+    servers = None
+    if source_server_id:
+        targets = ", ".join(get_server_label(t) for t in target_server_ids) or "—"
+        servers = f"{get_server_label(source_server_id)} → {targets}"
+
+    fields: List[tuple] = [("Library", group_label)]
+    if servers:
+        fields.append(("Servers", servers))
+    if error:
+        description = f"Run failed: {error}"
+        color = 0xFF4757
+    else:
+        fields.extend(_mirror_count_lines(asset_counts))
+        fields.extend(_mirror_count_lines(collection_counts, prefix="Collection "))
+        if totals.get("unmapped"):
+            fields.append(("Unmapped", f"{totals['unmapped']} item(s) not found on a target"))
+        if totals.get("failed"):
+            description = f"Run finished with {totals['failed']} failed item(s)"
+            color = 0xFFA502
+        elif totals.get("updated"):
+            description = f"Run successful — {totals['updated']} of {totals.get('checked', 0)} item(s) updated"
+            color = 0x3DD6B7
+        else:
+            description = f"Run successful — nothing changed ({totals.get('checked', 0)} item(s) checked)"
+            color = 0x3DD6B7
+
+    title = f"\U0001FA9E {'Scheduled ' if scheduled else ''}Media Mirror Complete"
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "fields": [{"name": n, "value": v, "inline": True} for n, v in fields],
+        "footer": {"text": "Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    settings = _get_notification_settings()
+    if send_discord:
+        try:
+            resp = requests.post(settings.get("discordWebhookUrl", ""), json={"embeds": [embed]}, timeout=10)
+            if resp.status_code not in (200, 204):
+                logger.warning("[DISCORD] Media Mirror notification failed: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.error("[DISCORD] Media Mirror notification error: %s", e)
+
+    if send_apprise:
+        other_urls: List[str] = []
+        for url in settings.get("appriseUrls", []) or []:
+            if not url.strip():
+                continue
+            discord_webhook = _resolve_discord_webhook_url(url)
+            if discord_webhook:
+                try:
+                    resp = requests.post(discord_webhook, json={"embeds": [embed]}, timeout=10)
+                    if resp.status_code not in (200, 204):
+                        logger.warning("[APPRISE] Media Mirror Discord embed failed: HTTP %s", resp.status_code)
+                except Exception as e:
+                    logger.error("[APPRISE] Media Mirror Discord embed error: %s", e)
+            else:
+                other_urls.append(url.strip())
+        if other_urls:
+            try:
+                import apprise
+                ap = apprise.Apprise()
+                for url in other_urls:
+                    ap.add(url)
+                body = description + "".join(f"\n{n}: {v}" for n, v in fields)
+                if len(ap) > 0 and not ap.notify(title=f"{title} — Simposter", body=body):
+                    logger.warning("[APPRISE] One or more Apprise services failed (Media Mirror)")
+            except Exception as e:
+                logger.error("[APPRISE] Media Mirror notification error: %s", e)
+
+
+def send_poster_drift_notification(items: List[Dict[str, Any]]) -> None:
+    """One summary per scan of posters changed outside Simposter (poster_drift.py).
+    Only sent when the drift action is "notify" or "resend"; uses the normal
+    Discord/Apprise switches. The library filter doesn't apply (an item can
+    belong to any library)."""
+    send_discord = _should_notify("poster_drift")
+    send_apprise = _should_notify_apprise("poster_drift")
+    if not items or (not send_discord and not send_apprise):
+        return
+    from ..media_server import get_server_label
+    resent = [i for i in items if i.get("resent")]
+    lines = []
+    for i in items[:15]:
+        line = f"{i.get('title') or i.get('rating_key')} ({get_server_label(i.get('server_id') or 'plex-1')})"
+        if (i.get("asset_type") or "poster") != "poster":
+            line += f" · {i['asset_type']}"
+        if "resent" in i:
+            line += " — re-sent" if i["resent"] else " — re-send failed"
+        lines.append(line)
+    if len(items) > 15:
+        lines.append(f"...and {len(items) - 15} more")
+    title = "\U0001F50D Art Changed Outside Simposter"
+    description = f"{len(items)} poster(s), logo(s) or backdrop(s) were changed on the server since Simposter sent them."
+    if resent:
+        description += f" {len(resent)} re-sent."
+    fields = [("Items", "\n".join(lines))]
+    embed = {
+        "title": title,
+        "description": description,
+        "color": 0xFFA502,
+        "fields": [{"name": n, "value": v[:1024], "inline": False} for n, v in fields],
+        "footer": {"text": "Simposter · History → Changed Outside Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    settings = _get_notification_settings()
+    if send_discord:
+        try:
+            resp = requests.post(settings.get("discordWebhookUrl", ""), json={"embeds": [embed]}, timeout=10)
+            if resp.status_code not in (200, 204):
+                logger.warning("[DISCORD] Poster drift notification failed: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.error("[DISCORD] Poster drift notification error: %s", e)
+    if send_apprise:
+        other_urls: List[str] = []
+        for url in settings.get("appriseUrls", []) or []:
+            if not url.strip():
+                continue
+            discord_webhook = _resolve_discord_webhook_url(url)
+            if discord_webhook:
+                try:
+                    requests.post(discord_webhook, json={"embeds": [embed]}, timeout=10)
+                except Exception as e:
+                    logger.error("[APPRISE] Poster drift Discord embed error: %s", e)
+            else:
+                other_urls.append(url.strip())
+        if other_urls:
+            try:
+                import apprise
+                ap = apprise.Apprise()
+                for url in other_urls:
+                    ap.add(url)
+                body = description + "\n" + "\n".join(lines)
+                if len(ap) > 0 and not ap.notify(title=f"{title} — Simposter", body=body):
+                    logger.warning("[APPRISE] One or more Apprise services failed (poster drift)")
+            except Exception as e:
+                logger.error("[APPRISE] Poster drift notification error: %s", e)
+
+
+def send_overlay_refresh_notification(
+    group: Dict[str, Any],
+    stats: Dict[str, int],
+    items: List[Dict[str, Any]],
+    scheduled: bool = False,
+) -> None:
+    """Run summary for an overlay refresh (Quirk #166): how many tracked
+    posters were checked/updated/failed, plus a few of the updated titles.
+    Uses its own "Overlay Refresh" toggles; library filter = the group's
+    first member library."""
+    members = (group or {}).get("members") or []
+    library_id = str(members[0].get("libraryId")) if members else None
+    send_discord = _should_notify("overlay_refresh", library_id)
+    send_apprise = _should_notify_apprise("overlay_refresh", library_id)
+    if not send_discord and not send_apprise:
+        return
+
+    # One line per title: the same poster on Plex and Jellyfin is two tracked
+    # rows, but one change from the user's point of view.
+    def _by_title(status: str) -> List[Dict[str, Any]]:
+        from ..media_server import get_server_label
+        merged: Dict[str, Dict[str, Any]] = {}
+        for i in items:
+            if i.get("status") != status:
+                continue
+            row = merged.setdefault(str(i.get("title")), {"title": i.get("title"), "reasons": [], "servers": []})
+            reason = i.get("reason")
+            if reason and reason not in row["reasons"]:
+                row["reasons"].append(reason)
+            label = get_server_label(i.get("server_id") or "")
+            if label not in row["servers"]:
+                row["servers"].append(label)
+        return list(merged.values())
+
+    updated = _by_title("updated")
+    removed = _by_title("removed")
+    n_updated = len(updated) or stats.get("updated", 0)
+    n_removed = len(removed) or stats.get("removed", 0)
+    fields: List[tuple] = [("Library", (group or {}).get("name") or _get_library_name(library_id))]
+    fields.append(("Checked", str(stats.get("checked", 0))))
+    if stats.get("removed"):
+        fields.append(("Overlays removed", str(n_removed)))
+    else:
+        fields.append(("Updated", str(n_updated)))
+    if stats.get("failed"):
+        fields.append(("Failed", str(stats["failed"])))
+    if updated:
+        # One line per reason with the titles it affected, e.g.
+        # "now shows bg_mid (3): Buddy, Clayface, Drive -- Plex, Jellyfin".
+        by_reason: Dict[str, Dict[str, Any]] = {}
+        for r in updated:
+            reason = "; ".join(r["reasons"]) or "re-rendered"
+            entry = by_reason.setdefault(reason, {"titles": [], "servers": []})
+            entry["titles"].append(str(r["title"]))
+            for s in r["servers"]:
+                if s not in entry["servers"]:
+                    entry["servers"].append(s)
+        lines = []
+        for reason, entry in sorted(by_reason.items(), key=lambda kv: -len(kv[1]["titles"])):
+            titles = entry["titles"]
+            shown = ", ".join(titles[:6]) + (f" +{len(titles) - 6} more" if len(titles) > 6 else "")
+            count = f" ({len(titles)})" if len(titles) > 1 else ""
+            lines.append(f"**{reason}**{count}: {shown} — {', '.join(entry['servers'])}")
+        text = ""
+        for i, line in enumerate(lines):
+            rest = len(lines) - i
+            if len(text) + len(line) + 1 > 960:
+                text += f"...and {rest} more change{'s' if rest != 1 else ''}"
+                break
+            text += line + "\n"
+        fields.append(("Changes", text.strip()))
+    if stats.get("failed"):
+        description = f"Finished with {stats['failed']} failed poster(s)"
+        color = 0xFFA502
+    elif stats.get("removed"):
+        description = f"Overlays removed from {n_removed} poster(s)"
+        color = 0x3DD6B7
+    elif stats.get("updated"):
+        description = f"{n_updated} poster(s) re-rendered with updated overlays"
+        color = 0x3DD6B7
+    else:
+        description = f"Nothing changed ({stats.get('checked', 0)} poster(s) checked)"
+        color = 0x3DD6B7
+
+    title = f"\U0001F501 {'Scheduled ' if scheduled else ''}Overlay Refresh Complete"
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "fields": [{"name": n, "value": v, "inline": n != "Changes"} for n, v in fields],
+        "footer": {"text": "Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    settings = _get_notification_settings()
+    if send_discord:
+        try:
+            resp = requests.post(settings.get("discordWebhookUrl", ""), json={"embeds": [embed]}, timeout=10)
+            if resp.status_code not in (200, 204):
+                logger.warning("[DISCORD] Overlay refresh notification failed: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.error("[DISCORD] Overlay refresh notification error: %s", e)
+
+    if send_apprise:
+        other_urls: List[str] = []
+        for url in settings.get("appriseUrls", []) or []:
+            if not url.strip():
+                continue
+            discord_webhook = _resolve_discord_webhook_url(url)
+            if discord_webhook:
+                try:
+                    requests.post(discord_webhook, json={"embeds": [embed]}, timeout=10)
+                except Exception as e:
+                    logger.error("[APPRISE] Overlay refresh Discord embed error: %s", e)
+            else:
+                other_urls.append(url.strip())
+        if other_urls:
+            try:
+                import apprise
+                ap = apprise.Apprise()
+                for url in other_urls:
+                    ap.add(url)
+                body = description + "".join(f"\n{n}: {v}" for n, v in fields)
+                body = body.replace("**", "")
+                if len(ap) > 0 and not ap.notify(title=f"{title} — Simposter", body=body):
+                    logger.warning("[APPRISE] One or more Apprise services failed (overlay refresh)")
+            except Exception as e:
+                logger.error("[APPRISE] Overlay refresh notification error: %s", e)
+
+
 def send_batch_notification(
     library_id: Optional[str],
     template_id: str,
     preset_id: str,
     success_count: int,
     failed_count: int,
-    source: str = "batch"
+    source: str = "batch",
+    action: str = "sent_to_plex",
+    synced_server_ids: Optional[List[str]] = None,
 ) -> bool:
     """
     Send a notification for batch processing completion.
@@ -534,6 +1020,16 @@ def send_batch_notification(
         success_count: Number of successful posters
         failed_count: Number of failed posters
         source: Source type ('batch', 'auto_generate', etc.)
+        action: Was previously ALWAYS hardcoded "sent_to_plex" here, regardless
+            of whether the batch run actually targeted Plex at all -- a real,
+            misleading bug for a Jellyfin/Emby-only batch (req.send_to_plex
+            False, targets=[...] only), which would still have said "Sent to
+            Plex" despite never touching Plex. Callers now pass the batch's
+            real `req.send_to_plex`-derived action instead.
+        synced_server_ids: Union of every non-Plex server_id actually synced
+            to across the whole batch run, for the "Also synced to" field --
+            independent of `action`, since a run can send to Plex directly
+            AND sync to a linked Jellyfin/Emby server in the same pass.
 
     Returns:
         True if notification was sent successfully
@@ -545,10 +1041,11 @@ def send_batch_notification(
         preset_id=preset_id,
         library_id=library_id,
         source=source,
-        action="sent_to_plex",
+        action=action,
         count=total,
         success_count=success_count,
-        failed_count=failed_count
+        failed_count=failed_count,
+        synced_server_ids=synced_server_ids,
     )
 
 
@@ -556,7 +1053,8 @@ def start_batch_progress_notification(
     library_id: Optional[str],
     template_id: str,
     total_count: int,
-    source: str = "batch"
+    source: str = "batch",
+    preset_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Send initial batch progress notification and return the message ID for updates.
@@ -588,8 +1086,8 @@ def start_batch_progress_notification(
                     "inline": True
                 },
                 {
-                    "name": "Template",
-                    "value": template_id or "N/A",
+                    "name": "Preset",
+                    "value": _get_preset_label(template_id, preset_id),
                     "inline": True
                 },
                 {
@@ -638,6 +1136,7 @@ def update_batch_progress_notification(
     poster_data: Optional[bytes] = None,
     poster_fallback_count: int = 0,
     logo_fallback_count: int = 0,
+    preset_id: Optional[str] = None,
 ) -> bool:
     """
     Update an existing batch progress notification.
@@ -675,8 +1174,8 @@ def update_batch_progress_notification(
                     "inline": True
                 },
                 {
-                    "name": "Template",
-                    "value": template_id or "N/A",
+                    "name": "Preset",
+                    "value": _get_preset_label(template_id, preset_id),
                     "inline": True
                 },
                 {
@@ -758,6 +1257,9 @@ def complete_batch_progress_notification(
     poster_data: Optional[bytes] = None,
     poster_fallback_count: int = 0,
     logo_fallback_count: int = 0,
+    synced_server_ids: Optional[List[str]] = None,
+    preset_id: Optional[str] = None,
+    action: str = "sent_to_plex",
 ) -> bool:
     """
     Update batch progress notification with final completion status.
@@ -785,22 +1287,10 @@ def complete_batch_progress_notification(
             description += f"\n**{failed_count}** failed"
 
         fields = [
-            {
-                "name": "Library",
-                "value": library_name,
-                "inline": True
-            },
-            {
-                "name": "Template",
-                "value": template_id or "N/A",
-                "inline": True
-            },
-            {
-                "name": "Total",
-                "value": str(total_count),
-                "inline": True
-            }
+            {"name": name, "value": value, "inline": True}
+            for name, value in _summary_fields(library_id, template_id, preset_id, action, None, synced_server_ids)
         ]
+        fields.append({"name": "Total", "value": str(total_count), "inline": True})
 
         # Show fallback counts if any were used
         if poster_fallback_count > 0 or logo_fallback_count > 0:

@@ -10,13 +10,765 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
-    version: 'v1.6.110',
-    date: '2026-09-26',
+    version: 'v1.8.26',
+    date: '2026-10-30',
     sections: [
       {
         title: 'Improvements',
         items: [
-          'Sorting by title now ignores a leading "The"/"A"/"An" — "The Matrix" sorts under M, "A Bug\'s Life" under B — matching how Plex/Kodi/iTunes libraries already sort (GitHub issue #70). Applies everywhere title-sorting exists: Movies, TV Shows, Logos, Backdrops, Square Art, and both Batch Edit pages.',
+          'Overlay Refresh: tracked posters are one sorted list showing each poster\u2019s preset and the overlays it was sent with. Click a column heading to sort by title, preset, overlays or last sent, and filter by preset or overlay. Hover a title to see what\u2019s on the poster right now.',
+          'Quieter logs: each poster render now logs one "Not drawn" summary instead of a line per skipped layer (the reasons are still there at DEBUG level), a scan logs one line listing the art that changed in Plex instead of one line per item, and scan progress and other step-by-step lines moved to DEBUG.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.25',
+    date: '2026-10-30',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay Refresh: tracked posters are grouped by what’s on the poster (or by the overlays they were sent with), with sorting by title or last sent and a Re-send button per group, instead of one long list.',
+          'Overlay Refresh says what changed: "now shows Trending", "no longer shows bg_low", "Resolution: 1080 → 4k" or "Trending restyled (position, color)", with the reason (e.g. "now on list Trending") first.',
+          'The Overlay Refresh notification lists each change once with the titles it affected, so every updated poster fits instead of five plus "and 11 more".',
+          'The overlay render log says "not on any list it checks" instead of "List is unknown" when the lists were checked and the item isn’t on one.',
+          'Updated fastapi to 0.143.0 and numpy to 2.5.4.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Editing a layer’s "Show when" rules, for example UMTK rewriting a live Kometa file’s TMDb ID lists every day, no longer re-renders posters that look the same. Only settings that change how a layer looks count.',
+          'The automatic database backup on upgrade now works in Docker (it never ran there, because the image couldn’t tell which version it was) and is taken before the upgrade changes anything. Look for simposter_<old version>.db.bak in config/settings.',
+          'Batch Edit with Plex and Jellyfin ticked now sends to Jellyfin for items shown under their Jellyfin copy (before, only Plex got them). When a ticked server is skipped, the log now says why.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.24',
+    date: '2026-10-29',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'When a Radarr/Sonarr webhook arrives before Jellyfin/Emby has imported the file, Simposter now checks again over the next ~40 minutes and sends the poster as soon as the item shows up, with its own notification. If the next library scan finds it first, the scan sends it and notifies instead. Before, it waited for the scan and sent no notification.',
+          'History records those later Jellyfin/Emby sends as the webhook (they showed as Auto), with the webhook’s template and preset.',
+          'History’s library filter lists each library group once (a group’s Plex and Jellyfin libraries both showed as "Movies"), and picking it shows every server’s rows.',
+          'Overlay Refresh lists a title on Plex and Jellyfin once, with both servers shown, instead of one row per server. Re-send and Remove overlays on that row apply to both copies, and check results are merged the same way.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.23',
+    date: '2026-10-28',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Resending a saved poster with the arrow on a grid card now shows in History, one row per server ("Resent to Plex", "Resent to Jellyfin"), plus a row per season resent to Plex. It wasn’t recorded at all.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.22',
+    date: '2026-10-28',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Poster editor: switching to a preset without overlays now unticks the overlays the previous preset had turned on (they stayed ticked). Switching between a show’s series and seasons still keeps the overlays you ticked.',
+          'After sending from the poster editor, every server that got the poster shows it: the "current poster" for a Jellyfin/Emby show or season now updates (it kept the old one), and the grid thumbnails of the other servers’ copies refresh too, not just the one on screen.',
+          'Search shows a title once per library group, even when it’s on several servers, and opening it lets you send to all of them (it showed one result per server, each sending only to its own server). Groups with "merge items" off still list each copy.',
+          'History now shows a row for posters the editor sends to Jellyfin/Emby (only the Plex send was listed), and the Plex row has its library when the editor was opened on the Jellyfin copy.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.21',
+    date: '2026-10-27',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Overlays → Scheduler has a "Refresh ratings & lists now" button (fetches them regardless of age) and a "Run now" button that runs Overlay Refresh for one library group.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Batch Edit and auto-generate fetch the ratings an overlay needs 100 at a time before rendering, instead of one MDBList request per poster. Ratings already stored are reused.',
+          'Ratings are now re-checked every 45 days by default (was 7), which saves MDBList calls. If you never changed it, it moves to 45; a value you set is kept.',
+          'Requests to MDBList, TMDb, Fanart.tv and TVDB now show up as Simposter on those services instead of "python-requests".',
+          'Clearer logs: Jellyfin/Emby uploads name the title, server and size; a resend says which servers got the poster; a Jellyfin/Emby item re-imported under a new id is called out; linked-library scans are one line per library; and posters changed outside Simposter are summed up in one line per scan.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'With "Items that already have a poster" set to resend, a webhook now also re-sends the poster to the other servers in the library group (it only went to Plex).',
+          'Scans no longer re-check the logo or backdrop of items that have none on every scan (a TV show without a logo was flagged as "changed" each time).'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.20',
+    date: '2026-10-27',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'TV shows and seasons now have a quality for overlays: a show uses its best episode (a show with any 4K episode counts as 4K, like Kometa), and each season its own best episode. Run a TV scan to fill it in.',
+          'Share a preset as a file from Template Manager (the share button on a preset, or Share selected), with its overlays if you like. It downloads a .zip when overlay images or fonts need to go with it, otherwise a .json. Import it with Import / Export → Open file.',
+          'More fonts: Simposter downloads 24 open-source font families (Oswald, Anton, Poppins, Raleway, Playfair Display, Cinzel, Bebas Neue and more) from its own font collection. Importing the Simposter defaults downloads them all; the rest of the time they download on first use.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay Refresh now says what changed, for example "now on list Trending: added Trending frame" or "Audience rating 8.4 → 8.7: added High score", instead of only naming the layer.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.19',
+    date: '2026-10-27',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'After you change and save an overlay, Simposter lists the posters that were sent with it and offers to refresh them. Only posters whose overlay now looks different are re-sent.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.18',
+    date: '2026-10-26',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Kometa import and live Kometa files have a new library type, "Movies and TV Shows": one overlay for both kinds of library, like a Kometa file both libraries point to. Layers that are the same for both are kept once; layers for only one kind (or that look different) only show on that kind.',
+          'Overlays → Scheduler: set how often ratings (in days) and lists (in hours) are fetched again. These are the only overlay settings that use API calls. Ratings keep the value you had under MDBList; lists start at once a day. The section also lists every library\'s Overlay Refresh schedule with a link to it.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay Refresh first fetches any list or rating that is due, so a run right after a list\'s refresh time already uses the new list.',
+          'Overlay Refresh no longer tracks posters sent with a preset that has no overlays (they could never change). Existing ones are removed on startup.',
+          'The Overlays page starts with a short "How overlays work" guide: make an overlay, turn it on in a preset, send posters, and keep them up to date with the Scheduler and Overlay Refresh. It can be hidden.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'TV editor: sending a poster for a Plex show that also has a Jellyfin/Emby copy now goes to every server you pick. It was only sent to Plex. A selected season a picked server doesn\'t have is skipped and named in a message, instead of being sent to another server.',
+          'A season poster sent to Plex from the editor now shows in History as "Show - Season 2" with the show\'s year (it showed only "Season 2"), and {title} on the poster is the show\'s name, as in the preview.',
+          'Without Plex: retries (scheduled and Retry now) now send Jellyfin/Emby items to their own server and the rest of their library group. They rendered a poster but sent it nowhere, and a network error could drop items from the queue. Overlays → "A real movie or show" now lists Jellyfin/Emby libraries too.',
+          'Changing the Floppy server address now asks for the app token again, instead of keeping the saved token for the new address.',
+          'Batch Edit: a brief network hiccup reaching TMDb (for example a DNS lookup that times out when several posters start at once) is now retried instead of failing those posters.',
+          'A Batch Edit sent only to Jellyfin/Emby now says "Sent" in its notification, with the servers it reached (it said "Saved locally").',
+          'Importing a Kometa file again (for example the TV copy of one you imported for movies) without uploading its images now uses the images already in Your images with the same file name, instead of reporting them missing and importing the layers without images. Live Kometa files do the same when an image isn\'t on disk.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.17',
+    date: '2026-10-26',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Overlay rules can use lists from WeTrakr, SIMKL and Floppy, not just MDBList. Set them up in Settings → General: WeTrakr takes an app key (public lists) and an optional account connection (your private lists and tracking lists), SIMKL takes a client ID and an account connection (your Plan to Watch, Watching, Completed... lists, and custom lists with SIMKL PRO/VIP), and Floppy takes your server address and an app token.',
+          'In Show when, "On a list" offers your own lists from every connected service in one dropdown, or you can paste any list link. Lists are cached and refreshed in the background, so a render never waits on a list service.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.16',
+    date: '2026-10-25',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Plex items with more than one TMDb ID (Plex sometimes keeps an old one) now use the right ID, the one TMDb links to the item\'s IMDb ID. Before, the first one was used, which could fetch art for the wrong movie and show the item twice in a group with Jellyfin/Emby. Run a library scan to correct existing items.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.15',
+    date: '2026-10-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Two new starter presets with a white border: budget-mm2k (the title as text) and budget-cl2k (the logo, with the season number on season posters). New installs get them during setup; existing installs can add them with Template Manager → Import Simposter defaults.',
+          'Importing the Simposter defaults also downloads a set of free fonts (Arimo, Roboto, Inter, Montserrat, Lato, Comfortaa, Bebas Neue), so they show in the font lists and are ready to use. Fonts that imported presets use are downloaded too.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Presets that use Arial (including the Simposter starters) no longer fall back to a different-looking font on Docker, where Arial isn\'t installed: they use Arimo, a free font with the same shape and spacing.',
+          'The Bebas font from Kometa\'s font collection loads again (it was renamed to Bebas Neue).'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.14',
+    date: '2026-10-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Changed outside Simposter now covers logos and backdrops too, not just posters. Library scans notice a logo or backdrop changed on the server, and History lists it next to the one Simposter sent, with Put back and Keep server\'s.',
+          'A "Changed" badge marks posters, logos and backdrops changed outside Simposter in the Movies, TV Shows, Logos and Backdrops grids. Click it to open the list in History.',
+          'Media Mirror can copy Thumb Art between Jellyfin and Emby servers, and Backup / Restore covers Thumb Art for Jellyfin/Emby libraries.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Library scans re-download a logo or backdrop when it changed on the server, without needing Force Refresh.',
+          'Overlay Manager: the preview draws text with the same font as the finished poster (uploaded fonts and Kometa fonts), instead of a stand-in from your browser.',
+          'Backup / Restore only offers Square Art for Plex libraries.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Kometa overlays: text now uses the same fonts as Kometa (Roboto-Medium by default, and any other font Kometa ships) instead of falling back to a bold system font. Use "Check now" on a live file, or import again, to update an existing overlay.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.13',
+    date: '2026-10-22',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Live Kometa files: a Browse button next to the file path lets you pick the .yml file from the Simposter server folders instead of typing the path.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Live Kometa files: the status now says which layers were skipped and why (for example, text with no position in the file).',
+          'Overlay Manager: a Kometa "backdrop" layer shows as a Background box with its color and size settings, instead of empty text fields, and warns when it has no color.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.12',
+    date: '2026-10-22',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Jellyfin/Emby scans are faster: items that haven\'t changed since the last scan are skipped.',
+          'Settings → Output is simpler: pick a save layout from cards that show the exact file names it writes. Templates and variables only appear under Custom, where variables can be clicked in.',
+          'Settings → Media Servers shows Silo as a coming server type (not usable yet).',
+          'Settings → Media Servers marks Emby as "Testing required": it uses the same calls as Jellyfin but hasn\'t been tested on a real Emby server yet.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Jellyfin/Emby: sending to an item that the server re-imported (it gets a new id) no longer fails until the next scan. Simposter finds the item again and sends to it.',
+          'Jellyfin/Emby: resolution and audio language badges set up in the Overlay Manager now match Jellyfin items too (they used different value names). Run a scan to update existing items.',
+          'Overlay Manager preview shows studio and streaming badges for Jellyfin/Emby items.',
+          'Jellyfin/Emby: a library scan with auto-generate on no longer makes a new poster for an item that a Radarr/Sonarr webhook already sent one to.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.11',
+    date: '2026-10-22',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'History → Changed Outside Simposter: Simposter now notices when a poster it sent was changed on the server (Kometa overlays, a manual edit, another tool). Choose what happens: only list it, list and notify, or put the Simposter poster back.',
+          'Each changed poster is shown next to the one Simposter sent.',
+          'Kometa import now supports blur, font styles of variable fonts, images next to text (addon images) and queues (layers that fill a list of positions, highest weight first). Blur is also a new layer type in the Overlay Manager.',
+          'Overlay Refresh can remove overlays: re-send a poster (or a filtered set) without any overlays.',
+          'Text layers can insert "Days since added" and "Show status".'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Saving Settings no longer reverts a Media Mirror setup made on the Media Mirror page in the meantime.'
+        ]
+      },
+      {
+        title: 'Security',
+        items: [
+          'Pillow updated to 13.0 (Python 3.11 and newer) and Vite to 8.3.5.',
+          'Restoring a database backup only reuses a stored media server key when the server address is the same.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.10',
+    date: '2026-10-21',
+    sections: [
+      {
+        title: 'Security',
+        items: [
+          'API keys and tokens (Fanart, TVDB, MDBList, Jellyfin/Emby, the webhook secret) are now hidden in the log and in error messages, not only the Plex token and TMDb key.',
+          'Image links (Kometa imports, URL badges, editor URLs, logo/backdrop sends) are checked again at every redirect, so a public link can no longer redirect to a device on your network.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'New overlay guide (docs/OVERLAYS.md), and the README, getting-started, media server, collections, architecture and workflow docs are updated for the overlay features.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.04',
+    date: '2026-10-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Kometa import: "Paste YAML" lets you paste an overlay file instead of uploading it. You can still add the images, fonts or zip it uses alongside.',
+          'Two new "Show when" fields: Days since added (from the date your last scan recorded) and Show status (continuing, ended, canceled or upcoming, from TMDb, for TV shows). Both have example values in the preview.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'TSSK overlay files now import correctly: their status filters (tvdb_status / tmdb_status) and "added" filters work instead of hiding the layer.',
+          'Filters with several comma-separated values, such as "label.not: Coming Soon, RequestNeeded", are now treated as separate values, as Kometa does. Before, they were read as one value and never matched.',
+          'Kometa overlays named "backdrop…" are imported as background boxes, as Kometa draws them, instead of looking for an image file.',
+          'An empty or comment-only overlay file (for example one TSSK has not filled yet) imports as an overlay with no layers instead of failing.',
+          'Overlays matched by a TMDb/TVDB ID list no longer show as a warning in the import report; the note about re-importing to update the list is shown as information.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.03',
+    date: '2026-10-20',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Kometa imports now download images an overlay links to (url, git or Kometa defaults) into your image library, so they show in the editor\'s Image list and don\'t depend on the link. Image layers also show their link in the editor. Re-import files you imported before.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.02',
+    date: '2026-10-20',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Fast-render overlay layers (matte, fade, vignette) are now built for every preset when Simposter starts, and again when a preset is saved or imported, so the first batch render is already fast.',
+          'Clearer logs: each poster with overlays gets a short summary of the data used (including ratings, or why they weren\'t loaded), the layers drawn, and why each other layer was skipped. Internal details moved to the debug log level.',
+          'Overlay Refresh lists which overlays each poster was sent with. Filter by an overlay, then re-send every poster that has it, or re-send a single poster.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'A season poster with its own matte, fade or vignette, or a Square Art render, could reuse the series poster\'s cached effects (or the other way round). Each now has its own.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.01',
+    date: '2026-10-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Live Kometa files (Overlay Manager, Advanced): point Simposter at an overlay file another tool keeps rewriting, like UMTK\'s daily files. It re-reads the file on a schedule, re-imports it into the same overlay when it changed, and can re-render the posters whose overlay now looks different.',
+          'Kometa files that list movies or shows by ID (tmdb_movie, tmdb_show, tvdb_show) now import, matching each item by its TMDb or TVDB ID. Re-import files you imported before to pick this up.',
+          'TMDb ID and TVDB ID can be used in Show when.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.0',
+    date: '2026-10-19',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Overlays are much easier to build: layers are listed top-down (the top one is drawn on top), each layer has Look, Position and Show when tabs, and settings are grouped in labelled boxes.',
+          'Show when: put a layer, or a whole overlay, only on posters that match, e.g. only 4K movies, only TrueHD Atmos, only files named "remux", or only movies rated 8 or higher.',
+          'Badge sets: group layers that shouldn\'t appear together (like 4K, 1080p and 720p) so only the first match is drawn.',
+          'Text layers can show values per movie, e.g. {audience_rating} or {mdb_imdb_rating}, picked from an Insert value list.',
+          'MDBList ratings and lists for overlays (add your API key in Settings, General).',
+          'Import Kometa overlay files, with a report of anything Simposter can\'t do yet.',
+          'Overlay Refresh: re-render posters whose overlay would now look different, on a schedule per library group.',
+          'Preview improvements: compare the overlay on several posters at once, a warning on layers that would show nothing, and a bigger editor.',
+          'The version badge now tells you when your branch has an update, or when your branch was merged and you should switch to another one.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Text layers showed {values} as written instead of filling them in.',
+          'The overlay preview limited image badges to half the poster width, so a larger Scale did nothing.',
+          'The update check never worked.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.12',
+    date: '2026-10-16',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Preset export now includes the overlay configs a preset uses and their badge images, so the preset looks the same when imported on another Simposter. Export selected presets, all presets or a compact copy, then use Download file or Open file in Template Manager.',
+          'Database backup now covers your settings, presets, overlay configs and badge images. Restore by choosing the backup file; API keys left out of the backup keep their current values.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Database backup export and import (Settings, Advanced) failed every time; both work again.',
+          'Clearing every overlay in the editor and saving the preset now removes them; before, the preset kept its old overlays.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.11',
+    date: '2026-10-15',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Editor preview toolbar: show the logo and text boxes right on the preview, then drag a box to move it or drag its corner to resize it.',
+          'Guides on the preview: center lines and a safe-area margin to help line things up.',
+          'The preview status now says Not up to date when settings changed after the last render.',
+          'The Current poster/logo column can be hidden, and Add to Retry Queue moved into a menu next to the Send button.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Opening Simposter at its base address no longer shows every movie library at once with Plex and Jellyfin copies as separate cards; it opens the first library, merged as expected.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.10',
+    date: '2026-10-14',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Refreshed manual editor: the left panel now has Image, Logo, Text and Extras tabs, with the preset bar pinned at the top and the Preview button at the bottom. Less-used settings (fades, drop shadow, boxes, font, outline) sit in small collapsible groups that show their current values when closed. Sliders take one line each, related dropdowns share a row, and the upload box is now a small Upload button next to "View all".',
+          'Labels to remove are now pinned above the Preview button on every tab, so they\'re always in view before you send.',
+          'Two bounding boxes: the logo and Custom Text each have their own box (yellow and blue outlines on the preview). Custom Text always sits in its box and shrinks to fit it. Existing presets are converted automatically and render the same as before.',
+          'Backdrops as poster backgrounds: switch the Images dropdown to Backdrops, filter them by text/textless, and zoom or pan a backdrop in the editor. "View all" opens every poster or backdrop in a larger picker.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Saving a preset (or Save As) no longer resets its season poster settings to "No Logo".',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Imported Simposter starter presets have text shadow turned off, and simposter-main\'s season text uses Comfortaa-Medium with no extra letter spacing.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.08',
+    date: '2026-10-13',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Thumb Art for Jellyfin and Emby: a new Thumb Art page (in a library\'s menu when its group has a Jellyfin or Emby library) for the 16:9 "Thumb" image those servers show in thumbnail views. Make one from a backdrop with your template/preset, adjust the backdrop position and logo size, then send it to the title\'s Jellyfin/Emby copies or save it to disk. Plex has no Thumb slot, so it\'s Jellyfin/Emby only.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Square Art shows a Plex icon in its header when the library is linked to Jellyfin or Emby, and Thumb Art shows the Jellyfin/Emby icon, so it\'s clear which server each one is for.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.07',
+    date: '2026-10-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Library scans (scheduled and manual) now pick up posters changed outside Simposter, e.g. by Kometa overlays, on Plex, Jellyfin and Emby. Only changed posters are re-downloaded, so scans stay fast and you no longer need "Force Refresh All Art" for this.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.06',
+    date: '2026-10-09',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Media Mirror now sends a Discord/Apprise summary when a run finishes: servers, and how many posters, logos, backdrops and collections were copied (e.g. "Posters: 3/40 copied"). Scheduled runs only notify when something changed or failed. Toggle it under Settings → Notifications.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'History showed Jellyfin season posters with only the show name. They now read "Show - Season N" with the year, matching the Plex rows.',
+          'Posters delivered to Jellyfin after it imported a show now record the preset in History instead of "—".',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.05',
+    date: '2026-10-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Notifications for a logo or backdrop picked from TMDb/Fanart had no thumbnail. The chosen image is now attached.',
+          'Logo and backdrop notifications showed "Preset: N/A". The Preset field is now left out when no preset was used.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.04',
+    date: '2026-10-08',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'The Logo and Backdrop editors can send to every server an item is on. With more than one, Send opens a picker so you can choose which servers get it.',
+          'Local Assets: resend a saved poster to any server in its library group, rename a file, and resize the thumbnails with a slider.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Notifications now read Library / Preset / Action / Servers, showing the preset name and every server the poster reached.',
+          'If Radarr/Sonarr fires before Jellyfin or Emby has imported the file, the poster is now sent to that server after its next library scan.',
+          'The "PNG exceeds Plex\'s upload size limit" warning no longer appears for Jellyfin/Emby-only uploads.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Every Sonarr webhook failed with "name \'plex_fallback\' is not defined".',
+          'Local Assets could hide a poster saved from a library group (for example, one saved while viewing the Jellyfin copy).',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.03',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Sending a poster and logo to several servers now produces one notification instead of one per upload. It lists every server it went to, which assets were sent, the library and the template/preset, with the poster attached.',
+          'The notification library filter now understands library groups: picking a library also covers the other libraries in its group, so Jellyfin/Emby sends are no longer filtered out.',
+          'Kometa presets no longer appear in the auto-generate preset list of a library group, since they only apply to collections.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Logo notifications from the editor showed "Unknown Library".',
+          'Docker: a fresh install could crash with "attempt to write a readonly database".',
+          'Picking an auto-generate preset for a group with a Plex library left the dropdown blank.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.02',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Plex, Jellyfin and Emby are now treated the same throughout. The setup wizard connects all of your servers on one page, with the same steps for each.',
+          'Library groups (Settings → Libraries) show the libraries of every server in the same style, with one "+ Link a library..." picker covering all your servers.',
+          'Scheduled scans can be limited to chosen library groups, and each group is scanned on every server it includes. The setup wizard now offers a scan schedule even without Plex.',
+          'The main Plex server has an Enabled checkbox like your other servers. Untick it to switch Plex off without losing its settings.',
+          'The Media Servers page only labels a Plex server "Primary" when you have more than one.',
+          'New Media Servers guide in the docs, and the other docs now cover Jellyfin and Emby.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Scan buttons on Jellyfin/Emby-only groups stayed clickable during another scan and then failed with "A scan is already in progress".',
+          'Scheduled scans no longer scan each linked Jellyfin/Emby library twice.',
+          'Libraries from a second Plex server now show up on their library group.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.01',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Collection matching: link collections with different names across servers (e.g. "MCU" on Plex and "Marvel Films" on Jellyfin), or split a wrong automatic match. Open it from the "Collection matching" button on the Collections page.',
+          'Media server maintenance: Settings → Cleanup now has a section for each of your media servers. Jellyfin servers can run their built-in cleanup tasks (optimize database, clean cache/transcode/log folders, clean the activity log) with last-run results and live progress.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Plex maintenance (Empty Trash, Clean Bundles, Optimize Database) now works for every Plex server you have added, not just the main one.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.7.0',
+    date: '2026-10-07',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Jellyfin and Emby support: connect Plex, Jellyfin and/or Emby in any combination — Plex is no longer required.',
+          'Library groups: link the same library across servers. Posters, logos and backdrops can be sent to every server in a group, and the same title on two servers shows as one card.',
+          'Collections now work with Jellyfin too, including a "Show posters from" switch and sending to more than one server.',
+          'Media Mirror: copy artwork from one server to the others in a group, by hand or on a schedule. Only changed images are re-copied.',
+          'Webhooks can target a library group by name — the Webhook URL Generator now lists your groups, and posters go to every library in the chosen group.',
+          'Automatic poster generation now works for Jellyfin/Emby libraries during scans, not just Plex.',
+          'New poster/logo upload window: choose a local file or paste an image URL, with a live preview.',
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Library and group names are shown instead of internal IDs in History, Local Assets, notifications and backups.',
+          'Removing a media server now cleans up all of its cached posters and scan data once you save.',
+          'Removing Plex now sticks, even if PLEX_URL/PLEX_TOKEN are set as environment variables.',
+          'Large library scans no longer stall after the movies step, and Save Changes registers on the first click.',
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Webhooks for a Jellyfin/Emby-only setup no longer try to reach a Plex server that is not configured.',
+          'Local poster/logo uploads no longer fail with "blocked network range" on some networks.',
+          'Kometa presets in Template Manager now preview as a collection instead of over a movie poster.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.2',
+    date: '2026-09-30',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Beta version of Jellyfin/Emby support implemented — connect one or more media servers, link libraries into shared groups, browse merged content, and send posters/logos/backdrops across servers. Still in beta: please report any issues you run into.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.114',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Settings → Media Servers: add, enable, test, and remove Plex/Jellyfin/Emby connections through the UI. Early groundwork for upcoming Jellyfin/Emby support — nothing else in the app uses these servers yet.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.113',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal backend addition (no user-facing change yet): a Jellyfin/Emby implementation of the new media-server abstraction, plus temporary developer endpoints to test it against a real instance. Groundwork for upcoming Jellyfin/Emby support — nothing in the app uses this yet.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.112',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal backend addition (no user-facing change): a new abstraction layer for talking to a media server, with the first implementation wrapping existing Plex code. Nothing in the app uses it yet — groundwork for upcoming Jellyfin/Emby support.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.111',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal database groundwork (no user-facing change): every cache table now tracks which configured media server a row belongs to, preparing for upcoming Jellyfin/Emby support. Existing installs are unaffected — nothing changes until a second server is actually added.',
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.6.110',
+    date: '2026-09-23',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Internal refactor (no user-facing change): consolidated 4 duplicated places that fetch Plex metadata for overlay badges into one shared function, plus removed a redundant metadata fetch in Save. Groundwork for upcoming Jellyfin support.',
         ]
       }
     ]

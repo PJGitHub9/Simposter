@@ -1,7 +1,7 @@
 # backend/templates/universal.py
 # Universal template with full creative controls for cinematic posters
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from PIL import Image, ImageDraw, ImageOps, ImageEnhance, ImageFilter, ImageChops, ImageFont
 import random
 import numpy as np
@@ -9,8 +9,9 @@ import os
 import io
 import time
 import hashlib
+import threading
 from pathlib import Path
-from ..config import settings, logger
+from ..config import settings, logger, EXTERNAL_IMAGE_FETCH_HEADERS
 
 # ============================================================
 # Helpers
@@ -22,6 +23,7 @@ def _resize_cover(
     target_h: int,
     zoom: float = 1.0,
     shift_y: float = 0.0,
+    shift_x: float = 0.0,
 ) -> Image.Image:
     """
     Resize to fully cover the target canvas (like CSS background-size: cover),
@@ -55,7 +57,13 @@ def _resize_cover(
     new_h = int(h * scale)
     resized = img.resize((new_w, new_h), Image.LANCZOS)
 
-    x = max(0, (new_w - target_w) // 2)
+    # shift_x (-0.5..0.5) moves the crop window within the horizontal slack the
+    # same way shift_y does vertically. Positive moves the image RIGHT (the crop
+    # window moves toward the source's left edge). Mostly useful for a wide
+    # backdrop used as a poster background, where most of the width is cropped.
+    max_x_offset = max(0, new_w - target_w)
+    x = int(max_x_offset * (0.5 - shift_x))
+    x = max(0, min(x, max_x_offset))
 
     max_y_offset = max(0, new_h - target_h)
     center_y = max_y_offset // 2
@@ -64,7 +72,17 @@ def _resize_cover(
     # toward the source's top edge, revealing more of what was above it.
     y = center_y - int(shift_y * max_y_offset)
     y = max(0, min(y, max_y_offset))
-    return resized.crop((x, y, x + target_w, y + target_h))
+
+    if new_w >= target_w and new_h >= target_h:
+        return resized.crop((x, y, x + target_w, y + target_h))
+
+    # Zoomed out below "cover" (zoom < 1): the image no longer fills the canvas
+    # on at least one axis. Center it on black on that axis rather than letting
+    # crop() pin it to the top-left corner.
+    cropped = resized.crop((x, y, x + min(new_w, target_w), y + min(new_h, target_h)))
+    out = Image.new(resized.mode, (target_w, target_h))
+    out.paste(cropped, ((target_w - cropped.width) // 2, (target_h - cropped.height) // 2))
+    return out
 
 
 def _add_vignette(img: Image.Image, strength: float) -> Image.Image:
@@ -150,16 +168,20 @@ _KOMETA_REMOTE_FONTS_BASE_URL = (
 )
 _KOMETA_REMOTE_FONTS = {
     "barlowregular": "Barlow-Regular.ttf",
-    "bebasregular": "Bebas-Regular.ttf",
+    # Upstream renamed Bebas-Regular to BebasNeue-Regular; keep the old name working.
+    "bebasregular": "BebasNeue-Regular.ttf",
+    "bebasneue": "BebasNeue-Regular.ttf",
+    "bebasneueregular": "BebasNeue-Regular.ttf",
     "boecklinsuniverse": "BoecklinsUniverse.ttf",
     "boogalooregular": "Boogaloo-Regular.ttf",
     "cherrycreamsoda": "CherryCreamSoda-Regular.ttf",
     "cherrycreamsodaregular": "CherryCreamSoda-Regular.ttf",
     "comfortaamedium": "Comfortaa-Medium.ttf",
-    "helveticabold": "Helvetica-Bold.ttf",
     "jurabold": "Jura-Bold.ttf",
     "limelightregular": "Limelight-Regular.ttf",
     "monoton": "Monoton-Regular.ttf",
+    "plusjakartasans": "PlusJakartaSans-Bold.ttf",
+    "plusjakartasansbold": "PlusJakartaSans-Bold.ttf",
     "monotonregular": "Monoton-Regular.ttf",
     "pressstart2p": "Press-Start-2P.ttf",
     "righteous": "Righteous-Regular.ttf",
@@ -175,6 +197,158 @@ _KOMETA_REMOTE_FONTS = {
     "yesteryearregular": "Yesteryear-Regular.ttf",
 }
 
+# Fonts bundled with Kometa itself (Kometa-Team/Kometa's fonts/ folder, open
+# font licenses). Kometa overlay files name them by file, e.g. its default
+# "Roboto-Medium.ttf"; fetched and cached on first use like the ones above.
+_KOMETA_REPO_FONTS_BASE_URL = "https://raw.githubusercontent.com/Kometa-Team/Kometa/master/fonts/"
+_KOMETA_REPO_FONTS = {_n.rsplit(".", 1)[0].lower().replace("-", "").replace("_", ""): _n for _n in (
+    "Arimo-Bold.ttf",
+    "Arimo-BoldItalic.ttf",
+    "Arimo-Italic.ttf",
+    "Arimo-Medium.ttf",
+    "Arimo-MediumItalic.ttf",
+    "Arimo-Regular.ttf",
+    "Arimo-SemiBold.ttf",
+    "Arimo-SemiBoldItalic.ttf",
+    "Comfortaa-Bold.ttf",
+    "Comfortaa-Light.ttf",
+    "Comfortaa-Medium.ttf",
+    "Comfortaa-Regular.ttf",
+    "Comfortaa-SemiBold.ttf",
+    "Consensus-Bold.otf",
+    "Consensus-ExtraLight.otf",
+    "Consensus-Light.otf",
+    "Consensus-Medium.otf",
+    "Consensus-Regular.otf",
+    "Consensus-SemiBold.otf",
+    "Consensus-Thin.otf",
+    "Figtree-Black.ttf",
+    "Figtree-BlackItalic.ttf",
+    "Figtree-Bold.ttf",
+    "Figtree-BoldItalic.ttf",
+    "Figtree-ExtraBold.ttf",
+    "Figtree-ExtraBoldItalic.ttf",
+    "Figtree-Italic.ttf",
+    "Figtree-Light.ttf",
+    "Figtree-LightItalic.ttf",
+    "Figtree-Medium.ttf",
+    "Figtree-MediumItalic.ttf",
+    "Figtree-Regular.ttf",
+    "Figtree-SemiBold.ttf",
+    "Figtree-SemiBoldItalic.ttf",
+    "Inter-Black.ttf",
+    "Inter-Bold.ttf",
+    "Inter-ExtraBold.ttf",
+    "Inter-ExtraLight.ttf",
+    "Inter-Light.ttf",
+    "Inter-Medium.ttf",
+    "Inter-Regular.ttf",
+    "Inter-SemiBold.ttf",
+    "Inter-Thin.ttf",
+    "Lato-Black.ttf",
+    "Lato-BlackItalic.ttf",
+    "Lato-Bold.ttf",
+    "Lato-BoldItalic.ttf",
+    "Lato-Italic.ttf",
+    "Lato-Light.ttf",
+    "Lato-LightItalic.ttf",
+    "Lato-Regular.ttf",
+    "Lato-Thin.ttf",
+    "Lato-ThinItalic.ttf",
+    "LibreFranklin-Black.ttf",
+    "LibreFranklin-BlackItalic.ttf",
+    "LibreFranklin-Bold.ttf",
+    "LibreFranklin-BoldItalic.ttf",
+    "LibreFranklin-ExtraBold.ttf",
+    "LibreFranklin-ExtraBoldItalic.ttf",
+    "LibreFranklin-ExtraLight.ttf",
+    "LibreFranklin-ExtraLightItalic.ttf",
+    "LibreFranklin-Italic.ttf",
+    "LibreFranklin-Light.ttf",
+    "LibreFranklin-LightItalic.ttf",
+    "LibreFranklin-Medium.ttf",
+    "LibreFranklin-MediumItalic.ttf",
+    "LibreFranklin-Regular.ttf",
+    "LibreFranklin-SemiBold.ttf",
+    "LibreFranklin-SemiBoldItalic.ttf",
+    "LibreFranklin-Thin.ttf",
+    "LibreFranklin-ThinItalic.ttf",
+    "Montserrat-Black.ttf",
+    "Montserrat-BlackItalic.ttf",
+    "Montserrat-Bold.ttf",
+    "Montserrat-BoldItalic.ttf",
+    "Montserrat-ExtraBold.ttf",
+    "Montserrat-ExtraBoldItalic.ttf",
+    "Montserrat-ExtraLight.ttf",
+    "Montserrat-ExtraLightItalic.ttf",
+    "Montserrat-Italic.ttf",
+    "Montserrat-Light.ttf",
+    "Montserrat-LightItalic.ttf",
+    "Montserrat-Medium.ttf",
+    "Montserrat-MediumItalic.ttf",
+    "Montserrat-Regular.ttf",
+    "Montserrat-SemiBold.ttf",
+    "Montserrat-SemiBoldItalic.ttf",
+    "Montserrat-Thin.ttf",
+    "Montserrat-ThinItalic.ttf",
+    "Roboto-Black.ttf",
+    "Roboto-BlackItalic.ttf",
+    "Roboto-Bold.ttf",
+    "Roboto-BoldItalic.ttf",
+    "Roboto-Italic.ttf",
+    "Roboto-Light.ttf",
+    "Roboto-LightItalic.ttf",
+    "Roboto-Medium.ttf",
+    "Roboto-MediumItalic.ttf",
+    "Roboto-Regular.ttf",
+    "Roboto-Thin.ttf",
+    "Roboto-ThinItalic.ttf",
+    "SourceSans3-Black.ttf",
+    "SourceSans3-BlackItalic.ttf",
+    "SourceSans3-Bold.ttf",
+    "SourceSans3-BoldItalic.ttf",
+    "SourceSans3-ExtraBold.ttf",
+    "SourceSans3-ExtraBoldItalic.ttf",
+    "SourceSans3-ExtraLight.ttf",
+    "SourceSans3-ExtraLightItalic.ttf",
+    "SourceSans3-Italic.ttf",
+    "SourceSans3-Light.ttf",
+    "SourceSans3-LightItalic.ttf",
+    "SourceSans3-Medium.ttf",
+    "SourceSans3-MediumItalic.ttf",
+    "SourceSans3-Regular.ttf",
+    "SourceSans3-SemiBold.ttf",
+    "SourceSans3-SemiBoldItalic.ttf",
+)}
+
+
+# Open look-alikes for common fonts that aren't free to ship (and aren't in the
+# Docker image): a preset naming "Arial" renders with Arimo, Google's
+# metric-compatible Arial replacement (Apache 2.0), instead of falling back to
+# DejaVu Sans. Only used when the real font isn't installed.
+_OPEN_SUBSTITUTES = {
+    "arial": ("Arimo-Regular", "Arimo-Bold"),
+    "arialbold": ("Arimo-Bold", "Arimo-Bold"),
+    "arialregular": ("Arimo-Regular", "Arimo-Bold"),
+    "helvetica": ("Arimo-Regular", "Arimo-Bold"),
+    "helveticaneue": ("Arimo-Regular", "Arimo-Bold"),
+    "helveticabold": ("Arimo-Bold", "Arimo-Bold"),
+}
+
+# Fonts downloaded when the Simposter defaults are imported, so they're ready
+# (and in the font list) before first use. All open licenses (OFL/Apache 2.0),
+# fetched from simposter-assets (Kometa's repos as a backup) rather than
+# shipped with Simposter. The defaults import also downloads the rest of
+# simposter-assets' fonts (prefetch_all_asset_fonts()).
+STARTER_FONTS = [
+    "Arimo-Regular", "Arimo-Bold",
+    "Roboto-Regular", "Roboto-Medium", "Roboto-Bold",
+    "Inter-Regular", "Inter-Bold",
+    "Montserrat-Regular", "Montserrat-Bold",
+    "Lato-Regular", "Lato-Bold",
+    "Comfortaa-Medium", "BebasNeue-Regular",
+]
+
 
 def _normalize_font_token(name: str) -> str:
     return "".join(c for c in (name or "").lower() if c.isalnum())
@@ -189,6 +363,9 @@ def _kometa_fonts_cache_dir() -> Path:
     return cache_dir
 
 
+_FAILED_FONT_FETCHES: set = set()
+
+
 def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     """
     Fetch-and-cache-on-first-use: if font_family matches one of the Kometa
@@ -199,20 +376,39 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     breaks rendering — _load_font()'s remaining fallback chain (system fonts,
     then PIL's default) still applies.
     """
-    filename = _KOMETA_REMOTE_FONTS.get(_normalize_font_token(font_family))
+    token = _normalize_font_token(font_family)
+    # A font already in the cache under this name is used as is. This keeps
+    # fonts working that upstream later renamed or removed (e.g. Helvetica-Bold,
+    # which isn't free to redistribute, or the old Bebas-Regular).
+    cache_dir = _kometa_fonts_cache_dir()
+    try:
+        for f in cache_dir.iterdir():
+            if f.suffix.lower() in (".ttf", ".otf", ".ttc") and _normalize_font_token(f.stem) == token:
+                return ImageFont.truetype(str(f), font_size)
+    except Exception:
+        pass
+    filename = _KOMETA_REMOTE_FONTS.get(token)
+    base_url = _KOMETA_REMOTE_FONTS_BASE_URL
+    if not filename:
+        filename = _KOMETA_REPO_FONTS.get(token)
+        base_url = _KOMETA_REPO_FONTS_BASE_URL
     if not filename:
         return None
 
-    cache_path = _kometa_fonts_cache_dir() / filename
+    cache_path = cache_dir / filename
     if not cache_path.exists():
+        if filename in _FAILED_FONT_FETCHES:
+            return None
         try:
             import requests
-            resp = requests.get(_KOMETA_REMOTE_FONTS_BASE_URL + filename, timeout=10)
+            resp = requests.get(base_url + filename, timeout=10)
             resp.raise_for_status()
             cache_path.write_bytes(resp.content)
-            logger.info("[FONT] Fetched and cached '%s' from Kometa-Team defaults repo", filename)
+            logger.info("[FONT] Fetched and cached '%s' from Kometa-Team on GitHub", filename)
         except Exception as e:
             logger.debug("[FONT] Failed to fetch remote font '%s': %s", filename, e)
+            # Don't retry on every render; a restart tries again.
+            _FAILED_FONT_FETCHES.add(filename)
             return None
 
     try:
@@ -220,6 +416,190 @@ def _load_remote_kometa_font(font_family: str, font_size: int, boldish: bool):
     except Exception as e:
         logger.debug("[FONT] Failed to load cached remote font %s: %s", cache_path, e)
         return None
+
+
+# Simposter's own font set (PJGitHub9/simposter-assets, fonts/): open-license
+# fonts with an index, fonts/fonts.json, mapping each font name to its file and,
+# for variable fonts (several weights in one file), the named weight to use.
+# Tried before Kometa's repos. Files go in fonts_cache/simposter-assets/, a
+# subfolder so the Kometa cache's match-by-file-name never picks up a variable
+# file under the wrong weight.
+_ASSET_FONTS_BASE_URL = "https://raw.githubusercontent.com/PJGitHub9/simposter-assets/main/fonts/"
+_ASSET_FONTS_INDEX_MAX_AGE = 24 * 3600
+_asset_fonts_lock = threading.Lock()
+_asset_fonts_index: Optional[Dict[str, dict]] = None  # normalized name -> entry
+_asset_fonts_index_checked = 0.0
+
+
+def _asset_fonts_dir() -> Path:
+    d = _kometa_fonts_cache_dir() / "simposter-assets"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def _asset_fonts_entries(refresh: bool = False) -> Dict[str, dict]:
+    """fonts.json, keyed by normalized font name. Cached on disk and re-fetched
+    once a day; a failed fetch keeps the stored copy (and waits 10 minutes)."""
+    global _asset_fonts_index, _asset_fonts_index_checked
+    import json
+    import time
+    with _asset_fonts_lock:
+        now = time.time()
+        path = _asset_fonts_dir() / "fonts.json"
+        if _asset_fonts_index is None and path.exists():
+            try:
+                _asset_fonts_index = {_normalize_font_token(f["name"]): f
+                                      for f in json.loads(path.read_text(encoding="utf-8")).get("fonts", [])
+                                      if f.get("name") and f.get("file")}
+                _asset_fonts_index_checked = path.stat().st_mtime
+            except Exception:
+                _asset_fonts_index = None
+        stale = now - _asset_fonts_index_checked > _ASSET_FONTS_INDEX_MAX_AGE
+        if _asset_fonts_index is None or stale or refresh:
+            try:
+                import requests
+                resp = requests.get(_ASSET_FONTS_BASE_URL + "fonts.json", timeout=10)
+                resp.raise_for_status()
+                fonts = resp.json().get("fonts", [])
+                index = {_normalize_font_token(f["name"]): f for f in fonts if f.get("name") and f.get("file")}
+                if index:
+                    path.write_text(resp.text, encoding="utf-8")
+                    _asset_fonts_index = index
+                _asset_fonts_index_checked = now
+            except Exception as e:
+                logger.debug("[FONT] Couldn't fetch simposter-assets fonts.json: %s", e)
+                # Retry in 10 minutes rather than on every render.
+                _asset_fonts_index_checked = now - _ASSET_FONTS_INDEX_MAX_AGE + 600
+        return _asset_fonts_index or {}
+
+
+def _asset_font_entry(font_family: str, boldish: bool = False) -> Optional[dict]:
+    entries = _asset_fonts_entries()
+    token = _normalize_font_token(font_family)
+    entry = entries.get(token)
+    # A bare family name ("Oswald") with bold asked for uses the family's Bold.
+    if entry and boldish and entry.get("style") in (None, "Regular") and _normalize_font_token(entry.get("family", "").replace(" ", "")) == token:
+        entry = entries.get(token + "bold") or entry
+    return entry
+
+
+def _ensure_asset_font_file(filename: str) -> Optional[Path]:
+    path = _asset_fonts_dir() / filename
+    if path.exists():
+        return path
+    if ("assets", filename) in _FAILED_FONT_FETCHES or "/" in filename or "\\" in filename:
+        return None
+    try:
+        import requests
+        resp = requests.get(_ASSET_FONTS_BASE_URL + filename, timeout=30)
+        resp.raise_for_status()
+        tmp = path.with_suffix(path.suffix + ".part")
+        tmp.write_bytes(resp.content)
+        tmp.replace(path)
+        logger.info("[FONT] Downloaded '%s' from simposter-assets", filename)
+        return path
+    except Exception as e:
+        logger.debug("[FONT] Failed to download '%s' from simposter-assets: %s", filename, e)
+        _FAILED_FONT_FETCHES.add(("assets", filename))
+        return None
+
+
+def _load_simposter_asset_font(font_family: str, font_size: int, boldish: bool = False):
+    """A font from Simposter's own set (fonts.json), downloaded on first use,
+    with the named weight applied for variable fonts. None if it isn't there."""
+    entry = _asset_font_entry(font_family, boldish)
+    if not entry:
+        return None
+    path = _ensure_asset_font_file(entry["file"])
+    if not path:
+        return None
+    try:
+        font = ImageFont.truetype(str(path), font_size)
+        if entry.get("style"):
+            try:
+                font.set_variation_by_name(entry["style"])
+            except Exception as e:
+                logger.debug("[FONT] '%s' has no named weight '%s': %s", entry["file"], entry["style"], e)
+        return font
+    except Exception as e:
+        logger.debug("[FONT] Failed to load %s: %s", path, e)
+        return None
+
+
+def asset_font_names() -> List[str]:
+    """Every font name in Simposter's own set (for the font list)."""
+    return [e["name"] for e in _asset_fonts_entries().values()]
+
+
+def asset_font_path(font_family: str) -> Optional[Path]:
+    """The downloaded file for a font in Simposter's own set (Overlay Manager preview)."""
+    entry = _asset_font_entry(font_family)
+    return _ensure_asset_font_file(entry["file"]) if entry else None
+
+
+def prefetch_all_asset_fonts() -> List[str]:
+    """Download every file in Simposter's own font set (when the Simposter
+    defaults are imported). Returns the files downloaded now."""
+    fetched = []
+    files = dict.fromkeys(e["file"] for e in _asset_fonts_entries(refresh=True).values())
+    for filename in files:
+        if (_asset_fonts_dir() / filename).exists():
+            continue
+        if _ensure_asset_font_file(filename):
+            fetched.append(filename)
+    if fetched:
+        logger.info("[FONT] Downloaded %d font file(s) from simposter-assets", len(fetched))
+    return fetched
+
+
+def _load_downloadable_font(font_family: str, font_size: int, boldish: bool):
+    """Simposter's own font set first, then Kometa's repos."""
+    return (_load_simposter_asset_font(font_family, font_size, boldish)
+            or _load_remote_kometa_font(font_family, font_size, boldish))
+
+
+def _have_font_file(name: str) -> bool:
+    """A font file with exactly this name (any extension) is already on disk."""
+    low = (name or "").strip().lower()
+    dirs = [Path(settings.CONFIG_DIR) / "fonts", Path(__file__).resolve().parent.parent.parent / "config" / "fonts",
+            _kometa_fonts_cache_dir()]
+    for d in dirs:
+        try:
+            if d.is_dir() and any(f.stem.lower() == low and f.suffix.lower() in (".ttf", ".otf", ".ttc") for f in d.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def prefetch_fonts(names) -> List[str]:
+    """Download the Kometa/open fonts in `names` that aren't on disk yet (others
+    are ignored). Arial-like names fetch their open look-alike. Returns the
+    names that were fetched."""
+    fetched = []
+    wanted = []
+    for name in names or []:
+        name = str(name or "").strip()
+        if not name:
+            continue
+        substitute = _OPEN_SUBSTITUTES.get(_normalize_font_token(name))
+        wanted.extend(substitute if substitute else (name,))
+    for name in dict.fromkeys(wanted):
+        if _have_font_file(name):
+            continue
+        entry = _asset_font_entry(name)
+        if entry:
+            if not (_asset_fonts_dir() / entry["file"]).exists() and _ensure_asset_font_file(entry["file"]):
+                fetched.append(name)
+            continue
+        if _load_remote_kometa_font(name, 12, False) is not None:
+            fetched.append(name)
+    if fetched:
+        logger.info("[FONT] Downloaded %d font(s): %s", len(fetched), ", ".join(fetched))
+    return fetched
 
 
 def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
@@ -336,8 +716,8 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
     if font_obj:
         return font_obj
 
-    # 3) Kometa Creator default fonts (fetched + cached on first use, see below)
-    font_obj = _load_remote_kometa_font(font_family, font_size, boldish)
+    # 3) Simposter's own font set, then Kometa's (fetched + cached on first use)
+    font_obj = _load_downloadable_font(font_family, font_size, boldish)
     if font_obj:
         return font_obj
 
@@ -356,6 +736,14 @@ def _load_font(font_family: str, font_size: int, font_weight: str = "700"):
             font_obj = scan_directory(sys_dir)
             if font_obj:
                 return font_obj
+
+    # 4b) Open look-alike for a font that isn't free to ship (Arial -> Arimo)
+    substitute = _OPEN_SUBSTITUTES.get(_normalize_font_token(font_family))
+    if substitute:
+        font_obj = _load_downloadable_font(substitute[1] if boldish else substitute[0], font_size, boldish)
+        if font_obj:
+            logger.debug("[FONT] Using %s in place of '%s'", substitute[1] if boldish else substitute[0], font_family)
+            return font_obj
 
     # 4) Common font name aliases as fallback
     # Map font families to their actual file names on different systems
@@ -488,15 +876,23 @@ def _render_text_overlay(
     stroke_width = int(options.get("stroke_width", 4))
     stroke_color = _hex_to_rgb(options.get("stroke_color", "#000000"))
 
-    # Bounding box option — when enabled, font_size auto-shrinks (down to a floor)
-    # until the wrapped text block fits inside the *same* box the uniformlogo
-    # template reserves for the logo (uniform_logo_max_w/h + offset_x/y), instead
-    # of overflowing. Deliberately reuses the logo's box rather than adding a
-    # separate set of size/position options — the two are never both in that spot
-    # at once (logo vs. text-instead-of-logo, e.g. season posters with logo_mode
-    # 'none'), so one box definition serves both.
-    bbox_enabled = bool(options.get("text_bbox_enabled", False))
+    # Text box — font_size auto-shrinks (down to a floor) until the wrapped text block
+    # fits inside the text's own box (text_box_*), separate from the logo's box
+    # (uniform_logo_*). Uniform Logo presets always carry text_box_* (the editors write
+    # them, and the 'text_box_always' migration added them to older presets), so the box
+    # is always on there. Options with neither text_box_* nor text_bbox_enabled (Kometa
+    # presets, or an old export imported later) keep the old full-width layout at
+    # position_y; an old export with text_bbox_enabled falls back to the logo box.
+    bbox_enabled = bool(options.get("text_bbox_enabled", False)) or any(
+        options.get(f"text_box_{n}") is not None
+        for n in ("max_w", "max_h", "offset_x", "offset_y", "h_align", "v_align")
+    )
     bbox_min_font_size = int(options.get("text_bbox_min_font_size", 20))
+    def _box_opt(name: str, default):
+        val = options.get(f"text_box_{name}")
+        if val is not None:
+            return val
+        return options.get(f"uniform_logo_{name}", default)
 
     # Replace template variables
     movie_title = str(options.get("movie_title", ""))
@@ -529,10 +925,10 @@ def _render_text_overlay(
     margin_left = 100
     margin_right = 100
     if bbox_enabled:
-        max_text_width = int(options.get("uniform_logo_max_w", 600))
-        box_h = int(options.get("uniform_logo_max_h", 240))
-        box_cx = W * float(options.get("uniform_logo_offset_x", 0.5))
-        box_cy = H * float(options.get("uniform_logo_offset_y", 0.78))
+        max_text_width = int(_box_opt("max_w", 600))
+        box_h = int(_box_opt("max_h", 240))
+        box_cx = W * float(_box_opt("offset_x", 0.5))
+        box_cy = H * float(_box_opt("offset_y", 0.78))
     else:
         max_text_width = W - margin_left - margin_right
         box_cx = W / 2
@@ -649,8 +1045,8 @@ def _render_text_overlay(
     # justifies individual lines within that block's own width, same as it always has.
     anchor_cx, anchor_cy, anchor_width = box_cx, box_cy, max_text_width
     if bbox_enabled:
-        h_align = str(options.get("uniform_logo_h_align", "center"))
-        v_align = str(options.get("uniform_logo_v_align", "center"))
+        h_align = str(_box_opt("h_align", "center"))
+        v_align = str(_box_opt("v_align", "center"))
         box_top = box_cy - box_h / 2
         box_bottom = box_cy + box_h / 2
         box_left_edge = box_cx - max_text_width / 2
@@ -797,6 +1193,7 @@ def build_base_poster(
     # ------------- OPTIONS -------------
     poster_zoom = float(options.get("poster_zoom", 1.0))          # 1.0 = normal
     poster_shift_y = float(options.get("poster_shift_y", 0.0))    # -0.5..0.5
+    poster_shift_x = float(options.get("poster_shift_x", 0.0))    # -0.5..0.5, manual editor only
 
     matte_height_ratio = float(options.get("matte_height_ratio", 0.0))  # 0..0.5
     fade_height_ratio = float(options.get("fade_height_ratio", 0.0))    # 0..0.5
@@ -813,6 +1210,7 @@ def build_base_poster(
 
     poster_zoom = max(poster_zoom, 0.1)
     poster_shift_y = clamp(poster_shift_y, -0.5, 0.5)
+    poster_shift_x = clamp(poster_shift_x, -0.5, 0.5)
 
     matte_height_ratio = clamp(matte_height_ratio, 0.0, 0.5)
     fade_height_ratio = clamp(fade_height_ratio, 0.0, 1.0)
@@ -826,19 +1224,19 @@ def build_base_poster(
     # ------------- BASE POSTER -------------
     base = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
 
-    if options.get("canvas_mode") == "square":
+    if options.get("canvas_mode") in ("square", "thumb"):
         # Square Art: shift moves the crop window within the cover-resize's
         # slack, revealing more real source content -- there's genuinely more
         # slack to work with on a square canvas (a 2:3 poster covering a 1:1
         # canvas), and no black-border look is wanted here (Quirk #43/#44).
-        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y)
+        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_y=poster_shift_y, shift_x=poster_shift_x)
         base.paste(poster, (0, 0))
     else:
         # Default 2:3 canvas: shift is a raw pixel paste-offset onto the black
         # base canvas, not a crop-window move -- at larger values this can move
         # the poster off-frame and let the black canvas show through as a
         # border, which is the intended, user-relied-on look here (Quirk #53).
-        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom)
+        poster = _resize_cover(background, canvas_w, canvas_h, zoom=poster_zoom, shift_x=poster_shift_x)
         shift_px = int(poster_shift_y * canvas_h)
         base.paste(poster, (0, shift_px))
 
@@ -1009,32 +1407,21 @@ def render_universal(
 # Overlay Rendering
 # ============================================================
 
-def apply_overlay_config(
-    canvas: Image.Image,
+def _prepare_overlays(
     preset_id: Optional[str],
     template_id: str,
-    metadata: Optional[Dict[str, Any]] = None,
-    overlay_config_ids: Optional[list] = None
-) -> Image.Image:
-    """
-    Apply overlay configurations to the canvas.
-
-    Overlay configs come from two sources (both are applied, deduped):
-    1. The preset's linked overlay_config_id (legacy single-link)
-    2. Explicit overlay_config_ids passed in render options (multi-select)
-
-    Args:
-        canvas: The base poster image
-        preset_id: The preset ID (to look up overlay_config_id)
-        template_id: The template ID
-        metadata: Optional metadata dict with fields like video_resolution, audio_codec, labels, etc.
-        overlay_config_ids: Optional list of overlay config IDs to apply directly
-
-    Returns:
-        Canvas with overlays applied
-    """
+    metadata: Optional[Dict[str, Any]],
+    overlay_config_ids: Optional[list],
+    log: bool = True,
+):
+    """Resolve which overlay elements apply to this item. Returns
+    (meta, ctx, selected); ctx is None when there are no configs at all.
+    Shared by apply_overlay_config() and overlay_summary(), so the refresh
+    check and the real render always agree on what an item's overlay has."""
     from .. import database as db
     from ..config import logger
+
+    meta = metadata if metadata is not None else {}
 
     # Collect all config IDs to apply (deduped, ordered)
     config_ids: list[str] = []
@@ -1060,11 +1447,9 @@ def apply_overlay_config(
                 seen.add(cid)
 
     if not config_ids:
-        logger.info("[OVERLAY] No overlay config IDs to apply (preset_id=%s, explicit_ids=%s)", preset_id, overlay_config_ids)
-        return canvas
-
-    # Log available metadata for overlay rendering
-    meta = metadata or {}
+        if log:
+            logger.debug("[OVERLAY] No overlay config IDs to apply (preset_id=%s, explicit_ids=%s)", preset_id, overlay_config_ids)
+        return meta, None, []
 
     # Pre-pass: resolve streaming platform and studio if any config needs them
     tmdb_id = meta.get("tmdb_id")
@@ -1119,7 +1504,166 @@ def apply_overlay_config(
             except Exception as cfg_err:
                 logger.debug("[OVERLAY] Pre-pass config error for %s: %s", cid, cfg_err)
 
-    logger.info("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
+    if log:
+        logger.debug("[OVERLAY] Metadata available for overlays: %s", {k: v for k, v in meta.items() if k != "labels"})
+
+    # Gather every element from every config first, so one selection pass can
+    # apply conditions, group/weight and suppress across all of them (Kometa's
+    # groups span overlay files). Elements without those keys pass straight
+    # through, in their original order.
+    all_elements: list = []
+    # Whole-overlay conditions, checked once the context is built: [(conditions, elements, name)]
+    gated: list = []
+    config_names: list = []
+    for config_id in config_ids:
+        try:
+            overlay_config = db.get_overlay_config(config_id)
+            if not overlay_config:
+                _warn_missing_overlay(preset_id, config_id)
+                continue
+
+            elements = overlay_config.get("elements", [])
+            config_names.append((overlay_config.get("name") or config_id, len(elements)))
+            if not elements:
+                continue
+
+            if log:
+                logger.debug("[OVERLAY] Overlay '%s': %d layers %s", overlay_config.get("name"), len(elements),
+                             [e.get("type", "unknown") for e in elements])
+            config_elements = [e for e in elements if isinstance(e, dict)]
+            all_elements.extend(config_elements)
+            if overlay_config.get("conditions"):
+                gated.append((overlay_config["conditions"], config_elements, overlay_config.get("name") or config_id))
+        except Exception as e:
+            logger.error(f"[OVERLAY] Failed to load overlay config {config_id}: {e}")
+
+    from .. import overlay_engine
+    # Stand-ins so data the whole-overlay conditions use (ratings, lists, file paths) gets loaded.
+    every_element = list(all_elements)
+    ctx = overlay_engine.build_context(meta, elements=all_elements + [{"conditions": conds} for conds, _, _ in gated])
+    # Every condition the item is checked against (layers and whole overlays), for overlay_summary(facts=...).
+    ctx["_condition_elements"] = every_element + [{"conditions": conds} for conds, _, _ in gated]
+    gated_reasons: dict = {}
+    for conds, config_elements, config_name in gated:
+        failed = next((c for c in conds if isinstance(c, dict) and not overlay_engine.check_condition(c, ctx)), None)
+        if failed is not None:
+            skip = {id(e) for e in config_elements}
+            all_elements = [e for e in all_elements if id(e) not in skip]
+            why = f"the overlay '{config_name}' doesn't apply: " + overlay_engine.describe_failure(failed, ctx)
+            for e in config_elements:
+                gated_reasons[id(e)] = why
+    selected = overlay_engine.select_elements(all_elements, ctx)
+    if log:
+        _log_overlay_summary(meta, ctx, config_names, every_element, all_elements, gated_reasons, selected)
+
+    return meta, ctx, selected
+
+
+# Missing overlay configs already reported this run (preset, config) -- once is enough.
+_missing_overlay_warned: set = set()
+
+
+def _warn_missing_overlay(preset_id: Optional[str], config_id: str) -> None:
+    from ..config import logger
+    key = (preset_id or "", config_id)
+    if key in _missing_overlay_warned:
+        logger.debug("[OVERLAY] Overlay %s not found (preset %s)", config_id, preset_id)
+        return
+    _missing_overlay_warned.add(key)
+    where = f"Preset '{preset_id}' turns on" if preset_id else "This render turns on"
+    logger.warning("[OVERLAY] %s an overlay that no longer exists (%s), so it's skipped. "
+                   "Open the preset in the editor and save it to remove it. (Shown once.)", where, config_id)
+
+
+def _item_title(meta: Dict[str, Any]) -> str:
+    title = meta.get("movie_title") or meta.get("title")
+    year = meta.get("movie_year") or meta.get("year")
+    if not title and meta.get("rating_key"):
+        try:
+            from .. import database as db
+            title, year = db.get_title_for_rating_key(str(meta["rating_key"]))
+        except Exception:
+            title = None
+    if not title:
+        return f"item {meta.get('rating_key')}" if meta.get("rating_key") else "this poster"
+    return f"{title} ({year})" if year else str(title)
+
+
+def _log_overlay_summary(meta, ctx, config_names, every_element, eligible, gated_reasons, selected) -> None:
+    """One readable block per overlay render: what was applied, the data the
+    rules saw, what was drawn and why the rest wasn't."""
+    from .. import overlay_engine
+    from ..config import logger
+    if not config_names:
+        return
+    overlays = ", ".join(f"'{n}' ({c} layer{'s' if c != 1 else ''})" for n, c in config_names)
+    logger.info("[OVERLAY] %s: overlays %s; drew %d of %d layers",
+                _item_title(meta), overlays, len(selected), len(every_element))
+    logger.info("[OVERLAY]   Data: %s", overlay_engine.data_summary(ctx, every_element))
+
+    selected_ids = {id(e) for e in selected}
+    explained = dict((id(e), why) for e, why in overlay_engine.explain_selection(eligible, ctx))
+    drawn = []
+    for e in every_element:
+        if id(e) not in selected_ids:
+            continue
+        label = overlay_engine.element_label(e)
+        if e.get("type") in _BADGE_DEFAULTS:
+            field = e.get("metadata_field") or _BADGE_DEFAULTS[e["type"]][0]
+            value = ctx.get(field) or meta.get(field)
+            label += f" = {value}" if value else f" (no {overlay_engine.FIELD_LABELS.get(field, field)} for this item, so it shows nothing)"
+        drawn.append(label)
+    if drawn:
+        logger.info("[OVERLAY]   Drew: %s", "; ".join(drawn))
+
+    skipped = [(e, gated_reasons.get(id(e)) or explained.get(id(e)) or "not drawn")
+               for e in every_element if id(e) not in selected_ids]
+    # One summary line at INFO (the per-layer reasons are at DEBUG): a
+    # 25-layer overlay used to add ~10 lines to every poster render.
+    kinds = {"rules didn't match": 0, "lost in a badge set": 0, "hidden by another layer": 0}
+    for e, why in skipped:
+        logger.debug("[OVERLAY]   Skipped %s: %s", overlay_engine.element_label(e), why)
+        if "another layer won" in why:
+            kinds["lost in a badge set"] += 1
+        elif why.startswith("hidden by"):
+            kinds["hidden by another layer"] += 1
+        else:
+            kinds["rules didn't match"] += 1
+    if skipped:
+        parts = ", ".join(f"{n} {k}" for k, n in kinds.items() if n)
+        logger.info("[OVERLAY]   Not drawn: %d (%s); set the log level to DEBUG to see why", len(skipped), parts)
+
+
+def apply_overlay_config(
+    canvas: Image.Image,
+    preset_id: Optional[str],
+    template_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    overlay_config_ids: Optional[list] = None
+) -> Image.Image:
+    """
+    Apply overlay configurations to the canvas.
+
+    Overlay configs come from two sources (both are applied, deduped):
+    1. The preset's linked overlay_config_id (legacy single-link)
+    2. Explicit overlay_config_ids passed in render options (multi-select)
+
+    Args:
+        canvas: The base poster image
+        preset_id: The preset ID (to look up overlay_config_id)
+        template_id: The template ID
+        metadata: Optional metadata dict with fields like video_resolution, audio_codec, labels, etc.
+        overlay_config_ids: Optional list of overlay config IDs to apply directly
+
+    Returns:
+        Canvas with overlays applied
+    """
+    from ..config import logger
+    from .. import overlay_engine
+
+    meta, ctx, selected = _prepare_overlays(preset_id, template_id, metadata, overlay_config_ids)
+    if ctx is None:
+        return canvas
 
     # Convert to RGBA for overlay compositing
     if canvas.mode != "RGBA":
@@ -1127,31 +1671,130 @@ def apply_overlay_config(
 
     W, H = canvas.size
 
-    for config_id in config_ids:
+    # Kometa blur(N): blur what's under this overlay bucket once, before its layers.
+    canvas = overlay_engine.apply_blur(canvas, overlay_engine.blur_radius(selected, W, H))
+    queued = overlay_engine.queue_placements(selected)
+
+    for element in selected:
+        if element.get("type") == "blur":
+            continue
+        if id(element) in queued:
+            pos = queued[id(element)]
+            if pos is None:
+                continue  # the queue has no position left for this layer
+            element = {**element, **pos, "placement": "kometa"}
         try:
-            overlay_config = db.get_overlay_config(config_id)
-            if not overlay_config:
-                logger.warning(f"[OVERLAY] Overlay config {config_id} not found")
-                continue
-
-            elements = overlay_config.get("elements", [])
-            if not elements:
-                logger.info(f"[OVERLAY] Overlay config '{overlay_config['name']}' has no elements, skipping")
-                continue
-
-            element_types = [e.get("type", "unknown") for e in elements]
-            logger.info(f"[OVERLAY] Applying overlay config '{overlay_config['name']}' with {len(elements)} elements: {element_types}")
-
-            for element in elements:
-                try:
-                    canvas = _apply_overlay_element(canvas, element, W, H, meta)
-                except Exception as elem_err:
-                    logger.error(f"[OVERLAY] Failed to apply element {element.get('type')}: {elem_err}")
-
-        except Exception as e:
-            logger.error(f"[OVERLAY] Failed to apply overlay config {config_id}: {e}")
+            if element.get("placement") == "kometa":
+                canvas = overlay_engine.render_kometa_element(canvas, element, ctx)
+            else:
+                text = element.get("text")
+                if element.get("type") == "text_label" and isinstance(text, str) and "{" in text:
+                    # Fill {variables} like Kometa-placed text does; a missing value skips the layer.
+                    filled = overlay_engine.fill_text(text, ctx)
+                    if filled is None:
+                        continue
+                    element = {**element, "text": filled}
+                canvas = _apply_overlay_element(canvas, element, W, H, meta)
+        except Exception as elem_err:
+            logger.error(f"[OVERLAY] Failed to apply element {element.get('type')}: {elem_err}")
 
     return canvas
+
+
+# Metadata badge types (new + legacy aliases)
+_BADGE_DEFAULTS = {
+    "video_badge":              ("video_resolution", 40),
+    "audio_badge":              ("audio_codec", 30),
+    "edition_badge":            ("edition", 30),
+    "streaming_platform_badge": ("streaming_platform", 30),
+    "studio_badge":             ("studio", 30),
+    "resolution_badge":         ("video_resolution", 40),  # legacy alias
+    "codec_badge":              ("audio_codec", 30),       # legacy alias
+}
+
+
+def _element_label(element: Dict[str, Any]) -> str:
+    name = (element.get("name") or "").strip()
+    if name:
+        return name
+    return (element.get("type") or "element").replace("_", " ")
+
+
+def _element_value(element: Dict[str, Any], meta: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+    """The item-specific part of what an element draws (badge value, filled
+    text), so a change in it counts as an overlay change."""
+    from .. import overlay_engine
+    etype = element.get("type")
+    if etype in _BADGE_DEFAULTS:
+        field = element.get("metadata_field") or _BADGE_DEFAULTS[etype][0]
+        return str(meta.get(field) or "")
+    if etype == "label_badge":
+        return ",".join(sorted(str(l) for l in (meta.get("labels") or [])))
+    text = element.get("text")
+    if isinstance(text, str) and "{" in text:
+        return overlay_engine.fill_text(text, ctx) or ""
+    return ""
+
+
+# Element keys that only decide WHETHER a layer is drawn, not how it looks.
+# Left out of the design hash: whether a layer is drawn is already in the
+# summary, so a changed rule (e.g. a tool rewriting a TMDb ID list every day)
+# must not count as a new look for posters it doesn't affect.
+_SELECTION_ONLY_KEYS = {"conditions", "group", "weight", "suppress", "show_if_label", "hide_if_label", "name"}
+
+
+def element_design(el: Dict[str, Any]) -> Dict[str, Any]:
+    """The settings of an overlay element that change how it looks."""
+    return {k: v for k, v in el.items() if k not in _SELECTION_ONLY_KEYS and not str(k).startswith("_")}
+
+
+def overlay_summary(options: Dict[str, Any], template_id: str, facts: Optional[dict] = None,
+                    designs: Optional[dict] = None) -> list:
+    """What the overlays would draw on this item right now: a list of
+    {bucket, label, value, design} (design = short hash of the element's
+    look settings, so restyling an element also counts as a change; its
+    show-when rules are left out). Uses the same selection as the real render,
+    below-logo bucket then above-logo.
+    `facts`, when given, is filled with the item's value for every field the
+    overlays' conditions check (kept out of the summary/signature, so a value
+    that changes without changing the poster isn't a change).
+    `designs`, when given, is filled with {design hash: look settings}, so a
+    later check can say what was restyled."""
+    import hashlib
+    import json
+    metadata = dict(options.get("metadata") or {})
+    preset_id = options.get("preset_id")
+    ids = options.get("overlay_config_ids") or []
+    below = [c for c in (options.get("overlay_config_ids_below") or []) if c in ids]
+    above = [c for c in ids if c not in below]
+    out = []
+    for bucket, bucket_ids, bucket_preset in (("below", below, None), ("above", above, preset_id)):
+        if not bucket_ids and not bucket_preset:
+            continue
+        meta, ctx, selected = _prepare_overlays(bucket_preset, template_id, metadata, bucket_ids, log=False)
+        if ctx is None:
+            continue
+        if facts is not None:
+            from .. import overlay_engine
+            facts.update(overlay_engine.condition_facts(ctx.get("_condition_elements") or [], ctx))
+        for el in selected:
+            look = element_design(el)
+            design = hashlib.sha1(json.dumps(look, sort_keys=True, default=str).encode()).hexdigest()[:12]
+            if designs is not None:
+                designs[design] = json.loads(json.dumps(look, default=str))
+            out.append({
+                "bucket": bucket,
+                "label": _element_label(el),
+                "value": _element_value(el, meta, ctx),
+                "design": design,
+            })
+    return out
+
+
+def overlay_signature(summary: list) -> str:
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(summary, sort_keys=True).encode()).hexdigest()
 
 
 def _get_text_anchor(element: Dict[str, Any]) -> str:
@@ -1165,12 +1808,12 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
     from ..config import logger
 
     element_type = element.get("type")
-    logger.info("[OVERLAY] Processing element type='%s' at position=(%.2f, %.2f)",
+    logger.debug("[OVERLAY] Processing element type='%s' at position=(%.2f, %.2f)",
                 element_type, element.get("position_x", 0.5), element.get("position_y", 0.5))
 
     # Check conditional rendering based on labels
     if not _should_render_element(element, metadata):
-        logger.info("[OVERLAY]   -> Skipped (conditional label filter)")
+        logger.debug("[OVERLAY]   -> Skipped (conditional label filter)")
         return canvas
 
     # Calculate position
@@ -1178,17 +1821,6 @@ def _apply_overlay_element(canvas: Image.Image, element: Dict[str, Any], W: int,
     pos_y = element.get("position_y", 0.5)
     x = int(W * pos_x)
     y = int(H * pos_y)
-
-    # Metadata badge types (new + legacy aliases)
-    _BADGE_DEFAULTS = {
-        "video_badge":              ("video_resolution", 40),
-        "audio_badge":              ("audio_codec", 30),
-        "edition_badge":            ("edition", 30),
-        "streaming_platform_badge": ("streaming_platform", 30),
-        "studio_badge":             ("studio", 30),
-        "resolution_badge":         ("video_resolution", 40),  # legacy alias
-        "codec_badge":              ("audio_codec", 30),       # legacy alias
-    }
 
     if element_type in _BADGE_DEFAULTS:
         default_field, default_font_size = _BADGE_DEFAULTS[element_type]
@@ -1357,7 +1989,8 @@ def _fetch_url_badge_image(url: str) -> Optional[Image.Image]:
 
     # Download and cache
     try:
-        resp = _requests.get(url, timeout=10, headers={"User-Agent": "Simposter/1.0"})
+        from ..middleware.validation import safe_get
+        resp = safe_get(url, strict=True, timeout=10, headers=EXTERNAL_IMAGE_FETCH_HEADERS)
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
         img.save(str(cache_path), "PNG")
@@ -1400,10 +2033,10 @@ def _apply_metadata_badge(
     metadata_field = element.get("metadata_field") or default_field
     value = metadata.get(metadata_field, "")
     if not value:
-        logger.info("[OVERLAY]   -> Metadata badge: no value for field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
+        logger.debug("[OVERLAY]   -> Metadata badge: no value for field '%s' (metadata keys: %s)", metadata_field, list(metadata.keys()))
         return canvas
 
-    logger.info("[OVERLAY]   -> Metadata badge: %s = '%s'", metadata_field, value)
+    logger.debug("[OVERLAY]   -> Metadata badge: %s = '%s'", metadata_field, value)
 
     # Check per-value mode; fall back to '__other__' catch-all, then "text"
     badge_modes = element.get("badge_modes") or {}
@@ -1413,7 +2046,7 @@ def _apply_metadata_badge(
         mode = badge_modes.get("__other__", "text")
 
     if mode == "none":
-        logger.info("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", value)
+        logger.debug("[OVERLAY]   -> Mode is 'none' for value '%s', skipping", value)
         return canvas
 
     if mode == "image":
@@ -1423,11 +2056,11 @@ def _apply_metadata_badge(
             try:
                 result = _render_badge_asset(canvas, element, x, y, asset_id, value=value)
                 if result is not None:
-                    logger.info("[OVERLAY]   -> Rendered metadata badge as image (asset=%s)", asset_id)
+                    logger.debug("[OVERLAY]   -> Rendered metadata badge as image (asset=%s)", asset_id)
                     return result
             except Exception as e:
                 logger.warning(f"[OVERLAY] Failed to render metadata badge asset: {e}")
-        logger.info("[OVERLAY]   -> Image mode but asset not found, falling through to text")
+        logger.debug("[OVERLAY]   -> Image mode but asset not found, falling through to text")
 
     if mode == "url":
         badge_urls = element.get("badge_urls") or {}
@@ -1463,9 +2096,9 @@ def _apply_metadata_badge(
                 badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
                 badge_layer.paste(img, (paste_x, paste_y))
                 canvas = Image.alpha_composite(canvas, badge_layer)
-                logger.info("[OVERLAY]   -> Rendered metadata badge from URL: %s", url[:80])
+                logger.debug("[OVERLAY]   -> Rendered metadata badge from URL: %s", url[:80])
                 return canvas
-        logger.info("[OVERLAY]   -> URL mode: no URL or fetch failed for '%s', falling through to text", value)
+        logger.debug("[OVERLAY]   -> URL mode: no URL or fetch failed for '%s', falling through to text", value)
 
     if mode == "asset":
         from ..simposter_assets import get_asset_url
@@ -1503,9 +2136,9 @@ def _apply_metadata_badge(
                 badge_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
                 badge_layer.paste(img, (paste_x, paste_y))
                 canvas = Image.alpha_composite(canvas, badge_layer)
-                logger.info("[OVERLAY]   -> Rendered metadata badge from simposter asset: %s", asset_url[:80])
+                logger.debug("[OVERLAY]   -> Rendered metadata badge from simposter asset: %s", asset_url[:80])
                 return canvas
-        logger.info("[OVERLAY]   -> Asset mode: no simposter asset for '%s', falling through to text", value)
+        logger.debug("[OVERLAY]   -> Asset mode: no simposter asset for '%s', falling through to text", value)
 
     # Text rendering using element font settings
     font_family = element.get("font_family", "arial")
@@ -1522,7 +2155,7 @@ def _apply_metadata_badge(
     badge_texts = element.get("badge_texts") or {}
     display_text = badge_texts.get(value.lower()) or _SLUG_DISPLAY_LABELS.get(value.lower()) or value.upper()
 
-    logger.info("[OVERLAY]   -> Rendering metadata badge text '%s' (font=%s size=%s color=%s) at (%d, %d)",
+    logger.debug("[OVERLAY]   -> Rendering metadata badge text '%s' (font=%s size=%s color=%s) at (%d, %d)",
                 display_text, font_family, font_size, font_color_hex, x, y)
 
     draw = ImageDraw.Draw(canvas)
@@ -1573,19 +2206,12 @@ def _apply_full_cover_image(canvas: Image.Image, element: Dict[str, Any]) -> Ima
     """Apply a full-bleed image overlay that stretches to the canvas's current
     size at this point in the pipeline — intentional, not a bug: behaves like
     _apply_custom_image, which is also canvas-size-relative."""
-    from .. import database as db
+    from .. import overlay_engine
 
-    asset_id = element.get("asset_id")
-    if not asset_id:
+    # An uploaded asset, else an image URL (Kometa overlays that use url:).
+    overlay_img = overlay_engine._load_element_image(element)
+    if overlay_img is None:
         return canvas
-    asset = db.get_overlay_asset(asset_id)
-    if not asset:
-        return canvas
-    asset_path = Path(settings.CONFIG_DIR) / asset["file_path"]
-    if not asset_path.exists():
-        return canvas
-
-    overlay_img = Image.open(asset_path).convert("RGBA")
     W, H = canvas.size
     overlay_img = overlay_img.resize((W, H), Image.LANCZOS)
     return Image.alpha_composite(canvas, overlay_img)

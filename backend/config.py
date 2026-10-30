@@ -48,8 +48,23 @@ SECRET_FIELD_PATHS = (
     ("tmdb", "apiKey"),
     ("tvdb", "apiKey"),
     ("fanart", "apiKey"),
+    ("mdblist", "apiKey"),
+    ("wetrakr", "clientId"),
+    ("simkl", "clientId"),
+    ("floppy", "token"),
     ("automation", "webhookSecret"),
 )
+
+# Headers to send when fetching an arbitrary, user-supplied external image URL
+# (a manually-entered poster/logo/backdrop URL, a TMDb/Fanart candidate, etc.).
+# requests' default User-Agent ("python-requests/x.x") is a well-known bot
+# signature that some image hosts' anti-hotlink/bot protection blocks outright
+# with a 403 -- confirmed directly against theposterdb.com (which sits behind
+# Cloudflare): the exact same URL returns 200 for a browser UA or even this
+# plain "Simposter/1.0" string, and 403 only for the unmodified requests
+# default. Not an attempt to impersonate a browser, just to avoid being
+# mistaken for a scraper purely because of an unset header.
+EXTERNAL_IMAGE_FETCH_HEADERS = {"User-Agent": "Simposter/1.0"}
 
 # Simple docker/container detection for better guidance when connecting to Plex
 def _running_in_container() -> bool:
@@ -82,7 +97,25 @@ for env_path in env_candidates:
 #  Settings (loads .env properly)
 # ===============================
 class Settings(BaseSettings):
-    PLEX_URL: str = "http://localhost:32400"
+    # Empty by default, not a placeholder like "http://localhost:32400" --
+    # this class-level default only ever kicks in when no PLEX_URL env var is
+    # set at all, and _default_ui_settings() (ui_settings.py) copies whatever
+    # this evaluates to straight into a fresh install's "not yet configured"
+    # settings response. A non-empty placeholder there looked exactly like a
+    # real, user-provided value everywhere else in the app that checks
+    # `if settings.PLEX_URL` to mean "Plex is configured" -- including once it
+    # got saved into the DB as a real settings row by the very first save (an
+    # onboarding "Skip Plex" run included), permanently making a genuinely
+    # never-configured install look configured. This default was never
+    # load-bearing for docker-compose.yml (which never sets this env var) or
+    # the documented .env.example convenience flow (that sets a REAL env var,
+    # picked up independently via os.getenv() in _env_overrides() below,
+    # regardless of this class default) -- verified before removing it. Two
+    # other places in this codebase (ui_settings.py, database.py) already
+    # special-cased the literal "http://localhost:32400" string as "not
+    # really configured" for exactly this reason; fixing it here instead
+    # closes the root cause rather than needing a third special case.
+    PLEX_URL: str = ""
     PLEX_TOKEN: str = ""
     PLEX_MOVIE_LIBRARY_NAME: str = ""
     PLEX_MOVIE_LIBRARY_NAMES: List[str] = []
@@ -93,6 +126,7 @@ class Settings(BaseSettings):
     TVDB_API_KEY: str = ""
     TVDB_PIN: str = ""
     FANART_API_KEY: str = ""
+    MDBLIST_API_KEY: str = ""
 
     OUTPUT_ROOT: str = ""
     CONFIG_DIR: str = "./config"
@@ -202,9 +236,26 @@ def _load_ui_settings_fallback():
         plex_libs_env = os.getenv("PLEX_MOVIE_LIBRARY_NAMES")
         tmdb_key_env = os.getenv("TMDB_API_KEY")
 
-        if plex_url_env:
+        # ...except Plex credentials the user has explicitly removed in the UI
+        # (PlexSettings.ignoreEnvCredentials) -- otherwise a removed Plex would
+        # silently come back on every container restart.
+        plex_env_ignored = bool(plex_data.get("ignoreEnvCredentials"))
+        # The main Plex server switched off via its "Enabled" checkbox: Plex is
+        # off app-wide (saved URL/token kept), and env vars don't switch it back on.
+        _servers = data.get("mediaServers")
+        if isinstance(_servers, str):
+            try:
+                _servers = json.loads(_servers)
+            except ValueError:
+                _servers = []
+        _plex1 = next((s for s in (_servers or []) if isinstance(s, dict) and s.get("id") == "plex-1"), None)
+        if _plex1 is not None and _plex1.get("enabled") is False:
+            settings.PLEX_URL = ""
+            settings.PLEX_TOKEN = ""
+            plex_env_ignored = True
+        if plex_url_env and not plex_env_ignored:
             settings.PLEX_URL = plex_url_env.rstrip("/")
-        if plex_token_env:
+        if plex_token_env and not plex_env_ignored:
             settings.PLEX_TOKEN = plex_token_env
         if plex_lib_env:
             settings.PLEX_MOVIE_LIBRARY_NAME = plex_lib_env
@@ -233,6 +284,7 @@ POSTER_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "posters")
 LOGO_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "logos")
 ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "backdrops")
 SQUARE_ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "square_art")
+THUMB_ART_CACHE_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "thumb_art")
 HISTORY_THUMBNAIL_DIR = str(Path(settings.CONFIG_DIR) / "cache" / "history_thumbnails")
 
 # Load from ui_settings.json if environment variables weren't provided
@@ -264,6 +316,7 @@ Path(POSTER_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(LOGO_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(SQUARE_ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+Path(THUMB_ART_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 Path(HISTORY_THUMBNAIL_DIR).mkdir(parents=True, exist_ok=True)
 
 # Migrate legacy log locations into the dedicated config/logs folder
@@ -285,6 +338,87 @@ settings.LOG_FILE = str(preferred_log)
 # ==========================
 #  Logging with sensitive data redaction
 # ==========================
+# Secret-looking query/header values, e.g. "?api_key=abc", "&apikey=abc",
+# "X-Plex-Token=abc", "secret=abc", 'MediaBrowser Token="abc"'. Catches keys that
+# aren't saved yet (a "Test" button) and URLs inside requests' exception text.
+_SECRET_PARAM_RE = re.compile(
+    r"(?i)((?:api_?key|apikey|api_token|x-plex-token|plex-token|token|secret)=)[^&\s'\"<>,;)]+"
+)
+_SECRET_HEADER_RE = re.compile(r'(?i)(token=")[^"]*(")')
+_SECRET_BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}")
+
+_known_secrets_cache: dict = {"at": 0.0, "values": ()}
+
+
+def _media_server_secrets() -> list:
+    """Tokens/API keys of every configured media server, read straight from the
+    settings table (config.py can't import database.py)."""
+    try:
+        import sqlite3
+        db_path = Path(settings.SETTINGS_DIR) / "simposter.db"
+        if not db_path.exists():
+            return []
+        conn = sqlite3.connect(str(db_path), timeout=2)
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+            # List-source keys and sign-in tokens (backend/list_sources.py).
+            extra = [r[0] for r in conn.execute(
+                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token')"
+            ).fetchall()]
+            try:
+                for (data_json,) in conn.execute("SELECT data_json FROM list_source_auth").fetchall():
+                    auth = json.loads(data_json or "{}")
+                    extra += [auth.get(k) for k in ("access_token", "refresh_token")]
+            except sqlite3.Error:
+                pass  # table not created yet
+        finally:
+            conn.close()
+        servers = json.loads(row[0]) if row and row[0] else []
+        out = [str(v) for v in extra if v]
+        for s in servers if isinstance(servers, list) else []:
+            if isinstance(s, dict):
+                for k in ("token", "apiKey"):
+                    if s.get(k):
+                        out.append(str(s[k]))
+        return out
+    except Exception:
+        return []
+
+
+def _known_secrets() -> tuple:
+    """Every saved secret value, longest first, refreshed at most once a minute."""
+    import time as _time
+    now = _time.time()
+    if now - _known_secrets_cache["at"] < 60:
+        return _known_secrets_cache["values"]
+    vals = [
+        getattr(settings, name, "") or ""
+        for name in ("PLEX_TOKEN", "TMDB_API_KEY", "TVDB_API_KEY", "FANART_API_KEY",
+                     "MDBLIST_API_KEY", "WEBHOOK_SECRET")
+    ]
+    vals += _media_server_secrets()
+    values = tuple(sorted({str(v) for v in vals if v and len(str(v)) >= 6}, key=len, reverse=True))
+    _known_secrets_cache.update(at=now, values=values)
+    return values
+
+
+def redact_secrets(text) -> str:
+    """Hide API keys, tokens and secrets in a string before it is logged or
+    returned to the browser."""
+    if text is None:
+        return ""
+    s = str(text)
+    if not s:
+        return s
+    s = _SECRET_PARAM_RE.sub(r"\1***", s)
+    s = _SECRET_HEADER_RE.sub(r"\1***\2", s)
+    s = _SECRET_BEARER_RE.sub(r"\1***", s)
+    for secret in _known_secrets():
+        if secret in s:
+            s = s.replace(secret, secret[:4] + "***")
+    return s
+
+
 class RedactingFormatter(logging.Formatter):
     """Custom formatter that redacts sensitive information from logs."""
 
@@ -295,22 +429,32 @@ class RedactingFormatter(logging.Formatter):
         else:
             record.api_tag = ""
 
-        original = super().format(record)
-        # Redact tokens and API keys
-        redacted = original
-        if settings.PLEX_TOKEN and len(settings.PLEX_TOKEN) > 4:
-            redacted = redacted.replace(settings.PLEX_TOKEN, settings.PLEX_TOKEN[:4] + "***REDACTED***")
-        if settings.TMDB_API_KEY and len(settings.TMDB_API_KEY) > 4:
-            redacted = redacted.replace(settings.TMDB_API_KEY, settings.TMDB_API_KEY[:4] + "***REDACTED***")
-        return redacted
+        return redact_secrets(super().format(record))
+
+# High-frequency UI progress-polling endpoints (batch/scan/backup progress bars,
+# polled every 200ms-3s while an operation runs) add zero diagnostic value to the
+# access log and drown out everything else in it -- dropped entirely below,
+# regardless of configured LOG_LEVEL, rather than just downgraded to DEBUG.
+_NOISY_POLL_PATHS = (
+    "/api/batch-progress",
+    "/api/backup/progress",
+    "/api/scan-progress",
+)
 
 class APILogDowngradeFilter(logging.Filter):
-    """Force uvicorn access logs to DEBUG level so they don't spam INFO."""
+    """Force uvicorn access logs to DEBUG level so they don't spam INFO,
+    and drop known high-frequency polling requests entirely."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name.startswith("uvicorn"):
             record.levelname = "DEBUG"
             record.levelno = logging.DEBUG
+            try:
+                msg = record.getMessage()
+            except Exception:
+                msg = ""
+            if any(p in msg for p in _NOISY_POLL_PATHS):
+                return False
         return True
 
 logger = logging.getLogger("simposter")
@@ -615,7 +759,7 @@ def get_plex_movies(library_ids: Optional[List[str]] = None):
                 )
             )
 
-    logger.info("[PLEX] Loaded %d movies from %d libraries (%s)", len(out), len(lib_ids), ",".join(lib_ids))
+    logger.debug("[PLEX] Loaded %d movies from %d libraries (%s)", len(out), len(lib_ids), ",".join(lib_ids))
     try:
         cache.refresh_from_list(out)
     except (sqlite3.Error, AttributeError) as e:
@@ -634,12 +778,45 @@ def extract_tmdb_id_from_metadata(xml_text: str) -> Optional[int]:
         logger.debug("Failed to parse XML metadata: %s", e)
         return None
 
+    tmdb_ids: List[int] = []
+    imdb_id = None
     for g in root.findall(".//Guid"):
         gid = g.get("id") or ""
         match = re.search(r"(?:tmdb|themoviedb)://(\d+)", gid)
-        if match:
-            return int(match.group(1))
-    return None
+        if match and int(match.group(1)) not in tmdb_ids:
+            tmdb_ids.append(int(match.group(1)))
+        imdb = re.search(r"imdb://(tt\d+)", gid)
+        if imdb and not imdb_id:
+            imdb_id = imdb.group(1)
+    if len(tmdb_ids) > 1:
+        return _pick_tmdb_id(tmdb_ids, imdb_id)
+    return tmdb_ids[0] if tmdb_ids else None
+
+
+# (tmdb ids, imdb id) -> chosen id, so a scan doesn't ask TMDb again for every item.
+_TMDB_PICKS: Dict[tuple, int] = {}
+
+
+def _pick_tmdb_id(tmdb_ids: List[int], imdb_id: Optional[str]) -> int:
+    """Plex sometimes attaches two TMDb ids to one item (e.g. an old entry for
+    the film's working title plus the real one). Use the one TMDb itself
+    links to the item's IMDb id; without an IMDb id or a match, keep the
+    first, as before."""
+    key = (tuple(tmdb_ids), imdb_id)
+    if key in _TMDB_PICKS:
+        return _TMDB_PICKS[key]
+    chosen = tmdb_ids[0]
+    if imdb_id:
+        try:
+            from .tmdb_client import find_tmdb_ids_by_imdb
+            matches = [i for i in find_tmdb_ids_by_imdb(imdb_id) if i in tmdb_ids]
+            if matches:
+                chosen = matches[0]
+        except Exception as e:
+            logger.debug("[TMDB] Couldn't check IMDb %s against TMDb ids %s: %s", imdb_id, tmdb_ids, e)
+    logger.info("[TMDB] Plex lists several TMDb ids %s (IMDb %s); using %s", tmdb_ids, imdb_id or "none", chosen)
+    _TMDB_PICKS[key] = chosen
+    return chosen
 
 
 def extract_tvdb_id_from_metadata(xml_text: str) -> Optional[int]:
@@ -724,6 +901,114 @@ def extract_media_info_from_metadata(xml_text: str) -> Dict[str, str]:
     return info
 
 
+_API_USER_AGENT: Optional[str] = None
+
+
+def api_user_agent() -> str:
+    """User-Agent for Simposter's own API calls (MDBList, TMDb, Fanart.tv,
+    TVDB...), so services show "Simposter/<version>" instead of
+    "python-requests"."""
+    global _API_USER_AGENT
+    if _API_USER_AGENT is None:
+        try:
+            from .api.version_info import get_current_version
+            version = str(get_current_version() or "").lstrip("v") or "1"
+        except Exception:
+            version = "1"
+        _API_USER_AGENT = f"Simposter/{version} (+https://github.com/PJGitHub9/Simposter)"
+    return _API_USER_AGENT
+
+
+def _resolution_rank(value: Optional[str]) -> int:
+    """Order resolutions so the best can be picked: 8k > 4k > 1440 > 1080 > 720 > SD."""
+    v = str(value or "").strip().lower().rstrip("p")
+    if not v:
+        return 0
+    if v.endswith("k"):
+        try:
+            return {8: 7, 4: 6, 2: 4}.get(int(v[:-1]), 4)
+        except ValueError:
+            return 0
+    if v == "sd":
+        return 1
+    try:
+        n = int(v)
+    except ValueError:
+        return 0
+    return 7 if n >= 4320 else 6 if n >= 2160 else 5 if n >= 1440 else 4 if n >= 1080 else 3 if n >= 720 else 2 if n >= 576 else 1
+
+
+def best_media_info(infos: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """A show's or season's media info: the highest-resolution episode's (more
+    audio channels breaks a tie). Like Kometa, which treats a show as 4K when
+    any of its episodes is."""
+    best: Dict[str, Any] = {}
+    best_key = (-1, -1)
+    for info in infos or []:
+        if not info:
+            continue
+        try:
+            channels = int(float(info.get("audio_channels") or 0))
+        except (TypeError, ValueError):
+            channels = 0
+        key = (_resolution_rank(info.get("video_resolution")), channels)
+        if key > best_key:
+            best, best_key = info, key
+    return dict(best)
+
+
+def _media_element_info(media) -> Dict[str, str]:
+    info: Dict[str, str] = {}
+    for attr, field in (("videoResolution", "video_resolution"), ("videoCodec", "video_codec"),
+                        ("audioCodec", "audio_codec")):
+        val = media.get(attr)
+        if val:
+            info[field] = val.lower()
+    if media.get("audioChannels"):
+        info["audio_channels"] = media.get("audioChannels")
+    for stream in media.iter("Stream"):
+        if stream.get("streamType") == "2":
+            lang = stream.get("languageTag") or stream.get("language")
+            if lang:
+                info["audio_language"] = lang.lower()
+            break
+    return info
+
+
+def extract_episode_media_infos(xml_text: str) -> List[tuple]:
+    """[(season_rating_key, info)] for every episode in a Plex episode list
+    (/allLeaves or a season's /children); an episode with several versions
+    counts as its best one."""
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return []
+    out = []
+    for video in root.iter("Video"):
+        infos = [_media_element_info(m) for m in video.findall("Media")]
+        out.append((video.get("parentRatingKey"), best_media_info(infos)))
+    return out
+
+
+def plex_show_media_info(rating_key: str, season: bool = False) -> Dict[str, Any]:
+    """Best-episode media info for a Plex show (or season), fetched live. Shows
+    and seasons have no file of their own, so Plex returns no <Media> for them.
+    Returns {"show": info, "seasons": {season_key: info}}."""
+    path = "children" if season else "allLeaves"
+    r = plex_session.get(f"{settings.PLEX_URL}/library/metadata/{rating_key}/{path}",
+                         headers=plex_headers(), timeout=20)
+    r.raise_for_status()
+    episodes = extract_episode_media_infos(r.text)
+    by_season: Dict[str, list] = {}
+    for season_key, info in episodes:
+        if season_key:
+            by_season.setdefault(str(season_key), []).append(info)
+    return {
+        "show": best_media_info([info for _, info in episodes]),
+        "seasons": {k: best_media_info(v) for k, v in by_season.items()},
+    }
+
+
 def get_plex_media_info(rating_key: str) -> Dict[str, str]:
     """Return media stream info for *rating_key*, using DB cache when available."""
     # 1. Check cache first
@@ -736,12 +1021,40 @@ def get_plex_media_info(rating_key: str) -> Dict[str, str]:
     except Exception:
         pass  # DB not available yet or import error
 
-    # 2. Fetch from Plex and cache the result
+    # 2. Fetch from Plex and cache the result (only for a Plex item; a
+    #    Jellyfin/Emby item's media info comes from its scan)
+    try:
+        from . import database as db
+        if not settings.PLEX_URL or db.get_server_id_for_rating_key(str(rating_key)) != "plex-1":
+            return {}
+    except Exception:
+        pass
     url = f"{settings.PLEX_URL}/library/metadata/{rating_key}"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=6)
         r.raise_for_status()
         info = extract_media_info_from_metadata(r.text)
+        if not info:
+            # A show or season has no file of its own: use its best episode's.
+            kind = ""
+            try:
+                node = ET.fromstring(r.text).find("Directory")
+                kind = (node.get("type") if node is not None else "") or ""
+            except Exception:
+                pass
+            if kind in ("show", "season"):
+                from . import database as db
+                result = plex_show_media_info(rating_key, season=kind == "season")
+                info = result["show"]
+                if kind == "show":
+                    if info:
+                        db.update_tv_media_info(rating_key, info.get("video_resolution"), info.get("audio_codec"),
+                                                info.get("audio_channels"), video_codec=info.get("video_codec"),
+                                                audio_language=info.get("audio_language"))
+                    db.set_season_media_info("plex-1", rating_key, result["seasons"])
+                elif info:
+                    db.set_season_media_info("plex-1", None, {str(rating_key): info})
+                return info
         if info:
             try:
                 from . import database as db
@@ -770,6 +1083,98 @@ def get_plex_media_info(rating_key: str) -> Dict[str, str]:
     except Exception as e:
         logger.debug("[PLEX] Failed to fetch media info for %s: %s", rating_key, e)
         return {}
+
+
+def inject_plex_media_metadata(
+    render_options: Dict[str, Any],
+    rating_key: Optional[str],
+    *,
+    tmdb_id: Optional[Any] = None,
+    is_tv: Optional[bool] = None,
+    plex_xml_text: Optional[str] = None,
+    log_prefix: str = "",
+) -> Dict[str, Any]:
+    """Fetch Plex media info (resolution/codec/audio/edition) for *rating_key*
+    and merge it into render_options["metadata"], plus inject tmdb_id/media_type
+    for studio/streaming-platform badge resolution.
+
+    This is the single consolidated version of a pattern that used to be
+    duplicated, nearly byte-for-byte, across preview.py, batch.py (x2), save.py,
+    and plexsend.py — see CLAUDE.md Quirk #56. (overlay_config.py's
+    /overlay-preview-metadata endpoint calls get_plex_media_info()/
+    get_movie_tmdb_id() too, but builds a standalone response dict rather than
+    injecting into render options, so it's a different consumer of those two
+    primitives, not a copy of this pattern — deliberately left untouched.)
+
+    Callers that already know tmdb_id/is_tv (batch.py, preview.py always do)
+    should pass them to skip an extra Plex fetch. Callers that already have the
+    raw metadata XML in hand (plexsend.py, from its own title/year lookup)
+    should pass plex_xml_text to derive tmdb_id/is_tv from it instead of
+    re-fetching. If neither is given but rating_key is, this fetches metadata
+    once and derives both from it (save.py's case — this also replaces that
+    call site's own redundant second fetch-and-parse for the same purpose).
+
+    Mutates render_options in place and returns it for convenient chaining.
+    """
+    if not rating_key:
+        return render_options
+
+    # The overlay engine looks up this item's stored file paths by rating_key
+    # (filename conditions, Kometa's filepath.regex).
+    render_options["metadata"] = {**(render_options.get("metadata") or {}), "rating_key": str(rating_key)}
+
+    plex_media = get_plex_media_info(rating_key)
+    if plex_media:
+        existing_meta = render_options.get("metadata") or {}
+        render_options["metadata"] = {**existing_meta, **plex_media}
+        logger.debug("%sInjected Plex media info for rating_key=%s: %s", log_prefix, rating_key, plex_media)
+
+    resolved_tmdb_id = tmdb_id
+    resolved_is_tv = is_tv
+
+    # A Jellyfin/Emby item (or no Plex at all): the ids are already in the scan
+    # cache, and a Plex lookup would only fail.
+    if (resolved_tmdb_id is None or resolved_is_tv is None) and plex_xml_text is None:
+        try:
+            from . import database as db
+            if not settings.PLEX_URL or db.get_server_id_for_rating_key(str(rating_key)) != "plex-1":
+                cached_tmdb, _cached_tvdb = db.get_ids_for_rating_key(str(rating_key))
+                if resolved_tmdb_id is None and cached_tmdb:
+                    resolved_tmdb_id = cached_tmdb
+                if resolved_is_tv is None:
+                    with db.get_db() as conn:
+                        resolved_is_tv = conn.execute(
+                            "SELECT 1 FROM tv_cache WHERE rating_key = ? LIMIT 1", (str(rating_key),)
+                        ).fetchone() is not None
+        except Exception as e:
+            logger.debug("%sCached id lookup failed for %s: %s", log_prefix, rating_key, e)
+
+    if (resolved_tmdb_id is None or resolved_is_tv is None) and settings.PLEX_URL:
+        xml_text = plex_xml_text
+        if xml_text is None:
+            try:
+                r = plex_session.get(f"{settings.PLEX_URL}/library/metadata/{rating_key}", headers=plex_headers(), timeout=5)
+                if r.ok:
+                    xml_text = r.text
+            except Exception as e:
+                logger.debug("%sFailed to fetch metadata for tmdb_id/is_tv: %s", log_prefix, e)
+
+        if xml_text:
+            if resolved_tmdb_id is None:
+                resolved_tmdb_id = extract_tmdb_id_from_metadata(xml_text)
+            if resolved_is_tv is None:
+                try:
+                    resolved_is_tv = ET.fromstring(xml_text).find(".//Directory") is not None
+                except ET.ParseError:
+                    resolved_is_tv = None
+
+    if resolved_tmdb_id:
+        render_options.setdefault("metadata", {})
+        render_options["metadata"]["tmdb_id"] = resolved_tmdb_id
+        render_options["metadata"]["media_type"] = "tv" if resolved_is_tv else "movie"
+        logger.debug("%sInjected tmdb_id=%s media_type=%s for studio/streaming badge resolution", log_prefix, resolved_tmdb_id, render_options["metadata"]["media_type"])
+
+    return render_options
 
 
 def get_movie_tmdb_id(rating_key: str) -> Optional[int]:
@@ -845,6 +1250,26 @@ def extract_folder_name_from_metadata(xml_text: str) -> Optional[str]:
     if len(segments) >= 4:
         return segments[-2]
     return None
+
+
+def extract_media_paths_from_metadata(xml_text: str) -> List[str]:
+    """Every media file path in a Plex /library/metadata/{key} response.
+
+    Movies: one <Part file> per version (a movie with 4K + 1080p copies has two).
+    Shows: no <Part> at this level, so the show folder(s) from <Location path>.
+    Used by overlay conditions that match on the file name (Kometa's
+    filepath.regex). Returns [] on any parse failure."""
+    if not xml_text or xml_text.startswith("<html"):
+        return []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    paths = [p.get("file") for p in root.findall(".//Part") if p.get("file")]
+    if not paths:
+        paths = [loc.get("path") for loc in root.findall(".//Location") if loc.get("path")]
+    seen = set()
+    return [p for p in paths if not (p in seen or seen.add(p))]
 
 
 def get_movie_folder_name(rating_key: str) -> Optional[str]:
@@ -946,7 +1371,23 @@ def get_media_folder_name(rating_key: str, is_tv: bool = False) -> Optional[str]
     a resolved {folder} instead of always falling back to {title}.
 
     Behavior for movies is byte-identical to calling get_movie_folder_name()
-    directly (this just forwards to it) -- no change to existing behavior."""
+    directly (this just forwards to it) -- no change to existing behavior.
+
+    Server-aware at THIS single entry point rather than requiring every
+    caller to check first: get_show_folder_name()/get_movie_folder_name()
+    are both unconditionally Plex-only (a live Plex metadata fetch), always
+    doomed for a Jellyfin/Emby-sourced rating_key. Several callers (batch.py's
+    two closures) already guard this themselves at the call site, but that
+    pattern doesn't scale -- save.py's own direct call had no such guard and
+    silently paid for a doomed fetch on every "Save to Disk" of a Jellyfin
+    item whenever Plex happened to be configured-but-unreachable. Checking
+    once, here, protects every current and future caller uniformly."""
+    try:
+        from . import database as db
+        if db.get_server_id_for_rating_key(rating_key) != "plex-1":
+            return None
+    except Exception:
+        pass  # DB not available yet or lookup failed -- fall through to the original behavior
     if is_tv:
         return get_show_folder_name(rating_key)
     return get_movie_folder_name(rating_key)
@@ -1295,3 +1736,88 @@ def get_reuse_cached_poster_days() -> float:
         return float(val or 0)
     except Exception:
         return 0.0
+
+
+def normalize_collection_title(name: str) -> str:
+    """Strips a trailing " Collection" (case-insensitive) and lowercases/trims
+    for fuzzy-matching a collection's name across servers/sources. Extracted
+    from movies.py's _best_collection_match() (originally built to match a
+    plain Plex collection title against TMDb's own "X Collection"-suffixed
+    search results) into a shared, module-level function so database.py's
+    cross-server collection dedup (get_cached_collections_multi(), Quirk
+    #130's follow-up) can reuse the identical normalization instead of a
+    second, driftable copy. User-reported directly, confirming the same
+    pattern applies a second place: "i think jellyfin adds 'collection' to
+    the end of the collection name whereas plex doesnt" -- e.g. Plex's "Marvel
+    Cinematic Universe" vs. Jellyfin's "Marvel Cinematic Universe Collection"
+    for what is, in the real world, the exact same collection."""
+    n = (name or "").strip().lower()
+    if n.endswith(" collection"):
+        n = n[: -len(" collection")]
+    return n.strip()
+
+
+def get_library_group_for(server_id: str, library_id: str, media_type: str) -> Optional[dict]:
+    """Finds and returns the whole LibraryGroup a (server_id, library_id) pair
+    belongs to (Quirk #62/#64), or None if it's in no group at all. The shared
+    lookup behind get_library_group_members()/get_library_group_preferred_server()
+    below -- both just pick a different field off the same group, so this is
+    the one place that actually reads `libraryGroups`."""
+    try:
+        from . import database as db
+        ui = db.get_ui_settings() or {}
+        groups = ui.get("libraryGroups") or []
+        for group in groups:
+            if group.get("mediaType") != media_type:
+                continue
+            members = group.get("members") or []
+            if any(m.get("serverId") == server_id and m.get("libraryId") == str(library_id) for m in members):
+                return group
+        return None
+    except Exception as e:
+        logger.debug("[LIBRARY_GROUP] Failed to resolve group for %s/%s (%s): %s", server_id, library_id, media_type, e)
+        return None
+
+
+def get_library_group_members(server_id: str, library_id: str, media_type: str) -> Optional[List[tuple]]:
+    """Given a (server_id, library_id) pair (a Plex library_id in every real
+    caller today), returns every member of its LibraryGroup as a
+    (server_id, library_id) tuple list -- including the pair passed in -- IF
+    that group has more than one member (i.e. it's actually linked to
+    another server's library). Returns None when there's no group, or the
+    group only has this one member -- meaning "nothing to merge, use the
+    normal single-library query" -- so every caller's existing single-library
+    code path is unaffected unless a real link exists."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return None
+    members = group.get("members") or []
+    if len(members) <= 1:
+        return None
+    return [(m.get("serverId"), m.get("libraryId")) for m in members]
+
+
+def get_library_group_preferred_server(server_id: str, library_id: str, media_type: str) -> Optional[str]:
+    """The specific group's own preferredServerId (Quirk #82's per-group
+    picker, replacing the old single global automation.preferredPosterServer
+    setting) -- None when the group has none set (or there's no group at
+    all), in which case database.py's _dedupe_by_tmdb_id() falls back to its
+    own default (Plex if present, else most-recently-updated)."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return None
+    return group.get("preferredServerId") or None
+
+
+def get_library_group_merge_enabled(server_id: str, library_id: str, media_type: str) -> bool:
+    """The specific group's own mergeItems setting (Quirk #119's follow-up --
+    the user asked for a real per-group choice between "1 poster per item"
+    (merged, the original default) and showing each linked server's copy as
+    its own card). Defaults to True (merge) when there's no group at all, or
+    the group predates this field and has no explicit value -- matching the
+    behavior every existing install already had before this setting existed,
+    so this is a strict no-op unless a group is explicitly opted out."""
+    group = get_library_group_for(server_id, library_id, media_type)
+    if not group:
+        return True
+    return group.get("mergeItems", True) is not False

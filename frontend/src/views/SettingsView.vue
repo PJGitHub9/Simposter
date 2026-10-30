@@ -7,6 +7,7 @@ import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { setSessionStorage, getSessionStorage } from '../composables/useSessionStorage'
+import { onboardingJustSaved } from '@/composables/useOnboardingLauncher'
 
 // Import tab components
 import GeneralTab from './settings/GeneralTab.vue'
@@ -18,6 +19,7 @@ import AutomationTab from './settings/AutomationTab.vue'
 import AdvancedTab from './settings/AdvancedTab.vue'
 import NotificationsTab from './settings/NotificationsTab.vue'
 import CleanupTab from './settings/CleanupTab.vue'
+import MediaServersTab from './settings/MediaServersTab.vue'
 
 interface LibraryMapping {
   id: string
@@ -50,7 +52,7 @@ const route = useRoute()
 const router = useRouter()
 
 // Active tab state - initialize from URL or default to 'general'
-const activeTab = ref<'general' | 'libraries' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
+const activeTab = ref<'general' | 'libraries' | 'media-servers' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
   (route.query.tab as any) || 'general'
 )
 
@@ -58,6 +60,12 @@ const activeTab = ref<'general' | 'libraries' | 'output' | 'performance' | 'auto
 const hasUnsavedChanges = ref(false)
 const initialSettingsSnapshot = ref('')
 const watchersEnabled = ref(false)
+// The last-saved libraryGroups list -- threaded down to LibrariesTab ->
+// LibraryGroupCard so each card can show its OWN unsaved indicator (a
+// per-group "Merge items" toggle, say) instead of only the whole-section
+// yellow border, which is easy to miss on a page with several groups. Kept
+// in sync with initialSettingsSnapshot inside captureSettingsSnapshot().
+const initialLibraryGroups = ref<any[]>([])
 
 // Track which sections have unsaved changes
 const sectionsWithChanges = ref({
@@ -70,7 +78,15 @@ const sectionsWithChanges = ref({
   imageQuality: false,
   performance: false,
   scheduler: false,
-  automation: false
+  automation: false,
+  mediaServers: false,
+  // Granular, per-server-type flags (mediaServers above stays as the
+  // combined flag used by the "preferred server" picker) so editing just
+  // the Jellyfin section in MediaServersTab.vue doesn't yellow-highlight
+  // the untouched Plex/Emby sections too.
+  mediaServersPlex: false,
+  mediaServersJellyfin: false,
+  mediaServersEmby: false
 })
 
 // Cooldown state to prevent rapid clicking
@@ -108,6 +124,20 @@ const savedTvShowLibraryIds = ref<Set<string>>(new Set())
 // succeeds, rather than firing immediately on Remove, so a removal isn't "final" until
 // you save, consistent with every other change on this page.
 const pendingLibraryCacheCleanup = ref<Set<string>>(new Set())
+// Media servers removed (with confirmation) in the Media Servers tab since the
+// last save -- their cached data is purged only once the save succeeds, same
+// "not final until saved" rule as library removal above.
+const pendingServerCachePurge = ref<Set<string>>(new Set())
+
+function onPrimaryPlexRemoved() {
+  // Plex's own library mappings live here (not in the store), so the tab
+  // can't clear them itself. Its library-group memberships were already
+  // stripped by MediaServersTab.
+  localLibraries.value = []
+  localTvShowLibraries.value = []
+  plexLibraries.value = []
+  testConnection.value = ''
+}
 const localTmdbApiKey = ref('')
 const localTvdbApiKey = ref('')
 const localFanartApiKey = ref('')
@@ -125,7 +155,11 @@ const localTmdbRateLimit = ref(40)
 const localTvdbRateLimit = ref(20)
 const localMemoryLimit = ref(2048)
 const localUseOverlayCache = ref(true)
-let scanPoller: number | null = null
+// Scan polling itself now lives entirely in App.vue, driven by the shared
+// scan store's own visibility (see its own comment on this) -- this page
+// only ever needs to flip scan.visible.value on/off, never run its own
+// separate polling loop (that used to stop the moment this page unmounted,
+// mid-scan, freezing the still-globally-visible overlay).
 
 // Automation settings
 const localWebhookAutoSend = ref(true)
@@ -155,6 +189,8 @@ const localDiscordNotifyBatch = ref(true)
 const localDiscordNotifyManual = ref(true)
 const localDiscordNotifyWebhook = ref(true)
 const localDiscordNotifyAutoGenerate = ref(true)
+const localDiscordNotifyMediaMirror = ref(true)
+const localDiscordNotifyOverlayRefresh = ref(true)
 const localAppriseEnabled = ref(false)
 const localAppriseUrls = ref<string[]>([])
 const localAppriseNotifyLibraries = ref<string[]>([])
@@ -162,6 +198,8 @@ const localAppriseNotifyBatch = ref(true)
 const localAppriseNotifyManual = ref(true)
 const localAppriseNotifyWebhook = ref(true)
 const localAppriseNotifyAutoGenerate = ref(true)
+const localAppriseNotifyMediaMirror = ref(true)
+const localAppriseNotifyOverlayRefresh = ref(true)
 
 // API key testing
 const testingApiKeys = ref<Record<string, boolean>>({})
@@ -313,6 +351,8 @@ const loadLocalSettings = async () => {
   localDiscordNotifyManual.value = settings.notifications?.value?.discordNotifyManual ?? true
   localDiscordNotifyWebhook.value = settings.notifications?.value?.discordNotifyWebhook ?? true
   localDiscordNotifyAutoGenerate.value = settings.notifications?.value?.discordNotifyAutoGenerate ?? true
+  localDiscordNotifyMediaMirror.value = settings.notifications?.value?.discordNotifyMediaMirror ?? true
+  localDiscordNotifyOverlayRefresh.value = settings.notifications?.value?.discordNotifyOverlayRefresh ?? true
   localAppriseEnabled.value = settings.notifications?.value?.appriseEnabled ?? false
   localAppriseUrls.value = settings.notifications?.value?.appriseUrls ?? []
   localAppriseNotifyLibraries.value = settings.notifications?.value?.appriseNotifyLibraries ?? []
@@ -320,6 +360,8 @@ const loadLocalSettings = async () => {
   localAppriseNotifyManual.value = settings.notifications?.value?.appriseNotifyManual ?? true
   localAppriseNotifyWebhook.value = settings.notifications?.value?.appriseNotifyWebhook ?? true
   localAppriseNotifyAutoGenerate.value = settings.notifications?.value?.appriseNotifyAutoGenerate ?? true
+  localAppriseNotifyMediaMirror.value = settings.notifications?.value?.appriseNotifyMediaMirror ?? true
+  localAppriseNotifyOverlayRefresh.value = settings.notifications?.value?.appriseNotifyOverlayRefresh ?? true
 
   await nextTick()
 }
@@ -382,13 +424,30 @@ const captureSettingsSnapshot = () => {
     discordNotifyManual: localDiscordNotifyManual.value,
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
+    discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
     appriseNotifyLibraries: localAppriseNotifyLibraries.value,
     appriseNotifyBatch: localAppriseNotifyBatch.value,
     appriseNotifyManual: localAppriseNotifyManual.value,
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
-    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
+    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
+    appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value,
+    // mediaServers/preferredPosterServer/libraryGroups are bound directly to
+    // the store (no local staging ref, unlike everything else here -- Quirk
+    // #79/#119) so read straight from it rather than from a localXxx ref
+    // that doesn't exist for these fields.
+    mediaServers: JSON.parse(JSON.stringify(settings.mediaServers.value)),
+    preferredPosterServer: settings.automation.value.preferredPosterServer,
+    libraryGroups: JSON.parse(JSON.stringify(settings.libraryGroups.value)),
+    // MDBList (GeneralTab) is bound directly to the store too.
+    mdblist: JSON.parse(JSON.stringify(settings.mdblist.value)),
+    // WeTrakr / SIMKL / Floppy list sources (GeneralTab), also bound to the store.
+    wetrakr: JSON.parse(JSON.stringify(settings.wetrakr.value)),
+    simkl: JSON.parse(JSON.stringify(settings.simkl.value)),
+    floppy: JSON.parse(JSON.stringify(settings.floppy.value))
   })
   hasUnsavedChanges.value = false
 
@@ -402,6 +461,10 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.performance = false
   sectionsWithChanges.value.scheduler = false
   sectionsWithChanges.value.automation = false
+  sectionsWithChanges.value.mediaServers = false
+  sectionsWithChanges.value.mediaServersPlex = false
+  sectionsWithChanges.value.mediaServersJellyfin = false
+  sectionsWithChanges.value.mediaServersEmby = false
 
   setTimeout(() => {
     watchersEnabled.value = true
@@ -466,13 +529,24 @@ const checkForChanges = () => {
     discordNotifyManual: localDiscordNotifyManual.value,
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
+    discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
     appriseNotifyLibraries: localAppriseNotifyLibraries.value,
     appriseNotifyBatch: localAppriseNotifyBatch.value,
     appriseNotifyManual: localAppriseNotifyManual.value,
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
-    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
+    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
+    appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value,
+    mediaServers: settings.mediaServers.value,
+    preferredPosterServer: settings.automation.value.preferredPosterServer,
+    libraryGroups: settings.libraryGroups.value,
+    mdblist: settings.mdblist.value,
+    wetrakr: settings.wetrakr.value,
+    simkl: settings.simkl.value,
+    floppy: settings.floppy.value
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -497,10 +571,33 @@ const checkForChanges = () => {
   sectionsWithChanges.value.plexConnection =
     localPlexUrl.value !== initial.plexUrl ||
     localPlexToken.value !== initial.plexToken
+  // libraryGroups (Quirk #119's unified group model) also needs comparing per
+  // media type -- adding/removing a group, linking/unlinking a Jellyfin/Emby
+  // member, or editing a Plex-less group's own settings all happen directly
+  // against the store, not localLibraries/localTvShowLibraries, so those two
+  // alone would miss exactly the "add/remove groups" case the user reported.
+  const initialGroups: any[] = initial.libraryGroups || []
+  initialLibraryGroups.value = initialGroups
+  const byMediaType = (list: any[], mediaType: string) => list.filter(g => g && g.mediaType === mediaType)
   sectionsWithChanges.value.movieLibraries =
-    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries)
+    JSON.stringify(localLibraries.value) !== JSON.stringify(initial.libraries) ||
+    JSON.stringify(byMediaType(settings.libraryGroups.value, 'movie')) !== JSON.stringify(byMediaType(initialGroups, 'movie'))
   sectionsWithChanges.value.tvLibraries =
-    JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries)
+    JSON.stringify(localTvShowLibraries.value) !== JSON.stringify(initial.tvShowLibraries) ||
+    JSON.stringify(byMediaType(settings.libraryGroups.value, 'tv')) !== JSON.stringify(byMediaType(initialGroups, 'tv'))
+  sectionsWithChanges.value.mediaServers =
+    JSON.stringify(settings.mediaServers.value) !== JSON.stringify(initial.mediaServers) ||
+    settings.automation.value.preferredPosterServer !== initial.preferredPosterServer
+
+  const initialMediaServers: any[] = initial.mediaServers || []
+  const byType = (list: any[], type: string) => list.filter(s => s && s.type === type)
+  sectionsWithChanges.value.mediaServersPlex =
+    JSON.stringify(byType(settings.mediaServers.value, 'plex')) !== JSON.stringify(byType(initialMediaServers, 'plex')) ||
+    sectionsWithChanges.value.plexConnection
+  sectionsWithChanges.value.mediaServersJellyfin =
+    JSON.stringify(byType(settings.mediaServers.value, 'jellyfin')) !== JSON.stringify(byType(initialMediaServers, 'jellyfin'))
+  sectionsWithChanges.value.mediaServersEmby =
+    JSON.stringify(byType(settings.mediaServers.value, 'emby')) !== JSON.stringify(byType(initialMediaServers, 'emby'))
 
   sectionsWithChanges.value.performance =
     localConcurrentRenders.value !== initial.concurrentRenders ||
@@ -609,13 +706,17 @@ const saveSettings = async () => {
     discordNotifyManual: localDiscordNotifyManual.value,
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
+    discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
     appriseNotifyLibraries: localAppriseNotifyLibraries.value,
     appriseNotifyBatch: localAppriseNotifyBatch.value,
     appriseNotifyManual: localAppriseNotifyManual.value,
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
-    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value
+    appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
+    appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value
   }
 
   // Capture which libraries are newly-added (present now, weren't in the last-saved set)
@@ -645,7 +746,7 @@ const saveSettings = async () => {
     }
   }
 
-  await settings.save()
+  await settings.save({ allowEmptyMediaServers: pendingServerCachePurge.value.size > 0 })
 
   if (!settings.error.value) {
     await updateScheduler()
@@ -666,24 +767,48 @@ const saveSettings = async () => {
     pendingLibraryCacheCleanup.value = new Set()
   }
 
+  if (!settings.error.value && pendingServerCachePurge.value.size > 0) {
+    const apiBase = getApiBase()
+    // A server removed and then re-added (same stable id) before saving is
+    // still configured -- skip it rather than purging a live server's cache
+    // (the backend also refuses this with a 409).
+    const stillConfigured = new Set(settings.mediaServers.value.map(s => s.id))
+    for (const serverId of pendingServerCachePurge.value) {
+      if (stillConfigured.has(serverId)) continue
+      try {
+        await fetch(`${apiBase}/api/media-server/${encodeURIComponent(serverId)}/cache`, { method: 'DELETE' })
+      } catch (e) {
+        console.error('[SETTINGS] Failed to purge cache for removed media server', serverId, e)
+      }
+    }
+    pendingServerCachePurge.value = new Set()
+  }
+
   saved.value = settings.error.value ? `Error: ${settings.error.value}` : 'Saved!'
   setTimeout(() => (saved.value = ''), 1500)
   savedLibraryIds.value = new Set(localLibraries.value.filter(l => l.id).map(l => String(l.id)))
   savedTvShowLibraryIds.value = new Set(localTvShowLibraries.value.filter(l => l.id).map(l => String(l.id)))
 
-  // Auto-scan any newly-added library now that it's actually saved -- otherwise it'd sit
-  // there empty until the next scheduled scan or a manual click, which isn't obvious for
-  // a library you just added. Sequential (not Promise.all) since scanLibrary() guards
-  // against overlapping scans and would just reject a concurrent second call.
-  if (!settings.error.value && newlyAddedLibraryIds.length > 0) {
-    for (const libraryId of newlyAddedLibraryIds) {
-      await scanLibrary(libraryId)
-    }
-  }
-
+  // Mark the page saved BEFORE kicking off any auto-scan below. The scan of a
+  // large library can take minutes, and previously this baseline was only
+  // captured after it finished -- so the page kept showing "unsaved changes"
+  // the whole time, looking like the save needed a second click.
   watchersEnabled.value = false
   await nextTick()
   captureSettingsSnapshot()
+
+  // Auto-scan any newly-added library now that it's actually saved -- otherwise it'd sit
+  // there empty until the next scheduled scan or a manual click, which isn't obvious for
+  // a library you just added. Sequential (not Promise.all) since scanLibrary() guards
+  // against overlapping scans and would just reject a concurrent second call. Not
+  // awaited by saveSettings() itself: the global scan overlay tracks progress.
+  if (!settings.error.value && newlyAddedLibraryIds.length > 0) {
+    void (async () => {
+      for (const libraryId of newlyAddedLibraryIds) {
+        await scanLibrary(libraryId)
+      }
+    })()
+  }
 }
 
 const testPlexConnection = async () => {
@@ -707,24 +832,22 @@ const testPlexConnection = async () => {
       const movieSectionsList = movieLibs.map((s: PlexLibrary) => s.title).join(', ')
       const tvShowSectionsList = tvShowLibs.map((s: PlexLibrary) => s.title).join(', ')
       testConnection.value = `✓ Connected! Found ${movieLibs.length} movie libraries: ${movieSectionsList}${tvShowLibs.length > 0 ? ` and ${tvShowLibs.length} TV show libraries: ${tvShowSectionsList}` : ''}`
-      if (movieLibs.length > 0) {
-        if (!localLibraries.value.length || localLibraries.value.every(l => !l.id)) {
-          localLibraries.value = movieLibs.map((s: PlexLibrary, idx: number) => ({
-            id: s.key,
-            title: s.title,
-            displayName: s.title || `Library ${idx + 1}`,
-          }))
-        }
-      }
-      if (tvShowLibs.length > 0) {
-        if (!localTvShowLibraries.value.length || localTvShowLibraries.value.every(l => !l.id)) {
-          localTvShowLibraries.value = tvShowLibs.map((s: PlexLibrary, idx: number) => ({
-            id: s.key,
-            title: s.title,
-            displayName: s.title || `TV Library ${idx + 1}`,
-          }))
-        }
-      }
+      // Deliberately does NOT auto-populate localLibraries/localTvShowLibraries
+      // with everything just discovered (this function used to, before the
+      // per-group "Link a Plex library..." picker existed in
+      // LibraryGroupCard.vue -- plexLibraries.value above is already
+      // everything that picker needs to offer as options). Auto-committing
+      // every discovered library as "tracked" the moment Test Connection
+      // succeeded was a real, reported bug: LibrariesTab.vue's
+      // ensureGroupsForMappings() watches these same arrays and immediately
+      // backfills a group per entry with no save step of its own, so the
+      // very next Save on ANY Settings tab (the page-wide save always
+      // includes the full current libraryGroups/localLibraries state)
+      // silently created and persisted a group per Plex library the moment
+      // the user saved the Media Servers tab -- before ever visiting
+      // Libraries, let alone picking anything. The user must now explicitly
+      // link each library via a group's own picker before it becomes
+      // tracked/saved/scanned.
     } else {
       testConnection.value = `✗ ${data.error}: ${data.message}`
     }
@@ -839,7 +962,7 @@ const clearCache = () => {
   }
 }
 
-const scanLibrary = async (libraryId?: string) => {
+const scanLibrary = async (libraryId?: string, forceRefresh = false) => {
   if (scan.running.value || scan.checking.value) {
     saved.value = 'Scan already in progress'
     setTimeout(() => (saved.value = ''), 2000)
@@ -872,16 +995,22 @@ const scanLibrary = async (libraryId?: string) => {
         setTimeout(checkScanStatus, 5000)
       }
     }, 10000)
-    saved.value = libraryId ? `Rescanning library ${libraryId}...` : 'Rescanning all libraries...'
+    const actionLabel = forceRefresh ? 'Force-refreshing all art for' : 'Rescanning'
+    saved.value = libraryId ? `${actionLabel} library ${libraryId}...` : `${actionLabel} all libraries...`
     scan.visible.value = true
     scan.log.value = ['Starting rescan...']
     scan.progress.value = { processed: 0, total: 0 }
     scan.current.value = ''
-    startScanPolling()
+    // App.vue's own watcher on scan.visible starts polling the moment the
+    // line above flips it true -- no need to start our own here too.
 
     const apiBase = getApiBase()
     const url = new URL(`${apiBase}/api/scan-library`)
     if (libraryId) url.searchParams.set('library_id', libraryId)
+    // Default is now a fast, skip-if-cached scan (backend default changed to
+    // force_poster_refresh=False) -- this explicit flag is "Force Refresh All
+    // Art"'s own opt-in to the old always-redownload behavior.
+    if (forceRefresh) url.searchParams.set('force_poster_refresh', 'true')
     const res = await fetch(url.toString(), { method: 'POST' })
     if (!res.ok) {
       if (res.status === 409) {
@@ -922,6 +1051,35 @@ const scanLibrary = async (libraryId?: string) => {
       }
     }
 
+    // If this Plex library is linked to another server's library via a Library
+    // Group (Settings -> Libraries -> "Linked Libraries", see CLAUDE.md's
+    // merged-grid Quirk), scan that linked library too -- a single "Scan" click
+    // on a linked row covers Plex AND Jellyfin/Emby, instead of needing a
+    // separate whole-server import from Media Servers. A silent no-op for any
+    // library that isn't linked to anything (the common case).
+    if (libraryId) {
+      try {
+        const linkedRes = await fetch(`${apiBase}/api/media-server/scan-linked?server_id=plex-1&library_id=${encodeURIComponent(libraryId)}`, { method: 'POST' })
+        if (linkedRes.ok) {
+          const linkedData = await linkedRes.json()
+          // A non-empty errors array (e.g. the linked server_id no longer
+          // resolves to any configured server -- Quirk #70, found live when
+          // re-adding a server issued it a new id and silently orphaned an
+          // existing link) previously had nothing surfacing it at all; the
+          // scan looked like it succeeded while quietly doing nothing for
+          // the linked side. Surface it the same way other scan failures on
+          // this page already are.
+          if (Array.isArray(linkedData.errors) && linkedData.errors.length) {
+            const detail = linkedData.errors.map((e: any) => `${e.server_id}: ${e.error}`).join('; ')
+            saved.value = `Linked library scan had errors: ${detail}`
+            setTimeout(() => (saved.value = ''), 6000)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to scan linked libraries', err)
+      }
+    }
+
     saved.value = `Rescanned ${data.count || 0} items`
     setTimeout(() => (saved.value = ''), 2000)
     scan.log.value = [`Done: ${scan.progress.value.processed || data.count || 0} items`]
@@ -940,7 +1098,6 @@ const scanLibrary = async (libraryId?: string) => {
       scan.visible.value = false
     }, 3000)
   }
-  stopScanPolling()
   scan.running.value = false
   scanCooldown.value = false
 }
@@ -1059,71 +1216,34 @@ const handleDbExport = async () => {
 
 const handleDbImport = async () => {
   if (!dbImportText.value.trim()) {
-    saved.value = 'Paste database JSON to import'
+    saved.value = 'Choose a backup file to import'
     setTimeout(() => (saved.value = ''), 2000)
     return
   }
-  if (!window.confirm('⚠️ This will completely replace your current database. Are you sure?')) {
+  if (!window.confirm('⚠️ This replaces your current settings, presets and overlays. Continue?')) {
     return
   }
   dbImporting.value = true
   try {
-    const json = JSON.parse(dbImportText.value)
     const apiBase = getApiBase()
     const res = await fetch(`${apiBase}/api/database/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(json)
+      body: dbImportText.value
     })
-    if (!res.ok) throw new Error(`API error ${res.status}`)
-    saved.value = 'Database imported successfully! Reloading...'
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data?.detail || `API error ${res.status}`)
+    saved.value = `Restored ${data.presets ?? 0} presets and ${data.overlay_configs ?? 0} overlays. Reloading...`
     showDbImportModal.value = false
     dbImportText.value = ''
     setTimeout(() => {
       window.location.reload()
     }, 2000)
   } catch (e) {
-    saved.value = `Import failed: ${e instanceof Error ? e.message : 'Invalid JSON'}`
+    saved.value = `Import failed: ${e instanceof Error ? e.message : 'Unknown error'}`
   } finally {
     dbImporting.value = false
-    setTimeout(() => (saved.value = ''), 2500)
-  }
-}
-
-const startScanPolling = () => {
-  stopScanPolling()
-  const apiBase = getApiBase()
-  scanPoller = window.setInterval(async () => {
-    try {
-      const res = await fetch(`${apiBase}/api/scan-progress`)
-      if (!res.ok) return
-      const data = await res.json()
-      if (data.total) {
-        scan.progress.value = { processed: data.processed || 0, total: data.total || 0 }
-      }
-      if (data.current) {
-        scan.current.value = data.current
-      }
-      if (scan.progress.value.total) {
-        const pct = Math.min(100, Math.round((scan.progress.value.processed / scan.progress.value.total) * 100))
-        const line = `${scan.progress.value.processed}/${scan.progress.value.total} (${pct}%) ${scan.current.value || ''}`
-        scan.log.value = [line]
-      }
-      if (data.state && data.state !== 'running') {
-        stopScanPolling()
-        scan.running.value = false
-        scan.visible.value = false
-      }
-    } catch {
-      // ignore polling errors
-    }
-  }, 1000)
-}
-
-const stopScanPolling = () => {
-  if (scanPoller !== null) {
-    clearInterval(scanPoller)
-    scanPoller = null
+    setTimeout(() => (saved.value = ''), 4000)
   }
 }
 
@@ -1144,9 +1264,15 @@ const fetchPresets = async () => {
 onMounted(async () => {
   watchersEnabled.value = false
 
-  if (!settings.loaded.value) {
-    await settings.load()
-  }
+  // Always re-fetch from the backend and re-baseline against it on every
+  // mount -- a fresh visit to Settings should show the actual saved state,
+  // not whatever was left in the store from a prior visit's unsaved edit
+  // (e.g. toggling a group's "Merge items" checkbox and navigating away
+  // without saving). settings.load() unconditionally overwrites every store
+  // field, including the ones bound directly with no local staging ref
+  // (libraryGroups/mediaServers/preferredPosterServer, Quirk #79/#119/#120),
+  // so baselining against it here is always correct.
+  await settings.load()
 
   await loadLocalSettings()
   await fetchPresets()
@@ -1159,6 +1285,9 @@ onMounted(async () => {
 
   await nextTick()
   captureSettingsSnapshot()
+  setTimeout(() => {
+    watchersEnabled.value = true
+  }, 100)
 })
 
 watch(
@@ -1177,6 +1306,34 @@ watch(
     }
   }
 )
+
+// The onboarding wizard saves directly to the shared settings store
+// (plex/automation/libraryGroups/mediaServers, etc.), bypassing this page's
+// own local staging refs and "last saved" snapshot entirely -- if this page
+// was already mounted when the wizard ran (Settings -> Advanced -> "Run
+// Startup Wizard"), it never found out the store just changed out from under
+// it, so its own watchers correctly (but wrongly, since it WAS saved)
+// flagged the page as having unsaved changes the moment the wizard/
+// QuickStartGuide closed. Re-running the exact same re-sync onMounted()
+// already does on a genuine fresh load -- re-fetch from the backend and
+// re-baseline everything against it -- fixes this the same way a real page
+// reload would, without requiring one.
+watch(onboardingJustSaved, async (val, oldVal) => {
+  if (val === oldVal) return
+  watchersEnabled.value = false
+  await settings.load()
+  await loadLocalSettings()
+
+  if (settings.plex.value.url && settings.plex.value.token) {
+    await testPlexConnection()
+  }
+
+  await nextTick()
+  captureSettingsSnapshot()
+  setTimeout(() => {
+    watchersEnabled.value = true
+  }, 100)
+})
 
 watch([
   localTheme,
@@ -1223,7 +1380,28 @@ watch([
   localDiscordNotifyManual,
   localDiscordNotifyWebhook,
   localDiscordNotifyAutoGenerate,
-  localWebhookAlwaysRegenerateSeason
+  localDiscordNotifyMediaMirror,
+  localDiscordNotifyOverlayRefresh,
+  localAppriseNotifyMediaMirror,
+  localAppriseNotifyOverlayRefresh,
+  localWebhookAlwaysRegenerateSeason,
+  // mediaServers/preferredPosterServer are bound directly to the store
+  // rather than a localXxx staging ref -- watched straight off the store
+  // itself so an edit made in MediaServersTab.vue's own UI still triggers
+  // the same unsaved-changes/yellow-highlight machinery every other field
+  // already gets (Quirk #79's follow-up -- the user asked for this
+  // explicitly after noticing it was missing).
+  () => settings.mediaServers.value,
+  () => settings.automation.value.preferredPosterServer,
+  // Same reasoning as mediaServers above -- LibraryGroupCard.vue (Quirk #119)
+  // writes straight to settings.libraryGroups directly, no local staging ref,
+  // so adding/removing/editing a group there needs to be watched off the
+  // store itself too, or it silently never flips the unsaved-changes flag.
+  () => settings.libraryGroups.value,
+  () => settings.mdblist.value,
+  () => settings.wetrakr.value,
+  () => settings.simkl.value,
+  () => settings.floppy.value
 ], () => {
   if (watchersEnabled.value) {
     checkForChanges()
@@ -1245,9 +1423,21 @@ watch(() => route.query.tab, (newTab) => {
   }
 })
 
+// libraryGroups/mediaServers/automation.preferredPosterServer are bound
+// directly to the store with no local staging ref (Quirk #79/#119/#120),
+// so an unsaved edit deliberately survives leaving and returning to
+// Settings (rather than being silently discarded) -- the per-field
+// "● Unsaved" indicator (LibraryGroupCard.vue's mergeUnsaved, plus the
+// existing whole-section yellow border) is what tells you it still needs
+// saving. A revert-on-confirmed-leave version of this was tried and
+// reverted at the user's own request: they preferred the edit staying
+// visible with a clear "still unsaved" marker over it silently vanishing
+// the moment you navigate away, even with a confirm dialog in between.
 onBeforeRouteLeave((_to, _from, next) => {
-  stopScanPolling()
-
+  // Deliberately no longer stops scan polling here -- that's owned by
+  // App.vue now (see its own comment), specifically so a scan started from
+  // this page keeps its globally-visible overlay updated even after
+  // navigating away from Settings.
   if (hasUnsavedChanges.value) {
     const answer = window.confirm('You have unsaved changes. Are you sure you want to leave?')
     if (answer) {
@@ -1270,7 +1460,6 @@ onMounted(() => {
   window.addEventListener('beforeunload', handleBeforeUnload)
 
   onBeforeUnmount(() => {
-    stopScanPolling()
     window.removeEventListener('beforeunload', handleBeforeUnload)
   })
 })
@@ -1310,6 +1499,12 @@ onMounted(() => {
           Libraries
         </button>
         <!-- Integrations tab removed -->
+        <button
+          :class="['tab', { active: activeTab === 'media-servers' }]"
+          @click="activeTab = 'media-servers'"
+        >
+          Media Servers
+        </button>
         <button
           :class="['tab', { active: activeTab === 'output' }]"
           @click="activeTab = 'output'"
@@ -1384,8 +1579,6 @@ onMounted(() => {
         :tvShowLibraries="localTvShowLibraries"
         :savedLibraryIds="savedLibraryIds"
         :savedTvShowLibraryIds="savedTvShowLibraryIds"
-        :testConnection="testConnection"
-        :testConnectionLoading="testConnectionLoading"
         :plexLibraries="plexLibraries"
         :scanCooldown="scanCooldown"
         :scanningLibraryId="scanningLibraryId"
@@ -1397,15 +1590,13 @@ onMounted(() => {
         :defaultTvLabelsToRemove="localDefaultTvLabelsToRemove"
         :unsavedChanges="hasUnsavedChanges"
         :schedulerChanged="sectionsWithChanges.scheduler"
-        :plexConnectionChanged="sectionsWithChanges.plexConnection"
         :movieLibrariesChanged="sectionsWithChanges.movieLibraries"
         :tvLibrariesChanged="sectionsWithChanges.tvLibraries"
+        :initialLibraryGroups="initialLibraryGroups"
         :sendLogosToPlex="localSendLogosToPlex"
         :kometaCompatibility="localKometaCompatibility"
         @update:sendLogosToPlex="localSendLogosToPlex = $event; hasUnsavedChanges = true"
         @update:kometaCompatibility="localKometaCompatibility = $event; sectionsWithChanges.automation = true; hasUnsavedChanges = true"
-        @update:plexUrl="localPlexUrl = $event"
-        @update:plexToken="localPlexToken = $event"
         @update:libraries="localLibraries = $event; hasUnsavedChanges = true"
         @update:tvShowLibraries="localTvShowLibraries = $event; hasUnsavedChanges = true"
         @update:schedulerEnabled="localSchedulerEnabled = $event"
@@ -1413,13 +1604,30 @@ onMounted(() => {
         @update:schedulerLibraryIds="localSchedulerLibraryIds = $event"
         @update:defaultLabelsToRemove="localDefaultLabelsToRemove = $event; hasUnsavedChanges = true"
         @update:defaultTvLabelsToRemove="localDefaultTvLabelsToRemove = $event; hasUnsavedChanges = true"
-        @test-connection="testPlexConnection"
         @scan-library="scanLibrary"
         @save="saveSettings"
         @library-removed="pendingLibraryCacheCleanup.add($event)"
       />
 
       <!-- Integrations content removed -->
+
+      <MediaServersTab
+        v-if="activeTab === 'media-servers'"
+        :plexUrl="localPlexUrl"
+        :plexToken="localPlexToken"
+        :testConnection="testConnection"
+        :testConnectionLoading="testConnectionLoading"
+        :plexConnectionChanged="sectionsWithChanges.plexConnection"
+        :plexServersChanged="sectionsWithChanges.mediaServersPlex"
+        :jellyfinServersChanged="sectionsWithChanges.mediaServersJellyfin"
+        :embyServersChanged="sectionsWithChanges.mediaServersEmby"
+        @update:plexUrl="localPlexUrl = $event"
+        @update:plexToken="localPlexToken = $event"
+        @test-connection="testPlexConnection"
+        @save="saveSettings"
+        @server-removed="pendingServerCachePurge.add($event)"
+        @primary-plex-removed="onPrimaryPlexRemoved"
+      />
 
       <OutputTab
         v-if="activeTab === 'output'"
@@ -1504,6 +1712,8 @@ onMounted(() => {
         :discordNotifyManual="localDiscordNotifyManual"
         :discordNotifyWebhook="localDiscordNotifyWebhook"
         :discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate"
+        :discordNotifyMediaMirror="localDiscordNotifyMediaMirror"
+        :discordNotifyOverlayRefresh="localDiscordNotifyOverlayRefresh"
         :appriseEnabled="localAppriseEnabled"
         :appriseUrls="localAppriseUrls"
         :appriseNotifyLibraries="localAppriseNotifyLibraries"
@@ -1511,6 +1721,8 @@ onMounted(() => {
         :appriseNotifyManual="localAppriseNotifyManual"
         :appriseNotifyWebhook="localAppriseNotifyWebhook"
         :appriseNotifyAutoGenerate="localAppriseNotifyAutoGenerate"
+        :appriseNotifyMediaMirror="localAppriseNotifyMediaMirror"
+        :appriseNotifyOverlayRefresh="localAppriseNotifyOverlayRefresh"
         :libraries="localLibraries"
         :tvShowLibraries="localTvShowLibraries"
         :unsavedChanges="hasUnsavedChanges"
@@ -1521,6 +1733,8 @@ onMounted(() => {
         @update:discordNotifyManual="localDiscordNotifyManual = $event; hasUnsavedChanges = true"
         @update:discordNotifyWebhook="localDiscordNotifyWebhook = $event; hasUnsavedChanges = true"
         @update:discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate = $event; hasUnsavedChanges = true"
+        @update:discordNotifyMediaMirror="localDiscordNotifyMediaMirror = $event; hasUnsavedChanges = true"
+        @update:discordNotifyOverlayRefresh="localDiscordNotifyOverlayRefresh = $event; hasUnsavedChanges = true"
         @update:appriseEnabled="localAppriseEnabled = $event; hasUnsavedChanges = true"
         @update:appriseUrls="localAppriseUrls = $event; hasUnsavedChanges = true"
         @update:appriseNotifyLibraries="localAppriseNotifyLibraries = $event; hasUnsavedChanges = true"
@@ -1528,6 +1742,8 @@ onMounted(() => {
         @update:appriseNotifyManual="localAppriseNotifyManual = $event; hasUnsavedChanges = true"
         @update:appriseNotifyWebhook="localAppriseNotifyWebhook = $event; hasUnsavedChanges = true"
         @update:appriseNotifyAutoGenerate="localAppriseNotifyAutoGenerate = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyMediaMirror="localAppriseNotifyMediaMirror = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyOverlayRefresh="localAppriseNotifyOverlayRefresh = $event; hasUnsavedChanges = true"
         @save="saveSettings"
       />
 

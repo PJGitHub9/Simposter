@@ -186,6 +186,14 @@ select option {
   padding: 8px;
 }
 
+/* Group headings inside a dropdown (optgroup) */
+select optgroup {
+  background: var(--surface);
+  color: #8b95a7;
+  font-style: normal;
+  font-weight: 700;
+}
+
 /* Light theme overrides for inputs, selects, buttons */
 :root[data-theme='light'] input,
 :root[data-theme='light'] select,
@@ -198,6 +206,11 @@ select option {
 :root[data-theme='light'] select option {
   background: #ffffff;
   color: #1e293b;
+}
+
+:root[data-theme='light'] select optgroup {
+  background: #ffffff;
+  color: #64748b;
 }
 
 :root[data-theme='light'] button {

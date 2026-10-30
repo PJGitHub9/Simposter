@@ -50,7 +50,7 @@ A logo drop shadow (Photoshop-style — angle, distance, size, opacity) is also 
 
 ## Overlay Badges
 
-Badges pull live metadata from Plex (resolution, codec, audio channels, edition title) or TMDb (studio, streaming platform) and render on top of the poster:
+Badges pull live metadata from your media server (resolution, codec, audio channels; edition title on Plex) or TMDb (studio, streaming platform) and render on top of the poster:
 
 - **Video** — Resolution (4K, 1080p, 720p) and codec (HEVC, AV1, H.264)
 - **Audio** — Codec (Atmos, DTS-X, TrueHD), channels, language
@@ -58,14 +58,34 @@ Badges pull live metadata from Plex (resolution, codec, audio channels, edition 
 - **Studio / Streaming platform** — Auto-detected
 - **Custom images** — Your own badge assets (4K logo, Dolby Vision seal, etc.)
 - **Text labels** — Custom text with full font/size/color control
-- **Full-cover images** — An image that stretches to fill the whole canvas, placed below or above the logo/text
+- **Full-poster images** — An image that stretches to fill the whole canvas, e.g. a frame
+- **Ratings** — audience, critic, IMDb, Rotten Tomatoes and more, from MDBList, as text or as rules
 
-Each badge value can be individually set to **None**, **Text**, or **Image** mode — so you can show 4K as a badge image but render Dolby Atmos as text, for example. Every overlay element can also be placed **below** the logo/text instead of the default above.
+Each badge value can be individually set to **None**, **Text**, **Image**, **URL** or **Simposter Asset** mode — so you can show 4K as a badge image but render Dolby Atmos as text, for example. A whole overlay can also be placed **below** the logo/text instead of the default above.
 
-Badge visibility can be controlled with Plex labels: `show_if_label` / `hide_if_label`.
+Every layer can have **Show when** rules (file name, ratings, MDBList lists, show status, days since added, labels…), and you can import Kometa overlay files directly. The full guide is in **[OVERLAYS.md](OVERLAYS.md)**.
 
 <img width="1102" height="904" alt="image" src="https://github.com/user-attachments/assets/55866bfe-aded-499a-b321-a45c77893cbe" />
 
+
+---
+
+## Logos, Backdrops, Square Art & Thumb Art
+
+Each library's sidebar menu has a page per artwork type, showing what every item currently has on your server, with search, sort and label filters (Logos, Backdrops and Square Art also filter by "missing"). Click an item to open its editor:
+
+- **🖼️ Logos**: pick a clear logo from TMDb, Fanart.tv or TVDB (or upload one) and send it.
+- **🎞️ Backdrops**: pick a background image and send it.
+- **🔳 Square Art** (Plex only): renders a 1:1 version of the poster with your template and preset, and sends it to Plex's square art slot.
+- **🌄 Thumb Art** (Jellyfin/Emby only, shown when the library group has a Jellyfin or Emby library): a 16:9 landscape image with the logo, sent to Jellyfin/Emby's Thumb image.
+
+If the item is on more than one server, Send asks which servers get it. In the poster editor you can also use a **backdrop as the poster background** (Images: Backdrops), with zoom and left/right pan.
+
+---
+
+## Local Assets
+
+**📁 Local Assets** lists the posters Simposter has saved to disk. You can filter by library and folder, change the thumbnail size, rename or delete files, and **resend** a saved poster to its server, or to any server in its library group, without re-rendering it.
 
 ---
 
@@ -80,6 +100,10 @@ The same manual editor used for movies/TV, made collection-aware — upload your
 A dedicated creator modeled directly on **[bullmoose00](https://github.com/bullmoose00)'s `create_poster.ps1`** (from their [Plex-Stuff](https://github.com/bullmoose00/Plex-Stuff) repo) and the wider Kometa community's poster conventions — flat color or a live-referenced background texture, a 5-style gradient dropdown, centered logo (width-only resize, vertical-offset positioning — matching that script's own logo placement, not a bounding-box system), text, border. Credit to bullmoose00 for the original tool this creator's mechanics are built on. Pulls its background textures and a categorized logo library (aspect ratio, award, franchise, genre, streaming platform, studio, etc.) live from the [Kometa-Team/Defaults-Image-Creation](https://github.com/Kometa-Team/Defaults-Image-Creation) repo, so new textures/logos there show up automatically with no update needed on your end.
 
 Both creators support Save Location and Send-to-Plex, same as movies/TV.
+
+### Collections across servers
+
+Collections work the same on Plex, Jellyfin and Emby, and both creators can send to any server that has the collection. When a library group spans several servers, the same collection on each is matched by name (a trailing "Collection" is ignored) and shown as one card, with a **Show from** switch and a server filter. For collections whose names don't match, use **Collection matching** on the Collections page — see [MEDIA_SERVERS.md](MEDIA_SERVERS.md#collections-across-servers).
 
 ### Fanart.tv and Collections
 
@@ -141,6 +165,16 @@ Every poster generation is logged in the **History** tab:
 - Filter by library, template, action
 
 ![History](https://github.com/user-attachments/assets/2e7b7b23-770e-463e-91e6-62f0d061fff1)
+
+### Changed outside Simposter
+
+After Simposter sends a poster, logo or backdrop, it remembers what it looked like. When a library scan sees that the server's copy changed (Kometa adding an overlay, a manual edit, another tool), it compares the two and lists real changes under **History → Changed Outside Simposter**, with Simposter's version next to the server's. Small differences from the server re-saving or resizing the image don't count.
+
+- Choose what happens when a change is found: don't check, only list it, list it and send a notification, or put Simposter's version back automatically. If another tool keeps changing it, the two will take turns, so automatic put-back is best used when nothing else manages that item's art.
+- Per item: **Put Simposter's back** sends what Simposter last sent, **Keep server's** accepts the change and stops reporting it.
+- A **Changed** badge marks these items on the Movies, TV Shows, Logos and Backdrops grids; click it to open the list.
+
+Only art Simposter sent is tracked, and only from the version that added this onward.
 
 
 

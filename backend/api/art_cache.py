@@ -10,8 +10,22 @@ import requests
 
 from ..config import settings, plex_headers, plex_session, logger
 
+# Maps this app's Plex-XML-derived `plex_image_type` string (what make_art_cache()
+# was originally built around) to the server-agnostic ImageType enum
+# (backend/media_server/base.py) -- used only for the non-Plex fetch branch below,
+# so a Jellyfin/Emby item routes through MediaServerClient.download_image() with
+# the right image type instead of always assuming Plex.
+_PLEX_TYPE_TO_IMAGE_TYPE = {
+    "clearLogo": "logo",
+    "art": "backdrop",
+    "backgroundSquare": "square_art",
+    # Not a real Plex type -- Thumb Art is Jellyfin/Emby only (plex_supported=False).
+    "jellyfinThumb": "thumb_art",
+}
 
-def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, direct_endpoint: Optional[str] = None):
+
+def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, direct_endpoint: Optional[str] = None,
+                   plex_supported: bool = True):
     """Returns (cache_path, cache_url, save_cache, fetch_and_cache, get_or_create_thumbnail) for one asset type.
 
     cache_dir: on-disk directory (e.g. LOGO_CACHE_DIR, ART_CACHE_DIR)
@@ -60,10 +74,39 @@ def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, dire
             if cached:
                 return cached
 
+        from .. import database as db
+        server_id = db.get_server_id_for_rating_key(rating_key)
+        if server_id != "plex-1":
+            image_type_value = _PLEX_TYPE_TO_IMAGE_TYPE.get(plex_image_type)
+            if not image_type_value:
+                return None
+            try:
+                from ..media_server import get_client, ImageType
+                client = get_client(server_id)
+                if not client:
+                    return None
+                data = client.download_image(rating_key, ImageType(image_type_value))
+                if not data:
+                    return None
+                # Jellyfin's download_image() returns raw bytes with no content-type
+                # header of its own -- Primary/Backdrop/Logo images are virtually
+                # always JPEG or PNG in practice, and save_cache()'s extension
+                # detection falls back to "png" for anything it doesn't recognize
+                # anyway, so a fixed guess here is a cosmetic detail, not a
+                # correctness one (the bytes themselves are never re-encoded).
+                return save_cache(rating_key, data, "image/jpeg")
+            except Exception as e:
+                logger.debug("[ART_CACHE:%s] Non-Plex fetch failed for %s (server=%s): %s", plex_image_type, rating_key, server_id, e)
+                return None
+
+        if not plex_supported:
+            # e.g. Thumb Art: Plex has no such slot, so never query Plex for it.
+            return None
+
         if direct_endpoint:
             try:
                 import time as _time
-                cache_buster = f"?X-Plex-Token={settings.PLEX_TOKEN}&t={int(_time.time())}" if force_refresh else ""
+                cache_buster = f"?t={int(_time.time())}" if force_refresh else ""
                 direct_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/{direct_endpoint}{cache_buster}"
                 r = plex_session.get(direct_url, headers=plex_headers(), timeout=10)
                 if r.status_code == 200 and r.content:

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import EditorCard from './EditorCard.vue'
 
 const props = defineProps<{
   enabled: boolean
@@ -23,6 +23,8 @@ const props = defineProps<{
   strokeWidth: number
   strokeColor: string
   availableFonts: string[]
+  // Uniform Logo places Custom Text with its own box, so the vertical-position slider doesn't apply.
+  hidePosition?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -90,11 +92,11 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
         </div>
       </div>
 
-      <hr class="mini-divider" />
+      <!-- Parent-provided controls (the Text box card) -->
+      <slot />
 
       <!-- Font Settings -->
-      <div class="field-group">
-        <div class="subsection-title">Font Settings</div>
+      <EditorCard title="Font" :default-open="true" :summary="`${fontFamily} · ${fontSize}px`">
 
         <label class="field-label">
           Font Family
@@ -152,13 +154,10 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
             type="color"
           />
         </label>
-      </div>
-
-      <hr class="mini-divider" />
+      </EditorCard>
 
       <!-- Text Styling -->
-      <div class="field-group">
-        <div class="subsection-title">Text Styling</div>
+      <EditorCard title="Alignment &amp; spacing" :summary="`${textAlign} · ${textTransform}`">
 
         <label class="field-label">
           Text Align
@@ -242,7 +241,7 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
           </div>
         </div>
 
-        <div class="slider">
+        <div v-if="!hidePosition" class="slider">
           <label>Vertical Position %</label>
           <div class="slider-row">
             <input
@@ -262,12 +261,10 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
             />
           </div>
         </div>
-      </div>
-
-      <hr class="mini-divider" />
+      </EditorCard>
 
       <!-- Text Shadow -->
-      <div class="field-group">
+      <EditorCard title="Shadow" :summary="shadowEnabled ? 'On' : 'Off'">
         <label class="checkbox-label">
           <input
             type="checkbox"
@@ -371,12 +368,10 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
             </div>
           </div>
         </div>
-      </div>
-
-      <hr class="mini-divider" />
+      </EditorCard>
 
       <!-- Text Stroke -->
-      <div class="field-group">
+      <EditorCard title="Outline" :summary="strokeEnabled ? `${strokeWidth}px` : 'Off'">
         <label class="checkbox-label">
           <input
             type="checkbox"
@@ -417,7 +412,7 @@ const textTransforms = ['none', 'uppercase', 'lowercase', 'capitalize']
             />
           </label>
         </div>
-      </div>
+      </EditorCard>
     </div>
   </div>
 </template>
@@ -507,21 +502,6 @@ input:checked + .toggle-slider:before {
 
 .field-group {
   margin-bottom: 12px;
-}
-
-.subsection-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #c9d6ff;
-  margin-bottom: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.mini-divider {
-  border: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  margin: 12px 0;
 }
 
 .field-label {
@@ -617,6 +597,26 @@ input:checked + .toggle-slider:before {
 
 .slider-row input[type='range'] {
   width: 100%;
+}
+
+/* Compact sliders: label, bar and number on one line */
+.slider:has(> .slider-row) {
+  display: grid;
+  grid-template-columns: minmax(0, 38%) minmax(0, 1fr) 56px;
+  align-items: center;
+  column-gap: 8px;
+  margin-bottom: 8px;
+}
+.slider:has(> .slider-row) > label {
+  margin-bottom: 0;
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+.slider:has(> .slider-row) > .slider-row {
+  display: contents;
+}
+.slider:has(> .slider-row) .slider-num {
+  padding: 4px;
 }
 
 .slider-num {

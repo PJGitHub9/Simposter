@@ -19,7 +19,7 @@ from typing import List, Optional
 from ..config import settings, plex_session, plex_headers, logger
 from .. import database as db
 from ..save_paths import resolve_library_label
-from .movies import fetch_and_cache_logo, fetch_and_cache_backdrop, fetch_and_cache_square_art
+from .movies import fetch_and_cache_logo, fetch_and_cache_backdrop, fetch_and_cache_square_art, fetch_and_cache_thumb_art
 from .save import normalize_logo_for_plex, normalize_backdrop_for_plex
 
 router = APIRouter()
@@ -31,8 +31,8 @@ router = APIRouter()
 # Posters deliberately stay in the library's own base dir with NO subfolder --
 # that's the original, pre-existing layout, and changing it would silently
 # strand any backup a user already has on disk from before this feature.
-_ASSET_SUBDIRS = {"logo": "logos", "backdrop": "backdrops", "square_art": "square_art"}
-_VALID_ASSET_TYPES = {"poster", "logo", "backdrop", "square_art"}
+_ASSET_SUBDIRS = {"logo": "logos", "backdrop": "backdrops", "square_art": "square_art", "thumb_art": "thumb_art"}
+_VALID_ASSET_TYPES = {"poster", "logo", "backdrop", "square_art", "thumb_art"}
 
 # Plex upload endpoint (relative to /library/metadata/{rating_key}/) + which
 # save.py normalize function to run bytes through first, per asset type --
@@ -52,7 +52,20 @@ def _get_backup_dir(library_id: str, asset_type: str = "poster") -> Path:
 
     # Try new location (library name)
     library_name = resolve_library_label(library_id)
-    new_dir = backup_root / _sanitize_filename(library_name)
+    new_top = backup_root / _sanitize_filename(library_name)
+    # One-time migration: a library whose backup was created before it had a
+    # readable label (e.g. a Jellyfin library saved under its raw GUID) gets
+    # its whole folder renamed to the readable name, so old and new backups
+    # don't end up split across two folders.
+    old_top = backup_root / str(library_id)
+    if old_top != new_top and old_top.is_dir() and not new_top.exists() \
+            and not re.fullmatch(r"\d+", str(library_id)):
+        try:
+            old_top.rename(new_top)
+            logger.info("[BACKUP] Renamed backup folder %s -> %s", old_top.name, new_top.name)
+        except OSError as e:
+            logger.warning("[BACKUP] Could not rename backup folder %s: %s", old_top, e)
+    new_dir = new_top
     subdir = _ASSET_SUBDIRS.get(asset_type)
     if subdir:
         new_dir = new_dir / subdir
@@ -501,8 +514,31 @@ def api_backup_delete(library_id: str, media_type: str = "movie", asset_type: st
 # Background workers
 # ---------------------------------------------------------------------------
 def _download_poster(rating_key: str, out_path: Path) -> bool:
-    """Download a poster from Plex by rating_key. Returns True on success."""
+    """Download a poster by rating_key. Returns True on success.
+
+    Resolves server_id per-item (db.get_server_id_for_rating_key()) rather
+    than taking a server_id parameter -- matches the exact pattern
+    art_cache.py's fetch_and_cache() already established (Quirk #65/#120) for
+    Logo/Backdrop/Square Art, so a Jellyfin/Emby-linked library's items are
+    backed up correctly with zero new request-schema fields needed: the
+    library_id a backup run is scoped to already resolves to the right
+    server's own cached items via db.get_cached_movies()/get_cached_tv_shows(),
+    so every rating_key this function ever receives already belongs to the
+    right server -- this just needs to fetch from wherever that actually is."""
     try:
+        from .. import database as db
+        server_id = db.get_server_id_for_rating_key(rating_key)
+        if server_id != "plex-1":
+            from ..media_server import get_client, ImageType
+            client = get_client(server_id)
+            if not client:
+                return False
+            data = client.download_image(rating_key, ImageType.POSTER)
+            if not data:
+                return False
+            out_path.write_bytes(data)
+            return True
+
         url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/thumb"
         resp = plex_session.get(url, headers=plex_headers(), timeout=10, stream=True)
         if resp.status_code != 200:
@@ -517,8 +553,26 @@ def _download_poster(rating_key: str, out_path: Path) -> bool:
 
 
 def _get_show_seasons(show_rating_key: str) -> list:
-    """Fetch seasons for a TV show from Plex. Returns list of {key, title, index}."""
+    """Fetch seasons for a TV show. Returns list of {key, title, index}.
+
+    Same per-item server_id resolution as _download_poster() above. Plex
+    keeps its original direct XML fetch (list_seasons() was deliberately never
+    added to PlexClient/the abstract MediaServerClient interface -- Quirk
+    #100's own established scope -- so there's no abstraction to route
+    through for Plex here, same as api_tv_show_seasons()). A non-Plex client
+    with no list_seasons() method (guarded via hasattr, matching
+    api_tv_show_seasons()'s identical defensive check) returns no seasons
+    rather than raising."""
     try:
+        from .. import database as db
+        server_id = db.get_server_id_for_rating_key(show_rating_key)
+        if server_id != "plex-1":
+            from ..media_server import get_client
+            client = get_client(server_id)
+            if not client or not hasattr(client, "list_seasons"):
+                return []
+            return client.list_seasons(show_rating_key)
+
         url = f"{settings.PLEX_URL}/library/metadata/{show_rating_key}/children"
         r = plex_session.get(url, headers=plex_headers(), timeout=10)
         r.raise_for_status()
@@ -633,6 +687,8 @@ _FETCH_AND_CACHE = {
     "logo": fetch_and_cache_logo,
     "backdrop": fetch_and_cache_backdrop,
     "square_art": fetch_and_cache_square_art,
+    # Jellyfin/Emby only (Quirk #153); Plex items are skipped, not counted as failures.
+    "thumb_art": fetch_and_cache_thumb_art,
 }
 
 
@@ -662,6 +718,8 @@ def _backup_art_library(library_id: str, items: list, asset_type: str, progress_
             "current_movie": title,
             "current_step": f"Downloading {asset_type.replace('_', ' ')} ({idx + 1}/{total_items})",
         })
+        if asset_type == "thumb_art" and db.get_server_id_for_rating_key(rating_key) == "plex-1":
+            continue
 
         try:
             # force_refresh=True: a backup should reflect what's CURRENTLY in
@@ -719,11 +777,25 @@ def _run_backup(library_id: str, items: list, is_tv: bool, include_seasons: bool
 
 
 def _restore_selected(items: list, asset_type: str = "poster"):
-    """Restore user-confirmed asset files to Plex, for one asset type."""
+    """Restore user-confirmed asset files, for one asset type.
+
+    Resolves server_id per-item (same pattern as _download_poster()/
+    _get_show_seasons() above) -- a restore's items list comes from whatever
+    library the backup was originally scoped to, so each rating_key already
+    belongs to whichever server that library lives on; this just needs to
+    upload there instead of always assuming Plex."""
+    from .. import database as db
+    from ..media_server import get_client, ImageType
+
     succeeded = 0
     failed = 0
     total = len(items)
     endpoint_segment = _RESTORE_ENDPOINT.get(asset_type, "posters")
+    image_type_for_asset = {
+        "poster": ImageType.POSTER, "logo": ImageType.LOGO,
+        "backdrop": ImageType.BACKDROP, "square_art": ImageType.SQUARE_ART,
+        "thumb_art": ImageType.THUMB_ART,
+    }.get(asset_type, ImageType.POSTER)
 
     for idx, item in enumerate(items):
         file_path = item["file_path"]
@@ -748,16 +820,36 @@ def _restore_selected(items: list, asset_type: str = "poster"):
             # to a Plex image-upload endpoint).
             if asset_type == "logo":
                 payload, content_type = normalize_logo_for_plex(payload, content_type)
-            elif asset_type in ("backdrop", "square_art"):
+            elif asset_type in ("backdrop", "square_art", "thumb_art"):
                 payload, content_type = normalize_backdrop_for_plex(payload, content_type)
 
-            url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/{endpoint_segment}"
-            headers = {
-                "X-Plex-Token": settings.PLEX_TOKEN,
-                "Content-Type": content_type,
-            }
-            resp = requests.post(url, headers=headers, data=payload, timeout=20)
-            resp.raise_for_status()
+            server_id = db.get_server_id_for_rating_key(rating_key)
+            if server_id != "plex-1":
+                client = get_client(server_id)
+                if not client:
+                    raise RuntimeError(f"No configured/enabled media server for server_id={server_id}")
+                # square_art on a non-Plex server raises NotImplementedError
+                # (Quirk #59, no Jellyfin/Emby equivalent exists) -- caught by
+                # this function's own broad except below, counted as a normal
+                # per-item failure rather than aborting the whole restore run.
+                client.upload_image(rating_key, image_type_for_asset, payload, content_type)
+            elif asset_type == "thumb_art":
+                raise NotImplementedError("Plex has no thumb art slot")
+            else:
+                url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/{endpoint_segment}"
+                headers = {
+                    "X-Plex-Token": settings.PLEX_TOKEN,
+                    "Content-Type": content_type,
+                }
+                resp = requests.post(url, headers=headers, data=payload, timeout=20)
+                resp.raise_for_status()
+            # A restore sets the item's art on purpose: use it as the baseline
+            # for drift detection (poster_drift.py).
+            try:
+                from .. import poster_drift
+                poster_drift.record_sent(server_id, rating_key, payload, asset_type)
+            except Exception:
+                pass
             succeeded += 1
         except Exception as e:
             logger.debug("[BACKUP] Error restoring %s (key=%s): %s", filename, rating_key, e)
