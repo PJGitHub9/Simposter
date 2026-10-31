@@ -1,7 +1,7 @@
 """Real, permanent media-server endpoints backing the Settings UI's Media
 Servers section (Jellyfin-integration plan Phase 5 -- CLAUDE.md Quirk #60).
 """
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -281,16 +281,22 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
     # upgrade): say so, rather than it looking like a second, unrelated send.
     if new_items:
         current_keys = {r["rating_key"] for r in rows}
-        gone_ids = {
-            (k, str(v)) for r in pre_scan_rows if (r.get("rating_key") or r.get("key")) not in current_keys
-            for k, v in (("tmdb", r.get("tmdb_id")), ("tvdb", r.get("tvdb_id"))) if v
-        }
+        gone_ids: Dict[tuple, str] = {}  # (id kind, id) -> the key that left
+        for r in pre_scan_rows:
+            old_key = r.get("rating_key") or r.get("key")
+            if old_key in current_keys:
+                continue
+            for k, v in (("tmdb", r.get("tmdb_id")), ("tvdb", r.get("tvdb_id"))):
+                if v:
+                    gone_ids[(k, str(v))] = str(old_key)
         from ..config import logger as _log
         from ..media_server import get_server_label
         for item in new_items:
-            ids = {(k, str(v)) for k, v in (("tmdb", item.get("tmdb_id")), ("tvdb", item.get("tvdb_id"))) if v}
-            if ids & gone_ids:
+            ids = [(k, str(v)) for k, v in (("tmdb", item.get("tmdb_id")), ("tvdb", item.get("tvdb_id"))) if v]
+            old_key = next((gone_ids[i] for i in ids if i in gone_ids), None)
+            if old_key:
                 item["reimported"] = True
+                item["reimported_from"] = old_key
                 _log.info("[MEDIA_SERVER_SCAN] %s%s was re-imported on %s (new item id %s); its poster is sent again",
                           item.get("title") or item["rating_key"], f" ({item['year']})" if item.get("year") else "",
                           get_server_label(server_id), item["rating_key"])

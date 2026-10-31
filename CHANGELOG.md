@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.8.28 (2026-10-31) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Overlay Refresh failed forever on a removed item** — `_upload_tracked()` only retried a 404 for Jellyfin/Emby. It now also looks a movie up by TMDb id in the tracked library (`_find_moved_item()`, for a Plex rating key that changed) and moves the tracked row; when nothing is found it raises `ItemGone`, and the run deletes the row and counts it as `gone` (page, log and notification).
+- **Re-imported Jellyfin/Emby copy announced as auto-generated** — the scan's re-import detection keeps the old id (`reimported_from`); `_deliver_cached_plex_render()` copies the old id's last send (`db.get_last_poster_send()`) source/template/preset into History and skips the notification.
+
 ## v1.8.27 (2026-10-30) — `webui-overhaul-dev` branch
 
 ### Improvements
