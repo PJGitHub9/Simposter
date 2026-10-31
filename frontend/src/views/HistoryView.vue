@@ -320,6 +320,66 @@ const filteredRecords = computed(() => {
   return filtered
 })
 
+// One poster sent to several servers is written as one History row per
+// server. Show those as a single row ("Sent to Plex + Jellyfin"): same title,
+// year, template, preset, source and kind of action, on different servers,
+// within a few minutes of each other. The Plex row (when there is one) is
+// the one the preview and the title link use. Display only.
+type HistoryRow = HistoryRecord & { servers: string[] }
+const MERGE_WINDOW_MS = 5 * 60 * 1000
+const actionKind = (action: string): string | null => {
+  if (action === 'sent_to_plex' || action === 'sent_to_media_server') return 'sent'
+  if (action === 'resent_to_plex' || action === 'resent_to_media_server') return 'resent'
+  if (action === 'overlay_refresh' || action === 'overlay_removed') return action
+  return null
+}
+const recordTime = (r: HistoryRecord) => {
+  const t = Date.parse(r.created_at.includes('T') || r.created_at.includes('Z') ? r.created_at : r.created_at.replace(' ', 'T') + 'Z')
+  return isNaN(t) ? 0 : t
+}
+const displayRows = computed<HistoryRow[]>(() => {
+  const rows: HistoryRow[] = []
+  const open = new Map<string, { row: HistoryRow; time: number }>()
+  for (const r of filteredRecords.value) {
+    const server = r.server_id || 'plex-1'
+    const kind = actionKind(r.action)
+    if (!kind) {
+      rows.push({ ...r, servers: [server] })
+      continue
+    }
+    const key = [r.title, r.year, r.template_id, r.preset_id, r.source, kind].join('|')
+    const time = recordTime(r)
+    const hit = open.get(key)
+    if (hit && !hit.row.servers.includes(server) && Math.abs(hit.time - time) <= MERGE_WINDOW_MS) {
+      hit.row.servers.push(server)
+      if (server === 'plex-1') {
+        // Use the Plex copy for the preview and the title link.
+        Object.assign(hit.row, { ...r, servers: hit.row.servers, created_at: hit.row.created_at })
+      }
+      continue
+    }
+    const row: HistoryRow = { ...r, servers: [server] }
+    rows.push(row)
+    open.set(key, { row, time })
+  }
+  for (const row of rows) {
+    row.servers.sort((a, b) => (a === 'plex-1' ? -1 : b === 'plex-1' ? 1 : 0))
+  }
+  return rows
+})
+
+const rowActionLabel = (row: HistoryRow) => {
+  if (row.servers.length < 2) return getActionLabel(row)
+  const names = row.servers.map(sid => mediaServerLabel(sid, settings.mediaServers.value)).join(' + ')
+  switch (actionKind(row.action)) {
+    case 'sent': return `Sent to ${names}`
+    case 'resent': return `Resent to ${names}`
+    case 'overlay_refresh': return `Overlay refreshed on ${names}`
+    case 'overlay_removed': return `Overlays removed on ${names}`
+    default: return getActionLabel(row)
+  }
+}
+
 const fetchHistory = async () => {
   loading.value = true
   error.value = null
@@ -825,7 +885,7 @@ onMounted(async () => {
 
     <div v-else class="history-table-container">
       <div class="results-count">
-        Showing {{ filteredRecords.length }} record{{ filteredRecords.length !== 1 ? 's' : '' }}
+        Showing {{ displayRows.length }} record{{ displayRows.length !== 1 ? 's' : '' }}
       </div>
 
       <table class="history-table">
@@ -845,7 +905,7 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="record in filteredRecords" :key="record.id" :class="{ 'row-failed': record.action === 'failed' }">
+          <tr v-for="record in displayRows" :key="record.id" :class="{ 'row-failed': record.action === 'failed' }">
             <td class="preview-cell">
               <button
                 v-if="canPreview(record)"
@@ -889,7 +949,7 @@ onMounted(async () => {
             </td>
             <td class="action-cell">
               <span :class="['action-badge', getActionClass(record.action)]">
-                {{ getActionLabel(record) }}
+                {{ rowActionLabel(record) }}
               </span>
             </td>
             <td class="fallback-cell">

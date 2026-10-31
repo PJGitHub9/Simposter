@@ -128,7 +128,33 @@ def init_scheduler(restore_from_settings: bool = True):
         except Exception as e:
             logger.error("[SCHEDULER] Failed to restore schedule from settings: %s", e, exc_info=True)
 
+    # Update check: tell the user (Discord/Apprise) when a newer version is on
+    # their branch. First check 5 minutes after start-up.
+    schedule_update_check()
+
     return _scheduler
+
+
+def schedule_update_check() -> bool:
+    """Check for a newer Simposter version every few hours (backend/update_notice.py)."""
+    if _scheduler is None:
+        return False
+    try:
+        from datetime import datetime, timedelta
+        from apscheduler.triggers.interval import IntervalTrigger
+        from .update_notice import CHECK_INTERVAL_HOURS, check_and_notify
+        _scheduler.add_job(
+            check_and_notify,
+            trigger=IntervalTrigger(hours=CHECK_INTERVAL_HOURS),
+            id="app_update_check",
+            name="Check for Simposter updates",
+            replace_existing=True,
+            next_run_time=datetime.now() + timedelta(minutes=5),
+        )
+        return True
+    except Exception as e:
+        logger.debug("[SCHEDULER] Could not schedule the update check: %s", e)
+        return False
 
 
 def get_scheduler() -> Optional[BackgroundScheduler]:

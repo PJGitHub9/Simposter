@@ -249,6 +249,7 @@ class NotificationSettings(BaseModel):
     discordNotifyAutoGenerate: bool = True
     discordNotifyMediaMirror: bool = True
     discordNotifyOverlayRefresh: bool = True
+    discordNotifyAppUpdates: bool = True
     appriseEnabled: bool = False
     appriseUrls: List[str] = Field(default_factory=list)
     appriseNotifyLibraries: List[str] = Field(default_factory=list)
@@ -258,6 +259,7 @@ class NotificationSettings(BaseModel):
     appriseNotifyAutoGenerate: bool = True
     appriseNotifyMediaMirror: bool = True
     appriseNotifyOverlayRefresh: bool = True
+    appriseNotifyAppUpdates: bool = True
 
 
 class LibraryGroupMember(BaseModel):

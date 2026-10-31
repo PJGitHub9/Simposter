@@ -173,6 +173,7 @@ export type NotificationSettings = {
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
   discordNotifyMediaMirror?: boolean
+  discordNotifyAppUpdates?: boolean
   discordNotifyOverlayRefresh?: boolean
   appriseEnabled: boolean
   appriseUrls: string[]
@@ -182,6 +183,7 @@ export type NotificationSettings = {
   appriseNotifyWebhook: boolean
   appriseNotifyAutoGenerate: boolean
   appriseNotifyMediaMirror?: boolean
+  appriseNotifyAppUpdates?: boolean
   appriseNotifyOverlayRefresh?: boolean
 }
 
@@ -275,6 +277,7 @@ const notifications = ref<NotificationSettings>({
   discordNotifyWebhook: true,
   discordNotifyAutoGenerate: true,
   discordNotifyMediaMirror: true,
+  discordNotifyAppUpdates: true,
   discordNotifyOverlayRefresh: true,
   appriseEnabled: false,
   appriseUrls: [],
@@ -284,6 +287,7 @@ const notifications = ref<NotificationSettings>({
   appriseNotifyWebhook: true,
   appriseNotifyAutoGenerate: true,
   appriseNotifyMediaMirror: true,
+  appriseNotifyAppUpdates: true,
   appriseNotifyOverlayRefresh: true
 })
 
@@ -394,6 +398,7 @@ async function loadSettings() {
       discordNotifyWebhook: data.notifications?.discordNotifyWebhook ?? true,
       discordNotifyAutoGenerate: data.notifications?.discordNotifyAutoGenerate ?? true,
       discordNotifyMediaMirror: data.notifications?.discordNotifyMediaMirror ?? true,
+      discordNotifyAppUpdates: data.notifications?.discordNotifyAppUpdates ?? true,
       discordNotifyOverlayRefresh: data.notifications?.discordNotifyOverlayRefresh ?? true,
       appriseEnabled: data.notifications?.appriseEnabled ?? false,
       appriseUrls: data.notifications?.appriseUrls ?? [],
@@ -403,6 +408,7 @@ async function loadSettings() {
       appriseNotifyWebhook: data.notifications?.appriseNotifyWebhook ?? true,
       appriseNotifyAutoGenerate: data.notifications?.appriseNotifyAutoGenerate ?? true,
       appriseNotifyMediaMirror: data.notifications?.appriseNotifyMediaMirror ?? true,
+      appriseNotifyAppUpdates: data.notifications?.appriseNotifyAppUpdates ?? true,
       appriseNotifyOverlayRefresh: data.notifications?.appriseNotifyOverlayRefresh ?? true
     }
 

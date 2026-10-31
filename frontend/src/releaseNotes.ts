@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.29',
+    date: '2026-10-31',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Update notifications: when a newer version is available on your branch, Simposter sends a Discord/Apprise notification with what it includes and how to update. Once per version, checked every 6 hours. Turn it off with "App updates" in Settings \u2192 Notifications.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'History shows a poster sent to several servers as one row ("Sent to Plex + Jellyfin") instead of one row per server. The Server filter still shows each server\u2019s sends on their own.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.28',
     date: '2026-10-31',
     sections: [

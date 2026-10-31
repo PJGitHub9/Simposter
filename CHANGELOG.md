@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.29 (2026-10-31) — `webui-overhaul-dev` branch
+
+### New Features
+- **Update notifications** — new `backend/update_notice.py`: `check_and_notify()` runs every 6 hours (first run 5 minutes after start-up, `schedule_update_check()` in `scheduler.py`), reuses `version_info.check_for_updates()` for the running branch, reads that branch's `frontend/src/releaseNotes.ts` from GitHub (`parse_release_notes()`, `highlights_between()`), and sends `send_app_update_notification()` (Discord embed / Apprise text: new version, running version, highlights, how to update). Announced once per version (one-row `app_update_notice` table; only marked when a notification went out). New "App updates" toggles (`discordNotifyAppUpdates`/`appriseNotifyAppUpdates`, default on, source `app_update`).
+
+### Improvements
+- **History merges multi-server rows** — `HistoryView.vue`'s `displayRows` folds rows with the same title, year, template, preset, source and kind of action on different servers within 5 minutes into one row ("Sent to Plex + Jellyfin"), using the Plex row for the preview and title link. Display only; the database keeps one row per server.
+
 ## v1.8.28 (2026-10-31) — `webui-overhaul-dev` branch
 
 ### Bug Fixes

@@ -190,6 +190,7 @@ const localDiscordNotifyManual = ref(true)
 const localDiscordNotifyWebhook = ref(true)
 const localDiscordNotifyAutoGenerate = ref(true)
 const localDiscordNotifyMediaMirror = ref(true)
+const localDiscordNotifyAppUpdates = ref(true)
 const localDiscordNotifyOverlayRefresh = ref(true)
 const localAppriseEnabled = ref(false)
 const localAppriseUrls = ref<string[]>([])
@@ -199,6 +200,7 @@ const localAppriseNotifyManual = ref(true)
 const localAppriseNotifyWebhook = ref(true)
 const localAppriseNotifyAutoGenerate = ref(true)
 const localAppriseNotifyMediaMirror = ref(true)
+const localAppriseNotifyAppUpdates = ref(true)
 const localAppriseNotifyOverlayRefresh = ref(true)
 
 // API key testing
@@ -352,6 +354,7 @@ const loadLocalSettings = async () => {
   localDiscordNotifyWebhook.value = settings.notifications?.value?.discordNotifyWebhook ?? true
   localDiscordNotifyAutoGenerate.value = settings.notifications?.value?.discordNotifyAutoGenerate ?? true
   localDiscordNotifyMediaMirror.value = settings.notifications?.value?.discordNotifyMediaMirror ?? true
+  localDiscordNotifyAppUpdates.value = settings.notifications?.value?.discordNotifyAppUpdates ?? true
   localDiscordNotifyOverlayRefresh.value = settings.notifications?.value?.discordNotifyOverlayRefresh ?? true
   localAppriseEnabled.value = settings.notifications?.value?.appriseEnabled ?? false
   localAppriseUrls.value = settings.notifications?.value?.appriseUrls ?? []
@@ -361,6 +364,7 @@ const loadLocalSettings = async () => {
   localAppriseNotifyWebhook.value = settings.notifications?.value?.appriseNotifyWebhook ?? true
   localAppriseNotifyAutoGenerate.value = settings.notifications?.value?.appriseNotifyAutoGenerate ?? true
   localAppriseNotifyMediaMirror.value = settings.notifications?.value?.appriseNotifyMediaMirror ?? true
+  localAppriseNotifyAppUpdates.value = settings.notifications?.value?.appriseNotifyAppUpdates ?? true
   localAppriseNotifyOverlayRefresh.value = settings.notifications?.value?.appriseNotifyOverlayRefresh ?? true
 
   await nextTick()
@@ -425,6 +429,7 @@ const captureSettingsSnapshot = () => {
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
     discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyAppUpdates: localDiscordNotifyAppUpdates.value,
     discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
@@ -434,6 +439,7 @@ const captureSettingsSnapshot = () => {
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
     appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyAppUpdates: localAppriseNotifyAppUpdates.value,
     appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value,
     // mediaServers/preferredPosterServer/libraryGroups are bound directly to
     // the store (no local staging ref, unlike everything else here -- Quirk
@@ -530,6 +536,7 @@ const checkForChanges = () => {
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
     discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyAppUpdates: localDiscordNotifyAppUpdates.value,
     discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
@@ -539,6 +546,7 @@ const checkForChanges = () => {
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
     appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyAppUpdates: localAppriseNotifyAppUpdates.value,
     appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value,
     mediaServers: settings.mediaServers.value,
     preferredPosterServer: settings.automation.value.preferredPosterServer,
@@ -707,6 +715,7 @@ const saveSettings = async () => {
     discordNotifyWebhook: localDiscordNotifyWebhook.value,
     discordNotifyAutoGenerate: localDiscordNotifyAutoGenerate.value,
     discordNotifyMediaMirror: localDiscordNotifyMediaMirror.value,
+    discordNotifyAppUpdates: localDiscordNotifyAppUpdates.value,
     discordNotifyOverlayRefresh: localDiscordNotifyOverlayRefresh.value,
     appriseEnabled: localAppriseEnabled.value,
     appriseUrls: localAppriseUrls.value,
@@ -716,6 +725,7 @@ const saveSettings = async () => {
     appriseNotifyWebhook: localAppriseNotifyWebhook.value,
     appriseNotifyAutoGenerate: localAppriseNotifyAutoGenerate.value,
     appriseNotifyMediaMirror: localAppriseNotifyMediaMirror.value,
+    appriseNotifyAppUpdates: localAppriseNotifyAppUpdates.value,
     appriseNotifyOverlayRefresh: localAppriseNotifyOverlayRefresh.value
   }
 
@@ -1381,8 +1391,10 @@ watch([
   localDiscordNotifyWebhook,
   localDiscordNotifyAutoGenerate,
   localDiscordNotifyMediaMirror,
+  localDiscordNotifyAppUpdates,
   localDiscordNotifyOverlayRefresh,
   localAppriseNotifyMediaMirror,
+  localAppriseNotifyAppUpdates,
   localAppriseNotifyOverlayRefresh,
   localWebhookAlwaysRegenerateSeason,
   // mediaServers/preferredPosterServer are bound directly to the store
@@ -1713,6 +1725,7 @@ onMounted(() => {
         :discordNotifyWebhook="localDiscordNotifyWebhook"
         :discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate"
         :discordNotifyMediaMirror="localDiscordNotifyMediaMirror"
+        :discordNotifyAppUpdates="localDiscordNotifyAppUpdates"
         :discordNotifyOverlayRefresh="localDiscordNotifyOverlayRefresh"
         :appriseEnabled="localAppriseEnabled"
         :appriseUrls="localAppriseUrls"
@@ -1722,6 +1735,7 @@ onMounted(() => {
         :appriseNotifyWebhook="localAppriseNotifyWebhook"
         :appriseNotifyAutoGenerate="localAppriseNotifyAutoGenerate"
         :appriseNotifyMediaMirror="localAppriseNotifyMediaMirror"
+        :appriseNotifyAppUpdates="localAppriseNotifyAppUpdates"
         :appriseNotifyOverlayRefresh="localAppriseNotifyOverlayRefresh"
         :libraries="localLibraries"
         :tvShowLibraries="localTvShowLibraries"
@@ -1734,6 +1748,7 @@ onMounted(() => {
         @update:discordNotifyWebhook="localDiscordNotifyWebhook = $event; hasUnsavedChanges = true"
         @update:discordNotifyAutoGenerate="localDiscordNotifyAutoGenerate = $event; hasUnsavedChanges = true"
         @update:discordNotifyMediaMirror="localDiscordNotifyMediaMirror = $event; hasUnsavedChanges = true"
+        @update:discordNotifyAppUpdates="localDiscordNotifyAppUpdates = $event; hasUnsavedChanges = true"
         @update:discordNotifyOverlayRefresh="localDiscordNotifyOverlayRefresh = $event; hasUnsavedChanges = true"
         @update:appriseEnabled="localAppriseEnabled = $event; hasUnsavedChanges = true"
         @update:appriseUrls="localAppriseUrls = $event; hasUnsavedChanges = true"
@@ -1743,6 +1758,7 @@ onMounted(() => {
         @update:appriseNotifyWebhook="localAppriseNotifyWebhook = $event; hasUnsavedChanges = true"
         @update:appriseNotifyAutoGenerate="localAppriseNotifyAutoGenerate = $event; hasUnsavedChanges = true"
         @update:appriseNotifyMediaMirror="localAppriseNotifyMediaMirror = $event; hasUnsavedChanges = true"
+        @update:appriseNotifyAppUpdates="localAppriseNotifyAppUpdates = $event; hasUnsavedChanges = true"
         @update:appriseNotifyOverlayRefresh="localAppriseNotifyOverlayRefresh = $event; hasUnsavedChanges = true"
         @save="saveSettings"
       />

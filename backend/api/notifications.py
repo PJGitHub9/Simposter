@@ -91,6 +91,7 @@ def _should_notify_apprise(source: str, library_id: Optional[str] = None) -> boo
         "auto_generate": "appriseNotifyAutoGenerate",
         "media_mirror": "appriseNotifyMediaMirror",
         "overlay_refresh": "appriseNotifyOverlayRefresh",
+        "app_update": "appriseNotifyAppUpdates",
     }
 
     setting_key = source_map.get(source)
@@ -131,6 +132,7 @@ def _should_notify(source: str, library_id: Optional[str] = None) -> bool:
         "auto_generate": "discordNotifyAutoGenerate",
         "media_mirror": "discordNotifyMediaMirror",
         "overlay_refresh": "discordNotifyOverlayRefresh",
+        "app_update": "discordNotifyAppUpdates",
     }
 
     setting_key = source_map.get(source)
@@ -868,6 +870,103 @@ def send_poster_drift_notification(items: List[Dict[str, Any]]) -> None:
                     logger.warning("[APPRISE] One or more Apprise services failed (poster drift)")
             except Exception as e:
                 logger.error("[APPRISE] Poster drift notification error: %s", e)
+
+
+def send_app_update_notification(
+    current: str,
+    latest: str,
+    branch: Optional[str],
+    highlights: List[str],
+    more: int = 0,
+    version_count: int = 1,
+    url: str = "",
+) -> bool:
+    """"Update available" notice (backend/update_notice.py): the newer version,
+    what it includes (from that branch's release notes) and how to update.
+    Uses the "App updates" toggles; there's no library to filter on. Returns
+    True if it went out on at least one channel."""
+    send_discord = _should_notify("app_update")
+    send_apprise = _should_notify_apprise("app_update")
+    if not send_discord and not send_apprise:
+        return False
+
+    title = f"\U0001F195 Update available: {latest}"
+    where = f" on the {branch} branch" if branch and branch != "main" else ""
+    description = f"You're running {current}{where}. Consider updating to {latest}."
+    if version_count > 1:
+        description += f" ({version_count} new versions)"
+    fields: List[tuple] = []
+    if highlights:
+        # Discord caps a field at 1024 characters: add whole lines while they fit.
+        text, left = "", more
+        for i, h in enumerate(highlights):
+            line = f"\u2022 {h}\n"
+            if len(text) + len(line) > 960:
+                left += len(highlights) - i
+                break
+            text += line
+        if left:
+            text += f"\u2026and {left} more change{'s' if left != 1 else ''}"
+        fields.append(("Updates include", text.strip()))
+    fields.append(("How to update", "Docker: pull the new image and restart. From source: pull the branch and restart."))
+    if url:
+        fields.append(("Details", url))
+
+    embed = {
+        "title": title,
+        "description": description,
+        "color": 0x3DD6B7,
+        "fields": [{"name": n, "value": v, "inline": False} for n, v in fields],
+        "footer": {"text": "Simposter"},
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if url:
+        embed["url"] = url
+
+    sent = False
+    settings = _get_notification_settings()
+    if send_discord:
+        try:
+            resp = requests.post(settings.get("discordWebhookUrl", ""), json={"embeds": [embed]}, timeout=10)
+            if resp.status_code in (200, 204):
+                sent = True
+            else:
+                logger.warning("[DISCORD] Update notification failed: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.error("[DISCORD] Update notification error: %s", e)
+
+    if send_apprise:
+        other_urls: List[str] = []
+        for apprise_url in settings.get("appriseUrls", []) or []:
+            if not apprise_url.strip():
+                continue
+            discord_webhook = _resolve_discord_webhook_url(apprise_url)
+            if discord_webhook:
+                try:
+                    resp = requests.post(discord_webhook, json={"embeds": [embed]}, timeout=10)
+                    if resp.status_code in (200, 204):
+                        sent = True
+                    else:
+                        logger.warning("[APPRISE] Update Discord embed failed: HTTP %s", resp.status_code)
+                except Exception as e:
+                    logger.error("[APPRISE] Update Discord embed error: %s", e)
+            else:
+                other_urls.append(apprise_url.strip())
+        if other_urls:
+            try:
+                import apprise
+                ap = apprise.Apprise()
+                for u in other_urls:
+                    ap.add(u)
+                body = description + "".join(f"\n\n{n}:\n{v}" for n, v in fields)
+                if len(ap) > 0:
+                    if ap.notify(title=f"Simposter update available: {latest}", body=body):
+                        sent = True
+                    else:
+                        logger.warning("[APPRISE] One or more Apprise services failed (update notice)")
+            except Exception as e:
+                logger.error("[APPRISE] Update notification error: %s", e)
+    return sent
 
 
 def send_overlay_refresh_notification(

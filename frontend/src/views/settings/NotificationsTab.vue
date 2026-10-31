@@ -19,6 +19,7 @@ const props = defineProps<{
   discordNotifyWebhook: boolean
   discordNotifyAutoGenerate: boolean
   discordNotifyMediaMirror: boolean
+  discordNotifyAppUpdates: boolean
   discordNotifyOverlayRefresh: boolean
   appriseEnabled: boolean
   appriseUrls: string[]
@@ -28,6 +29,7 @@ const props = defineProps<{
   appriseNotifyWebhook: boolean
   appriseNotifyAutoGenerate: boolean
   appriseNotifyMediaMirror: boolean
+  appriseNotifyAppUpdates: boolean
   appriseNotifyOverlayRefresh: boolean
   libraries: LibraryMapping[]
   tvShowLibraries: LibraryMapping[]
@@ -43,6 +45,7 @@ const emit = defineEmits<{
   'update:discordNotifyWebhook': [value: boolean]
   'update:discordNotifyAutoGenerate': [value: boolean]
   'update:discordNotifyMediaMirror': [value: boolean]
+  'update:discordNotifyAppUpdates': [value: boolean]
   'update:discordNotifyOverlayRefresh': [value: boolean]
   'update:appriseEnabled': [value: boolean]
   'update:appriseUrls': [value: string[]]
@@ -52,6 +55,7 @@ const emit = defineEmits<{
   'update:appriseNotifyWebhook': [value: boolean]
   'update:appriseNotifyAutoGenerate': [value: boolean]
   'update:appriseNotifyMediaMirror': [value: boolean]
+  'update:appriseNotifyAppUpdates': [value: boolean]
   'update:appriseNotifyOverlayRefresh': [value: boolean]
   'save': []
 }>()
@@ -101,6 +105,10 @@ const localDiscordNotifyOverlayRefresh = computed({
   get: () => props.discordNotifyOverlayRefresh,
   set: (val) => emit('update:discordNotifyOverlayRefresh', val)
 })
+const localDiscordNotifyAppUpdates = computed({
+  get: () => props.discordNotifyAppUpdates,
+  set: (val) => emit('update:discordNotifyAppUpdates', val)
+})
 
 const localAppriseEnabled = computed({
   get: () => props.appriseEnabled,
@@ -135,6 +143,10 @@ const localAppriseNotifyMediaMirror = computed({
 const localAppriseNotifyOverlayRefresh = computed({
   get: () => props.appriseNotifyOverlayRefresh,
   set: (val) => emit('update:appriseNotifyOverlayRefresh', val)
+})
+const localAppriseNotifyAppUpdates = computed({
+  get: () => props.appriseNotifyAppUpdates,
+  set: (val) => emit('update:appriseNotifyAppUpdates', val)
 })
 
 const isAppriseLibrarySelected = (id: string) => isPicked(props.appriseNotifyLibraries, id)
@@ -428,6 +440,14 @@ const testWebhook = async () => {
                 <span class="type-description">When an overlay refresh updates posters (scheduled runs only when something changed)</span>
               </div>
             </label>
+
+            <label class="type-checkbox">
+              <input type="checkbox" v-model="localDiscordNotifyAppUpdates" />
+              <div class="type-content">
+                <span class="type-label">App updates</span>
+                <span class="type-description">When a new Simposter version is available on your branch, with what it includes</span>
+              </div>
+            </label>
           </div>
         </div>
       </div>
@@ -585,6 +605,14 @@ const testWebhook = async () => {
               <div class="type-content">
                 <span class="type-label">Overlay Refresh</span>
                 <span class="type-description">When an overlay refresh updates posters (scheduled runs only when something changed)</span>
+              </div>
+            </label>
+
+            <label class="type-checkbox">
+              <input type="checkbox" v-model="localAppriseNotifyAppUpdates" />
+              <div class="type-content">
+                <span class="type-label">App updates</span>
+                <span class="type-description">When a new Simposter version is available on your branch, with what it includes</span>
               </div>
             </label>
           </div>
