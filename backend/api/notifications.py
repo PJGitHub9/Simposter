@@ -916,6 +916,8 @@ def send_overlay_refresh_notification(
         fields.append(("Updated", str(n_updated)))
     if stats.get("failed"):
         fields.append(("Failed", str(stats["failed"])))
+    if stats.get("gone"):
+        fields.append(("No longer in library", str(stats["gone"])))
     if updated:
         # One line per reason with the titles it affected, e.g.
         # "now shows bg_mid (3): Buddy, Clayface, Drive -- Plex, Jellyfin".

@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.28',
+    date: '2026-10-31',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Overlay Refresh kept failing on a poster whose movie was removed from the library. It now looks for the movie again (Plex gives a replaced or re-added file a new id) and keeps tracking it there, or, if it\u2019s really gone, stops tracking it and reports it as "no longer in the library".',
+          'When Jellyfin/Emby re-imports a movie after a webhook already sent its poster (for example after a Radarr upgrade), the next scan still sends the poster to the new copy, but History keeps the webhook as the source and no second "auto generated" notification is sent.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.27',
     date: '2026-10-30',
     sections: [

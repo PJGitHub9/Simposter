@@ -47,6 +47,7 @@ type RunStatus = {
   unchanged?: number
   failed?: number
   removed?: number
+  gone?: number
   error?: string | null
   items?: RunItem[]
   finished_at?: string
@@ -446,7 +447,7 @@ onUnmounted(() => {
           <span v-if="group.overlayRefresh?.lastRunAt" class="last-run">
             Last refresh {{ formatDate(group.overlayRefresh.lastRunAt) }}<template v-if="group.overlayRefresh.lastRunStats">
               — {{ group.overlayRefresh.lastRunStats.updated || 0 }} updated, {{ group.overlayRefresh.lastRunStats.failed || 0 }} failed,
-              {{ group.overlayRefresh.lastRunStats.checked || 0 }} checked</template>
+              {{ group.overlayRefresh.lastRunStats.checked || 0 }} checked<template v-if="group.overlayRefresh.lastRunStats.gone">, {{ group.overlayRefresh.lastRunStats.gone }} no longer in the library</template></template>
           </span>
         </div>
       </div>
@@ -489,7 +490,7 @@ onUnmounted(() => {
             Overlays removed from {{ status.removed || 0 }} poster(s), {{ status.failed || 0 }} failed.
           </template>
           <template v-else>
-            {{ status.updated || 0 }} updated, {{ status.failed || 0 }} failed, {{ status.unchanged || 0 }} unchanged.
+            {{ status.updated || 0 }} updated, {{ status.failed || 0 }} failed, {{ status.unchanged || 0 }} unchanged<template v-if="status.gone">, {{ status.gone }} no longer in the library (no longer tracked)</template>.
           </template>
         </div>
 
@@ -900,6 +901,11 @@ button:disabled {
 .status-pill.removed {
   background: rgba(61, 214, 183, 0.18);
   color: #3dd6b7;
+}
+
+.status-pill.gone {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary, #9aa4b2);
 }
 
 .status-pill.changed {

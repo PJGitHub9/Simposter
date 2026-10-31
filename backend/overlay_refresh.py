@@ -381,12 +381,41 @@ def _same_layers(old: List[dict], new: List[dict]) -> bool:
     return [key(e) for e in old] == [key(e) for e in new]
 
 
+class ItemGone(Exception):
+    """The tracked item no longer exists on its server (404) and couldn't be
+    found again by its TMDb id."""
+
+
+def _find_moved_item(client, server_id: str, state: Dict[str, Any]) -> Optional[str]:
+    """A tracked movie whose id stopped working may still be in the library
+    under a new id (Plex gives a replaced or re-added file a new rating key).
+    Look it up by TMDb id in the tracked library and move the tracked row to
+    the new id. Movies only: a show's TVDB id isn't stored with the record,
+    and Jellyfin/Emby items go through refresh_stale_item_id() first."""
+    if state.get("media_type") != "movie" or state.get("season_index") is not None or not state.get("tmdb_id"):
+        return None
+    try:
+        new_key = client.find_item_by_external_id(state["tmdb_id"], None, "movie", library_id=state.get("library_id"))
+    except Exception as e:
+        logger.debug("[OVERLAY_REFRESH] Re-lookup of %s failed: %s", state.get("title"), e)
+        return None
+    if not new_key or str(new_key) == str(state["rating_key"]):
+        return None
+    old_key = state["rating_key"]
+    db.delete_overlay_state(server_id, old_key, state.get("season_index"))
+    state["rating_key"] = str(new_key)
+    db.upsert_overlay_state(state)
+    logger.info("[OVERLAY_REFRESH] %s moved on its server: %s is now %s", state.get("title") or old_key, old_key, new_key)
+    return str(new_key)
+
+
 def _upload_tracked(client, server_id: str, state: Dict[str, Any], payload: bytes, content_type: str) -> str:
-    """Upload a re-rendered poster for a tracked item. If Jellyfin/Emby
-    re-imported the item under a new id, find it again by TMDb/TVDB id and
-    retry once; the tracked row is moved to the new id (the database's
-    re-key does that), so `state` is updated to match. Returns the id the
-    poster was uploaded to."""
+    """Upload a re-rendered poster for a tracked item. If the server says the
+    id no longer exists (404), find the item again by TMDb/TVDB id (Jellyfin/
+    Emby re-imports, or a Plex rating key that changed) and retry once; the
+    tracked row is moved to the new id, so `state` is updated to match.
+    Raises ItemGone when it isn't there any more. Returns the id the poster
+    was uploaded to."""
     from .api.media_server_send import _upload_poster_and_verify, is_not_found_error, refresh_stale_item_id
     rating_key = state["rating_key"]
     is_collection = bool(state.get("is_collection"))
@@ -394,11 +423,13 @@ def _upload_tracked(client, server_id: str, state: Dict[str, Any], payload: byte
         _upload_poster_and_verify(client, server_id, rating_key, payload, content_type, is_collection=is_collection)
         return rating_key
     except Exception as e:
-        new_key = None
-        if is_not_found_error(e) and not is_collection:
-            new_key = refresh_stale_item_id(server_id, client, str(rating_key))
-        if not new_key:
+        if not is_not_found_error(e):
             raise
+        new_key = None
+        if not is_collection:
+            new_key = refresh_stale_item_id(server_id, client, str(rating_key)) or _find_moved_item(client, server_id, state)
+        if not new_key:
+            raise ItemGone(str(e)) from e
     _upload_poster_and_verify(client, server_id, new_key, payload, content_type, is_collection=is_collection)
     state["rating_key"] = new_key
     return new_key
@@ -491,7 +522,11 @@ def remove_state(state: Dict[str, Any], source: str = "overlay_refresh") -> Dict
     opts.pop("preset_id", None)
     img = render_poster_image(state["template_id"], state["background_url"], state.get("logo_url"), opts)
     payload, content_type = encode_poster_for_plex(img, for_plex=is_plex)
-    rating_key = _upload_tracked(client, server_id, state, payload, content_type)
+    try:
+        rating_key = _upload_tracked(client, server_id, state, payload, content_type)
+    except ItemGone:
+        db.delete_overlay_state(server_id, state["rating_key"], state.get("season_index"))
+        return {"status": "gone", "detail": "no longer in the library; stopped tracking it"}
 
     try:
         save_or_cache_render(rating_key, payload, None)
@@ -723,7 +758,7 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
             prepare_data(states)
         _update_status(group_id, {"total": len(states)})
         items: List[Dict[str, Any]] = []
-        counts = {"changed": 0, "updated": 0, "unchanged": 0, "failed": 0, "removed": 0}
+        counts = {"changed": 0, "updated": 0, "unchanged": 0, "failed": 0, "removed": 0, "gone": 0}
         for i, state in enumerate(states):
             title = _display_title(state)
             _update_status(group_id, {"processed": i, "current": title})
@@ -738,6 +773,8 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                     entry["reason"] = result["detail"]
                     if result["status"] == "removed":
                         counts["removed"] += 1
+                    elif result["status"] == "gone":
+                        counts["gone"] += 1
                     else:
                         counts["failed"] += 1
                     items.append(entry)
@@ -777,6 +814,15 @@ def run_group(group_id: str, apply: bool, only_keys: Optional[List[str]] = None,
                         entry["reason"] = result["detail"]
                 else:
                     entry["status"] = "changed"
+            except ItemGone:
+                # Removed from the library: stop tracking it instead of failing
+                # on every run.
+                db.delete_overlay_state(state["server_id"], state["rating_key"], state.get("season_index"))
+                counts["gone"] += 1
+                entry["status"] = "gone"
+                entry["reason"] = "no longer in the library; stopped tracking it"
+                from .media_server import get_server_label
+                logger.info("[OVERLAY_REFRESH] %s is no longer on %s; stopped tracking it", title, get_server_label(state["server_id"]))
             except Exception as e:
                 counts["failed"] += 1
                 entry["status"] = "failed"

@@ -525,11 +525,24 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
     except Exception:
         pending = None
     source = "webhook" if pending else "auto_generate"
+    # A copy re-imported under a new id (e.g. after a Radarr upgrade) gets the
+    # poster its old id already had: keep that send's source in History and
+    # don't announce the same poster a second time.
+    previous = None
+    if not pending and item.get("reimported_from"):
+        try:
+            previous = db.get_last_poster_send(server_id, item["reimported_from"])
+        except Exception:
+            previous = None
+        if previous and previous.get("source"):
+            source = previous["source"]
 
     # Which template/preset this render came from: the webhook's, the group's
     # auto-generate config, else whatever Plex's copy was last sent with.
     if pending and pending.get("template_id"):
         preset_info = {"template_id": pending.get("template_id"), "preset_id": pending.get("preset_id")}
+    elif previous and previous.get("template_id"):
+        preset_info = {"template_id": previous.get("template_id"), "preset_id": previous.get("preset_id")}
     else:
         preset_info = cfg or db.get_last_plex_send_preset(media_type, tmdb_id) or {}
 
@@ -584,7 +597,9 @@ def _deliver_cached_plex_render(server_id: str, library_id: str, media_type: str
                         else "it wasn't on that server when the poster was made")
         except Exception as e:
             logger.warning("[AUTO_GEN] Failed to send cached poster for %s to %s: %s", item.get("title"), server_id, e)
-    if sent:
+    if sent and previous:
+        logger.info("[AUTO_GEN] %s already had this poster before it was re-imported; no notification sent", item.get("title"))
+    elif sent:
         notif_kwargs = dict(
             title=item.get("title") or rating_key,
             year=item.get("year"),

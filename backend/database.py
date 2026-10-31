@@ -4337,6 +4337,20 @@ def get_title_for_rating_key(rating_key: str) -> tuple:
     return None, None
 
 
+def get_last_poster_send(server_id: str, rating_key: str) -> Optional[Dict[str, Any]]:
+    """The most recent successful poster send to this item on this server
+    (source, template_id, preset_id, created_at), or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT source, template_id, preset_id, created_at FROM poster_history "
+            "WHERE server_id = ? AND rating_key = ? AND COALESCE(status, 'success') = 'success' "
+            "AND action IN ('sent_to_plex', 'resent_to_plex', 'sent_to_media_server', 'resent_to_media_server', 'overlay_refresh') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (server_id, str(rating_key)),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def get_library_id_for_rating_key(rating_key: str) -> Optional[str]:
     """Return the cached library_id for a rating_key from movie_cache or
     tv_cache. Mirrors get_title_for_rating_key()'s exact lookup shape as a
