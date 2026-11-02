@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.30 (2026-11-02) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Mobile layout** — checked every main page at 390px wide (Chrome phone emulation against a copy of the database) and fixed what was clunky. CSS only, all behind `max-width: 900px`/`600px` breakpoints; desktop is unchanged.
+  - **Editors** (`EditorPane.vue`, `TvShowEditorPane.vue`): the preview pane moves above the controls and stays pinned to the top (`position: sticky`, image 30vh, or 15vh after "Smaller", remembered in `localStorage` `simposter-mobile-preview-small`); action buttons in two rows with their labels (they were icon-only and one was empty); the controls scroll with the page instead of in their own inner box; the TV editor's rendered-seasons strip is hidden on phones.
+  - **App shell** (`App.vue`): on phones `.main-pane` is `overflow: clip` (was `auto`, which made it a scroll container and stopped sticky elements working) with the workspace column at `minmax(0, 1fr)`.
+  - **Movies/TV Shows/Batch Edit/History**: sort and filter controls behind a "Sort & filter"/"Filters" button showing the current sort or number of active filters. History rows become cards (title, View, date, badges, library, preset, path or error).
+  - **Template Manager, Overlays**: grid columns `minmax(0, 1fr)` so content no longer runs past the screen; **Local Assets, Collections**: header and filter rows wrap; **Settings**: less nested padding.
+
 ## v1.8.29 (2026-10-31) — `webui-overhaul-dev` branch
 
 ### New Features

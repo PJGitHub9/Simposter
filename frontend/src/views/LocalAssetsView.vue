@@ -1328,4 +1328,14 @@ onMounted(() => {
     opacity: 1;
   }
 }
+
+/* Phones: wrap the filter row instead of running off the screen */
+@media (max-width: 600px) {
+  .local-assets-view { padding: 0.25rem; }
+  .header { margin-bottom: 1rem; gap: 10px; }
+  .header h1 { font-size: 1.4rem; }
+  .assets-filters { flex-wrap: wrap; gap: 0.6rem; padding: 0.75rem; }
+  .assets-filters .filter-input { flex: 1 1 100%; }
+  .assets-filters .filter-select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+}
 </style>

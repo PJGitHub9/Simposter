@@ -634,6 +634,12 @@ const getPreviewUrl = (record: HistoryRecord): string | null => {
 
 // Detect mobile/touch device
 const isMobile = ref(false)
+// Phones: the filters collapse behind one button; the count shows what's set.
+const mobileFiltersOpen = ref(false)
+const activeFilterCount = computed(() =>
+  [titleSearch.value, selectedLibrary.value, selectedTemplate.value, selectedAction.value, selectedSource.value, selectedServer.value]
+    .filter(v => v !== '' && v !== 'all' && v != null).length
+)
 const checkMobile = () => {
   isMobile.value = window.innerWidth <= 768 || 'ontouchstart' in window
 }
@@ -795,7 +801,12 @@ onMounted(async () => {
 
     <!-- History tab -->
     <template v-if="activeTab === 'history'">
-    <div class="filters">
+    <button type="button" class="mobile-filters-toggle" :aria-expanded="mobileFiltersOpen" @click="mobileFiltersOpen = !mobileFiltersOpen">
+      <span>Filters</span>
+      <span class="mobile-filters-summary">{{ activeFilterCount ? `${activeFilterCount} active` : 'none' }}</span>
+      <span>{{ mobileFiltersOpen ? '▴' : '▾' }}</span>
+    </button>
+    <div class="filters" :class="{ 'mobile-open': mobileFiltersOpen }">
       <div class="filter-group">
         <label class="search-label">
           <span>Search</span>
@@ -888,7 +899,7 @@ onMounted(async () => {
         Showing {{ displayRows.length }} record{{ displayRows.length !== 1 ? 's' : '' }}
       </div>
 
-      <table class="history-table">
+      <table class="history-table history-main-table">
         <thead>
           <tr>
             <th class="preview-th">Preview</th>
@@ -2011,6 +2022,114 @@ onMounted(async () => {
 
   .preview-title {
     max-width: 160px;
+  }
+}
+
+.mobile-filters-toggle {
+  display: none;
+}
+
+/* Phones: filters behind a button, and each history row as a small card
+   (title, date, badges) instead of a 1200px table scrolled sideways. */
+@media (max-width: 600px) {
+  .mobile-filters-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mobile-filters-summary {
+    flex: 1;
+    text-align: right;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  .filters:not(.mobile-open) {
+    display: none;
+  }
+
+  .history-main-table.history-table {
+    min-width: 0;
+  }
+
+  .history-main-table thead {
+    display: none;
+  }
+
+  .history-main-table,
+  .history-main-table tbody {
+    display: block;
+  }
+
+  .history-main-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    padding: 10px 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .history-main-table td {
+    display: block;
+    padding: 0;
+    border: none;
+    font-size: 12px;
+  }
+
+  .history-main-table .title-cell {
+    order: 1;
+    flex: 1 1 0;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .history-main-table .preview-cell {
+    order: 2;
+  }
+
+  .history-main-table .date-cell {
+    order: 3;
+    flex-basis: 100%;
+    color: var(--text-secondary);
+  }
+
+  .history-main-table .action-cell { order: 4; }
+  .history-main-table .source-cell { order: 5; }
+  .history-main-table .library-cell { order: 6; color: var(--text-secondary); }
+  .history-main-table .preset-cell { order: 7; color: var(--text-secondary); }
+  .history-main-table .fallback-cell { order: 8; }
+
+  .history-main-table .year-cell,
+  .history-main-table .template-cell,
+  .history-main-table .fallback-cell:has(.no-fallback) {
+    display: none;
+  }
+
+  .history-main-table .path-cell {
+    order: 9;
+    flex-basis: 100%;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .history-main-table .path-cell:not(:has(.error-message-text, .path-text)) {
+    display: none;
   }
 }
 </style>

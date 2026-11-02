@@ -136,6 +136,11 @@ const sortKey = computed({
     sortOrder.value = order as 'asc' | 'desc'
   }
 })
+// Phones: the sort/filter dropdowns collapse behind one button.
+const mobileFiltersOpen = ref(false)
+const activeBatchFilterCount = computed(() =>
+  [filterLabel.value !== '', sentFilter.value !== 'all', savedFilter.value !== 'all'].filter(Boolean).length
+)
 const posterLimit = ref<number>(50)
 const currentPage = ref<number>(1)
 
@@ -1283,7 +1288,12 @@ onMounted(async () => {
     <!-- Movie Selection Controls -->
     <div class="movie-controls">
       <div class="filter-row">
-        <div class="filter-groups">
+        <button type="button" class="mobile-filters-toggle" :aria-expanded="mobileFiltersOpen" @click="mobileFiltersOpen = !mobileFiltersOpen">
+          <span>Sort &amp; filter</span>
+          <span class="mobile-filters-summary">{{ activeBatchFilterCount ? `${activeBatchFilterCount} filter${activeBatchFilterCount === 1 ? '' : 's'} on` : '' }}</span>
+          <span>{{ mobileFiltersOpen ? '▴' : '▾' }}</span>
+        </button>
+        <div class="filter-groups" :class="{ 'mobile-open': mobileFiltersOpen }">
           <div class="limit-control">
             <label for="poster-limit">Show:</label>
             <select id="poster-limit" v-model.number="posterLimit" class="filter-select">
@@ -2671,5 +2681,38 @@ onMounted(async () => {
     font-size: 0.8rem;
   }
 
+}
+
+.mobile-filters-toggle {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .mobile-filters-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary, #eef);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mobile-filters-summary {
+    flex: 1;
+    text-align: right;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-secondary, #9aa);
+  }
+
+  .filter-groups:not(.mobile-open) {
+    display: none;
+  }
 }
 </style>

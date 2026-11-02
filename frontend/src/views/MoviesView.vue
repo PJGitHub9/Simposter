@@ -271,6 +271,16 @@ const page = ref(Number(route.query.page) || 1)
 const defaultSortSettings = getDefaultSort()
 const sortBy = ref<'title' | 'year' | 'addedAt'>((route.query.sortBy as any) || defaultSortSettings.sortBy)
 const sortOrder = ref<'asc' | 'desc'>((route.query.sortOrder as any) || defaultSortSettings.sortOrder)
+
+// Phones: the sort/filter controls collapse behind one button (opened on demand).
+const mobileFiltersOpen = ref(false)
+const sortSummary = computed(() => {
+  const by = sortBy.value === 'title' ? 'Title' : sortBy.value === 'year' ? 'Year' : 'Date added'
+  const dir = sortBy.value === 'title'
+    ? (sortOrder.value === 'asc' ? 'A-Z' : 'Z-A')
+    : (sortOrder.value === 'asc' ? 'oldest first' : 'newest first')
+  return `${by}, ${dir}`
+})
 const filterLabel = ref<string>((route.query.label as string) || '')
 
 const posterCache = posterCacheStore
@@ -555,7 +565,12 @@ onMounted(async () => {
 <template>
   <div class="view">
     <div class="toolbar glass">
-      <div class="controls">
+      <button type="button" class="mobile-filters-toggle" :aria-expanded="mobileFiltersOpen" @click="mobileFiltersOpen = !mobileFiltersOpen">
+        <span>Sort &amp; filter</span>
+        <span class="mobile-filters-summary">{{ sortSummary }}</span>
+        <span class="mobile-filters-caret">{{ mobileFiltersOpen ? '▴' : '▾' }}</span>
+      </button>
+      <div class="controls" :class="{ 'mobile-open': mobileFiltersOpen }">
         <div class="control-group">
           <label for="sort-select">Sort by:</label>
           <select id="sort-select" v-model="sortBy" class="control-select">
@@ -889,6 +904,66 @@ button {
   .callout {
     padding: 10px;
     font-size: 13px;
+  }
+}
+
+.mobile-filters-toggle {
+  display: none;
+}
+
+/* Phones: controls hidden behind the "Sort & filter" button, laid out in two
+   columns when opened, so the posters start near the top of the screen. */
+@media (max-width: 600px) {
+  .mobile-filters-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary, #eef);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .mobile-filters-summary {
+    flex: 1;
+    text-align: right;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--muted, #9aa);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .controls:not(.mobile-open) {
+    display: none;
+  }
+
+  .controls.mobile-open {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .controls.mobile-open .control-group,
+  .controls.mobile-open .filter-check {
+    grid-column: 1 / -1;
+  }
+
+  .controls.mobile-open .control-select {
+    max-width: none;
+  }
+
+  .controls.mobile-open .refresh-btn {
+    width: auto;
+    padding: 9px 6px;
+    font-size: 12px;
   }
 }
 </style>

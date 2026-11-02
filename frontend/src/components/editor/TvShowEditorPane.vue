@@ -206,6 +206,14 @@ let previewChangeSeq = 0
 
 // Collapsible "Current poster/logo" column, remembered across sessions.
 const CURRENT_COLLAPSED_KEY = 'simposter-editor-current-collapsed'
+// Phones: the pinned preview can be shrunk while scrolling the controls.
+const mobilePreviewSmall = ref((() => {
+  try { return localStorage.getItem('simposter-mobile-preview-small') === '1' } catch { return false }
+})())
+function toggleMobilePreview() {
+  mobilePreviewSmall.value = !mobilePreviewSmall.value
+  try { localStorage.setItem('simposter-mobile-preview-small', mobilePreviewSmall.value ? '1' : '0') } catch { /* storage unavailable */ }
+}
 const currentCollapsed = ref((() => {
   try { return localStorage.getItem(CURRENT_COLLAPSED_KEY) === '1' } catch { return false }
 })())
@@ -4147,7 +4155,7 @@ watch(tmdbId, () => {
       </div>
     </div>
 
-    <div class="preview-pane">
+    <div class="preview-pane" :class="{ 'mobile-preview-small': mobilePreviewSmall }">
       <div class="preview-inner">
         <button v-if="currentCollapsed" type="button" class="current-expand" title="Show the current poster and logo" @click="currentCollapsed = false">Current ›</button>
         <div v-else class="preview-existing">
@@ -4192,6 +4200,7 @@ watch(tmdbId, () => {
             <div class="preview-label">
               <div class="preview-title-row">
                 <span>Preview</span>
+                <button type="button" class="mobile-preview-toggle" @click="toggleMobilePreview">{{ mobilePreviewSmall ? 'Larger' : 'Smaller' }}</button>
               </div>
               <div v-if="currentSeason" class="current-season-label">{{ currentSeason.title }}</div>
               <span v-if="loading" class="status-badge">Rendering...</span>
@@ -6412,6 +6421,137 @@ button:disabled {
     flex-direction: column;
     align-items: flex-start;
     gap: 4px;
+  }
+}
+
+.mobile-preview-toggle {
+  display: none;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary, #aab);
+  cursor: pointer;
+}
+
+/* Phones and narrow windows: preview pinned at the top so slider changes are
+   visible without scrolling; "Smaller" shrinks it while browsing thumbnails. */
+@media (max-width: 900px) {
+  .editor-shell {
+    overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .preview-pane {
+    order: -1;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 8px 10px 10px;
+    background: #0c0e16;
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45);
+  }
+
+  .preview-main {
+    gap: 6px;
+  }
+
+  .preview-header-row {
+    margin-bottom: 6px;
+    row-gap: 6px;
+  }
+
+  .preview-container {
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+
+  .preview-img,
+  .placeholder-img {
+    max-height: 30vh;
+  }
+
+  .mobile-preview-small .preview-img,
+  .mobile-preview-small .placeholder-img {
+    max-height: 15vh;
+  }
+
+  .mobile-preview-toggle {
+    display: inline-flex;
+  }
+
+  /* Two rows: [Send to media server | more] [Save to disk | Send logo only] */
+  .preview-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr 40px;
+    width: 100%;
+    gap: 6px;
+    margin-top: 0;
+  }
+
+  .preview-actions .btn-inline {
+    min-width: 0;
+    max-width: none;
+    padding: 7px 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    justify-content: center;
+  }
+
+  .preview-actions .btn-plex {
+    order: 1;
+    grid-column: span 2;
+  }
+
+  .preview-actions .more-menu {
+    order: 2;
+  }
+
+  .preview-actions .btn-save {
+    order: 3;
+  }
+
+  .preview-actions .btn-send-logo {
+    order: 4;
+    grid-column: span 2;
+  }
+
+  .preview-actions .more-menu .btn-more {
+    width: 100%;
+  }
+
+  .preview-actions .btn-label {
+    display: inline;
+  }
+
+  .controls-sidebar,
+  .controls-scroll {
+    overflow: visible;
+  }
+
+  .controls-scroll {
+    padding-bottom: 16px;
+  }
+
+  /* These were pinned inside the controls' own scroll area; on phones the
+     page scrolls instead, and pinning them to the screen would leave little
+     room under the pinned preview. */
+  .editor-tabs,
+  .acc-actions {
+    position: static;
+  }
+
+  .rendered-previews-section {
+    display: none;
   }
 }
 </style>

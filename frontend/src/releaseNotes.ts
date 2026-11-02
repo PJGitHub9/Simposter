@@ -10,6 +10,20 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.30',
+    date: '2026-11-02',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Easier to use on a phone. In the poster editor the preview stays at the top of the screen while you scroll the controls (tap "Smaller" to shrink it), and the Send/Save buttons show their names again.',
+          'Movies, TV Shows, Batch Edit and History keep their sort and filter options behind one button on a phone, so the posters start near the top. History rows show as small cards instead of a wide table.',
+          'Template Manager, Local Assets, Collections, Overlays and Settings no longer run off the side of a phone screen, and use less padding there.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.29',
     date: '2026-10-31',
     sections: [

@@ -3961,7 +3961,7 @@ onMounted(() => {
 
 @media (max-width: 900px) {
   .overlay-manager { padding: 1rem; }
-  .content-grid { grid-template-columns: 1fr; }
+  .content-grid { grid-template-columns: minmax(0, 1fr); }
   .editor-modal { width: 96%; height: 94vh; }
   .editor-columns { grid-template-columns: 1fr; }
   .preview-column { position: static; order: -1; }
@@ -3979,5 +3979,10 @@ onMounted(() => {
   vertical-align: middle;
   background: rgba(139, 92, 246, 0.18);
   color: #a78bfa;
+}
+
+@media (max-width: 600px) {
+  .overlay-manager { padding: 0.25rem; }
+  .section-card { padding: 1rem; }
 }
 </style>

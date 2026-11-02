@@ -1504,7 +1504,9 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 /* Tablet breakpoint - sidebar collapses to hamburger */
 @media (max-width: 900px) {
   .workspace {
-    grid-template-columns: 1fr;
+    /* minmax(0, 1fr): with .main-pane at overflow:clip (below) a plain 1fr
+       column would grow to the page's widest child instead of the screen */
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .hamburger-btn {
@@ -1517,6 +1519,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
   .main-pane {
     padding: 12px;
+    /* clip, not auto: on phones the window scrolls, and an overflow:auto
+       pane would stop sticky elements (the editor's pinned preview) sticking */
+    height: auto;
+    overflow: clip;
+    min-width: 0;
   }
 
   .global-scan-overlay,

@@ -1186,7 +1186,9 @@ onMounted(async () => {
   align-items: start;
 }
 @media (max-width: 1200px) {
-  .layout { grid-template-columns: 1fr; }
+  /* minmax(0, 1fr), not 1fr: a plain 1fr column grows to its widest child
+     and pushed the page past the screen edge on phones */
+  .layout { grid-template-columns: minmax(0, 1fr); }
 }
 .column {
   display: flex;
@@ -1570,5 +1572,13 @@ select:focus, textarea:focus, input:focus {
   .preset-chips { display: none; }
   .preset-card-title { width: auto; flex: 1; }
   .settings-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 600px) {
+  .template-manager { padding: 4px; gap: 14px; }
+  .header { align-items: flex-start; gap: 10px; }
+  .header h2 { font-size: 1.35rem; }
+  .pill { white-space: nowrap; padding: 6px 10px; font-size: 0.8rem; }
+  .section { padding: 14px; }
 }
 </style>

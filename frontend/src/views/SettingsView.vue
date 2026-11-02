@@ -1991,4 +1991,16 @@ onMounted(() => {
     font-size: 12px;
   }
 }
+
+/* Phones: the tab pages nest padded boxes three deep; trim the padding so
+   the fields get the width. :deep() because each tab has its own styles. */
+@media (max-width: 600px) {
+  .tab-content-wrapper :deep(.tab-content) {
+    padding: 12px 2px;
+  }
+
+  .tab-content-wrapper :deep(.section) {
+    padding: 14px 12px;
+  }
+}
 </style>
