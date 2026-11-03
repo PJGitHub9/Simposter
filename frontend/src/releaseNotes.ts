@@ -18,6 +18,7 @@ export const releaseNotes: ReleaseNote[] = [
         items: [
           'Much smaller cache folder: cached posters, backdrops, square art and logos are only shown in the app, so they are now stored at display size (posters 1000px tall, about 100–300 KB) instead of full resolution, and saved renders kept for re-sending are stored as high-quality JPEG. Existing files are shrunk once in the background after updating; Backup still saves full-size images.',
           'Overlays: a Notes & credits field on each overlay, e.g. to thank the creator an overlay was imported from. Shown under the overlay in the list, with clickable links, and kept when the overlay is shared or re-imported.',
+          'Overlays: the How overlays work guide is shorter (one line per step).',
           'Overlays: an overlay kept in sync with a live Kometa file now has a Live badge (grey when paused), and its editor says its layers are replaced when the file changes.'
         ]
       },

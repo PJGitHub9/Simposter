@@ -2495,7 +2495,7 @@ onMounted(() => {
             </div>
             <label class="notes-field">
               <span>Notes &amp; credits</span>
-              <textarea v-model="selectedConfig.notes" rows="2" maxlength="4000"
+              <textarea v-model="selectedConfig.notes" rows="1" maxlength="4000"
                 placeholder="e.g. Audience rating and media info imported from https://github.com/jmxd/Kometa"></textarea>
             </label>
             <p v-if="liveSources[selectedConfig.id]" class="live-note">
@@ -3686,7 +3686,9 @@ onMounted(() => {
 .config-notes { margin-top: 4px; font-size: 0.78rem; color: var(--text-secondary, #8b95a7); white-space: pre-line; overflow-wrap: anywhere; }
 .config-notes a { color: var(--accent, #3dd6b7); text-decoration: none; }
 .config-notes a:hover { text-decoration: underline; }
-.notes-field { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.5rem; max-width: 640px; }
+/* The header's left side takes the free width, so the notes box isn't squeezed to the name field's width. */
+.editor-header > div:first-child { flex: 1; min-width: 0; margin-right: 1rem; }
+.notes-field { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.5rem; max-width: 1100px; }
 .notes-field span { font-size: 0.72rem; color: var(--text-secondary, #8b95a7); font-weight: 500; }
 .notes-field textarea { padding: 0.4rem 0.55rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.82rem; font-family: inherit; resize: vertical; }
 .notes-field textarea:focus { outline: none; border-color: var(--accent, #3dd6b7); }
@@ -3714,7 +3716,7 @@ onMounted(() => {
 .editor-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border, #2a2f3e); }
 .editor-header h2 { margin: 0 0 0.4rem 0; color: var(--text-primary, #fff); font-size: 1.15rem; }
 .editor-name-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-.config-name-input { flex: 1; min-width: 160px; padding: 0.45rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.95rem; }
+.config-name-input { flex: 1; min-width: 160px; max-width: 420px; padding: 0.45rem 0.6rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.95rem; }
 .config-name-input:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 .region-selector { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
 .region-label { color: var(--text-secondary, #888); font-size: 0.78rem; font-weight: 500; }
