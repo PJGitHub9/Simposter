@@ -617,6 +617,8 @@ class OverlayConfigSaveRequest(BaseModel):
     streaming_region: str = "US"  # ISO 3166-1 alpha-2 region for TMDb watch provider lookups
     # Conditions for the whole overlay: when any fails, none of its layers draw.
     conditions: Optional[List[Dict[str, Any]]] = None
+    # Notes / credits shown with the overlay (None keeps the stored ones).
+    notes: Optional[str] = None
 
 
 class OverlayConfigDeleteRequest(BaseModel):

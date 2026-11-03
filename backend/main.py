@@ -28,6 +28,9 @@ async def startup_event():
     from .overlay_cache import warm_all
     threading.Thread(target=warm_all, daemon=True, name="overlay-cache-warm").start()
     # Overlay Refresh no longer tracks posters sent without overlays; drop old ones.
+    # Shrink image caches written before cached images were stored downscaled (once).
+    from .cache_images import start_shrink_existing
+    start_shrink_existing()
     from .overlay_refresh import prune_without_overlays
     threading.Thread(target=prune_without_overlays, daemon=True, name="overlay-refresh-prune").start()
 

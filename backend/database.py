@@ -918,6 +918,10 @@ def init_database():
         if "conditions_json" not in overlay_cols:
             cursor.execute("ALTER TABLE overlay_configs ADD COLUMN conditions_json TEXT")
             logger.info("[DB] Added 'conditions_json' column to overlay_configs table")
+        # Free-text notes / credits for the overlay (e.g. who made the original).
+        if "notes" not in overlay_cols:
+            cursor.execute("ALTER TABLE overlay_configs ADD COLUMN notes TEXT")
+            logger.info("[DB] Added 'notes' column to overlay_configs table")
 
         # Live Kometa files: overlay YAMLs on disk that are re-imported when they change.
         cursor.execute("""
@@ -1984,7 +1988,7 @@ def get_all_overlay_configs() -> List[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, elements_json, streaming_region, conditions_json, created_at, updated_at
+            SELECT id, name, elements_json, streaming_region, conditions_json, notes, created_at, updated_at
             FROM overlay_configs
             ORDER BY created_at DESC
         """)
@@ -1997,6 +2001,7 @@ def get_all_overlay_configs() -> List[Dict[str, Any]]:
             "elements": json.loads(row["elements_json"]),
             "streaming_region": row["streaming_region"] or "US",
             "conditions": _overlay_conditions(row["conditions_json"]),
+            "notes": row["notes"] or "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
@@ -2009,7 +2014,7 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, name, elements_json, streaming_region, conditions_json, created_at, updated_at
+            SELECT id, name, elements_json, streaming_region, conditions_json, notes, created_at, updated_at
             FROM overlay_configs
             WHERE id = ?
         """, (config_id,))
@@ -2022,6 +2027,7 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
             "elements": json.loads(row["elements_json"]),
             "streaming_region": row["streaming_region"] or "US",
             "conditions": _overlay_conditions(row["conditions_json"]),
+            "notes": row["notes"] or "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"]
         }
@@ -2029,22 +2035,25 @@ def get_overlay_config(config_id: str) -> Optional[Dict[str, Any]]:
 
 
 def save_overlay_config(config_id: str, name: str, elements: List[Dict[str, Any]], streaming_region: str = "US",
-                        conditions: Optional[List[Dict[str, Any]]] = None) -> None:
-    """Save or update an overlay configuration. conditions=None keeps the stored
-    whole-overlay conditions (callers that don't know about them, e.g. a Kometa re-import)."""
+                        conditions: Optional[List[Dict[str, Any]]] = None, notes: Optional[str] = None) -> None:
+    """Save or update an overlay configuration. conditions=None / notes=None keep
+    the stored whole-overlay conditions / notes (callers that don't know about
+    them, e.g. a Kometa re-import or a live file sync)."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO overlay_configs (id, name, elements_json, streaming_region, conditions_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            INSERT INTO overlay_configs (id, name, elements_json, streaming_region, conditions_json, notes, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 elements_json = excluded.elements_json,
                 streaming_region = excluded.streaming_region,
                 conditions_json = COALESCE(excluded.conditions_json, overlay_configs.conditions_json),
+                notes = COALESCE(excluded.notes, overlay_configs.notes),
                 updated_at = CURRENT_TIMESTAMP
         """, (config_id, name, json.dumps(elements), streaming_region,
-              None if conditions is None else json.dumps(conditions)))
+              None if conditions is None else json.dumps(conditions),
+              None if notes is None else str(notes)[:4000]))
     logger.info(f"[DB] Saved overlay config {config_id} ({name})")
 
 

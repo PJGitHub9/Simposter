@@ -3,6 +3,7 @@ metadata Image[] array (clearLogo, art, ...). Factored out of what used to be
 movies.py's logo-only cache helpers so a second asset type (backdrop/"art")
 doesn't have to duplicate the same four functions a second time -- see
 CLAUDE.md's Backdrop feature note if this file is touched again."""
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,11 @@ from ..config import settings, plex_headers, plex_session, logger
 # (backend/media_server/base.py) -- used only for the non-Plex fetch branch below,
 # so a Jellyfin/Emby item routes through MediaServerClient.download_image() with
 # the right image type instead of always assuming Plex.
+def _ext_of(content: bytes) -> str:
+    from ..cache_images import _ext_of as ext_of
+    return ext_of(content)
+
+
 _PLEX_TYPE_TO_IMAGE_TYPE = {
     "clearLogo": "logo",
     "art": "backdrop",
@@ -43,6 +49,10 @@ def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, dire
         despite a scan reporting it fetched them -- see CLAUDE.md's Backdrop quirk).
     """
     _cache_dir = Path(cache_dir)
+    # Display size for this asset (cache_images.py); logos stay PNG.
+    _kind = _PLEX_TYPE_TO_IMAGE_TYPE.get(plex_image_type, "backdrop")
+    # Set by fetch_and_cache(full_copy_to=...) for the duration of one call.
+    _full_copy = threading.local()
 
     def cache_path(rating_key: str) -> Optional[Path]:
         for ext in ("png", "jpg", "jpeg", "webp"):
@@ -56,19 +66,35 @@ def make_art_cache(cache_dir: str, route_prefix: str, plex_image_type: str, dire
         return f"/api/{route_prefix}/{rating_key}?raw=1&v={ts}"
 
     def save_cache(rating_key: str, content: bytes, content_type: str) -> Optional[Path]:
-        ext = (content_type.split("/")[-1] if "/" in content_type else "png").lower()
-        if ext not in ("jpg", "jpeg", "png", "webp"):
-            ext = "png"
-        target = _cache_dir / f"{rating_key}.{ext}"
-        try:
-            target.write_bytes(content)
-            return target
-        except Exception as e:
-            logger.debug("[ART_CACHE:%s] Failed to write cache for %s: %s", plex_image_type, rating_key, e)
-            return None
+        """Stored downscaled for display (cache_images.py). When fetch_and_cache()
+        was given full_copy_to (Backup), the original bytes are written there first."""
+        dest = getattr(_full_copy, "path", None)
+        if dest is not None:
+            try:
+                ext = {"png": ".png", "webp": ".webp"}.get(_ext_of(content), ".jpg")
+                out = Path(str(dest) + ext)
+                out.write_bytes(content)
+                _full_copy.written = out
+            except Exception as e:
+                logger.debug("[ART_CACHE:%s] Failed to write full-size copy for %s: %s", plex_image_type, rating_key, e)
+        from ..cache_images import write_display
+        return write_display(_cache_dir, str(rating_key), content, _kind)
 
-    def fetch_and_cache(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
-        """Fetch this asset type from Plex and cache locally. Returns cached file path or None."""
+    def fetch_and_cache(rating_key: str, force_refresh: bool = False, full_copy_to: Optional[Path] = None):
+        """Fetch this asset type and cache it (downscaled). Returns the cached
+        file path or None. With full_copy_to (a path without extension; Backup),
+        always downloads, writes the full-size original to that path plus the
+        right extension, and returns that path instead."""
+        if full_copy_to is not None:
+            _full_copy.path, _full_copy.written = full_copy_to, None
+            try:
+                _fetch(rating_key, True)
+                return _full_copy.written
+            finally:
+                _full_copy.path = None
+        return _fetch(rating_key, force_refresh)
+
+    def _fetch(rating_key: str, force_refresh: bool = False) -> Optional[Path]:
         if not force_refresh:
             cached = cache_path(rating_key)
             if cached:

@@ -726,21 +726,16 @@ def _backup_art_library(library_id: str, items: list, asset_type: str, progress_
             # Plex, not whatever this app's own cache happened to have last --
             # this also has the (desirable, not just tolerated) side effect of
             # refreshing that live cache to match, same as a fresh scan would.
-            cached_path = fetch_and_cache(rating_key, force_refresh=True)
+            # The cache keeps a downscaled copy (cache_images.py); the backup
+            # gets the full-size original written straight to its file.
+            backup_path = fetch_and_cache(rating_key, force_refresh=True, full_copy_to=backup_dir / base_name)
         except Exception as e:
             logger.debug("[BACKUP] %s fetch failed for %s: %s", asset_type, rating_key, e)
-            cached_path = None
+            backup_path = None
 
-        if cached_path:
-            ext = cached_path.suffix  # already includes the leading "."
-            filename = f"{base_name}{ext}"
-            try:
-                shutil.copy2(cached_path, backup_dir / filename)
-                manifest[filename] = {"rating_key": rating_key, "title": title, "year": year}
-                succeeded += 1
-            except Exception as e:
-                logger.debug("[BACKUP] Failed to copy %s backup for %s: %s", asset_type, rating_key, e)
-                failed += 1
+        if backup_path:
+            manifest[backup_path.name] = {"rating_key": rating_key, "title": title, "year": year}
+            succeeded += 1
         else:
             failed += 1
 

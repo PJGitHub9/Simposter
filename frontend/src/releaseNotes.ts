@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.32',
+    date: '2026-11-03',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Much smaller cache folder: cached posters, backdrops, square art and logos are only shown in the app, so they are now stored at display size (posters 1000px tall, about 100–300 KB) instead of full resolution, and saved renders kept for re-sending are stored as high-quality JPEG. Existing files are shrunk once in the background after updating; Backup still saves full-size images.',
+          'Overlays: a Notes & credits field on each overlay, e.g. to thank the creator an overlay was imported from. Shown under the overlay in the list, with clickable links, and kept when the overlay is shared or re-imported.',
+          'Overlays: an overlay kept in sync with a live Kometa file now has a Live badge (grey when paused), and its editor says its layers are replaced when the file changes.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Overlays: renaming an overlay (or a layer) no longer asks to refresh posters; only changes that can alter a poster do.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.31',
     date: '2026-11-02',
     sections: [

@@ -1614,9 +1614,10 @@ def _render_cache_path(rating_key: str) -> Path:
 def save_render_cache(rating_key: str, img_bytes: bytes) -> None:
     """Persist rendered poster bytes so they can be resent later."""
     try:
+        from .cache_images import shrink_render  # PNG -> full-size JPEG 95
         p = _render_cache_path(rating_key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(img_bytes)
+        p.write_bytes(shrink_render(img_bytes))
     except Exception as e:
         logger.debug("[RENDER_CACHE] Failed to save for %s: %s", rating_key, e)
 
@@ -1669,9 +1670,10 @@ def save_render_cache_by_tmdb(media_type: str, tmdb_id: Optional[int], img_bytes
     if not tmdb_id:
         return
     try:
+        from .cache_images import shrink_render  # PNG -> full-size JPEG 95
         p = _render_cache_path_by_tmdb(media_type, tmdb_id, season_index)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(img_bytes)
+        p.write_bytes(shrink_render(img_bytes))
     except Exception as e:
         logger.debug("[RENDER_CACHE] Failed to save by-tmdb cache for %s tmdb_id=%s: %s", media_type, tmdb_id, e)
 

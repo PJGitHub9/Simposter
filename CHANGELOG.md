@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.8.32 (2026-11-03) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Live overlay badge** — the Overlay Manager list and editor mark an overlay a live Kometa file writes to (matched by the file's `config_id` from `GET /api/live-kometa-files`, not the `overlay-live-` id prefix), with the file path and interval in the tooltip, and a note in the editor that its layers are replaced when the file changes.
+
+- **Overlay notes & credits** — new `overlay_configs.notes` column (`OverlayConfigSaveRequest.notes`, max 4000 chars). `save_overlay_config(notes=None)` keeps the stored notes, so Kometa re-imports and live file syncs don't wipe them; preset shares and database backups carry them via `overlay_bundle`. The list renders http(s) links without `v-html`; editing notes doesn't offer a poster refresh.
+
+- **Smaller image caches** — new `backend/cache_images.py`. Display caches (`posters` via both `_save_poster_cache()`, and `backdrops`/`square_art`/`thumb_art`/`logos` via `art_cache.save_cache()`) are written downscaled: posters 1000px tall, others 1280px long side, JPEG 85; logos 800px wide PNG (alpha kept). Resend caches (`save_render_cache()`, `save_render_cache_by_tmdb()`) store a PNG render as full-size JPEG 95, 4:4:4. `start_shrink_existing()` (startup thread, once: `applied_migrations` `cache_shrink_v1`) rewrites older files, keeping each file's mtime so cache URLs and thumbnails stay valid. Backup no longer copies the cache: `fetch_and_cache(full_copy_to=...)` writes the full-size original straight to the backup file. Measured on test images: a 17.6 MB poster PNG -> 255 KB display copy; an 8.4 MB render -> 3 MB JPEG.
+
+### Bug Fixes
+- **Rename asked to refresh posters** — `saveConfig()` offered Overlay Refresh on any unsaved change. It now compares `renderSnapshotOf()` (the config without its name and without layer names; a layer rename also renames it in hide rules) against the saved one.
+
 ## v1.8.31 (2026-11-02) — `webui-overhaul-dev` branch
 
 ### New Features

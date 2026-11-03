@@ -66,7 +66,7 @@ def api_save_overlay_config(req: OverlayConfigSaveRequest):
     try:
         elements = [elem.model_dump() for elem in req.elements]
         db.save_overlay_config(req.id, req.name, elements, streaming_region=req.streaming_region,
-                               conditions=req.conditions)
+                               conditions=req.conditions, notes=req.notes)
         return {"status": "ok", "id": req.id}
     except Exception as e:
         logger.error(f"[OVERLAY] Error saving overlay config {req.id}: {e}")

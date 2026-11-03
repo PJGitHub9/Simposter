@@ -61,6 +61,8 @@ interface OverlayConfig {
   /** Conditions for the whole overlay: when any fails, none of its layers draw. */
   conditions?: OverlayCondition[]
   streaming_region?: string
+  /** Free-text notes / credits, e.g. who made the original overlay. */
+  notes?: string
   created_at?: string
   updated_at?: string
 }
@@ -247,8 +249,45 @@ const uploading = ref(false)
 
 // --- API functions ---
 
+// Overlays a live Kometa file keeps in sync (config id -> that file), for the "Live" badge.
+interface LiveSource { path: string; name: string | null; enabled: boolean; interval_hours: number }
+const liveSources = ref<Record<string, LiveSource>>({})
+const loadLiveSources = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/live-kometa-files`)
+    if (!res.ok) return
+    const data = await res.json()
+    const map: Record<string, LiveSource> = {}
+    for (const f of (data.files || data || []) as Array<LiveSource & { config_id: string | null }>) {
+      if (f.config_id) map[f.config_id] = { path: f.path, name: f.name, enabled: f.enabled, interval_hours: f.interval_hours }
+    }
+    liveSources.value = map
+  } catch { /* the badge is optional */ }
+}
+const liveFileName = (src: LiveSource) => src.path.split(/[\\/]/).pop() || src.path
+const liveTitle = (src: LiveSource) =>
+  `Live Kometa file: ${src.path}. ${src.enabled ? `Checked every ${src.interval_hours} h` : 'Paused'}; its layers are replaced when the file changes.`
+
+/** Notes split into text and http(s) links, so links can be clickable without v-html. */
+const noteParts = (text: string | undefined): Array<{ text: string; href?: string }> => {
+  const out: Array<{ text: string; href?: string }> = []
+  const re = /https?:\/\/[^\s<>"')]+/g
+  const src = text || ''
+  let last = 0
+  for (const m of src.matchAll(re)) {
+    const at = m.index ?? 0
+    if (at > last) out.push({ text: src.slice(last, at) })
+    const url = m[0].replace(/[.,;:!?]+$/, '')
+    out.push({ text: url, href: url })
+    last = at + url.length
+  }
+  if (last < src.length) out.push({ text: src.slice(last) })
+  return out
+}
+
 const loadConfigs = async () => {
   loading.value = true
+  loadLiveSources()
   try {
     const res = await fetch(`${apiBase}/api/overlay-configs`)
     if (res.ok) {
@@ -354,6 +393,18 @@ const loadMoviesForLibrary = async (lib: {key: string, title: string, type: stri
 // What the open overlay looked like when opened/saved, to warn before throwing edits away.
 let savedSnapshot = ''
 const snapshotOf = (c: OverlayConfig | null) => (c ? JSON.stringify(c) : '')
+// The same, minus what doesn't change a poster: the overlay's name, its notes and layer names
+// (renaming a layer also renames it in hide rules). Decides the refresh prompt.
+let savedRenderSnapshot = ''
+const renderSnapshotOf = (c: OverlayConfig | null) => {
+  if (!c) return ''
+  const { name: _name, notes: _notes, ...rest } = c
+  return JSON.stringify({ ...rest, elements: (c.elements || []).map(({ name: _n, ...el }) => el) })
+}
+const markSaved = (c: OverlayConfig | null) => {
+  savedSnapshot = snapshotOf(c)
+  savedRenderSnapshot = renderSnapshotOf(c)
+}
 const hasUnsavedChanges = () => !!selectedConfig.value && snapshotOf(selectedConfig.value) !== savedSnapshot
 const closeEditor = () => {
   if (hasUnsavedChanges() && !confirm('You have unsaved changes to this overlay. Close without saving?')) return
@@ -372,7 +423,7 @@ const createNewConfig = () => {
     elements: [],
     streaming_region: 'US',
   }
-  savedSnapshot = snapshotOf(selectedConfig.value)
+  markSaved(selectedConfig.value)
   showEditor.value = true
 }
 
@@ -397,7 +448,7 @@ const editConfig = (config: OverlayConfig) => {
   const els = selectedConfig.value?.elements || []
   expandedEls.value = new Set(els.length <= 3 ? els.map(e => toRaw(e)) : [])
   // Taken after the label migration: converting old fields alone isn't an edit worth a warning.
-  savedSnapshot = snapshotOf(selectedConfig.value)
+  markSaved(selectedConfig.value)
   showEditor.value = true
 }
 
@@ -417,7 +468,8 @@ const offerRefresh = async (configId: string, configName: string) => {
 
 const saveConfig = async () => {
   if (!selectedConfig.value) return
-  const changed = hasUnsavedChanges()
+  // Only a change that can alter posters offers a refresh (not a rename).
+  const changed = renderSnapshotOf(selectedConfig.value) !== savedRenderSnapshot
   const savedId = selectedConfig.value.id
   const savedName = selectedConfig.value.name || 'this overlay'
   try {
@@ -429,7 +481,7 @@ const saveConfig = async () => {
     })
     if (res.ok) {
       await loadConfigs()
-      savedSnapshot = snapshotOf(selectedConfig.value)
+      markSaved(selectedConfig.value)
       showEditor.value = false
       selectedConfig.value = null
       if (changed && savedId) offerRefresh(savedId, savedName)
@@ -2319,8 +2371,19 @@ onMounted(() => {
         <div v-else class="configs-list">
           <div v-for="config in configs" :key="config.id" class="config-item">
             <div class="config-info">
-              <div class="config-name">{{ config.name }}</div>
+              <div class="config-name">
+                {{ config.name }}
+                <span v-if="liveSources[config.id]" class="live-badge" :class="{ paused: !liveSources[config.id]?.enabled }" :title="liveTitle(liveSources[config.id]!)">
+                  {{ liveSources[config.id]?.enabled ? 'Live' : 'Live · paused' }}
+                </span>
+              </div>
               <div class="config-meta">{{ config.elements.length }} layer{{ config.elements.length !== 1 ? 's' : '' }}</div>
+              <div v-if="config.notes" class="config-notes">
+                <template v-for="(part, pi) in noteParts(config.notes)" :key="pi">
+                  <a v-if="part.href" :href="part.href" target="_blank" rel="noopener noreferrer" @click.stop>{{ part.text }}</a>
+                  <template v-else>{{ part.text }}</template>
+                </template>
+              </div>
             </div>
             <div class="config-actions">
               <button class="btn-icon" @click="editConfig(config)" title="Edit">
@@ -2420,6 +2483,9 @@ onMounted(() => {
             <h2>Edit overlay</h2>
             <div class="editor-name-row">
               <input v-model="selectedConfig.name" class="config-name-input" placeholder="Overlay name..." />
+              <span v-if="liveSources[selectedConfig.id]" class="live-badge" :class="{ paused: !liveSources[selectedConfig.id]?.enabled }" :title="liveTitle(liveSources[selectedConfig.id]!)">
+                {{ liveSources[selectedConfig.id]?.enabled ? 'Live' : 'Live · paused' }}
+              </span>
               <div v-if="hasStreamingBadge" class="region-selector">
                 <span class="region-label">Streaming region</span>
                 <select v-model="selectedConfig.streaming_region" class="region-select">
@@ -2427,6 +2493,14 @@ onMounted(() => {
                 </select>
               </div>
             </div>
+            <label class="notes-field">
+              <span>Notes &amp; credits</span>
+              <textarea v-model="selectedConfig.notes" rows="2" maxlength="4000"
+                placeholder="e.g. Audience rating and media info imported from https://github.com/jmxd/Kometa"></textarea>
+            </label>
+            <p v-if="liveSources[selectedConfig.id]" class="live-note">
+              Kept in sync with {{ liveFileName(liveSources[selectedConfig.id]!) }}: its layers are replaced when that file changes. "Show overlay when" rules you add here are kept.
+            </p>
           </div>
           <button class="btn-close" title="Close" @click="closeEditor">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3605,6 +3679,17 @@ onMounted(() => {
 .config-info { flex: 1; }
 .config-name { color: var(--text-primary, #fff); font-weight: 500; font-size: 0.95rem; }
 .config-meta { color: var(--text-secondary, #777); font-size: 0.8rem; margin-top: 2px; }
+.live-badge { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.4rem; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; vertical-align: middle; color: #3dd6b7; background: rgba(61, 214, 183, 0.12); border: 1px solid rgba(61, 214, 183, 0.45); cursor: help; }
+.live-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.live-badge.paused { color: var(--text-secondary, #8b95a7); background: rgba(255, 255, 255, 0.05); border-color: var(--border, #2a2f3e); }
+.live-note { margin: 0.4rem 0 0; font-size: 0.75rem; color: var(--text-secondary, #8b95a7); }
+.config-notes { margin-top: 4px; font-size: 0.78rem; color: var(--text-secondary, #8b95a7); white-space: pre-line; overflow-wrap: anywhere; }
+.config-notes a { color: var(--accent, #3dd6b7); text-decoration: none; }
+.config-notes a:hover { text-decoration: underline; }
+.notes-field { display: flex; flex-direction: column; gap: 0.25rem; margin-top: 0.5rem; max-width: 640px; }
+.notes-field span { font-size: 0.72rem; color: var(--text-secondary, #8b95a7); font-weight: 500; }
+.notes-field textarea { padding: 0.4rem 0.55rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border, #2a2f3e); border-radius: 6px; color: var(--text-primary, #fff); font-size: 0.82rem; font-family: inherit; resize: vertical; }
+.notes-field textarea:focus { outline: none; border-color: var(--accent, #3dd6b7); }
 .config-actions { display: flex; gap: 0.5rem; }
 
 .btn-icon { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; background: transparent; border: 1px solid var(--border, #2a2f3e); border-radius: 5px; color: var(--text-secondary, #aaa); cursor: pointer; transition: all 0.15s; }

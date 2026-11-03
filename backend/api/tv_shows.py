@@ -92,17 +92,9 @@ def _poster_cache_url(rating_key: str, cached: Path) -> str:
 
 
 def _save_poster_cache(rating_key: str, content: bytes, content_type: str, prefix: str = "tv") -> Optional[Path]:
-    cache_dir = Path(POSTER_CACHE_DIR)
-    ext = (content_type.split("/")[-1] if "/" in content_type else "jpg").lower()
-    if ext not in ("jpg", "jpeg", "png", "webp"):
-        ext = "jpg"
-    target = cache_dir / f"{prefix}_{rating_key}.{ext}"
-    try:
-        target.write_bytes(content)
-        return target
-    except Exception as e:
-        logger.debug("[CACHE] failed to write TV show poster cache for %s: %s", rating_key, e)
-        return None
+    """Cached for display only, so stored 1000px tall (cache_images.py)."""
+    from ..cache_images import write_display
+    return write_display(Path(POSTER_CACHE_DIR), f"{prefix}_{rating_key}", content, "poster")
 
 
 def _remove_poster_cache(rating_key: str, prefix: str = "tv"):
