@@ -19,7 +19,8 @@ export const releaseNotes: ReleaseNote[] = [
           'Edit presets in Template Manager by typing values: open a preset and change any setting (Image, Logo, Text, Extras) without opening a poster. Series and season settings each have their own view; season values follow the series unless you set them.',
           'Overlay order on a preset: the Overlays tab lists a preset’s overlays in draw order (top is drawn on top). Add one, move it up or down, switch it between above and below the logo and text, or remove it. The editor’s Overlays list now shows the same order.',
           'Template Manager only shows the settings that apply: the logo hex color only for Custom hex, drop shadow and outline details only when they’re on, text settings only when custom text is on, border details only with a border. Settings are grouped under small headings, and fallback rules are a Fallback tab instead of a separate window.',
-          'After a preset’s overlays change (in Template Manager or with Save Preset in the editor), Simposter asks whether to refresh the posters made with that preset. Posters whose overlays were set differently can be included with a separate checkbox.'
+          'After a preset’s overlays change (in Template Manager or with Save Preset in the editor), Simposter asks whether to refresh the posters made with that preset. Posters whose overlays were set differently can be included with a separate checkbox.',
+          'Date rules for overlays: show a layer only between two dates each year (e.g. Christmas, Halloween, St Patrick’s Day; quick picks included), or by date added, release date or days since release. Put several seasonal layers in one overlay, each with its own dates. A scheduled Overlay Refresh switches them on and off; the preview’s “Pretend today is” lets you check any season now.'
         ]
       },
       {

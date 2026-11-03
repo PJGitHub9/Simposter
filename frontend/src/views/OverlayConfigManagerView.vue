@@ -214,6 +214,10 @@ const previewItemLists = ref<string[]>([])
 const previewCriticRating = ref('7.5')
 const previewDaysAdded = ref('3')
 const previewShowStatus = ref('continuing')
+// Dates: "today" ('' = the real date) lets you check a seasonal overlay any time of year.
+const previewToday = ref('')
+const previewAddedDate = ref('2026-10-30')
+const previewReleaseDate = ref('2021-10-22')
 // Test mode: lists (by URL) the pretend item is on.
 const previewOnLists = ref<Set<string>>(new Set())
 
@@ -992,6 +996,8 @@ const RATING_KEYS = new Set([
 const TEXT_VAR_RE = /\{([A-Za-z0-9_.]+)\}/g
 const textKeys = (el: OverlayElement): string[] => [...String(el.text || '').matchAll(TEXT_VAR_RE)].map(m => m[1] as string)
 
+const ITEM_DATA_FIELDS = new Set(['days_since_added', 'added_date', 'release_date', 'days_since_release', 'show_status'])
+
 /** What the current layers (saved or not) need from a real item, sent with the metadata request. */
 const itemNeeds = computed(() => {
   const els = selectedConfig.value?.elements || []
@@ -999,13 +1005,13 @@ const itemNeeds = computed(() => {
     textKeys(el).some(k => RATING_KEYS.has(k)) || (el.conditions || []).some(c => RATING_KEYS.has(String(c.field || '').toLowerCase())))
     || (selectedConfig.value?.conditions || []).some(c => RATING_KEYS.has(String(c.field || '').toLowerCase()))
   const types = [...new Set(els.map(e => e.type).filter(t => t === 'streaming_platform_badge' || t === 'studio_badge'))].sort()
-  // Item data fields filled on request (date added, show status).
+  // Item data fields filled on request (date added, release date, show status).
   const used = new Set<string>()
   for (const c of [...els.flatMap(el => el.conditions || []), ...(selectedConfig.value?.conditions || [])]) {
     const f = String(c.field || '').toLowerCase()
-    if (f === 'days_since_added' || f === 'show_status') used.add(f)
+    if (ITEM_DATA_FIELDS.has(f)) used.add(f)
   }
-  for (const el of els) for (const k of textKeys(el)) if (k === 'days_since_added' || k === 'show_status') used.add(k)
+  for (const el of els) for (const k of textKeys(el)) if (ITEM_DATA_FIELDS.has(k)) used.add(k)
   return { ratings, lists: configLists.value, types, fields: [...used].sort() }
 })
 const itemNeedsKey = computed(() => JSON.stringify(itemNeeds.value))
@@ -1134,6 +1140,7 @@ watch(showHiddenInPreview, v => {
 const itemContext = (d: ItemData, mediaType: string, title?: string) => buildContext({
   ...d.metadata, media_type: mediaType, labels: d.labels, file_paths: d.file_paths, lists: d.lists,
   ...(title ? { movie_title: title } : {}),
+  ...(previewToday.value ? { today: previewToday.value } : {}),
 })
 
 /** Context from the example values, with some fields swapped (used by compare tiles). */
@@ -1146,6 +1153,9 @@ const exampleContext = (overrides: Record<string, string> = {}, title?: string) 
   if (String(previewCriticRating.value).trim() !== '') meta.critic_rating = Number(previewCriticRating.value)
   if (String(previewDaysAdded.value).trim() !== '') meta.days_since_added = Number(previewDaysAdded.value)
   if (previewShowStatus.value) meta.show_status = previewShowStatus.value
+  if (previewToday.value) meta.today = previewToday.value
+  if (previewAddedDate.value) meta.added_date = previewAddedDate.value
+  if (previewReleaseDate.value) meta.release_date = previewReleaseDate.value
   meta.lists = [...previewOnLists.value]
   if (title) meta.movie_title = title
   // Ratings without a test box (IMDb, Rotten Tomatoes, ...) use the list's example values.
@@ -2006,7 +2016,7 @@ watch(previewAudioLanguage, () => { nextTick(renderPreview) })
 watch(previewEdition, () => { nextTick(renderPreview) })
 watch(previewStreamingPlatform, () => { nextTick(renderPreview) })
 watch(previewStudio, () => { nextTick(renderPreview) })
-watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
+watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewToday, previewAddedDate, previewReleaseDate, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
 // Re-render when the simposter asset map loads (it arrives async after mount)
 watch(simposterAssetMap, () => { renderPreview() })
 // A new rating/list/badge type in the layers: fetch it for the real items being previewed.
@@ -2037,6 +2047,7 @@ const CONDITION_TEST_FIELD: Record<string, string> = {
   filepath: 'filepath', file_path: 'filepath', filename: 'filepath', audience_rating: 'audience_rating',
   critic_rating: 'critic_rating', list: 'list', mdblist_list: 'list', streaming_platform: 'platform', studio: 'studio',
   days_since_added: 'days_since_added', show_status: 'show_status',
+  added_date: 'added_date', release_date: 'release_date', days_since_release: 'release_date',
 }
 const usedTestFields = computed(() => {
   const out = new Set<string>()
@@ -2063,6 +2074,11 @@ const usedTestFields = computed(() => {
   return out
 })
 const showAllTestValues = ref(false)
+/** A rule checks today's date (shown in both preview modes). */
+const usesToday = computed(() => [
+  ...(selectedConfig.value?.elements || []).flatMap(el => el.conditions || []),
+  ...(selectedConfig.value?.conditions || []),
+].some(c => String(c.field || '').toLowerCase() === 'today'))
 const showTest = (field: string) => showAllTestValues.value || usedTestFields.value.has(field)
 
 // "A real movie" with nothing picked yet opens the picker, then switches over.
@@ -3269,6 +3285,12 @@ onMounted(() => {
                   </button>
                 </div>
 
+                <label v-if="usesToday" class="preview-value-field preview-today">
+                  <span>Pretend today is</span>
+                  <input type="date" v-model="previewToday" />
+                  <button v-if="previewToday" type="button" class="btn-link" @click="previewToday = ''">Use today</button>
+                </label>
+
                 <p v-if="!overlayMatchesPreview" class="overlay-off-note">
                   This overlay's own conditions don't match this preview, so nothing is drawn.
                   <button type="button" class="btn-link" @click="leftTab = 'when'">See conditions</button>
@@ -3378,6 +3400,14 @@ onMounted(() => {
                     <label v-if="showTest('days_since_added')" class="preview-value-field">
                       <span>Days since added</span>
                       <input type="number" min="0" step="1" v-model.lazy="previewDaysAdded" />
+                    </label>
+                    <label v-if="showTest('added_date')" class="preview-value-field">
+                      <span>Date added</span>
+                      <input type="date" v-model="previewAddedDate" />
+                    </label>
+                    <label v-if="showTest('release_date')" class="preview-value-field">
+                      <span>Release date</span>
+                      <input type="date" v-model="previewReleaseDate" />
                     </label>
                     <label v-if="showTest('show_status')" class="preview-value-field">
                       <span>Show status</span>
@@ -3898,6 +3928,9 @@ onMounted(() => {
 .preview-value-field span { color: var(--text-secondary, #666); font-size: 0.65rem; font-weight: 500; }
 .preview-value-field select { padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; }
 .preview-value-field select:focus { outline: none; border-color: var(--accent, #3dd6b7); }
+.preview-value-field input[type='date'] { padding: 0.25rem 0.35rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 4px; color: var(--text-primary, #fff); font-size: 0.72rem; color-scheme: dark; }
+:root[data-theme='light'] .preview-value-field input[type='date'] { color-scheme: light; }
+.preview-today { flex-direction: row; align-items: center; gap: 0.4rem; margin: 0.35rem 0; }
 
 .element-warn { color: #fbbf24; font-size: 0.85rem; cursor: help; flex-shrink: 0; }
 .warn-list { grid-column: 1 / -1; margin: 0; padding: 0.4rem 0.6rem; list-style: none; border: 1px solid rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.07); border-radius: 6px; color: #fbbf24; font-size: 0.74rem; line-height: 1.45; }

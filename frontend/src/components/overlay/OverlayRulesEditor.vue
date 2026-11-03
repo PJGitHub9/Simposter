@@ -4,7 +4,8 @@
 // when several overlap lives in the config-level Badge sets panel.
 import { normalizeListUrl, type OverlayCondition, type OverlayRuleFields } from '@/services/overlayEngine'
 import { computed, onMounted, ref } from 'vue'
-import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist } from '@/services/overlayFields'
+import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist, rangeParts } from '@/services/overlayFields'
+import DateRangeInput from '@/components/overlay/DateRangeInput.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { listDisplayName, providerLabel, useListSources } from '@/composables/useListSources'
 
@@ -77,6 +78,8 @@ const addPasted = async (i: number, c: OverlayCondition) => {
 }
 
 const isMulti = (c: OverlayCondition) => !!opDef(String(c.op))?.multi
+const isRange = (c: OverlayCondition) => !!opDef(String(c.op))?.range
+const isDateField = (c: OverlayCondition) => ['date', 'today'].includes(fieldDef(String(c.field || ''))?.kind || '')
 const isNoValue = (c: OverlayCondition) => !!opDef(String(c.op))?.noValue
 const isUnsupported = (c: OverlayCondition) => String(c.field || '').startsWith('_')
 
@@ -109,13 +112,22 @@ const changeField = (c: OverlayCondition, field: string) => {
   if (def?.kind === 'list') listSources.load()
   const first = opsFor(field)[0]
   c.op = first ? first.value : 'eq'
-  c.value = def?.kind === 'choice' && def.options?.[0] ? def.options[0].value : ''
+  c.value = def?.kind === 'choice' && def.options?.[0] ? def.options[0].value
+    : def?.kind === 'today' ? ['12-01', '12-26']
+    : opDef(c.op)?.range ? ['', ''] : ''
 }
 
 const changeOp = (c: OverlayCondition, op: string) => {
   const wasMulti = isMulti(c)
+  const wasRange = isRange(c)
   c.op = op
   if (opDef(op)?.noValue) { delete c.value; return }
+  if (isRange(c) !== wasRange) {
+    // between <-> a single date: keep the first date.
+    const first = wasRange ? rangeParts(c.value)[0] : String(c.value ?? '')
+    c.value = isRange(c) ? [first, ''] : first
+    return
+  }
   const nowMulti = isMulti(c)
   if (nowMulti && !wasMulti) c.value = valueList(c)
   else if (!nowMulti && wasMulti) c.value = valueList(c)[0] ?? ''
@@ -214,6 +226,15 @@ const removeCondition = (i: number) => {
             <option v-if="c.value && !fieldDef(String(c.field))?.options?.some(o => o.value === String(c.value))" :value="String(c.value)">{{ c.value }}</option>
             <option v-for="o in fieldDef(String(c.field))?.options || []" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
+          <!-- A date, or a date range (yearly or fixed) -->
+          <DateRangeInput
+            v-else-if="isDateField(c)"
+            :model-value="c.value"
+            :range="isRange(c)"
+            :allow-yearly="isRange(c)"
+            :yearly-default="fieldDef(String(c.field))?.kind === 'today'"
+            @update:model-value="c.value = $event as OverlayCondition['value']"
+          />
           <!-- Free value -->
           <input
             v-else

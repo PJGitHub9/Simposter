@@ -26,6 +26,7 @@ Placement (render_kometa_element), used when element["placement"] == "kometa":
 from __future__ import annotations
 
 import re
+from datetime import date as _date, datetime as _datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -71,7 +72,8 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     ratings (conditions or text variables), and list membership (conditions;
     MDBList, WeTrakr, SIMKL or Floppy, see list_sources.py)."""
     rating_fields = _rating_field_names()
-    needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False}
+    needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False,
+             "release": False}
     for element in elements:
         for cond in element.get("conditions") or []:
             if not isinstance(cond, dict):
@@ -83,8 +85,10 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
                 needs["ratings"] = True
             elif field in ("tmdb_id", "tvdb_id"):
                 needs["ids"] = True
-            elif field in ("days_since_added", "added"):
+            elif field in ("days_since_added", "added", "added_date"):
                 needs["added"] = True
+            elif field in ("release_date", "days_since_release"):
+                needs["release"] = True
             elif field == "show_status":
                 needs["status"] = True
             elif field in _LIST_FIELDS:
@@ -96,8 +100,10 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
             names = {m.group(1) for m in _VAR_RE.finditer(str(text))}
             if names & rating_fields:
                 needs["ratings"] = True
-            if "days_since_added" in names:
+            if names & {"days_since_added", "added_date"}:
                 needs["added"] = True
+            if names & {"release_date", "days_since_release"}:
+                needs["release"] = True
             if "show_status" in names:
                 needs["status"] = True
     return needs
@@ -136,12 +142,17 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
     needs = needed_data(elements) if elements else {"paths": False, "ratings": False, "lists": []}
     needs.setdefault("added", False)
     needs.setdefault("status", False)
+    needs.setdefault("release", False)
     needs_paths = needs_paths or needs["paths"]
     ctx = dict(meta or {})
     # Why data a rule needs is missing (shown in the render log by data_summary()).
     notes: Dict[str, str] = {}
     ctx["_notes"] = notes
     ctx["resolution"] = normalize_resolution(ctx.get("video_resolution"))
+    # Today's date (the server's local time zone), for seasonal rules.
+    # The preview may pass its own to test a season.
+    if not _parse_date(ctx.get("today")):
+        ctx["today"] = _date.today().isoformat()
     if ctx.get("year") is None and ctx.get("movie_year") not in (None, ""):
         ctx["year"] = ctx.get("movie_year")
     if ctx.get("title") is None and ctx.get("movie_title"):
@@ -170,7 +181,7 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                 ctx["tvdb_id"] = cached_tvdb
         except Exception:
             pass
-    if needs["added"] and ctx.get("days_since_added") in (None, ""):
+    if needs["added"] and (ctx.get("days_since_added") in (None, "") or ctx.get("added_date") in (None, "")):
         added_at = ctx.get("added_at") or ctx.get("addedAt")
         if not added_at and ctx.get("rating_key"):
             try:
@@ -181,11 +192,33 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
         try:
             if added_at:
                 import time
-                ctx["days_since_added"] = max(0, int((time.time() - float(added_at)) // 86400))
-        except (TypeError, ValueError):
+                if ctx.get("days_since_added") in (None, ""):
+                    ctx["days_since_added"] = max(0, int((time.time() - float(added_at)) // 86400))
+                if ctx.get("added_date") in (None, ""):
+                    ctx["added_date"] = _datetime.fromtimestamp(float(added_at)).date().isoformat()
+        except (TypeError, ValueError, OverflowError, OSError):
             pass
         if ctx.get("days_since_added") in (None, ""):
             notes["days_since_added"] = "no date added stored yet, scan the library"
+        if ctx.get("added_date") in (None, ""):
+            notes["added_date"] = "no date added stored yet, scan the library"
+    if needs["release"] and ctx.get("release_date") in (None, ""):
+        tmdb_id, _tvdb, media_type = _item_ids(ctx)
+        if not tmdb_id:
+            notes["release_date"] = "this item has no TMDb ID"
+        else:
+            released, why = _release_date(media_type, tmdb_id)
+            if released:
+                ctx["release_date"] = released
+            else:
+                notes["release_date"] = why
+    if needs["release"] and ctx.get("days_since_release") in (None, ""):
+        rd = _parse_date(ctx.get("release_date"))
+        if rd:
+            # Negative before release: "is below 0" = not out yet.
+            ctx["days_since_release"] = (_parse_date(ctx["today"]) - rd).days
+        else:
+            notes.setdefault("days_since_release", notes.get("release_date") or "no release date")
     if needs["status"] and ctx.get("show_status") in (None, ""):
         if not _is_tv(ctx):
             notes["show_status"] = "only TV shows have a status"
@@ -241,6 +274,113 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
             ctx.setdefault("lists", [])
             notes.setdefault("lists", f"list lookup failed: {e}")
     return ctx
+
+
+# --------------------------------------------------------------------------
+# Dates
+# --------------------------------------------------------------------------
+
+_RELEASE_REFRESH_DAYS = 30
+
+
+def _parse_date(value: Any) -> Optional[_date]:
+    """A YYYY-MM-DD date (anything after the date, like a time, is ignored)."""
+    if isinstance(value, _datetime):
+        return value.date()
+    if isinstance(value, _date):
+        return value
+    text = str(value or "").strip()[:10]
+    try:
+        return _date.fromisoformat(text) if len(text) == 10 else None
+    except ValueError:
+        return None
+
+
+def _month_day(value: Any) -> Optional[Tuple[int, int]]:
+    """A yearly date, MM-DD (e.g. 12-25)."""
+    m = re.fullmatch(r"\s*(\d{1,2})-(\d{1,2})\s*", str(value or ""))
+    if not m:
+        return None
+    month, day = int(m.group(1)), int(m.group(2))
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    return month, day
+
+
+def _range_bounds(target: Any) -> Optional[Tuple[str, str]]:
+    """A 'between' value: [start, end], or 'start..end' / 'start~end'."""
+    if isinstance(target, (list, tuple)):
+        parts = [str(t).strip() for t in target]
+    else:
+        parts = [p.strip() for p in re.split(r"\.\.|~", str(target or ""))]
+    parts = [p for p in parts if p]
+    return (parts[0], parts[1]) if len(parts) == 2 else None
+
+
+def date_in_range(value: Any, target: Any) -> Optional[bool]:
+    """Is the date `value` within the range `target` (both ends included)?
+    MM-DD ends make a yearly range that may wrap past New Year (12-20..01-05);
+    YYYY-MM-DD ends make a fixed range. None when either can't be read."""
+    when = _parse_date(value)
+    bounds = _range_bounds(target)
+    if not when or not bounds:
+        return None
+    start_md, end_md = _month_day(bounds[0]), _month_day(bounds[1])
+    if start_md and end_md:
+        md = (when.month, when.day)
+        if start_md <= end_md:
+            return start_md <= md <= end_md
+        return md >= start_md or md <= end_md
+    start, end = _parse_date(bounds[0]), _parse_date(bounds[1])
+    if not start or not end:
+        return None
+    if start > end:
+        start, end = end, start
+    return start <= when <= end
+
+
+def _release_date(media_type: str, tmdb_id: Any) -> Tuple[Optional[str], str]:
+    """Release date (movie) or first air date (show) from TMDb, kept in the
+    database so overlay checks don't ask TMDb on every render. Re-asked after
+    30 days, or daily while TMDb has no date yet. Returns (date, why-missing)."""
+    from . import database as db
+    kind = "show" if media_type == "show" else "movie"
+    key = str(tmdb_id)
+    row = None
+    try:
+        with db.get_db() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS release_dates (media_type TEXT NOT NULL, tmdb_id TEXT NOT NULL, "
+                         "release_date TEXT, fetched_at TEXT NOT NULL, PRIMARY KEY (media_type, tmdb_id))")
+            row = conn.execute("SELECT release_date, fetched_at FROM release_dates WHERE media_type = ? AND tmdb_id = ?",
+                               (kind, key)).fetchone()
+    except Exception:
+        row = None
+    if row:
+        fetched = _parse_date(row["fetched_at"])
+        age = (_date.today() - fetched).days if fetched else 999
+        if row["release_date"] and age < _RELEASE_REFRESH_DAYS:
+            return row["release_date"], ""
+        if not row["release_date"] and age < 1:
+            return None, "TMDb has no release date for it yet"
+    try:
+        from . import tmdb_client
+        if kind == "show":
+            released = str(tmdb_client.get_tv_show_details(int(tmdb_id)).get("first_air_date") or "")[:10]
+        else:
+            released = str(tmdb_client.get_movie_details(int(tmdb_id)).get("release_date") or "")[:10]
+    except Exception as e:
+        if row and row["release_date"]:
+            return row["release_date"], ""
+        return None, f"TMDb lookup failed: {e}"
+    released = released if _parse_date(released) else None
+    try:
+        with db.get_db() as conn:
+            conn.execute("INSERT OR REPLACE INTO release_dates (media_type, tmdb_id, release_date, fetched_at) "
+                         "VALUES (?, ?, ?, ?)", (kind, key, released, _date.today().isoformat()))
+            conn.commit()
+    except Exception:
+        pass
+    return released, ("" if released else "TMDb has no release date for it yet")
 
 
 # --------------------------------------------------------------------------
@@ -301,6 +441,21 @@ def check_condition(cond: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
             return False
         hit = any(p.search(str(v)) for p in patterns for v in values)
         return hit if op == "regex" else not hit
+
+    if op in ("between", "not_between"):
+        hits = [date_in_range(v, target) for v in values]
+        if not any(h is not None for h in hits):
+            return False
+        hit = any(h for h in hits)
+        return hit if op == "between" else not hit
+
+    if op in _NUMERIC_OPS and _parse_date(target):
+        # Dates: gt = after, lt = before.
+        when = next((d for d in (_parse_date(v) for v in values) if d), None)
+        if not when:
+            return False
+        limit = _parse_date(target)
+        return {"gt": when > limit, "gte": when >= limit, "lt": when < limit, "lte": when <= limit}[op]
 
     if op in _NUMERIC_OPS:
         threshold = _as_number(target)
@@ -719,12 +874,15 @@ FIELD_LABELS = {
     "mdb_trakt_rating": "Trakt rating", "mdb_letterboxd_rating": "Letterboxd rating",
     "mdb_myanimelist_rating": "MyAnimeList score",
     "days_since_added": "Days since added", "show_status": "Show status",
+    "today": "Today's date", "added_date": "Date added", "release_date": "Release date",
+    "days_since_release": "Days since release",
 }
 _OP_WORDS = {
     "eq": "is", "is": "is", "ne": "is not", "not": "is not", "in": "is one of", "not_in": "is none of",
     "contains": "contains", "not_contains": "doesn't contain", "regex": "matches", "not_regex": "doesn't match",
     "gt": "is above", "gte": "is at least", "lt": "is below", "lte": "is at most",
     "exists": "is set", "not_exists": "is empty",
+    "between": "is between", "not_between": "is not between",
 }
 
 
@@ -959,6 +1117,11 @@ def data_summary(ctx: Dict[str, Any], elements: List[Dict[str, Any]]) -> str:
     if needs.get("added"):
         parts.append(f"added {ctx['days_since_added']} days ago" if ctx.get("days_since_added") not in (None, "")
                      else "date added: " + (notes.get("days_since_added") or "unknown"))
+    if any(isinstance(c, dict) and str(c.get("field") or "").lower() == "today"
+           for e in elements for c in (e.get("conditions") or [])):
+        parts.append(f"today {ctx.get('today')}")
+    if needs.get("release"):
+        parts.append("released " + str(ctx.get("release_date") or notes.get("release_date") or "unknown"))
     if needs.get("status"):
         parts.append("status " + str(ctx.get("show_status") or notes.get("show_status") or "unknown"))
     if needs["paths"] and notes.get("filepath"):

@@ -169,9 +169,67 @@ export const normalizeResolution = (value: unknown): string | null => {
   return RESOLUTION_ALIASES[key] ?? (key || null)
 }
 
+// --- Dates (a port of overlay_engine.py's date helpers; keep them identical) ---
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+/** Today as YYYY-MM-DD in this browser's time zone. */
+export const localToday = (): string => {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+/** A YYYY-MM-DD date (anything after the first 10 characters is ignored), as UTC midnight. */
+export const parseDate = (value: unknown): Date | null => {
+  const m = String(value ?? '').trim().slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return null
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const date = new Date(Date.UTC(y, mo - 1, d))
+  return date.getUTCMonth() === mo - 1 && date.getUTCDate() === d ? date : null
+}
+
+/** A yearly date, MM-DD (e.g. 12-25), as [month, day]. */
+const monthDay = (value: unknown): [number, number] | null => {
+  const m = String(value ?? '').match(/^\s*(\d{1,2})-(\d{1,2})\s*$/)
+  if (!m) return null
+  const month = Number(m[1]); const day = Number(m[2])
+  return month >= 1 && month <= 12 && day >= 1 && day <= 31 ? [month, day] : null
+}
+
+const rangeBounds = (target: unknown): [string, string] | null => {
+  const parts = (Array.isArray(target) ? target.map(t => String(t).trim()) : String(target ?? '').split(/\.\.|~/).map(p => p.trim()))
+    .filter(Boolean)
+  return parts.length === 2 ? [parts[0] as string, parts[1] as string] : null
+}
+
+const mdLess = (a: [number, number], b: [number, number]) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1])
+
+/** Is the date `value` within `target` (ends included)? MM-DD ends = a yearly range
+ *  that may wrap past New Year; YYYY-MM-DD ends = a fixed range. null if unreadable. */
+export const dateInRange = (value: unknown, target: unknown): boolean | null => {
+  const when = parseDate(value)
+  const bounds = rangeBounds(target)
+  if (!when || !bounds) return null
+  const smd = monthDay(bounds[0]); const emd = monthDay(bounds[1])
+  if (smd && emd) {
+    const md: [number, number] = [when.getUTCMonth() + 1, when.getUTCDate()]
+    if (!mdLess(emd, smd)) return !mdLess(md, smd) && !mdLess(emd, md)
+    return !mdLess(md, smd) || !mdLess(emd, md)
+  }
+  let start = parseDate(bounds[0]); let end = parseDate(bounds[1])
+  if (!start || !end) return null
+  if (start > end) [start, end] = [end, start]
+  return when >= start && when <= end
+}
+
 export const buildContext = (meta: Record<string, unknown>): OverlayContext => {
   const ctx: OverlayContext = { ...meta }
   ctx.resolution = normalizeResolution(ctx.video_resolution)
+  // Today's date for seasonal rules; the preview can set its own to test a season.
+  if (!parseDate(ctx.today)) ctx.today = localToday()
+  if (parseDate(ctx.release_date)) {
+    ctx.days_since_release = Math.round(((parseDate(ctx.today) as Date).getTime() - (parseDate(ctx.release_date) as Date).getTime()) / 86400000)
+  }
   if (ctx.year == null && ctx.movie_year != null && ctx.movie_year !== '') ctx.year = ctx.movie_year
   if (ctx.title == null && ctx.movie_title) ctx.title = ctx.movie_title
   ctx.labels = ((meta.labels as unknown[]) || []).map(String)
@@ -232,6 +290,22 @@ export const checkCondition = (cond: OverlayCondition, ctx: OverlayContext): boo
     if (res.some(r => r === null)) return false
     const hit = values.some(v => res.some(r => (r as RegExp).test(String(v))))
     return op === 'regex' ? hit : !hit
+  }
+
+  if (op === 'between' || op === 'not_between') {
+    const hits = values.map(v => dateInRange(v, target))
+    if (!hits.some(h => h !== null)) return false
+    const hit = hits.some(h => h === true)
+    return op === 'between' ? hit : !hit
+  }
+
+  if (['gt', 'gte', 'lt', 'lte'].includes(op) && parseDate(target)) {
+    // Dates: gt = after, lt = before.
+    const when = values.map(parseDate).find((d): d is Date => d !== null)
+    if (!when) return false
+    const limit = (parseDate(target) as Date).getTime()
+    const n = when.getTime()
+    return op === 'gt' ? n > limit : op === 'gte' ? n >= limit : op === 'lt' ? n < limit : n <= limit
   }
 
   if (['gt', 'gte', 'lt', 'lte'].includes(op)) {

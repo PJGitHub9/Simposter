@@ -3,7 +3,7 @@
 import type { OverlayCondition } from '@/services/overlayEngine'
 import { listDisplayName } from '@/composables/useListSources'
 
-export type FieldKind = 'choice' | 'text' | 'number' | 'path' | 'list'
+export type FieldKind = 'choice' | 'text' | 'number' | 'path' | 'list' | 'date' | 'today'
 
 export interface FieldOption { value: string; label: string }
 
@@ -21,7 +21,7 @@ export interface FieldDef {
 
 const opts = (pairs: Array<[string, string]>): FieldOption[] => pairs.map(([value, label]) => ({ value, label }))
 
-export const FIELD_GROUPS = ['Video', 'Audio', 'File', 'Ratings', 'Lists', 'Item'] as const
+export const FIELD_GROUPS = ['Video', 'Audio', 'File', 'Ratings', 'Lists', 'Dates', 'Item'] as const
 
 export const FIELDS: FieldDef[] = [
   {
@@ -83,8 +83,24 @@ export const FIELDS: FieldDef[] = [
   },
   { value: 'year', label: 'Year', group: 'Item', kind: 'number', placeholder: '2024' },
   {
-    value: 'days_since_added', label: 'Days since added', group: 'Item', kind: 'number', placeholder: '7',
+    value: 'today', label: "Today's date", group: 'Dates', kind: 'today',
+    hint: 'For seasonal overlays: "is between Dec 1 and Dec 26" shows it every year in that window. Uses the server time zone; a scheduled Overlay Refresh puts it on and takes it off.',
+  },
+  {
+    value: 'added_date', label: 'Date added', group: 'Dates', kind: 'date',
+    hint: 'The day it was added to the library. Needs a library scan.',
+  },
+  {
+    value: 'days_since_added', label: 'Days since added', group: 'Dates', kind: 'number', placeholder: '7',
     hint: 'Days since it was added to the library. "is at most 7" = added in the last week. Needs a library scan.',
+  },
+  {
+    value: 'release_date', label: 'Release date', group: 'Dates', kind: 'date',
+    hint: 'Release date (movies) or first air date (shows), from TMDb.',
+  },
+  {
+    value: 'days_since_release', label: 'Days since release', group: 'Dates', kind: 'number', placeholder: '30',
+    hint: 'From TMDb. Below 0 = not released yet; "is at most 30" = released in the last month.',
   },
   {
     value: 'show_status', label: 'Show status', group: 'Item', kind: 'choice',
@@ -107,7 +123,7 @@ export const fieldDef = (field: string): FieldDef | undefined => {
   return FIELDS.find(d => d.value === (ALIASES[f] || f))
 }
 
-export interface OpDef { value: string; label: string; noValue?: boolean; multi?: boolean }
+export interface OpDef { value: string; label: string; noValue?: boolean; multi?: boolean; range?: boolean }
 
 const OPS_BY_KIND: Record<FieldKind, OpDef[]> = {
   choice: [
@@ -141,6 +157,20 @@ const OPS_BY_KIND: Record<FieldKind, OpDef[]> = {
     { value: 'regex', label: 'matches pattern' },
     { value: 'not_regex', label: "doesn't match pattern" },
   ],
+  date: [
+    { value: 'between', label: 'is between', range: true },
+    { value: 'not_between', label: 'is not between', range: true },
+    { value: 'gt', label: 'is after' },
+    { value: 'lt', label: 'is before' },
+    { value: 'gte', label: 'is on or after' },
+    { value: 'lte', label: 'is on or before' },
+    { value: 'exists', label: 'is known', noValue: true },
+    { value: 'not_exists', label: 'is unknown', noValue: true },
+  ],
+  today: [
+    { value: 'between', label: 'is between', range: true },
+    { value: 'not_between', label: 'is not between', range: true },
+  ],
   list: [
     { value: 'eq', label: 'is on' },
     { value: 'in', label: 'is on any of', multi: true },
@@ -164,6 +194,8 @@ export const ALL_OPS: OpDef[] = [
   { value: 'lte', label: 'is at most' },
   { value: 'exists', label: 'is set', noValue: true },
   { value: 'not_exists', label: 'is empty', noValue: true },
+  { value: 'between', label: 'is between', range: true },
+  { value: 'not_between', label: 'is not between', range: true },
 ]
 
 export const opsFor = (field: string, currentOp?: string): OpDef[] => {
@@ -178,6 +210,24 @@ export const opsFor = (field: string, currentOp?: string): OpDef[] => {
 }
 
 export const opDef = (op: string): OpDef | undefined => ALL_OPS.find(o => o.value === op)
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** "12-25" -> "Dec 25", "2026-12-25" -> "Dec 25, 2026". */
+export const formatDateValue = (v: unknown): string => {
+  const s = String(v ?? '').trim()
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (m) return `${MONTHS[Number(m[2]) - 1] || m[2]} ${Number(m[3])}, ${m[1]}`
+  m = s.match(/^(\d{1,2})-(\d{1,2})$/)
+  if (m) return `${MONTHS[Number(m[1]) - 1] || m[1]} ${Number(m[2])}`
+  return s
+}
+
+/** A between value as [start, end] (stored as a two-item list; "a..b" also read). */
+export const rangeParts = (v: unknown): [string, string] => {
+  const parts = Array.isArray(v) ? v.map(x => String(x)) : String(v ?? '').split(/\.\.|~/)
+  return [String(parts[0] ?? '').trim(), String(parts[1] ?? '').trim()]
+}
 
 const valueLabel = (field: string, v: unknown): string => {
   const def = fieldDef(field)
@@ -197,6 +247,11 @@ export const describeCondition = (c: OverlayCondition): string => {
   const op = opDef(String(c.op || 'eq'))
   const opText = def ? (opsFor(field).find(o => o.value === c.op)?.label || op?.label || c.op) : (op?.label || c.op)
   if (op?.noValue) return `${name} ${opText}`
+  if (op?.range) {
+    const [a, b] = rangeParts(c.value)
+    return `${name} ${opText} ${a && b ? `${formatDateValue(a)} and ${formatDateValue(b)}` : '…'}`
+  }
+  if (def?.kind === 'date' || def?.kind === 'today') return `${name} ${opText} ${formatDateValue(c.value) || '…'}`
   const values = Array.isArray(c.value) ? c.value : [c.value]
   const shown = values.filter(v => v !== undefined && v !== null && v !== '').map(v => valueLabel(field, v))
   const valText = shown.length > 3 ? `${shown.slice(0, 3).join(', ')} +${shown.length - 3}` : shown.join(', ')
@@ -214,6 +269,9 @@ export const TEXT_VARIABLES: TextVariable[] = [
   { key: 'studio', label: 'Studio', group: 'Item', example: 'Legendary' },
   { key: 'days_since_added', label: 'Days since added', group: 'Item', example: '3' },
   { key: 'show_status', label: 'Show status', group: 'Item', example: 'continuing', note: 'TV shows only' },
+  { key: 'added_date', label: 'Date added', group: 'Item', example: '2026-11-02' },
+  { key: 'release_date', label: 'Release date', group: 'Item', example: '2021-10-22' },
+  { key: 'days_since_release', label: 'Days since release', group: 'Item', example: '12' },
   { key: 'resolution', label: 'Resolution', group: 'Video', example: '4k' },
   { key: 'video_codec', label: 'Video codec', group: 'Video', example: 'hevc' },
   { key: 'audio_codec', label: 'Audio codec', group: 'Audio', example: 'truehd' },

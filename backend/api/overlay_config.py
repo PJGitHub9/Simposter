@@ -393,6 +393,10 @@ def api_link_preset_to_overlay(req: PresetOverlayLinkRequest):
 # Image Proxy (for CORS-free canvas preview of URL badge images)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Item data the preview fills on request (overlay_engine.build_context derives them).
+_PREVIEW_ITEM_FIELDS = {"days_since_added", "added_date", "release_date", "days_since_release", "show_status"}
+
+
 @router.get("/overlay-preview-metadata")
 def api_overlay_preview_metadata(
     rating_key: str,
@@ -500,14 +504,14 @@ def api_overlay_preview_metadata(
                     lists_out = ctx.get("lists") or []
             except Exception as mdb_err:
                 logger.debug(f"[OVERLAY] Preview MDBList error: {mdb_err}")
-        # Date added and show status, when the layers' rules use them.
+        # Date added, release date and show status, when the layers use them.
         wanted = {f.strip() for f in (fields or "").split(",") if f.strip()}
         if saved_cfg:
             for e in saved_cfg.get("elements", []):
                 for c in (e.get("conditions") or []) if isinstance(e, dict) else []:
-                    if isinstance(c, dict) and c.get("field") in ("days_since_added", "show_status"):
+                    if isinstance(c, dict) and c.get("field") in _PREVIEW_ITEM_FIELDS:
                         wanted.add(c["field"])
-        wanted &= {"days_since_added", "show_status"}
+        wanted &= _PREVIEW_ITEM_FIELDS
         if wanted:
             try:
                 from .. import overlay_engine

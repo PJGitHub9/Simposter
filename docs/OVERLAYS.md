@@ -126,17 +126,22 @@ Every layer, and every overlay as a whole, can have rules. All of a layer's rule
 | **File** | File path / name (pattern match on the file name, e.g. TRaSH naming, CAM/TS, `{edition-…}` tags), edition (Plex only) |
 | **Ratings** | Audience rating (0–10), critic rating (0–10), MDBList score, IMDb, Rotten Tomatoes (critics and audience), Metacritic, TMDb, Trakt, Letterboxd. All need an [MDBList key](#mdblist-ratings-and-lists). |
 | **Lists** | On a list from MDBList, WeTrakr, SIMKL or Floppy (see [Lists from other services](#lists-from-wetrakr-simkl-and-floppy)) |
-| **Item** | Label (Plex only), movie or show, year, days since added, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform |
+| **Dates** | Today's date, date added, days since added, release date, days since release |
+| **Item** | Label (Plex only), movie or show, year, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform |
 
 Operators depend on the field:
 
 - **Text and choice fields**: is, is not, is any of, is none of, contains, matches pattern, is set, is empty.
 - **Numbers**: is at least, is above, is at most, is below, is exactly, is known, is unknown.
 - **Lists**: is on, is on any of, is not on.
+- **Dates**: is between, is not between, is after, is before, is on or after, is on or before. Today's date only has "is between" / "is not between".
 
 Notes on some fields:
 
-- **Days since added** counts from the date your last library scan recorded. Use "is at most 7" for a "NEW" badge.
+- **Today's date** is for seasonal overlays. Tick **Every year** to pick a month and day for each end (or use **Quick pick** for Christmas, Halloween, St Patrick's Day and others); the range may cross New Year, e.g. Dec 27 to Jan 2. It uses the server's time zone. A poster only changes when it's rendered, so turn on a scheduled [Overlay Refresh](#overlay-refresh) for the library to put seasonal layers on and take them off. In the preview, **Pretend today is** lets you check a season any time of year.
+- **A seasonal overlay**: make one overlay with a layer per season (Christmas, Halloween, ...), each with its own Today's date rule, plus any other rule such as being on a list.
+- **Days since added** and **Date added** come from the date your last library scan recorded. Use "is at most 7" for a "NEW" badge.
+- **Release date** and **Days since release** come from TMDb (movie release date, or a show's first air date), stored for 30 days. Days since release is below 0 before release.
 - **Show status** is continuing, ended, canceled or upcoming, from TMDb. TV shows only.
 - **TMDb ID / TVDB ID** with "is any of" takes a list of IDs. This is how tools like UMTK and TSSK pick items.
 - **Label** and **edition** come from Plex only. On Jellyfin/Emby, match the file name instead (most edition tags are in the file name).
