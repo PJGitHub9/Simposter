@@ -2496,7 +2496,7 @@ onMounted(() => {
             <label class="notes-field">
               <span>Notes &amp; credits</span>
               <textarea v-model="selectedConfig.notes" rows="1" maxlength="4000"
-                placeholder="e.g. Audience rating and media info imported from https://github.com/jmxd/Kometa"></textarea>
+                placeholder="e.g. This overlay is for ratings, imported from https://github.com/"></textarea>
             </label>
             <p v-if="liveSources[selectedConfig.id]" class="live-note">
               Kept in sync with {{ liveFileName(liveSources[selectedConfig.id]!) }}: its layers are replaced when that file changes. "Show overlay when" rules you add here are kept.
