@@ -183,10 +183,12 @@ For batches instead of one at a time, see **Batch Processing** in [COLLECTIONS_A
 | `TMDB_API_KEY` | TMDb API key | `abcd1234` |
 | `TVDB_API_KEY` | TVDB API key | `efgh5678` |
 | `FANART_API_KEY` | Fanart.tv API key | `ijkl9012` |
+| `JELLYFIN_URL` | Adds a Jellyfin server to Settings → Media Servers (with `JELLYFIN_API_KEY`) | `http://jellyfin:8096` |
+| `JELLYFIN_API_KEY` | API key for that Jellyfin server | `0123abcd` |
 | `DISABLE_UPDATE_CHECK` | Set to `1` to stop Simposter checking GitHub for a newer version of your branch | `1` |
 | `CONFIG_DIR` | Config directory path (Docker default: `/config`) | `/config` |
 
-For Docker, set these under `environment:` in `docker-compose.yml`. For local dev, put them in a `.env` file at the repo root (see [`.env.example`](../.env.example)). Env vars only seed a **fresh, unconfigured** database on first startup — once you've set something through the wizard or Settings, that saved value takes priority from then on, so changing/removing an env var later won't silently override what you've already configured in the UI. If you remove Plex in Settings → Media Servers, `PLEX_URL`/`PLEX_TOKEN` are ignored from then on, so Plex doesn't come back on the next restart. Jellyfin/Emby servers are set up in the UI only (no env vars).
+For Docker, set these under `environment:` in `docker-compose.yml`. For local dev, put them in a `.env` file at the repo root (see [`.env.example`](../.env.example)). Env vars only seed a **fresh, unconfigured** database on first startup — once you've set something through the wizard or Settings, that saved value takes priority from then on, so changing/removing an env var later won't silently override what you've already configured in the UI. If you remove Plex in Settings → Media Servers, `PLEX_URL`/`PLEX_TOKEN` are ignored from then on, so Plex doesn't come back on the next restart. `JELLYFIN_URL`/`JELLYFIN_API_KEY` add the server once; after that it's managed in Settings → Media Servers (a server you remove there isn't added back, and a different `JELLYFIN_URL` adds that server). Emby servers are set up in the UI only. `TVDB_API_KEY`/`FANART_API_KEY` are used until a key is saved in Settings → General.
 
 ---
 

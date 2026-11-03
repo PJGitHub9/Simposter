@@ -215,15 +215,18 @@ def _apply_runtime_settings(merged: dict):
     object.__setattr__(settings, "PLEX_DEFAULT_MOVIE_LIB_ID", default_id)
 
     # TMDB runtime key
-    tmdb_key = tmdb_data.get("apiKey") or ""
+    # A key saved in Settings wins; otherwise the TMDB_API_KEY env var (Docker/Unraid).
+    tmdb_key = tmdb_data.get("apiKey") or os.getenv("TMDB_API_KEY", "")
     object.__setattr__(settings, "TMDB_API_KEY", tmdb_key)
 
     # TVDB runtime key
-    tvdb_key = tvdb_data.get("apiKey") or ""
+    # A key saved in Settings wins; otherwise the TVDB_API_KEY env var (Docker/Unraid).
+    tvdb_key = tvdb_data.get("apiKey") or os.getenv("TVDB_API_KEY", "")
     object.__setattr__(settings, "TVDB_API_KEY", tvdb_key)
 
     # Fanart runtime key
-    fanart_key = fanart_data.get("apiKey") or ""
+    # A key saved in Settings wins; otherwise the FANART_API_KEY env var (Docker/Unraid).
+    fanart_key = fanart_data.get("apiKey") or os.getenv("FANART_API_KEY", "")
     object.__setattr__(settings, "FANART_API_KEY", fanart_key)
 
     # MDBList runtime key (ratings and lists for overlays)

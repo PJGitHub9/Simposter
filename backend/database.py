@@ -5276,10 +5276,63 @@ def restore_poster_history_rows(rows: list) -> None:
     logger.info("[CLEANUP] Restored %d poster_history rows", len(rows))
 
 
+def _media_server_id(server_type: str, url: str) -> str:
+    """Same id as frontend/src/services/mediaServerId.ts (FNV-1a of the
+    normalized URL), so a server added from an env var and the same server
+    added in Settings get one id."""
+    text = url.strip().lower().rstrip("/")
+    h = 0x811C9DC5
+    units = text.encode("utf-16-le")  # JS charCodeAt works on UTF-16 code units
+    for i in range(0, len(units), 2):
+        h ^= units[i] | (units[i + 1] << 8)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return f"{server_type}-{h:x}"
+
+
+def seed_jellyfin_from_env():
+    """JELLYFIN_URL + JELLYFIN_API_KEY (e.g. from an Unraid template) add a
+    Jellyfin server to Settings > Media Servers, once. After that the server
+    is the user's: edits and removal in the UI stick (a removed server isn't
+    added back on restart), and changing JELLYFIN_URL adds the new server."""
+    import os
+    url = (os.getenv("JELLYFIN_URL") or "").strip().rstrip("/")
+    api_key = (os.getenv("JELLYFIN_API_KEY") or "").strip()
+    if not url or not api_key:
+        return
+    server_id = _media_server_id("jellyfin", url)
+    marker = f"env_jellyfin:{server_id}"
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            if cursor.execute("SELECT 1 FROM applied_migrations WHERE name = ?", (marker,)).fetchone():
+                return
+            row = cursor.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
+            try:
+                servers = json.loads(row["value"]) if row and row["value"] else []
+            except ValueError:
+                servers = []
+            if not isinstance(servers, list):
+                servers = []
+            if not any(isinstance(s, dict) and s.get("id") == server_id for s in servers):
+                servers.append({"id": server_id, "type": "jellyfin", "name": "Jellyfin", "url": url,
+                                "apiKey": api_key, "enabled": True})
+                cursor.execute(
+                    "INSERT INTO settings (key, value, category) VALUES ('mediaServers', ?, NULL) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (json.dumps(servers),),
+                )
+                logger.info("[DB] Added Jellyfin server from JELLYFIN_URL (%s)", server_id)
+            cursor.execute("INSERT OR IGNORE INTO applied_migrations (name) VALUES (?)", (marker,))
+            conn.commit()
+    except Exception as e:
+        logger.warning("[DB] Could not add Jellyfin server from env: %s", e)
+
+
 # Initialize database on module import
 init_database()
 # Copy environment variables to UI settings on startup
 copy_env_to_ui_settings()
+seed_jellyfin_from_env()
 
 
 # ---------------------------------------------------------------------------

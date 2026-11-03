@@ -26,6 +26,7 @@ export const releaseNotes: ReleaseNote[] = [
       {
         title: 'Bug Fixes',
         items: [
+          'TVDB_API_KEY and FANART_API_KEY set on the container were ignored unless the key was also saved in Settings.',
           'Template Manager: on a phone the preset name was squeezed to nothing by its buttons, so a preset couldn’t be opened by tapping its name.',
           'Template Manager and Batch Edit: the preview panel now stays in view as you scroll down, so pressing ▶ on a preset further down the list shows the preview without scrolling back up.',
           'Template Manager: a preset’s fallback only asks for a fallback preset (it always uses the same template), and the ✎ button also opens the preset’s settings.',
