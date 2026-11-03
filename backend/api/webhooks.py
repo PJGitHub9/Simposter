@@ -1379,6 +1379,13 @@ def process_webhook_poster_generation(
                 if _ui.get("automation", {}).get("existingContentMode") == "resend":
                     cached = load_render_cache(rating_key)
                     if cached:
+                        from ..resend_policy import resend_check
+                        _ok, _why = resend_check(rating_key, template_id, preset_id)
+                        if not _ok:
+                            logger.info("[WEBHOOK] Not resending the saved poster for %s [%s]: %s; rendering fresh",
+                                        title_hint, rating_key, _why)
+                            cached = None
+                    if cached:
                         plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
                         plex_session.post(
                             plex_url,

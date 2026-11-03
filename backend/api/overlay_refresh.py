@@ -133,6 +133,90 @@ def api_overlay_refresh_run_overlay(req: OverlayRunRequest):
     return {"started": started, "busy": busy}
 
 
+class PresetRefreshRequest(BaseModel):
+    template_id: str
+    preset_id: str
+    # The preset's overlay lists before the save: {"series"|"season": {"ids": [...], "below": [...]}}
+    old: Dict[str, Dict[str, List[str]]]
+    include_different: bool = False
+    group_ids: Optional[List[str]] = None  # run-preset only; default: every group found
+
+
+def _title_items(states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    from ..media_server import get_server_label
+    titles: Dict[str, Dict[str, Any]] = {}
+    for s in states:
+        name = refresh._display_title(s)
+        row = titles.setdefault(name, {"title": name, "servers": []})
+        label = get_server_label(s["server_id"])
+        if label not in row["servers"]:
+            row["servers"].append(label)
+    return sorted(titles.values(), key=lambda r: str(r["title"]).lower())
+
+
+def _preset_groups(req: PresetRefreshRequest) -> List[Dict[str, Any]]:
+    found = refresh.match_preset_states(req.template_id, req.preset_id, req.old)
+    groups = []
+    for group in (db.get_ui_settings() or {}).get("libraryGroups") or []:
+        pairs = set(refresh.group_pairs(group))
+        part: Dict[str, Any] = {}
+        for kind in ("matching", "different"):
+            mine = [s for s in found[kind] if (s["server_id"], str(s.get("library_id"))) in pairs]
+            part[kind] = {"states": mine, "keys": [refresh.state_key(s) for s in mine],
+                          "items": _title_items(mine)}
+        if not part["matching"]["states"] and not part["different"]["states"]:
+            continue
+        groups.append({"group_id": group.get("id"), "group_name": group.get("name") or group.get("id"), **part})
+    return groups
+
+
+@router.post("/by-preset")
+def api_overlay_refresh_by_preset(req: PresetRefreshRequest):
+    """Tracked posters sent with a preset whose overlays just changed, per
+    library group: those that followed the old lists ("matching") and those
+    that currently have other overlays ("different")."""
+    groups = _preset_groups(req)
+    out = []
+    for g in groups:
+        out.append({
+            "group_id": g["group_id"], "group_name": g["group_name"],
+            "matching": {"keys": g["matching"]["keys"], "items": g["matching"]["items"]},
+            "different": {"keys": g["different"]["keys"], "items": g["different"]["items"]},
+            "running": refresh.get_status(g["group_id"]).get("state") == "running",
+        })
+    return {
+        "groups": out,
+        "total_matching": sum(len(g["matching"]["items"]) for g in out),
+        "total_different": sum(len(g["different"]["items"]) for g in out),
+    }
+
+
+@router.post("/run-preset")
+def api_overlay_refresh_run_preset(req: PresetRefreshRequest):
+    """Point the chosen tracked posters at the preset's new overlay lists and
+    refresh them (non-forced: only posters that now look different are sent)."""
+    new = refresh.preset_overlay_lists(req.template_id, req.preset_id)
+    started, busy = [], []
+    for g in _preset_groups(req):
+        if req.group_ids is not None and g["group_id"] not in req.group_ids:
+            continue
+        states = g["matching"]["states"] + (g["different"]["states"] if req.include_different else [])
+        if not states:
+            continue
+        if refresh.get_status(g["group_id"]).get("state") == "running":
+            busy.append(g["group_name"])
+            continue
+        for s in states:
+            kind = "series" if s.get("season_index") is None else "season"
+            db.set_overlay_state_overlay_lists(s["server_id"], str(s["rating_key"]), s.get("season_index"),
+                                               new[kind]["ids"], new[kind]["below"])
+        if refresh.start_run(g["group_id"], True, [refresh.state_key(s) for s in states]):
+            started.append(g["group_name"])
+        else:
+            busy.append(g["group_name"])
+    return {"started": started, "busy": busy}
+
+
 @router.get("/status")
 def api_overlay_refresh_status(group_id: str):
     return refresh.get_status(group_id)

@@ -153,6 +153,12 @@ def process_new_content_for_library(
                             if auto_send and ui_settings.get("automation", {}).get("existingContentMode") == "resend":
                                 cached = load_render_cache(rating_key)
                                 if cached:
+                                    from .resend_policy import resend_check
+                                    _ok, _why = resend_check(rating_key, template_id, preset_id)
+                                    if not _ok:
+                                        logger.info(f"[AUTO_GEN] Not resending the saved poster for {title}: {_why}; rendering fresh")
+                                        cached = None
+                                if cached:
                                     try:
                                         plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"
                                         plex_session.post(
@@ -315,6 +321,12 @@ def process_new_content_for_library(
                             # Resend cached poster if setting requests it and one exists
                             if auto_send and ui_settings.get("automation", {}).get("existingContentMode") == "resend":
                                 cached = load_render_cache(rating_key)
+                                if cached:
+                                    from .resend_policy import resend_check
+                                    _ok, _why = resend_check(rating_key, template_id, preset_id)
+                                    if not _ok:
+                                        logger.info(f"[AUTO_GEN] Not resending the saved poster for {title}: {_why}; rendering fresh")
+                                        cached = None
                                 if cached:
                                     try:
                                         plex_url = f"{settings.PLEX_URL}/library/metadata/{rating_key}/posters"

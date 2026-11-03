@@ -5,6 +5,11 @@ import { useNotification } from '@/composables/useNotification'
 import { useSettingsStore } from '@/stores/settings'
 import { copyToClipboard } from '@/services/clipboard'
 import PresetShareModal from '@/components/PresetShareModal.vue'
+import PresetEditForm from '@/components/presets/PresetEditForm.vue'
+import PresetRefreshPrompt from '@/components/presets/PresetRefreshPrompt.vue'
+import { usePresetRefreshPrompt } from '@/composables/usePresetRefreshPrompt'
+import type { PresetOverlayLists } from '@/services/presetOverlayLists'
+import { onBeforeRouteLeave } from 'vue-router'
 
 type Preset = {
   id: string
@@ -13,15 +18,6 @@ type Preset = {
   season_options?: Record<string, unknown>
 }
 type TemplatePresets = Record<string, { presets: Preset[] }>
-type PresetFallback = {
-  fallbackPosterAction?: 'continue' | 'skip' | 'template'
-  fallbackPosterTemplate?: string
-  fallbackPosterPreset?: string
-  fallbackLogoAction?: 'continue' | 'skip' | 'template'
-  fallbackLogoTemplate?: string
-  fallbackLogoPreset?: string
-  logoSource?: string
-}
 
 const apiBase = getApiBase()
 const settings = useSettingsStore()
@@ -57,21 +53,9 @@ const savingFallback = ref(false)
 const showDefaultsOpen = ref(true)
 const selectedPresets = ref<Set<string>>(new Set())
 const deleting = ref<string | null>(null)
-const showFallbackModal = ref(false)
-const modalPreset = ref<{ templateId: string; preset: Preset } | null>(null)
-const modalFallback = ref<PresetFallback>({
-  fallbackPosterAction: 'continue',
-  fallbackPosterTemplate: '',
-  fallbackPosterPreset: '',
-  fallbackLogoAction: 'continue',
-  fallbackLogoTemplate: '',
-  fallbackLogoPreset: '',
-  logoSource: ''
-})
 
 // Expand/tab state for preset cards
 const expandedPresets = ref<Set<string>>(new Set())
-const presetActiveTabs = ref<Record<string, 'series' | 'season'>>({})
 const showImportExport = ref(false)
 
 // Preview state
@@ -94,31 +78,38 @@ const presetCount = computed(() =>
   Object.values(presets.value).reduce((acc, tpl) => acc + (tpl.presets?.length || 0), 0)
 )
 
-const posterFallbackLabel = computed(() => {
-  const opts = modalPreset.value?.preset.options || {}
-  const pref = opts.poster_filter || opts.posterPreference || ''
-  return pref ? `If ${pref} poster not found` : 'If preferred poster not found'
-})
-
-const logoFallbackLabel = computed(() => {
-  const opts = modalPreset.value?.preset.options || {}
-  const pref = opts.logo_preference || opts.logo_mode || ''
-  return pref ? `If ${pref} logo not found` : 'If preferred logo not found'
-})
-
 // ---- Preset card helpers ----
+// Cards whose type-in form has unsaved edits (PresetEditForm emits dirty-change).
+const dirtyPresets = ref<Set<string>>(new Set())
+const setDirty = (key: string, dirty: boolean) => {
+  const s = new Set(dirtyPresets.value)
+  if (dirty) s.add(key)
+  else s.delete(key)
+  dirtyPresets.value = s
+}
+// After a type-in save: reload, and offer to refresh posters if its overlays changed.
+const { prompt: refreshPrompt, offer: offerRefresh, close: closeRefreshPrompt } = usePresetRefreshPrompt()
+const onPresetSaved = async (templateId: string, preset: Preset, lists: { before: PresetOverlayLists; after: PresetOverlayLists }) => {
+  await offerRefresh(templateId, preset.id, preset.name || preset.id, lists.before, lists.after)
+  await fetchPresets(true)
+}
+const confirmDiscard = (key: string) =>
+  !dirtyPresets.value.has(key) || window.confirm(`Discard unsaved changes to "${key.split('::')[1]}"?`)
+
+onBeforeRouteLeave(() => {
+  if (!dirtyPresets.value.size) return true
+  return window.confirm('You have unsaved preset changes. Leave anyway?')
+})
+
 const toggleExpand = (key: string) => {
   const s = new Set(expandedPresets.value)
-  if (s.has(key)) s.delete(key)
+  if (s.has(key) && !confirmDiscard(key)) return
+  if (s.has(key)) {
+    s.delete(key)
+    setDirty(key, false)
+  }
   else s.add(key)
   expandedPresets.value = s
-}
-
-const getPresetTab = (key: string): 'series' | 'season' =>
-  presetActiveTabs.value[key] || 'series'
-
-const setPresetTab = (key: string, tab: 'series' | 'season') => {
-  presetActiveTabs.value = { ...presetActiveTabs.value, [key]: tab }
 }
 
 const logoLabel = (opts: Record<string, unknown>) => {
@@ -139,8 +130,6 @@ const posterLabel = (opts: Record<string, unknown>) => {
   return map[f] || f
 }
 
-const pct = (v: unknown) => (v != null && v !== '' && !isNaN(Number(v))) ? `${Math.round(Number(v) * 100)}%` : '—'
-
 const hasFallback = (opts: Record<string, unknown>) =>
   (opts.fallbackPosterAction && opts.fallbackPosterAction !== 'continue') ||
   (opts.fallbackLogoAction && opts.fallbackLogoAction !== 'continue')
@@ -159,28 +148,12 @@ const hasSeasonOptions = (preset: Preset) => {
   return s && typeof s === 'object' && Object.keys(s).length > 0
 }
 
-const getActiveOpts = (key: string, preset: Preset): Record<string, unknown> => {
-  const tab = getPresetTab(key)
-  // season_options may be a sparse diff (only the fields that differ from options) rather
-  // than a full copy — merge it on top of options so the season tab always displays a
-  // complete, correct set of values instead of one missing anything not in the diff.
-  return (tab === 'season' && hasSeasonOptions(preset))
-    ? { ...preset.options, ...(preset.season_options as Record<string, unknown>) }
-    : preset.options
-}
-
-const logoSourceLabel = (src: unknown) => {
-  if (!src) return '—'
-  const map: Record<string, string> = {
-    tmdb: 'TMDb only', fanart: 'Fanart.tv only',
-    tmdb_fanart: 'TMDb → Fanart', fanart_tmdb: 'Fanart → TMDb', both: 'Both merged'
-  }
-  return map[String(src)] || String(src)
-}
 // ---- End helpers ----
 
-const fetchPresets = async () => {
-  loading.value = true
+// The loading state (which unmounts every card) only on the first load or when asked;
+// later reloads keep open cards and their unsaved edits.
+const fetchPresets = async (quiet = false) => {
+  if (!quiet && !Object.keys(presets.value || {}).length) loading.value = true
   try {
     const res = await fetch(`${apiBase}/api/presets`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
@@ -204,48 +177,6 @@ const handleExportAll = async () => {
     showError(e instanceof Error ? e.message : 'Export failed')
   } finally {
     exporting.value = false
-  }
-}
-
-const openFallbackModal = (templateId: string, preset: Preset) => {
-  modalPreset.value = { templateId, preset }
-  const opts = preset.options || {}
-  modalFallback.value = {
-    fallbackPosterAction: (opts.fallbackPosterAction as 'template' | 'continue' | 'skip' | undefined) || 'continue',
-    fallbackPosterTemplate: (opts.fallbackPosterTemplate as string) || '',
-    fallbackPosterPreset: (opts.fallbackPosterPreset as string) || '',
-    fallbackLogoAction: (opts.fallbackLogoAction as 'template' | 'continue' | 'skip' | undefined) || 'continue',
-    fallbackLogoTemplate: (opts.fallbackLogoTemplate as string) || '',
-    fallbackLogoPreset: (opts.fallbackLogoPreset as string) || '',
-    logoSource: (opts.logoSource as string) || ''
-  }
-  showFallbackModal.value = true
-}
-
-const savePresetFallback = async () => {
-  if (!modalPreset.value) return
-  try {
-    const { templateId, preset } = modalPreset.value
-    const normalized: PresetFallback = { ...modalFallback.value }
-    if (normalized.fallbackPosterAction !== 'template') {
-      normalized.fallbackPosterTemplate = ''
-      normalized.fallbackPosterPreset = ''
-    }
-    if (normalized.fallbackLogoAction !== 'template') {
-      normalized.fallbackLogoTemplate = ''
-      normalized.fallbackLogoPreset = ''
-    }
-    const updated = { ...preset.options, ...normalized }
-    const res = await fetch(`${apiBase}/api/presets/save`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ template_id: templateId, preset_id: preset.id, options: updated })
-    })
-    if (!res.ok) throw new Error(`API error ${res.status}`)
-    await fetchPresets()
-    showFallbackModal.value = false
-  } catch (e) {
-    showError(e instanceof Error ? e.message : 'Failed to save fallback rules')
   }
 }
 
@@ -372,6 +303,8 @@ const renameValue = ref('')
 const startRename = (key: string, currentName: string) => {
   renamingPreset.value = key
   renameValue.value = currentName
+  // The pencil also opens the card, so its settings are ready to edit too.
+  if (!expandedPresets.value.has(key)) expandedPresets.value = new Set(expandedPresets.value).add(key)
 }
 
 const saveRename = async (templateId: string, preset: Preset) => {
@@ -841,7 +774,6 @@ onMounted(async () => {
                       <button class="icon-btn" @click.stop="startRename(`${templateId}::${preset.id}`, preset.name || preset.id)" title="Rename">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                       </button>
-                      <button class="icon-btn" @click.stop="openFallbackModal(templateId, preset)" title="Fallback rules">⚙</button>
                       <button class="icon-btn" @click.stop="openShare(String(templateId), preset)" title="Share as a file">
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
                       </button>
@@ -866,80 +798,15 @@ onMounted(async () => {
                   </div>
 
                   <!-- Expanded body -->
-                  <div v-show="expandedPresets.has(`${templateId}::${preset.id}`)" class="preset-card-body">
-                    <!-- Series / Season tabs -->
-                    <div class="preset-tabs">
-                      <button
-                        :class="['preset-tab', { active: getPresetTab(`${templateId}::${preset.id}`) === 'series' }]"
-                        @click="setPresetTab(`${templateId}::${preset.id}`, 'series')"
-                      >Series</button>
-                      <button
-                        :class="['preset-tab', { active: getPresetTab(`${templateId}::${preset.id}`) === 'season' }]"
-                        @click="setPresetTab(`${templateId}::${preset.id}`, 'season')"
-                      >
-                        Season
-                        <span v-if="!hasSeasonOptions(preset)" class="tab-note">(uses series)</span>
-                      </button>
-                    </div>
-
-                    <!-- Settings grid -->
-                    <div class="preset-settings">
-                      <div v-if="getPresetTab(`${templateId}::${preset.id}`) === 'season' && !hasSeasonOptions(preset)" class="no-season-note">
-                        No season-specific settings saved — season posters use the series preset above.
-                      </div>
-                      <template v-else>
-                        <div class="settings-grid">
-                          <div class="setting-item" style="grid-column: 1 / -1;">
-                            <span class="setting-label">Preset ID</span>
-                            <span class="setting-value" style="font-size:0.78rem; font-weight:400; color: var(--text-secondary); font-family: monospace;">{{ preset.id }}</span>
-                          </div>
-                          <div class="setting-item">
-                            <span class="setting-label">Logo</span>
-                            <span class="setting-value">{{ logoLabel(getActiveOpts(`${templateId}::${preset.id}`, preset)) }}</span>
-                          </div>
-                          <div class="setting-item">
-                            <span class="setting-label">Poster</span>
-                            <span class="setting-value">{{ posterLabel(getActiveOpts(`${templateId}::${preset.id}`, preset)) }}</span>
-                          </div>
-                          <div class="setting-item">
-                            <span class="setting-label">Logo source</span>
-                            <span class="setting-value">{{ logoSourceLabel(getActiveOpts(`${templateId}::${preset.id}`, preset).logoSource) || 'Default' }}</span>
-                          </div>
-                          <div class="setting-item">
-                            <span class="setting-label">Matte</span>
-                            <span class="setting-value">{{ pct(getActiveOpts(`${templateId}::${preset.id}`, preset).matte_height_ratio) }}</span>
-                          </div>
-                          <div class="setting-item">
-                            <span class="setting-label">Fade</span>
-                            <span class="setting-value">{{ pct(getActiveOpts(`${templateId}::${preset.id}`, preset).fade_height_ratio) }}</span>
-                          </div>
-                          <div class="setting-item">
-                            <span class="setting-label">Vignette</span>
-                            <span class="setting-value">{{ getActiveOpts(`${templateId}::${preset.id}`, preset).vignette_strength != null ? getActiveOpts(`${templateId}::${preset.id}`, preset).vignette_strength : '—' }}</span>
-                          </div>
-                          <div class="setting-item">
-                            <span class="setting-label">Text overlay</span>
-                            <span class="setting-value" :class="getActiveOpts(`${templateId}::${preset.id}`, preset).text_overlay_enabled ? 'val-on' : 'val-off'">
-                              {{ getActiveOpts(`${templateId}::${preset.id}`, preset).text_overlay_enabled ? 'On' : 'Off' }}
-                            </span>
-                          </div>
-                          <div class="setting-item" v-if="getActiveOpts(`${templateId}::${preset.id}`, preset).text_overlay_enabled">
-                            <span class="setting-label">Text</span>
-                            <span class="setting-value setting-value-text">{{ getActiveOpts(`${templateId}::${preset.id}`, preset).custom_text || '—' }}</span>
-                          </div>
-                          <div class="setting-item">
-                            <span class="setting-label">Border</span>
-                            <span class="setting-value" :class="getActiveOpts(`${templateId}::${preset.id}`, preset).border_enabled ? 'val-on' : 'val-off'">
-                              {{ getActiveOpts(`${templateId}::${preset.id}`, preset).border_enabled ? 'On' : 'Off' }}
-                            </span>
-                          </div>
-                          <div class="setting-item" v-if="hasFallback(getActiveOpts(`${templateId}::${preset.id}`, preset))">
-                            <span class="setting-label">Fallback</span>
-                            <span class="setting-value">{{ fallbackSummary(getActiveOpts(`${templateId}::${preset.id}`, preset)) }}</span>
-                          </div>
-                        </div>
-                      </template>
-                    </div>
+                  <div v-if="expandedPresets.has(`${templateId}::${preset.id}`)" class="preset-card-body">
+                    <div class="preset-id-line">Preset ID <code>{{ preset.id }}</code></div>
+                    <PresetEditForm
+                      :template-id="String(templateId)"
+                      :preset="preset as any"
+                      :all-presets="presets"
+                      @saved="(lists: { before: PresetOverlayLists; after: PresetOverlayLists }) => onPresetSaved(String(templateId), preset, lists)"
+                      @dirty-change="(d: boolean) => setDirty(`${templateId}::${preset.id}`, d)"
+                    />
                   </div>
                 </div>
               </div>
@@ -1051,97 +918,9 @@ onMounted(async () => {
     </div>
 
     <!-- Fallback rules modal -->
-    <div v-if="showFallbackModal && modalPreset" class="modal-overlay" @click="showFallbackModal = false">
-      <div class="modal" @click.stop>
-        <div class="modal-header">
-          <h4>Fallback rules — {{ modalPreset.preset.name || modalPreset.preset.id }}</h4>
-          <button class="icon-btn" @click="showFallbackModal = false">×</button>
-        </div>
-        <div class="modal-body">
-          <p class="help small" style="margin-bottom: 12px;">
-            Defines what happens when this preset's preferred poster or logo can't be found.
-            Only applies in batch, webhook and scheduled renders — not the manual editor.
-          </p>
-
-          <h5>Logo source override</h5>
-          <div class="grid">
-            <label>
-              <span class="label-text">Logo source</span>
-              <select v-model="modalFallback.logoSource">
-                <option value="">Use default setting</option>
-                <option value="tmdb">TMDb only</option>
-                <option value="fanart">Fanart.tv only</option>
-                <option value="tmdb_fanart">TMDb first, Fanart fallback</option>
-                <option value="fanart_tmdb">Fanart first, TMDb fallback</option>
-                <option value="both">Both merged</option>
-              </select>
-            </label>
-          </div>
-
-          <h5>Poster fallback</h5>
-          <div class="grid">
-            <label>
-              <span class="label-text">{{ posterFallbackLabel }}</span>
-              <select v-model="modalFallback.fallbackPosterAction">
-                <option value="continue">Use first available poster</option>
-                <option value="skip">Skip — no poster will be generated</option>
-                <option value="template">Use a different preset</option>
-              </select>
-            </label>
-            <div v-if="modalFallback.fallbackPosterAction === 'template'" class="grid subgrid">
-              <label>
-                <span class="label-text">Fallback template</span>
-                <select v-model="modalFallback.fallbackPosterTemplate">
-                  <option value="">Select template</option>
-                  <option v-for="(_, tplId) in presets" :key="tplId" :value="tplId">{{ tplId }}</option>
-                </select>
-              </label>
-              <label>
-                <span class="label-text">Fallback preset</span>
-                <select v-model="modalFallback.fallbackPosterPreset" :disabled="!modalFallback.fallbackPosterTemplate">
-                  <option value="">Use first preset</option>
-                  <option v-for="p in (modalFallback.fallbackPosterTemplate ? presets[modalFallback.fallbackPosterTemplate]?.presets || [] : [])" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
-                </select>
-              </label>
-            </div>
-          </div>
-
-          <h5>Logo fallback</h5>
-          <div class="grid">
-            <label>
-              <span class="label-text">{{ logoFallbackLabel }}</span>
-              <select v-model="modalFallback.fallbackLogoAction">
-                <option value="continue">Render without logo</option>
-                <option value="skip">Skip — no poster will be generated</option>
-                <option value="template">Use a different preset</option>
-              </select>
-            </label>
-            <div v-if="modalFallback.fallbackLogoAction === 'template'" class="grid subgrid">
-              <label>
-                <span class="label-text">Fallback template</span>
-                <select v-model="modalFallback.fallbackLogoTemplate">
-                  <option value="">Select template</option>
-                  <option v-for="(_, tplId) in presets" :key="tplId" :value="tplId">{{ tplId }}</option>
-                </select>
-              </label>
-              <label>
-                <span class="label-text">Fallback preset</span>
-                <select v-model="modalFallback.fallbackLogoPreset" :disabled="!modalFallback.fallbackLogoTemplate">
-                  <option value="">Use first preset</option>
-                  <option v-for="p in (modalFallback.fallbackLogoTemplate ? presets[modalFallback.fallbackLogoTemplate]?.presets || [] : [])" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
-                </select>
-              </label>
-            </div>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button class="secondary" @click="showFallbackModal = false">Cancel</button>
-          <button class="primary" @click="savePresetFallback">Save</button>
-        </div>
-      </div>
-    </div>
   </div>
   <PresetShareModal v-if="shareTarget" :keys="shareTarget.keys" :title="shareTarget.title" @close="shareTarget = null" />
+  <PresetRefreshPrompt v-if="refreshPrompt" :state="refreshPrompt" @close="closeRefreshPrompt" />
 </template>
 
 <style scoped>
@@ -1250,7 +1029,6 @@ onMounted(async () => {
   align-items: flex-end;
 }
 .grid.preferences-grid { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
-.grid.subgrid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 
 .label-text { display: block; margin-bottom: 6px; color: var(--text-secondary, #9aa4b5); font-size: 0.9rem; }
 
@@ -1430,54 +1208,9 @@ select:focus, textarea:focus, input:focus {
 }
 
 /* Series/Season tabs */
-.preset-tabs { display: flex; gap: 4px; }
-.preset-tab {
-  padding: 4px 14px;
-  border-radius: 6px;
-  border: 1px solid var(--border, #2a2f3e);
-  background: none;
-  color: var(--text-secondary, #9aa4b5);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s;
-  font-family: inherit;
-}
-.preset-tab:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
-.preset-tab.active {
-  background: rgba(61,214,183,0.12);
-  border-color: rgba(61,214,183,0.35);
-  color: #3dd6b7;
-}
-.tab-note { color: var(--text-secondary); font-weight: 400; margin-left: 4px; font-size: 0.75rem; }
 
 /* Settings grid */
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 6px 12px;
-}
-.setting-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.05);
-}
-.setting-label { font-size: 0.72rem; color: var(--text-secondary, #9aa4b5); text-transform: uppercase; letter-spacing: 0.5px; }
-.setting-value { font-size: 0.85rem; font-weight: 600; color: var(--text-primary, #dce6ff); }
-.setting-value-text { font-size: 0.8rem; font-weight: 400; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.val-on { color: #3dd6b7; }
-.val-off { color: var(--text-secondary, #9aa4b5); font-weight: 400; }
 
-.no-season-note {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  font-style: italic;
-  padding: 8px;
-}
 
 /* Preview panel */
 .preview-panel { position: sticky; top: 24px; align-self: flex-start; gap: 16px; }
@@ -1553,8 +1286,6 @@ select:focus, textarea:focus, input:focus {
 .modal.search-modal { width: 480px; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; }
 .modal-header h4 { margin: 0; font-size: 1.1rem; }
-.modal-body h5 { margin: 16px 0 8px; color: var(--accent, #3dd6b7); font-size: 0.95rem; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
 
 .search-results { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-height: 300px; overflow: auto; }
 .search-result {
@@ -1571,14 +1302,19 @@ select:focus, textarea:focus, input:focus {
 @media (max-width: 900px) {
   .preset-chips { display: none; }
   .preset-card-title { width: auto; flex: 1; }
-  .settings-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 @media (max-width: 600px) {
   .template-manager { padding: 4px; gap: 14px; }
+  /* name on its own line; the action buttons used to squeeze it to zero width */
+  .preset-card-header { flex-wrap: wrap; }
+  .preset-card-title { flex: 1 1 calc(100% - 40px); min-width: 0; }
+  .preset-actions { flex-wrap: wrap; }
   .header { align-items: flex-start; gap: 10px; }
   .header h2 { font-size: 1.35rem; }
   .pill { white-space: nowrap; padding: 6px 10px; font-size: 0.8rem; }
   .section { padding: 14px; }
 }
+.preset-id-line { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 8px; }
+.preset-id-line code { font-size: 0.75rem; }
 </style>

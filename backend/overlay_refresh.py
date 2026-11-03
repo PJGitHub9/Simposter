@@ -608,6 +608,51 @@ def state_overlay_ids(state: Dict[str, Any]) -> List[str]:
     return ids
 
 
+def _lists(options: Dict[str, Any]) -> Dict[str, List[str]]:
+    return {
+        "ids": list(options.get("overlay_config_ids") or []),
+        "below": list(options.get("overlay_config_ids_below") or []),
+    }
+
+
+def preset_overlay_lists(template_id: str, preset_id: str) -> Dict[str, Dict[str, List[str]]]:
+    """A preset's overlay lists for series and (resolved) season posters.
+    Seasons inherit the series lists unless the season config overrides them."""
+    preset = db.get_preset(template_id, preset_id)
+    if not preset:
+        empty = {"ids": [], "below": []}
+        return {"series": dict(empty), "season": dict(empty)}
+    options = preset.get("options") or {}
+    season = db.resolve_season_options(options, preset.get("season_options"))
+    return {"series": _lists(options), "season": _lists(season)}
+
+
+def match_preset_states(template_id: str, preset_id: str,
+                        old: Dict[str, Dict[str, List[str]]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Tracked posters sent with a preset whose overlays just changed.
+
+    "matching": the snapshot equals the preset's old lists (it followed the
+    preset). "different": anything else, except posters already on the new
+    lists. A kind (series/season) whose lists didn't change offers nothing."""
+    new = preset_overlay_lists(template_id, preset_id)
+    empty = {"ids": [], "below": []}
+    found: Dict[str, List[Dict[str, Any]]] = {"matching": [], "different": []}
+    for state in db.get_all_overlay_states():
+        if state.get("template_id") != template_id or state.get("preset_id") != preset_id:
+            continue
+        kind = "series" if state.get("season_index") is None else "season"
+        old_lists = {"ids": list((old.get(kind) or empty).get("ids") or []),
+                     "below": list((old.get(kind) or empty).get("below") or [])}
+        if old_lists == new[kind]:
+            continue
+        snap = _lists(state.get("options") or {})
+        if snap == old_lists:
+            found["matching"].append(state)
+        elif snap != new[kind]:
+            found["different"].append(state)
+    return found
+
+
 def state_key(state: Dict[str, Any]) -> str:
     si = state.get("season_index")
     return f"{state['server_id']}:{state['rating_key']}:{-1 if si is None else si}"

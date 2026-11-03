@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import PresetRefreshPrompt from '@/components/presets/PresetRefreshPrompt.vue'
+import { usePresetRefreshPrompt } from '@/composables/usePresetRefreshPrompt'
+import { presetOverlayLists, type PresetOverlayLists } from '@/services/presetOverlayLists'
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import type { MovieInput } from '../../services/types'
@@ -598,6 +601,27 @@ const availableFonts = ref<string[]>([])
 
 // Overlay configs
 const overlayConfigs = ref<{ id: string; name: string }[]>([])
+// Ticked overlays first, in draw order (top = drawn on top), then the rest.
+const orderedOverlayConfigs = computed(() => {
+  const byId = new Map(overlayConfigs.value.map(c => [c.id, c]))
+  const ticked = [...options.value.overlayConfigIds].reverse().filter(id => byId.has(id)).map(id => byId.get(id)!)
+  return [...ticked, ...overlayConfigs.value.filter(c => !options.value.overlayConfigIds.includes(c.id))]
+})
+const overlayDrawPos = (id: string) => {
+  const ticked = [...options.value.overlayConfigIds].reverse().filter(x => overlayConfigs.value.some(c => c.id === x))
+  return ticked.indexOf(id) + 1
+}
+
+// After Save Preset: offer to refresh tracked posters when the preset's overlays changed.
+const { prompt: refreshPrompt, offer: offerRefresh, close: closeRefreshPrompt } = usePresetRefreshPrompt()
+const storedOverlayLists = (): PresetOverlayLists => {
+  const p = presetService.presets.value.find(x => x.id === presetService.selectedPreset.value)
+  return presetOverlayLists((p?.options || {}) as Record<string, any>, (p?.season_options || null) as Record<string, any> | null)
+}
+const offerPresetRefresh = async (before: PresetOverlayLists) => {
+  const p = presetService.presets.value.find(x => x.id === presetService.selectedPreset.value)
+  await offerRefresh(presetService.selectedTemplate.value, presetService.selectedPreset.value, p?.name || presetService.selectedPreset.value, before, storedOverlayLists())
+}
 
 const render = useRenderService()
 const loading = render.loading
@@ -1378,6 +1402,7 @@ const saveCurrentPreset = async () => {
 
   // When editing season options, we need to save to season_options_json
   // The presetService will handle both options and season_options
+  const beforeOverlays = storedOverlayLists()
   if (selectedPosterType.value === 'season') {
     // Fetch current preset, update only season_options
     const currentPreset = presets.value.find(p => p.id === selectedPreset.value)
@@ -1396,6 +1421,7 @@ const saveCurrentPreset = async () => {
         if (!res.ok) throw new Error(`API error ${res.status}`)
         success('Season preset saved!')
         await presetService.load()
+        await offerPresetRefresh(beforeOverlays)
       } catch (e) {
         notifyError(`Failed to save: ${e instanceof Error ? e.message : 'Unknown error'}`)
       }
@@ -1405,6 +1431,7 @@ const saveCurrentPreset = async () => {
     await presetService.savePreset(backendOptions)
     if (!presetService.error.value) {
       success('Preset saved!')
+      await offerPresetRefresh(beforeOverlays)
     } else {
       notifyError(`Failed to save: ${presetService.error.value}`)
     }
@@ -4023,13 +4050,14 @@ watch(tmdbId, () => {
           <EditorCard v-if="overlayConfigs.length > 0" title="Overlays" :default-open="true" :summary="options.overlayConfigIds.length ? `${options.overlayConfigIds.length} on` : 'None'">
             <div v-if="overlayConfigs.length > 0" class="slider">
                             <div class="overlay-config-checkboxes">
-                <div v-for="cfg in overlayConfigs" :key="cfg.id" class="overlay-config-item">
+                <div v-for="cfg in orderedOverlayConfigs" :key="cfg.id" class="overlay-config-item">
                   <label class="checkbox-label">
                     <input
                       type="checkbox"
                       :checked="options.overlayConfigIds.includes(cfg.id)"
                       @change="toggleOverlayConfig(cfg.id)"
                     />
+                    <span v-if="overlayDrawPos(cfg.id)" class="overlay-pos" title="Draw order: 1 is drawn on top">{{ overlayDrawPos(cfg.id) }}</span>
                     {{ cfg.name }}
                   </label>
                   <label v-if="options.overlayConfigIds.includes(cfg.id)" class="checkbox-label overlay-config-below-row">
@@ -4327,6 +4355,7 @@ watch(tmdbId, () => {
     @close="showLogoUploadModal = false"
     @uploaded="onLogoUploaded"
   />
+  <PresetRefreshPrompt v-if="refreshPrompt" :state="refreshPrompt" @close="closeRefreshPrompt" />
 </template>
 
 <style scoped>
@@ -6553,5 +6582,18 @@ button:disabled {
   .rendered-previews-section {
     display: none;
   }
+}
+
+.overlay-pos {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  margin-right: 4px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(61, 214, 183, 0.15);
+  color: var(--accent, #3dd6b7);
 }
 </style>

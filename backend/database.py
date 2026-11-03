@@ -2489,6 +2489,30 @@ def upsert_overlay_state(row: Dict[str, Any]) -> None:
         ))
 
 
+def set_overlay_state_overlay_lists(server_id: str, rating_key: str, season_index: Optional[int],
+                                    ids: List[str], below: List[str]) -> None:
+    """Replace one tracked poster's overlay lists in its options snapshot,
+    leaving every other option and column as it is. Used when a preset's
+    overlays change and the poster should follow them on its next refresh."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT options_json FROM overlay_state WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (server_id, str(rating_key), _season_db(season_index)),
+        ).fetchone()
+        if not row:
+            return
+        try:
+            options = json.loads(row["options_json"] or "{}")
+        except Exception:
+            options = {}
+        options["overlay_config_ids"] = list(ids)
+        options["overlay_config_ids_below"] = list(below)
+        conn.execute(
+            "UPDATE overlay_state SET options_json = ? WHERE server_id = ? AND rating_key = ? AND season_index = ?",
+            (json.dumps(options), server_id, str(rating_key), _season_db(season_index)),
+        )
+
+
 def delete_overlay_state(server_id: str, rating_key: str, season_index: Optional[int] = None) -> None:
     with get_db() as conn:
         conn.execute(

@@ -10,6 +10,30 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.31',
+    date: '2026-11-02',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Edit presets in Template Manager by typing values: open a preset and change any setting (Image, Logo, Text, Extras) without opening a poster. Series and season settings each have their own view; season values follow the series unless you set them.',
+          'Overlay order on a preset: the Overlays tab lists a preset’s overlays in draw order (top is drawn on top). Add one, move it up or down, switch it between above and below the logo and text, or remove it. The editor’s Overlays list now shows the same order.',
+          'Template Manager only shows the settings that apply: the logo hex color only for Custom hex, drop shadow and outline details only when they’re on, text settings only when custom text is on, border details only with a border. Settings are grouped under small headings, and fallback rules are a Fallback tab instead of a separate window.',
+          'After a preset’s overlays change (in Template Manager or with Save Preset in the editor), Simposter asks whether to refresh the posters made with that preset. Posters whose overlays were set differently can be included with a separate checkbox.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Template Manager: on a phone the preset name was squeezed to nothing by its buttons, so a preset couldn’t be opened by tapping its name.',
+          'Template Manager and Batch Edit: the preview panel now stays in view as you scroll down, so pressing ▶ on a preset further down the list shows the preview without scrolling back up.',
+          'Template Manager: a preset’s fallback only asks for a fallback preset (it always uses the same template), and the ✎ button also opens the preset’s settings.',
+          'With “Items that already have a poster” set to resend, a webhook or new-content scan could re-upload an old poster made before your preset’s current settings or overlays (or with a fallback preset). It now renders fresh with the preset when the preset uses overlays, was edited since, or the saved poster was made with a different or fallback preset.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.30',
     date: '2026-11-02',
     sections: [

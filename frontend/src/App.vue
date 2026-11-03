@@ -1193,7 +1193,9 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
 
 .workspace {
   display: grid;
-  grid-template-columns: var(--sidebar-w, 260px) 1fr;
+  /* minmax(0, 1fr): .main-pane is overflow:clip, which keeps a plain 1fr
+     column from shrinking below its widest content */
+  grid-template-columns: var(--sidebar-w, 260px) minmax(0, 1fr);
   gap: 14px;
   flex: 1;
   align-items: stretch;
@@ -1204,7 +1206,11 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   padding: 16px;
   background: rgba(14, 16, 24, 0.75);
   height: 100%;
-  overflow-y: auto;
+  /* clip, not auto: the window does the scrolling (nothing caps this pane's
+     height), and an overflow:auto pane that never scrolls stops sticky
+     elements inside it (Template Manager / Batch Edit previews) sticking */
+  overflow: clip;
+  min-width: 0;
 }
 
 .global-scan-overlay {

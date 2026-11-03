@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.8.31 (2026-11-02) — `webui-overhaul-dev` branch
+
+### New Features
+- **Type-in preset editing in Template Manager** — `PresetEditForm.vue` (fields from `services/presetFields.ts`: every option the editors save, grouped Image/Logo/Text/Extras, same ranges and units, `percent` stored 0-1) replaces the read-only summary. Series saves go through the merge endpoint `/api/presets/save` with only the form's fields and both overlay lists (never `season_options`); season saves send the full resolved season object to `/api/presets/save-season-options`, which keeps the diff. Kometa presets get their own field list. Unsaved edits are confirmed before collapsing a card or leaving the page.
+- **Only the settings that apply** — `PresetField.showIf`/`isFieldVisible()` hide fields whose switch is off or that don't apply (logo hex unless `logo_mode` is hex; logo box/style/drop shadow with no logo; drop-shadow, text-shadow and outline details while off; every text field while custom text is off; border details while off); hidden fields keep their stored value. Fields sit under `section` sub-headings. Fallback rules (logo source, poster/logo fallback action, template, preset) moved from the ⚙ popup into a Fallback tab (series view only); a non-"template" action clears its target. The popup was removed; it also saved without the preset `name`, which reset a renamed preset to its id.
+- **Overlay order per preset** — `PresetOverlayList.vue`: top-first list (stored bottom-to-top in `overlay_config_ids`), add on top, ↑/↓, above/below logo & text, remove; missing overlays are shown and kept. Season view shows "Same as series" until overridden. The editors' Overlays card lists ticked overlays first in draw order with a position number.
+- **Refresh prompt after a preset's overlays change** — new `POST /api/overlay-refresh/by-preset` and `/run-preset` (`backend/api/overlay_refresh.py`), `overlay_refresh.preset_overlay_lists()`/`match_preset_states()`, `db.set_overlay_state_overlay_lists()`. Tracked posters whose snapshot equals the preset's old lists are offered; posters with other overlays can be included (checkbox, off by default); posters already on the new lists, or of a kind (series/season) whose lists didn't change, are left out. Run rewrites the chosen snapshots' overlay lists and starts a normal non-forced refresh per library group. Shown by Template Manager and by Save Preset in both editors (`usePresetRefreshPrompt.ts`, `PresetRefreshPrompt.vue`).
+
+### Bug Fixes
+- **Template Manager on a phone** — the preset name was squeezed to 0px by the action buttons; the header now wraps.
+- **Sticky previews never stuck on desktop** — `.main-pane` (App.vue) was `overflow-y: auto` but never scrolls (the window does), which disables `position: sticky` inside it; now `overflow: clip` with `min-width: 0`, and `.workspace` uses `minmax(0, 1fr)` (same fix as phones in v1.8.30). Template Manager's preview panel and Batch Edit's preview sidebar now follow the page.
+- **Template Manager fallback** — no fallback template dropdown; the fallback preset list is this template's own presets (minus itself) and saving stores the template automatically. The ✎ (rename) button also opens the card.
+- **"Resend" re-uploaded stale posters** — with `existingContentMode=resend`, the webhook and auto-generate resend shortcuts re-uploaded whatever image was saved for the Plex item (e.g. a render from before the preset had overlays). New `backend/resend_policy.py` `resend_check()`: resend only when the preset has no overlays, the last real Plex render (skipping `resent_to_plex` rows) used the same template/preset with no fallback, and the preset wasn't edited since; otherwise render fresh, with a log line saying why.
+
 ## v1.8.30 (2026-11-02) — `webui-overhaul-dev` branch
 
 ### Improvements
