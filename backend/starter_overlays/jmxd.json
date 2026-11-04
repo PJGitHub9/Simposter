@@ -1,0 +1,2821 @@
+{
+ "version": 1,
+ "overlays": [
+  {
+   "id": "starter-jmxd-media-info",
+   "name": "MediaInfo - jmxd",
+   "description": "Resolution, HDR/Dolby Vision, audio codec and edition badges. Needs TRaSH-style file names.",
+   "notes": "Made by jmxd: https://github.com/jmxd/Kometa (support: https://buymeacoffee.com/jmxd). Images are downloaded from that repo when added.",
+   "credit": {
+    "author": "jmxd",
+    "url": "https://github.com/jmxd/Kometa"
+   },
+   "streaming_region": "US",
+   "conditions": [],
+   "fonts": [],
+   "elements": [
+    {
+     "type": "full_cover_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "gradient_top",
+     "conditions": [
+      {
+       "field": "title",
+       "op": "eq",
+       "value": "1234"
+      }
+     ],
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/gradients/gradient_top.png"
+    },
+    {
+     "type": "full_cover_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "gradient_bottom",
+     "conditions": [
+      {
+       "field": "title",
+       "op": "eq",
+       "value": "1234"
+      }
+     ],
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/gradients/gradient_bottom.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV",
+     "group": "video_codec",
+     "weight": 220.0,
+     "suppress": [
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bDV\\b(?!.*HDR)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "HDR",
+     "group": "video_codec",
+     "weight": 230.0,
+     "suppress": [
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bHDR10\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/HDR.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Plus",
+     "group": "video_codec",
+     "weight": 240.0,
+     "suppress": [
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bHDR10Plus\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/Plus.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-HDR",
+     "group": "video_codec",
+     "weight": 250.0,
+     "suppress": [
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bDV[ .]HDR10\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-Plus",
+     "group": "video_codec",
+     "weight": 260.0,
+     "suppress": [
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bDV[ .]HDR10Plus\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DigitalPlus",
+     "group": "audio_codec",
+     "weight": 270.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bEAC3[ .][57]\\.1\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DigitalPlus.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DTS-HD",
+     "group": "audio_codec",
+     "weight": 280.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bDTS-HD[ .]MA[ .][57]\\.1\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DTS-HD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DTS-X",
+     "group": "audio_codec",
+     "weight": 285.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bDTS-X[ .][57]\\.1\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DTS-X.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Atmos",
+     "group": "audio_codec",
+     "weight": 290.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bEAC3[ .]Atmos[ .][57]\\.1\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "TrueHD",
+     "group": "audio_codec",
+     "weight": 295.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bTrueHD[ .][57]\\.1\\b(?! Atmos)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/TrueHD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "TrueHD-Atmos",
+     "group": "audio_codec",
+     "weight": 300.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\bTrueHD[ .]Atmos[ .][57]\\.1\\b"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/TrueHD-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-DigitalPlus",
+     "group": "combined_codec",
+     "weight": 310.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*(\\bDV\\b(?!.*HDR)))(?=.*(\\bEAC3[ .][57]\\.1\\b))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DigitalPlus.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "HDR-DigitalPlus",
+     "group": "combined_codec",
+     "weight": 320.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10\\b)(?=.*\\bEAC3[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/HDR-DigitalPlus.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Plus-DigitalPlus",
+     "group": "combined_codec",
+     "weight": 330.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10Plus\\b)(?=.*\\bEAC3[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/Plus-DigitalPlus.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-HDR-DigitalPlus",
+     "group": "combined_codec",
+     "weight": 340.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10\\b)(?=.*\\bEAC3[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DigitalPlus.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-Plus-DigitalPlus",
+     "group": "combined_codec",
+     "weight": 350.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10Plus\\b)(?=.*\\bEAC3[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DigitalPlus.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-DTS-HD",
+     "group": "combined_codec",
+     "weight": 360.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*(\\bDV\\b(?!.*HDR)))(?=.*\\bDTS-HD[ .]MA[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DTS-HD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-DTS-X",
+     "group": "combined_codec",
+     "weight": 365.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*(\\bDV\\b(?!.*HDR)))(?=.*(\\bDTS-X[ .][57]\\.1\\b))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DTS-X.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "HDR-DTS-HD",
+     "group": "combined_codec",
+     "weight": 370.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10\\b)(?=.*\\bDTS-HD[ .]MA[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/HDR-DTS-HD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "HDR-DTS-X",
+     "group": "combined_codec",
+     "weight": 375.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10\\b)(?=.*(\\bDTS-X[ .][57]\\.1\\b))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/HDR-DTS-X.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Plus-DTS-HD",
+     "group": "combined_codec",
+     "weight": 380.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10Plus\\b)(?=.*\\bDTS-HD[ .]MA[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/Plus-DTS-HD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Plus-DTS-X",
+     "group": "combined_codec",
+     "weight": 385.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10Plus\\b)(?=.*(\\bDTS-X[ .][57]\\.1\\b))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/Plus-DTS-X.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-HDR-DTS-HD",
+     "group": "combined_codec",
+     "weight": 390.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10\\b)(?=.*\\bDTS-HD[ .]MA[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DTS-HD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-HDR-DTS-X",
+     "group": "combined_codec",
+     "weight": 395.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10\\b)(?=.*(\\bDTS-X[ .][57]\\.1\\b))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DTS-X.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-Plus-DTS-HD",
+     "group": "combined_codec",
+     "weight": 400.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10Plus\\b)(?=.*\\bDTS-HD[ .]MA[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DTS-HD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-Plus-DTS-X",
+     "group": "combined_codec",
+     "weight": 405.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10Plus\\b)(?=.*(\\bDTS-X[ .][57]\\.1\\b))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-DTS-X.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-Atmos",
+     "group": "combined_codec",
+     "weight": 410.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*(\\bDV\\b(?!.*HDR)))(?=.*\\bEAC3[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "HDR-Atmos",
+     "group": "combined_codec",
+     "weight": 420.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10\\b)(?=.*\\bEAC3[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/HDR-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Plus-Atmos",
+     "group": "combined_codec",
+     "weight": 430.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10Plus\\b)(?=.*\\bEAC3[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/Plus-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-HDR-Atmos",
+     "group": "combined_codec",
+     "weight": 440.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10\\b)(?=.*\\bEAC3[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-Plus-Atmos",
+     "group": "combined_codec",
+     "weight": 450.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10Plus\\b)(?=.*\\bEAC3[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-TrueHD",
+     "group": "combined_codec",
+     "weight": 460.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*(\\bDV\\b(?!.*HDR)))(?=.*\\bTrueHD[ .][57]\\.1\\b(?! Atmos))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-TrueHD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "HDR-TrueHD",
+     "group": "combined_codec",
+     "weight": 470.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10\\b)(?=.*\\bTrueHD[ .][57]\\.1\\b(?! Atmos))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/HDR-TrueHD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Plus-TrueHD",
+     "group": "combined_codec",
+     "weight": 480.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10Plus\\b)(?=.*\\bTrueHD[ .][57]\\.1\\b(?! Atmos))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/Plus-TrueHD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-HDR-TrueHD",
+     "group": "combined_codec",
+     "weight": 490.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10\\b)(?=.*\\bTrueHD[ .][57]\\.1\\b(?! Atmos))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-TrueHD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-Plus-TrueHD",
+     "group": "combined_codec",
+     "weight": 500.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10Plus\\b)(?=.*\\bTrueHD[ .][57]\\.1\\b(?! Atmos))"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-TrueHD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-TrueHD-Atmos",
+     "group": "combined_codec",
+     "weight": 510.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*(\\bDV\\b(?!.*HDR)))(?=.*\\bTrueHD[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-TrueHD-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "HDR-TrueHD-Atmos",
+     "group": "combined_codec",
+     "weight": 520.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10\\b)(?=.*\\bTrueHD[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/HDR-TrueHD-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Plus-TrueHD-Atmos",
+     "group": "combined_codec",
+     "weight": 530.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?!.*(\\bDV\\b))(?=.*\\bHDR10Plus\\b)(?=.*\\bTrueHD[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/Plus-TrueHD-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-HDR-TrueHD-Atmos",
+     "group": "combined_codec",
+     "weight": 540.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10\\b)(?=.*\\bTrueHD[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-TrueHD-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "DV-Plus-TrueHD-Atmos",
+     "group": "combined_codec",
+     "weight": 550.0,
+     "suppress": [
+      "DV",
+      "HDR",
+      "Plus",
+      "DV-HDR",
+      "DV-Plus",
+      "DigitalPlus",
+      "DTS-HD",
+      "DTS-X",
+      "Atmos",
+      "TrueHD",
+      "TrueHD-Atmos"
+     ],
+     "conditions": [
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)(?=.*\\bDV[ .]HDR10Plus\\b)(?=.*\\bTrueHD[ .]Atmos[ .][57]\\.1\\b)"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "bottom",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/codec/DV-TrueHD-Atmos.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "1080P",
+     "group": "resolution",
+     "weight": 490.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/resolution/1080P.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Ultra-HD",
+     "group": "resolution",
+     "weight": 500.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4k"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/resolution/Ultra-HD.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "IMAX-1080p",
+     "group": "edition",
+     "weight": 420.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)IMAX[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/IMAX.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Unrated-Edition-1080p",
+     "group": "edition",
+     "weight": 430.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Unrated[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Unrated-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Directors-Cut-1080p",
+     "group": "edition",
+     "weight": 440.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)(Director|Ultimate Director)[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Directors-Cut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Special-Edition-1080p",
+     "group": "edition",
+     "weight": 450.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Special[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Special-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Anniversary-Edition-1080p",
+     "group": "edition",
+     "weight": 460.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)\\d+th Anniversary[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Anniversary-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Collectors-Edition-1080p",
+     "group": "edition",
+     "weight": 470.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Collector[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Collectors-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Minus-Color-1080p",
+     "group": "edition",
+     "weight": 480.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Minus Color[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Minus-Color.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Extended-Cut-1080p",
+     "group": "edition",
+     "weight": 490.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Extended Cut[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Extended-Cut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Extended-Edition-1080p",
+     "group": "edition",
+     "weight": 500.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Extended(?! Cut)[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Extended-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Open-Matte-1080p",
+     "group": "edition",
+     "weight": 510.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Open Matte[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Open-Matte.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Final-Cut-1080p",
+     "group": "edition",
+     "weight": 520.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Final Cut[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Final-Cut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Remastered-1080p",
+     "group": "edition",
+     "weight": 530.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Remastered[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Remastered.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Restored-1080p",
+     "group": "edition",
+     "weight": 540.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Restored[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Restored.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Signature-Edition-1080p",
+     "group": "edition",
+     "weight": 550.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Signature[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Signature-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Theatrical-1080p",
+     "group": "edition",
+     "weight": 560.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Theatrical(?! Cut)[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Theatrical.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Theatrical-Cut-1080p",
+     "group": "edition",
+     "weight": 570.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Theatrical Cut[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Theatrical-Cut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Uncut-1080p",
+     "group": "edition",
+     "weight": 580.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Uncut[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Uncut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Ultimate-Edition-1080p",
+     "group": "edition",
+     "weight": 590.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "1080p"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Ultimate(?! Director)[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 202,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Ultimate-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "IMAX-4K",
+     "group": "edition",
+     "weight": 420.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)IMAX[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/IMAX.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Unrated-Edition-4K",
+     "group": "edition",
+     "weight": 430.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Unrated[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Unrated-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Directors-Cut-4K",
+     "group": "edition",
+     "weight": 440.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)(Director|Ultimate Director)[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Directors-Cut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Special-Edition-4K",
+     "group": "edition",
+     "weight": 450.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Special[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Special-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Anniversary-Edition-4K",
+     "group": "edition",
+     "weight": 460.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)\\d+th Anniversary[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Anniversary-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Collectors-Edition-4K",
+     "group": "edition",
+     "weight": 470.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Collector[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Collectors-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Minus-Color-4K",
+     "group": "edition",
+     "weight": 480.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Minus Color[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Minus-Color.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Extended-Cut-4K",
+     "group": "edition",
+     "weight": 490.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Extended Cut[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Extended-Cut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Extended-Edition-4K",
+     "group": "edition",
+     "weight": 500.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Extended(?! Cut)[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Extended-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Open-Matte-4K",
+     "group": "edition",
+     "weight": 510.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Open Matte[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Open-Matte.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Final-Cut-4K",
+     "group": "edition",
+     "weight": 520.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Final Cut[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Final-Cut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Remastered-4K",
+     "group": "edition",
+     "weight": 530.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Remastered[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Remastered.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Restored-4K",
+     "group": "edition",
+     "weight": 540.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Restored[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Restored.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Signature-Edition-4K",
+     "group": "edition",
+     "weight": 550.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Signature[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Signature-Edition.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Theatrical-4K",
+     "group": "edition",
+     "weight": 560.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Theatrical(?! Cut)[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Theatrical.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Theatrical-Cut-4K",
+     "group": "edition",
+     "weight": 570.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Theatrical Cut[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Theatrical-Cut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Uncut-4K",
+     "group": "edition",
+     "weight": 580.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Uncut[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Uncut.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "Ultimate-Edition-4K",
+     "group": "edition",
+     "weight": 590.0,
+     "conditions": [
+      {
+       "field": "resolution",
+       "op": "eq",
+       "value": "4K"
+      },
+      {
+       "field": "filepath",
+       "op": "regex",
+       "value": "(?i)\\{(edition-)Ultimate(?! Director)[^}]*\\}"
+      },
+      {
+       "field": "media_type",
+       "op": "ne",
+       "value": "tv"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "left",
+     "vertical_align": "top",
+     "horizontal_offset": 186,
+     "vertical_offset": 50,
+     "back_radius": 30.0,
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/media_info/edition/Ultimate-Edition.png"
+    }
+   ]
+  },
+  {
+   "id": "starter-jmxd-audience-rating",
+   "name": "Audience Rating - jmxd",
+   "description": "Audience rating badge (green/yellow/red by score). Needs an MDBList API key.",
+   "notes": "Made by jmxd: https://github.com/jmxd/Kometa (support: https://buymeacoffee.com/jmxd). Images are downloaded from that repo when added.",
+   "credit": {
+    "author": "jmxd",
+    "url": "https://github.com/jmxd/Kometa"
+   },
+   "streaming_region": "US",
+   "conditions": [],
+   "fonts": [
+    {
+     "file": "AvenirNextLTPro-Bold.ttf",
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/fonts/AvenirNextLTPro-Bold.ttf"
+    }
+   ],
+   "elements": [
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "audience_score_high_backdrop",
+     "group": "backdrop",
+     "weight": 500.0,
+     "conditions": [
+      {
+       "field": "audience_rating",
+       "op": "gte",
+       "value": 8
+      },
+      {
+       "field": "label",
+       "op": "ne",
+       "value": "Coming Soon"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "right",
+     "vertical_align": "top",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_width": 140.0,
+     "back_height": 80.0,
+     "back_align": "center",
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/audience_score/audience_score_high.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "audience_score_mid_backdrop",
+     "group": "backdrop",
+     "weight": 400.0,
+     "conditions": [
+      {
+       "field": "audience_rating",
+       "op": "gte",
+       "value": 6
+      },
+      {
+       "field": "label",
+       "op": "ne",
+       "value": "Coming Soon"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "right",
+     "vertical_align": "top",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_width": 140.0,
+     "back_height": 80.0,
+     "back_align": "center",
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/audience_score/audience_score_mid.png"
+    },
+    {
+     "type": "custom_image",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "name": "audience_score_low_backdrop",
+     "group": "backdrop",
+     "weight": 300.0,
+     "conditions": [
+      {
+       "field": "audience_rating",
+       "op": "gte",
+       "value": 0
+      },
+      {
+       "field": "label",
+       "op": "ne",
+       "value": "Coming Soon"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "right",
+     "vertical_align": "top",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_width": 140.0,
+     "back_height": 80.0,
+     "back_align": "center",
+     "url": "https://raw.githubusercontent.com/jmxd/Kometa/36e9852ca593d1c679d6995f97f14d392eb9b4c7/overlays/images/audience_score/audience_score_low.png"
+    },
+    {
+     "type": "text_label",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "text": "{audience_rating}",
+     "font_family": "AvenirNextLTPro-Bold",
+     "font_size": 68,
+     "font_color": "#111111",
+     "name": "rating_high",
+     "group": "score",
+     "weight": 500.0,
+     "conditions": [
+      {
+       "field": "audience_rating",
+       "op": "gte",
+       "value": 8
+      },
+      {
+       "field": "label",
+       "op": "ne",
+       "value": "Coming Soon"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "right",
+     "vertical_align": "top",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_width": 140.0,
+     "back_height": 80.0,
+     "back_align": "center"
+    },
+    {
+     "type": "text_label",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "text": "{audience_rating}",
+     "font_family": "AvenirNextLTPro-Bold",
+     "font_size": 68,
+     "font_color": "#111111",
+     "name": "rating_mid",
+     "group": "score",
+     "weight": 400.0,
+     "conditions": [
+      {
+       "field": "audience_rating",
+       "op": "gte",
+       "value": 6
+      },
+      {
+       "field": "label",
+       "op": "ne",
+       "value": "Coming Soon"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "right",
+     "vertical_align": "top",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_width": 140.0,
+     "back_height": 80.0,
+     "back_align": "center"
+    },
+    {
+     "type": "text_label",
+     "position_x": 0.5,
+     "position_y": 0.5,
+     "text": "{audience_rating}",
+     "font_family": "AvenirNextLTPro-Bold",
+     "font_size": 68,
+     "font_color": "#111111",
+     "name": "rating_low",
+     "group": "score",
+     "weight": 300.0,
+     "conditions": [
+      {
+       "field": "audience_rating",
+       "op": "gte",
+       "value": 0
+      },
+      {
+       "field": "label",
+       "op": "ne",
+       "value": "Coming Soon"
+      }
+     ],
+     "placement": "kometa",
+     "horizontal_align": "right",
+     "vertical_align": "top",
+     "horizontal_offset": 50,
+     "vertical_offset": 50,
+     "back_width": 140.0,
+     "back_height": 80.0,
+     "back_align": "center"
+    }
+   ]
+  }
+ ]
+}

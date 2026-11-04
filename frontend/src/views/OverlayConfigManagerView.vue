@@ -4,6 +4,7 @@ import { getApiBase } from '@/services/apiBase'
 import OverlayRulesEditor from '@/components/overlay/OverlayRulesEditor.vue'
 import KometaPlacementEditor from '@/components/overlay/KometaPlacementEditor.vue'
 import KometaImportModal from '@/components/overlay/KometaImportModal.vue'
+import StarterOverlaysModal from '@/components/overlay/StarterOverlaysModal.vue'
 import OverlayPositionEditor from '@/components/overlay/OverlayPositionEditor.vue'
 import OverlayBadgeSets from '@/components/overlay/OverlayBadgeSets.vue'
 import LiveKometaFiles from '@/components/overlay/LiveKometaFiles.vue'
@@ -236,6 +237,10 @@ const previewMetadataValues: Record<string, Ref<string>> = {
 
 // Kometa import
 const showKometaImport = ref(false)
+const showStarters = ref(false)
+const onStarterAdded = async () => {
+  await Promise.all([loadConfigs(), loadAssets(), loadFonts()])
+}
 const onKometaImported = async (ids: string[]) => {
   await Promise.all([loadConfigs(), loadAssets(), loadFonts()])
   const first = configs.value.find(c => c.id === ids[0])
@@ -2348,7 +2353,13 @@ onMounted(() => {
       <div class="section-card">
         <div class="section-header">
           <h2>Your overlays</h2>
-          <div style="display:flex;gap:0.5rem;">
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button class="btn-secondary-sm" title="Ready-made overlays shared by their creators" @click="showStarters = true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="12 2 15 9 22 9.3 16.5 14 18.5 21 12 17 5.5 21 7.5 14 2 9.3 9 9"/>
+            </svg>
+            Starter overlays
+          </button>
           <button class="btn-secondary-sm" title="Import Kometa overlay files" @click="showKometaImport = true">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -2366,7 +2377,7 @@ onMounted(() => {
 
         <div v-if="loading" class="loading">Loading...</div>
         <div v-else-if="configs.length === 0" class="empty-state">
-          No overlays yet. Click <strong>New overlay</strong> to build one, or <strong>Import Kometa</strong> if you already have Kometa overlay files.
+          No overlays yet. Click <strong>New overlay</strong> to build one, <strong>Starter overlays</strong> for ready-made ones, or <strong>Import Kometa</strong> if you already have Kometa overlay files.
         </div>
         <div v-else class="configs-list">
           <div v-for="config in configs" :key="config.id" class="config-item">
@@ -3650,6 +3661,7 @@ onMounted(() => {
       :groups="refreshPrompt.groups"
       @close="refreshPrompt = null"
     />
+    <StarterOverlaysModal v-if="showStarters" @close="showStarters = false" @added="onStarterAdded" />
     <KometaImportModal v-if="showKometaImport" @close="showKometaImport = false" @imported="onKometaImported" />
   </div>
 </template>

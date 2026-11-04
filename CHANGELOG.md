@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.34 (2026-11-04) — `webui-overhaul-dev` branch
+
+### New Features
+- **Starter overlays** — `backend/starter_overlays/*.json` (first: `jmxd.json`, the user's "MediaInfo - jmxd" and "Audience Rating - jmxd" from their own setup, 81 + 6 layers, with the user's per-layer tweaks and no whole-overlay rules). Image layers carry `url`s to jmxd/Kometa pinned at commit `36e9852`, not `asset_id`s; `POST /api/overlay-starters/{id}/install` (`backend/api/overlay_starters.py`) downloads them with the Kometa importer's `download_remote_image()` + `_AssetSaver` (reuses identical files), fetches listed fonts into `config/fonts`, and saves the overlay under the starter's id with a credit note (409 if added; `replace=true` overwrites it with the shipped version in place, so presets using it stay linked). `GET /api/overlay-starters` reads `starter_overlays/index.json` + its files from simposter-assets (at most every 10 minutes, `?refresh=true` for Check for new), keeps the last good copy in `config/cache/starter_overlays/`, and falls back to the bundled files; a remote starter replaces a bundled one with the same id. Optional `min_version` per starter (listed but not addable on older installs). `StarterOverlaysModal.vue` next to Import Kometa.
+
 ## v1.8.33 (2026-11-03) — `webui-overhaul-dev` branch
 
 ### Improvements

@@ -175,6 +175,15 @@ Rename a layer with the pencil icon or by double-clicking its name. Hide rules f
 
 ---
 
+## Starter overlays
+
+**📐 Overlays → Starter overlays** lists ready-made overlays you can add with one click. The list comes from the [simposter-assets](https://github.com/PJGitHub9/simposter-assets/tree/main/starter_overlays) repository, so new ones appear without updating Simposter (**Check for new** looks again right away):
+
+- **MediaInfo - jmxd**: resolution, HDR/Dolby Vision, audio codec and edition badges (needs TRaSH-style file names).
+- **Audience Rating - jmxd**: a green/yellow/red audience score badge (needs an [MDBList key](#mdblist-ratings-and-lists)).
+
+Both were made by [jmxd](https://github.com/jmxd/Kometa). Adding one downloads its images (and the font it uses) from his repository into **Your images**; nothing of his is bundled with Simposter. After adding, tick it in a preset to use it, as with any overlay. **Replace** (on one you've already added) overwrites it with the version that ships with Simposter, including any updates since you added it; your own changes to it are lost, and presets using it stay linked.
+
 ## Importing Kometa overlays
 
 **📐 Overlays → Import Kometa** turns Kometa overlay files into Simposter overlays (one overlay per file).

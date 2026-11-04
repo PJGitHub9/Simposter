@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.34',
+    date: '2026-11-04',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Starter overlays: Overlays → Starter overlays adds ready-made overlays in one click. First up: jmxd’s MediaInfo badges and Audience Rating badge (thanks to jmxd, github.com/jmxd/Kometa). Their images are downloaded from his repository when you add them. New starter overlays appear here without updating Simposter, and Replace brings an added one up to date (your changes to it are lost).'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.33',
     date: '2026-11-03',
     sections: [

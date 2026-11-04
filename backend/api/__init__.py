@@ -24,6 +24,7 @@ from . import (
     backup,
     overlay_config,
     kometa_import,
+    overlay_starters,
     live_kometa,
     mdblist,
     list_sources,
@@ -69,3 +70,4 @@ router.include_router(media_server.router)
 router.include_router(media_server_send.router)
 router.include_router(media_mirror.router)
 router.include_router(overlay_refresh.router)
+router.include_router(overlay_starters.router)
