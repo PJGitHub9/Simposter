@@ -101,6 +101,7 @@ interface DriftItem {
   drift_detected_at: string
   drift_score: number | null
   drift_action: string | null
+  library_id?: string | null
 }
 const driftItems = ref<DriftItem[]>([])
 const driftAction = ref('list')
@@ -184,6 +185,31 @@ const driftCurrentUrl = (item: DriftItem) => {
   return `${apiBase}/api/${kind}/${key}/poster?raw=1&v=${v}`
 }
 const DRIFT_ASSET_LABELS: Record<string, string> = { poster: 'Poster', logo: 'Logo', backdrop: 'Backdrop' }
+const DRIFT_ASSET_ORDER = ['poster', 'logo', 'backdrop'] as const
+const DRIFT_ASSET_PLURAL: Record<string, string> = { poster: 'Posters', logo: 'Logos', backdrop: 'Backdrops' }
+
+/** Changed items by library group (or library when it isn't in a group), then by type. */
+const driftGroups = computed(() => {
+  const groups = new Map<string, { key: string; name: string; count: number; types: Map<string, DriftItem[]> }>()
+  for (const item of driftItems.value) {
+    const lib = item.library_id ? String(item.library_id) : ''
+    const g = lib ? (settings.libraryGroups.value || []).find(gr => (gr.members || []).some(m => String(m.libraryId) === lib)) : undefined
+    const key = g ? `group:${g.id}` : (lib ? `lib:${lib}` : 'none')
+    const name = g ? (g.name || libraryLabel(lib)) : (lib ? libraryLabel(lib, 'Other') : 'Other')
+    if (!groups.has(key)) groups.set(key, { key, name, count: 0, types: new Map() })
+    const entry = groups.get(key)!
+    const type = driftAsset(item)
+    if (!entry.types.has(type)) entry.types.set(type, [])
+    entry.types.get(type)!.push(item)
+    entry.count += 1
+  }
+  return [...groups.values()]
+    .sort((a, b) => (a.key === 'none' ? 1 : b.key === 'none' ? -1 : a.name.localeCompare(b.name)))
+    .map(g => ({
+      ...g,
+      types: DRIFT_ASSET_ORDER.filter(t => g.types.has(t)).map(t => ({ type: t, items: g.types.get(t)! })),
+    }))
+})
 
 // Retry queue state
 const retryItems = ref<RetryQueueItem[]>([])
@@ -1118,8 +1144,16 @@ onMounted(async () => {
         <p>Nothing changed outside Simposter.</p>
         <p class="hint">Only art Simposter sent is tracked, and it's checked when a scan sees the server's copy change.</p>
       </div>
-      <div v-else class="drift-grid">
-        <div v-for="item in driftItems" :key="driftKey(item)" class="drift-card">
+      <template v-else>
+      <details v-for="group in driftGroups" :key="group.key" class="drift-group" open>
+        <summary class="drift-group-head">
+          <span class="drift-group-name">{{ group.name }}</span>
+          <span class="drift-group-count">{{ group.count }}</span>
+        </summary>
+        <div v-for="t in group.types" :key="t.type" class="drift-type">
+          <h4 class="drift-type-head">{{ DRIFT_ASSET_PLURAL[t.type] }} <span>{{ t.items.length }}</span></h4>
+      <div class="drift-grid">
+        <div v-for="item in t.items" :key="driftKey(item)" class="drift-card">
           <div class="drift-title">{{ item.title }} <span class="drift-asset">{{ DRIFT_ASSET_LABELS[driftAsset(item)] }}</span></div>
           <div class="drift-meta">
             {{ mediaServerLabel(item.server_id, settings.mediaServers.value) }} · noticed {{ formatDate(item.drift_detected_at) }}
@@ -1145,6 +1179,9 @@ onMounted(async () => {
           </div>
         </div>
       </div>
+        </div>
+      </details>
+      </template>
     </template>
 
     <!-- Preview Popup -->
@@ -1724,6 +1761,14 @@ onMounted(async () => {
 }
 .drift-setting small, .drift-meta { color: var(--text-secondary, #9aa4b2); font-size: 0.8rem; }
 .drift-message { margin: 0 0 12px; font-size: 0.85rem; }
+.drift-group { margin-bottom: 14px; border: 1px solid var(--border, #2a2f3e); border-radius: 10px; padding: 10px 14px; background: rgba(255, 255, 255, 0.015); }
+.drift-group-head { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; font-weight: 600; color: var(--text-primary, #fff); }
+.drift-group-head::-webkit-details-marker { display: none; }
+.drift-group-head::before { content: '\25B8'; color: var(--text-secondary, #8b95a7); transition: transform 0.15s; }
+.drift-group[open] > .drift-group-head::before { transform: rotate(90deg); }
+.drift-group-count, .drift-type-head span { font-size: 0.72rem; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: rgba(61, 214, 183, 0.12); color: var(--accent, #3dd6b7); }
+.drift-type { margin-top: 12px; }
+.drift-type-head { margin: 0 0 8px; font-size: 0.82rem; font-weight: 600; color: var(--text-secondary, #9aa4b2); display: flex; align-items: center; gap: 6px; }
 .drift-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
 .drift-card {
   border: 1px solid rgba(255, 255, 255, 0.06);

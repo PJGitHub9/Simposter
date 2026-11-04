@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.33',
+    date: '2026-11-03',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'History → Changed Outside Simposter is grouped by library group, then by type (posters, logos, backdrops), with counts. Each group can be collapsed.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Changed Outside Simposter flagged almost every logo after the cache got smaller. Logo checks now compare only what you can see (the hidden colour under transparent areas no longer counts), and the false marks are cleared on the next start.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.32',
     date: '2026-11-03',
     sections: [

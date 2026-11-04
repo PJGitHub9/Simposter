@@ -103,11 +103,75 @@ def fingerprint(image: Any) -> Optional[str]:
             img = Image.open(io.BytesIO(image))
         else:
             img = Image.open(str(image))
-        img = img.convert("RGB").resize(_GRID, Image.BOX)
+        img = _flatten(img).resize(_GRID, Image.BOX)
         return base64.b64encode(img.tobytes()).decode("ascii")
     except Exception as e:
         logger.debug("[DRIFT] Couldn't fingerprint image: %s", e)
         return None
+
+
+def _flatten(img: Image.Image) -> Image.Image:
+    """RGB as the image looks: a transparent image (logos) is drawn on black.
+    convert("RGB") alone keeps the hidden colour under transparent pixels,
+    which any resize or re-save can change while the logo looks the same."""
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (0, 0, 0))
+        bg.paste(rgba, mask=rgba.getchannel("A"))
+        return bg
+    return img.convert("RGB")
+
+
+def recheck_art_fingerprints(force: bool = False) -> Dict[str, int]:
+    """Once after fingerprints started ignoring the colour under transparent
+    pixels: recompute stored logo/backdrop fingerprints from the kept sent
+    copies, and clear drift marks that no longer hold against the cached image.
+    (Shrinking the cache had made every logo look changed.)"""
+    marker = "drift_fp_alpha_v1"
+    out = {"recomputed": 0, "cleared": 0}
+    try:
+        with db.get_db() as conn:
+            cur = conn.cursor()
+            if not force and cur.execute("SELECT 1 FROM applied_migrations WHERE name = ?", (marker,)).fetchone():
+                return out
+            rows = cur.execute(
+                "SELECT server_id, rating_key, asset_type, fingerprint, drift_detected_at FROM poster_fingerprints "
+                "WHERE asset_type IN ('logo', 'backdrop')"
+            ).fetchall()
+        from .api import movies as m
+        for server_id, rating_key, asset_type, old_fp, drifted in rows:
+            fp = old_fp
+            sent = sent_copy_path(server_id, rating_key, asset_type)
+            if sent.exists():
+                new_fp = fingerprint(sent.read_bytes())
+                if new_fp and new_fp != old_fp:
+                    fp = new_fp
+                    out["recomputed"] += 1
+            clear = False
+            if drifted:
+                cached = m._logo_cache_path(rating_key) if asset_type == "logo" else m._art_cache_path(rating_key)
+                current = fingerprint(cached) if cached else None
+                clear = bool(current) and not compare(fp, current)["drift"]
+            if fp != old_fp or clear:
+                with db.get_db() as conn:
+                    if clear:
+                        conn.cursor().execute(
+                            """UPDATE poster_fingerprints SET fingerprint = ?, drift_detected_at = NULL, drift_score = NULL,
+                                 drift_action = NULL WHERE server_id = ? AND rating_key = ? AND asset_type = ?""",
+                            (fp, server_id, rating_key, asset_type))
+                        out["cleared"] += 1
+                    else:
+                        conn.cursor().execute(
+                            "UPDATE poster_fingerprints SET fingerprint = ? WHERE server_id = ? AND rating_key = ? AND asset_type = ?",
+                            (fp, server_id, rating_key, asset_type))
+        with db.get_db() as conn:
+            conn.cursor().execute("INSERT OR IGNORE INTO applied_migrations (name) VALUES (?)", (marker,))
+        if out["recomputed"] or out["cleared"]:
+            logger.info("[DRIFT] Logo/backdrop fingerprints updated: %d recomputed, %d false 'changed' marks cleared",
+                        out["recomputed"], out["cleared"])
+    except Exception as e:
+        logger.warning("[DRIFT] Couldn't recheck logo/backdrop fingerprints: %s", e)
+    return out
 
 
 def compare(a: str, b: str) -> Dict[str, Any]:
@@ -337,6 +401,11 @@ def list_drifted() -> List[Dict[str, Any]]:
     for r in rows:
         r["title"] = _title(r["rating_key"])
         r["is_tv"] = _is_tv(r["rating_key"])
+        # For grouping by library group in History (a season maps to its show's library).
+        try:
+            r["library_id"] = db.get_library_id_for_rating_key(str(r["rating_key"]))
+        except Exception:
+            r["library_id"] = None
     return rows
 
 

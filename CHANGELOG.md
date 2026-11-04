@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.33 (2026-11-03) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Changed Outside Simposter grouped** — `list_drifted()` adds each item's `library_id` (`db.get_library_id_for_rating_key()`, seasons via their show); `HistoryView.vue`'s `driftGroups` groups by library group (else the library, else "Other"), then Posters / Logos / Backdrops, as collapsible `<details>` sections with counts.
+
+### Bug Fixes
+- **Every logo marked as changed** — `poster_drift.fingerprint()` used `convert("RGB")`, which keeps the hidden colour under transparent pixels; the cache shrink (or any resize/re-save) changes it, so a re-downloaded logo scored ~200 against what was sent. Now `_flatten()` draws transparent images on black first (RGB images give the same fingerprint as before). `recheck_art_fingerprints()` (startup thread, once: `drift_fp_alpha_v1`) recomputes stored logo/backdrop fingerprints from `drift_sent/` copies and clears marks that no longer hold against the cached image.
+
 ## v1.8.32 (2026-11-03) — `webui-overhaul-dev` branch
 
 ### Improvements
