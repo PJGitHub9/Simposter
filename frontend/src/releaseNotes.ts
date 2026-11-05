@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.35',
+    date: '2026-11-05',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Retry queue: with "Reuse cached poster for (days)" turned on, a retry re-sent the poster from the last send (usually the fallback poster the item was queued for) and marked the item resolved, so queued items disappeared. Retries now always render fresh and stay in the queue until the poster meets the template.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.34',
     date: '2026-11-04',
     sections: [

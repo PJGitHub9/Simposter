@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.35 (2026-11-05) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Retry queue emptied itself** — the "Reuse cached poster for (days)" shortcut (Quirk #41) is meant only for webhooks and auto-generate, but the retry job calls `process_single_movie_poster()`/`process_single_tv_show_poster()` with `source="auto_generate"`, so it took the shortcut too: it re-sent the TMDb-keyed render (the fallback poster the item was queued for) and returned a result with no `needs_retry`, which the retry job read as resolved. Both reuse checks in `batch.py` now skip when `send_only_if_ideal` is set (retry job and Retry Now). Seen on the user's server: 14 items resolved this way on 2026-11-04/05 after the setting was set to 10 days.
+
 ## v1.8.34 (2026-11-04) — `webui-overhaul-dev` branch
 
 ### New Features

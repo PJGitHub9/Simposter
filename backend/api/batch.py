@@ -299,7 +299,11 @@ def _process_single_movie(
         # Plex re-matches the item under a brand-new rating_key, and Simposter's own
         # rating_key-keyed cache has never seen that new key before -- indistinguishable
         # from a genuinely new library addition without this check.
-        if source in ("webhook", "auto_generate") and req.send_to_plex:
+        # Never for the retry queue / Retry Now (send_only_if_ideal): they exist to
+        # check whether a better poster can be made now, and the cached poster is
+        # usually the fallback one they were queued for. (The retry job runs with
+        # source="auto_generate", so the source check alone let it through.)
+        if source in ("webhook", "auto_generate") and req.send_to_plex and not getattr(req, "send_only_if_ideal", False):
             reuse_days = get_reuse_cached_poster_days()
             if reuse_days > 0:
                 cached_bytes = load_render_cache_by_tmdb("movie", tmdb_id, reuse_days)
@@ -1882,7 +1886,9 @@ def _render_and_save_poster(
     # (_render_tv_series_poster()/_render_all_tv_seasons()) before this function was
     # invoked, so the savings here are the CPU-heavy render + the Plex upload, not the
     # network calls.
-    if source in ("webhook", "auto_generate") and req.send_to_plex and not skip_send_not_ideal:
+    # Not for the retry queue / Retry Now either (see _process_single_movie()).
+    if (source in ("webhook", "auto_generate") and req.send_to_plex and not skip_send_not_ideal
+            and not getattr(req, "send_only_if_ideal", False)):
         reuse_days = get_reuse_cached_poster_days()
         if reuse_days > 0:
             cached_bytes = load_render_cache_by_tmdb("tv-show" if is_tv else "movie", tmdb_id, reuse_days, season_index if is_tv else None)
