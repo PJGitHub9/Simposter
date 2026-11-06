@@ -73,7 +73,7 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     MDBList, WeTrakr, SIMKL or Floppy, see list_sources.py)."""
     rating_fields = _rating_field_names()
     needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False,
-             "release": False}
+             "release": False, "rating_fields": []}
     for element in elements:
         for cond in element.get("conditions") or []:
             if not isinstance(cond, dict):
@@ -83,6 +83,8 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
                 needs["paths"] = True
             elif field in rating_fields:
                 needs["ratings"] = True
+                if field not in needs["rating_fields"]:
+                    needs["rating_fields"].append(field)
             elif field in ("tmdb_id", "tvdb_id"):
                 needs["ids"] = True
             elif field in ("days_since_added", "added", "added_date"):
@@ -100,6 +102,9 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
             names = {m.group(1) for m in _VAR_RE.finditer(str(text))}
             if names & rating_fields:
                 needs["ratings"] = True
+                for name in sorted(names & rating_fields):
+                    if name not in needs["rating_fields"]:
+                        needs["rating_fields"].append(name)
             if names & {"days_since_added", "added_date"}:
                 needs["added"] = True
             if names & {"release_date", "days_since_release"}:
@@ -240,8 +245,21 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
         tmdb_id, tvdb_id, media_type = _item_ids(ctx)
         try:
             from . import mdblist_client as mdb
-            if not mdb.has_key():
-                notes["ratings"] = "no MDBList API key in Settings > General"
+            from . import server_ratings
+            # Audience/critic rating from the media server when that's the
+            # chosen source (or MDBList can't be used); MDBList for the rest.
+            used = server_ratings.fill(ctx, media_type, tmdb_id, mdb.has_key())
+            if used:
+                ctx["_rating_sources"] = used
+            wanted = set(needs.get("rating_fields") or [])
+            still_needed = {f for f in wanted if ctx.get(f) in (None, "")}
+            if wanted and not still_needed:
+                pass  # everything came from the media server
+            elif not mdb.has_key():
+                if still_needed & {"audience_rating", "critic_rating"}:
+                    notes["ratings"] = "no rating for this item on the media server (scan the library), and no MDBList API key"
+                else:
+                    notes["ratings"] = "no MDBList API key in Settings > General"
             else:
                 if not tmdb_id and not tvdb_id:
                     notes["ratings"] = "this item has no TMDb/TVDB ID"
@@ -954,8 +972,14 @@ def prefetch_ratings_for_render(template_id: Optional[str], preset_id: Optional[
             elements += [e for e in cfg.get("elements") or [] if isinstance(e, dict)]
             if cfg.get("conditions"):
                 elements.append({"conditions": cfg["conditions"]})
-        if not elements or not needed_data(elements)["ratings"]:
+        needs = needed_data(elements) if elements else {"ratings": False}
+        if not needs["ratings"]:
             return 0
+        from .server_ratings import mdblist_fields_wanted
+        wanted = set(needs.get("rating_fields") or [])
+        server_only = {"audience_rating", "critic_rating"} - mdblist_fields_wanted()
+        if wanted and wanted <= server_only:
+            return 0  # every rating these overlays use comes from the media server
         tmdb_ids = []
         for rk in rating_keys:
             tmdb_id, _tvdb = db.get_ids_for_rating_key(str(rk))
@@ -1110,7 +1134,9 @@ def data_summary(ctx: Dict[str, Any], elements: List[Dict[str, Any]]) -> str:
                        if isinstance(c, dict) and str(c.get("field") or "").lower() in _rating_field_names()}
                       | {m.group(1) for e in elements for m in _VAR_RE.finditer(str(e.get("text") or ""))
                          if m.group(1) in _rating_field_names()})
-        shown = [f"{FIELD_LABELS.get(k, k)} {_format_value(ctx[k])}" for k in used if ctx.get(k) not in (None, "")]
+        sources = ctx.get("_rating_sources") or {}
+        shown = [f"{FIELD_LABELS.get(k, k)} {_format_value(ctx[k])}" + (f" (from {sources[k]})" if k in sources else "")
+                 for k in used if ctx.get(k) not in (None, "")]
         parts.append("ratings: " + (", ".join(shown) if shown else notes.get("ratings") or "none found"))
     if needs["lists"]:
         parts.append("on lists: " + (_short(ctx.get("lists") or [], 3) if ctx.get("lists") else notes.get("lists") or "none"))

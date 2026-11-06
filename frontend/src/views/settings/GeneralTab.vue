@@ -66,6 +66,12 @@ const localTvdbApiKey = computed({
 })
 
 const settingsStore = useSettingsStore()
+// Audience/critic rating sources: the media server's own rating (read during
+// scans, no key needed) or an MDBList source (backend/server_ratings.py).
+const serverRatingSources = [
+  { value: 'plex', label: 'Plex' },
+  { value: 'jellyfin', label: 'Jellyfin / Emby' },
+]
 const ratingSources = [
   { value: 'imdb', label: 'IMDb' },
   { value: 'tomatoes', label: 'Rotten Tomatoes (critics)' },
@@ -456,16 +462,26 @@ const timezones = computed(() => {
         <label>
           <span class="label-text">Audience rating comes from</span>
           <select v-model="settingsStore.mdblist.value.audienceRatingSource">
-            <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            <optgroup label="Your media server (no key needed)">
+              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </optgroup>
+            <optgroup label="MDBList (needs the key above)">
+              <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </optgroup>
           </select>
-          <span class="help-text">Fills <code>audience_rating</code> (0–10). In Kometa this is your Plex library's audience rating; pick the source your library uses.</span>
+          <span class="help-text">Fills <code>audience_rating</code> (0–10). Plex uses the audience rating set in your Plex library (as Kometa does); Jellyfin/Emby uses the community rating. Read during library scans. If you pick an MDBList source without an MDBList key, the media server's rating is used.</span>
         </label>
         <label>
           <span class="label-text">Critic rating comes from</span>
           <select v-model="settingsStore.mdblist.value.criticRatingSource">
-            <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            <optgroup label="Your media server (no key needed)">
+              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </optgroup>
+            <optgroup label="MDBList (needs the key above)">
+              <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </optgroup>
           </select>
-          <span class="help-text">Fills <code>critic_rating</code> (0–10).</span>
+          <span class="help-text">Fills <code>critic_rating</code> (0–10). Plex: the library's critic rating; Jellyfin/Emby: the critic rating (0–100, shown as 0–10).</span>
         </label>
       </div>
     </div>

@@ -10,6 +10,18 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.37',
+    date: '2026-11-06',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Ratings without MDBList: overlays that use the audience or critic rating (like the Audience Rating starter overlay) can now use the rating your Plex, Jellyfin or Emby server already has. Pick the source in Settings → General → “Audience rating comes from”. Ratings are read during library scans, so scan once after updating. Without an MDBList key, the media server’s rating is used automatically.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.36',
     date: '2026-11-05',
     sections: [

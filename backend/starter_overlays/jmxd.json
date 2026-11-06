@@ -2617,7 +2617,7 @@
   {
    "id": "starter-jmxd-audience-rating",
    "name": "Audience Rating - jmxd",
-   "description": "Audience rating badge (green/yellow/red by score). Needs an MDBList API key.",
+   "description": "Audience rating badge (green/yellow/red by score). Uses your media server's audience rating, or MDBList (Settings → General).",
    "notes": "Made by jmxd: https://github.com/jmxd/Kometa (support: https://buymeacoffee.com/jmxd). Images are downloaded from that repo when added.",
    "credit": {
     "author": "jmxd",

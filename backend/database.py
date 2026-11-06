@@ -1163,6 +1163,22 @@ def init_database():
                 PRIMARY KEY (server_id, rating_key)
             )
         """)
+        # Ratings the media servers have (Plex audienceRating/rating, Jellyfin
+        # CommunityRating/CriticRating), 0-10, filled by scans (server_ratings.py).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS server_ratings (
+                server_id TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                server_type TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                tmdb_id INTEGER,
+                audience_rating REAL,
+                critic_rating REAL,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (server_id, rating_key)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_ratings_tmdb ON server_ratings(media_type, tmdb_id)")
 
         # MDBList caches (overlay ratings and list membership). item_ratings is
         # keyed by "movie:tmdb:603"-style keys; data_json holds the normalized
@@ -4555,7 +4571,7 @@ def rekey_media_server_item(server_id: str, old_key: str, new_key: str) -> bool:
                 cursor.execute(f"UPDATE {table} SET rating_key = ?, updated_at = CURRENT_TIMESTAMP WHERE rating_key = ? AND server_id = ?",
                                (new_key, old_key, server_id))
             changed = True
-        for table in ("overlay_state", "poster_fingerprints", "media_server_item_etags"):
+        for table in ("overlay_state", "poster_fingerprints", "media_server_item_etags", "server_ratings"):
             try:
                 cursor.execute(f"UPDATE OR IGNORE {table} SET rating_key = ? WHERE server_id = ? AND rating_key = ?",
                                (new_key, server_id, old_key))
@@ -5046,7 +5062,7 @@ def purge_server_cache(server_id: str) -> Dict[str, Any]:
         own_keys = sorted(keys - shared)
 
         for table in ("movie_cache", "tv_cache", "collection_cache", "poster_retry_queue", "poster_fingerprints",
-                      "media_server_item_etags", "season_media_info"):
+                      "media_server_item_etags", "season_media_info", "server_ratings"):
             cursor.execute(f"DELETE FROM {table} WHERE server_id = ?", (server_id,))
             counts[table] = cursor.rowcount
 

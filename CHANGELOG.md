@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.37 (2026-11-06) — `webui-overhaul-dev` branch
+
+### New Features
+- **Ratings from the media server** — new `backend/server_ratings.py` and table `server_ratings` (server_id, rating_key, server_type, media_type, tmdb_id, audience/critic 0-10). Plex scans store `audienceRating`/`rating` from the metadata they already fetch (movies in `_fetch_label_for_movie`, shows in `_fetch_tv_show_data`); Jellyfin/Emby scans store `CommunityRating` and `CriticRating`/10 from `list_items()`. `audienceRatingSource`/`criticRatingSource` accept `plex` and `jellyfin` (Jellyfin or Emby); `build_context()` fills the two fields from the chosen server (matched by TMDb id, else rating key), or from any server when an MDBList source is chosen but there's no key, and only calls MDBList for fields still missing. The render log says "(from Plex)". Batch prefetch skips MDBList when every rating used comes from a server. The Kometa importer no longer warns that `audience_rating`/`critic_rating` need MDBList. Purged and re-keyed with the server's other cache rows.
+
 ## v1.8.36 (2026-11-05) — `webui-overhaul-dev` branch
 
 ### New Features

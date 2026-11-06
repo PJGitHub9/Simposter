@@ -56,6 +56,8 @@ MDBLIST_RATING_FIELDS = {
 
 
 def _rating_message(field: str) -> Optional[str]:
+    if field in ("audience_rating", "critic_rating"):
+        return None  # read from the media server (or MDBList), server_ratings.py
     if field in MDBLIST_RATING_FIELDS:
         try:
             from .mdblist_client import has_key

@@ -1661,6 +1661,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
         bulk_labels = {}
         bulk_tmdb_ids = {}
         bulk_thumb_versions = {}
+        bulk_ratings = {}  # rating_key -> (audience, critic) from Plex
         bulk_art_versions = {}
         bulk_file_paths = {}
         # Parallelized (was a fully sequential one-request-at-a-time loop) --
@@ -1692,10 +1693,11 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 for image in root.findall(".//Image"):
                     if image.get("type") == "clearLogo":
                         art_versions["logo"] = image.get("url")
-                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text), thumb_version, extract_media_paths_from_metadata(r.text), art_versions
+                from ..server_ratings import from_plex_element
+                return movie_key, labels_list, extract_tmdb_id_from_metadata(r.text), thumb_version, extract_media_paths_from_metadata(r.text), art_versions, from_plex_element(video)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch labels for {movie_key}: {e}")
-                return movie_key, [], None, None, None, {}
+                return movie_key, [], None, None, None, {}, (None, None)
 
         if movie_keys:
             try:
@@ -1704,7 +1706,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                     label_futures = {executor.submit(_fetch_label_for_movie, key): key for key in movie_keys}
                     label_done = 0
                     for future in as_completed(label_futures):
-                        movie_key, labels_list, tmdb_id, thumb_version, file_paths, art_versions = future.result()
+                        movie_key, labels_list, tmdb_id, thumb_version, file_paths, art_versions, ratings = future.result()
+                        bulk_ratings[movie_key] = ratings
                         bulk_art_versions[movie_key] = art_versions
                         bulk_file_paths[movie_key] = file_paths
                         bulk_labels[movie_key] = labels_list
@@ -1889,6 +1892,11 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 db.set_file_paths({m["rating_key"]: bulk_file_paths.get(m["rating_key"]) for m in cached_movies})
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to store file paths for library {lib_id}: {e}")
+            from .. import server_ratings
+            server_ratings.store("plex-1", "plex", "movie", [
+                (m["rating_key"], bulk_tmdb_ids.get(m["rating_key"]), *bulk_ratings[m["rating_key"]])
+                for m in cached_movies if m["rating_key"] in bulk_ratings
+            ])
             logger.info(f"[SCAN] Cached {len(cached_movies)} movies for library {lib_id} ({len(new_movies)} new)")
 
             # Mark every currently-present movie with a known tmdb_id as "still here" --
@@ -2023,6 +2031,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
             tmdb_id = None
             tvdb_id = None
             file_paths = None
+            show_ratings = (None, None)
             try:
                 url = f"{settings.PLEX_URL}/library/metadata/{key}"
                 r = plex_session.get(url, headers=plex_headers(), timeout=10)
@@ -2030,6 +2039,8 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 tmdb_id = extract_tmdb_id_from_metadata(r.text)
                 tvdb_id = extract_tvdb_id_from_metadata(r.text)
                 file_paths = extract_media_paths_from_metadata(r.text)
+                from ..server_ratings import from_plex_xml
+                show_ratings = from_plex_xml(r.text)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to fetch tmdb/tvdb id for TV show {key}: {e}")
 
@@ -2057,6 +2068,7 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 "library_id": lib_id,
                 "file_paths": file_paths,
                 "episode_media": episode_media,
+                "ratings": show_ratings,
             }
 
         if tv_shows:
@@ -2084,6 +2096,10 @@ def api_scan_library(library_id: Optional[str] = Query(None), force_poster_refre
                 db.set_file_paths({s["rating_key"]: s.get("file_paths") for s in cached_shows}, is_tv=True)
             except Exception as e:
                 logger.debug(f"[SCAN] Failed to store file paths for TV library {lib_id}: {e}")
+            from .. import server_ratings
+            server_ratings.store("plex-1", "plex", "tv", [
+                (s["rating_key"], s.get("tmdb_id"), *(s.get("ratings") or (None, None))) for s in cached_shows
+            ])
             for s in cached_shows:
                 em = s.get("episode_media")
                 if not em:

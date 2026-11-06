@@ -11,6 +11,7 @@ This guide covers building overlays, the rules that decide which posters get whi
 - [Text with values](#text-with-values)
 - [Badge sets and hide rules](#badge-sets-and-hide-rules)
 - [Importing Kometa overlays](#importing-kometa-overlays)
+- [Ratings](#ratings)
 - [MDBList ratings and lists](#mdblist-ratings-and-lists)
 - [Lists from WeTrakr, SIMKL and Floppy](#lists-from-wetrakr-simkl-and-floppy)
 - [Scheduler](#scheduler)
@@ -27,7 +28,7 @@ This guide covers building overlays, the rules that decide which posters get whi
 **Show information about the item**
 - Quality badges: resolution (4K, 1080p…), HDR/Dolby Vision (from the file name), video codec, audio codec, channels and language, with a different image or text per value.
 - Edition (Director's Cut, Extended, IMAX…), studio or TV network logo, and where the title streams.
-- Ratings from IMDb, Rotten Tomatoes, Metacritic, TMDb, Trakt, Letterboxd, MyAnimeList and the MDBList score, as a number on the poster or as a rule (e.g. a frame only above 8.5). Needs an MDBList key.
+- Audience and critic ratings, as a number on the poster or as a rule (e.g. a frame only above 8.5). They come from your media server (Plex's audience/critic rating, Jellyfin/Emby's community/critic rating) with no extra setup, or from MDBList (IMDb, Rotten Tomatoes, Metacritic, TMDb, Trakt, Letterboxd, MyAnimeList) with an MDBList key.
 - Any text, with values filled in per item: `{title}`, `{year}`, `{audience_rating}`, `{resolution}`…
 
 **Decide which posters get which layers**
@@ -124,7 +125,7 @@ Every layer, and every overlay as a whole, can have rules. All of a layer's rule
 | **Video** | Resolution (4K / 1080p / 720p / SD), video codec |
 | **Audio** | Audio codec, audio channels, audio language |
 | **File** | File path / name (pattern match on the file name, e.g. TRaSH naming, CAM/TS, `{edition-…}` tags), edition (Plex only) |
-| **Ratings** | Audience rating (0–10), critic rating (0–10), MDBList score, IMDb, Rotten Tomatoes (critics and audience), Metacritic, TMDb, Trakt, Letterboxd. All need an [MDBList key](#mdblist-ratings-and-lists). |
+| **Ratings** | Audience rating (0–10) and critic rating (0–10), from your media server or MDBList ([Ratings](#ratings)). MDBList score, IMDb, Rotten Tomatoes (critics and audience), Metacritic, TMDb, Trakt, Letterboxd need an [MDBList key](#mdblist-ratings-and-lists). |
 | **Lists** | On a list from MDBList, WeTrakr, SIMKL or Floppy (see [Lists from other services](#lists-from-wetrakr-simkl-and-floppy)) |
 | **Dates** | Today's date, date added, days since added, release date, days since release |
 | **Item** | Label (Plex only), movie or show, year, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform |
@@ -145,7 +146,7 @@ Notes on some fields:
 - **Show status** is continuing, ended, canceled or upcoming, from TMDb. TV shows only.
 - **TMDb ID / TVDB ID** with "is any of" takes a list of IDs. This is how tools like UMTK and TSSK pick items.
 - **Label** and **edition** come from Plex only. On Jellyfin/Emby, match the file name instead (most edition tags are in the file name).
-- Rating fields only appear once an MDBList key is set in Settings → General; "On a list" appears once any list service is set up there.
+- Audience and critic rating are always listed; the other rating fields only appear once an MDBList key is set in Settings → General; "On a list" appears once any list service is set up there.
 - A rule that can't be checked (missing data) doesn't match, so the layer stays off.
 - **TV shows and seasons**: a show or season has no file of its own, so resolution, codec and audio come from its best episode (highest resolution, then most audio channels). A show with one 4K episode counts as 4K, matching Kometa; each season uses its own episodes. These values are read during a TV scan (one extra request per show), so scan once after updating. On Plex, audio language isn't available this way. File-name rules on a show check the show's folder.
 
@@ -160,7 +161,7 @@ A **Text** layer can include values that are filled in per item. Use **+ Insert 
 | Item | `{title}`, `{year}`, `{edition}` (Plex only), `{studio}` |
 | Video | `{resolution}`, `{video_codec}` |
 | Audio | `{audio_codec}`, `{audio_channels}`, `{audio_language}` |
-| Ratings (MDBList) | `{audience_rating}`, `{critic_rating}`, `{mdb_rating}`, `{mdb_imdb_rating}`, `{mdb_tomatoes_rating}`, `{mdb_tomatoesaudience_rating}`, `{mdb_metacritic_rating}`, `{mdb_metacriticuser_rating}`, `{mdb_tmdb_rating}`, `{mdb_trakt_rating}`, `{mdb_letterboxd_rating}`, `{mdb_myanimelist_rating}`, `{mdb_average_rating}` |
+| Ratings | `{audience_rating}`, `{critic_rating}` (media server or MDBList); with MDBList also `{mdb_rating}`, `{mdb_imdb_rating}`, `{mdb_tomatoes_rating}`, `{mdb_tomatoesaudience_rating}`, `{mdb_metacritic_rating}`, `{mdb_metacriticuser_rating}`, `{mdb_tmdb_rating}`, `{mdb_trakt_rating}`, `{mdb_letterboxd_rating}`, `{mdb_myanimelist_rating}`, `{mdb_average_rating}` |
 
 If a value is missing for an item (no rating yet, no MDBList key), the layer isn't drawn at all rather than showing an empty or literal `{…}` text.
 
@@ -180,7 +181,7 @@ Rename a layer with the pencil icon or by double-clicking its name. Hide rules f
 **📐 Overlays → Starter overlays** lists ready-made overlays you can add with one click. The list comes from the [simposter-assets](https://github.com/PJGitHub9/simposter-assets/tree/main/starter_overlays) repository, so new ones appear without updating Simposter (**Check for new** looks again right away):
 
 - **MediaInfo - jmxd**: resolution, HDR/Dolby Vision, audio codec and edition badges (needs TRaSH-style file names).
-- **Audience Rating - jmxd**: a green/yellow/red audience score badge (needs an [MDBList key](#mdblist-ratings-and-lists)).
+- **Audience Rating - jmxd**: a green/yellow/red audience score badge, using your media server's audience rating (or MDBList, see [Ratings](#ratings)).
 
 Both were made by [jmxd](https://github.com/jmxd/Kometa). Adding one downloads its images (and the font it uses) from his repository into **Your images**; nothing of his is bundled with Simposter. After adding, tick it in a preset to use it, as with any overlay. **Replace** (on one you've already added) overwrites it with the version that ships with Simposter, including any updates since you added it; your own changes to it are lost, and presets using it stay linked.
 
@@ -228,11 +229,21 @@ Overlay files from [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Show
 
 ---
 
+## Ratings
+
+`audience_rating` and `critic_rating` (0–10) work without any extra service. Pick where they come from in **Settings → General → Audience rating comes from / Critic rating comes from**:
+
+- **Plex**: the audience and critic rating Plex shows for the item. Which site those come from (Rotten Tomatoes, IMDb, TMDb) is set per library in Plex (Edit library → Advanced → Ratings source). This is what Kometa's `audience_rating` uses.
+- **Jellyfin / Emby**: the community rating (0–10) and critic rating (0–100, shown as 0–10).
+- **An MDBList source** (IMDb, Rotten Tomatoes, ...): needs an MDBList key (below). Without a key, the media server's rating is used instead.
+
+Media server ratings are read during library scans, so scan the library once after updating. A rating found on one server applies to the same movie or show on your other servers (matched by TMDb ID). The render log says where each rating came from ("Audience rating 8.6 (from Plex)").
+
 ## MDBList ratings and lists
 
 [MDBList](https://mdblist.com) provides ratings from many sources and user-made lists. Add a free API key in **Settings → General → MDBList** (get one at mdblist.com/preferences, API section; the free tier has a daily request limit). Then:
 
-- **Audience rating comes from** / **Critic rating comes from**: which source fills `audience_rating` and `critic_rating` (IMDb, Rotten Tomatoes critics or audience, TMDb, Trakt, Metacritic, Letterboxd, MyAnimeList, or the MDBList score). Both are scaled to 0–10.
+- **Audience rating comes from** / **Critic rating comes from**: besides Plex and Jellyfin/Emby ([Ratings](#ratings)), an MDBList source (IMDb, Rotten Tomatoes critics or audience, TMDb, Trakt, Metacritic, Letterboxd, MyAnimeList, or the MDBList score). All are scaled to 0–10.
 
 Simposter only contacts MDBList when an overlay actually uses a rating or list, and remembers the results; how often they are fetched again is set in [Scheduler](#scheduler). If MDBList is unreachable, the render still happens; layers that needed the missing value are left off.
 
@@ -278,7 +289,7 @@ How it works and its limits:
 
 - Only posters sent by Simposter since this feature existed are tracked. A poster is re-rendered from the artwork it was originally rendered from, not from what's on the server now.
 - A poster keeps the overlays it was sent with. Turning an overlay on or off in a preset reaches already-sent posters the next time they're sent (use Re-send in Tracked posters).
-- New data (resolution, file name, date added) arrives with library scans; ratings and lists arrive from MDBList.
+- New data (resolution, file name, date added, media server ratings) arrives with library scans; MDBList ratings and lists arrive from MDBList.
 - Runs are logged and send a summary notification (toggle "Overlay Refresh" in Settings → Notifications). A poster sent to several servers is listed once, with the servers.
 
 ---

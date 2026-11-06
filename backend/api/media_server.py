@@ -253,6 +253,14 @@ def _scan_one_library(client, server_id: str, library_id: str, media_type: str, 
         from ..config import logger
         logger.debug("[MEDIA_SERVER_SCAN] Failed to store file paths for %s: %s", library_id, e)
 
+    # The server's own ratings, for overlay audience/critic rating rules.
+    from .. import server_ratings
+    server_ratings.store(
+        server_id, "jellyfin",  # Jellyfin and Emby; Plex has its own scan
+        "movie" if media_type == "movie" else "tv",
+        [(i.id, i.tmdb_id, getattr(i, "audience_rating", None), getattr(i, "critic_rating", None)) for i in items],
+    )
+
     # Fetch poster/logo/backdrop art + video/audio media info for every
     # scanned item -- deliberately a SECOND pass, after the identity rows
     # above already exist (fetch_and_cache_poster()/etc route to the right

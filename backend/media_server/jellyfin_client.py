@@ -135,7 +135,7 @@ class JellyfinClient(MediaServerClient):
             "IncludeItemTypes": item_type,
             # Etag = MD5 of the item's DateLastSaved (BaseItem.GetEtag() in
             # Jellyfin's source); it changes whenever the server saves the item.
-            "Fields": "ProviderIds,Path,ProductionYear,DateCreated,Etag",
+            "Fields": "ProviderIds,Path,ProductionYear,DateCreated,Etag,CommunityRating,CriticRating",
             "CollapseBoxSetItems": "false",
         }
         try:
@@ -152,6 +152,8 @@ class JellyfinClient(MediaServerClient):
             if not item_id:
                 continue
             provider_ids = item.get("ProviderIds") or {}
+            from ..server_ratings import from_jellyfin_item
+            audience, critic = from_jellyfin_item(item)
             out.append(MediaItem(
                 id=item_id,
                 title=item.get("Name") or "",
@@ -165,6 +167,8 @@ class JellyfinClient(MediaServerClient):
                 logo_version=(item.get("ImageTags") or {}).get("Logo"),
                 backdrop_version=((item.get("BackdropImageTags") or [None])[0]),
                 etag=item.get("Etag") or None,
+                audience_rating=audience,
+                critic_rating=critic,
             ))
         return out
 
