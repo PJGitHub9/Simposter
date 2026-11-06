@@ -48,7 +48,28 @@ const fetchLogFiles = async () => {
   }
 }
 
+// Problems: every warning/error in the whole log file, grouped by kind (backend/log_problems.py).
+type ProblemGroup = { key: string; title: string; help: string; level: 'error' | 'warning'; count: number; first: string; last: string; samples: string[] }
+const problems = ref<ProblemGroup[]>([])
+const problemsTotal = ref(0)
+const problemsOpen = ref(true)
+const openProblem = ref<string | null>(null)
+const fetchProblems = async (date?: string | null) => {
+  try {
+    const res = await fetch(`${apiBase}/api/logs/problems${date ? `?date=${date}` : ''}`)
+    if (!res.ok) { problems.value = []; problemsTotal.value = 0; return }
+    const data = await res.json()
+    problems.value = data.groups || []
+    problemsTotal.value = data.total || 0
+  } catch {
+    problems.value = []
+    problemsTotal.value = 0
+  }
+}
+const problemTime = (t: string) => t.slice(11, 16)
+
 const fetchLogs = async (date?: string | null) => {
+  fetchProblems(date)
   loading.value = true
   error.value = null
   try {
@@ -342,6 +363,33 @@ const clearLogs = async () => {
         </div>
       </div>
 
+      <!-- Problems in this log: warnings and errors grouped by kind -->
+      <div v-if="!error" class="problems" :class="{ clean: !problems.length }">
+        <button type="button" class="problems-head" @click="problemsOpen = !problemsOpen">
+          <span class="problems-caret" :class="{ open: problemsOpen }">▸</span>
+          <strong>Problems</strong>
+          <span v-if="problems.length" class="problems-count">{{ problemsTotal }} in {{ problems.length }} kind{{ problems.length === 1 ? '' : 's' }}</span>
+          <span v-else class="problems-ok">No warnings or errors in this log</span>
+        </button>
+        <div v-if="problemsOpen && problems.length" class="problems-list">
+          <div v-for="p in problems" :key="p.key" class="problem" :class="p.level">
+            <button type="button" class="problem-row" @click="openProblem = openProblem === p.key ? null : p.key">
+              <span class="problem-level">{{ p.level === 'error' ? 'ERROR' : 'WARN' }}</span>
+              <span class="problem-title">{{ p.title }}</span>
+              <span class="problem-count">{{ p.count }}×</span>
+              <span class="problem-when">last {{ problemTime(p.last) }}</span>
+            </button>
+            <div v-if="openProblem === p.key" class="problem-detail">
+              <p v-if="p.help" class="problem-help">{{ p.help }}</p>
+              <div class="problem-samples">
+                <div v-for="(line, i) in p.samples" :key="i">{{ line }}</div>
+              </div>
+              <small v-if="p.count > p.samples.length">Showing the last {{ p.samples.length }} of {{ p.count }}.</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div v-if="error" class="callout error">
         {{ error }}
       </div>
@@ -540,6 +588,31 @@ const clearLogs = async () => {
 
 .log-container {
   margin-top: 8px;
+}
+
+.problems { margin: 10px 0 4px; border: 1px solid var(--border, #2a2f3e); border-radius: 10px; background: rgba(255, 255, 255, 0.015); }
+.problems-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; background: none; border: none; color: var(--text-primary, #fff); cursor: pointer; text-align: left; font-size: 0.88rem; }
+.problems-caret { color: var(--text-secondary, #8b95a7); transition: transform 0.15s; display: inline-block; }
+.problems-caret.open { transform: rotate(90deg); }
+.problems-count { font-size: 0.75rem; padding: 1px 8px; border-radius: 999px; background: rgba(248, 113, 113, 0.12); color: #f87171; }
+.problems-ok { font-size: 0.78rem; color: var(--accent, #3dd6b7); }
+.problems.clean .problems-caret { visibility: hidden; }
+.problems-list { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 4px; }
+.problem { border-radius: 7px; background: rgba(255, 255, 255, 0.02); }
+.problem-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; background: none; border: none; color: var(--text-primary, #e5e7eb); cursor: pointer; text-align: left; font-size: 0.82rem; }
+.problem-level { flex-shrink: 0; width: 46px; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em; }
+.problem.error .problem-level { color: #f87171; }
+.problem.warning .problem-level { color: #fbbf24; }
+.problem-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problem-count { flex-shrink: 0; font-weight: 600; }
+.problem-when { flex-shrink: 0; font-size: 0.72rem; color: var(--text-secondary, #8b95a7); }
+.problem-detail { padding: 0 10px 10px 66px; }
+.problem-help { margin: 0 0 6px; font-size: 0.8rem; color: var(--text-secondary, #b6bdca); }
+.problem-samples { font-family: ui-monospace, Consolas, monospace; font-size: 0.72rem; color: var(--text-secondary, #9aa4b2); background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 6px 8px; overflow-x: auto; white-space: pre; }
+.problem-detail small { display: block; margin-top: 4px; font-size: 0.7rem; color: var(--text-secondary, #8b95a7); }
+@media (max-width: 600px) {
+  .problem-when { display: none; }
+  .problem-detail { padding-left: 10px; }
 }
 
 .empty-state {

@@ -1249,7 +1249,7 @@ def _render_tv_series_poster(
 
         try:
             if settings.FANART_API_KEY:
-                fanart_imgs = fanart_client.get_images_for_tv_show(int(tvdb_id))
+                fanart_imgs = get_fanart_tv_images(int(tvdb_id))
                 logos.extend(fanart_imgs.get("logos", []))
         except Exception as e:
             logger.warning("[BATCH TV] Fanart series fetch failed: %s", e)
@@ -1438,7 +1438,7 @@ def _render_all_tv_seasons(
             pass
         try:
             if settings.FANART_API_KEY:
-                fanart_imgs = fanart_client.get_images_for_tv_show(int(tvdb_id))
+                fanart_imgs = get_fanart_tv_images(int(tvdb_id))
                 series_logos.extend(fanart_imgs.get("logos", []))
         except Exception:
             pass

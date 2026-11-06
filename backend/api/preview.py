@@ -415,7 +415,10 @@ def api_preview(req: PreviewRequest):
                     elif logo_mode == "none":
                         logger.debug("[PREVIEW] Skipping logo fetch because logo_mode='none'")
                 else:
-                    logger.warning("[PREVIEW] Could not find TMDB ID for rating_key=%s%s, trying Plex poster", rating_key, _dt)
+                    # Collections (the Kometa creator) have no TMDb id of their own,
+                    # so that's expected there, not worth a warning on every preview.
+                    (logger.debug if (template_id == "kometa" or getattr(req, "is_collection", False)) else logger.warning)(
+                        "[PREVIEW] Could not find TMDB ID for rating_key=%s%s, trying Plex poster", rating_key, _dt)
                     # Fallback: Try Plex poster directly. Also treated as
                     # "not yet resolved" when background_url is still the
                     # frontend's own internal marker URL (/api/movie/.../poster)

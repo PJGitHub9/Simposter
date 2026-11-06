@@ -439,6 +439,9 @@ _NOISY_POLL_PATHS = (
     "/api/batch-progress",
     "/api/backup/progress",
     "/api/scan-progress",
+    # The top bar's server status, every minute per open tab: half of a DEBUG log.
+    "/api/plex-status",
+    "/api/media-server/status",
 )
 
 class APILogDowngradeFilter(logging.Filter):

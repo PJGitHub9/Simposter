@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.8.36 (2026-11-05) — `webui-overhaul-dev` branch
+
+### New Features
+- **Logs → Problems** — new `GET /api/logs/problems?date=` (`backend/log_problems.py`) reads the whole log file (the page itself only loads the last 500 lines), groups WARNING/ERROR lines by known kind (TMDb image downloads, Plex/Jellyfin/Emby unreachable or upload failed, Discord/Apprise, TMDb/MDBList/list services, no poster found, Overlay Refresh, webhooks, database locked) with an explanation, and groups anything else by its message with numbers, ids and URLs blanked. `date` must be YYYYMMDD. Panel at the top of `LogsView.vue`, refreshed with the log.
+
+### Improvements
+- **Status polling out of the log** — `/api/plex-status` and `/api/media-server/status` added to `_NOISY_POLL_PATHS`; on the user's server they were 4,282 of 8,419 lines in a day at DEBUG.
+- **Kometa preview warning** — "Could not find TMDB ID ... trying Plex poster" is DEBUG for the `kometa` template / collections (32 a day on the user's server).
+
+### Bug Fixes
+- **Fanart never used for TV batch renders** — `batch.py` called `fanart_client.get_images_for_tv_show()` (twice) but only imports it as `get_fanart_tv_images`, so every TV batch/webhook/auto-generate render logged `Fanart series fetch failed: name 'fanart_client' is not defined` and got no Fanart logos. Found by the new Problems summary on the user's log.
+
 ## v1.8.35 (2026-11-05) — `webui-overhaul-dev` branch
 
 ### Bug Fixes

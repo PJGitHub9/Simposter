@@ -10,6 +10,31 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.36',
+    date: '2026-11-05',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Logs: a Problems summary at the top groups the day’s warnings and errors by kind, with a count and a plain explanation of what it means and what to do. Click one to see its latest lines.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Logs: the top bar’s once-a-minute server status checks are no longer written to the log (about half of a debug-level log).',
+          'Logs: previews in the Kometa collection creator no longer warn that the collection has no TMDb ID.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'TV posters made by Batch Edit, webhooks and auto-generate never used Fanart.tv logos (an internal error was logged as "Fanart series fetch failed").'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.35',
     date: '2026-11-05',
     sections: [
