@@ -65,7 +65,7 @@ def _rating_message(field: str) -> Optional[str]:
                 return None
         except Exception:
             pass
-        return f"{field} comes from MDBList; add an MDBList API key in Settings → General or this stays hidden"
+        return f"{field} comes from MDBList; add an MDBList API key in Settings → Ratings & Lists or this stays hidden"
     if field in RATING_FIELDS or field.endswith("_rating"):
         return f"{field} isn't available in Simposter yet, so this stays hidden"
     return None
@@ -788,7 +788,7 @@ def map_definition(
                 conditions.append(_never("_list_mdblist_list"))
                 continue
             if not has_key():
-                messages.append("mdblist_list needs an MDBList API key (Settings → General); hidden until one is added")
+                messages.append("mdblist_list needs an MDBList API key (Settings → Ratings & Lists); hidden until one is added")
             conditions.append({"field": "list", "op": "eq", "value": norm[0]} if len(norm) == 1
                               else {"field": "list", "op": "in", "value": norm})
             continue

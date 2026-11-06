@@ -17,7 +17,7 @@ const what = computed(() => (props.subject === 'overlay' ? 'this overlay' : 'thi
 // (a condition that already uses one keeps showing its field).
 const settings = useSettingsStore()
 const hasMdblistKey = computed(() => !!settings.mdblist.value.apiKey)
-// "On a list" works with any list service set up in Settings → General.
+// "On a list" works with any list service set up in Settings → Ratings & Lists.
 const hasListSource = computed(() => hasMdblistKey.value || !!settings.wetrakr.value.clientId
   || !!settings.simkl.value.clientId || !!(settings.floppy.value.url && settings.floppy.value.token))
 const fieldsFor = (c: OverlayCondition) => {
@@ -199,7 +199,7 @@ const removeCondition = (i: number) => {
           </div>
           <p v-if="pasteMsg[i]" class="cond-note inline" :class="{ warn: !pasteMsg[i]?.ok }">{{ pasteMsg[i]?.text }}</p>
           <p v-if="listSources.loaded.value && !listSources.groups.value.length" class="cond-note inline">
-            No lists found yet. Connect WeTrakr, SIMKL or Floppy in Settings → General, or paste a list link.
+            No lists found yet. Connect WeTrakr, SIMKL or Floppy in Settings → Ratings & Lists, or paste a list link.
           </p>
           <p v-for="(msg, svc) in listSources.errors.value" :key="svc" class="cond-note inline warn">{{ providerLabel(String(svc)) }}: {{ msg }}</p>
         </div>
@@ -260,7 +260,7 @@ const removeCondition = (i: number) => {
 
       <div class="rules-actions">
         <button type="button" class="btn-small" @click="addCondition">+ Add condition</button>
-        <p v-if="!hasMdblistKey" class="hint">Ratings show up here once you add an MDBList API key in Settings → General{{ hasListSource ? '' : ', and lists once you set up MDBList, WeTrakr, SIMKL or Floppy there' }}.</p>
+        <p v-if="!hasMdblistKey" class="hint">Ratings show up here once you add an MDBList API key in Settings → Ratings & Lists{{ hasListSource ? '' : ', and lists once you set up MDBList, WeTrakr, SIMKL or Floppy there' }}.</p>
         <span v-if="(element.conditions?.length || 0) > 1" class="hint">All conditions must match.</span>
       </div>
 

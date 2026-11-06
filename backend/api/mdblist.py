@@ -44,7 +44,7 @@ def api_mdblist_list_refresh(payload: dict):
     if not url:
         raise HTTPException(400, "Not an MDBList list URL (https://mdblist.com/lists/<user>/<list>)")
     if not mdb.has_key():
-        raise HTTPException(400, "Add an MDBList API key in Settings → General first")
+        raise HTTPException(400, "Add an MDBList API key in Settings → Ratings & Lists first")
     data = mdb.get_list(url, force=True)
     if not data:
         raise HTTPException(502, "Couldn't fetch that list from MDBList")

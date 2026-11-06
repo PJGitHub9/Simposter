@@ -10,13 +10,34 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.38',
+    date: '2026-11-06',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Overlay ratings now default to your media server: audience and critic rating come from the first media server (in Settings → Media Servers order) that has a rating for the item, so rating overlays work with no setup. Installs without an MDBList key are switched over automatically; if you use MDBList, your choice is kept.',
+          'Settings: a new Ratings & Lists tab holds where overlay ratings come from, MDBList, WeTrakr, SIMKL and Floppy. General is back to appearance, library display and API keys.',
+          'Settings → Libraries: each library group shows its Media Mirror and Overlay Refresh status (on/off, schedule, last run) with a link to that page.',
+          'Default presets now come from the simposter-assets repository, so new or improved starter presets arrive without a Simposter update. Template Manager → Import Simposter defaults always gets the latest ones (your own presets aren’t touched; defaults with the same name are updated). If the repository can’t be reached, the presets built into Simposter are used.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Setup wizard: every library you pick is now scanned. Before, it started all the scans at once and only one ran (Simposter scans one library at a time), so most libraries stayed empty until you scanned them yourself.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.37',
     date: '2026-11-06',
     sections: [
       {
         title: 'New Features',
         items: [
-          'Ratings without MDBList: overlays that use the audience or critic rating (like the Audience Rating starter overlay) can now use the rating your Plex, Jellyfin or Emby server already has. Pick the source in Settings → General → “Audience rating comes from”. Ratings are read during library scans, so scan once after updating. Without an MDBList key, the media server’s rating is used automatically.'
+          'Ratings without MDBList: overlays that use the audience or critic rating (like the Audience Rating starter overlay) can now use the rating your Plex, Jellyfin or Emby server already has. Pick the source in Settings → Ratings & Lists → “Audience rating comes from”. Ratings are read during library scans, so scan once after updating. Without an MDBList key, the media server’s rating is used automatically.'
         ]
       }
     ]

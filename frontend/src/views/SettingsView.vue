@@ -52,7 +52,7 @@ const route = useRoute()
 const router = useRouter()
 
 // Active tab state - initialize from URL or default to 'general'
-const activeTab = ref<'general' | 'libraries' | 'media-servers' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
+const activeTab = ref<'general' | 'ratings' | 'libraries' | 'media-servers' | 'output' | 'performance' | 'automation' | 'notifications' | 'advanced' | 'cleanup'>(
   (route.query.tab as any) || 'general'
 )
 
@@ -1505,6 +1505,12 @@ onMounted(() => {
           General
         </button>
         <button
+          :class="['tab', { active: activeTab === 'ratings' }]"
+          @click="activeTab = 'ratings'"
+        >
+          Ratings &amp; Lists
+        </button>
+        <button
           :class="['tab', { active: activeTab === 'libraries' }]"
           @click="activeTab = 'libraries'"
         >
@@ -1560,6 +1566,32 @@ onMounted(() => {
     <div class="tab-content-wrapper">
       <GeneralTab
         v-if="activeTab === 'general'"
+        :theme="localTheme"
+        :posterDensity="localPosterDensity"
+        :deduplicateMovies="localDeduplicateMovies"
+        :defaultSort="localDefaultSort"
+        :timezone="localTimezone"
+        :tmdbApiKey="localTmdbApiKey"
+        :tvdbApiKey="localTvdbApiKey"
+        :fanartApiKey="localFanartApiKey"
+        :testingKeys="testingApiKeys"
+        :apiKeyTestResults="apiKeyTestResults"
+        :unsavedChanges="hasUnsavedChanges"
+        @update:theme="localTheme = $event as Theme"
+        @update:posterDensity="localPosterDensity = $event"
+        @update:deduplicateMovies="localDeduplicateMovies = $event"
+        @update:defaultSort="localDefaultSort = $event"
+        @update:timezone="localTimezone = $event"
+        @update:tmdbApiKey="localTmdbApiKey = $event"
+        @update:tvdbApiKey="localTvdbApiKey = $event"
+        @update:fanartApiKey="localFanartApiKey = $event"
+        @test-api-key="testSingleApiKey"
+        @save="saveSettings"
+      />
+
+      <GeneralTab
+        v-if="activeTab === 'ratings'"
+        part="ratings"
         :theme="localTheme"
         :posterDensity="localPosterDensity"
         :deduplicateMovies="localDeduplicateMovies"

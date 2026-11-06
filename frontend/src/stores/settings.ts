@@ -252,7 +252,7 @@ const libraryGroups = ref<LibraryGroup[]>([])
 const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
-const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'imdb', criticRatingSource: 'tomatoes', cacheDays: 7 })
+const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'server', criticRatingSource: 'server', cacheDays: 7 })
 const wetrakr = ref<WeTrakrSettings>({ clientId: '' })
 const simkl = ref<SimklSettings>({ clientId: '' })
 const floppy = ref<FloppySettings>({ url: '', token: '' })
@@ -344,8 +344,8 @@ async function loadSettings() {
     fanart.value = { apiKey: data.fanart?.apiKey ?? '' }
     mdblist.value = {
       apiKey: data.mdblist?.apiKey ?? '',
-      audienceRatingSource: data.mdblist?.audienceRatingSource ?? 'imdb',
-      criticRatingSource: data.mdblist?.criticRatingSource ?? 'tomatoes',
+      audienceRatingSource: data.mdblist?.audienceRatingSource ?? 'server',
+      criticRatingSource: data.mdblist?.criticRatingSource ?? 'server',
       cacheDays: data.mdblist?.cacheDays ?? 7
     }
     wetrakr.value = { clientId: data.wetrakr?.clientId ?? '' }

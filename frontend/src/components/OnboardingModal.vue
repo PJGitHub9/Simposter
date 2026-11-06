@@ -502,7 +502,7 @@ const importDefaultPreset = async () => {
   importingPreset.value = true
   presetError.value = ''
   try {
-    const res = await fetch(`${apiBase}/api/presets/default-template`)
+    const res = await fetch(`${apiBase}/api/presets/default-template?refresh=true`)
     if (!res.ok) throw new Error('Failed to fetch default preset')
     const data = await res.json()
     const importRes = await fetch(`${apiBase}/api/presets/import`, {
@@ -597,31 +597,16 @@ const goNext = async () => {
       // re-run still needs this persisted so the wizard doesn't lose it if
       // closed early. Only the SCAN itself (below) is skipped on a re-run.
       await savePlexEarly()
-      if (!isRerun) {
-        // Fire-and-forget — scan runs in the background while user completes setup.
-        // First-time onboarding only: a re-run's own auto-scan-on-save (Quirk #33,
-        // triggered by the normal Settings -> Libraries save path once the wizard
-        // finishes) already covers whatever the user actually changed, scoped to
-        // just that -- firing this too would additionally rescan every
-        // already-configured library the user didn't touch this run.
-        fetch(`${apiBase}/api/scan-library`, { method: 'POST' }).catch(() => {})
-      }
     }
-    // Same fire-and-forget pattern for whichever Jellyfin/Emby libraries were
-    // selected -- POST /api/media-server/{server_id}/scan (Quirk #66's scoped
-    // scan), the exact same call StandaloneServerLibraries.vue's own "Scan"
-    // button makes. The LibraryGroups these libraries belong to are created
-    // later in saveSettings() (called from the 'performance' step below) --
-    // scanning doesn't need the group to exist first (Quirk #116: a standalone
-    // library's rows filter correctly by library_id alone). First-time only,
-    // same reasoning as the Plex scan above.
-    if (!isRerun) {
-      nonPlexDiscovered.value
+    // First-time onboarding only: scan everything picked, in the background
+    // while the user finishes setup. A re-run doesn't (its normal Settings ->
+    // Libraries save scans just what changed, Quirk #33).
+    if (!isRerun && !initialScansStarted) {
+      initialScansStarted = true
+      const nonPlexScans = nonPlexDiscovered.value
         .filter(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
-        .forEach(d => {
-          const params = new URLSearchParams({ library_id: d.libraryId, media_type: d.mediaType })
-          fetch(`${apiBase}/api/media-server/${d.serverId}/scan?${params.toString()}`, { method: 'POST' }).catch(() => {})
-        })
+        .map(d => `${apiBase}/api/media-server/${d.serverId}/scan?${new URLSearchParams({ library_id: d.libraryId, media_type: d.mediaType }).toString()}`)
+      void runInitialScans(wantsPlex.value ? [`${apiBase}/api/scan-library`, ...nonPlexScans] : nonPlexScans)
     }
   }
   if (step.value === 'performance') await saveSettings()
@@ -640,6 +625,25 @@ const goNext = async () => {
   let nextIdx = STEPS.indexOf(step.value) + 1
   while (nextIdx < STEPS.length && !visibleSteps.value.includes(STEPS[nextIdx]!)) nextIdx++
   if (nextIdx < STEPS.length) step.value = STEPS[nextIdx]!
+}
+
+// Simposter runs one scan at a time (a second one gets 409), and each scan
+// request only returns once that scan is done, so the wizard's scans run one
+// after another. Starting them all at once left every library but one
+// unscanned. A 409 (another scan is running) waits and tries again.
+let initialScansStarted = false  // once per wizard, even if the user steps back
+const runInitialScans = async (urls: string[]) => {
+  for (const url of urls) {
+    for (let attempt = 0; attempt < 60; attempt++) {
+      try {
+        const res = await fetch(url, { method: 'POST' })
+        if (res.status !== 409) break
+      } catch {
+        break
+      }
+      await new Promise(r => setTimeout(r, 5000))
+    }
+  }
 }
 
 const goBack = () => {

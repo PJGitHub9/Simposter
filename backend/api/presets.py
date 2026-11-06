@@ -1,9 +1,11 @@
 # backend/api/presets.py
+import json
 from pathlib import Path
+from typing import Any
 from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Body
 
-from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger
+from ..config import load_presets, save_presets, USER_PRESETS_PATH, logger, settings
 from ..schemas import PresetDeleteRequest, PresetSaveRequest
 from .. import database as db
 from .template_manager import _get_fallback_settings
@@ -66,7 +68,7 @@ def api_presets():
 
                 # Backup JSON file
                 backup_path = presets_file.with_suffix(".json.migrated")
-                presets_file.rename(backup_path)
+                presets_file.replace(backup_path)  # rename() fails on Windows if an old backup exists
                 logger.info(f"[PRESETS] Backed up presets.json as {backup_path}")
 
                 # Return migrated data
@@ -601,31 +603,128 @@ def _prefetch_preset_fonts(payload: dict, extra_fonts, all_asset_fonts: bool = F
     threading.Thread(target=_run, name="preset-font-prefetch", daemon=True).start()
 
 
-@router.get("/presets/default-template")
-def api_presets_default_template():
-    """Return the built-in starter presets for new-user onboarding (never auto-applied to
-    an existing install — only fetched by OnboardingModal.vue's fire-and-forget import on
-    first run). IDs are generated from each preset's name here rather than hardcoded, so
-    the source-of-truth data above only needs a display name."""
-    result: dict = {}
-    # Fonts to download when these are imported (see api_presets_import).
+# Default presets live in the simposter-assets repo (presets/defaults.json), so
+# new or updated defaults ship without a release. Read at most every 10 minutes,
+# the last good copy kept in config/cache/default_presets.json, and the
+# presets above used when neither is available. A preset may set "min_version"
+# when it uses an option older versions don't have: an older install keeps
+# the bundled preset of the same name instead (or skips it).
+_DEFAULTS_URL = "https://raw.githubusercontent.com/PJGitHub9/simposter-assets/main/presets/defaults.json"
+_DEFAULTS_MAX_AGE = 600
+_DEFAULTS_MAX_BYTES = 2 * 1024 * 1024
+_defaults_lock = __import__("threading").Lock()
+_defaults_remote: Optional[dict] = None
+_defaults_checked = 0.0
+
+
+def _defaults_cache_file() -> Path:
+    d = Path(settings.CONFIG_DIR) / "cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "default_presets.json"
+
+
+def _valid_defaults(data: Any) -> bool:
+    templates = data.get("templates") if isinstance(data, dict) else None
+    return isinstance(templates, dict) and any(
+        isinstance(t, dict) and isinstance(t.get("presets"), list) and t["presets"] for t in templates.values()
+    )
+
+
+def _remote_defaults(refresh: bool = False) -> Optional[dict]:
+    """presets/defaults.json from simposter-assets, else the last good copy."""
+    import time
+    global _defaults_remote, _defaults_checked
+    with _defaults_lock:
+        if _defaults_remote is None:
+            try:
+                data = json.loads(_defaults_cache_file().read_text(encoding="utf-8"))
+                _defaults_remote = data if _valid_defaults(data) else None
+            except Exception:
+                _defaults_remote = None
+        now = time.time()
+        if refresh or now - _defaults_checked > _DEFAULTS_MAX_AGE:
+            _defaults_checked = now
+            try:
+                import requests
+                from ..config import EXTERNAL_IMAGE_FETCH_HEADERS
+                r = requests.get(_DEFAULTS_URL, headers=EXTERNAL_IMAGE_FETCH_HEADERS, timeout=10)
+                r.raise_for_status()
+                if len(r.content) > _DEFAULTS_MAX_BYTES:
+                    raise ValueError("defaults.json is larger than 2 MB")
+                data = r.json()
+                if not _valid_defaults(data):
+                    raise ValueError("defaults.json has no presets")
+                _defaults_cache_file().write_text(json.dumps(data), encoding="utf-8")
+                _defaults_remote = data
+            except Exception as e:
+                logger.debug("[PRESETS] Couldn't fetch default presets from simposter-assets: %s", e)
+        return _defaults_remote
+
+
+def _too_new(preset: dict) -> bool:
+    needed = str(preset.get("min_version") or "").strip()
+    if not needed:
+        return False
+    try:
+        from .version_info import parse_version
+        current = db.get_app_version()
+        return current != "unknown" and parse_version(needed) > parse_version(current)
+    except Exception:
+        return False
+
+
+def _default_preset_entry(preset: dict) -> dict:
+    entry = {
+        "id": preset.get("id") or _slugify_preset_name(preset["name"]),
+        "name": preset["name"],
+        "options": preset.get("options") or {},
+    }
+    if preset.get("season_options"):
+        entry["season_options"] = preset["season_options"]
+    return entry
+
+
+def build_default_presets(refresh: bool = False) -> dict:
+    """The default presets in import format, from simposter-assets when
+    available. Also used by onboarding and Template Manager's import."""
+    remote = _remote_defaults(refresh)
+    source = "simposter-assets" if remote else "built-in"
+    templates = (remote or {}).get("templates") or {}
+    result: dict = {"_source": source}
     from ..templates.universal import STARTER_FONTS
-    result["_fonts"] = list(STARTER_FONTS)
-    # ...and the rest of Simposter's font set (simposter-assets) after them.
-    result["_asset_fonts"] = True
-    for template_id, tdata in _DEFAULT_PRESETS_TEMPLATE.items():
-        presets = []
-        for preset in tdata["presets"]:
-            entry = {
-                "id": _slugify_preset_name(preset["name"]),
-                "name": preset["name"],
-                "options": preset["options"],
-            }
-            if preset.get("season_options"):
-                entry["season_options"] = preset["season_options"]
-            presets.append(entry)
-        result[template_id] = {"presets": presets}
+    fonts = list(STARTER_FONTS)
+    for name in (remote or {}).get("fonts") or []:
+        if isinstance(name, str) and name not in fonts:
+            fonts.append(name)
+    result["_fonts"] = fonts           # downloaded on import (api_presets_import)
+    result["_asset_fonts"] = True      # ...and the rest of simposter-assets' fonts
+    if remote and isinstance(remote.get("_overlays"), dict):
+        result["_overlays"] = remote["_overlays"]  # overlays the presets use (overlay_bundle)
+    for template_id in list(_DEFAULT_PRESETS_TEMPLATE) + [t for t in templates if t not in _DEFAULT_PRESETS_TEMPLATE]:
+        bundled = {p["name"]: p for p in (_DEFAULT_PRESETS_TEMPLATE.get(template_id) or {}).get("presets", [])}
+        chosen = []
+        source_presets = (templates.get(template_id) or {}).get("presets") if remote else None
+        if source_presets is None:
+            source_presets = list(bundled.values())
+        for preset in source_presets:
+            if not isinstance(preset, dict) or not preset.get("name"):
+                continue
+            if _too_new(preset):
+                if preset["name"] in bundled:
+                    chosen.append(_default_preset_entry(bundled[preset["name"]]))
+                continue
+            chosen.append(_default_preset_entry(preset))
+        if chosen:
+            result[template_id] = {"presets": chosen}
     return result
+
+
+@router.get("/presets/default-template")
+def api_presets_default_template(refresh: bool = False):
+    """The starter presets for onboarding and Template Manager's "Import
+    Simposter defaults" (never applied automatically). From simposter-assets
+    presets/defaults.json, the bundled ones as fallback."""
+    return build_default_presets(refresh)
 
 
 def _attach_overlays(export: dict, raw_entries: list) -> dict:

@@ -621,6 +621,19 @@ const allPresets = computed(() => {
   return presets
 })
 
+// Media Mirror / Overlay Refresh status per group, shown on each card. Those
+// settings live on each group's own pages; this only reads them.
+const groupStatus = ref<Record<string, any>>({})
+const loadGroupStatus = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/media-server/library-groups/status`)
+    if (res.ok) groupStatus.value = (await res.json()).groups || {}
+  } catch {
+    // the cards just leave the status out
+  }
+}
+onMounted(loadGroupStatus)
+
 onMounted(async () => {
   fetchPresets()
   fetchDiscoveredLibraries()
@@ -722,6 +735,7 @@ watch(
           :available-labels="card.mappingIdx !== null ? (availableLabels[localLibraries[card.mappingIdx]!.id] || []) : []"
           :scan-cooldown="scanCooldown"
           :scanning-library-id="scanningLibraryId"
+          :status="groupStatus[card.group.id] || null"
           @link-plex="(key, title) => onLinkPlex('movie', card.group, key, title)"
           @unlink-plex="onUnlinkPlex('movie', card.group)"
           @update:mapping="patch => card.mappingIdx !== null && onUpdateMapping('movie', card.mappingIdx, patch)"
@@ -758,6 +772,7 @@ watch(
           :available-labels="card.mappingIdx !== null ? (availableLabels[localTvShowLibraries[card.mappingIdx]!.id] || []) : []"
           :scan-cooldown="scanCooldown"
           :scanning-library-id="scanningLibraryId"
+          :status="groupStatus[card.group.id] || null"
           @link-plex="(key, title) => onLinkPlex('tv', card.group, key, title)"
           @unlink-plex="onUnlinkPlex('tv', card.group)"
           @update:mapping="patch => card.mappingIdx !== null && onUpdateMapping('tv', card.mappingIdx, patch)"

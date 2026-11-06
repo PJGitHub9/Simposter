@@ -15,6 +15,10 @@ const props = defineProps<{
   unsavedChanges: boolean
   testingKeys?: Record<string, boolean>
   apiKeyTestResults?: Record<string, string>
+  // Which tab this instance is: General (appearance, display, API keys) or
+  // Ratings & Lists (rating sources and list services). One component so the
+  // key test / sign-in logic isn't duplicated.
+  part?: 'general' | 'ratings'
 }>()
 
 const emit = defineEmits<{
@@ -69,6 +73,7 @@ const settingsStore = useSettingsStore()
 // Audience/critic rating sources: the media server's own rating (read during
 // scans, no key needed) or an MDBList source (backend/server_ratings.py).
 const serverRatingSources = [
+  { value: 'server', label: 'Your media server (first one that has it)' },
   { value: 'plex', label: 'Plex' },
   { value: 'jellyfin', label: 'Jellyfin / Emby' },
 ]
@@ -279,8 +284,9 @@ const timezones = computed(() => {
 
 <template>
   <div class="tab-content">
-    <h2>General Settings</h2>
+    <h2>{{ part === 'ratings' ? 'Ratings & Lists' : 'General Settings' }}</h2>
 
+    <template v-if="part !== 'ratings'">
     <div class="section">
       <h3>Appearance</h3>
 
@@ -431,13 +437,49 @@ const timezones = computed(() => {
       <div class="api-test-section">
       </div>
     </div>
+    </template>
+
+    <template v-else>
+    <div class="section">
+      <h3>Overlay ratings</h3>
+      <p class="section-description">
+        Where the <code>audience_rating</code> and <code>critic_rating</code> values in overlays come from. Your media server's
+        ratings are read during library scans and need nothing else; the MDBList sources need the MDBList key below.
+      </p>
+      <div class="api-keys-grid">
+        <label>
+          <span class="label-text">Audience rating comes from</span>
+          <select v-model="settingsStore.mdblist.value.audienceRatingSource">
+            <optgroup label="Your media server (no key needed)">
+              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </optgroup>
+            <optgroup label="MDBList (needs the key below)">
+              <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </optgroup>
+          </select>
+          <span class="help-text">Fills <code>audience_rating</code> (0–10). The default uses your media servers in the order they're listed in Media Servers, taking the first one that has a rating for the item. Plex uses the audience rating set in your Plex library (as Kometa does); Jellyfin/Emby uses the community rating. An MDBList source without an MDBList key also falls back to your media servers.</span>
+        </label>
+        <label>
+          <span class="label-text">Critic rating comes from</span>
+          <select v-model="settingsStore.mdblist.value.criticRatingSource">
+            <optgroup label="Your media server (no key needed)">
+              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </optgroup>
+            <optgroup label="MDBList (needs the key below)">
+              <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </optgroup>
+          </select>
+          <span class="help-text">Fills <code>critic_rating</code> (0–10). Plex: the library's critic rating; Jellyfin/Emby: the critic rating (0–100, shown as 0–10).</span>
+        </label>
+      </div>
+    </div>
 
     <div class="section">
       <h3>MDBList (overlay ratings &amp; lists)</h3>
       <p class="section-description">
-        Overlays can show ratings (IMDb, Rotten Tomatoes, TMDb, Trakt, Metacritic, Letterboxd and more) and only appear on
-        items in an MDBList list (for example a "trending" ribbon). Kometa overlay files that use <code>audience_rating</code>,
-        <code>critic_rating</code> or <code>mdblist_list</code> need this. Results are stored, so a render rarely calls MDBList;
+        Overlays can show ratings from IMDb, Rotten Tomatoes, TMDb, Trakt, Metacritic, Letterboxd and more, and only appear on
+        items in an MDBList list (for example a "trending" ribbon). Kometa overlay files that use
+        <code>mdblist_list</code> need this. Results are stored, so a render rarely calls MDBList;
         how often they're re-fetched is set in Overlays → Scheduler.
       </p>
       <div class="api-keys-grid">
@@ -458,30 +500,6 @@ const timezones = computed(() => {
             {{ mdblistResult.message }}
           </span>
           <span class="help-text">Free key at <a href="https://mdblist.com/preferences/" target="_blank">mdblist.com/preferences</a> (API section). The free tier has a daily request limit.</span>
-        </label>
-        <label>
-          <span class="label-text">Audience rating comes from</span>
-          <select v-model="settingsStore.mdblist.value.audienceRatingSource">
-            <optgroup label="Your media server (no key needed)">
-              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
-            </optgroup>
-            <optgroup label="MDBList (needs the key above)">
-              <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
-            </optgroup>
-          </select>
-          <span class="help-text">Fills <code>audience_rating</code> (0–10). Plex uses the audience rating set in your Plex library (as Kometa does); Jellyfin/Emby uses the community rating. Read during library scans. If you pick an MDBList source without an MDBList key, the media server's rating is used.</span>
-        </label>
-        <label>
-          <span class="label-text">Critic rating comes from</span>
-          <select v-model="settingsStore.mdblist.value.criticRatingSource">
-            <optgroup label="Your media server (no key needed)">
-              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
-            </optgroup>
-            <optgroup label="MDBList (needs the key above)">
-              <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
-            </optgroup>
-          </select>
-          <span class="help-text">Fills <code>critic_rating</code> (0–10). Plex: the library's critic rating; Jellyfin/Emby: the critic rating (0–100, shown as 0–10).</span>
         </label>
       </div>
     </div>
@@ -602,6 +620,7 @@ const timezones = computed(() => {
         </div>
       </div>
     </div>
+    </template>
 
     <div class="section">
       <button @click="emit('save')" class="primary" :disabled="!unsavedChanges">

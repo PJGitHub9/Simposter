@@ -136,6 +136,21 @@
       </p>
     </div>
 
+    <!-- Settings for this group that live on its own pages (Media Mirror,
+         Overlay Refresh), shown here so they aren't missed. Read-only. -->
+    <div v-if="status && hasAnyMember && groupSaved" class="group-status">
+      <div class="group-status-row">
+        <span class="group-status-name">Media Mirror</span>
+        <span class="group-status-text">{{ mirrorSummary }}</span>
+        <router-link :to="pageLink('media-mirror')" class="group-status-link">Open</router-link>
+      </div>
+      <div class="group-status-row">
+        <span class="group-status-name">Overlay Refresh</span>
+        <span class="group-status-text">{{ refreshSummary }}</span>
+        <router-link :to="pageLink('overlay-refresh')" class="group-status-link">Open</router-link>
+      </div>
+    </div>
+
     <div class="library-actions">
       <!-- One Scan button for every group, disabled while ANY scan is running
            (one scan at a time, server-wide). A group with a main-Plex library
@@ -173,6 +188,23 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useSettingsStore, type LibraryGroup, type LibraryGroupMember } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
+
+interface GroupStatus {
+  mirror: {
+    enabled: boolean
+    sourceServerId: string | null
+    targetServerIds: string[]
+    scheduleEnabled: boolean
+    lastRunAt: string | null
+    nextRun: string | null
+  }
+  overlayRefresh: {
+    enabled: boolean
+    scheduleCron: string
+    lastRunAt: string | null
+    nextRun: string | null
+  }
+}
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
 
@@ -221,7 +253,53 @@ const props = defineProps<{
   // on specific fields (currently just "Merge items") -- the live `group`
   // prop above is always the current, possibly-unsaved, editable value.
   initialGroup?: LibraryGroup | null
+  // Media Mirror / Overlay Refresh status from /api/media-server/library-groups/status.
+  status?: GroupStatus | null
 }>()
+
+// Status line helpers (Media Mirror / Overlay Refresh).
+const groupSaved = computed(() => !!props.initialGroup)
+
+const whenText = (iso: string | null): string => {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return ''
+  const mins = Math.round((Date.now() - t) / 60000)
+  const ago = Math.abs(mins)
+  const span = ago < 60 ? `${ago} min` : ago < 48 * 60 ? `${Math.round(ago / 60)} h` : `${Math.round(ago / 1440)} days`
+  return mins >= 0 ? `${span} ago` : `in ${span}`
+}
+
+const serverName = (id: string | null) => (id ? mediaServerLabel(id, settingsStore.mediaServers.value) : '?')
+
+const mirrorSummary = computed(() => {
+  const m = props.status?.mirror
+  if (!m || !m.enabled) return 'Off'
+  const parts = [`${serverName(m.sourceServerId)} → ${m.targetServerIds.map(serverName).join(', ') || '?'}`]
+  parts.push(m.scheduleEnabled ? (m.nextRun ? `next run ${whenText(m.nextRun)}` : 'scheduled') : 'manual runs only')
+  if (m.lastRunAt) parts.push(`last run ${whenText(m.lastRunAt)}`)
+  return parts.join(' · ')
+})
+
+const refreshSummary = computed(() => {
+  const r = props.status?.overlayRefresh
+  if (!r || !r.enabled) return r?.lastRunAt ? `No schedule · last run ${whenText(r.lastRunAt)}` : 'No schedule'
+  const parts = [r.nextRun ? `next run ${whenText(r.nextRun)}` : 'scheduled']
+  if (r.lastRunAt) parts.push(`last run ${whenText(r.lastRunAt)}`)
+  return parts.join(' · ')
+})
+
+// Same library/server pair the sidebar uses for this group's pages: the
+// Plex library when the group has one, else its first library + server.
+const pageLink = (page: 'media-mirror' | 'overlay-refresh') => {
+  const name = props.mediaType === 'tv' ? `tv-${page}` : page
+  const plex = props.group.members.find(m => m.serverId === 'plex-1')
+  const first = props.group.members[0]
+  const query: Record<string, string> = plex
+    ? { library: plex.libraryId }
+    : first ? { library: first.libraryId, server: first.serverId } : {}
+  return { name, query }
+}
 
 const emit = defineEmits<{
   // Parent creates the corresponding mapping-array entry.
@@ -821,4 +899,38 @@ function removeGroup() {
   margin: 0;
   padding: 0 12px 10px;
 }
+
+.group-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+.group-status-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.group-status-name {
+  flex: 0 0 110px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.group-status-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary, #9aa4b2);
+}
+.group-status-link {
+  color: var(--accent, #3dd6b7);
+  text-decoration: none;
+  font-weight: 600;
+}
+.group-status-link:hover { text-decoration: underline; }
 </style>

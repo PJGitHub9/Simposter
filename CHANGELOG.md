@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.38 (2026-11-06) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Rating source defaults to the media server** — new source value `server` (the default for `mdblist.audienceRatingSource`/`criticRatingSource`): `server_ratings.server_order()` lists "plex"/"jellyfin" in the order the enabled servers appear in `mediaServers` (Emby counts as jellyfin), and `fill()` takes the first one with a rating for the item. One-time migration `rating_source_server`: on installs with no MDBList key, stored `imdb`/`tomatoes` (the old defaults, saved by every Settings save so indistinguishable from a choice) become `server`; anything else, and every install with a key, is left alone.
+- **Ratings & Lists tab** — Settings' General tab was split: `GeneralTab.vue` takes `part="general" | "ratings"` (one component, so the key tests and sign-in flows aren't duplicated) and SettingsView renders it twice. The audience/critic rating dropdowns moved out of the MDBList section into an "Overlay ratings" section at the top of the new tab. In-app hints, log messages and docs say "Settings → Ratings & Lists".
+- **Group status on Settings → Libraries** — new `GET /api/media-server/library-groups/status` (Media Mirror on/off, source → targets, schedule/next run, last run; Overlay Refresh schedule/next run, last run; read fresh from the DB since both pages save there directly). Each saved group card shows it read-only with an Open link to the page (same library/server pair the sidebar uses).
+- **Default presets from simposter-assets** — `GET /api/presets/default-template` (`build_default_presets()` in `backend/api/presets.py`) reads `presets/defaults.json` from simposter-assets (at most every 10 minutes; `?refresh=true`, sent by onboarding and Template Manager's "Import Simposter defaults", fetches now), keeps the last good copy in `config/cache/default_presets.json`, and falls back to the bundled `_DEFAULT_PRESETS_TEMPLATE`. A preset with a `min_version` newer than the install uses the bundled preset of the same name, or is skipped. Optional `fonts` (added to `_fonts`) and `_overlays` (an overlay bundle, as in preset exports) pass through to the import. A remote file with no presets is ignored.
+
+### Bug Fixes
+- **Setup wizard scanned only one library** — on leaving the Libraries step it fired every selected library's scan at once (`/api/scan-library` and each `/api/media-server/{id}/scan`); the backend runs one scan at a time and answers `409` to the rest, which the wizard ignored, so on a fresh Jellyfin install three of four libraries never scanned. New `runInitialScans()` (`OnboardingModal.vue`) awaits them one after another (each request returns when its scan is done), retries a `409` every 5 s for up to 5 minutes, and runs once per wizard.
+- **Presets JSON migration error on Windows** — `presets_file.rename()` to `presets.json.migrated` fails on Windows when an older backup is already there (`WinError 183`, logged as "Error loading presets" on a fresh database); now `replace()`.
+
+
 ## v1.8.37 (2026-11-06) — `webui-overhaul-dev` branch
 
 ### New Features

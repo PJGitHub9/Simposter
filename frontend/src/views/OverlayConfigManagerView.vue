@@ -3228,7 +3228,7 @@ onMounted(() => {
                             </optgroup>
                           </select>
                         </div>
-                        <small class="text-var-hint">Values in {curly braces} are filled in per movie. If a value is missing for a movie, this layer is skipped on that poster.<template v-if="!hasMdblistKey"> Ratings appear in the list once you add an MDBList API key in Settings → General.</template></small>
+                        <small class="text-var-hint">Values in {curly braces} are filled in per movie. If a value is missing for a movie, this layer is skipped on that poster.<template v-if="!hasMdblistKey"> Ratings appear in the list once you add an MDBList API key in Settings → Ratings & Lists.</template></small>
                       </label>
                       </div></div>
                       <div class="look-sec"><div class="look-sec-title">Font</div><div class="look-sec-grid">

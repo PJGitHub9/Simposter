@@ -259,7 +259,7 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                 if still_needed & {"audience_rating", "critic_rating"}:
                     notes["ratings"] = "no rating for this item on the media server (scan the library), and no MDBList API key"
                 else:
-                    notes["ratings"] = "no MDBList API key in Settings > General"
+                    notes["ratings"] = "no MDBList API key in Settings > Ratings & Lists"
             else:
                 if not tmdb_id and not tvdb_id:
                     notes["ratings"] = "this item has no TMDb/TVDB ID"

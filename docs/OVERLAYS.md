@@ -146,7 +146,7 @@ Notes on some fields:
 - **Show status** is continuing, ended, canceled or upcoming, from TMDb. TV shows only.
 - **TMDb ID / TVDB ID** with "is any of" takes a list of IDs. This is how tools like UMTK and TSSK pick items.
 - **Label** and **edition** come from Plex only. On Jellyfin/Emby, match the file name instead (most edition tags are in the file name).
-- Audience and critic rating are always listed; the other rating fields only appear once an MDBList key is set in Settings → General; "On a list" appears once any list service is set up there.
+- Audience and critic rating are always listed; the other rating fields only appear once an MDBList key is set in Settings → Ratings & Lists; "On a list" appears once any list service is set up there.
 - A rule that can't be checked (missing data) doesn't match, so the layer stays off.
 - **TV shows and seasons**: a show or season has no file of its own, so resolution, codec and audio come from its best episode (highest resolution, then most audio channels). A show with one 4K episode counts as 4K, matching Kometa; each season uses its own episodes. These values are read during a TV scan (one extra request per show), so scan once after updating. On Plex, audio language isn't available this way. File-name rules on a show check the show's folder.
 
@@ -231,8 +231,9 @@ Overlay files from [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Show
 
 ## Ratings
 
-`audience_rating` and `critic_rating` (0–10) work without any extra service. Pick where they come from in **Settings → General → Audience rating comes from / Critic rating comes from**:
+`audience_rating` and `critic_rating` (0–10) work without any extra service. Pick where they come from in **Settings → Ratings & Lists → Audience rating comes from / Critic rating comes from**:
 
+- **Your media server** (the default): the first enabled server in Settings → Media Servers, in the order they're listed, that has a rating for the item. With only Plex or only Jellyfin, that's simply your server.
 - **Plex**: the audience and critic rating Plex shows for the item. Which site those come from (Rotten Tomatoes, IMDb, TMDb) is set per library in Plex (Edit library → Advanced → Ratings source). This is what Kometa's `audience_rating` uses.
 - **Jellyfin / Emby**: the community rating (0–10) and critic rating (0–100, shown as 0–10).
 - **An MDBList source** (IMDb, Rotten Tomatoes, ...): needs an MDBList key (below). Without a key, the media server's rating is used instead.
@@ -241,7 +242,7 @@ Media server ratings are read during library scans, so scan the library once aft
 
 ## MDBList ratings and lists
 
-[MDBList](https://mdblist.com) provides ratings from many sources and user-made lists. Add a free API key in **Settings → General → MDBList** (get one at mdblist.com/preferences, API section; the free tier has a daily request limit). Then:
+[MDBList](https://mdblist.com) provides ratings from many sources and user-made lists. Add a free API key in **Settings → Ratings & Lists → MDBList** (get one at mdblist.com/preferences, API section; the free tier has a daily request limit). Then:
 
 - **Audience rating comes from** / **Critic rating comes from**: besides Plex and Jellyfin/Emby ([Ratings](#ratings)), an MDBList source (IMDb, Rotten Tomatoes critics or audience, TMDb, Trakt, Metacritic, Letterboxd, MyAnimeList, or the MDBList score). All are scaled to 0–10.
 
@@ -251,7 +252,7 @@ For a list rule, choose **On a list** and paste the list's URL (`https://mdblist
 
 ### Lists from WeTrakr, SIMKL and Floppy
 
-"On a list" also works with these services. Set them up in **Settings → General**:
+"On a list" also works with these services. Set them up in **Settings → Ratings & Lists**:
 
 - **WeTrakr**: the **Client ID** of an app you create at wetrakr.com → Settings → API (not the client secret; the redirect URL isn't used). Public lists work with just the Client ID. To use your own private lists and your tracking lists (Watchlist, Watching, Watched, On hold, Dropped), click **Connect account**: Simposter shows a code to enter at wetrakr.com/activate.
 - **SIMKL**: a client ID from an app registered at simkl.com/settings/developer as **TV, devices & command line**, then **Connect account** (approve the code on simkl.com). Every SIMKL list needs the connection. Plan to Watch, Watching, Completed, On Hold and Dropped work on a free account; custom lists need SIMKL PRO or VIP.

@@ -140,11 +140,13 @@ class FanartSettings(BaseModel):
 
 class MDBListSettings(BaseModel):
     apiKey: str = ""
-    # Which MDBList rating fills the overlay fields audience_rating / critic_rating
-    # (0-10 scale, like Kometa's). Sources: imdb, tmdb, trakt, tomatoes,
-    # tomatoesaudience, metacritic, metacriticuser, letterboxd, myanimelist, score.
-    audienceRatingSource: str = "imdb"
-    criticRatingSource: str = "tomatoes"
+    # What fills the overlay fields audience_rating / critic_rating (0-10, like
+    # Kometa's): "server" (the first enabled media server that has a rating),
+    # "plex", "jellyfin" (Jellyfin or Emby), or an MDBList source: imdb, tmdb,
+    # trakt, tomatoes, tomatoesaudience, metacritic, metacriticuser, letterboxd,
+    # myanimelist, score. See server_ratings.py.
+    audienceRatingSource: str = "server"
+    criticRatingSource: str = "server"
     cacheDays: int = 7  # how long ratings and lists are reused before refetching
 
 

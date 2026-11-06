@@ -433,7 +433,7 @@ const handleImport = async () => {
 const handleImportDefaults = async () => {
   importingDefaults.value = true
   try {
-    const res = await fetch(`${apiBase}/api/presets/default-template`)
+    const res = await fetch(`${apiBase}/api/presets/default-template?refresh=true`)
     if (!res.ok) throw new Error(`API error ${res.status}`)
     const data = await res.json()
     const importRes = await fetch(`${apiBase}/api/presets/import`, {

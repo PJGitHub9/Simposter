@@ -5,8 +5,9 @@ attributes (modules/plex.py), so they need no outside service. Scans store
 them here: Plex audienceRating/rating, Jellyfin/Emby CommunityRating and
 CriticRating (0-100, stored /10). All values are 0-10.
 
-Settings > General picks one source per field: "plex", "jellyfin" (Jellyfin
-or Emby) or an MDBList source. When an MDBList source is picked but there is
+Settings > Ratings & Lists picks one source per field: "server" (the default:
+the first enabled media server in Settings > Media Servers that has a rating
+for the item), "plex", "jellyfin" (Jellyfin or Emby) or an MDBList source. When an MDBList source is picked but there is
 no MDBList key, the media server's value is used instead, so overlays that
 use a rating still work out of the box.
 
@@ -15,9 +16,9 @@ rating stored from the Plex copy also applies to the Jellyfin copy.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-SERVER_SOURCES = ("plex", "jellyfin")
+SERVER_SOURCES = ("server", "plex", "jellyfin")
 
 
 def _num(value: Any, scale: float = 1.0) -> Optional[float]:
@@ -138,9 +139,28 @@ def _sources() -> Dict[str, str]:
     except Exception:
         cfg = {}
     return {
-        "audience_rating": str(cfg.get("audienceRatingSource") or "imdb").lower(),
-        "critic_rating": str(cfg.get("criticRatingSource") or "tomatoes").lower(),
+        "audience_rating": str(cfg.get("audienceRatingSource") or "server").lower(),
+        "critic_rating": str(cfg.get("criticRatingSource") or "server").lower(),
     }
+
+
+def server_order() -> List[str]:
+    """"plex"/"jellyfin" in the order the enabled servers are listed in
+    Settings > Media Servers (Emby counts as "jellyfin"). Both, Plex first,
+    when nothing is configured."""
+    from . import database as db
+    try:
+        servers = (db.get_ui_settings() or {}).get("mediaServers") or []
+    except Exception:
+        servers = []
+    order: List[str] = []
+    for srv in servers:
+        if not isinstance(srv, dict) or srv.get("enabled") is False:
+            continue
+        kind = "plex" if srv.get("type") == "plex" else "jellyfin" if srv.get("type") in ("jellyfin", "emby") else None
+        if kind and kind not in order:
+            order.append(kind)
+    return order or ["plex", "jellyfin"]
 
 
 def fill(ctx: Dict[str, Any], media_type: str, tmdb_id: Any, mdblist_ready: bool) -> Dict[str, str]:
@@ -153,10 +173,12 @@ def fill(ctx: Dict[str, Any], media_type: str, tmdb_id: Any, mdblist_ready: bool
     for field, source in _sources().items():
         if ctx.get(field) not in (None, ""):
             continue
-        if source in SERVER_SOURCES:
+        if source == "server":
+            order = server_order()
+        elif source in SERVER_SOURCES:
             order = [source]
         elif not mdblist_ready:
-            order = list(SERVER_SOURCES)  # no MDBList: any server's value
+            order = server_order()  # MDBList source without a key: the servers instead
         else:
             continue
         for src in order:

@@ -148,7 +148,8 @@ For batches instead of one at a time, see **Batch Processing** in [COLLECTIONS_A
 
 | Tab | What's in it |
 |-----|--------------|
-| **General** | Theme, poster display density, deduplication, default sort, API key management, **MDBList** key and rating sources (for overlay ratings and lists — see [OVERLAYS.md](OVERLAYS.md#mdblist-ratings-and-lists)) |
+| **General** | Theme, poster display density, deduplication, default sort, TMDb/TVDB/Fanart API keys |
+| **Ratings & Lists** | Where overlay audience/critic ratings come from (Plex, Jellyfin/Emby or MDBList), the MDBList key, and WeTrakr, SIMKL and Floppy lists (see [OVERLAYS.md](OVERLAYS.md#ratings)) |
 | **Libraries** | **Library groups** (link the same library across Plex/Jellyfin/Emby — see [MEDIA_SERVERS.md](MEDIA_SERVERS.md)), auto-generate preset per group, Merge items, webhook ignore labels, per-library default labels to remove, **Kometa Compatibility** (auto-checks "Overlay" for any library added from now on), add/remove libraries (removing purges that library's cache/DB rows, keeping History) |
 | **Media Servers** | Add, name, test and remove Plex, Jellyfin and Emby servers (removing one purges its cached data on save) |
 | **Output** | Save-location path templates (with Kometa-compatible presets, including a `{folder}` variable that matches Radarr/Sonarr's real on-disk folder names) for movies, TV shows, and collections; batch subfolder option; image format/quality |

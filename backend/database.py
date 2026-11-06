@@ -421,6 +421,17 @@ def init_database():
             cursor.execute("INSERT INTO applied_migrations (name) VALUES (?)", (mig_name,))
             logger.info("[DB] Migration %s updated %d preset(s)", mig_name, migrated)
 
+        # Overlay rating sources default to the media server now (Quirk #210).
+        # The old defaults (MDBList's IMDb / Rotten Tomatoes) were saved on every
+        # Settings save, so they can't be told apart from a real choice; switch
+        # them only where there's no MDBList key, where MDBList was never used.
+        if not cursor.execute("SELECT 1 FROM applied_migrations WHERE name = 'rating_source_server'").fetchone():
+            key_row = cursor.execute("SELECT value FROM settings WHERE key = 'mdblist.apiKey'").fetchone()
+            if not (key_row and str(key_row[0] or "").strip()):
+                for skey, old in (("mdblist.audienceRatingSource", "imdb"), ("mdblist.criticRatingSource", "tomatoes")):
+                    cursor.execute("UPDATE settings SET value = 'server' WHERE key = ? AND value = ?", (skey, old))
+            cursor.execute("INSERT INTO applied_migrations (name) VALUES ('rating_source_server')")
+
         # Create indexes for better query performance
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_presets_template

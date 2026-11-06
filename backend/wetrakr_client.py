@@ -73,9 +73,9 @@ def owns(key: str) -> bool:
 
 def missing_setup(key: str) -> Optional[str]:
     if not _client_id():
-        return "no WeTrakr app key in Settings > General"
+        return "no WeTrakr app key in Settings > Ratings & Lists"
     if key.startswith("wetrakr:") and not _auth().get("access_token"):
-        return "WeTrakr isn't connected (Settings > General > Connect account)"
+        return "WeTrakr isn't connected (Settings > Ratings & Lists > Connect account)"
     return None
 
 

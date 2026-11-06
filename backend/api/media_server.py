@@ -957,3 +957,45 @@ def api_set_library_group_merge_items(payload: MergeItemsUpdate):
     if updated is None:
         raise HTTPException(404, "No Library Group found for this library")
     return {"group": updated}
+
+
+@router.get("/library-groups/status")
+def api_library_groups_status():
+    """Media Mirror and Overlay Refresh status per library group, for the
+    summary line on each group card in Settings → Libraries. Both are set on
+    their own pages and saved straight to the DB, so they're read fresh here."""
+    from .. import database as db
+    from .. import scheduler as scheduler_module
+    out = {}
+    for group in (db.get_ui_settings() or {}).get("libraryGroups") or []:
+        gid = group.get("id")
+        if not gid:
+            continue
+        media_type = group.get("mediaType") or "movie"
+        mirror = group.get("mirror") or {}
+        mirror_next = None
+        if mirror.get("enabled") and mirror.get("scheduleEnabled"):
+            # The job is keyed by whichever member the schedule was saved from.
+            for m in group.get("members") or []:
+                sched = scheduler_module.get_media_mirror_schedule(m.get("serverId"), m.get("libraryId"), media_type)
+                if sched and sched.get("next_run_time"):
+                    mirror_next = sched["next_run_time"]
+                    break
+        refresh_cfg = group.get("overlayRefresh") or {}
+        out[gid] = {
+            "mirror": {
+                "enabled": bool(mirror.get("enabled")),
+                "sourceServerId": mirror.get("sourceServerId"),
+                "targetServerIds": mirror.get("targetServerIds") or [],
+                "scheduleEnabled": bool(mirror.get("scheduleEnabled")),
+                "lastRunAt": mirror.get("lastRunAt"),
+                "nextRun": mirror_next,
+            },
+            "overlayRefresh": {
+                "enabled": bool(refresh_cfg.get("enabled")),
+                "scheduleCron": refresh_cfg.get("scheduleCron") or "",
+                "lastRunAt": refresh_cfg.get("lastRunAt"),
+                "nextRun": (scheduler_module.get_overlay_refresh_schedule(gid) or {}).get("next_run_time"),
+            },
+        }
+    return {"groups": out}

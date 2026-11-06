@@ -230,8 +230,8 @@ def rating_fields(normalized: Dict[str, Any]) -> Dict[str, Any]:
         out["mdb_average_rating"] = raw["average"]
     cfg = _mdblist_settings()
     for field, setting, default in (
-        ("audience_rating", "audienceRatingSource", "imdb"),
-        ("critic_rating", "criticRatingSource", "tomatoes"),
+        ("audience_rating", "audienceRatingSource", "server"),
+        ("critic_rating", "criticRatingSource", "server"),
     ):
         source = str(cfg.get(setting) or default).lower()
         value = _to_ten(source, raw.get(source))
