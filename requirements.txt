@@ -3,7 +3,7 @@ uvicorn[standard]==0.54.0
 requests==2.34.2
 python-dotenv==1.2.4
 pydantic-settings==2.16.1
-python-multipart==0.0.32
+python-multipart==0.0.33
 pillow==13.0.0; python_version >= "3.11"
 pillow==12.3.0; python_version < "3.11"
 numpy==2.5.4
