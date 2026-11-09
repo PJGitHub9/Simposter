@@ -4,11 +4,11 @@ Simposter can serve posters to other apps by TMDb id. An app such as Ether asks 
 
 ## Enable it
 
-Open **🔌 Poster API** in the sidebar.
+Turn it on in **Settings → Media Servers → Poster API**. The **🔌 Poster API** page then appears in the sidebar; open it for the rest:
 
-1. Tick **Enable**.
-2. Click **Generate** next to the key field, copy the key and **Save**. The key is shown in full only once; after that the page shows a masked value.
-3. Pick a **default movie preset** and **default TV preset** (Uniform Logo presets only). Left on "simposter-main (default)", Simposter uses the `simposter-main` starter preset (or the first Uniform Logo preset if that one was deleted).
+1. Click **Generate** next to the key field, copy the key and **Save**. The key is shown in full only once; after that the page shows a masked value.
+2. Pick a **default movie preset** and **default TV preset** (Uniform Logo presets only). Left on "simposter-main (default)", Simposter uses the `simposter-main` starter preset (or the first Uniform Logo preset if that one was deleted).
+3. With more than one library group of a type (for example "Movies" and "4K Movies"), pick the **movie / TV library group** a request uses when it names none. "Any library" uses whichever library has the title, Plex first.
 4. **Wait seconds** (2-30, default 10) is how long a request waits for a render before it is sent to stock TMDb art instead.
 
 The key is optional, but without one anyone who can reach Simposter can use your TMDb quota through this API. The page warns you about this.
@@ -42,6 +42,17 @@ The Poster API page shows these templates with your host filled in, and a Copy b
 
 `preset=<id>` renders with that Uniform Logo preset instead of the default. Preset ids may contain letters, digits, `_` and `-`. An unknown id, or a Kometa preset, returns 404. Each preset is cached separately.
 
+### `group=` override
+
+`group=<name or id>` uses that library group (the name is matched without regard to case): the poster already in one of its libraries is served, and a render reads its file details (4K, HDR, audio) for the overlay badges from that group only. This lets one app use a 4K URL and another a regular one:
+
+```
+/api/poster?tmdb_id=603&type=movie&group=4K%20Movies
+/api/poster?tmdb_id=603&type=movie&group=Movies
+```
+
+A title that isn't in the group's libraries is rendered without library badges. An unknown group returns 404. Each group is cached separately; pinned posters apply to every group.
+
 ## Responses
 
 | Status | Meaning |
@@ -57,7 +68,7 @@ The Poster API page shows these templates with your host filled in, and a Copy b
 Without `preset=`, Simposter looks in this order and serves the first hit:
 
 1. **Pinned**: a poster you pinned from the editor (see below). Never expires and never overwritten.
-2. **Library**: the poster Simposter already sent to your media server for that title.
+2. **Library**: a poster this install already has for the title, without rendering: the last poster Simposter sent for it, or else the poster on your media server as cached by library scans (Plex copy first). With a library group, only that group's libraries count. Seasons only use posters Simposter sent.
 3. **Rendered**: a render cached by the API itself. If you edit the preset afterwards, the old render is served once while a new one is built in the background.
 
 If none exist, Simposter renders one from TMDb art with your default preset. Many requests for the same id at once cause one render, and all of them get the same answer.
@@ -65,6 +76,22 @@ If none exist, Simposter renders one from TMDb art with your default preset. Man
 With `preset=`, pinned and library posters are skipped and the render for that preset is used.
 
 Cached files (pinned, library, rendered) are served even with no TMDb key; only a new render needs one.
+
+## Recent requests
+
+The Poster API page lists the newest 2000 calls to the poster URLs and what each one got back:
+
+| Result | Meaning |
+|---|---|
+| Library | The poster already in your library was served (no render). |
+| Pinned | A poster you pinned was served. |
+| Cached render | A poster the API rendered earlier was served. |
+| Generated | A poster was rendered for this request. |
+| Sent to TMDb | The render took longer than the wait time; the request went to the stock TMDb poster while the render finished. |
+| Not found | No such title, no poster art on TMDb, or an unknown preset or group. |
+| Bad key | The key was missing or wrong. |
+
+Filter by result or search by title or TMDb id. Posters served from your library don't get a tile under **Posters** (the file belongs to your library); they only appear here.
 
 ## Regenerate, pin, clear
 

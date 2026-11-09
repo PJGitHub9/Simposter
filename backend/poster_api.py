@@ -46,6 +46,7 @@ class Served:
     data: Optional[bytes] = None
     url: Optional[str] = None
     source: Optional[str] = None  # "pinned" | "library" | "rendered"
+    generated: bool = False  # rendered during this request (vs. an earlier render)
 
 
 _NOT_FOUND = Served(kind="not_found")
@@ -61,7 +62,7 @@ _last_no_key_warning = 0.0
 
 
 def _tuple(key: CacheKey) -> Tuple:
-    return (key.media_type, int(key.tmdb_id), key.season, key.preset_key or "")
+    return (key.media_type, int(key.tmdb_id), key.season, key.preset_key or "", key.group or "")
 
 
 # ------------------------------------------------------------------ settings
@@ -142,7 +143,8 @@ def _render_job(key: CacheKey, template_id: str, preset_id: str, skip_if_fresh: 
             e = store.get_entry(key, "rendered")
             if e and e.get("preset_hash") == phash:
                 return Path(e["path"])
-        result = render_for_tmdb(key.media_type, key.tmdb_id, key.season, template_id, preset_id)
+        result = render_for_tmdb(key.media_type, key.tmdb_id, key.season, template_id, preset_id,
+                                 members=store.group_members(key.media_type, key.group))
         if result is None:
             with _lock:
                 _negative[t] = time.time()
@@ -236,19 +238,38 @@ def _redirect_or_not_found(key: CacheKey) -> Served:
     return Served(kind="redirect", url=TMDB_POSTER_URL.format(poster_path))
 
 
-def serve(media_type: str, tmdb_id: int, season: Optional[int], preset: Optional[str]) -> Served:
+def resolve_request_group(media_type: str, group: Optional[str]) -> Optional[str]:
+    """Group id for a request: the ``group`` parameter (id or name), else the
+    settings default for the media type. "" = any library. None = the parameter
+    names no library group of this media type."""
+    if group and group.strip():
+        g = store.resolve_group(media_type, group)
+        return str(g["id"]) if g else None
+    s = store.get_settings()
+    default = s.tvGroup if media_type == "tv" else s.movieGroup
+    g = store.resolve_group(media_type, default) if default else None
+    return str(g["id"]) if g else ""  # a removed default group falls back to any library
+
+
+def serve(media_type: str, tmdb_id: int, season: Optional[int], preset: Optional[str],
+          group: Optional[str] = None) -> Served:
     if media_type not in ("movie", "tv"):
         return _NOT_FOUND
-    key = CacheKey(media_type, int(tmdb_id), season, preset or "")
+    group_id = resolve_request_group(media_type, group)
+    if group_id is None:
+        return _NOT_FOUND
+    key = CacheKey(media_type, int(tmdb_id), season, preset or "", group_id)
     if preset:
         if preset not in _uniformlogo_preset_ids():
             return _NOT_FOUND
         preset_id = preset
     else:
-        pinned = store.get_entry(key, "pinned")
+        # A pinned poster applies to every group.
+        pinned = store.get_entry(CacheKey(media_type, key.tmdb_id, season, ""), "pinned")
         if pinned:
             return Served(kind="file", path=Path(pinned["path"]), source="pinned")
-        lib = store.library_poster_path(media_type, key.tmdb_id, season)
+        lib = store.library_poster_path(media_type, key.tmdb_id, season,
+                                        store.group_members(media_type, group_id))
         if lib is not None:
             return Served(kind="file", path=lib, source="library")
         preset_id = _default_preset_id(media_type)
@@ -285,5 +306,5 @@ def serve(media_type: str, tmdb_id: int, season: Optional[int], preset: Optional
     except FutureTimeout:
         return _redirect_or_not_found(key)
     if path is not None and Path(path).is_file():
-        return Served(kind="file", path=Path(path), source="rendered")
+        return Served(kind="file", path=Path(path), source="rendered", generated=True)
     return _NOT_FOUND

@@ -661,14 +661,15 @@ def _season_title(season: int) -> str:
     return "Specials" if season == 0 else f"Season {season}"
 
 
-def _inject_library_metadata(render_options: dict, media_type: str, tmdb_id: int) -> None:
+def _inject_library_metadata(render_options: dict, media_type: str, tmdb_id: int,
+                             members: Optional[list] = None) -> None:
     """Resolution/codec/audio/edition badges for a title that is also in a
     library, via the same injector batch uses. May do one live Plex metadata
     fetch for a Plex item (a Jellyfin/Emby item reads the scan cache). Not in a
     library -> rating_key None -> the injector is a no-op."""
     from .config import inject_plex_media_metadata
     try:
-        rating_key = db.find_rating_key_by_tmdb_id(media_type, tmdb_id)
+        rating_key = db.find_rating_key_by_tmdb_id(media_type, tmdb_id, members)
     except Exception as e:  # badges are a nice-to-have; never fail a render over them
         logger.debug("%s rating_key lookup failed for %s tmdb_id=%s: %s", _API_LOG, media_type, tmdb_id, e)
         rating_key = None
@@ -712,7 +713,8 @@ def _render_jpeg(
     return buf.getvalue()
 
 
-def _render_movie(tmdb_id: int, ctx: PresetContext, poster_path: Optional[str]) -> Optional[RenderResult]:
+def _render_movie(tmdb_id: int, ctx: PresetContext, poster_path: Optional[str],
+                  members: Optional[list] = None) -> Optional[RenderResult]:
     details = get_movie_details(tmdb_id)
     imgs = get_images_for_movie(tmdb_id, details.get("original_language"))
     try:
@@ -728,7 +730,7 @@ def _render_movie(tmdb_id: int, ctx: PresetContext, poster_path: Optional[str]) 
     render_options = dict(choice.options)
     render_options["movie_title"] = details.get("title", "")
     render_options["movie_year"] = details.get("year", "")
-    _inject_library_metadata(render_options, "movie", tmdb_id)
+    _inject_library_metadata(render_options, "movie", tmdb_id, members)
     if choice.preset_id:
         render_options["preset_id"] = choice.preset_id
 
@@ -747,7 +749,8 @@ def _render_movie(tmdb_id: int, ctx: PresetContext, poster_path: Optional[str]) 
     )
 
 
-def _render_tv(tmdb_id: int, season: Optional[int], ctx: PresetContext, raw: dict) -> Optional[RenderResult]:
+def _render_tv(tmdb_id: int, season: Optional[int], ctx: PresetContext, raw: dict,
+               members: Optional[list] = None) -> Optional[RenderResult]:
     if season is not None:
         known = {s.get("season_number") for s in (raw.get("seasons") or [])}
         if season not in known:
@@ -802,7 +805,7 @@ def _render_tv(tmdb_id: int, season: Optional[int], ctx: PresetContext, raw: dic
         render_options["season_text"] = season_title
         render_options["season_number"] = str(season)
     # _render_and_save_poster's order: inject, preset_id, then {title}/{year}.
-    _inject_library_metadata(render_options, "tv", tmdb_id)
+    _inject_library_metadata(render_options, "tv", tmdb_id, members)
     if choice.preset_id:
         render_options["preset_id"] = choice.preset_id
     render_options["movie_title"] = title or ""
@@ -825,6 +828,7 @@ def render_for_tmdb(
     season: Optional[int],
     template_id: str,
     preset_id: str,
+    members: Optional[list] = None,
 ) -> Optional[RenderResult]:
     """Render a finished poster (JPEG, quality 95, 4:4:4 chroma) for a TMDb movie,
     TV series (``season=None``) or TV season with the given template/preset, using
@@ -834,7 +838,10 @@ def render_for_tmdb(
 
     Returns None when TMDb has no such id (or the show no such season), when no
     poster art exists yet, or when the preset's fallback says to skip. Other
-    errors (TMDb unreachable/no key, render failure) propagate to the caller."""
+    errors (TMDb unreachable/no key, render failure) propagate to the caller.
+
+    ``members`` ((server_id, library_id) pairs of a library group) limits which
+    library copy the badges are read from; None = any library."""
     raw = _tmdb_raw(media_type, tmdb_id)
     if raw is None:
         logger.info("%s TMDb has no %s with id %s", _API_LOG, media_type, tmdb_id)
@@ -842,5 +849,5 @@ def render_for_tmdb(
 
     ctx = load_preset_context(template_id, preset_id, None, log_label=_API_LOG)
     if media_type == "movie":
-        return _render_movie(tmdb_id, ctx, raw.get("poster_path") or None)
-    return _render_tv(tmdb_id, season, ctx, raw)
+        return _render_movie(tmdb_id, ctx, raw.get("poster_path") or None, members)
+    return _render_tv(tmdb_id, season, ctx, raw, members)

@@ -1059,6 +1059,28 @@ def init_database():
                 PRIMARY KEY (media_type, tmdb_id, season_index, preset_key, source)
             )
         """)
+        # Served-from-library requests used to get a row here; they now only go
+        # into poster_api_requests (the file belongs to the library, not the API).
+        cursor.execute("DELETE FROM poster_api_cache WHERE source = 'library'")
+
+        # Poster API request history (Poster API page -> Recent requests). result:
+        # library | pinned | rendered (cached render) | generated (rendered for this
+        # request) | redirect (sent to the TMDb poster) | not_found | bad_key.
+        # Trimmed to the newest POSTER_API_REQUESTS_KEEP rows on insert.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_api_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                media_type TEXT,
+                tmdb_id INTEGER,
+                season_index INTEGER,
+                preset TEXT,
+                group_id TEXT,
+                result TEXT NOT NULL,
+                title TEXT,
+                duration_ms INTEGER
+            )
+        """)
 
         # Media Mirror change detection: a sha256 of the RAW source image bytes
         # last successfully copied to each target item, per asset type. A run
@@ -1579,6 +1601,8 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "posterApi.key",
     "posterApi.defaultMoviePreset",
     "posterApi.defaultTvPreset",
+    "posterApi.movieGroup",
+    "posterApi.tvGroup",
     "automation.webhookAutoLabels",
     "automation.labelToAdd",
     "notifications.discordWebhookUrl",
@@ -4563,24 +4587,29 @@ def get_ids_for_rating_key(rating_key: str) -> tuple:
     return None, None
 
 
-def find_rating_key_by_tmdb_id(media_type: str, tmdb_id: int) -> Optional[str]:
+def find_rating_key_by_tmdb_id(media_type: str, tmdb_id: int,
+                               members: Optional[List[Any]] = None) -> Optional[str]:
     """A library rating_key for this TMDb id from movie_cache ("movie") or
     tv_cache ("tv"/"tv-show"), or None if the title isn't in any scanned library.
     Prefers the Plex copy when the same title exists on several servers (its
     media info can be fetched live); otherwise the most recently updated row.
-    Used by the poster API to add library badges to a TMDb-id render."""
+    Used by the poster API to add library badges to a TMDb-id render.
+    ``members`` ((server_id, library_id) pairs) limits it to those libraries."""
     if not tmdb_id:
         return None
     table = "tv_cache" if media_type in ("tv", "tv-show") else "movie_cache"
     with get_db() as conn:
-        row = conn.execute(
-            f"""SELECT rating_key FROM {table}
+        rows = conn.execute(
+            f"""SELECT rating_key, server_id, library_id FROM {table}
                 WHERE tmdb_id = ? AND rating_key IS NOT NULL
-                ORDER BY (server_id = 'plex-1') DESC, updated_at DESC
-                LIMIT 1""",
+                ORDER BY (server_id = 'plex-1') DESC, updated_at DESC""",
             (int(tmdb_id),),
-        ).fetchone()
-    return str(row["rating_key"]) if row else None
+        ).fetchall()
+    allowed = {(str(s), str(l)) for s, l in members} if members is not None else None
+    for row in rows:
+        if allowed is None or (str(row["server_id"]), str(row["library_id"])) in allowed:
+            return str(row["rating_key"])
+    return None
 
 
 def get_cached_item_identity(rating_key: str) -> Optional[Dict[str, Any]]:
@@ -5646,6 +5675,53 @@ def poster_api_cache_counts() -> Dict[str, int]:
     with get_db() as conn:
         rows = conn.execute("SELECT source, COUNT(*) AS n FROM poster_api_cache GROUP BY source").fetchall()
     return {r["source"]: r["n"] for r in rows}
+
+
+POSTER_API_REQUESTS_KEEP = 2000
+
+
+def poster_api_request_log(media_type: Optional[str], tmdb_id: Optional[int], season: Optional[int],
+                           preset: str, group_id: str, result: str, title: Optional[str],
+                           duration_ms: int) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO poster_api_requests (media_type, tmdb_id, season_index, preset, group_id, result, title, duration_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (media_type, tmdb_id, season, preset or "", group_id or "", result, title, int(duration_ms)))
+        conn.execute(
+            "DELETE FROM poster_api_requests WHERE id <= "
+            "(SELECT id FROM poster_api_requests ORDER BY id DESC LIMIT 1 OFFSET ?)",
+            (POSTER_API_REQUESTS_KEEP,))
+
+
+def poster_api_requests_list(result: Optional[str], search: str, offset: int,
+                             limit: int) -> Tuple[List[Dict[str, Any]], int, Dict[str, int]]:
+    """Newest first. Also returns the count per result over the whole history."""
+    where, params = [], []
+    if result:
+        where.append("result = ?")
+        params.append(result)
+    search = (search or "").strip()
+    if search:
+        if search.isdigit():
+            where.append("(title LIKE ? COLLATE NOCASE OR tmdb_id = ?)")
+            params += [f"%{search}%", int(search)]
+        else:
+            where.append("title LIKE ? COLLATE NOCASE")
+            params.append(f"%{search}%")
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    with get_db() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM poster_api_requests{clause}", params).fetchone()[0]
+        rows = conn.execute(f"SELECT * FROM poster_api_requests{clause} ORDER BY id DESC LIMIT ? OFFSET ?",
+                            params + [limit, offset]).fetchall()
+        counts = {r["result"]: r["n"] for r in conn.execute(
+            "SELECT result, COUNT(*) AS n FROM poster_api_requests GROUP BY result").fetchall()}
+    return [dict(r) for r in rows], total, counts
+
+
+def poster_api_requests_clear() -> int:
+    with get_db() as conn:
+        return conn.execute("DELETE FROM poster_api_requests").rowcount
 
 
 def get_title_for_tmdb_id(media_type: str, tmdb_id: int) -> Optional[str]:

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.52 (2026-11-09) — `webui-overhaul-dev` branch
+
+### New Features
+- **Poster API request history** — new `poster_api_requests` table (newest 2000 kept), written by `handle_poster_request()` for every lookup and rejected key: `result` = library | pinned | rendered | generated (`Served.generated`, rendered during the request) | redirect | not_found | bad_key, with title, preset, group and duration. `GET`/`DELETE /api/poster-api/requests` (filter by result, search title/TMDb id, per-result counts). Poster API page → Recent requests.
+- **Poster API library groups** — `posterApi.movieGroup` / `tvGroup` (default group when a request names none; validated on PUT) and a `group=` query parameter (id or case-insensitive name) on `/api/poster`, `/api/poster/{type}/{id}` and `/poster`. The group limits the library lookup and the rating key used for badges (`find_rating_key_by_tmdb_id(..., members)`, `render_for_tmdb(..., members)`). `CacheKey.group`; stored as `preset_key = "preset@group"` (`store._dbkey()`/`split_dbkey()`), file names get `__g_<group>`. Pinned posters stay group-independent; pinning clears the default render of every group. Unknown group → 404.
+
+### Bug Fixes
+- **Poster API rendered titles already in the library** — the "library" step only checked `poster_renders_by_tmdb/`, so a title Simposter never sent (or an install restored without that folder) always rendered. `library_poster_path()` now also checks the resend cache (`poster_renders/{rating_key}.jpg`) and the scan's poster cache (`posters/{rating_key}.*`, `tv_` for shows) of every library copy, Plex first. Movies and whole shows only (no season number in the cache tables).
+
+### Improvements
+- **No library tiles** — `touch_served()` no longer records served-from-library posters in `poster_api_cache` (startup deletes existing `source='library'` rows); the Library source filter is gone. They appear in the request history.
+- **Poster API toggle** — the sidebar entry only shows when `posterApi.enabled` (or in server-less mode); the switch moved to Settings → Media Servers (saved immediately via `PUT /api/poster-api/settings`), the Poster API page links to it.
+
 ## v1.8.51 (2026-11-09) — `webui-overhaul-dev` branch
 
 ### Bug Fixes

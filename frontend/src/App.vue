@@ -199,7 +199,8 @@ const tabs = computed<MenuItem[]>(() => {
     ...nonPlexGroupTabs('tv'),
     { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
     { key: 'overlay-config-manager', label: '\u{1F4D0} Overlays' },
-    { key: 'poster-api', label: '\u{1F50C} Poster API' },
+    // Only once enabled (Settings -> Media Servers -> Poster API).
+    ...(settings.posterApi.value.enabled ? [{ key: 'poster-api', label: '\u{1F50C} Poster API' }] : []),
     { key: 'history', label: '\u{1F4CB} History' },
     { key: 'settings', label: '\u{2699}\uFE0F Settings' },
     { key: 'logs', label: '\u{1F4DD} Logs' }

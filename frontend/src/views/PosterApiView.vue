@@ -14,6 +14,8 @@ type Cfg = {
   defaultTvPreset: string
   waitSeconds: number
   retentionDays: number
+  movieGroup: string
+  tvGroup: string
 }
 type Status = {
   enabled: boolean
@@ -31,6 +33,7 @@ type Item = {
   tmdb_id: number
   season: number | null
   preset: string
+  group?: string
   source: 'library' | 'rendered' | 'pinned'
   title: string
   hits: number
@@ -44,7 +47,12 @@ const apiBase = getApiBase()
 const store = useSettingsStore()
 const { success, error: showError, info } = useNotification()
 
-const cfg = ref<Cfg>({ enabled: false, key: '', defaultMoviePreset: '', defaultTvPreset: '', waitSeconds: 10, retentionDays: 90 })
+const cfg = ref<Cfg>({ enabled: false, key: '', defaultMoviePreset: '', defaultTvPreset: '', waitSeconds: 10, retentionDays: 90, movieGroup: '', tvGroup: '' })
+
+// Library groups per media type, for the default-group pickers and tile labels.
+const movieGroups = computed(() => store.libraryGroups.value.filter(g => g.mediaType === 'movie'))
+const tvGroups = computed(() => store.libraryGroups.value.filter(g => g.mediaType === 'tv'))
+const groupName = (id?: string) => (id ? store.libraryGroups.value.find(g => g.id === id)?.name || id : '')
 const saved = ref<Cfg | null>(null)
 const status = ref<Status | null>(null)
 const presets = ref<{ id: string; name?: string }[]>([])
@@ -171,7 +179,7 @@ const items = ref<Item[]>([])
 const total = ref(0)
 const search = ref('')
 const typeFilter = ref<'' | 'movie' | 'tv'>('')
-const sourceFilter = ref<'' | 'pinned' | 'rendered' | 'library'>('')
+const sourceFilter = ref<'' | 'pinned' | 'rendered'>('')
 const listLoading = ref(false)
 const failedThumbs = ref<Set<number>>(new Set())
 const { page, totalPages, pagedItems, nextPage, prevPage, resetPage } = usePagedItems(items, 24)
@@ -194,6 +202,81 @@ async function loadItems() {
   } finally {
     listLoading.value = false
   }
+}
+
+// ---- Recent requests (every call to the public poster URLs) ----
+type RequestRow = {
+  id: number
+  requested_at: string | null
+  type: 'movie' | 'tv' | null
+  tmdb_id: number | null
+  season: number | null
+  preset: string
+  group: string
+  result: string
+  title: string
+  duration_ms: number | null
+}
+const REQUEST_RESULTS: { value: string; label: string; hint: string }[] = [
+  { value: 'library', label: 'Library', hint: 'Served the poster already in your library' },
+  { value: 'pinned', label: 'Pinned', hint: 'Served a poster you pinned' },
+  { value: 'rendered', label: 'Cached render', hint: 'Served a poster the API rendered earlier' },
+  { value: 'generated', label: 'Generated', hint: 'Rendered for this request' },
+  { value: 'redirect', label: 'Sent to TMDb', hint: 'The render took too long; sent to the stock TMDb poster while it finishes' },
+  { value: 'not_found', label: 'Not found', hint: 'No such title, no poster art, or an unknown preset/group' },
+  { value: 'bad_key', label: 'Bad key', hint: 'Missing or wrong API key' },
+]
+const resultLabel = (r: string) => REQUEST_RESULTS.find(x => x.value === r)?.label || r
+const resultHint = (r: string) => REQUEST_RESULTS.find(x => x.value === r)?.hint || ''
+const REQ_PAGE = 50
+const requests = ref<RequestRow[]>([])
+const reqTotal = ref(0)
+const reqCounts = ref<Record<string, number>>({})
+const reqResult = ref('')
+const reqSearch = ref('')
+const reqOffset = ref(0)
+const reqLoading = ref(false)
+
+async function loadRequests() {
+  reqLoading.value = true
+  try {
+    const q = new URLSearchParams({ limit: String(REQ_PAGE), offset: String(reqOffset.value) })
+    if (reqResult.value) q.set('result', reqResult.value)
+    if (reqSearch.value.trim()) q.set('search', reqSearch.value.trim())
+    const res = await fetch(`${apiBase}/api/poster-api/requests?${q}`)
+    if (!res.ok) throw new Error(String(res.status))
+    const data = await res.json()
+    requests.value = data.items || []
+    reqTotal.value = data.total ?? 0
+    reqCounts.value = data.counts || {}
+  } catch {
+    showError('Failed to load the request history')
+  } finally {
+    reqLoading.value = false
+  }
+}
+
+async function clearRequests() {
+  if (!window.confirm('Clear the whole request history?')) return
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/requests`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(String(res.status))
+    reqOffset.value = 0
+    await loadRequests()
+  } catch {
+    showError('Failed to clear the request history')
+  }
+}
+
+let reqSearchTimer: ReturnType<typeof setTimeout> | null = null
+watch(reqResult, () => { reqOffset.value = 0; loadRequests() })
+watch(reqSearch, () => {
+  if (reqSearchTimer) clearTimeout(reqSearchTimer)
+  reqSearchTimer = setTimeout(() => { reqOffset.value = 0; loadRequests() }, 300)
+})
+function reqPage(delta: number) {
+  reqOffset.value = Math.max(0, reqOffset.value + delta * REQ_PAGE)
+  loadRequests()
 }
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
@@ -219,7 +302,7 @@ function fmtTime(s: string | null) {
 const sourceLabel = (s: string) => (s === 'library' ? 'Library' : s === 'pinned' ? 'Pinned' : 'Rendered')
 
 function target(it: Item) {
-  return { type: it.type, tmdb_id: it.tmdb_id, season: it.season, preset: it.preset }
+  return { type: it.type, tmdb_id: it.tmdb_id, season: it.season, preset: it.preset, group: it.group || '' }
 }
 
 async function regenerate(it: Item) {
@@ -343,7 +426,7 @@ function openResult(r: SearchResult) {
 }
 
 onMounted(async () => {
-  await Promise.all([loadSettings(), loadStatus(), loadPresets(), loadItems()])
+  await Promise.all([loadSettings(), loadStatus(), loadPresets(), loadItems(), loadRequests()])
 })
 </script>
 
@@ -357,7 +440,8 @@ onMounted(async () => {
 
       <h3>Setup</h3>
       <div class="field row">
-        <label class="check"><input type="checkbox" v-model="cfg.enabled" /> Enable Poster API</label>
+        <span v-if="cfg.enabled" class="hint">The Poster API is on. Turn it off in <router-link to="/settings?tab=media-servers">Settings → Media Servers</router-link>.</span>
+        <span v-else class="warn">The Poster API is off. Turn it on in <router-link to="/settings?tab=media-servers">Settings → Media Servers</router-link>.</span>
       </div>
 
       <div class="field">
@@ -389,6 +473,28 @@ onMounted(async () => {
         </div>
       </div>
       <div v-if="status?.default_preset_missing" class="warn">A default preset no longer exists. Requests without an explicit preset fall back to simposter-main (or the first preset if it's gone) until you pick another.</div>
+
+      <div v-if="movieGroups.length > 1 || tvGroups.length > 1" class="grid2">
+        <div class="field">
+          <label>Movie library group</label>
+          <select class="text-input" v-model="cfg.movieGroup">
+            <option value="">Any library</option>
+            <option v-for="g in movieGroups" :key="g.id" :value="g.id">{{ g.name || g.id }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>TV library group</label>
+          <select class="text-input" v-model="cfg.tvGroup">
+            <option value="">Any library</option>
+            <option v-for="g in tvGroups" :key="g.id" :value="g.id">{{ g.name || g.id }}</option>
+          </select>
+        </div>
+      </div>
+      <div v-if="movieGroups.length > 1 || tvGroups.length > 1" class="hint">
+        Which library a request uses when it names none: the poster already in that library is served,
+        and its file details (4K, HDR, audio) feed the overlay badges. Add <code>&amp;group=Name</code>
+        to a URL to pick a group per request, for example one URL for 4K and one for regular.
+      </div>
 
       <div class="field">
         <label>Wait seconds (2–30)</label>
@@ -433,7 +539,6 @@ onMounted(async () => {
           <option value="">All sources</option>
           <option value="pinned">Pinned</option>
           <option value="rendered">Rendered</option>
-          <option value="library">Library</option>
         </select>
       </div>
 
@@ -468,7 +573,7 @@ onMounted(async () => {
             <div class="title" :title="it.title">{{ it.title || 'TMDb ' + it.tmdb_id }}</div>
             <div class="sub">
               {{ it.type === 'tv' ? 'TV' : 'Movie' }}<template v-if="it.season !== null && it.season !== undefined"> · Season {{ it.season }}</template>
-              · {{ it.preset || 'default' }}
+              · {{ it.preset || 'default' }}<template v-if="it.group"> · {{ groupName(it.group) }}</template>
             </div>
             <div class="sub">{{ it.hits }} hits · {{ fmtTime(it.last_served_at) }}</div>
           </div>
@@ -486,6 +591,58 @@ onMounted(async () => {
         <button class="secondary-small" @click="nextPage" :disabled="page >= totalPages">Next</button>
       </div>
       <div v-if="total > items.length" class="hint">Showing the first {{ items.length }} of {{ total }}. Narrow the search to see others.</div>
+    </div>
+
+    <div class="view glass">
+      <div class="row between">
+        <h3>Recent requests</h3>
+        <div class="row">
+          <button class="secondary-small" @click="loadRequests" :disabled="reqLoading">{{ reqLoading ? 'Loading…' : 'Refresh' }}</button>
+          <button class="secondary-small" @click="clearRequests" :disabled="!reqTotal && !Object.keys(reqCounts).length">Clear</button>
+        </div>
+      </div>
+      <p class="muted">Every call to the poster URLs and what Simposter answered with. The newest 2000 are kept.</p>
+      <div class="row wrap req-counts">
+        <span v-for="r in REQUEST_RESULTS" :key="r.value" class="req-count" :title="r.hint">
+          <span class="req-badge" :class="'r-' + r.value">{{ r.label }}</span> {{ reqCounts[r.value] || 0 }}
+        </span>
+      </div>
+      <div class="row wrap">
+        <input class="text-input" v-model="reqSearch" placeholder="Search title or TMDb id" />
+        <select class="text-input" v-model="reqResult">
+          <option value="">All results</option>
+          <option v-for="r in REQUEST_RESULTS" :key="r.value" :value="r.value">{{ r.label }}</option>
+        </select>
+      </div>
+      <div v-if="!requests.length" class="hint">{{ reqLoading ? 'Loading…' : 'No requests yet.' }}</div>
+      <div v-else class="req-table-wrap">
+        <table class="req-table">
+          <thead>
+            <tr><th>Time</th><th>Title</th><th>Request</th><th>Result</th><th class="num-col">Took</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in requests" :key="r.id">
+              <td class="nowrap">{{ fmtTime(r.requested_at) }}</td>
+              <td>
+                {{ r.title || (r.tmdb_id ? 'TMDb ' + r.tmdb_id : '—') }}
+                <span v-if="r.title && r.tmdb_id" class="muted"> · TMDb {{ r.tmdb_id }}</span>
+              </td>
+              <td class="muted">
+                {{ r.type === 'tv' ? 'TV' : r.type === 'movie' ? 'Movie' : '?' }}<template v-if="r.season !== null && r.season !== undefined"> · Season {{ r.season }}</template>
+                <template v-if="r.preset"> · {{ r.preset }}</template>
+                <template v-if="r.group"> · {{ groupName(r.group) }}</template>
+              </td>
+              <td><span class="req-badge" :class="'r-' + r.result" :title="resultHint(r.result)">{{ resultLabel(r.result) }}</span></td>
+              <td class="num-col muted">{{ r.duration_ms != null ? (r.duration_ms >= 1000 ? (r.duration_ms / 1000).toFixed(1) + ' s' : r.duration_ms + ' ms') : '' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="reqTotal > REQ_PAGE" class="row">
+        <button class="secondary-small" @click="reqPage(-1)" :disabled="reqOffset === 0">Newer</button>
+        <span class="muted">{{ reqOffset + 1 }}–{{ Math.min(reqOffset + REQ_PAGE, reqTotal) }} of {{ reqTotal }}</span>
+        <button class="secondary-small" @click="reqPage(1)" :disabled="reqOffset + REQ_PAGE >= reqTotal">Older</button>
+      </div>
     </div>
 
     <div class="view glass">
@@ -542,6 +699,21 @@ button.secondary-small.danger:hover:not(:disabled) { border-color: rgba(255, 120
 .b-pinned { color: #ffd479; }
 .b-rendered { color: #3dd6b7; }
 .b-library { color: #8fb4ff; }
+.req-counts { margin: 4px 0 10px; gap: 14px; }
+.req-count { font-size: 13px; }
+.req-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); }
+.r-library { color: #8fb4ff; }
+.r-pinned { color: #ffd479; }
+.r-rendered { color: #3dd6b7; }
+.r-generated { color: #b48cff; }
+.r-redirect { color: #ffb36b; }
+.r-not_found, .r-bad_key { color: #ff7b7b; }
+.req-table-wrap { overflow-x: auto; margin-top: 10px; }
+.req-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.req-table th { text-align: left; font-weight: 600; color: var(--text-muted); padding: 6px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+.req-table td { padding: 6px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); vertical-align: top; }
+.req-table .num-col { text-align: right; white-space: nowrap; }
+.req-table .nowrap { white-space: nowrap; }
 .meta .title { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meta .sub { font-size: 12px; color: #a8b3cf; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; }

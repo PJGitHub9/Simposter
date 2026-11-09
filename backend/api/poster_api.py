@@ -5,6 +5,7 @@ import secrets
 import base64
 import io
 import os
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -38,6 +39,10 @@ def put_poster_api_settings(body: PosterApiSettings):
         pid = getattr(body, field)
         if pid and pid not in uniform:
             raise HTTPException(status_code=400, detail=f"Unknown uniformlogo preset '{pid}' for {field}")
+    for field, media_type in (("movieGroup", "movie"), ("tvGroup", "tv")):
+        gid = (getattr(body, field) or "").strip()
+        if gid and not store.resolve_group(media_type, gid):
+            raise HTTPException(status_code=400, detail=f"Unknown library group '{gid}' for {field}")
     if body.key == SECRET_MASK:
         body.key = current.key
     body.waitSeconds = store.clamp_wait_seconds(body.waitSeconds)
@@ -76,11 +81,37 @@ def _sniff_media_type(path) -> str:
     return "image/png" if head == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
 
 
+def _request_title(media_type: str, tmdb_id: int, season: Optional[int], served=None) -> Optional[str]:
+    """Best title for the request history: the served cache row's title, else the library's."""
+    try:
+        if served is not None and served.source in ("rendered", "pinned") and served.path:
+            with db.get_db() as conn:
+                row = conn.execute("SELECT title FROM poster_api_cache WHERE file_path = ? AND title IS NOT NULL "
+                                   "AND title != '' LIMIT 1", (str(served.path),)).fetchone()
+            if row:
+                return row["title"]
+        return db.get_title_for_tmdb_id(media_type, tmdb_id)
+    except Exception:
+        return None
+
+
+def _log_request(media_type, tmdb_id, season, preset, group_id, result, title, started) -> None:
+    try:
+        db.poster_api_request_log(media_type, tmdb_id, season, preset or "", group_id or "", result, title,
+                                  int((time.monotonic() - started) * 1000))
+    except Exception:
+        logger.debug("[POSTER API] Could not record the request", exc_info=True)
+
+
 def handle_poster_request(request: Request, tmdb_id: Optional[int], type_: Optional[str],
-                          season: Optional[int], preset: Optional[str]) -> Response:
-    """Shared by GET /api/poster, GET /api/poster/{type}/{id} and the root GET /poster."""
+                          season: Optional[int], preset: Optional[str],
+                          group: Optional[str] = None) -> Response:
+    """Shared by GET /api/poster, GET /api/poster/{type}/{id} and the root GET /poster.
+    Every request that reaches a lookup (and every rejected key) goes into the
+    request history shown on the Poster API page."""
     from .. import poster_api
 
+    started = time.monotonic()
     cfg = store.get_settings()
     if not cfg.enabled:
         raise HTTPException(status_code=404, detail="Not found")
@@ -89,6 +120,8 @@ def handle_poster_request(request: Request, tmdb_id: Optional[int], type_: Optio
         supplied = request.query_params.get("key") or ""
         if not hmac.compare_digest(supplied.encode("utf-8"), cfg.key.encode("utf-8")):
             logger.warning("[POSTER API] Rejected %s: missing or invalid key (key=***)", request.url.path)
+            _log_request(_TYPE_MAP.get((type_ or "").strip().lower()), tmdb_id if (tmdb_id or 0) > 0 else None,
+                         season, preset, "", "bad_key", None, started)
             raise HTTPException(status_code=401, detail="Invalid or missing key")
 
     media_type = _TYPE_MAP.get((type_ or "").strip().lower())
@@ -104,12 +137,27 @@ def handle_poster_request(request: Request, tmdb_id: Optional[int], type_: Optio
     if preset and not re.fullmatch(r"[a-zA-Z0-9_-]+", preset):
         raise HTTPException(status_code=400, detail="invalid preset")
 
-    served = poster_api.serve(media_type, tmdb_id, season, preset)
+    # group: a library group id or name (e.g. a 4K group vs a regular one); decides
+    # which library copy's poster is served and whose media info feeds the badges.
+    group = (group or "").strip()[:200] or None
+    group_id = poster_api.resolve_request_group(media_type, group)
+    if group_id is None:
+        _log_request(media_type, tmdb_id, season, preset, group or "", "not_found",
+                     _request_title(media_type, tmdb_id, season), started)
+        raise HTTPException(status_code=404, detail="Unknown library group")
+    served = poster_api.serve(media_type, tmdb_id, season, preset, group_id or None)
+    if served.kind == "file" and served.path:
+        result = "generated" if served.generated else (served.source or "rendered")
+    else:
+        result = "redirect" if served.kind == "redirect" else ("not_found" if served.kind == "not_found" else "rendered")
+    _log_request(media_type, tmdb_id, season, preset, group_id, result,
+                 _request_title(media_type, tmdb_id, season, served), started)
     if served.kind == "redirect" and served.url:
         return RedirectResponse(served.url, status_code=302)
     if served.kind == "file" and served.path:
         try:
-            store.touch_served(store.CacheKey(media_type, tmdb_id, season, preset or ""), served.source or "rendered")
+            store.touch_served(store.CacheKey(media_type, tmdb_id, season, preset or "", group_id),
+                               served.source or "rendered")
         except Exception:
             logger.exception("[POSTER API] touch_served failed")
         return FileResponse(str(served.path), media_type=_sniff_media_type(served.path), headers=_CACHE_HEADERS)
@@ -120,14 +168,14 @@ def handle_poster_request(request: Request, tmdb_id: Optional[int], type_: Optio
 
 @router.get("/poster")
 def api_poster(request: Request, tmdb_id: Optional[int] = None, type: Optional[str] = None,
-               season: Optional[int] = None, preset: Optional[str] = None):
-    return handle_poster_request(request, tmdb_id, type, season, preset)
+               season: Optional[int] = None, preset: Optional[str] = None, group: Optional[str] = None):
+    return handle_poster_request(request, tmdb_id, type, season, preset, group)
 
 
 @router.get("/poster/{media_type}/{tmdb_id}")
 def api_poster_path(request: Request, media_type: str, tmdb_id: int,
-                    season: Optional[int] = None, preset: Optional[str] = None):
-    return handle_poster_request(request, tmdb_id, media_type, season, preset)
+                    season: Optional[int] = None, preset: Optional[str] = None, group: Optional[str] = None):
+    return handle_poster_request(request, tmdb_id, media_type, season, preset, group)
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +184,7 @@ def api_poster_path(request: Request, media_type: str, tmdb_id: int,
 
 MAX_PIN_BYTES = 20 * 1024 * 1024
 MAX_BULK_ITEMS = 500  # bulk regenerate/clear per request
-_SOURCES = ("rendered", "pinned", "library")
+_SOURCES = ("rendered", "pinned")
 
 
 def _norm_type(type_: Optional[str]) -> str:
@@ -159,7 +207,8 @@ def _admin_key(body, allow_preset: bool = True) -> "store.CacheKey":
     preset = (getattr(body, "preset", None) or "").strip() if allow_preset else ""
     if preset and not re.fullmatch(r"[a-zA-Z0-9_-]+", preset):
         raise HTTPException(status_code=400, detail="invalid preset")
-    return store.CacheKey(media_type, int(body.tmdb_id), season, preset)
+    group = (getattr(body, "group", None) or "").strip() if allow_preset else ""
+    return store.CacheKey(media_type, int(body.tmdb_id), season, preset, group)
 
 
 @router.get("/poster-api/status")
@@ -202,7 +251,8 @@ def _item_json(r: dict) -> dict:
         "type": r["media_type"],
         "tmdb_id": r["tmdb_id"],
         "season": None if season is None or season < 0 else season,
-        "preset": r.get("preset_key") or "",
+        "preset": store.split_dbkey(r.get("preset_key") or "")[0],
+        "group": store.split_dbkey(r.get("preset_key") or "")[1],
         "source": r["source"],
         "title": r.get("title") or "",
         "hits": r.get("hits") or 0,
@@ -210,6 +260,37 @@ def _item_json(r: dict) -> dict:
         "last_served_at": r.get("last_served_at"),
         "thumb_url": f"/api/poster-api/thumb/{r['id']}",
     }
+
+
+_REQUEST_RESULTS = ("library", "pinned", "rendered", "generated", "redirect", "not_found", "bad_key")
+
+
+@router.get("/poster-api/requests")
+def poster_api_requests(result: Optional[str] = None, search: str = "", offset: int = 0, limit: int = 50):
+    if result and result not in _REQUEST_RESULTS:
+        raise HTTPException(status_code=400, detail="invalid result")
+    rows, total, counts = db.poster_api_requests_list(result or None, search, max(0, offset), max(1, min(200, limit)))
+    return {
+        "items": [{
+            "id": r["id"],
+            "requested_at": r["requested_at"],
+            "type": r["media_type"],
+            "tmdb_id": r["tmdb_id"],
+            "season": r["season_index"],
+            "preset": r["preset"] or "",
+            "group": r["group_id"] or "",
+            "result": r["result"],
+            "title": r["title"] or "",
+            "duration_ms": r["duration_ms"],
+        } for r in rows],
+        "total": total,
+        "counts": counts,
+    }
+
+
+@router.delete("/poster-api/requests")
+def poster_api_requests_clear():
+    return {"deleted": db.poster_api_requests_clear()}
 
 
 @router.get("/poster-api/items")
@@ -270,7 +351,7 @@ def poster_api_regenerate(body: PosterApiTarget):
 def _clear_key(key: "store.CacheKey", source: Optional[str]) -> int:
     """Delete rows (and their files and thumbnails) for one key; source None = all."""
     season_index = -1 if key.season is None else key.season
-    rows = db.poster_api_cache_rows_for_key(key.media_type, key.tmdb_id, season_index, key.preset_key, source)
+    rows = db.poster_api_cache_rows_for_key(key.media_type, key.tmdb_id, season_index, store._dbkey(key), source)
     deleted = store.delete_entry(key, source)
     for r in rows:
         try:
@@ -354,7 +435,10 @@ def poster_api_pin(body: PosterApiPinRequest):
     # The pinned poster replaces the default render for this title, which is
     # never served while a pin exists -- remove it rather than keep a dead copy.
     # Renders for an explicit ?preset= are still served, so they stay.
-    removed = _clear_key(store.CacheKey(key.media_type, key.tmdb_id, key.season, ""), "rendered")
+    # The default slot exists once per library group (plus "any library").
+    group_ids = [""] + [str(g.get("id")) for g in store._library_groups(key.media_type) if g.get("id")]
+    removed = sum(_clear_key(store.CacheKey(key.media_type, key.tmdb_id, key.season, "", gid), "rendered")
+                  for gid in group_ids)
     return {"ok": True, "removed_rendered": removed}
 
 

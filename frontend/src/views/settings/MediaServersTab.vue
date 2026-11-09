@@ -211,6 +211,22 @@
     </div>
     </div>
 
+    <!-- Poster API: off by default; the sidebar page only appears once it's on.
+         Saved straight away (its own endpoint), not with "Save Media Servers". -->
+    <div class="section">
+      <h3>Poster API</h3>
+      <p class="poster-api-text">
+        Lets other apps ask Simposter for a poster by TMDb id. Turning it on adds the Poster API page to the sidebar,
+        where you set the key and default presets.
+      </p>
+      <label class="poster-api-toggle">
+        <input type="checkbox" :checked="posterApiEnabled" :disabled="posterApiSaving" @change="togglePosterApi(($event.target as HTMLInputElement).checked)" />
+        Enable Poster API
+      </label>
+      <router-link v-if="posterApiEnabled" to="/poster-api" class="poster-api-link">Open the Poster API page</router-link>
+      <p v-if="posterApiError" class="poster-api-error">{{ posterApiError }}</p>
+    </div>
+
     <!-- "When the same item is found on more than one server, prefer..." used
          to live here as one global setting (Quirk #74). Moved to Settings ->
          Libraries, scoped per Library Group instead (see
@@ -283,6 +299,31 @@ const localPlexToken = computed({
 
 const apiBase = getApiBase()
 const settingsStore = useSettingsStore()
+
+// Poster API on/off. PUT /api/poster-api/settings needs the whole settings
+// object, so read the current one and change only `enabled`.
+const posterApiEnabled = computed(() => !!settingsStore.posterApi.value.enabled)
+const posterApiSaving = ref(false)
+const posterApiError = ref('')
+async function togglePosterApi(enabled: boolean) {
+  posterApiSaving.value = true
+  posterApiError.value = ''
+  try {
+    const cur = await fetch(`${apiBase}/api/poster-api/settings`)
+    if (!cur.ok) throw new Error(`Could not read the Poster API settings (${cur.status})`)
+    const res = await fetch(`${apiBase}/api/poster-api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...(await cur.json()), enabled }),
+    })
+    if (!res.ok) throw new Error(`Saving failed (${res.status})`)
+    settingsStore.posterApi.value = await res.json()
+  } catch (e) {
+    posterApiError.value = e instanceof Error ? e.message : 'Saving failed'
+  } finally {
+    posterApiSaving.value = false
+  }
+}
 const servers = settingsStore.mediaServers
 
 // The primary Plex connection can be named too, same as any other server --
@@ -648,6 +689,29 @@ h3 {
   color: var(--text-secondary);
   font-style: italic;
   margin: 0 0 16px 0;
+}
+
+.poster-api-text {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.poster-api-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.poster-api-link {
+  margin-left: 16px;
+  color: var(--accent, #3dd6b7);
+  font-size: 14px;
+}
+.poster-api-error {
+  color: #ff6b6b;
+  font-size: 13px;
+  margin: 8px 0 0;
 }
 
 .section {

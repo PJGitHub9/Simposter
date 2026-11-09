@@ -120,6 +120,8 @@ export type PosterApiSettings = {
   defaultTvPreset: string
   waitSeconds: number
   retentionDays: number
+  movieGroup?: string // library group id used when a request names none; '' = any library
+  tvGroup?: string
 }
 
 // List sources for overlay "On a list" rules (backend/list_sources.py).
@@ -365,7 +367,9 @@ async function loadSettings() {
       defaultMoviePreset: data.posterApi?.defaultMoviePreset ?? '',
       defaultTvPreset: data.posterApi?.defaultTvPreset ?? '',
       waitSeconds: data.posterApi?.waitSeconds ?? 10,
-      retentionDays: data.posterApi?.retentionDays ?? 90
+      retentionDays: data.posterApi?.retentionDays ?? 90,
+      movieGroup: data.posterApi?.movieGroup ?? '',
+      tvGroup: data.posterApi?.tvGroup ?? ''
     }
     wetrakr.value = { clientId: data.wetrakr?.clientId ?? '' }
     simkl.value = { clientId: data.simkl?.clientId ?? '' }

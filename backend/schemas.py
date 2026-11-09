@@ -380,6 +380,11 @@ class PosterApiSettings(BaseModel):
     defaultTvPreset: str = ""
     waitSeconds: int = 10  # how long a request waits for a render before 302 to TMDb (2-30)
     retentionDays: int = 90  # rendered cache entries unserved this long are pruned
+    # Library group (LibraryGroup.id) a request uses when it names none: which
+    # library copy's poster is served and whose media info feeds overlay badges.
+    # "" = any library (Plex copy first).
+    movieGroup: str = ""
+    tvGroup: str = ""
 
 
 class PosterApiTarget(BaseModel):
@@ -388,6 +393,7 @@ class PosterApiTarget(BaseModel):
     tmdb_id: int
     season: Optional[int] = None
     preset: Optional[str] = None
+    group: Optional[str] = None  # library group id ("" / None = the default slot)
 
 
 class PosterApiClearRequest(PosterApiTarget):

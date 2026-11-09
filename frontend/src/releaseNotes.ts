@@ -10,6 +10,32 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.52',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster API request history: the Poster API page lists recent calls with what each one got back (a poster from your library, a pinned one, an earlier render, a new render, the stock TMDb poster, not found, or a wrong key), how long it took, and totals per result.',
+          'Poster API library groups: pick which movie and TV library group the Poster API uses (for example "4K Movies" or "Movies"), or add &group=Name to a request URL, so one app can get the 4K version and another the regular one. The group decides which existing poster is served and where the 4K/HDR/audio badges come from.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'The Poster API rendered a new poster even when the title\u2019s poster was already in your library. It now serves the poster your media server has (or the last one Simposter sent) without rendering.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Posters the Poster API serves straight from your library no longer get a tile on the Poster API page (they are files your library already has); they show in the request history instead.',
+          'The Poster API page only appears in the sidebar once the Poster API is turned on. The on/off switch moved to Settings \u2192 Media Servers.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.51',
     date: '2026-11-09',
     sections: [
