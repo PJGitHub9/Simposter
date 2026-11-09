@@ -34,6 +34,8 @@ const props = defineProps<{
   libraries: LibraryMapping[]
   tvShowLibraries: LibraryMapping[]
   unsavedChanges: boolean
+  // Per-section unsaved flags from SettingsView.vue (sectionsWithChanges)
+  changed?: Record<string, boolean>
 }>()
 
 const emit = defineEmits<{
@@ -314,7 +316,7 @@ const testWebhook = async () => {
     <h2>Notifications</h2>
 
     <!-- Discord Webhook -->
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.discord }]">
       <h3>Discord Webhook</h3>
       <p class="section-description">
         Receive notifications in Discord when posters are generated.
@@ -454,7 +456,7 @@ const testWebhook = async () => {
     </div>
 
     <!-- Apprise -->
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.apprise }]">
       <h3>Apprise</h3>
       <p class="section-description">
         Send notifications to 70+ services (Slack, Telegram, Pushover, Gotify, ntfy, email, and more)
@@ -1029,5 +1031,11 @@ code {
   padding: 1px 5px;
   font-size: 11px;
   font-family: monospace;
+}
+
+/* Yellow highlight for a section with unsaved changes (flags from SettingsView.vue). */
+.section.section-unsaved {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
 }
 </style>

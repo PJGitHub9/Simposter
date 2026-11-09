@@ -164,6 +164,13 @@ const toggleTvLib = (key: string) => {
   else selectedTvLibs.value.add(key)
 }
 
+// Keeps a library's existing per-library settings (auto-generate, webhook
+// ignore labels, display name) when the wizard re-saves the Plex library list.
+const withExistingMapping = (m: { id: string; title: string; displayName: string }, existing: any[] | undefined) => {
+  const prev = (existing || []).find((e: any) => String(e?.id) === String(m.id))
+  return prev ? { ...prev, ...m, displayName: prev.displayName || m.displayName } : m
+}
+
 const initLibraries = () => {
   selectedMovieLibs.value = new Set(movieLibSections.value.map(s => s.key))
   selectedTvLibs.value = new Set(tvLibSections.value.map(s => s.key))
@@ -345,16 +352,18 @@ const saveSettings = async () => {
     // written -- but the rest of this object (url/token/library mappings) is
     // Plex-specific and only overwritten when Plex was actually chosen this run, so
     // re-running the wizard without Plex can't blank out a real prior Plex connection.
-    settings.plex.value = wantsPlex.value ? {
+    // Only when Plex was actually connected this run: otherwise the library
+    // lists are empty and saving them would wipe the existing Plex libraries.
+    settings.plex.value = wantsPlex.value && plexOk.value ? {
       ...settings.plex.value,
       url: plexUrl.value,
       token: plexToken.value,
       movieLibraryName: movieMappings[0]?.title || '',
       movieLibraryNames: movieMappings.map(m => m.title),
-      libraryMappings: movieMappings.map(m => ({ ...m })),
+      libraryMappings: movieMappings.map(m => withExistingMapping(m, settings.plex.value.libraryMappings)),
       tvShowLibraryName: tvMappings[0]?.title || '',
       tvShowLibraryNames: tvMappings.map(m => m.title),
-      tvShowLibraryMappings: tvMappings.map(m => ({ ...m })),
+      tvShowLibraryMappings: tvMappings.map(m => withExistingMapping(m, settings.plex.value.tvShowLibraryMappings)),
       sendLogosToPlex: sendLogosToPlex.value,
     } : {
       ...settings.plex.value,
@@ -407,12 +416,14 @@ const saveSettings = async () => {
       enabled: scanFrequency.value !== 'never',
       cronExpression: scanCronExpression.value || '0 1 * * *',
       // Empty = every library on every server (narrow it later in Settings -> Libraries).
-      libraryIds: [],
+      // A re-run keeps the selection made in Settings.
+      libraryIds: isRerun ? (settings.scheduler.value.libraryIds || []) : [],
     }
     // defaultLabelsToRemove keyed by library ID so SettingsView renders correctly --
     // Plex-only concept, skipped entirely when Plex wasn't chosen.
-    if (wantsPlex.value) {
-      const labelsRecord: Record<string, string[]> = {}
+    if (wantsPlex.value && plexOk.value) {
+      // Merge, so libraries not picked this run keep their own label lists.
+      const labelsRecord: Record<string, string[]> = { ...settings.defaultLabelsToRemove.value }
       allLibIds.forEach(id => { labelsRecord[id] = labelsToRemove })
       settings.defaultLabelsToRemove.value = labelsRecord
     }
@@ -545,10 +556,10 @@ const savePlexEarly = async () => {
     token: plexToken.value,
     movieLibraryName: movieMappings[0]?.title || '',
     movieLibraryNames: movieMappings.map(m => m.title),
-    libraryMappings: movieMappings,
+    libraryMappings: movieMappings.map(m => withExistingMapping(m, settings.plex.value.libraryMappings)),
     tvShowLibraryName: tvMappings[0]?.title || '',
     tvShowLibraryNames: tvMappings.map(m => m.title),
-    tvShowLibraryMappings: tvMappings,
+    tvShowLibraryMappings: tvMappings.map(m => withExistingMapping(m, settings.plex.value.tvShowLibraryMappings)),
   }
   await settings.save()
 }
@@ -789,7 +800,7 @@ const goBack = () => {
 }
 
 // ── Close ──────────────────────────────────────────────────────────────────
-const markOnboardingDone = async () => {
+const markOnboardingDone = async (saveWizardSettings = true) => {
   try {
     // Defense-in-depth: saveSettings() (above) is only ever triggered from
     // ONE specific step-transition (`if (step.value === 'performance')` in
@@ -805,7 +816,10 @@ const markOnboardingDone = async () => {
     // no-op in the normal case (its own settingsSaved guard already fired),
     // and the real save in the bug case -- either way, this function is the
     // ONE path guaranteed to run on every close/skip.
-    await saveSettings()
+    // Skip (saveWizardSettings=false) only marks setup as done: the wizard's
+    // fields still hold their defaults then, and saving them would overwrite
+    // the real settings (timezone, performance, automation, scan schedule...).
+    if (saveWizardSettings) await saveSettings()
     settings.onboardingCompleted.value = true
     await settings.save()
   } catch { /* non-fatal */ }
@@ -834,12 +848,34 @@ const close = async () => {
 }
 
 const skip = async () => {
-  await markOnboardingDone()
+  await markOnboardingDone(false)
   await settings.load()
   emit('done')
 }
 
 onMounted(() => {
+  // A re-run starts from the current settings, not the wizard's defaults, so
+  // stepping through it doesn't silently reset anything that isn't changed.
+  if (isRerun) {
+    if (settings.timezone.value) timezone.value = settings.timezone.value
+    concurrentRenders.value = settings.performance.value.concurrentRenders ?? concurrentRenders.value
+    outputFormat.value = (settings.imageQuality.value.outputFormat as any) || outputFormat.value
+    jpgQuality.value = settings.imageQuality.value.jpgQuality ?? jpgQuality.value
+    webpQuality.value = settings.imageQuality.value.webpQuality ?? webpQuality.value
+    existingContentMode.value = (settings.automation.value.existingContentMode as any) || existingContentMode.value
+    sendLogosToPlex.value = !!settings.plex.value.sendLogosToPlex
+    usingKometa.value = !!settings.automation.value.kometaCompatibility
+    sendLabel.value = !!settings.automation.value.labelToAdd
+    if (settings.automation.value.labelToAdd) labelName.value = settings.automation.value.labelToAdd
+    const sched = settings.scheduler.value
+    if (!sched.enabled) scanFrequency.value = 'never'
+    else if (sched.cronExpression === '0 1 * * *') scanFrequency.value = 'daily'
+    else if (sched.cronExpression === '0 1 * * 0') scanFrequency.value = 'weekly'
+    else { scanFrequency.value = 'custom'; customCron.value = sched.cronExpression || customCron.value }
+    const urls = settings.notifications.value.appriseUrls || []
+    wantsNotifications.value = !!settings.notifications.value.appriseEnabled && urls.length > 0
+    appriseUrls.value = urls.join('\n')
+  }
   if (settings.plex.value.url) plexUrl.value = settings.plex.value.url
   if (settings.plex.value.token) plexToken.value = settings.plex.value.token
   if (settings.tmdb.value.apiKey) tmdbApiKey.value = settings.tmdb.value.apiKey

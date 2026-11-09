@@ -10,6 +10,27 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.51',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Some changes in Settings could not be saved: changing the theme, poster density, timezone, default sort, duplicate grouping or any save location left the Save button on "No Changes", and a few other settings could lose their unsaved status after another change.',
+          'Clicking "Skip setup" in the setup wizard overwrote existing settings with the wizard defaults (timezone, performance, image quality, automation, scan schedule) and could clear your Plex library list.',
+          'Settings are no longer saved if they never loaded, which could otherwise write blank values (including API keys) over your real settings.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Every section in Settings now turns yellow when it has unsaved changes, and goes back to normal if you change a value back.',
+          'Running the setup wizard again starts from your current settings, keeps your scan schedule library selection, and keeps each Plex library’s auto-generate and ignore-label settings. Plex libraries are only changed when Plex was connected in that run.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.50',
     date: '2026-11-08',
     sections: [

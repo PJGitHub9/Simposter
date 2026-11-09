@@ -443,6 +443,14 @@ async function loadSettings() {
 // server(s) this save. The backend otherwise refuses an empty mediaServers
 // list when entries are already saved (a guard against accidental wipes).
 async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
+  // Never save before a successful load: every field would still hold its
+  // in-memory default, and saving those would overwrite the real settings
+  // (blank API keys, default automation, ...). Refuse and reload instead.
+  if (!loaded.value) {
+    await loadSettings()
+    error.value = 'Settings had not loaded yet, so nothing was saved. Check the values and save again.'
+    return
+  }
   loading.value = true
   error.value = null
   try {

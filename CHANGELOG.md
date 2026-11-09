@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.51 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Settings edits that never enabled Save** — about 30 staged fields (General: theme, posterDensity, timezone, deduplicateMovies, defaultSort; Output: every save location and tvShowSaveMode; several Automation, Apprise and Libraries fields) were missing from `SettingsView.vue`'s `watch([...], checkForChanges)` list, so the Save button stayed "No Changes". Inline `hasUnsavedChanges = true` flags could be cleared by the next watched change, and `sendLogosToPlex` was in neither snapshot. Every staged field is now watched and in both snapshots.
+- **Wizard Skip overwrote settings** — `skip()` ran the wizard's full `saveSettings()` with untouched defaults (and an empty Plex library list, since Plex is ticked by default). `markOnboardingDone(false)` now only marks onboarding complete.
+- **Save before load** — the settings store's `saveSettings()` refuses to save (and reloads) when settings never loaded, instead of sending in-memory defaults.
+
+### Improvements
+- **Per-section unsaved highlight** — `checkForChanges()` computes every section flag from the saved snapshot (new `libraryDisplay`, `ratings`, `logoDefaults`, `labels`, `discord`, `apprise`, `cleanupSchedule`, `rateLimits`; `scheduler` is scan-only). Tabs receive them as a `changed` prop and use `section-unsaved`.
+- **Wizard re-run** — prefilled from current settings (timezone, performance, image quality, automation, labels, scan schedule, Apprise); keeps the scan library selection; Plex connection, library mappings and labels-to-remove only written when Plex was connected this run, keeping existing per-library settings (`withExistingMapping()`).
+
 ## v1.8.50 (2026-11-08) — `dev-noserver` branch
 
 ### New Features

@@ -14,6 +14,8 @@ const props = defineProps<{
   tvdbApiKey: string
   fanartApiKey: string
   unsavedChanges: boolean
+  // Per-section unsaved flags from SettingsView.vue (sectionsWithChanges)
+  changed?: Record<string, boolean>
   testingKeys?: Record<string, boolean>
   apiKeyTestResults?: Record<string, string>
   // Which tab this instance is: General (appearance, display, API keys) or
@@ -302,7 +304,7 @@ const timezones = computed(() => {
     <h2>{{ part === 'ratings' ? 'Ratings & Lists' : 'General Settings' }}</h2>
 
     <template v-if="part !== 'ratings'">
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.appearance }]">
       <h3>Appearance</h3>
 
       <label>
@@ -340,7 +342,7 @@ const timezones = computed(() => {
       </label>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.libraryDisplay }]">
       <h3>Library Display</h3>
       <p class="section-description">
         Configure how movies and TV shows are displayed in library and batch edit views.
@@ -372,7 +374,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.apiKeys }]">
       <h3>API Keys</h3>
       <p class="section-description">
         Configure API keys for accessing metadata from external services.
@@ -455,7 +457,7 @@ const timezones = computed(() => {
     </template>
 
     <template v-else>
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>Overlay ratings</h3>
       <p class="section-description">
         Where the <code>audience_rating</code> and <code>critic_rating</code> values in overlays come from.
@@ -496,7 +498,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>MDBList (overlay ratings &amp; lists)</h3>
       <p class="section-description">
         Overlays can show ratings from IMDb, Rotten Tomatoes, TMDb, Trakt, Metacritic, Letterboxd and more, and only appear on
@@ -526,7 +528,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>WeTrakr (overlay lists)</h3>
       <p class="section-description">
         Show an overlay layer only on items in a WeTrakr list. Public lists work with just the Client ID. Your own private
@@ -564,7 +566,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>SIMKL (overlay lists)</h3>
       <p class="section-description">
         Show an overlay layer only on items in your SIMKL Plan to Watch, Watching, Completed, On Hold or Dropped list, or in a
@@ -605,7 +607,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>Floppy (overlay lists)</h3>
       <p class="section-description">
         Show an overlay layer only on items in a list on your own Floppy server.
@@ -994,5 +996,11 @@ button:disabled {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+/* Yellow highlight for a section with unsaved changes (flags from SettingsView.vue). */
+.section.section-unsaved {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
 }
 </style>

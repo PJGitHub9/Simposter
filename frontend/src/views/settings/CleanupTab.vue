@@ -52,6 +52,8 @@ const props = defineProps<{
   scheduleCategories: string[]
   scheduleHistoryDays: number
   unsavedChanges: boolean
+  // Per-section unsaved flags from SettingsView.vue (sectionsWithChanges)
+  changed?: Record<string, boolean>
 }>()
 
 const emit = defineEmits<{
@@ -589,7 +591,7 @@ async function runDbVacuum() {
       </template>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.cleanupSchedule }]">
       <h3>Scheduled Cleanup</h3>
       <p class="section-description">
         Automatically scan and move matched categories to the cleanup trash on a schedule -- never permanently
@@ -1205,5 +1207,11 @@ button:disabled {
 }
 .error-note {
   color: #f05d7b;
+}
+
+/* Yellow highlight for a section with unsaved changes (flags from SettingsView.vue). */
+.section.section-unsaved {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
 }
 </style>

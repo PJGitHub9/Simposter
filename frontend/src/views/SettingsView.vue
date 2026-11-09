@@ -88,7 +88,17 @@ const sectionsWithChanges = ref({
   // the untouched Plex/Emby sections too.
   mediaServersPlex: false,
   mediaServersJellyfin: false,
-  mediaServersEmby: false
+  mediaServersEmby: false,
+  // One flag per Settings section, all computed in checkForChanges() from the
+  // saved snapshot (so a value changed back to what's saved clears it again).
+  libraryDisplay: false,
+  ratings: false,
+  logoDefaults: false,
+  labels: false,
+  discord: false,
+  apprise: false,
+  cleanupSchedule: false,
+  rateLimits: false,
 })
 
 // Cooldown state to prevent rapid clicking
@@ -423,6 +433,7 @@ const captureSettingsSnapshot = () => {
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
     reuseCachedPosterDays: localReuseCachedPosterDays.value,
+    sendLogosToPlex: localSendLogosToPlex.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -473,6 +484,9 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.mediaServersPlex = false
   sectionsWithChanges.value.mediaServersJellyfin = false
   sectionsWithChanges.value.mediaServersEmby = false
+  for (const key of Object.keys(sectionsWithChanges.value) as Array<keyof typeof sectionsWithChanges.value>) {
+    sectionsWithChanges.value[key] = false
+  }
 
   setTimeout(() => {
     watchersEnabled.value = true
@@ -530,6 +544,7 @@ const checkForChanges = () => {
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
     reuseCachedPosterDays: localReuseCachedPosterDays.value,
+    sendLogosToPlex: localSendLogosToPlex.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -622,7 +637,41 @@ const checkForChanges = () => {
     JSON.stringify(localCleanupScheduleCategories.value) !== JSON.stringify(initial.cleanupScheduleCategories) ||
     localCleanupScheduleHistoryDays.value !== initial.cleanupScheduleHistoryDays
 
-
+  // Every remaining section is computed from the snapshot too, so its yellow
+  // highlight clears again when a value is changed back.
+  const differs = (keys: string[]) => {
+    const now = JSON.parse(currentSnapshot)
+    return keys.some(k => JSON.stringify(now[k]) !== JSON.stringify(initial[k]))
+  }
+  sectionsWithChanges.value.appearance = differs(['theme', 'posterDensity', 'timezone'])
+  sectionsWithChanges.value.libraryDisplay = differs(['deduplicateMovies', 'defaultSort'])
+  sectionsWithChanges.value.apiKeys = differs(['tmdbApiKey', 'tvdbApiKey', 'fanartApiKey', 'apiOrder'])
+  sectionsWithChanges.value.ratings = differs(['mdblist', 'wetrakr', 'simkl', 'floppy'])
+  sectionsWithChanges.value.imageQuality = differs(['outputFormat', 'jpgQuality', 'pngCompression', 'webpQuality'])
+  sectionsWithChanges.value.performance = differs(['concurrentRenders', 'useOverlayCache', 'memoryLimit'])
+  sectionsWithChanges.value.rateLimits = differs(['tmdbRateLimit', 'tvdbRateLimit'])
+  sectionsWithChanges.value.automation = differs([
+    'webhookAutoSend', 'webhookAutoLabels', 'labelToAdd', 'webhookAlwaysRegenerateSeason', 'webhookSecret',
+    'existingContentMode', 'retryUntilTemplateMet', 'retryIntervalHours', 'retryMaxAttempts', 'reuseCachedPosterDays',
+  ])
+  sectionsWithChanges.value.logoDefaults = differs(['sendLogosToPlex'])
+  sectionsWithChanges.value.labels = differs(['defaultLabelsToRemove', 'defaultTvLabelsToRemove', 'kometaCompatibility'])
+  sectionsWithChanges.value.discord = differs([
+    'discordEnabled', 'discordWebhookUrl', 'discordNotifyLibraries', 'discordNotifyBatch', 'discordNotifyManual',
+    'discordNotifyWebhook', 'discordNotifyAutoGenerate', 'discordNotifyMediaMirror', 'discordNotifyAppUpdates',
+    'discordNotifyOverlayRefresh',
+  ])
+  sectionsWithChanges.value.apprise = differs([
+    'appriseEnabled', 'appriseUrls', 'appriseNotifyLibraries', 'appriseNotifyBatch', 'appriseNotifyManual',
+    'appriseNotifyWebhook', 'appriseNotifyAutoGenerate', 'appriseNotifyMediaMirror', 'appriseNotifyAppUpdates',
+    'appriseNotifyOverlayRefresh',
+  ])
+  sectionsWithChanges.value.cleanupSchedule = differs([
+    'cleanupScheduleEnabled', 'cleanupScheduleCronExpression', 'cleanupScheduleCategories', 'cleanupScheduleHistoryDays',
+  ])
+  // Scheduled Scans (Libraries tab) only covers the scan schedule; the
+  // cleanup schedule has its own flag above.
+  sectionsWithChanges.value.scheduler = differs(['schedulerEnabled', 'schedulerCronExpression', 'schedulerLibraryIds'])
 }
 
 const saveSettings = async () => {
@@ -1357,6 +1406,25 @@ watch([
   localMovieSaveLocation,
   localTvShowSaveLocation,
   localCollectionSaveLocation,
+  localTvShowSaveMode,
+  localSendLogosToPlex,
+  localKometaCompatibility,
+  localWebhookAutoSend,
+  localWebhookAutoLabels,
+  localLabelToAdd,
+  localWebhookSecret,
+  localExistingContentMode,
+  localRetryUntilTemplateMet,
+  localRetryIntervalHours,
+  localRetryMaxAttempts,
+  localReuseCachedPosterDays,
+  localAppriseEnabled,
+  localAppriseUrls,
+  localAppriseNotifyLibraries,
+  localAppriseNotifyBatch,
+  localAppriseNotifyManual,
+  localAppriseNotifyWebhook,
+  localAppriseNotifyAutoGenerate,
   localSaveBatch,
   localSaveToAssetFolderOnSend,
   localDefaultLabelsToRemove,
@@ -1578,6 +1646,7 @@ onMounted(() => {
     <!-- Tab Content -->
     <div class="tab-content-wrapper">
       <GeneralTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'general'"
         :theme="localTheme"
         :posterDensity="localPosterDensity"
@@ -1603,6 +1672,7 @@ onMounted(() => {
       />
 
       <GeneralTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'ratings'"
         part="ratings"
         :theme="localTheme"
@@ -1629,6 +1699,7 @@ onMounted(() => {
       />
 
       <LibrariesTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'libraries' && !serverless"
         :plexUrl="localPlexUrl"
         :plexToken="localPlexToken"
@@ -1687,6 +1758,7 @@ onMounted(() => {
       />
 
       <OutputTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'output'"
         :movieSaveLocation="localMovieSaveLocation"
         :tvShowSaveLocation="localTvShowSaveLocation"
@@ -1714,6 +1786,7 @@ onMounted(() => {
       />
 
       <PerformanceTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'performance'"
         :concurrentRenders="localConcurrentRenders"
         :useOverlayCache="localUseOverlayCache"
@@ -1761,6 +1834,7 @@ onMounted(() => {
       />
 
       <NotificationsTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'notifications'"
         :discordEnabled="localDiscordEnabled"
         :discordWebhookUrl="localDiscordWebhookUrl"
@@ -1809,6 +1883,7 @@ onMounted(() => {
       />
 
       <AdvancedTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'advanced'"
         :dbExporting="dbExporting"
         :dbImporting="dbImporting"
@@ -1826,6 +1901,7 @@ onMounted(() => {
         @save="saveSettings"
       />
       <CleanupTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'cleanup'"
         :scheduleEnabled="localCleanupScheduleEnabled"
         :scheduleCronExpression="localCleanupScheduleCronExpression"
