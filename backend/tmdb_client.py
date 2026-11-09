@@ -67,13 +67,7 @@ _rate_limit_requests = []  # List of (timestamp,) tuples
 
 def _apply_rate_limit():
     """Apply rate limiting based on UI settings (requests per 10 seconds)."""
-    # Get rate limit from UI settings
-    try:
-        from .api.ui_settings import _read_settings
-        ui_settings = _read_settings(include_env=False)
-        rate_limit = ui_settings.performance.tmdbRateLimit if ui_settings.performance else 40
-    except Exception:
-        rate_limit = 40  # Default to 40 requests per 10 seconds
+    rate_limit = db.get_performance_int("tmdbRateLimit", 40)
 
     with _rate_limit_lock:
         now = time.time()

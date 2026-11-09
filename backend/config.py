@@ -696,6 +696,9 @@ def resolve_library_id(name) -> str:
     if name_str.isdigit():
         return name_str
 
+    if not settings.PLEX_URL:
+        # No Plex configured (server-less, or Jellyfin/Emby only): nothing to ask.
+        return "1"
     url = f"{settings.PLEX_URL}/library/sections"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=8)

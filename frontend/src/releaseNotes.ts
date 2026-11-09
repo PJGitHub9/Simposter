@@ -10,6 +10,19 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.55',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Faster API calls: every TMDb and TVDB request also asked Plex for its library list. It no longer does, so batch renders, scans, webhooks and new Poster API renders make one Plex request fewer per TMDb call (about 20% faster in a 100-poster test), and server-less installs no longer log a Plex warning for each one.',
+          'Poster API: posters it already has are served about 10× faster (0.3 s → 0.025 s each, and no slowdown when many arrive at once). The request history and hit counts are now saved in the background instead of during each request.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.54',
     date: '2026-11-09',
     sections: [

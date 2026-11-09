@@ -160,7 +160,7 @@ def touch_served(key: CacheKey, source: str) -> None:
         # The file belongs to the library, not the API: no tile, only the request
         # history (poster_api_requests) records it.
         return
-    db.poster_api_cache_touch(key.media_type, key.tmdb_id, _season(key), _dbkey(key), source)
+    db.poster_api_queue_touch(key.media_type, key.tmdb_id, _season(key), _dbkey(key), source)
 
 
 def list_entries(search: str, media_type: Optional[str], source: Optional[str],

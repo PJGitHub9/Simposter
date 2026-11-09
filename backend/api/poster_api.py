@@ -97,7 +97,7 @@ def _request_title(media_type: str, tmdb_id: int, season: Optional[int], served=
 
 def _log_request(media_type, tmdb_id, season, preset, group_id, result, title, started) -> None:
     try:
-        db.poster_api_request_log(media_type, tmdb_id, season, preset or "", group_id or "", result, title,
+        db.poster_api_queue_request(media_type, tmdb_id, season, preset or "", group_id or "", result, title,
                                   int((time.monotonic() - started) * 1000))
     except Exception:
         logger.debug("[POSTER API] Could not record the request", exc_info=True)

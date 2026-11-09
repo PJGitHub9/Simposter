@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.55 (2026-11-09) — `dev-noserver` branch
+
+### Improvements
+- **TMDb/TVDB requests no longer call Plex** — `tmdb_client._apply_rate_limit()` (before every TMDb request) and `tvdb_client._apply_rate_limit()` read the rate limit through `_read_settings()`, which re-applies runtime settings and so runs `resolve_library_ids()`: a live `GET /library/sections` to Plex per request (a warning per request without Plex). Both now use the new `db.get_performance_int()`, which reads the settings table only. `resolve_library_id()` skips the request when no Plex URL is set.
+- **Poster API bookkeeping in the background** — the request-history row and hit counter were two commits per request (~130-160 ms each on a slow disk, one writer at a time), so concurrent cache hits queued. `db.poster_api_queue_request()`/`poster_api_queue_touch()` queue them; a daemon thread writes them every second in one transaction (also on exit), and the page's history/tile readers flush first.
+- **Measured** (100 movies, 8 at a time): cached 30 s → 3.6 s total (median 2.4 s → 0.25 s); fresh renders 97 s → 79 s; no Plex warnings.
+
+
 ## v1.8.54 (2026-11-09) — `webui-overhaul-dev` branch
 
 ### Security

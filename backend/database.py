@@ -47,6 +47,20 @@ def _configure_conn(conn: sqlite3.Connection):
     conn.row_factory = sqlite3.Row
 
 
+def get_performance_int(key: str, default: int) -> int:
+    """A positive int from the saved performance settings (e.g. tmdbRateLimit).
+
+    Reads the settings table only. The API clients call this before every request;
+    `_read_settings()` would also re-apply runtime settings, which re-resolves the
+    Plex library names with a request to Plex each time.
+    """
+    try:
+        value = int(((get_ui_settings() or {}).get("performance") or {}).get(key, default))
+        return value if value > 0 else default
+    except Exception:
+        return default
+
+
 def get_db_version() -> Optional[str]:
     """Get the current database version."""
     try:
@@ -5598,6 +5612,7 @@ def poster_api_cache_rows_for_key(media_type: str, tmdb_id: int, season_index: i
 
 def poster_api_cache_list(search: str, media_type: Optional[str], source: Optional[str],
                           offset: int, limit: int) -> Tuple[List[Dict[str, Any]], int]:
+    poster_api_flush_pending()
     where, params = [], []
     search = (search or "").strip()
     if search:
@@ -5652,6 +5667,7 @@ def poster_api_cache_get_by_id(row_id: int) -> Optional[Dict[str, Any]]:
 
 
 def poster_api_cache_counts() -> Dict[str, int]:
+    poster_api_flush_pending()
     with get_db() as conn:
         rows = conn.execute("SELECT source, COUNT(*) AS n FROM poster_api_cache GROUP BY source").fetchall()
     return {r["source"]: r["n"] for r in rows}
@@ -5674,9 +5690,101 @@ def poster_api_request_log(media_type: Optional[str], tmdb_id: Optional[int], se
             (POSTER_API_REQUESTS_KEEP,))
 
 
+# Poster API bookkeeping (request history + hit counters) is queued and written by
+# one background thread, so serving a cached poster never waits for a commit.
+# Each commit costs ~100 ms on slow disks, and SQLite takes one writer at a time,
+# so writing in the request made concurrent cache hits queue behind each other.
+import threading as _pa_threading
+
+_PA_FLUSH_SECONDS = 1.0
+_pa_lock = _pa_threading.Lock()
+_pa_requests: List[tuple] = []
+_pa_touches: List[tuple] = []
+_pa_thread: Optional[_pa_threading.Thread] = None
+
+
+def _pa_start_writer() -> None:
+    global _pa_thread
+    if _pa_thread is not None and _pa_thread.is_alive():
+        return
+    _pa_thread = _pa_threading.Thread(target=_pa_writer_loop, name="poster-api-writer", daemon=True)
+    _pa_thread.start()
+
+
+def _pa_writer_loop() -> None:
+    while True:
+        time.sleep(_PA_FLUSH_SECONDS)
+        try:
+            poster_api_flush_pending()
+        except Exception:
+            logger.debug("[POSTER API] Could not write request history", exc_info=True)
+
+
+def poster_api_queue_request(media_type: Optional[str], tmdb_id: Optional[int], season: Optional[int],
+                             preset: str, group_id: str, result: str, title: Optional[str],
+                             duration_ms: int) -> None:
+    """Queue a request-history row; written within about a second."""
+    with _pa_lock:
+        _pa_requests.append((media_type, tmdb_id, season, preset or "", group_id or "", result, title,
+                             int(duration_ms)))
+        _pa_start_writer()
+
+
+def poster_api_queue_touch(media_type: str, tmdb_id: int, season_index: int, preset_key: str,
+                           source: str) -> None:
+    """Queue a hit (last_served_at + hits) on a poster_api_cache row."""
+    with _pa_lock:
+        _pa_touches.append((media_type, tmdb_id, season_index, preset_key, source))
+        _pa_start_writer()
+
+
+def poster_api_flush_pending() -> None:
+    """Write everything queued so far in one transaction. Readers of the history and
+    the tiles call this first so the page never shows a stale count."""
+    with _pa_lock:
+        reqs, touches = list(_pa_requests), list(_pa_touches)
+        _pa_requests.clear()
+        _pa_touches.clear()
+    if not reqs and not touches:
+        return
+    try:
+        with get_db() as conn:
+            if reqs:
+                conn.executemany(
+                    "INSERT INTO poster_api_requests (media_type, tmdb_id, season_index, preset, group_id, "
+                    "result, title, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", reqs)
+                conn.execute(
+                    "DELETE FROM poster_api_requests WHERE id <= "
+                    "(SELECT id FROM poster_api_requests ORDER BY id DESC LIMIT 1 OFFSET ?)",
+                    (POSTER_API_REQUESTS_KEEP,))
+            if touches:
+                conn.executemany(
+                    "UPDATE poster_api_cache SET last_served_at=CURRENT_TIMESTAMP, hits=hits+1 "
+                    "WHERE media_type=? AND tmdb_id=? AND season_index=? AND preset_key=? AND source=?",
+                    touches)
+    except Exception:
+        # put them back so the next flush retries (bounded, so a broken DB can't grow it forever)
+        with _pa_lock:
+            _pa_requests[:0] = reqs[-POSTER_API_REQUESTS_KEEP:]
+            _pa_touches[:0] = touches[-5000:]
+        raise
+
+
+def _pa_flush_at_exit() -> None:
+    try:
+        poster_api_flush_pending()
+    except Exception:
+        pass
+
+
+import atexit as _pa_atexit
+_pa_atexit.register(_pa_flush_at_exit)
+
+
 def poster_api_requests_list(result: Optional[str], search: str, offset: int,
                              limit: int) -> Tuple[List[Dict[str, Any]], int, Dict[str, int]]:
     """Newest first. Also returns the count per result over the whole history."""
+    poster_api_flush_pending()
     where, params = [], []
     if result:
         where.append("result = ?")
@@ -5700,6 +5808,7 @@ def poster_api_requests_list(result: Optional[str], search: str, offset: int,
 
 
 def poster_api_requests_clear() -> int:
+    poster_api_flush_pending()
     with get_db() as conn:
         return conn.execute("DELETE FROM poster_api_requests").rowcount
 
