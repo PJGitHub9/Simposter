@@ -822,6 +822,9 @@ const layerWarnings = (el: OverlayElement): string[] => {
     if (!field) out.push('A "Show when" condition has no field picked.')
     else if (field.startsWith('_')) out.push('A "Show when" condition came from Kometa and can never match, so this layer never shows.')
     else if (!fieldDef(field)) out.push(`"Show when" uses "${field}", which Simposter doesn't know.`)
+    else if (field === 'list' && !hasMdblistKey.value && (Array.isArray(c.value) ? c.value : [c.value]).some(v => String(v || '').includes('mdblist.com/'))) {
+      out.push("Uses an MDBList list, but there's no MDBList API key (Settings → Ratings & Lists), so this layer never shows.")
+    }
     else if (!opDef(String(c.op || 'eq'))?.noValue) {
       const vals = Array.isArray(c.value) ? c.value : [c.value]
       if (!vals.some(v => v !== undefined && v !== null && String(v).trim() !== '')) out.push(`The "${fieldDef(field)?.label}" condition has no value.`)

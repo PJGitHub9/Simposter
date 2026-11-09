@@ -4,6 +4,7 @@
 
 ### Improvements
 - **Text and its image centered** — `_with_addon()` (overlay_engine.py) and the preview top-aligned a text layer's addon image; Kometa's `get_backdrop()` centers the smaller one on the other axis. Now centered by default, with a new `addon_align` (start/center/end, Overlay Manager "Align"). The Side dropdown now shows Left for a stored `left`.
+- **MDBList list without a key warned** — a Kometa import kept its MDBList list rules on an install with no key, and the rule editor showed the list name like a working list. The layer's ⚠ list (`layerWarnings()`) and the rule editor now say the list needs a key and the layer never shows until one is added.
 - **List-service error wording** — the rule editor's per-service list-loading error (e.g. an expired WeTrakr sign-in) says it only affects that service's lists in the menu.
 - **Kometa import logging** — `api_kometa_import()` logs a warning when a file can't be read or imported, or produces no layers (with the first messages), and an info line listing skipped/hidden overlays. Previously the reason was only in the HTTP response.
 

@@ -17,6 +17,7 @@ export const releaseNotes: ReleaseNote[] = [
         title: 'Improvements',
         items: [
           'Text with an image next to it (e.g. a Rotten Tomatoes rating and its tomato) is now centered against the image, as Kometa does; it used to sit at the top. The Overlay Manager has a new Align option to put them at the top or bottom edges instead, and the Side option no longer shows blank for Left.',
+          'A layer that uses an MDBList list now shows a warning when there\u2019s no MDBList API key, since it can\u2019t show until one is added.',
           'The note about a service whose sign-in failed (e.g. WeTrakr) now says it only affects that service\u2019s lists in the list menu.',
           'Kometa imports that fail, save nothing, or skip layers are now written to the log with the reason (before, the reason only showed in the import window).'
         ]

@@ -198,6 +198,9 @@ const removeCondition = (i: number) => {
             <button type="button" class="btn-small" :disabled="pasteBusy[i]" @click="addPasted(i, c)">{{ pasteBusy[i] ? 'Checking…' : 'Add' }}</button>
           </div>
           <p v-if="pasteMsg[i]" class="cond-note inline" :class="{ warn: !pasteMsg[i]?.ok }">{{ pasteMsg[i]?.text }}</p>
+          <p v-if="!hasMdblistKey && listKeys(c).some(k => k.includes('mdblist.com/'))" class="cond-note inline warn">
+            MDBList lists need an MDBList API key (Settings → Ratings & Lists). Until one is added, this layer never shows.
+          </p>
           <p v-if="listSources.loaded.value && !listSources.groups.value.length" class="cond-note inline">
             No lists found yet. Connect WeTrakr, SIMKL or Floppy in Settings → Ratings & Lists, or paste a list link.
           </p>
