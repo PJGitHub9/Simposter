@@ -6,7 +6,16 @@ export interface OverlayCondition {
   field: string
   op: string
   value?: string | number | string[]
+  /** Country for content_rating / streaming (two letters, US by default). */
+  region?: string
 }
+
+// Fields whose value depends on a country (see backend/overlay_engine.py):
+// the context holds one list per country as "<field>@<REGION>".
+export const REGIONAL_FIELDS = ['content_rating', 'streaming']
+export const conditionRegion = (cond: { region?: string }): string =>
+  (String(cond.region || '').replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 2)) || 'US'
+export const regionalKey = (field: string, region: string): string => `${field}@${(region || 'US').toUpperCase()}`
 
 export interface OverlayRuleFields {
   name?: string
@@ -37,6 +46,7 @@ export interface OverlayRuleFields {
   font_style?: string
   addon_position?: string
   addon_offset?: number
+  addon_align?: string
   addon_scale?: number
   blur_amount?: number
   queue?: string
@@ -273,7 +283,13 @@ export const checkCondition = (cond: OverlayCondition, ctx: OverlayContext): boo
   const op = String(cond.op || 'eq').trim().toLowerCase()
   const field = String(cond.field || '').trim().toLowerCase()
   let target: unknown = cond.value
-  const values = fieldValues(field, ctx)
+  let values: unknown[]
+  if (REGIONAL_FIELDS.includes(field)) {
+    const raw = ctx[regionalKey(field, conditionRegion(cond))]
+    values = Array.isArray(raw) ? raw : (raw === null || raw === undefined || raw === '' ? [] : [raw])
+  } else {
+    values = fieldValues(field, ctx)
+  }
   if (field === 'resolution') {
     target = Array.isArray(target) ? target.map(normalizeResolution) : normalizeResolution(target)
   }
@@ -394,15 +410,30 @@ export const queuePlacements = (
   return out
 }
 
+// Kometa's number formats ({x%} = x * 10 whole, {x#} = no trailing ".0", {x/} = half);
+// keep in step with _format_value() in backend/overlay_engine.py.
+const formatValue = (v: unknown, fmt: string): string => {
+  if (fmt) {
+    const n = asNumber(v)
+    if (n !== null) {
+      if (fmt === '%') return String(Math.trunc(n * 10))
+      if (fmt === '#') { const t = n.toFixed(1); return t.endsWith('.0') ? t.slice(0, -2) : t }
+      if (fmt === '/') return (n / 2).toFixed(1)
+    }
+    return String(v)
+  }
+  return typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(1) : String(v)
+}
+
 export const fillText = (template: string, ctx: OverlayContext): string | null => {
   let missing = false
-  const out = (template || '').replace(/\{([A-Za-z0-9_.]+)\}/g, (_m, key: string) => {
+  const out = (template || '').replace(/\{([A-Za-z0-9_.]+)([%#/]?)\}/g, (_m, key: string, fmt: string) => {
     let v: unknown
     if (key === 'title' || key === 'movie_title') v = ctx.movie_title ?? ctx.title
     else if (key === 'year' || key === 'movie_year') v = ctx.movie_year ?? ctx.year
     else v = ctx[key]
     if (v === null || v === undefined || String(v).trim() === '') { missing = true; return '' }
-    return typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(1) : String(v)
+    return formatValue(v, fmt)
   })
   return missing ? null : out
 }

@@ -394,7 +394,18 @@ def api_link_preset_to_overlay(req: PresetOverlayLinkRequest):
 # ═══════════════════════════════════════════════════════════════════════════
 
 # Item data the preview fills on request (overlay_engine.build_context derives them).
-_PREVIEW_ITEM_FIELDS = {"days_since_added", "added_date", "release_date", "days_since_release", "show_status"}
+_PREVIEW_ITEM_FIELDS = {"days_since_added", "added_date", "release_date", "days_since_release", "show_status",
+                        "network"}
+# Per-country fields, requested as "content_rating@GB" / "streaming@US".
+_PREVIEW_REGIONAL_FIELDS = {"content_rating", "streaming"}
+
+
+def _preview_field_ok(name: str) -> bool:
+    import re as _re
+    if name in _PREVIEW_ITEM_FIELDS:
+        return True
+    base, _, region = name.partition("@")
+    return base in _PREVIEW_REGIONAL_FIELDS and bool(_re.fullmatch(r"[A-Z]{2}", region))
 
 
 @router.get("/overlay-preview-metadata")
@@ -511,12 +522,19 @@ def api_overlay_preview_metadata(
                 for c in (e.get("conditions") or []) if isinstance(e, dict) else []:
                     if isinstance(c, dict) and c.get("field") in _PREVIEW_ITEM_FIELDS:
                         wanted.add(c["field"])
-        wanted &= _PREVIEW_ITEM_FIELDS
+                    elif isinstance(c, dict) and c.get("field") in _PREVIEW_REGIONAL_FIELDS:
+                        from .. import overlay_engine as _oe
+                        wanted.add(_oe.regional_key(c["field"], _oe.condition_region(c)))
+        wanted = {f for f in wanted if _preview_field_ok(f)}
         if wanted:
             try:
                 from .. import overlay_engine
                 tmdb_id, tvdb_id = db.get_ids_for_rating_key(rating_key)
-                stand_in = [{"type": "text_label", "conditions": [{"field": f, "op": "exists"} for f in wanted]}]
+                conds = []
+                for f in wanted:
+                    base, _, region = f.partition("@")
+                    conds.append({"field": base, "op": "exists", **({"region": region} if region else {})})
+                stand_in = [{"type": "text_label", "conditions": conds}]
                 ctx = overlay_engine.build_context(
                     {"rating_key": rating_key, "tmdb_id": tmdb_id, "tvdb_id": tvdb_id, "media_type": media_type},
                     elements=stand_in,

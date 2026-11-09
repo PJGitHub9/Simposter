@@ -128,7 +128,7 @@ Every layer, and every overlay as a whole, can have rules. All of a layer's rule
 | **Ratings** | Audience rating (0–10) and critic rating (0–10), from your media server or MDBList ([Ratings](#ratings)). MDBList score, IMDb, Rotten Tomatoes (critics and audience), Metacritic, TMDb, Trakt, Letterboxd need an [MDBList key](#mdblist-ratings-and-lists). |
 | **Lists** | On a list from MDBList, WeTrakr, SIMKL or Floppy (see [Lists from other services](#lists-from-wetrakr-simkl-and-floppy)) |
 | **Dates** | Today's date, date added, days since added, release date, days since release |
-| **Item** | Label (Plex only), movie or show, year, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform |
+| **Item** | Label (Plex only), movie or show, year, show status (TV), TMDb ID, TVDB ID, title, studio, streaming platform, content rating, network (TV), streaming service |
 
 Operators depend on the field:
 
@@ -144,6 +144,10 @@ Notes on some fields:
 - **Days since added** and **Date added** come from the date your last library scan recorded. Use "is at most 7" for a "NEW" badge.
 - **Release date** and **Days since release** come from TMDb (movie release date, or a show's first air date), stored for 30 days. Days since release is below 0 before release.
 - **Show status** is continuing, ended, canceled or upcoming, from TMDb. TV shows only.
+- **Content rating** is the certification in a country, from TMDb (PG-13 or R in the US, 12A or 15 in GB, TV-MA for US shows). Set the country under the rule (US by default). Plex's spelling with a country prefix (`gb/12A`) matches too.
+- **Network** is a TV show's network from TMDb (HBO, Netflix, AMC; a show can have several).
+- **Streaming service** is a subscription service the title is on in a country, from TMDb's watch providers (rent/buy doesn't count). Use the service's name or TMDb's provider id (Netflix is 8); set the country under the rule.
+- Content rating and network are stored for 30 days and streaming services for 7, so renders don't ask TMDb each time.
 - **TMDb ID / TVDB ID** with "is any of" takes a list of IDs. This is how tools like UMTK and TSSK pick items.
 - **Label** and **edition** come from Plex only. On Jellyfin/Emby, match the file name instead (most edition tags are in the file name).
 - Audience and critic rating are always listed; the other rating fields only appear once an MDBList key is set in Settings → Ratings & Lists; "On a list" appears once any list service is set up there.
@@ -164,6 +168,8 @@ A **Text** layer can include values that are filled in per item. Use **+ Insert 
 | Ratings | `{audience_rating}`, `{critic_rating}` (media server or MDBList); with MDBList also `{mdb_rating}`, `{mdb_imdb_rating}`, `{mdb_tomatoes_rating}`, `{mdb_tomatoesaudience_rating}`, `{mdb_metacritic_rating}`, `{mdb_metacriticuser_rating}`, `{mdb_tmdb_rating}`, `{mdb_trakt_rating}`, `{mdb_letterboxd_rating}`, `{mdb_myanimelist_rating}`, `{mdb_average_rating}` |
 
 If a value is missing for an item (no rating yet, no MDBList key), the layer isn't drawn at all rather than showing an empty or literal `{…}` text.
+
+Ratings can be formatted the way Kometa does by adding a character before the closing brace: `{critic_rating%}` is the rating × 10 as a whole number (7.6 → 76, so `{critic_rating%}%` shows "76%"), `{critic_rating#}` drops a trailing `.0` (9.0 → 9), and `{critic_rating/}` halves it (7.6 → 3.8, for 5-star scales).
 
 ---
 
@@ -191,7 +197,7 @@ Both were made by [jmxd](https://github.com/jmxd/Kometa). Adding one downloads i
 
 > **Beta.** Kometa import and live Kometa files work, but Kometa files vary a lot and some may still import slightly differently than Kometa draws them. Please report anything that looks off.
 
-1. Add the overlay `.yml` files, or **Paste YAML** to paste one in. Add the images and fonts they use alongside: loose files, a folder, or a zip.
+1. Add the overlay `.yml` files, or **Paste YAML** to paste one in. You can also paste the `overlay_files` entries from your Kometa `config.yml`, such as `- default: ratings` with its `template_variables`: Simposter downloads Kometa's built-in file (`defaults/overlays/ratings.yml` from Kometa's GitHub, kept for a week) and expands it with your variables, all entries into one overlay. A `- file:` entry uses the uploaded file with that name. Copying the lines straight out of `config.yml` is fine, even when the first line lost its indent. Add the images and fonts they use alongside: loose files, a folder, or a zip.
 2. Pick the library type the files are for: **Movies**, **TV Shows**, or **Movies and TV Shows** (one overlay for both kinds of library, like a Kometa file both libraries use; layers that only apply to one kind, or look different, get a movie/show rule so they only show there). Also add the images the files use, unless they're already in Your images from an earlier import: an image with the same file name is reused.
 3. **Check** shows a report per file and per overlay: what imported, what was skipped and why, and which images weren't found.
 4. **Import** saves the overlays. Re-importing a file updates the same overlay instead of creating a copy.
@@ -202,11 +208,12 @@ Then turn the overlays on in a preset (or the editor's Extras → Overlays).
 
 - Kometa's own templates, including `default: templates`, variables, defaults, conditionals and optional values. Simposter expands them the way Kometa does.
 - Images from files, links (`url:`, `git:`) and Kometa's defaults (`default:`/`pmm:`). Linked images are downloaded into **Your images**.
-- Positions (`horizontal_align`/`vertical_align` and offsets), background boxes (`back_color`, size, radius, padding, border), text with `text(…)` and variables, fonts, outlines.
+- Positions (`horizontal_align`/`vertical_align` and offsets), background boxes (`back_color`, size, radius, padding, border), text with `text(…)` and variables (including the `%`, `#` and `/` rating formats), fonts, outlines.
 - `group`/`weight` (as badge sets) and `suppress_overlays` (as hide rules).
 - `queues` (layers fill a list of positions, highest weight first), `blur`, images next to text (addon images) and `font_style` for variable fonts.
 - Filters: resolution, codecs, channels, language, file path, edition, labels, year, title, studio, ratings, `added`, `tvdb_status`/`tmdb_status`, and the usual modifiers (`.not`, `.regex`, `.gte`, `.lte`, …). Comma-separated values (`label.not: Coming Soon, RequestNeeded`) are split, as in Kometa.
-- Builders: `tmdb_movie`, `tmdb_show` and `tvdb_show` ID lists, and `mdblist_list`.
+- Builders: `tmdb_movie`, `tmdb_show` and `tvdb_show` ID lists, `mdblist_list`, and `tmdb_discover` with `with_watch_providers` (as a streaming-service rule in its `watch_region`).
+- `content_rating` and `network` filters and searches. Kometa's built-in content rating files (`content_rating_us_movie`, `_us_show`, `_uk`, `_au`, `_de`, `_nz`, `commonsense`) check their own country.
 
 ### What doesn't
 

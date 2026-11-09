@@ -256,6 +256,14 @@ def _describe_facts(old: Optional[Dict[str, Any]], new: Dict[str, Any], conditio
             parts += [f"label {v} added" for v in gained] + [f"label {v} removed" for v in lost]
         elif field == "filepath":
             parts.append("file changed" + (f" to {after[0]}" if len(after) == 1 else ""))
+        elif "@" in field:
+            # Per-country fields ("content_rating@GB"): the bare rating / the service names.
+            base, _, region = field.partition("@")
+            label = f"{FIELD_LABELS.get(base, base.replace('_', ' '))} ({region})"
+            def _show(vals):
+                keep = [v for v in vals if (not v.isdigit() if base == "streaming" else "/" not in v)]
+                return ", ".join(keep or vals) or "—"
+            parts.append(f"{label} {_show(before)} → {_show(after)}")
         else:
             label = FIELD_LABELS.get(field, field.replace("_", " "))
             parts.append(f"{label} {', '.join(before) or '—'} → {', '.join(after) or '—'}")

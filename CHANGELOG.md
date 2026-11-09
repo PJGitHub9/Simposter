@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.8.53 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Text and its image centered** — `_with_addon()` (overlay_engine.py) and the preview top-aligned a text layer's addon image; Kometa's `get_backdrop()` centers the smaller one on the other axis. Now centered by default, with a new `addon_align` (start/center/end, Overlay Manager "Align"). The Side dropdown now shows Left for a stored `left`.
+- **List-service error wording** — the rule editor's per-service list-loading error (e.g. an expired WeTrakr sign-in) says it only affects that service's lists in the menu.
+- **Kometa import logging** — `api_kometa_import()` logs a warning when a file can't be read or imported, or produces no layers (with the first messages), and an info line listing skipped/hidden overlays. Previously the reason was only in the HTTP response.
+
+### New Features
+- **Kometa config entries** — `kometa_import.config_overlay_entries()` recognizes a pasted/uploaded `config.yml` snippet (a bare `- default:`/`- file:` list, an `overlay_files:` block, or `libraries: X: overlay_files:`); `expand_config_entries()` expands each entry with its `template_variables` (as `config_vars`) into one overlay, renaming repeated layer names across entries. `default:` files come from `raw.githubusercontent.com/Kometa-Team/Kometa/master/defaults/overlays/<name>.yml` (`safe_get(strict=True)`, name `^[a-z0-9_]+$`), cached in `config/cache/kometa_defaults/` for 7 days with the cached copy as fallback. The import modal's paste check accepts these. A pasted fragment that isn't valid YAML on its own (first line flush left with its children still indented, or the whole block still indented) is retried re-indented/dedented (`_yaml_candidates()`/`_lenient_yaml()`, also used by `_load_yaml()`); only a version that parses is used.
+- **Content rating, network and streaming rules** — new condition fields in `overlay_engine.py`/`overlayEngine.ts`: `content_rating` and `streaming` are per country (the condition's `region`, US by default; context keys `content_rating@GB`, `streaming@US` via `regional_key()`), `network` is a list. Content ratings (every country) and networks come from TMDb (`/movie/{id}/release_dates`, `/tv/{id}/content_ratings`, `/tv/{id}` networks) via `_tmdb_facts()`, cached 30 days in new table `tmdb_item_facts`; a rating also matches Plex's `gb/12A` form. Streaming uses `get_watch_providers()` (flatrate, 7-day cache), matched by provider id or name. Importer: `content_rating`/`network` filters and `plex_search`, `tmdb_discover` `with_watch_providers` + `watch_region` → streaming rule; Kometa's per-country rating defaults get their country. Render log, Overlay Refresh reasons ("Content rating (GB) 15 → 12A"), rule editor (country box), preview example values and real-item preview handle them. Kometa's content_rating ×6, commonsense, network and streaming defaults went from all-hidden to working.
+- **Rating text formats** — `{x%}` (int(x*10)), `{x#}` (one decimal, trailing ".0" dropped), `{x/}` (x/2, one decimal), as in Kometa's `modules/overlays.py`; `_VAR_RE`/`_format_value()` in `overlay_engine.py` and `fillText()`/`formatValue()` in `overlayEngine.ts` (kept in step). `_kometa_text()` keeps these instead of dropping them, and maps Kometa's old bare `critic_rating%`/`0`/`#` names the way Kometa does.
+
 ## v1.8.52 (2026-11-09) — `webui-overhaul-dev` branch
 
 ### New Features

@@ -10,6 +10,28 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.53',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Text with an image next to it (e.g. a Rotten Tomatoes rating and its tomato) is now centered against the image, as Kometa does; it used to sit at the top. The Overlay Manager has a new Align option to put them at the top or bottom edges instead, and the Side option no longer shows blank for Left.',
+          'The note about a service whose sign-in failed (e.g. WeTrakr) now says it only affects that service\u2019s lists in the list menu.',
+          'Kometa imports that fail, save nothing, or skip layers are now written to the log with the reason (before, the reason only showed in the import window).'
+        ]
+      },
+      {
+        title: 'New Features',
+        items: [
+          'Kometa import: paste the overlay_files entries from your Kometa config.yml, such as "- default: ratings" with its template_variables (copied straight out of the file is fine, even when the first line lost its indent). Simposter downloads Kometa\u2019s built-in overlay file and builds the overlay with your settings.',
+          'New overlay rules: content rating (from TMDb, per country, e.g. PG-13 or 12A), TV network, and streaming service (subscription services in a country, from TMDb). Kometa\u2019s built-in content rating, network and streaming overlays now import with working badges.',
+          'Rating text formats from Kometa: {critic_rating%} shows the rating as a whole number out of 100 (7.6 \u2192 76), {critic_rating#} drops a trailing .0, and {critic_rating/} halves it. Imported Kometa rating overlays now show "76%" instead of "7.6%".'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.52',
     date: '2026-11-09',
     sections: [

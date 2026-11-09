@@ -648,6 +648,7 @@ class OverlayElement(BaseModel):
     # Image drawn next to a text layer (Kometa text addon); the image is asset_id/url
     addon_position: Optional[str] = None  # left | right | top | bottom
     addon_offset: Optional[float] = None  # gap between text and image, Kometa px
+    addon_align: Optional[str] = None  # start | center | end: cross-axis alignment, default center (Kometa)
     addon_scale: Optional[float] = None
     blur_amount: Optional[float] = None  # type "blur": Kometa blur(N), 1-100
     # Kometa queue: selected layers take these positions, highest weight first
