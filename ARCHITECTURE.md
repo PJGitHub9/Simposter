@@ -127,7 +127,7 @@ This document explains how Simposter starts, how the backend and frontend intera
 #### `kometa_import.py` / `live_kometa.py` / `mdblist.py` / `overlay_refresh.py`
 - `POST /overlay-configs/kometa-import` — import Kometa overlay YAML (plus images, fonts, zips); `dry_run` returns the report only. The logic is in `backend/kometa_import.py` (Kometa template expansion, filter and placement mapping)
 - `/live-kometa-files` — list, add/edit, `POST /{id}/sync`, delete. Server-side overlay files re-imported on a schedule (`backend/live_kometa.py`)
-- `POST /test-mdblist`, `GET /mdblist/ratings`, `GET /mdblist/lists`, `POST /mdblist/lists/refresh`, `DELETE /mdblist/cache` — MDBList ratings and lists (`backend/mdblist_client.py`)
+- `POST /test-mdblist` — MDBList key test; ratings and lists are fetched by `backend/mdblist_client.py` when an overlay needs them
 - `/overlay-refresh/group`, `/config`, `/run`, `/status`, `/items`, `/log` — re-render tracked posters whose overlay would now come out differently (`backend/overlay_refresh.py`)
 
 #### `scheduler.py`

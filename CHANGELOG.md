@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.54 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Security
+- **Poster API key in the log** — uvicorn's request lines (written to `simposter.log` at every level) showed `?key=` in full: `redact_secrets()`'s pattern didn't match a bare `key=` and `_known_secrets()` didn't include `posterApi.key`. Added `_KEY_PARAM_RE` (`?key=`/`&key=`) and the saved key to `_known_secrets()`.
+
+### Bug Fixes
+- **`/poster` ignored `group`** — the root alias in `main.py` didn't accept or pass it.
+- **Poster API search with a huge number** — an all-digit search over 18 digits overflowed SQLite's integer and returned a 500; it now only searches titles.
+
+### Improvements
+- **Unused API routes removed** — no frontend or backend caller, and not documented for users: the second `GET /tv-show/{id}/select-poster` in `tv_shows.py` (FastAPI only ever used the first; the second was the older Plex-only version), `POST /cache/refresh`, `GET /movies/tmdb`, `POST /presets/link-overlay`, `GET /retry-queue/count`, `POST /retry-queue/apply-settings`, `GET /scheduler/status`, `GET /mdblist/ratings`, `GET /mdblist/lists`, `POST /mdblist/lists/refresh`, `DELETE /mdblist/cache`. Kept `/ping` (uptime monitors) and `/webhook/test` (in docs/WEBHOOKS.md).
+- **One Poster API address shown** — `/poster-api/status` `url_templates` now has `movie`/`tv` (both `/poster?...`) instead of `query`/`path`/`root`; the Poster API page, the onboarding Poster API step and `docs/POSTER_API.md` show only `/poster`. `/api/poster` and `/api/poster/{type}/{id}` still work for existing links.
+
 ## v1.8.53 (2026-11-09) — `webui-overhaul-dev` branch
 
 ### Improvements

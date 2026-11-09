@@ -23,8 +23,8 @@ type Status = {
   default_movie_preset: string
   default_tv_preset: string
   default_preset_missing: boolean
-  url_templates: { query: string; path: string; root: string }
-  url_templates_with_key?: { query: string; path: string; root: string }
+  url_templates: { movie: string; tv: string }
+  url_templates_with_key?: { movie: string; tv: string }
   counts: { pinned: number; rendered: number }
 }
 type Item = {
@@ -168,9 +168,8 @@ const templates = computed(() => {
   const k = status.value?.url_templates_with_key || t
   if (!t || !k) return []
   return [
-    { label: 'Query form', value: t.query, copy: k.query },
-    { label: 'Path form', value: t.path, copy: k.path },
-    { label: 'Root alias', value: t.root, copy: k.root }
+    { label: 'Movies', value: t.movie, copy: k.movie },
+    { label: 'TV shows', value: t.tv, copy: k.tv }
   ]
 })
 
@@ -511,7 +510,7 @@ onMounted(async () => {
           <button class="secondary-small" @click="copyTemplate(t.copy)">Copy</button>
         </div>
         <div class="hint">
-          {tmdb_id} is the TMDb id.
+          {tmdb_id} is the TMDb id. For a season poster add <code>&amp;season=2</code>.
           <template v-if="status?.key_set"> Copy includes your API key, ready to paste into the other app.</template>
         </div>
       </div>

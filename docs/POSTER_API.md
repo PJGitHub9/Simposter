@@ -17,23 +17,18 @@ The key is optional, but without one anyone who can reach Simposter can use your
 
 ## URLs
 
-Three equivalent forms. Replace `603` with a TMDb id and `YOUR_KEY` with your key (leave `&key=...` off if you have no key). The **Copy** buttons on the Poster API page copy these URLs with your real key already filled in.
+Replace `603` with a TMDb id and `YOUR_KEY` with your key (leave `&key=...` off if you have no key). The **Copy** buttons on the Poster API page copy these URLs with your real key already filled in.
 
 ```
-# Query form
-http://simposter:8003/api/poster?tmdb_id=603&type=movie&key=YOUR_KEY
-
-# Path form
-http://simposter:8003/api/poster/movie/603?key=YOUR_KEY
-
-# Root alias
 http://simposter:8003/poster?tmdb_id=603&type=movie&key=YOUR_KEY
 ```
+
+Everything else Simposter offers is under `/api/`, so a reverse proxy can forward just `/poster` and block the rest. Older links using `/api/poster?...` or `/api/poster/movie/603` keep working and return the same poster.
 
 TV shows use `type=tv` (also accepted: `series`, `show`, `tv-show`). Add `season=2` for a season poster; without it you get the series poster. `season` is ignored for movies.
 
 ```
-http://simposter:8003/api/poster?tmdb_id=1396&type=tv&season=2&key=YOUR_KEY
+http://simposter:8003/poster?tmdb_id=1396&type=tv&season=2&key=YOUR_KEY
 ```
 
 The Poster API page shows these templates with your host filled in, and a Copy button for each.
@@ -47,8 +42,8 @@ The Poster API page shows these templates with your host filled in, and a Copy b
 `group=<name or id>` uses that library group (the name is matched without regard to case): the poster already in one of its libraries is served, and a render reads its file details (4K, HDR, audio) for the overlay badges from that group only. This lets one app use a 4K URL and another a regular one:
 
 ```
-/api/poster?tmdb_id=603&type=movie&group=4K%20Movies
-/api/poster?tmdb_id=603&type=movie&group=Movies
+/poster?tmdb_id=603&type=movie&group=4K%20Movies
+/poster?tmdb_id=603&type=movie&group=Movies
 ```
 
 A title that isn't in the group's libraries is rendered without library badges. An unknown group returns 404. Each group is cached separately; pinned posters apply to every group.

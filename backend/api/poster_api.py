@@ -218,12 +218,12 @@ def poster_api_status(request: Request):
     cfg = store.get_settings()
     base = str(request.base_url).rstrip("/")
     def _templates(key_text: str) -> dict:
+        # Only the /poster form is shown: it's the one a reverse proxy can pass on
+        # its own. /api/poster and /api/poster/{type}/{id} still work for old links.
         q = f"&key={key_text}" if cfg.key else ""
-        p = f"?key={key_text}" if cfg.key else ""
         return {
-            "query": f"{base}/api/poster?tmdb_id={{tmdb_id}}&type=movie{q}",
-            "path": f"{base}/api/poster/movie/{{tmdb_id}}{p}",
-            "root": f"{base}/poster?tmdb_id={{tmdb_id}}&type=movie{q}",
+            "movie": f"{base}/poster?tmdb_id={{tmdb_id}}&type=movie{q}",
+            "tv": f"{base}/poster?tmdb_id={{tmdb_id}}&type=tv{q}",
         }
 
     ids = poster_api._uniformlogo_preset_ids()

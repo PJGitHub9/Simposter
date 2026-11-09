@@ -37,7 +37,6 @@ class MovieTMDbResponse(BaseModel):
     tmdb_id: Optional[int]
 
 
-
 class PreviewRequest(BaseModel):
     template_id: str
     background_url: Optional[str] = None  # Optional to allow backend to fetch from TMDb using tv_show_rating_key
@@ -681,12 +680,6 @@ class OverlayAssetUploadRequest(BaseModel):
 
 class OverlayAssetDeleteRequest(BaseModel):
     id: str
-
-
-class PresetOverlayLinkRequest(BaseModel):
-    template_id: str
-    preset_id: str
-    overlay_config_id: Optional[str] = None
 
 
 # Radarr webhook schemas removed

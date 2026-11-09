@@ -2279,18 +2279,6 @@ def delete_overlay_asset(asset_id: str) -> bool:
     return deleted
 
 
-def link_preset_to_overlay_config(template_id: str, preset_id: str, overlay_config_id: Optional[str]) -> None:
-    """Link a preset to an overlay configuration (or unlink if overlay_config_id is None)."""
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE presets
-            SET overlay_config_id = ?
-            WHERE template_id = ? AND id = ?
-        """, (overlay_config_id, template_id, preset_id))
-    logger.info(f"[DB] Linked preset {preset_id} to overlay config {overlay_config_id}")
-
-
 def replace_all_presets(preset_data: Dict[str, Dict[str, Any]]) -> None:
     """
     Replace all presets in the database with the provided structure.
@@ -5521,14 +5509,6 @@ def get_all_list_cache() -> List[Dict[str, Any]]:
     return out
 
 
-def clear_mdblist_cache() -> int:
-    with get_db() as conn:
-        n = conn.execute("DELETE FROM item_ratings").rowcount
-        n += conn.execute("DELETE FROM list_cache").rowcount
-        conn.commit()
-    return n
-
-
 # List-source sign-ins (backend/list_sources.py)
 
 def get_list_source_auth(provider: str) -> Dict[str, Any]:
@@ -5621,7 +5601,7 @@ def poster_api_cache_list(search: str, media_type: Optional[str], source: Option
     where, params = [], []
     search = (search or "").strip()
     if search:
-        if search.isdigit():
+        if search.isdigit() and len(search) <= 18:  # longer won't fit SQLite's 64-bit ints
             where.append("(title LIKE ? COLLATE NOCASE OR tmdb_id = ?)")
             params += [f"%{search}%", int(search)]
         else:
@@ -5703,7 +5683,7 @@ def poster_api_requests_list(result: Optional[str], search: str, offset: int,
         params.append(result)
     search = (search or "").strip()
     if search:
-        if search.isdigit():
+        if search.isdigit() and len(search) <= 18:  # longer won't fit SQLite's 64-bit ints
             where.append("(title LIKE ? COLLATE NOCASE OR tmdb_id = ?)")
             params += [f"%{search}%", int(search)]
         else:

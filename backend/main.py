@@ -74,9 +74,9 @@ app.include_router(api_router, prefix="/api")
 # /poster-api is a Vue route and must still fall through to the SPA.
 @app.get("/poster")
 def root_poster(request: Request, tmdb_id: Optional[int] = None, type: Optional[str] = None,
-                season: Optional[int] = None, preset: Optional[str] = None):
+                season: Optional[int] = None, preset: Optional[str] = None, group: Optional[str] = None):
     from .api.poster_api import handle_poster_request
-    return handle_poster_request(request, tmdb_id, type, season, preset)
+    return handle_poster_request(request, tmdb_id, type, season, preset, group)
 
 
 # Serve built frontend

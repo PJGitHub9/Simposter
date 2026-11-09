@@ -10,6 +10,27 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.54',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Security: the Poster API key is no longer written to Simposter\u2019s log. Request lines with ?key= showed it in full. If you shared a log since turning the Poster API on, change the key.',
+          'The short /poster address now honors group=, like /api/poster.',
+          'Searching the Poster API page for a very long number no longer shows an error.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Removed 11 old API addresses nothing in Simposter used any more (a duplicate TV poster lookup, old cache/retry/scheduler/MDBList helpers).',
+          'The Poster API page, setup wizard and docs now show one address, /poster (with a line each for movies and TV shows), instead of three versions of the same link. It\u2019s the one a reverse proxy can pass on its own. Older /api/poster links keep working.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.53',
     date: '2026-11-09',
     sections: [

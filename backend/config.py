@@ -345,6 +345,9 @@ settings.LOG_FILE = str(preferred_log)
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_?key|apikey|api_token|x-plex-token|plex-token|token|secret)=)[^&\s'\"<>,;)]+"
 )
+# A bare "key=" query parameter (the Poster API key, ?key=...). Only after ? or &,
+# so words ending in "key=" elsewhere aren't touched.
+_KEY_PARAM_RE = re.compile(r"(?i)([?&]key=)[^&\s'\"<>,;)]+")
 _SECRET_HEADER_RE = re.compile(r'(?i)(token=")[^"]*(")')
 _SECRET_BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}")
 
@@ -364,7 +367,7 @@ def _media_server_secrets() -> list:
             row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
             # List-source keys and sign-in tokens (backend/list_sources.py).
             extra = [r[0] for r in conn.execute(
-                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token')"
+                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token', 'posterApi.key')"
             ).fetchall()]
             try:
                 for (data_json,) in conn.execute("SELECT data_json FROM list_source_auth").fetchall():
@@ -412,6 +415,7 @@ def redact_secrets(text) -> str:
     if not s:
         return s
     s = _SECRET_PARAM_RE.sub(r"\1***", s)
+    s = _KEY_PARAM_RE.sub(r"\1***", s)
     s = _SECRET_HEADER_RE.sub(r"\1***\2", s)
     s = _SECRET_BEARER_RE.sub(r"\1***", s)
     for secret in _known_secrets():

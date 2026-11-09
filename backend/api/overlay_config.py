@@ -17,7 +17,6 @@ from ..schemas import (
     OverlayConfigDeleteRequest,
     OverlayAssetUploadRequest,
     OverlayAssetDeleteRequest,
-    PresetOverlayLinkRequest,
 )
 
 router = APIRouter()
@@ -357,36 +356,6 @@ def api_font_file(name: str):
         raise HTTPException(404, "Font not found")
     return FileResponse(str(path), media_type=_FONT_MEDIA_TYPES[path.suffix.lower()],
                         headers={"Cache-Control": "public, max-age=86400"})
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Preset-Overlay Linking Endpoint
-# ═══════════════════════════════════════════════════════════════════════════
-
-@router.post("/presets/link-overlay")
-def api_link_preset_to_overlay(req: PresetOverlayLinkRequest):
-    """Link a preset to an overlay configuration."""
-    try:
-        # Verify preset exists
-        preset = db.get_preset(req.template_id, req.preset_id)
-        if not preset:
-            raise HTTPException(404, f"Preset {req.preset_id} not found in template {req.template_id}")
-
-        # Verify overlay config exists (if provided)
-        if req.overlay_config_id:
-            overlay_config = db.get_overlay_config(req.overlay_config_id)
-            if not overlay_config:
-                raise HTTPException(404, f"Overlay config {req.overlay_config_id} not found")
-
-        # Link preset to overlay config
-        db.link_preset_to_overlay_config(req.template_id, req.preset_id, req.overlay_config_id)
-
-        return {"status": "ok"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[OVERLAY] Error linking preset to overlay config: {e}")
-        raise HTTPException(500, "Failed to link preset to overlay configuration")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

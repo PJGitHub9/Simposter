@@ -583,11 +583,9 @@ const paKeyForUrl = computed(() => (paKeyIsNew.value ? encodeURIComponent(paKey.
 const paTemplates = computed(() => {
   const base = apiBase.replace(/\/$/, '')
   const q = paKey.value ? `&key=${paKeyForUrl.value}` : ''
-  const p = paKey.value ? `?key=${paKeyForUrl.value}` : ''
   return [
-    { label: 'Query form', value: `${base}/api/poster?tmdb_id={tmdb_id}&type=movie${q}` },
-    { label: 'Path form', value: `${base}/api/poster/movie/{tmdb_id}${p}` },
-    { label: 'Root alias', value: `${base}/poster?tmdb_id={tmdb_id}&type=movie${q}` },
+    { label: 'Movies', value: `${base}/poster?tmdb_id={tmdb_id}&type=movie${q}` },
+    { label: 'TV shows', value: `${base}/poster?tmdb_id={tmdb_id}&type=tv${q}` },
   ]
 })
 
