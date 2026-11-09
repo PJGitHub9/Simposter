@@ -107,6 +107,7 @@ const FALLBACK: PresetField[] = [
   { key: 'fallbackPosterPreset', label: 'Fallback preset', group: 'fallback', section: 'Poster', type: 'preset', seriesOnly: true, showIf: isTemplate('fallbackPosterAction') },
   { key: 'fallbackLogoAction', label: 'If the preferred logo isn’t found', group: 'fallback', section: 'Logo', type: 'select', seriesOnly: true, default: 'continue', options: fallbackActions('Render without a logo') },
   { key: 'fallbackLogoPreset', label: 'Fallback preset', group: 'fallback', section: 'Logo', type: 'preset', seriesOnly: true, showIf: isTemplate('fallbackLogoAction') },
+  { key: 'fallbackKeepOverlays', label: 'Use current overlays on fallback poster', group: 'fallback', section: 'Overlays', type: 'bool', seriesOnly: true, default: 'true', help: 'Off: the fallback poster gets only the fallback preset’s own overlays', showIf: (v) => v('fallbackPosterAction') === 'template' || v('fallbackLogoAction') === 'template' },
 ]
 
 export const UNIFORMLOGO_FIELDS: PresetField[] = [
@@ -208,7 +209,7 @@ export function toDisplay(field: PresetField, stored: unknown): unknown {
     const n = Number(stored)
     return stored == null || stored === '' || Number.isNaN(n) ? '' : Math.round(n * 1000) / 10
   }
-  if (field.type === 'bool') return !!stored
+  if (field.type === 'bool') return stored == null ? field.default === 'true' : !!stored
   if (field.type === 'number') return stored == null ? '' : stored
   if ((stored == null || stored === '') && field.default !== undefined) return field.default
   return stored == null ? '' : String(stored)

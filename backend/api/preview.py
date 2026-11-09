@@ -7,6 +7,7 @@ from ..config import logger, load_presets, get_movie_tmdb_id
 from ..rendering import render_poster_image, render_with_overlay_cache
 from ..schemas import PreviewRequest
 from .. import database as db
+from ..preset_fallback import merge_fallback_options
 from ..tmdb_client import get_images_for_movie, get_movie_details
 from ..assets.selection import pick_poster, pick_logo, map_logo_mode_to_preference
 from ..logo_sources import get_logos_merged
@@ -324,7 +325,7 @@ def api_preview(req: PreviewRequest):
                                     if fpreset:
                                         fp_opts = fpreset.get("options", {})
                                         # Merge fallback preset options, letting fallback override current options to mirror batch behavior
-                                        render_options = {**render_options, **fp_opts}
+                                        render_options = merge_fallback_options(render_options, fp_opts)
                                         poster_filter = render_options.get("poster_filter", poster_filter)
                                         logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
                                         logo_preference = map_logo_mode_to_preference(logo_preference)
@@ -382,7 +383,7 @@ def api_preview(req: PreviewRequest):
                                     # Merge fallback preset options, letting fallback override current options
                                     # to mirror batch behavior and ensure template-specific settings (e.g., text overlay)
                                     # take effect. Request-supplied transient sliders can still override both.
-                                    render_options = {**render_options, **fp_opts}
+                                    render_options = merge_fallback_options(render_options, fp_opts)
                                     poster_filter = render_options.get("poster_filter", poster_filter)
                                     logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference
                                     logo_preference = map_logo_mode_to_preference(logo_preference)
@@ -544,7 +545,7 @@ def api_preview(req: PreviewRequest):
                                         logger.debug("[PREVIEW] Using season_options from fallback preset")
                                     else:
                                         fp_opts = fpreset.get("options", {})
-                                    render_options = {**render_options, **fp_opts}
+                                    render_options = merge_fallback_options(render_options, fp_opts)
                                     # NOTE: Don't update poster_filter here - we already tried with the original filter and failed
                                     # The fallback template will be used to render whatever poster we find below
                                     logo_preference = render_options.get("logo_preference") or render_options.get("logo_mode") or logo_preference

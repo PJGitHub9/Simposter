@@ -10,6 +10,24 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.39',
+    date: '2026-11-08',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Template Manager → Fallback: a new "Use current overlays on fallback poster" option (on by default). When a preset falls back to another preset because the preferred poster or logo wasn’t found, turn it off to give the fallback poster only the fallback preset’s own overlays (none, if it has none).'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Fallback posters always kept the original preset’s overlays when the fallback preset had none of its own, and silently swapped them for the fallback preset’s overlays when it did. Which overlays a fallback poster gets is now decided by the option above, for Batch Edit, webhooks, scheduled runs, retries and previews.'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.38',
     date: '2026-11-06',
     sections: [

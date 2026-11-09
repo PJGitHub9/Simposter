@@ -17,6 +17,7 @@ from ..save_paths import SaveContext, resolve_save_path, resolve_library_label, 
 from datetime import datetime, timezone
 from PIL import Image, PngImagePlugin
 from .. import database as db
+from ..preset_fallback import merge_fallback_options
 from .. import tvdb_client
 from ..fanart_client import get_images_for_tv_show as get_fanart_tv_images
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -371,7 +372,7 @@ def _process_single_movie(
                     if fpreset:
                         fp_opts = fpreset.get("options", {})
                         # Let fallback preset options override original options (matching preview behavior)
-                        render_options_base = {**render_options_base, **fp_opts}
+                        render_options_base = merge_fallback_options(render_options_base, fp_opts)
                         poster_filter = render_options_base.get("poster_filter", poster_filter)
                         logo_preference = render_options_base.get("logo_preference") or render_options_base.get("logo_mode") or logo_preference
                         logo_preference = map_logo_mode_to_preference(logo_preference)
@@ -424,7 +425,7 @@ def _process_single_movie(
                     if fpreset:
                         fp_opts = fpreset.get("options", {})
                         # Let fallback preset options override original options (matching preview behavior)
-                        render_options_base = {**render_options_base, **fp_opts}
+                        render_options_base = merge_fallback_options(render_options_base, fp_opts)
                         poster_filter = render_options_base.get("poster_filter", poster_filter)
                         logo_preference = render_options_base.get("logo_preference") or render_options_base.get("logo_mode") or logo_preference
                         logo_preference = map_logo_mode_to_preference(logo_preference)
@@ -1296,7 +1297,7 @@ def _render_tv_series_poster(
             fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None) if fallback_preset else None
             if fpreset:
                 fp_opts = fpreset.get("options", {})
-                render_options = {**render_options, **fp_opts}
+                render_options = merge_fallback_options(render_options, fp_opts)
                 template_id = fallback_template
                 preset_id = fallback_preset
                 # Now try to get ANY available poster
@@ -1492,7 +1493,7 @@ def _render_all_tv_seasons(
                     fpreset = next((p for p in tpl_presets if p.get("id") == fallback_preset), None) if fallback_preset else None
                     if fpreset:
                         fp_opts = fpreset.get("options", {})
-                        series_render_options = {**render_options, **fp_opts}
+                        series_render_options = merge_fallback_options(render_options, fp_opts)
                         series_template_id = fallback_template
                         series_preset_id = fallback_preset
                         # Now try to get ANY available poster
@@ -1649,7 +1650,7 @@ def _render_all_tv_seasons(
                     # Use the fallback preset's season options, resolved against its own base
                     # options (season_options may be stored as a sparse diff, not a full copy).
                     fp_opts = db.resolve_season_options(fpreset.get("options", {}), fpreset.get("season_options", {}))
-                    season_render_options = {**final_season_options, **fp_opts}
+                    season_render_options = merge_fallback_options(final_season_options, fp_opts)
                     season_template_id = fallback_template
                     season_preset_id = fallback_preset
                     # Now try to get ANY available poster

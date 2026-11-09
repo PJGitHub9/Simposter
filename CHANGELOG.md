@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.39 (2026-11-08) — `webui-overhaul-dev` branch
+
+### New Features
+- **"Use current overlays on fallback poster"** — new preset option `fallbackKeepOverlays` (default on), Template Manager → Fallback tab, shown when either fallback action is "template". Read from the original preset. On: the fallback poster keeps the original preset's `overlay_config_ids`/`overlay_config_ids_below`. Off: only the fallback preset's own lists (empty if none). `presetFields.ts` `toDisplay()` now honours `default: 'true'` on bool fields.
+
+### Bug Fixes
+- **Fallback renders inherited overlays by accident** — every fallback merge was `{**original, **fallback}`, so the original's overlay lists survived when the fallback preset had never stored one and were replaced when it had. All eight merges (`batch.py` movie poster/logo, `/api/batch` TV, TV series, TV season; `preview.py` ×3) now go through `backend/preset_fallback.py` `merge_fallback_options()`. With the default on, the only change is a fallback preset that has its own overlays, which now gets the original's.
+
+
 ## v1.8.38 (2026-11-06) — `webui-overhaul-dev` branch
 
 ### Improvements
