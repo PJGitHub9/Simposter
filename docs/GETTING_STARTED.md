@@ -120,7 +120,7 @@ npm run dev
 The first time you open Simposter with no media server configured, a guided wizard walks you through setup instead of dropping you on a blank Settings page:
 
 1. **Welcome**
-2. **Servers** — which media servers you use: Plex, Jellyfin and/or Emby, in any combination
+2. **Servers** — which media servers you use: Plex, Jellyfin and/or Emby, in any combination. You can instead choose **No media server - use Simposter as a poster provider**: the wizard then skips the connect and libraries steps, asks for your API keys, imports the starter presets, sets up the [Poster API](POSTER_API.md) and ends on the Poster API page. Connect a server later in Settings → Media Servers.
 3. **Connect** — the URL and credentials for each server you picked (a token for Plex, an API key for Jellyfin/Emby), with a Test button. At least one has to connect; any you skip can be added later in Settings → Media Servers.
 4. **Libraries** — pick which libraries to manage (movies and/or TV) from every server you connected. Libraries with the same name on different servers are put into one library group automatically.
 5. **API Keys** — TMDb (required), TVDB and Fanart.tv (optional, each has a "Test" button that validates the key live). See [Collections & Posters](COLLECTIONS_AND_POSTERS.md#fanarttv-and-collections) for why a Fanart key specifically matters if you plan to make Collection posters.

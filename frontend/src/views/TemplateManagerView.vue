@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, watch } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useNotification } from '@/composables/useNotification'
 import { useSettingsStore } from '@/stores/settings'
 import { copyToClipboard } from '@/services/clipboard'
+import { fetchTmdbTrending, searchTmdb, fetchTmdbPreviewImages, type TmdbPreviewItem } from '@/services/tmdbPreview'
 import PresetShareModal from '@/components/PresetShareModal.vue'
 import PresetEditForm from '@/components/presets/PresetEditForm.vue'
 import PresetRefreshPrompt from '@/components/presets/PresetRefreshPrompt.vue'
@@ -62,13 +63,19 @@ const showImportExport = ref(false)
 const previewUrl = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
-const previewMovie = ref<{ key: string; title: string } | null>(null)
+type PreviewItem = { key: string; title: string; year?: string; tmdbId?: number; tmdbType?: 'movie' | 'tv'; posterUrl?: string }
+const previewMovie = ref<PreviewItem | null>(null)
 const previewTemplate = ref<{ templateId: string; presetName: string } | null>(null)
-const movies = ref<{ key: string; title: string }[]>([])
-const selectedPreviewMovie = ref<{ key: string; title: string } | null>(null)
+const movies = ref<PreviewItem[]>([])
+// No library items to preview with (server-less, or nothing scanned yet): fall back to TMDb trending + search.
+const tmdbMode = ref(false)
+const tmdbResults = ref<TmdbPreviewItem[]>([])
+let tmdbSearchTimer: ReturnType<typeof setTimeout> | null = null
+const selectedPreviewMovie = ref<PreviewItem | null>(null)
 const showMovieSearch = ref(false)
 const movieSearchTerm = ref('')
-const movieSearchResults = computed(() => {
+const movieSearchResults = computed<PreviewItem[]>(() => {
+  if (tmdbMode.value) return tmdbResults.value.slice(0, 25)
   const query = movieSearchTerm.value.trim().toLowerCase()
   if (!query) return movies.value.slice(0, 25)
   return movies.value.filter((m) => (m.title || '').toLowerCase().includes(query)).slice(0, 25)
@@ -501,12 +508,31 @@ const fetchMovies = async () => {
         selectedPreviewMovie.value = null
     }
   } catch { /* ignore */ }
+  if (!movies.value.length) {
+    const trending = await fetchTmdbTrending('movie')
+    if (trending.length) {
+      tmdbMode.value = true
+      movies.value = trending
+      tmdbResults.value = trending
+    }
+  }
 }
+
+watch(movieSearchTerm, (term) => {
+  if (!tmdbMode.value) return
+  if (tmdbSearchTimer) clearTimeout(tmdbSearchTimer)
+  tmdbSearchTimer = setTimeout(async () => {
+    const q = term.trim()
+    tmdbResults.value = q.length >= 2 ? await searchTmdb(q, 'movie') : movies.value as TmdbPreviewItem[]
+  }, 300)
+})
 
 const pickRandomMovie = () =>
   movies.value.length ? movies.value[Math.floor(Math.random() * movies.value.length)] || null : null
 
 const resolvePreviewMovie = () => {
+  // TMDb mode: a search pick isn't in the trending list, so don't look it up there.
+  if (tmdbMode.value && selectedPreviewMovie.value?.tmdbId) return selectedPreviewMovie.value
   if (selectedPreviewMovie.value) {
     const match = movies.value.find((m) => m.key === selectedPreviewMovie.value?.key)
     if (match) return match
@@ -515,7 +541,7 @@ const resolvePreviewMovie = () => {
   return pickRandomMovie()
 }
 
-const selectPreviewMovie = (movie: { key: string; title: string }) => {
+const selectPreviewMovie = (movie: PreviewItem) => {
   selectedPreviewMovie.value = movie
   previewMovie.value = movie
   previewUrl.value = ''
@@ -555,7 +581,7 @@ const fetchCollectionTitles = async () => {
 
 const previewPreset = async (templateId: string, preset: Preset) => {
   const isKometa = templateId === 'kometa'
-  let movie: { key: string; title: string } | null
+  let movie: PreviewItem | null
   if (isKometa) {
     await fetchCollectionTitles()
     const titles = collectionTitles.value
@@ -574,16 +600,25 @@ const previewPreset = async (templateId: string, preset: Preset) => {
     ? (preset.options.kometa_logo_url.startsWith('/') ? `${apiBase}${preset.options.kometa_logo_url}` : preset.options.kometa_logo_url)
     : null
   try {
+    let backgroundUrl = isKometa ? '' : `${apiBase}/api/movie/${movie.key}/poster`
+    let logoUrl: string | null = kometaLogo
+    if (!isKometa && movie.tmdbId) {
+      // TMDb-sourced item (no library): poster/logo come from TMDb, never a rating_key.
+      const imgs = await fetchTmdbPreviewImages(movie as TmdbPreviewItem)
+      backgroundUrl = imgs.background
+      logoUrl = imgs.logo
+    }
     const res = await fetch(`${apiBase}/api/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         template_id: templateId,
-        background_url: isKometa ? '' : `${apiBase}/api/movie/${movie.key}/poster`,
-        logo_url: kometaLogo,
+        background_url: backgroundUrl,
+        logo_url: logoUrl,
         options: preset.options || {},
         preset_id: preset.id,
         movie_title: movie.title,
+        movie_year: movie.year || undefined,
         disableOverlayCache: !settings.performance.value.useOverlayCache,
         skip_fallback: true,
       })

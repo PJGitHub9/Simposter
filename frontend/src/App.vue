@@ -20,10 +20,13 @@ import { useMovies } from './composables/useMovies'
 import { useTvShows } from './composables/useTvShows'
 import { useSettingsStore } from './stores/settings'
 import { useScanStore } from './stores/scan'
+import { useServerless } from './composables/useServerless'
+import { LIBRARY_ROUTE_NAMES } from './router'
 import { useOperationStatus } from './stores/operationStatus'
 import { getApiBase } from '@/services/apiBase'
 import { libraryInfo } from '@/services/libraryLabel'
 import { onboardingLaunchRequested, notifyOnboardingSaved } from '@/composables/useOnboardingLauncher'
+import { apiEditorRequest } from '@/composables/useApiEditorLauncher'
 
 // Phase 8a -- a LibraryGroup with at least one member but NO Plex member represents a
 // standalone Jellyfin/Emby-only library (created via Settings -> Libraries's "Jellyfin/
@@ -113,10 +116,22 @@ const tabs = computed<MenuItem[]>(() => {
   const plexConfigured = settings.plexActive.value
   // Phase 8a -- a Jellyfin/Emby-only install (no Plex at all) is no longer locked out
   // of the app; it just has no Plex-derived tabs below. See onMounted()'s matching gate.
-  const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
+  // Server-less mode (onboarding done, no server): reduced nav built on the Poster API.
+  // No Backup / Restore: that page backs up per-library server artwork. The
+  // database backup (presets, overlays, settings, pinned posters) is in
+  // Settings -> Advanced.
+  if (serverless.value) {
+    return [
+      { key: 'poster-api', label: '\u{1F50C} Poster API' },
+      { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
+      { key: 'overlay-config-manager', label: '\u{1F4D0} Overlays' },
+      { key: 'logs', label: '\u{1F4DD} Logs' },
+      { key: 'settings', label: '\u{2699}\uFE0F Settings' }
+    ]
+  }
 
-  // If nothing at all is configured, only show Settings
-  if (!anyServerConfigured) {
+  // Not onboarded yet and nothing configured: only show Settings
+  if (!anyServerConfigured.value) {
     return [
       { key: 'settings', label: '\u{2699}\uFE0F Settings' }
     ]
@@ -184,6 +199,7 @@ const tabs = computed<MenuItem[]>(() => {
     ...nonPlexGroupTabs('tv'),
     { key: 'template-manager', label: '\u{1F3A8} Template Manager' },
     { key: 'overlay-config-manager', label: '\u{1F4D0} Overlays' },
+    { key: 'poster-api', label: '\u{1F50C} Poster API' },
     { key: 'history', label: '\u{1F4CB} History' },
     { key: 'settings', label: '\u{2699}\uFE0F Settings' },
     { key: 'logs', label: '\u{1F4DD} Logs' }
@@ -205,6 +221,38 @@ const showQuickGuide = ref(false)
 // counter rather than a boolean re-triggering `showOnboarding`.
 watch(onboardingLaunchRequested, (val) => {
   if (val > 0) showOnboarding.value = true
+})
+
+// Poster API page / server-less search "Open in editor": a TMDb-identified item with no
+// media-server rating key. Synthetic key (never sent as a rating key -- the editors gate
+// on `apiMode`). Uses its own `apiEdit=<type>:<id>` query param rather than `edit`:
+// `edit` is resolved by tryOpenEditItem() against the library lists by rating key OR
+// TMDb/TVDB id, so a bare TMDb id there could open an unrelated library item.
+watch(apiEditorRequest, (req) => {
+  if (!req) return
+  const mediaType = req.mediaType === 'tv' ? 'tv-show' : 'movie'
+  ui.setSelectedMovie({
+    key: `api-${req.mediaType}-${req.tmdb_id}`,
+    title: req.title,
+    // /api/preview's movie_year is an int -- an empty year must be omitted, not ''.
+    year: req.year || undefined,
+    poster: null,
+    tmdb_id: req.tmdb_id,
+    apiMode: true,
+    mediaType
+  } as any)
+  const { edit: _edit, ...rest } = route.query
+  router.push({ query: { ...rest, apiEdit: `${req.mediaType}:${req.tmdb_id}` } })
+  apiEditorRequest.value = null
+})
+
+// Browser back/forward for an API-mode editor: close it when its apiEdit param goes away
+// or no longer names the open item (there's no list to re-open an API item from).
+watch(() => route.query.apiEdit, (apiEdit) => {
+  const sel = ui.selectedMovie.value as any
+  if (!sel?.apiMode) return
+  const expected = `${sel.mediaType === 'tv-show' ? 'tv' : 'movie'}:${sel.tmdb_id}`
+  if (apiEdit !== expected) ui.setSelectedMovie(null)
 })
 
 const handleQuickGuideDone = () => {
@@ -238,6 +286,7 @@ const closeSidebar = () => {
 const { movies, hydratePostersFromSession } = useMovies()
 const { tvShows } = useTvShows()
 const settings = useSettingsStore()
+const { anyServerConfigured, serverless } = useServerless()
 const scan = useScanStore()
 const operationStatus = useOperationStatus()
 let scanPoller: number | null = null
@@ -529,6 +578,7 @@ watch(
 )
 
 const activeTab = computed<TabKey>(() => {
+  if (serverless.value) return (route.name as TabKey) || 'poster-api'
   const libQuery = resolveTabSuffix((route.query.library as string) || '', (route.query.server as string) || '')
   if (route.name === 'backup' && (route.query.type as string) === 'tv-show') {
     if (libQuery) return `tv-shows-${libQuery}`
@@ -613,8 +663,29 @@ const handleBack = () => {
   ui.setSelectedMovie(null)
 
   // Remove edit parameter from URL, keep other query params
-  const { edit, ...remainingQuery } = route.query
+  const { edit, apiEdit, ...remainingQuery } = route.query
   router.replace({ query: remainingQuery })
+}
+
+// Library loaders (posters, library contents, scan status). Runs from onMounted, and
+// again when a server-less session gets its first server configured mid-session.
+// Guarded so overlapping calls never run twice at once; startScanPolling() itself
+// clears any existing interval, so polling can't be double-started either.
+let libraryLoading: Promise<void> | null = null
+const startLibraryLoading = () => {
+  if (libraryLoading) return libraryLoading
+  hydratePostersFromSession()
+  scan.checking.value = true
+  libraryLoading = Promise.allSettled([
+    fetchAllLibrariesContent(),
+    fetchScanStatus().then((running) => {
+      if (running) startScanPolling()
+      else scan.checking.value = false
+    }),
+  ]).then(() => undefined).finally(() => {
+    libraryLoading = null
+  })
+  return libraryLoading
 }
 
 onMounted(async () => {
@@ -635,21 +706,15 @@ onMounted(async () => {
   // Check if any server is configured — show onboarding for new users. Phase 8a: an
   // install with only Jellyfin/Emby configured (no Plex) is no longer redirected to
   // Settings — matches the tabs computed's identical anyServerConfigured check above.
-  const plexConfigured = settings.plexActive.value
-  const anyServerConfigured = plexConfigured || settings.mediaServers.value.some(s => s.enabled && s.type !== 'plex')
   if (!settings.onboardingCompleted.value) {
     showOnboarding.value = true
-  } else if (!anyServerConfigured && route.path !== '/settings') {
-    router.push('/settings')
+  } else if (serverless.value && LIBRARY_ROUTE_NAMES.has(String(route.name || ''))) {
+    // Server-less mode lands on the Poster API page (the router guard handles deep links).
+    router.replace('/poster-api')
   }
 
-  hydratePostersFromSession()
-  fetchAllLibrariesContent()
-  scan.checking.value = true
-  fetchScanStatus().then((running) => {
-    if (running) startScanPolling()
-    else scan.checking.value = false
-  })
+  // Server-less mode has no libraries to load, search or scan.
+  if (!serverless.value) startLibraryLoading()
   // Check if batch operation is running
   fetchBatchStatus().then((running) => {
     if (running) startBatchPolling()
@@ -664,6 +729,16 @@ onMounted(async () => {
     // We need to wait for content to load before we can find the item
     // This will be handled by a watcher below
   }
+})
+
+// Onboarding can finish (or the last server can be removed) while a library page is open.
+watch(serverless, (v, old) => {
+  if (v && LIBRARY_ROUTE_NAMES.has(String(route.name || ''))) {
+    ui.setSelectedMovie(null)
+    router.replace('/poster-api')
+  }
+  // server-less -> configured mid-session: start the library loaders onMounted skipped
+  if (old && !v) startLibraryLoading()
 })
 
 const tryOpenEditItem = () => {
@@ -691,8 +766,8 @@ const tryOpenEditItem = () => {
 watch(() => route.query.edit, (editId) => {
   if (editId && !ui.selectedMovie.value) {
     tryOpenEditItem()
-  } else if (!editId && ui.selectedMovie.value) {
-    // Edit parameter removed, close editor
+  } else if (!editId && ui.selectedMovie.value && !(ui.selectedMovie.value as any).apiMode) {
+    // Edit parameter removed, close editor (an API-mode editor tracks `apiEdit` instead)
     ui.setSelectedMovie(null)
   }
 })
@@ -1012,7 +1087,7 @@ const handleSubmenuClick = (parentKey: TabKey, submenuKey: string) => {
   <div class="shell">
     <NotificationContainer />
     <OnboardingModal v-if="showOnboarding" @done="showOnboarding = false; showQuickGuide = true; notifyOnboardingSaved()" />
-    <QuickStartGuide v-if="showQuickGuide" @done="handleQuickGuideDone" />
+    <QuickStartGuide v-if="showQuickGuide" :serverless="!anyServerConfigured" @done="handleQuickGuideDone" />
     <UpdateAnnouncementModal @view-full-changelog="showChangelog = true" />
 
     <!-- Mobile sidebar overlay -->

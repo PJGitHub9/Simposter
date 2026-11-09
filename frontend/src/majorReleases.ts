@@ -242,4 +242,41 @@ export const majorReleases: MajorRelease[] = [
       },
     ],
   },
+  {
+    version: 'v1.8.50',
+    title: 'Poster API & running without a media server',
+    intro: "Simposter can now hand posters to other apps, and no longer needs a media server to be useful. Here's the short version; the full changelog is one click away below.",
+    highlights: [
+      {
+        icon: '🔌',
+        title: 'Poster API',
+        description: 'Apps like Ether can ask Simposter for a poster by TMDb id and get your pinned, library or freshly rendered one back as an image.',
+      },
+      {
+        icon: '🖼️',
+        title: 'Pinned, library, rendered',
+        description: 'A pinned poster wins, then the one already on your server, then a render from your default preset. If a render is slow, the app gets the stock TMDb poster and the finished one next time.',
+      },
+      {
+        icon: '🔑',
+        title: 'Optional key',
+        description: 'Protect the API with a key (it travels in the URL, so treat it like a password). Without one, anyone who can reach Simposter can use your TMDb quota.',
+      },
+      {
+        icon: '🧙',
+        title: 'No media server needed',
+        description: 'The setup wizard has a "No media server" choice. It asks for your TMDb key, imports starter presets and sets up the Poster API.',
+      },
+      {
+        icon: '📌',
+        title: 'Pin from the editor',
+        description: 'Open any TMDb title in the editor, tweak it and click Pin. The Poster API serves that poster from then on.',
+      },
+      {
+        icon: '🧭',
+        title: 'A smaller menu, a bigger one later',
+        description: 'Without a server you see Poster API, Template Manager, Overlays, Logs and Settings. Connect a server and everything comes back.',
+      },
+    ],
+  },
 ]

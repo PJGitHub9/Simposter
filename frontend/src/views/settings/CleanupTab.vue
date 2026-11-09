@@ -34,7 +34,7 @@ type TrashBatch = {
 // static catalog here since the schedule checklist needs to be selectable even
 // before the user has ever run a manual scan (which is the only other place
 // these labels/descriptions exist, sourced live from the backend).
-const CATEGORY_CATALOG = [
+const CATEGORY_CATALOG = computed(() => [
   { id: 'poster_cache', label: 'Orphaned poster cache' },
   { id: 'logo_cache', label: 'Orphaned logo cache' },
   { id: 'backdrop_cache', label: 'Orphaned backdrop cache' },
@@ -43,7 +43,8 @@ const CATEGORY_CATALOG = [
   { id: 'uploaded_files', label: 'Unused uploaded images' },
   { id: 'overlay_assets', label: 'Unused overlay badge assets' },
   { id: 'poster_history', label: 'Old History entries' },
-]
+  { id: 'poster_api_renders', label: `Poster API renders not served in ${settingsStore.posterApi.value.retentionDays} days` },
+])
 
 const props = defineProps<{
   scheduleEnabled: boolean

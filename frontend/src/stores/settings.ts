@@ -113,6 +113,15 @@ export type MDBListSettings = {
   cacheDays: number
 }
 
+export type PosterApiSettings = {
+  enabled: boolean
+  key: string // masked (SECRET_MASK) when set; the server keeps the real value
+  defaultMoviePreset: string
+  defaultTvPreset: string
+  waitSeconds: number
+  retentionDays: number
+}
+
 // List sources for overlay "On a list" rules (backend/list_sources.py).
 // Sign-in tokens are stored server-side, never here.
 export type WeTrakrSettings = { clientId: string }
@@ -207,6 +216,7 @@ export type UISettings = {
   tvdb?: TVDBSettings
   fanart?: FanartSettings
   mdblist?: Partial<MDBListSettings>
+  posterApi?: Partial<PosterApiSettings>
   wetrakr?: Partial<WeTrakrSettings>
   simkl?: Partial<SimklSettings>
   floppy?: Partial<FloppySettings>
@@ -253,6 +263,7 @@ const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
 const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'server', criticRatingSource: 'server', cacheDays: 7 })
+const posterApi = ref<PosterApiSettings>({ enabled: false, key: '', defaultMoviePreset: '', defaultTvPreset: '', waitSeconds: 10, retentionDays: 90 })
 const wetrakr = ref<WeTrakrSettings>({ clientId: '' })
 const simkl = ref<SimklSettings>({ clientId: '' })
 const floppy = ref<FloppySettings>({ url: '', token: '' })
@@ -347,6 +358,14 @@ async function loadSettings() {
       audienceRatingSource: data.mdblist?.audienceRatingSource ?? 'server',
       criticRatingSource: data.mdblist?.criticRatingSource ?? 'server',
       cacheDays: data.mdblist?.cacheDays ?? 7
+    }
+    posterApi.value = {
+      enabled: data.posterApi?.enabled ?? false,
+      key: data.posterApi?.key ?? '',
+      defaultMoviePreset: data.posterApi?.defaultMoviePreset ?? '',
+      defaultTvPreset: data.posterApi?.defaultTvPreset ?? '',
+      waitSeconds: data.posterApi?.waitSeconds ?? 10,
+      retentionDays: data.posterApi?.retentionDays ?? 90
     }
     wetrakr.value = { clientId: data.wetrakr?.clientId ?? '' }
     simkl.value = { clientId: data.simkl?.clientId ?? '' }
@@ -449,6 +468,7 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       tvdb: { ...tvdb.value },
       fanart: { ...fanart.value },
       mdblist: { ...mdblist.value },
+      posterApi: { ...posterApi.value },
       wetrakr: { ...wetrakr.value },
       simkl: { ...simkl.value },
       floppy: { ...floppy.value },
@@ -496,6 +516,7 @@ export function useSettingsStore() {
     tvdb,
     fanart,
     mdblist,
+    posterApi,
     wetrakr,
     simkl,
     floppy,

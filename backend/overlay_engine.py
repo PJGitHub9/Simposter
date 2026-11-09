@@ -257,7 +257,8 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                 pass  # everything came from the media server
             elif not mdb.has_key():
                 if still_needed & {"audience_rating", "critic_rating"}:
-                    notes["ratings"] = "no rating for this item on the media server (scan the library), and no MDBList API key"
+                    notes["ratings"] = ("no rating for this item from the media server or TMDb (TMDb has no critic "
+                                        "score), and no MDBList API key")
                 else:
                     notes["ratings"] = "no MDBList API key in Settings > Ratings & Lists"
             else:

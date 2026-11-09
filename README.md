@@ -22,6 +22,7 @@
 - **Scheduled scans** and a **smart retry queue** for hands-off automation
 - **Guided setup wizard** on first launch — media servers, API keys, libraries, automation, all in one flow
 - **Cleanup tools** — clear Simposter's own stale cache, and run each media server's built-in maintenance
+- **Poster API** — other apps (like Ether) can request a poster by TMDb id and get your pinned, library or freshly rendered poster. It also runs with no media server at all
 - **6 themes**, Discord/Apprise notifications, full History audit log with hover previews
 
 Full breakdown of all of this in the docs below.
@@ -52,6 +53,7 @@ Prefer not to build locally? Pre-built images are published to [ghcr.io/pjgithub
 | **[Media Servers](docs/MEDIA_SERVERS.md)** | Plex, Jellyfin and Emby: connecting servers, library groups, merged browsing, multi-server sending, Media Mirror, collection matching, server maintenance |
 | **[Overlays](docs/OVERLAYS.md)** | Building overlays and their rules, text values, Kometa import, MDBList ratings and lists, Overlay Refresh, live Kometa files |
 | **[Collections & Poster Guide](docs/COLLECTIONS_AND_POSTERS.md)** | Templates/presets, logos, overlay badges, batch processing, the smart retry queue, and Collections (including why a Fanart.tv key matters) |
+| **[Poster API](docs/POSTER_API.md)** | Serving posters to other apps by TMDb id, the key, URL forms, responses, pinning, running without a media server |
 | **[Webhooks](docs/WEBHOOKS.md)** | Radarr, Sonarr, and Tautulli setup, payload examples, dry-run testing |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Technical architecture, API routers, rendering pipeline (for contributors) |
 | **[WORKFLOW.md](WORKFLOW.md)** | How a poster request flows end-to-end for each trigger type |

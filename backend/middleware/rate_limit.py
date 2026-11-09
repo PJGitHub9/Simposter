@@ -89,8 +89,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             "/api/square-art": 1500,
             "/api/thumb-art": 1500,
 
+            # Public Poster API (also served at the root alias /poster, which maps
+            # to this same bucket). Cache hits are cheap; clients such as Plex
+            # scanners or Kometa fan out thousands of requests. /api/poster-api/*
+            # admin routes are a different path segment and stay on the default.
+            "/api/poster": 3000,
+
             # Moderate operations
-            "/api/tmdb": 40,  # Match TMDB's own limit
+            "/api/tmdb": 300,  # server-less nav shares this bucket; tmdb_client rate-limits + caches TMDb itself
             "/api/tvdb": 20,  # Match TVDB's limit
             "/api/presets": 50,
             "/api/templates": 50,
@@ -127,6 +133,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """
         # Remove trailing slash
         path = path.rstrip('/')
+
+        # Root alias of the public Poster API shares the /api/poster bucket
+        if path == "/poster":
+            return "/api/poster"
 
         # Extract base API path (first 2-3 segments)
         parts = path.split('/')
@@ -214,7 +224,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             Response from next middleware or rate limit error
         """
         # Skip rate limiting for non-API routes
-        if not request.url.path.startswith("/api"):
+        if not (request.url.path.startswith("/api") or request.url.path.rstrip("/") == "/poster"):
             return await call_next(request)
 
         # Get client identifier and endpoint

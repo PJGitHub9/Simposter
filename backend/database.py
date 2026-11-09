@@ -1039,6 +1039,27 @@ def init_database():
             )
         """)
 
+        # Poster API cache index (backend/poster_api_store.py owns the files in
+        # config/cache/poster_api/). source: rendered | pinned | library. season_index
+        # is -1 for "no season" (NOT NULL so the composite PK upserts correctly).
+        # Timestamps are CURRENT_TIMESTAMP (UTC), like the other tables.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS poster_api_cache (
+                media_type TEXT NOT NULL,
+                tmdb_id INTEGER NOT NULL,
+                season_index INTEGER NOT NULL DEFAULT -1,
+                preset_key TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                title TEXT,
+                preset_hash TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_served_at TIMESTAMP,
+                hits INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (media_type, tmdb_id, season_index, preset_key, source)
+            )
+        """)
+
         # Media Mirror change detection: a sha256 of the RAW source image bytes
         # last successfully copied to each target item, per asset type. A run
         # compares the freshly-downloaded source bytes' hash against this and
@@ -1284,7 +1305,7 @@ def init_database():
                         ("scheduler.cleanupCronExpression", "0 3 * * 0"),
                         ("scheduler.cleanupCategories", json.dumps([
                             "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
-                            "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+                            "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders",
                         ])),
                         ("scheduler.cleanupHistoryDays", "180"),
                     ):
@@ -1555,6 +1576,9 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "floppy.url",
     "floppy.token",
     "automation.webhookSecret",
+    "posterApi.key",
+    "posterApi.defaultMoviePreset",
+    "posterApi.defaultTvPreset",
     "automation.webhookAutoLabels",
     "automation.labelToAdd",
     "notifications.discordWebhookUrl",
@@ -4539,6 +4563,26 @@ def get_ids_for_rating_key(rating_key: str) -> tuple:
     return None, None
 
 
+def find_rating_key_by_tmdb_id(media_type: str, tmdb_id: int) -> Optional[str]:
+    """A library rating_key for this TMDb id from movie_cache ("movie") or
+    tv_cache ("tv"/"tv-show"), or None if the title isn't in any scanned library.
+    Prefers the Plex copy when the same title exists on several servers (its
+    media info can be fetched live); otherwise the most recently updated row.
+    Used by the poster API to add library badges to a TMDb-id render."""
+    if not tmdb_id:
+        return None
+    table = "tv_cache" if media_type in ("tv", "tv-show") else "movie_cache"
+    with get_db() as conn:
+        row = conn.execute(
+            f"""SELECT rating_key FROM {table}
+                WHERE tmdb_id = ? AND rating_key IS NOT NULL
+                ORDER BY (server_id = 'plex-1') DESC, updated_at DESC
+                LIMIT 1""",
+            (int(tmdb_id),),
+        ).fetchone()
+    return str(row["rating_key"]) if row else None
+
+
 def get_cached_item_identity(rating_key: str) -> Optional[Dict[str, Any]]:
     """What Simposter knows about a cached movie/show: which table, server,
     library and external ids. Used to find the item again on its server
@@ -5485,3 +5529,130 @@ def delete_list_source_auth(provider: str) -> None:
     with get_db() as conn:
         conn.execute("DELETE FROM list_source_auth WHERE provider = ?", (provider,))
         conn.commit()
+
+
+# ---------------------------------------------------------------- Poster API cache
+_PAC_COLS = ("rowid AS id, media_type, tmdb_id, season_index, preset_key, source, file_path, "
+             "title, preset_hash, created_at, last_served_at, hits")
+
+
+def poster_api_cache_get(media_type: str, tmdb_id: int, season_index: int, preset_key: str, source: str) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(
+            f"SELECT {_PAC_COLS} FROM poster_api_cache WHERE media_type=? AND tmdb_id=? "
+            "AND season_index=? AND preset_key=? AND source=?",
+            (media_type, tmdb_id, season_index, preset_key, source)).fetchone()
+    return dict(row) if row else None
+
+
+def poster_api_cache_put(media_type: str, tmdb_id: int, season_index: int, preset_key: str, source: str,
+                         file_path: str, title: Optional[str], preset_hash: Optional[str]) -> None:
+    """Upsert a row. Existing hits/last_served_at are kept; created_at is refreshed."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO poster_api_cache (media_type, tmdb_id, season_index, preset_key, source,
+                                          file_path, title, preset_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(media_type, tmdb_id, season_index, preset_key, source) DO UPDATE SET
+                file_path = excluded.file_path, title = excluded.title,
+                preset_hash = excluded.preset_hash, created_at = CURRENT_TIMESTAMP
+        """, (media_type, tmdb_id, season_index, preset_key, source, file_path, title, preset_hash))
+
+
+def poster_api_cache_delete(media_type: str, tmdb_id: int, season_index: int, preset_key: str, source: str) -> int:
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM poster_api_cache WHERE media_type=? AND tmdb_id=? AND season_index=? "
+            "AND preset_key=? AND source=?", (media_type, tmdb_id, season_index, preset_key, source))
+        return cur.rowcount
+
+
+def poster_api_cache_touch(media_type: str, tmdb_id: int, season_index: int, preset_key: str, source: str) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE poster_api_cache SET last_served_at=CURRENT_TIMESTAMP, hits=hits+1 "
+            "WHERE media_type=? AND tmdb_id=? AND season_index=? AND preset_key=? AND source=?",
+            (media_type, tmdb_id, season_index, preset_key, source))
+
+
+def poster_api_cache_rows_for_key(media_type: str, tmdb_id: int, season_index: int, preset_key: str,
+                                  source: Optional[str] = None) -> List[Dict[str, Any]]:
+    sql = (f"SELECT {_PAC_COLS} FROM poster_api_cache WHERE media_type=? AND tmdb_id=? "
+           "AND season_index=? AND preset_key=?")
+    params: list = [media_type, tmdb_id, season_index, preset_key]
+    if source:
+        sql += " AND source=?"
+        params.append(source)
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def poster_api_cache_list(search: str, media_type: Optional[str], source: Optional[str],
+                          offset: int, limit: int) -> Tuple[List[Dict[str, Any]], int]:
+    where, params = [], []
+    search = (search or "").strip()
+    if search:
+        if search.isdigit():
+            where.append("(title LIKE ? COLLATE NOCASE OR tmdb_id = ?)")
+            params += [f"%{search}%", int(search)]
+        else:
+            where.append("title LIKE ? COLLATE NOCASE")
+            params.append(f"%{search}%")
+    if media_type:
+        where.append("media_type = ?")
+        params.append(media_type)
+    if source:
+        where.append("source = ?")
+        params.append(source)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    with get_db() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM poster_api_cache{clause}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT {_PAC_COLS} FROM poster_api_cache{clause} "
+            "ORDER BY last_served_at IS NULL, last_served_at DESC, created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+            params + [limit, offset]).fetchall()
+    return [dict(r) for r in rows], total
+
+
+def poster_api_cache_stale_rendered(days: int) -> List[Dict[str, Any]]:
+    """Rendered rows whose last_served_at (or created_at, if never served) is older than `days`."""
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT {_PAC_COLS} FROM poster_api_cache WHERE source='rendered' "
+            "AND COALESCE(last_served_at, created_at) < datetime('now', ?)",
+            (f"-{int(days)} days",)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def poster_api_cache_restore_row(row: Dict[str, Any]) -> None:
+    """Re-insert a row exactly as exported (incl. hits and timestamps); replaces any row with the same key."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO poster_api_cache (media_type, tmdb_id, season_index, preset_key, source,
+                file_path, title, preset_hash, created_at, last_served_at, hits)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (row["media_type"], row["tmdb_id"], row["season_index"], row["preset_key"], row["source"],
+              row["file_path"], row.get("title"), row.get("preset_hash"), row.get("created_at"),
+              row.get("last_served_at"), row.get("hits") or 0))
+
+
+def poster_api_cache_get_by_id(row_id: int) -> Optional[Dict[str, Any]]:
+    with get_db() as conn:
+        row = conn.execute(f"SELECT {_PAC_COLS} FROM poster_api_cache WHERE rowid=?", (int(row_id),)).fetchone()
+    return dict(row) if row else None
+
+
+def poster_api_cache_counts() -> Dict[str, int]:
+    with get_db() as conn:
+        rows = conn.execute("SELECT source, COUNT(*) AS n FROM poster_api_cache GROUP BY source").fetchall()
+    return {r["source"]: r["n"] for r in rows}
+
+
+def get_title_for_tmdb_id(media_type: str, tmdb_id: int) -> Optional[str]:
+    """Cached library title for a TMDb id (movie_cache / tv_cache), or None."""
+    table = "tv_cache" if media_type in ("tv", "tv-show") else "movie_cache"
+    with get_db() as conn:
+        row = conn.execute(
+            f"SELECT title FROM {table} WHERE tmdb_id = ? AND title IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+            (int(tmdb_id),)).fetchone()
+    return row["title"] if row else None

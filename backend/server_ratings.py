@@ -19,6 +19,28 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SERVER_SOURCES = ("server", "plex", "jellyfin")
+# Sources that need no MDBList key: the media servers, plus TMDb's own user
+# score (audience only -- TMDb has no critic score). TMDb is also the fallback
+# for audience_rating whenever no server has a value, which is always the case
+# on an install with no media server (Poster API / server-less mode).
+TMDB_SOURCE = "tmdb"
+LOCAL_SOURCES = SERVER_SOURCES + (TMDB_SOURCE,)
+
+
+def tmdb_audience_rating(media_type: str, tmdb_id: Any) -> Optional[float]:
+    """TMDb's user score (vote_average, 0-10) for the item, from the cached
+    details call the render already makes. None when unknown or unrated."""
+    if tmdb_id in (None, ""):
+        return None
+    try:
+        from .tmdb_client import get_movie_details, get_tv_show_details
+        details = get_movie_details(int(tmdb_id)) if media_type == "movie" else get_tv_show_details(int(tmdb_id))
+    except Exception:
+        return None
+    if not details.get("vote_count"):
+        return None  # no votes yet: TMDb reports 0.0, which isn't a real score
+    value = _num(details.get("vote_average"))
+    return round(value, 1) if value is not None else None
 
 
 def _num(value: Any, scale: float = 1.0) -> Optional[float]:
@@ -170,28 +192,44 @@ def fill(ctx: Dict[str, Any], media_type: str, tmdb_id: Any, mdblist_ready: bool
     used: Dict[str, str] = {}
     rating_key = ctx.get("rating_key")
     cache: Dict[str, Dict[str, Optional[float]]] = {}
+    tmdb_value: List[Optional[float]] = []  # fetched at most once
+
+    def _tmdb() -> Optional[float]:
+        if not tmdb_value:
+            tmdb_value.append(tmdb_audience_rating(media_type, tmdb_id))
+        return tmdb_value[0]
+
     for field, source in _sources().items():
         if ctx.get(field) not in (None, ""):
             continue
-        if source == "server":
-            order = server_order()
+        if source == TMDB_SOURCE:
+            order: List[str] = [TMDB_SOURCE]
+        elif source == "server":
+            order = server_order() + [TMDB_SOURCE]
         elif source in SERVER_SOURCES:
             order = [source]
         elif not mdblist_ready:
-            order = server_order()  # MDBList source without a key: the servers instead
+            # MDBList source without a key: the servers instead, then TMDb.
+            order = server_order() + [TMDB_SOURCE]
         else:
             continue
         for src in order:
-            if src not in cache:
-                cache[src] = lookup(src, media_type, tmdb_id, rating_key)
-            value = cache[src].get(field)
+            if src == TMDB_SOURCE:
+                # TMDb only has an audience score.
+                value = _tmdb() if field == "audience_rating" else None
+                label = "TMDb"
+            else:
+                if src not in cache:
+                    cache[src] = lookup(src, media_type, tmdb_id, rating_key)
+                value = cache[src].get(field)
+                label = "Plex" if src == "plex" else "Jellyfin/Emby"
             if value is not None:
                 ctx[field] = value
-                used[field] = "Plex" if src == "plex" else "Jellyfin/Emby"
+                used[field] = label
                 break
     return used
 
 
 def mdblist_fields_wanted() -> set:
     """Which of audience/critic rating should still come from MDBList."""
-    return {f for f, s in _sources().items() if s not in SERVER_SOURCES}
+    return {f for f, s in _sources().items() if s not in LOCAL_SOURCES}

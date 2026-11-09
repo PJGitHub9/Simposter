@@ -10,6 +10,39 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.50',
+    date: '2026-11-08',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster API: other apps (like Ether) can ask Simposter for a poster by TMDb id. You get the poster you pinned, the one already on your media server, or a fresh render from your Uniform Logo preset, and if a render takes too long the request is sent to the stock TMDb poster while the render finishes. Turn it on in the new Poster API page, with an optional key, default presets, and a tile per cached poster (regenerate, clear, open in the editor).',
+          'Run Simposter without a media server: the setup wizard has a "No media server" choice that skips the server and library steps and sets up the Poster API instead. The menu shrinks to Poster API, Template Manager, Overlays, Logs and Settings (Settings hides Libraries, Output and Automation), the quick start guide shows what you can do without a server, and previews and search use TMDb titles. Connect a server later and the full menu returns.',
+          'Pin a poster from the editor: open any TMDb title in the editor from the Poster API page or global search and click Pin. The Poster API then always serves that poster for the title.',
+          'TMDb ratings for overlays: "TMDb (user score)" is a new audience rating source that needs only your TMDb key. When your media server has no rating for a title (always the case with no media server), the audience rating now comes from TMDb, so rating overlays work out of the box.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Saving Settings could reset some settings sections to defaults when the page did not send them.',
+          'The API rate limit did not apply to the /poster address, and the TMDb search limit was low enough that fast typing could return empty results.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Cleanup has a new "Poster API renders" category, and database export and import include pinned posters.',
+          'Template Manager and Overlay Manager previews work with TMDb titles when you have no library.',
+          'Poster API defaults to the simposter-main preset, and the Copy buttons copy each URL with your API key already filled in.',
+          'The setup wizard shows a spinner while it imports the starter presets.',
+          'Poster API page: tick posters (or Select page / Select all) to regenerate or clear many at once. Pinning a poster from the editor removes the old rendered copy for that title, since the pinned one is served instead.',
+          'With no media server, Overlay Manager marks video, audio and edition badges as needing a media server (they read file details from a library scan).'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.38',
     date: '2026-11-06',
     sections: [

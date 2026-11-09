@@ -63,7 +63,7 @@ def init_scheduler(restore_from_settings: bool = True):
                 cleanup_cron = scheduler_settings.get("cleanupCronExpression", "0 3 * * 0")
                 cleanup_categories = scheduler_settings.get("cleanupCategories") or [
                     "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
-                    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+                    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders",
                 ]
                 cleanup_history_days = int(scheduler_settings.get("cleanupHistoryDays", 180))
                 if schedule_cleanup(cleanup_cron, cleanup_categories, cleanup_history_days):

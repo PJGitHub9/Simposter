@@ -17,6 +17,9 @@ import SquareArtView from './views/SquareArtView.vue'
 import ThumbArtView from './views/ThumbArtView.vue'
 import MediaMirrorView from './views/MediaMirrorView.vue'
 import OverlayRefreshView from './views/OverlayRefreshView.vue'
+import PosterApiView from './views/PosterApiView.vue'
+import { useSettingsStore } from './stores/settings'
+import { useServerless } from './composables/useServerless'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -46,6 +49,29 @@ export const router = createRouter({
     { path: '/overlays', name: 'overlay-config-manager', component: OverlayConfigManagerView },
     { path: '/history', name: 'history', component: HistoryView },
     { path: '/settings', name: 'settings', component: SettingsView },
+    { path: '/poster-api', name: 'poster-api', component: PosterApiView },
     { path: '/logs', name: 'logs', component: LogsView }
   ]
+})
+
+// Routes that need a media server's library. In server-less mode (onboarding done, no
+// server configured) they all redirect to /poster-api.
+export const LIBRARY_ROUTE_NAMES = new Set([
+  'movies', 'batch-edit', 'collections', 'local-assets', 'logos', 'backdrops', 'square-art',
+  'thumb-art', 'media-mirror', 'overlay-refresh',
+  'tv-shows', 'tv-batch-edit', 'tv-local-assets', 'tv-logos', 'tv-backdrops', 'tv-square-art',
+  'tv-thumb-art', 'tv-media-mirror', 'tv-overlay-refresh',
+  'history', 'backup'  // backup = per-library server artwork, nothing to do without a server
+])
+
+router.beforeEach(async (to) => {
+  if (!LIBRARY_ROUTE_NAMES.has(String(to.name || ''))) return true
+  const settings = useSettingsStore()
+  if (!settings.loaded.value) {
+    try { await settings.load() } catch { /* leave unredirected if settings can't load */ }
+  }
+  if (!settings.loaded.value) return true
+  const { serverless } = useServerless()
+  // onboardingCompleted is part of `serverless`, so a fresh install still reaches the wizard.
+  return serverless.value ? { path: '/poster-api', replace: true } : true
 })

@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { APP_VERSION } from '@/version'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore } from '@/stores/settings'
+import { useServerless } from '@/composables/useServerless'
+import { openApiEditor } from '@/composables/useApiEditorLauncher'
 // Aliased to avoid colliding with this file's own local `mediaServerLabel`
 // function below (a different signature, for the /api/media-server/status
 // per-server badges) -- see CLAUDE.md Quirk #79 on why a same-named local
@@ -55,6 +57,7 @@ type PlexStatus = 'unknown' | 'up' | 'down' | 'unconfigured'
 const plexStatus = ref<PlexStatus>('unknown')
 
 const checkPlexStatus = async () => {
+  if (serverless.value) return
   try {
     const res = await fetch(`${apiBase}/api/plex-status`)
     if (res.ok) {
@@ -69,6 +72,7 @@ const checkPlexStatus = async () => {
 }
 
 const settingsStore = useSettingsStore()
+const { serverless } = useServerless()
 // Honors a custom name set on the primary Plex entry (Quirk #81's Name field),
 // same as every other place a server gets labeled -- previously hardcoded
 // "Plex" here regardless of what was configured.
@@ -93,6 +97,10 @@ interface MediaServerStatus {
 const mediaServerStatuses = ref<MediaServerStatus[]>([])
 
 const checkMediaServerStatus = async () => {
+  if (serverless.value) {
+    mediaServerStatuses.value = []
+    return
+  }
   try {
     const res = await fetch(`${apiBase}/api/media-server/status`)
     if (res.ok) {
@@ -130,7 +138,7 @@ interface ServerStatusEntry {
   status: PlexStatus | MediaServerStatus['status']
   title: string
 }
-const allServerStatuses = computed<ServerStatusEntry[]>(() => [
+const allServerStatuses = computed<ServerStatusEntry[]>(() => serverless.value ? [] : [
   // 'unconfigured' means Plex was never set up at all (a genuinely Jellyfin/
   // Emby-only install, Phase 8a) -- not the same as 'down' (configured but
   // currently unreachable, which SHOULD still show a red pill). Omitting the
@@ -170,7 +178,59 @@ const loadPosterCache = () => {
   }
 }
 
+// Server-less mode has no library to search -- search TMDb instead (movies + TV) and
+// open the picked title in the editor's API mode. With a media server: unchanged.
+type TmdbHit = { tmdb_id: number; title: string; year?: string | number | null; poster_path?: string | null }
+type TmdbSearchItem = Movie & { tmdbType: 'movie' | 'tv'; tmdbId: number }
+const tmdbHits = ref<{ movie: TmdbHit[]; tv: TmdbHit[] }>({ movie: [], tv: [] })
+let tmdbSearchTimer: ReturnType<typeof setTimeout> | null = null
+let tmdbSearchSeq = 0
+const fetchTmdbHits = async (term: string) => {
+  const seq = ++tmdbSearchSeq
+  const get = async (type: 'movie' | 'tv'): Promise<TmdbHit[]> => {
+    try {
+      const res = await fetch(`${apiBase}/api/tmdb/search?type=${type}&q=${encodeURIComponent(term)}`)
+      if (!res.ok) return []
+      const data = await res.json()
+      return Array.isArray(data) ? data : []
+    } catch {
+      return []
+    }
+  }
+  const [movie, tv] = await Promise.all([get('movie'), get('tv')])
+  if (seq === tmdbSearchSeq) tmdbHits.value = { movie, tv }
+}
+watch(() => props.search, (value) => {
+  if (!serverless.value) return
+  if (tmdbSearchTimer) clearTimeout(tmdbSearchTimer)
+  const term = (value || '').trim()
+  if (term.length < 2) {
+    tmdbSearchSeq++
+    tmdbHits.value = { movie: [], tv: [] }
+    return
+  }
+  tmdbSearchTimer = setTimeout(() => fetchTmdbHits(term), 300)
+})
+const toSearchItem = (h: TmdbHit, type: 'movie' | 'tv'): TmdbSearchItem => ({
+  key: `tmdb-${type}-${h.tmdb_id}`,
+  title: h.title,
+  year: h.year || undefined,
+  poster: h.poster_path ? `https://image.tmdb.org/t/p/w92${h.poster_path}` : null,
+  mediaType: type === 'tv' ? 'tv-show' : 'movie',
+  tmdbType: type,
+  tmdbId: h.tmdb_id,
+})
+const tmdbSearchResults = computed(() => {
+  const results: (TmdbSearchItem | { separator: string })[] = []
+  const movies = tmdbHits.value.movie.slice(0, 6)
+  const shows = tmdbHits.value.tv.slice(0, 6)
+  if (movies.length) results.push({ separator: 'Movies (TMDb)' }, ...movies.map(h => toSearchItem(h, 'movie')))
+  if (shows.length) results.push({ separator: 'TV Shows (TMDb)' }, ...shows.map(h => toSearchItem(h, 'tv')))
+  return results
+})
+
 const searchResults = computed(() => {
+  if (serverless.value) return props.search?.trim() ? tmdbSearchResults.value : []
   if (!props.search || !props.movies) return []
   const term = props.search.trim().toLowerCase()
   if (!term) return []
@@ -216,6 +276,13 @@ const searchResults = computed(() => {
 const showDropdown = computed(() => searchFocused.value && searchResults.value.length > 0)
 
 const handleSelectMovie = (movie: Movie) => {
+  const hit = movie as Partial<TmdbSearchItem>
+  if (serverless.value && hit.tmdbType && hit.tmdbId) {
+    openApiEditor({ tmdb_id: hit.tmdbId, mediaType: hit.tmdbType, title: movie.title, year: movie.year })
+    emit('update:search', '')
+    searchFocused.value = false
+    return
+  }
   emit('selectMovie', movie)
   emit('update:search', '')
   searchFocused.value = false
@@ -416,7 +483,7 @@ onUnmounted(() => {
         @focus="searchFocused = true"
         @blur="handleBlur"
         type="search"
-        placeholder="Search for movies, shows, or collections..."
+        :placeholder="serverless ? 'Search TMDb for movies or shows...' : 'Search for movies, shows, or collections...'"
         class="search-input"
       />
 

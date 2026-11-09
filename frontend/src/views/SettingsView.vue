@@ -5,6 +5,7 @@ import { useMovies } from '../composables/useMovies'
 import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
+import { useServerless } from '@/composables/useServerless'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { setSessionStorage, getSessionStorage } from '../composables/useSessionStorage'
 import { onboardingJustSaved } from '@/composables/useOnboardingLauncher'
@@ -43,6 +44,7 @@ interface Movie {
 }
 
 const settings = useSettingsStore()
+const { serverless } = useServerless()
 const saved = ref('')
 const allLibraryLabels = ref<Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }>>({})
 const labelsLoading = ref(false)
@@ -1435,6 +1437,14 @@ watch(() => route.query.tab, (newTab) => {
   }
 })
 
+// With no media server, Libraries / Output / Automation are hidden (they only
+// configure server libraries, saving to disk and webhooks). A link or a
+// remembered ?tab= pointing at one lands on General instead.
+const SERVER_ONLY_TABS = new Set(['libraries', 'output', 'automation'])
+watch([serverless, activeTab], ([isServerless, tab]) => {
+  if (isServerless && SERVER_ONLY_TABS.has(tab)) activeTab.value = 'general'
+}, { immediate: true })
+
 // libraryGroups/mediaServers/automation.preferredPosterServer are bound
 // directly to the store with no local staging ref (Quirk #79/#119/#120),
 // so an unsaved edit deliberately survives leaving and returning to
@@ -1511,6 +1521,7 @@ onMounted(() => {
           Ratings &amp; Lists
         </button>
         <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'libraries' }]"
           @click="activeTab = 'libraries'"
         >
@@ -1524,6 +1535,7 @@ onMounted(() => {
           Media Servers
         </button>
         <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'output' }]"
           @click="activeTab = 'output'"
         >
@@ -1536,6 +1548,7 @@ onMounted(() => {
           Performance
         </button>
         <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'automation' }]"
           @click="activeTab = 'automation'"
         >
@@ -1616,7 +1629,7 @@ onMounted(() => {
       />
 
       <LibrariesTab
-        v-if="activeTab === 'libraries'"
+        v-if="activeTab === 'libraries' && !serverless"
         :plexUrl="localPlexUrl"
         :plexToken="localPlexToken"
         :libraries="localLibraries"
@@ -1721,7 +1734,7 @@ onMounted(() => {
       />
 
       <AutomationTab
-        v-if="activeTab === 'automation'"
+        v-if="activeTab === 'automation' && !serverless"
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
         :labelToAdd="localLabelToAdd"
@@ -1830,6 +1843,10 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.serverless-note {
+  padding: 16px 0;
+  color: var(--text-secondary, inherit);
+}
 .view {
   display: flex;
   flex-direction: column;

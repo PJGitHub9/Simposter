@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.8.50 (2026-11-08) — `dev-noserver` branch
+
+### New Features
+- **Poster API** — `GET /api/poster?tmdb_id=&type=&season=&preset=&key=`, `GET /api/poster/{type}/{tmdb_id}` and a root alias `GET /poster` (`backend/api/poster_api.py`, registered before the SPA catch-all in `main.py`). `backend/poster_api.py` `serve()` looks up pinned, then library (the file Simposter already sent), then rendered (`poster_api_cache` table, files in `config/cache/poster_api/`); a cold request renders on a thread pool, waits `waitSeconds` (2-30) and otherwise 302s to `image.tmdb.org/t/p/w780`. Concurrent requests for one key share one render; genuine "no art" results are negatively cached for 10 minutes. Settings live under `posterApi` (`enabled`, `key`, `defaultMoviePreset`, `defaultTvPreset`, `waitSeconds`, `retentionDays`); the key is masked in `/api/ui-settings`. Admin routes `/api/poster-api/*` (status, items, thumb, regenerate, clear, pin, settings, generate-key) and `/api/tmdb/search|trending|tv/{id}/seasons`. New `docs/POSTER_API.md`.
+- **Server-less mode** — the setup wizard's "No media server" path (new Poster API step), a reduced nav, route guard and gated library/status calls when onboarding is done and no server is configured (`useServerless.ts`: `serverless = onboardingCompleted && !anyServerConfigured`).
+- **Editor API mode** — `EditorPane.vue`/`TvShowEditorPane.vue` open a TMDb title with `apiMode` (`?apiEdit=<type>:<id>`), hide send/save, and add a Pin button that stores the preview as a pinned poster.
+
+### Improvements
+- **`backend/tmdb_render.py`** — poster/logo selection and fallback logic extracted from `batch.py` (`load_preset_context`, `select_movie_assets`/`select_tv_series_assets`/`select_tv_season_assets`, `fetch_tv_series_images`) and shared with the Poster API's `render_for_tmdb`. Verified with a before/after golden comparison of the chosen poster/logo/fallback flags.
+- **Cleanup** — new `poster_api_renders` category (rendered files not served in `retentionDays`, trash/restore like the others); database export/import carries pinned posters (`poster_api_pinned`).
+- **Template Manager / Overlay Manager** previews fall back to TMDb trending and search when there is no library.
+- **TMDb rating source** — `server_ratings.TMDB_SOURCE = "tmdb"` fills `audience_rating` from TMDb's `vote_average` (needs only the TMDb key; `vote_count` 0 = no rating); it is also the fallback after the media servers for the `server` source and for an MDBList source with no key. TMDb has no critic score. `tmdb_client` details now include `vote_average`/`vote_count`. In Settings → Ratings & Lists the `tmdb` choice moved out of the MDBList group.
+- **Server-less polish** — Backup / Restore (per-library server artwork) removed from the server-less nav and redirected; Settings hides Libraries, Output and Automation; `QuickStartGuide.vue` has a server-less card set; Overlay Manager tags video/audio/edition badges "needs a media server"; Settings → Ratings & Lists hides the media-server rating choices.
+- **Poster API bulk actions** — `POST /api/poster-api/bulk` `{action: regenerate|clear, items: [...]}` (max 500; regenerate only touches rendered rows, clear uses each tile's own source, invalid items are skipped and counted). The Poster API page has per-tile checkboxes, Select page / Select all, and bulk Regenerate / Clear.
+- **Pin removes the default render** — `POST /api/poster-api/pin` deletes the default-slot rendered row/file/thumbnail for the same title (and season), which is never served while a pin exists; renders for an explicit `preset=` stay.
+- **Poster API defaults** — `FALLBACK_PRESET_ID = "simposter-main"` when no default preset is set; `/api/poster-api/status` adds `url_templates_with_key` so Copy gives a working URL; the wizard shows a spinner while importing starter presets.
+
+### Bug Fixes
+- `POST /api/ui-settings` with a section missing from the body reset that section to defaults; guarded with `model_fields_set` (found for `posterApi`).
+- `db.save_ui_settings()` deletes every settings row; partial saves use `db.set_setting()`.
+- Digit-only secrets/preset ids were read back as integers; `posterApi.key`, `defaultMoviePreset`, `defaultTvPreset` added to `_STRING_ONLY_SETTINGS_KEYS`.
+- Rate limiting skipped every non-`/api` path, so `/poster` would have been unlimited; `/api/poster` and `/poster` now have their own limit (3000/60 s) and `/api/tmdb` went from 40 to 300.
+- Saving a default preset on the Poster API compared against the wrong structure and rejected every non-empty value.
+- Poster API serve resolved the default preset before checking pinned/library (404 with no Uniform Logo presets); library PNG files were sent as `image/jpeg`; per-tile Clear could delete a pinned poster; switching from server-less to configured mid-session never started the library loaders.
+
 ## v1.8.38 (2026-11-06) — `webui-overhaul-dev` branch
 
 ### Improvements

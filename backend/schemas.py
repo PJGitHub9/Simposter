@@ -184,7 +184,7 @@ class PerformanceSettings(BaseModel):
 
 _DEFAULT_CLEANUP_CATEGORIES = [
     "poster_cache", "logo_cache", "backdrop_cache", "square_art_cache",
-    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history",
+    "overlay_effect_cache", "uploaded_files", "overlay_assets", "poster_history", "poster_api_renders",
 ]
 
 
@@ -372,6 +372,42 @@ class LibraryGroup(BaseModel):
     collectionMatchOverrides: Dict[str, str] = Field(default_factory=dict)
 
 
+class PosterApiSettings(BaseModel):
+    """Public poster API (/api/poster, /poster). Edited from the Poster API page."""
+    enabled: bool = False
+    key: str = ""  # empty = open access (a notice is shown in the UI)
+    defaultMoviePreset: str = ""  # uniformlogo preset id; "" = first preset
+    defaultTvPreset: str = ""
+    waitSeconds: int = 10  # how long a request waits for a render before 302 to TMDb (2-30)
+    retentionDays: int = 90  # rendered cache entries unserved this long are pruned
+
+
+class PosterApiTarget(BaseModel):
+    """Identifies a Poster API cache entry (type accepts the public route's aliases)."""
+    type: str
+    tmdb_id: int
+    season: Optional[int] = None
+    preset: Optional[str] = None
+
+
+class PosterApiClearRequest(PosterApiTarget):
+    source: Optional[str] = None  # rendered | pinned | library; None = every source
+
+
+class PosterApiBulkRequest(BaseModel):
+    """Regenerate or clear several Poster API tiles at once."""
+    action: str  # "regenerate" | "clear"
+    items: List[PosterApiClearRequest] = Field(default_factory=list)
+
+
+class PosterApiPinRequest(BaseModel):
+    type: str
+    tmdb_id: int
+    season: Optional[int] = None
+    title: str = ""
+    image_data: str  # data URL (data:image/...;base64,...)
+
+
 class UISettings(BaseModel):
     theme: str = "neon"
     posterDensity: int = 20
@@ -394,6 +430,7 @@ class UISettings(BaseModel):
     tvdb: TVDBSettings = Field(default_factory=TVDBSettings)
     fanart: FanartSettings = Field(default_factory=FanartSettings)
     mdblist: MDBListSettings = Field(default_factory=MDBListSettings)
+    posterApi: PosterApiSettings = Field(default_factory=PosterApiSettings)
     wetrakr: WeTrakrSettings = Field(default_factory=WeTrakrSettings)
     simkl: SimklSettings = Field(default_factory=SimklSettings)
     floppy: FloppySettings = Field(default_factory=FloppySettings)

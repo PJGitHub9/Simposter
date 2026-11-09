@@ -233,10 +233,13 @@ Overlay files from [UMTK](https://github.com/netplexflix/Upcoming-Movies-TV-Show
 
 `audience_rating` and `critic_rating` (0–10) work without any extra service. Pick where they come from in **Settings → Ratings & Lists → Audience rating comes from / Critic rating comes from**:
 
-- **Your media server** (the default): the first enabled server in Settings → Media Servers, in the order they're listed, that has a rating for the item. With only Plex or only Jellyfin, that's simply your server.
+- **Your media server** (the default): the first enabled server in Settings → Media Servers, in the order they're listed, that has a rating for the item. With only Plex or only Jellyfin, that's simply your server. If no server has an audience rating for the item, TMDb's user score is used.
 - **Plex**: the audience and critic rating Plex shows for the item. Which site those come from (Rotten Tomatoes, IMDb, TMDb) is set per library in Plex (Edit library → Advanced → Ratings source). This is what Kometa's `audience_rating` uses.
 - **Jellyfin / Emby**: the community rating (0–10) and critic rating (0–100, shown as 0–10).
-- **An MDBList source** (IMDb, Rotten Tomatoes, ...): needs an MDBList key (below). Without a key, the media server's rating is used instead.
+- **TMDb**: TMDb's user score (0–10), using the TMDb key you already have. Audience rating only; TMDb has no critic score.
+- **An MDBList source** (IMDb, Rotten Tomatoes, ...): needs an MDBList key (below). Without a key, the media server's rating is used instead, then TMDb.
+
+**No media server** ([Poster API](POSTER_API.md) / server-less installs): the audience rating comes from TMDb, so rating overlays work with no extra key. A critic rating needs an MDBList source and key. Video, audio and edition badges need a media server (they come from the file details a library scan reads), so they never draw; studio and streaming badges come from TMDb and do.
 
 Media server ratings are read during library scans, so scan the library once after updating. A rating found on one server applies to the same movie or show on your other servers (matched by TMDb ID). The render log says where each rating came from ("Audience rating 8.6 (from Plex)").
 
@@ -244,7 +247,7 @@ Media server ratings are read during library scans, so scan the library once aft
 
 [MDBList](https://mdblist.com) provides ratings from many sources and user-made lists. Add a free API key in **Settings → Ratings & Lists → MDBList** (get one at mdblist.com/preferences, API section; the free tier has a daily request limit). Then:
 
-- **Audience rating comes from** / **Critic rating comes from**: besides Plex and Jellyfin/Emby ([Ratings](#ratings)), an MDBList source (IMDb, Rotten Tomatoes critics or audience, TMDb, Trakt, Metacritic, Letterboxd, MyAnimeList, or the MDBList score). All are scaled to 0–10.
+- **Audience rating comes from** / **Critic rating comes from**: besides Plex and Jellyfin/Emby ([Ratings](#ratings)), an MDBList source (IMDb, Rotten Tomatoes critics or audience, Trakt, Metacritic, Letterboxd, MyAnimeList, or the MDBList score). All are scaled to 0–10. (TMDb is its own source and doesn't need MDBList; `{mdb_tmdb_rating}` is still available as text.)
 
 Simposter only contacts MDBList when an overlay actually uses a rating or list, and remembers the results; how often they are fetched again is set in [Scheduler](#scheduler). If MDBList is unreachable, the render still happens; layers that needed the missing value are left off.
 

@@ -53,6 +53,7 @@ SECRET_FIELD_PATHS = (
     ("simkl", "clientId"),
     ("floppy", "token"),
     ("automation", "webhookSecret"),
+    ("posterApi", "key"),
 )
 
 # Headers to send when fetching an arbitrary, user-supplied external image URL

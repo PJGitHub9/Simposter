@@ -16,6 +16,8 @@ import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdb
 import { useSettingsStore } from '@/stores/settings'
 import { listDisplayName, useListSources } from '@/composables/useListSources'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
+import { fetchTmdbTrending, searchTmdb, isTmdbKey } from '@/services/tmdbPreview'
+import { useServerless } from '@/composables/useServerless'
 import {
   buildContext, selectElementIndices, fillText, placeBox, offsetsFromBox, cssColor, blurAmount, queuePlacements,
   KOMETA_W, KOMETA_H, referencedLists, checkCondition, type OverlayRuleFields, type OverlayCondition,
@@ -81,6 +83,11 @@ interface OverlayAsset {
 interface SimpleMovie {
   key: string
   title: string
+  // Set for TMDb-sourced items (no library): poster comes from TMDb, no media-server metadata exists.
+  year?: string
+  tmdbId?: number
+  tmdbType?: 'movie' | 'tv'
+  posterUrl?: string
 }
 
 // --- Predefined badge values ---
@@ -177,6 +184,9 @@ const draggingIdx = ref<number | null>(null)
 // Poster search state
 const movies = ref<SimpleMovie[]>([])
 const moviesLoaded = ref(false)
+// No libraries to pick from (server-less, or none scanned): the picker lists TMDb trending + search instead.
+const tmdbMode = ref(false)
+let tmdbSearchTimer: ReturnType<typeof setTimeout> | null = null
 const movieSearchTerm = ref('')
 const showMovieSearch = ref(false)
 const selectedMovie = ref<SimpleMovie | null>(null)
@@ -193,6 +203,7 @@ const previewMode = ref<'item' | 'testing'>('testing')
 const previewItemMetadata = ref<Record<string, string>>({})
 
 const movieSearchResults = computed(() => {
+  if (tmdbMode.value) return movies.value.slice(0, 50)
   const q = movieSearchTerm.value.trim().toLowerCase()
   if (!q) return movies.value.slice(0, 50)
   return movies.value.filter(m => m.title.toLowerCase().includes(q)).slice(0, 50)
@@ -375,7 +386,25 @@ const loadPreviewLibraries = async () => {
   } finally {
     previewLibrariesLoading.value = false
   }
+  tmdbMode.value = previewLibraries.value.length === 0
 }
+
+const loadTmdbItems = async (type: 'movie' | 'tv', q = '') => {
+  moviesLoaded.value = false
+  const list = q.trim().length >= 2 ? await searchTmdb(q, type) : q.trim() ? [] : await fetchTmdbTrending(type)
+  movies.value = list
+  moviesLoaded.value = true
+}
+const setTmdbType = async (type: 'movie' | 'tv') => {
+  previewSelectedLibrary.value = { key: 'tmdb', title: 'TMDb trending / search', type: type === 'tv' ? 'show' : 'movie' }
+  await loadTmdbItems(type, movieSearchTerm.value)
+}
+watch(movieSearchTerm, (term) => {
+  if (!tmdbMode.value || !showMovieSearch.value || !previewSelectedLibrary.value) return
+  if (tmdbSearchTimer) clearTimeout(tmdbSearchTimer)
+  const type = previewSelectedLibrary.value.type === 'show' ? 'tv' : 'movie'
+  tmdbSearchTimer = setTimeout(() => loadTmdbItems(type, term), 300)
+})
 
 const loadMoviesForLibrary = async (lib: {key: string, title: string, type: string, server?: string}) => {
   moviesLoaded.value = false
@@ -695,6 +724,14 @@ const ADD_MENU = [
     { type: 'blur', label: 'Blur', hint: 'Blurs the poster under the other layers' },
   ] },
 ]
+
+// Video/audio/edition badges read the media file's details (resolution, codec,
+// edition) from a library scan, so with no media server they never draw.
+// Studio/streaming come from TMDb and still work.
+const { serverless } = useServerless()
+const MEDIA_INFO_TYPES = new Set(['video_badge', 'audio_badge', 'edition_badge', 'resolution_badge', 'codec_badge'])
+const NEEDS_SERVER_TITLE = 'Uses the media file details from a library scan. With no media server connected, this layer is never drawn.'
+const needsServerHere = (type: string) => serverless.value && MEDIA_INFO_TYPES.has(type)
 
 const showAddMenu = ref(false)
 const elementFilter = ref('')
@@ -1035,6 +1072,7 @@ const openMovieSearch = async () => {
   backToLibraries()
   showMovieSearch.value = true
   await loadPreviewLibraries()
+  if (tmdbMode.value) await setTmdbType('movie')
 }
 
 const selectLibrary = async (lib: {key: string, title: string, type: string, server?: string}) => {
@@ -1074,6 +1112,7 @@ const itemNeeds = computed(() => {
 const itemNeedsKey = computed(() => JSON.stringify(itemNeeds.value))
 
 const loadItemData = async (ratingKey: string, mediaType: string): Promise<ItemData | null> => {
+  if (isTmdbKey(ratingKey)) return null // TMDb-sourced item: no media-server metadata to look up
   try {
     const params = new URLSearchParams({ rating_key: ratingKey })
     if (selectedConfig.value?.id) params.set('config_id', selectedConfig.value.id)
@@ -1093,12 +1132,15 @@ const loadItemData = async (ratingKey: string, mediaType: string): Promise<ItemD
   }
 }
 
-const loadPosterImage = (key: string) => new Promise<HTMLImageElement | null>(resolve => {
+const posterUrlFor = (movie: SimpleMovie) =>
+  movie.posterUrl || `${apiBase}/api/movie/${movie.key}/poster?raw=1`
+
+const loadPosterImage = (movie: SimpleMovie) => new Promise<HTMLImageElement | null>(resolve => {
   const img = new Image()
   img.crossOrigin = 'anonymous'
   img.onload = () => resolve(img)
   img.onerror = () => resolve(null)
-  img.src = `${apiBase}/api/movie/${key}/poster?raw=1`
+  img.src = posterUrlFor(movie)
 })
 
 const fetchItemMetadata = async (ratingKey: string) => {
@@ -1124,7 +1166,7 @@ const selectMovie = async (movie: SimpleMovie) => {
   previewItemLists.value = []
   posterLoading.value = true
   try {
-    const url = `${apiBase}/api/movie/${movie.key}/poster?raw=1`
+    const url = posterUrlFor(movie)
     const img = new Image()
     img.crossOrigin = 'anonymous'
     await new Promise<void>((resolve, reject) => {
@@ -2284,7 +2326,7 @@ const addCompareItem = async (movie: SimpleMovie) => {
   const mediaType = previewSelectedLibrary.value?.type === 'show' ? 'tv' : 'movie'
   const tile: CompareTile = { id: nextTileId++, label: movie.title, movie, mediaType, bg: null }
   compareTiles.value = [...compareTiles.value, tile]
-  const [data, bg] = await Promise.all([loadItemData(movie.key, mediaType), loadPosterImage(movie.key)])
+  const [data, bg] = await Promise.all([loadItemData(movie.key, mediaType), loadPosterImage(movie)])
   compareTiles.value = compareTiles.value.map(t => (t.id === tile.id ? { ...t, data: data || undefined, bg } : t))
   nextTick(renderPreview)
 }
@@ -2549,7 +2591,7 @@ onMounted(() => {
                         <button v-for="item in section.items" :key="item.type" class="add-menu-item" @click="addElement(item.type)">
                           <span class="add-menu-dot" :style="{ background: elementTypeColor(item.type) }"></span>
                           <span class="add-menu-label">{{ item.label }}</span>
-                          <span class="add-menu-hint">{{ item.hint }}</span>
+                          <span class="add-menu-hint" :title="needsServerHere(item.type) ? NEEDS_SERVER_TITLE : undefined">{{ needsServerHere(item.type) ? 'Needs a media server' : item.hint }}</span>
                         </button>
                       </div>
                     </div>
@@ -2608,6 +2650,7 @@ onMounted(() => {
                           {{ elementPlace(element) }} · {{ elementWhen(element) }}<template v-if="element.group"> · in set "{{ element.group }}"</template>
                         </span>
                       </div>
+                      <span v-if="needsServerHere(element.type)" class="element-hidden" :title="NEEDS_SERVER_TITLE">needs a media server</span>
                       <span v-if="layerWarnings(element).length" class="element-warn" :title="layerWarnings(element).join('\n')">⚠</span>
                       <span v-if="!visibleElements.has(idx)" class="element-hidden" title="Not drawn for the movie or values used in the preview">not on this preview</span>
                     </div>
@@ -3563,7 +3606,7 @@ onMounted(() => {
       <div class="search-modal">
         <div class="search-modal-header">
           <div class="search-modal-title">
-            <button v-if="previewSelectedLibrary" class="btn-back" @click="backToLibraries" title="Back to libraries">
+            <button v-if="previewSelectedLibrary && !tmdbMode" class="btn-back" @click="backToLibraries" title="Back to libraries">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <polyline points="15 18 9 12 15 6"/>
               </svg>
@@ -3596,10 +3639,14 @@ onMounted(() => {
           </template>
           <!-- Step 2: item search -->
           <template v-else>
+            <div v-if="tmdbMode" class="library-list" style="flex-direction: row; margin-bottom: 8px;">
+              <button class="library-btn" :style="previewSelectedLibrary.type !== 'show' ? 'outline: 2px solid var(--accent, #6366f1);' : ''" @click="setTmdbType('movie')"><span class="library-name">Movies (TMDb)</span></button>
+              <button class="library-btn" :style="previewSelectedLibrary.type === 'show' ? 'outline: 2px solid var(--accent, #6366f1);' : ''" @click="setTmdbType('tv')"><span class="library-name">TV Shows (TMDb)</span></button>
+            </div>
             <input
               type="text"
               v-model="movieSearchTerm"
-              placeholder="Search by title..."
+              :placeholder="tmdbMode ? 'Search TMDb (trending shown by default)...' : 'Search by title...'"
               class="search-input"
               autofocus
             />
@@ -3612,7 +3659,7 @@ onMounted(() => {
                   class="search-result"
                   @click="selectMovie(movie)"
                 >
-                  {{ movie.title }}
+                  {{ movie.title }}<template v-if="movie.year"> ({{ movie.year }})</template>
                 </button>
                 <div v-if="moviesLoaded && movieSearchResults.length === 0" class="search-empty">No items match that search.</div>
               </template>

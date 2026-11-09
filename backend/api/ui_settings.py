@@ -362,7 +362,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
         # Merge with defaults so newly added fields are included
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False)
         merged = {**defaults, **data}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "wetrakr", "simkl", "floppy", "imageQuality", "performance", "automation", "scheduler", "notifications"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {**defaults.get(nested_key, {}), **data.get(nested_key, {})}
 
         # ENV variables are now copied to DB on container startup instead of runtime overrides
@@ -444,12 +444,18 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
         incoming = _restore_unchanged_secrets(incoming, current)
         incoming = _restore_unchanged_media_server_secrets(incoming, current)
         merged = {**defaults, **current, **incoming}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "wetrakr", "simkl", "floppy", "imageQuality", "performance", "automation", "scheduler", "notifications"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {
                 **defaults.get(nested_key, {}),
                 **current.get(nested_key, {}),
                 **incoming.get(nested_key, {}),
             }
+        # An older client/payload that omits posterApi entirely would otherwise be
+        # filled with schema defaults (key "", enabled False) by the model and wipe the
+        # stored section; only an explicitly-sent posterApi may change it.
+        if "posterApi" not in payload.model_fields_set:
+            merged["posterApi"] = current.get("posterApi") or defaults.get("posterApi")
+
         # mediaServers/libraryGroups are top-level LIST fields, unlike the dict-shaped
         # keys above -- {**current, **incoming} means `incoming`'s value wins outright
         # whenever the key is present, with no protection at all against an incoming
