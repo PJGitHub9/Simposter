@@ -245,12 +245,12 @@ export const majorReleases: MajorRelease[] = [
   {
     version: 'v1.8.50',
     title: 'Poster API & running without a media server',
-    intro: "Simposter can now hand posters to other apps, and no longer needs a media server to be useful. Here's the short version; the full changelog is one click away below.",
+    intro: "Simposter can now hand your posters to other apps like Ether, and can even run without a media server. It's off by default: turn it on in Settings → Media Servers → Poster API. Here's the short version; the full changelog is one click away below.",
     highlights: [
       {
         icon: '🔌',
         title: 'Poster API',
-        description: 'Apps like Ether can ask Simposter for a poster by TMDb id and get your pinned, library or freshly rendered one back as an image.',
+        description: 'Apps like Ether can ask Simposter for a poster by TMDb id and get your pinned, library or freshly rendered one back as an image. Turn it on in Settings → Media Servers; the Poster API page then appears in the sidebar.',
       },
       {
         icon: '🖼️',
@@ -276,6 +276,11 @@ export const majorReleases: MajorRelease[] = [
         icon: '🧭',
         title: 'A smaller menu, a bigger one later',
         description: 'Without a server you see Poster API, Template Manager, Overlays, Logs and Settings. Connect a server and everything comes back.',
+      },
+      {
+        icon: '🖥️',
+        title: 'Still best with a media server',
+        description: 'Keep your Plex, Jellyfin or Emby server connected: the Poster API then reads your actual files (4K, HDR, audio, edition) for badges, uses the server’s ratings, serves posters you already have, and keeps them up to date as things change.',
       },
     ],
   },

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.57 (2026-11-10) — `dev-noserver` branch
+
+### Bug Fixes
+- **Settings that saved without Save** — the Poster API on/off checkbox (Settings → Media Servers) PUT `/api/poster-api/settings` on every click, and a library group's "Merge items" checkbox POSTed `/api/media-server/library-group/merge-items`. Both now only change the settings store; the page-wide Save sends them. `posterApiEnabled` is in both of SettingsView's snapshots, the watch list and a new `posterApi` section flag (yellow highlight); "Merge items" was already covered by the `libraryGroups` diff. The sidebar reads a new `posterApiEnabledSaved` (set on load, after a successful Settings save and after a Poster API page save), so it only changes after saving. Every other request from Settings is an explicit action (Test, Scan, sign-in, Cleanup, import).
+- **Poster API key changed without Save** — Generate and Clear on the Poster API page wrote the key at once. They now set the field only (`keyUnsaved` note); Save stores it.
+
+### Improvements
+- **Media server still recommended** — `docs/POSTER_API.md` has a "Why connect a media server" section (file details, server ratings, library posters, scans/Overlay Refresh/webhooks), linked from README and GETTING_STARTED. The v1.8.50 entry in `majorReleases.ts` (shown to `webui-overhaul-dev` users crossing v1.8.50 after the merge) says the Poster API is off by default, where to turn it on, and that it works best with a media server.
+
 ## v1.8.56 (2026-11-09) — `dev-noserver` branch
 
 ### Bug Fixes

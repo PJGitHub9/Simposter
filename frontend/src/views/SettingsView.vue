@@ -99,6 +99,7 @@ const sectionsWithChanges = ref({
   apprise: false,
   cleanupSchedule: false,
   rateLimits: false,
+  posterApi: false,
 })
 
 // Cooldown state to prevent rapid clicking
@@ -466,7 +467,9 @@ const captureSettingsSnapshot = () => {
     // WeTrakr / SIMKL / Floppy list sources (GeneralTab), also bound to the store.
     wetrakr: JSON.parse(JSON.stringify(settings.wetrakr.value)),
     simkl: JSON.parse(JSON.stringify(settings.simkl.value)),
-    floppy: JSON.parse(JSON.stringify(settings.floppy.value))
+    floppy: JSON.parse(JSON.stringify(settings.floppy.value)),
+    // Poster API on/off (MediaServersTab), bound to the store.
+    posterApiEnabled: !!settings.posterApi.value.enabled
   })
   hasUnsavedChanges.value = false
 
@@ -571,7 +574,8 @@ const checkForChanges = () => {
     mdblist: settings.mdblist.value,
     wetrakr: settings.wetrakr.value,
     simkl: settings.simkl.value,
-    floppy: settings.floppy.value
+    floppy: settings.floppy.value,
+    posterApiEnabled: !!settings.posterApi.value.enabled
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -647,6 +651,7 @@ const checkForChanges = () => {
   sectionsWithChanges.value.libraryDisplay = differs(['deduplicateMovies', 'defaultSort'])
   sectionsWithChanges.value.apiKeys = differs(['tmdbApiKey', 'tvdbApiKey', 'fanartApiKey', 'apiOrder'])
   sectionsWithChanges.value.ratings = differs(['mdblist', 'wetrakr', 'simkl', 'floppy'])
+  sectionsWithChanges.value.posterApi = differs(['posterApiEnabled'])
   sectionsWithChanges.value.imageQuality = differs(['outputFormat', 'jpgQuality', 'pngCompression', 'webpQuality'])
   sectionsWithChanges.value.performance = differs(['concurrentRenders', 'useOverlayCache', 'memoryLimit'])
   sectionsWithChanges.value.rateLimits = differs(['tmdbRateLimit', 'tvdbRateLimit'])
@@ -1483,7 +1488,8 @@ watch([
   () => settings.mdblist.value,
   () => settings.wetrakr.value,
   () => settings.simkl.value,
-  () => settings.floppy.value
+  () => settings.floppy.value,
+  () => settings.posterApi.value.enabled
 ], () => {
   if (watchersEnabled.value) {
     checkForChanges()
@@ -1749,6 +1755,7 @@ onMounted(() => {
         :plexServersChanged="sectionsWithChanges.mediaServersPlex"
         :jellyfinServersChanged="sectionsWithChanges.mediaServersJellyfin"
         :embyServersChanged="sectionsWithChanges.mediaServersEmby"
+        :posterApiChanged="sectionsWithChanges.posterApi"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
         @test-connection="testPlexConnection"

@@ -10,6 +10,26 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.57',
+    date: '2026-11-10',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Settings: turning the Poster API on or off took effect at once, without Save. It now waits for Save like every other setting: the section turns yellow, and the sidebar entry only appears or disappears after saving.',
+          'Settings → Libraries: the "Merge items" checkbox of a library group also saved on its own. It now waits for Save too.',
+          'Poster API page: Generate and Clear changed the API key straight away. They now only change the field; the new key takes effect when you click Save, and the old one keeps working until then.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'The Poster API docs and the "what’s new" overview now explain why connecting a media server is still recommended even if you only use the Poster API: badges from your actual files, ratings from the server, posters you already have, and posters kept up to date.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.56',
     date: '2026-11-09',
     sections: [

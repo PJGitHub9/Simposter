@@ -266,6 +266,9 @@ const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
 const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'server', criticRatingSource: 'server', cacheDays: 7 })
 const posterApi = ref<PosterApiSettings>({ enabled: false, key: '', defaultMoviePreset: '', defaultTvPreset: '', waitSeconds: 10, retentionDays: 90 })
+// Whether the Poster API is on as last saved/loaded. The sidebar reads this, not
+// posterApi.enabled, so unticking the Settings checkbox doesn't hide the page until Save.
+const posterApiEnabledSaved = ref(false)
 const wetrakr = ref<WeTrakrSettings>({ clientId: '' })
 const simkl = ref<SimklSettings>({ clientId: '' })
 const floppy = ref<FloppySettings>({ url: '', token: '' })
@@ -371,6 +374,7 @@ async function loadSettings() {
       movieGroup: data.posterApi?.movieGroup ?? '',
       tvGroup: data.posterApi?.tvGroup ?? ''
     }
+    posterApiEnabledSaved.value = posterApi.value.enabled
     wetrakr.value = { clientId: data.wetrakr?.clientId ?? '' }
     simkl.value = { clientId: data.simkl?.clientId ?? '' }
     floppy.value = { url: data.floppy?.url ?? '', token: data.floppy?.token ?? '' }
@@ -499,6 +503,7 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       body: JSON.stringify(payload)
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
+    posterApiEnabledSaved.value = !!payload.posterApi?.enabled
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to save settings'
     error.value = message
@@ -529,6 +534,7 @@ export function useSettingsStore() {
     fanart,
     mdblist,
     posterApi,
+    posterApiEnabledSaved,
     wetrakr,
     simkl,
     floppy,

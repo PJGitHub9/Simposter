@@ -1,6 +1,8 @@
 # Poster API
 
-Simposter can serve posters to other apps by TMDb id. An app such as Ether asks for a poster by URL, and Simposter answers with your pinned poster, the one already on your media server, or a fresh render from your Uniform Logo preset. It also works with no media server at all.
+Simposter can serve posters to other apps by TMDb id. An app such as Ether asks for a poster by URL, and Simposter answers with your pinned poster, the one already on your media server, or a fresh render from your Uniform Logo preset.
+
+It also works with no media server at all, but **we strongly recommend connecting your Plex, Jellyfin or Emby server** even if you only want the Poster API. With a server, Simposter can read your actual files (4K, HDR, Dolby Vision, audio, edition), get ratings from the server, keep posters up to date when things change, and serve the poster you already have instead of rendering a new one. See [Why connect a media server](#why-connect-a-media-server).
 
 ## Enable it
 
@@ -100,6 +102,20 @@ On the Poster API page every cached poster is a tile.
 
 Rendered posters that haven't been served for **retention days** (default 90) are removed by Cleanup (Settings → Cleanup, "Poster API renders"). Pinned posters are included in database export/import.
 
+## Why connect a media server
+
+The Poster API runs without a server, but it can only use what TMDb knows about a title. Connect Plex, Jellyfin or Emby in **Settings → Media Servers** (and add a library in Settings → Libraries) and it gets:
+
+| | With a media server | Without one |
+|---|---|---|
+| **File details for badges** (4K, HDR, Dolby Vision, codecs, audio channels, language, edition, file name rules) | Read from your actual files by library scans | Not available; those badges and rules never show |
+| **Ratings** | Audience and critic ratings from the server, updated by every scan | MDBList (needs a key) or TMDb's audience score only |
+| **Posters you already have** | Served as-is from your library (the "Library" result), no render | Every title is rendered from TMDb art |
+| **Keeping up to date** | Scans notice a changed file, poster, logo or rating; Overlay Refresh re-renders posters whose overlays now look different; Radarr/Sonarr webhooks make posters for new arrivals | A rendered poster stays as it is until you Regenerate it or edit its preset |
+| **Labels, date added, library groups** | Usable in overlay rules, and `group=` picks a 4K or regular library | Not available |
+
+TMDb data (release date, content rating, networks, streaming services, lists) works either way.
+
 ## Running without a media server
 
 On first launch the setup wizard asks whether to connect a media server. Choose **No media server - use Simposter as a poster provider**. The wizard then:
@@ -109,7 +125,7 @@ On first launch the setup wizard asks whether to connect a media server. Choose 
 3. asks you to enable the Poster API, generate a key and pick default presets,
 4. lands you on the Poster API page.
 
-In this mode the sidebar shows only Poster API, Template Manager, Overlays, Logs and Settings (Settings hides Libraries, Output and Automation). Back up presets, overlays, settings and pinned posters from Settings → Advanced. Template Manager and Overlay Manager previews use TMDb titles (trending and search) instead of your library, and the global search finds TMDb titles. Connect a server later in Settings → Media Servers and the full navigation appears; remove the last one and you are back in this mode.
+In this mode the sidebar shows only Poster API, Template Manager, Overlays, Logs and Settings (Settings hides Libraries, Output and Automation). Back up presets, overlays, settings and pinned posters from Settings → Advanced. Template Manager and Overlay Manager previews use TMDb titles (trending and search) instead of your library, and the global search finds TMDb titles. Connect a server later in Settings → Media Servers and the full navigation appears; remove the last one and you are back in this mode. See [Why connect a media server](#why-connect-a-media-server) for what that adds.
 
 ## Ether and other clients
 

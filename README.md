@@ -22,7 +22,7 @@
 - **Scheduled scans** and a **smart retry queue** for hands-off automation
 - **Guided setup wizard** on first launch — media servers, API keys, libraries, automation, all in one flow
 - **Cleanup tools** — clear Simposter's own stale cache, and run each media server's built-in maintenance
-- **Poster API** — other apps (like Ether) can request a poster by TMDb id and get your pinned, library or freshly rendered poster. It also runs with no media server at all
+- **Poster API** — other apps (like Ether) can request a poster by TMDb id and get your pinned, library or freshly rendered poster. It also runs with no media server at all, though connecting one is recommended: file details for badges, server ratings, and posters kept up to date
 - **6 themes**, Discord/Apprise notifications, full History audit log with hover previews
 
 Full breakdown of all of this in the docs below.

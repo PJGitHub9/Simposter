@@ -62,6 +62,7 @@ const loadFailed = ref(false)
 
 const dirty = computed(() => !!saved.value && JSON.stringify(saved.value) !== JSON.stringify(cfg.value))
 const keyEmpty = computed(() => !cfg.value.key)
+const keyUnsaved = computed(() => !!saved.value && cfg.value.key !== saved.value.key)
 
 async function loadSettings() {
   try {
@@ -93,7 +94,7 @@ async function loadPresets() {
   } catch { /* leave empty */ }
 }
 
-async function putSettings(next: Cfg, keyOnly = false): Promise<boolean> {
+async function putSettings(next: Cfg): Promise<boolean> {
   saving.value = true
   try {
     const res = await fetch(`${apiBase}/api/poster-api/settings`, {
@@ -109,10 +110,10 @@ async function putSettings(next: Cfg, keyOnly = false): Promise<boolean> {
     }
     const data = await res.json()
     saved.value = { ...saved.value, ...data } as Cfg
-    // keyOnly: leave the user's other unsaved edits in cfg (and thus their dirty state) intact.
-    cfg.value = keyOnly ? { ...cfg.value, key: data.key } : { ...saved.value }
+    cfg.value = { ...saved.value }
     // Keep the shared store in step so a later full Settings save doesn't send a stale copy.
     store.posterApi.value = { ...saved.value }
+    store.posterApiEnabledSaved.value = !!saved.value.enabled
     await loadStatus()
     return true
   } catch {
@@ -124,19 +125,21 @@ async function putSettings(next: Cfg, keyOnly = false): Promise<boolean> {
 }
 
 async function save() {
-  if (await putSettings(cfg.value)) success('Poster API settings saved')
+  const keyChanged = cfg.value.key !== saved.value?.key
+  if (await putSettings(cfg.value)) success(keyChanged && newKey.value
+    ? 'Saved. The new key is in use now. Copy it before leaving: it is masked after that.'
+    : 'Poster API settings saved')
 }
 
+// Generate/Clear only change the field; the key takes effect on Save.
 async function generateKey() {
   if (loadFailed.value || !saved.value) return
   try {
     const res = await fetch(`${apiBase}/api/poster-api/generate-key`, { method: 'POST' })
     if (!res.ok) throw new Error(String(res.status))
     const { key } = await res.json()
-    if (await putSettings({ ...saved.value, key }, true)) {
-      newKey.value = key
-      success('New key saved. Copy it now - it is masked after you leave this page.')
-    }
+    newKey.value = key
+    cfg.value = { ...cfg.value, key }
   } catch {
     showError('Failed to generate key')
   }
@@ -149,11 +152,9 @@ async function copyNewKey() {
 
 async function clearKey() {
   if (loadFailed.value || !saved.value) return
-  if (!window.confirm('Remove the API key? Anyone who can reach Simposter will be able to use this API without one.')) return
-  if (await putSettings({ ...saved.value, key: '' }, true)) {
-    newKey.value = ''
-    success('Key cleared')
-  }
+  if (!window.confirm('Remove the API key? Once saved, anyone who can reach Simposter will be able to use this API without one.')) return
+  newKey.value = ''
+  cfg.value = { ...cfg.value, key: '' }
 }
 
 async function copyTemplate(text: string) {
@@ -451,7 +452,9 @@ onMounted(async () => {
           <button class="secondary" @click="generateKey" :disabled="saving || loadFailed || !saved">Generate</button>
           <button class="secondary" @click="clearKey" :disabled="saving || loadFailed || !saved || keyEmpty">Clear</button>
         </div>
-        <div v-if="newKey" class="hint">Shown in full once. It is already stored and will be masked on reload.</div>
+        <div v-if="newKey && keyUnsaved" class="warn">New key, not saved yet. Click Save below to start using it; the old key keeps working until then.</div>
+        <div v-else-if="newKey" class="hint">Shown in full once. It is saved and will be masked on reload.</div>
+        <div v-else-if="keyUnsaved" class="warn">Key removed, not saved yet. Click Save below.</div>
         <div v-if="keyEmpty" class="warn">Anyone who can reach Simposter can use your TMDb quota through this API — set a key.</div>
       </div>
 

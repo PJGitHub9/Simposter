@@ -211,20 +211,19 @@
     </div>
     </div>
 
-    <!-- Poster API: off by default; the sidebar page only appears once it's on.
-         Saved straight away (its own endpoint), not with "Save Media Servers". -->
-    <div class="section">
+    <!-- Poster API: off by default; the sidebar page only appears once it's on
+         and saved. Saved with the rest of Settings, like every other field. -->
+    <div :class="['section', { 'section-unsaved': posterApiChanged }]">
       <h3>Poster API</h3>
       <p class="poster-api-text">
         Lets other apps ask Simposter for a poster by TMDb id. Turning it on adds the Poster API page to the sidebar,
         where you set the key and default presets.
       </p>
       <label class="poster-api-toggle">
-        <input type="checkbox" :checked="posterApiEnabled" :disabled="posterApiSaving" @change="togglePosterApi(($event.target as HTMLInputElement).checked)" />
+        <input type="checkbox" :checked="posterApiEnabled" @change="togglePosterApi(($event.target as HTMLInputElement).checked)" />
         Enable Poster API
       </label>
-      <router-link v-if="posterApiEnabled" to="/poster-api" class="poster-api-link">Open the Poster API page</router-link>
-      <p v-if="posterApiError" class="poster-api-error">{{ posterApiError }}</p>
+      <router-link v-if="posterApiEnabled && settingsStore.posterApiEnabledSaved.value" to="/poster-api" class="poster-api-link">Open the Poster API page</router-link>
     </div>
 
     <!-- "When the same item is found on more than one server, prefer..." used
@@ -273,6 +272,7 @@ const props = defineProps<{
   plexServersChanged?: boolean
   jellyfinServersChanged?: boolean
   embyServersChanged?: boolean
+  posterApiChanged?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -300,29 +300,12 @@ const localPlexToken = computed({
 const apiBase = getApiBase()
 const settingsStore = useSettingsStore()
 
-// Poster API on/off. PUT /api/poster-api/settings needs the whole settings
-// object, so read the current one and change only `enabled`.
+// Poster API on/off. Only changes the settings store; the page-wide Save sends
+// it (posterApi is part of the /api/ui-settings payload), and SettingsView's
+// unsaved-changes check picks it up (posterApiEnabled in both snapshots).
 const posterApiEnabled = computed(() => !!settingsStore.posterApi.value.enabled)
-const posterApiSaving = ref(false)
-const posterApiError = ref('')
-async function togglePosterApi(enabled: boolean) {
-  posterApiSaving.value = true
-  posterApiError.value = ''
-  try {
-    const cur = await fetch(`${apiBase}/api/poster-api/settings`)
-    if (!cur.ok) throw new Error(`Could not read the Poster API settings (${cur.status})`)
-    const res = await fetch(`${apiBase}/api/poster-api/settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...(await cur.json()), enabled }),
-    })
-    if (!res.ok) throw new Error(`Saving failed (${res.status})`)
-    settingsStore.posterApi.value = await res.json()
-  } catch (e) {
-    posterApiError.value = e instanceof Error ? e.message : 'Saving failed'
-  } finally {
-    posterApiSaving.value = false
-  }
+function togglePosterApi(enabled: boolean) {
+  settingsStore.posterApi.value = { ...settingsStore.posterApi.value, enabled }
 }
 const servers = settingsStore.mediaServers
 
@@ -707,11 +690,6 @@ h3 {
   margin-left: 16px;
   color: var(--accent, #3dd6b7);
   font-size: 14px;
-}
-.poster-api-error {
-  color: #ff6b6b;
-  font-size: 13px;
-  margin: 8px 0 0;
 }
 
 .section {
