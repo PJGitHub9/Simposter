@@ -14,6 +14,8 @@ const props = defineProps<{
   dbImportText: string
   apiOrder: string[]
   unsavedChanges: boolean
+  // Per-section unsaved flags from SettingsView.vue (sectionsWithChanges)
+  changed?: Record<string, boolean>
   dbExportIncludeSecrets: boolean
 }>()
 
@@ -186,7 +188,7 @@ const moveApiDown = (api: string) => {
     </div>
 
     <!-- API Source Priority -->
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.apiKeys }]">
       <h3>API Source Priority</h3>
       <p class="section-description">
         Reorder which API to use first when fetching artwork (drag to reorder)
@@ -721,5 +723,11 @@ button:disabled {
 .arrow-btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+/* Yellow highlight for a section with unsaved changes (flags from SettingsView.vue). */
+.section.section-unsaved {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
 }
 </style>

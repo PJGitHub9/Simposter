@@ -77,6 +77,8 @@ const props = defineProps<{
   defaultLabelsToRemove: Record<string, string[]>
   defaultTvLabelsToRemove: Record<string, string[]>
   unsavedChanges: boolean
+  // Per-section unsaved flags from SettingsView.vue (sectionsWithChanges)
+  changed?: Record<string, boolean>
   schedulerChanged?: boolean
   movieLibrariesChanged?: boolean
   tvLibrariesChanged?: boolean
@@ -673,7 +675,7 @@ watch(
     </p>
 
     <!-- Global Logo Settings -->
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.logoDefaults }]">
       <h3>Logo Defaults</h3>
       <label class="checkbox-label">
         <input
@@ -790,7 +792,7 @@ watch(
          Jellyfin/Emby equivalent, and Kometa only ever runs against Plex), so
          the whole section is hidden rather than shown-but-inert for an
          install with no Plex configured at all. -->
-    <div v-if="plexConfigured" class="section">
+    <div v-if="plexConfigured" :class="['section', { 'section-unsaved': changed?.labels }]">
       <div class="section-header-inline">
         <div>
           <h3 style="margin-bottom: 4px;">Default Labels to Remove <span class="plex-only-tag">Plex only</span></h3>
@@ -1419,4 +1421,10 @@ button:disabled {
   user-select: none;
 }
 
+
+/* Yellow highlight for a section with unsaved changes (flags from SettingsView.vue). */
+.section.section-unsaved {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
+}
 </style>

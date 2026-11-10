@@ -53,6 +53,7 @@ SECRET_FIELD_PATHS = (
     ("simkl", "clientId"),
     ("floppy", "token"),
     ("automation", "webhookSecret"),
+    ("posterApi", "key"),
 )
 
 # Headers to send when fetching an arbitrary, user-supplied external image URL
@@ -344,6 +345,9 @@ settings.LOG_FILE = str(preferred_log)
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_?key|apikey|api_token|x-plex-token|plex-token|token|secret)=)[^&\s'\"<>,;)]+"
 )
+# A bare "key=" query parameter (the Poster API key, ?key=...). Only after ? or &,
+# so words ending in "key=" elsewhere aren't touched.
+_KEY_PARAM_RE = re.compile(r"(?i)([?&]key=)[^&\s'\"<>,;)]+")
 _SECRET_HEADER_RE = re.compile(r'(?i)(token=")[^"]*(")')
 _SECRET_BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}")
 
@@ -363,7 +367,7 @@ def _media_server_secrets() -> list:
             row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
             # List-source keys and sign-in tokens (backend/list_sources.py).
             extra = [r[0] for r in conn.execute(
-                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token')"
+                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token', 'posterApi.key')"
             ).fetchall()]
             try:
                 for (data_json,) in conn.execute("SELECT data_json FROM list_source_auth").fetchall():
@@ -411,6 +415,7 @@ def redact_secrets(text) -> str:
     if not s:
         return s
     s = _SECRET_PARAM_RE.sub(r"\1***", s)
+    s = _KEY_PARAM_RE.sub(r"\1***", s)
     s = _SECRET_HEADER_RE.sub(r"\1***\2", s)
     s = _SECRET_BEARER_RE.sub(r"\1***", s)
     for secret in _known_secrets():
@@ -691,6 +696,9 @@ def resolve_library_id(name) -> str:
     if name_str.isdigit():
         return name_str
 
+    if not settings.PLEX_URL:
+        # No Plex configured (server-less, or Jellyfin/Emby only): nothing to ask.
+        return "1"
     url = f"{settings.PLEX_URL}/library/sections"
     try:
         r = plex_session.get(url, headers=plex_headers(), timeout=8)

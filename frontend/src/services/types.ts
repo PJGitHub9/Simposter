@@ -18,6 +18,11 @@ export type MovieInput = {
   server_id?: string | null
   also_on?: string[] | null
   other_servers?: OtherServerRef[] | null
+  // API mode (Poster API page / server-less search): a TMDb-identified item with
+  // no media-server item behind it. `key` is then a synthetic `api-<type>-<id>`
+  // string that must never be sent to the backend as a rating key.
+  apiMode?: boolean
+  tmdb_id?: number | string | null
 }
 
 export type Movie = {

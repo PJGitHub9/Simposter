@@ -1,5 +1,110 @@
 # Changelog
 
+## v1.8.60 (2026-11-10) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Merging branches** — `dev-noserver` (Poster API and server-less mode, v1.8.50–v1.8.57) merged into `webui-overhaul-dev`, together with v1.8.39 (overlays carried to fallback posters).
+
+## v1.8.57 (2026-11-10) — `dev-noserver` branch
+
+### Bug Fixes
+- **Settings that saved without Save** — the Poster API on/off checkbox (Settings → Media Servers) PUT `/api/poster-api/settings` on every click, and a library group's "Merge items" checkbox POSTed `/api/media-server/library-group/merge-items`. Both now only change the settings store; the page-wide Save sends them. `posterApiEnabled` is in both of SettingsView's snapshots, the watch list and a new `posterApi` section flag (yellow highlight); "Merge items" was already covered by the `libraryGroups` diff. The sidebar reads a new `posterApiEnabledSaved` (set on load, after a successful Settings save and after a Poster API page save), so it only changes after saving. Every other request from Settings is an explicit action (Test, Scan, sign-in, Cleanup, import).
+- **Poster API key changed without Save** — Generate and Clear on the Poster API page wrote the key at once. They now set the field only (`keyUnsaved` note); Save stores it.
+
+### Improvements
+- **Media server still recommended** — `docs/POSTER_API.md` has a "Why connect a media server" section (file details, server ratings, library posters, scans/Overlay Refresh/webhooks), linked from README and GETTING_STARTED. The v1.8.50 entry in `majorReleases.ts` (shown to `webui-overhaul-dev` users crossing v1.8.50 after the merge) says the Poster API is off by default, where to turn it on, and that it works best with a media server.
+
+## v1.8.56 (2026-11-09) — `dev-noserver` branch
+
+### Bug Fixes
+- **"Failed to import preset" at the end of the setup wizard** — `POST /api/presets/import` built every imported preset's overlay effect layer (`overlay_cache.refresh_preset()`) before replying. On a slow CPU that was ~80 s per preset (~7 minutes for the starter set), so the browser or proxy gave up and the wizard showed an error although the presets were saved. It was also an `async def`, so the whole server stopped answering for those minutes. The layers are now built in a background thread (`_generate_overlay_caches_async()`), the endpoint is a plain `def`, and `/presets/import-file` calls it through `run_in_threadpool`. A render before the layer is ready builds it itself.
+- **No ratings in TMDb-item previews** — `/api/preview` only gave overlays the item's ids through a library `rating_key`, so Template Manager's TMDb preview and the editor's Poster API mode (whose preview is what Pin stores) never had a TMDb id and drew no rating/list/studio/release-date layers. `PreviewRequest.tmdb_id` is new; used only without a `rating_key`. `TemplateManagerView.vue` sends it with `is_tv`, `render.ts` sends it for `apiMode` items.
+- **"Server" rating sources never used MDBList** — with the default "server" source and no media server, `audience_rating` fell back to TMDb and `critic_rating` was never filled, even with an MDBList key. A media-server source with no value now uses MDBList (`server_ratings.MDBLIST_FALLBACK`: IMDb audience, Rotten Tomatoes critic), then TMDb for audience (`fill_after_mdblist()`). An explicitly chosen MDBList source still never falls back to another service. `mdblist_fields_wanted()` counts server sources only when no server is enabled. Settings → General shows the source actually used in server-less mode.
+- **Clearer rating notes** — when MDBList returns ratings but not the ones an overlay uses, the render log says which (`_rating_source_name()` in `overlay_engine.py`) instead of "none found".
+
+## v1.8.55 (2026-11-09) — `dev-noserver` branch
+
+### Improvements
+- **TMDb/TVDB requests no longer call Plex** — `tmdb_client._apply_rate_limit()` (before every TMDb request) and `tvdb_client._apply_rate_limit()` read the rate limit through `_read_settings()`, which re-applies runtime settings and so runs `resolve_library_ids()`: a live `GET /library/sections` to Plex per request (a warning per request without Plex). Both now use the new `db.get_performance_int()`, which reads the settings table only. `resolve_library_id()` skips the request when no Plex URL is set.
+- **Poster API bookkeeping in the background** — the request-history row and hit counter were two commits per request (~130-160 ms each on a slow disk, one writer at a time), so concurrent cache hits queued. `db.poster_api_queue_request()`/`poster_api_queue_touch()` queue them; a daemon thread writes them every second in one transaction (also on exit), and the page's history/tile readers flush first.
+- **Measured** (100 movies, 8 at a time): cached 30 s → 3.6 s total (median 2.4 s → 0.25 s); fresh renders 97 s → 79 s; no Plex warnings.
+
+
+## v1.8.54 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Security
+- **Poster API key in the log** — uvicorn's request lines (written to `simposter.log` at every level) showed `?key=` in full: `redact_secrets()`'s pattern didn't match a bare `key=` and `_known_secrets()` didn't include `posterApi.key`. Added `_KEY_PARAM_RE` (`?key=`/`&key=`) and the saved key to `_known_secrets()`.
+
+### Bug Fixes
+- **`/poster` ignored `group`** — the root alias in `main.py` didn't accept or pass it.
+- **Poster API search with a huge number** — an all-digit search over 18 digits overflowed SQLite's integer and returned a 500; it now only searches titles.
+
+### Improvements
+- **Unused API routes removed** — no frontend or backend caller, and not documented for users: the second `GET /tv-show/{id}/select-poster` in `tv_shows.py` (FastAPI only ever used the first; the second was the older Plex-only version), `POST /cache/refresh`, `GET /movies/tmdb`, `POST /presets/link-overlay`, `GET /retry-queue/count`, `POST /retry-queue/apply-settings`, `GET /scheduler/status`, `GET /mdblist/ratings`, `GET /mdblist/lists`, `POST /mdblist/lists/refresh`, `DELETE /mdblist/cache`. Kept `/ping` (uptime monitors) and `/webhook/test` (in docs/WEBHOOKS.md).
+- **One Poster API address shown** — `/poster-api/status` `url_templates` now has `movie`/`tv` (both `/poster?...`) instead of `query`/`path`/`root`; the Poster API page, the onboarding Poster API step and `docs/POSTER_API.md` show only `/poster`. `/api/poster` and `/api/poster/{type}/{id}` still work for existing links.
+
+## v1.8.53 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Improvements
+- **Text and its image centered** — `_with_addon()` (overlay_engine.py) and the preview top-aligned a text layer's addon image; Kometa's `get_backdrop()` centers the smaller one on the other axis. Now centered by default, with a new `addon_align` (start/center/end, Overlay Manager "Align"). The Side dropdown now shows Left for a stored `left`.
+- **MDBList list without a key warned** — a Kometa import kept its MDBList list rules on an install with no key, and the rule editor showed the list name like a working list. The layer's ⚠ list (`layerWarnings()`) and the rule editor now say the list needs a key and the layer never shows until one is added.
+- **List-service error wording** — the rule editor's per-service list-loading error (e.g. an expired WeTrakr sign-in) says it only affects that service's lists in the menu.
+- **Kometa import logging** — `api_kometa_import()` logs a warning when a file can't be read or imported, or produces no layers (with the first messages), and an info line listing skipped/hidden overlays. Previously the reason was only in the HTTP response.
+
+### New Features
+- **Kometa config entries** — `kometa_import.config_overlay_entries()` recognizes a pasted/uploaded `config.yml` snippet (a bare `- default:`/`- file:` list, an `overlay_files:` block, or `libraries: X: overlay_files:`); `expand_config_entries()` expands each entry with its `template_variables` (as `config_vars`) into one overlay, renaming repeated layer names across entries. `default:` files come from `raw.githubusercontent.com/Kometa-Team/Kometa/master/defaults/overlays/<name>.yml` (`safe_get(strict=True)`, name `^[a-z0-9_]+$`), cached in `config/cache/kometa_defaults/` for 7 days with the cached copy as fallback. The import modal's paste check accepts these. A pasted fragment that isn't valid YAML on its own (first line flush left with its children still indented, or the whole block still indented) is retried re-indented/dedented (`_yaml_candidates()`/`_lenient_yaml()`, also used by `_load_yaml()`); only a version that parses is used.
+- **Content rating, network and streaming rules** — new condition fields in `overlay_engine.py`/`overlayEngine.ts`: `content_rating` and `streaming` are per country (the condition's `region`, US by default; context keys `content_rating@GB`, `streaming@US` via `regional_key()`), `network` is a list. Content ratings (every country) and networks come from TMDb (`/movie/{id}/release_dates`, `/tv/{id}/content_ratings`, `/tv/{id}` networks) via `_tmdb_facts()`, cached 30 days in new table `tmdb_item_facts`; a rating also matches Plex's `gb/12A` form. Streaming uses `get_watch_providers()` (flatrate, 7-day cache), matched by provider id or name. Importer: `content_rating`/`network` filters and `plex_search`, `tmdb_discover` `with_watch_providers` + `watch_region` → streaming rule; Kometa's per-country rating defaults get their country. Render log, Overlay Refresh reasons ("Content rating (GB) 15 → 12A"), rule editor (country box), preview example values and real-item preview handle them. Kometa's content_rating ×6, commonsense, network and streaming defaults went from all-hidden to working.
+- **Rating text formats** — `{x%}` (int(x*10)), `{x#}` (one decimal, trailing ".0" dropped), `{x/}` (x/2, one decimal), as in Kometa's `modules/overlays.py`; `_VAR_RE`/`_format_value()` in `overlay_engine.py` and `fillText()`/`formatValue()` in `overlayEngine.ts` (kept in step). `_kometa_text()` keeps these instead of dropping them, and maps Kometa's old bare `critic_rating%`/`0`/`#` names the way Kometa does.
+
+## v1.8.52 (2026-11-09) — `webui-overhaul-dev` branch
+
+### New Features
+- **Poster API request history** — new `poster_api_requests` table (newest 2000 kept), written by `handle_poster_request()` for every lookup and rejected key: `result` = library | pinned | rendered | generated (`Served.generated`, rendered during the request) | redirect | not_found | bad_key, with title, preset, group and duration. `GET`/`DELETE /api/poster-api/requests` (filter by result, search title/TMDb id, per-result counts). Poster API page → Recent requests.
+- **Poster API library groups** — `posterApi.movieGroup` / `tvGroup` (default group when a request names none; validated on PUT) and a `group=` query parameter (id or case-insensitive name) on `/api/poster`, `/api/poster/{type}/{id}` and `/poster`. The group limits the library lookup and the rating key used for badges (`find_rating_key_by_tmdb_id(..., members)`, `render_for_tmdb(..., members)`). `CacheKey.group`; stored as `preset_key = "preset@group"` (`store._dbkey()`/`split_dbkey()`), file names get `__g_<group>`. Pinned posters stay group-independent; pinning clears the default render of every group. Unknown group → 404.
+
+### Bug Fixes
+- **Poster API rendered titles already in the library** — the "library" step only checked `poster_renders_by_tmdb/`, so a title Simposter never sent (or an install restored without that folder) always rendered. `library_poster_path()` now also checks the resend cache (`poster_renders/{rating_key}.jpg`) and the scan's poster cache (`posters/{rating_key}.*`, `tv_` for shows) of every library copy, Plex first. Movies and whole shows only (no season number in the cache tables).
+
+### Improvements
+- **No library tiles** — `touch_served()` no longer records served-from-library posters in `poster_api_cache` (startup deletes existing `source='library'` rows); the Library source filter is gone. They appear in the request history.
+- **Poster API toggle** — the sidebar entry only shows when `posterApi.enabled` (or in server-less mode); the switch moved to Settings → Media Servers (saved immediately via `PUT /api/poster-api/settings`), the Poster API page links to it.
+
+## v1.8.51 (2026-11-09) — `webui-overhaul-dev` branch
+
+### Bug Fixes
+- **Settings edits that never enabled Save** — about 30 staged fields (General: theme, posterDensity, timezone, deduplicateMovies, defaultSort; Output: every save location and tvShowSaveMode; several Automation, Apprise and Libraries fields) were missing from `SettingsView.vue`'s `watch([...], checkForChanges)` list, so the Save button stayed "No Changes". Inline `hasUnsavedChanges = true` flags could be cleared by the next watched change, and `sendLogosToPlex` was in neither snapshot. Every staged field is now watched and in both snapshots.
+- **Wizard Skip overwrote settings** — `skip()` ran the wizard's full `saveSettings()` with untouched defaults (and an empty Plex library list, since Plex is ticked by default). `markOnboardingDone(false)` now only marks onboarding complete.
+- **Save before load** — the settings store's `saveSettings()` refuses to save (and reloads) when settings never loaded, instead of sending in-memory defaults.
+
+### Improvements
+- **Per-section unsaved highlight** — `checkForChanges()` computes every section flag from the saved snapshot (new `libraryDisplay`, `ratings`, `logoDefaults`, `labels`, `discord`, `apprise`, `cleanupSchedule`, `rateLimits`; `scheduler` is scan-only). Tabs receive them as a `changed` prop and use `section-unsaved`.
+- **Wizard re-run** — prefilled from current settings (timezone, performance, image quality, automation, labels, scan schedule, Apprise); keeps the scan library selection; Plex connection, library mappings and labels-to-remove only written when Plex was connected this run, keeping existing per-library settings (`withExistingMapping()`).
+
+## v1.8.50 (2026-11-08) — `dev-noserver` branch
+
+### New Features
+- **Poster API** — `GET /api/poster?tmdb_id=&type=&season=&preset=&key=`, `GET /api/poster/{type}/{tmdb_id}` and a root alias `GET /poster` (`backend/api/poster_api.py`, registered before the SPA catch-all in `main.py`). `backend/poster_api.py` `serve()` looks up pinned, then library (the file Simposter already sent), then rendered (`poster_api_cache` table, files in `config/cache/poster_api/`); a cold request renders on a thread pool, waits `waitSeconds` (2-30) and otherwise 302s to `image.tmdb.org/t/p/w780`. Concurrent requests for one key share one render; genuine "no art" results are negatively cached for 10 minutes. Settings live under `posterApi` (`enabled`, `key`, `defaultMoviePreset`, `defaultTvPreset`, `waitSeconds`, `retentionDays`); the key is masked in `/api/ui-settings`. Admin routes `/api/poster-api/*` (status, items, thumb, regenerate, clear, pin, settings, generate-key) and `/api/tmdb/search|trending|tv/{id}/seasons`. New `docs/POSTER_API.md`.
+- **Server-less mode** — the setup wizard's "No media server" path (new Poster API step), a reduced nav, route guard and gated library/status calls when onboarding is done and no server is configured (`useServerless.ts`: `serverless = onboardingCompleted && !anyServerConfigured`).
+- **Editor API mode** — `EditorPane.vue`/`TvShowEditorPane.vue` open a TMDb title with `apiMode` (`?apiEdit=<type>:<id>`), hide send/save, and add a Pin button that stores the preview as a pinned poster.
+
+### Improvements
+- **`backend/tmdb_render.py`** — poster/logo selection and fallback logic extracted from `batch.py` (`load_preset_context`, `select_movie_assets`/`select_tv_series_assets`/`select_tv_season_assets`, `fetch_tv_series_images`) and shared with the Poster API's `render_for_tmdb`. Verified with a before/after golden comparison of the chosen poster/logo/fallback flags.
+- **Cleanup** — new `poster_api_renders` category (rendered files not served in `retentionDays`, trash/restore like the others); database export/import carries pinned posters (`poster_api_pinned`).
+- **Template Manager / Overlay Manager** previews fall back to TMDb trending and search when there is no library.
+- **TMDb rating source** — `server_ratings.TMDB_SOURCE = "tmdb"` fills `audience_rating` from TMDb's `vote_average` (needs only the TMDb key; `vote_count` 0 = no rating); it is also the fallback after the media servers for the `server` source and for an MDBList source with no key. TMDb has no critic score. `tmdb_client` details now include `vote_average`/`vote_count`. In Settings → Ratings & Lists the `tmdb` choice moved out of the MDBList group.
+- **Server-less polish** — Backup / Restore (per-library server artwork) removed from the server-less nav and redirected; Settings hides Libraries, Output and Automation; `QuickStartGuide.vue` has a server-less card set; Overlay Manager tags video/audio/edition badges "needs a media server"; Settings → Ratings & Lists hides the media-server rating choices.
+- **Poster API bulk actions** — `POST /api/poster-api/bulk` `{action: regenerate|clear, items: [...]}` (max 500; regenerate only touches rendered rows, clear uses each tile's own source, invalid items are skipped and counted). The Poster API page has per-tile checkboxes, Select page / Select all, and bulk Regenerate / Clear.
+- **Pin removes the default render** — `POST /api/poster-api/pin` deletes the default-slot rendered row/file/thumbnail for the same title (and season), which is never served while a pin exists; renders for an explicit `preset=` stay.
+- **Poster API defaults** — `FALLBACK_PRESET_ID = "simposter-main"` when no default preset is set; `/api/poster-api/status` adds `url_templates_with_key` so Copy gives a working URL; the wizard shows a spinner while importing starter presets.
+
+### Bug Fixes
+- `POST /api/ui-settings` with a section missing from the body reset that section to defaults; guarded with `model_fields_set` (found for `posterApi`).
+- `db.save_ui_settings()` deletes every settings row; partial saves use `db.set_setting()`.
+- Digit-only secrets/preset ids were read back as integers; `posterApi.key`, `defaultMoviePreset`, `defaultTvPreset` added to `_STRING_ONLY_SETTINGS_KEYS`.
+- Rate limiting skipped every non-`/api` path, so `/poster` would have been unlimited; `/api/poster` and `/poster` now have their own limit (3000/60 s) and `/api/tmdb` went from 40 to 300.
+- Saving a default preset on the Poster API compared against the wrong structure and rejected every non-empty value.
+- Poster API serve resolved the default preset before checking pinned/library (404 with no Uniform Logo presets); library PNG files were sent as `image/jpeg`; per-tile Clear could delete a pinned poster; switching from server-less to configured mid-session never started the library loaders.
+
 ## v1.8.39 (2026-11-08) — `webui-overhaul-dev` branch
 
 ### New Features

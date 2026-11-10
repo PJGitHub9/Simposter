@@ -45,6 +45,11 @@ const apiBase = getApiBase()
 // linked server(s) are what doSend() actually targets for it instead
 // (getLinkedServersForItem(), see doSend()'s own comment).
 const isNonPlexItem = computed(() => !!props.movie.server_id && props.movie.server_id !== 'plex-1')
+// API mode (Poster API page / server-less search): a TMDb-identified show with no
+// media-server item. `props.movie.key` is a synthetic `api-tv-<id>` (season keys
+// `api-tv-<id>-s<n>`), so every rating_key-keyed request, cache write and server
+// send/save below is skipped; seasons come from TMDb. See EditorPane.vue's twin.
+const isApiMode = computed(() => !!props.movie?.apiMode)
 // `showServerPreviewToggle`/`showMultiServerSend` are declared further down
 // (after `selectedPosterType`/`selectedSeasons`, which these depend on) --
 // safe to reference here since computed() getters are lazy and never
@@ -457,6 +462,7 @@ const loadSeasonsCache = () => {
 }
 
 const saveSeasonsCache = () => {
+  if (isApiMode.value) return
   if (typeof sessionStorage === 'undefined') return
   try {
     sessionStorage.setItem(SEASONS_CACHE_KEY, JSON.stringify(seasonsCache.value))
@@ -466,7 +472,7 @@ const saveSeasonsCache = () => {
 }
 
 const posterUrlForRatingKey = (ratingKey?: string | null) => {
-  if (!ratingKey) return undefined
+  if (!ratingKey || isApiMode.value) return undefined
   return `${apiBase}/api/movie/${ratingKey}/poster?raw=1`
 }
 const toPlexPosterUrl = (path?: string | null) => {
@@ -1592,15 +1598,22 @@ const fetchTmdbAssets = async () => {
     const mediaType = props.movie.mediaType || 'movie'
     const isTvShow = mediaType === 'tv-show'
 
+  if (isApiMode.value) {
+    // No media-server item: the TMDb id comes with the item. The images endpoint
+    // resolves the TVDB id itself when none is passed.
+    tmdbId.value = Number(props.movie.tmdb_id) || null
+    tvdbId.value = null
+  } else {
     // Use appropriate endpoint for TMDB ID lookup
     const tmdbEndpoint = isTvShow
       ? `${apiBase}/api/tv-show/${props.movie.key}/tmdb`
       : `${apiBase}/api/movie/${props.movie.key}/tmdb`
 
-  const tmdbRes = await fetch(tmdbEndpoint)
-  const tmdb = await tmdbRes.json()
-  tmdbId.value = tmdb.tmdb_id || null
-  tvdbId.value = tmdb.tvdb_id || null
+    const tmdbRes = await fetch(tmdbEndpoint)
+    const tmdb = await tmdbRes.json()
+    tmdbId.value = tmdb.tmdb_id || null
+    tvdbId.value = tmdb.tvdb_id || null
+  }
   if (!tmdbId.value) return
 
     // Use appropriate endpoint for images
@@ -1712,6 +1725,7 @@ const fetchAssetsForAllSeasons = async () => {
 }
 
 const fetchLabels = async () => {
+  if (isApiMode.value) { labels.value = []; selectedLabels.value = new Set(); return }
   try {
     // Use appropriate endpoint based on media type
     const mediaType = props.movie.mediaType || 'movie'
@@ -1745,6 +1759,7 @@ const fetchLabels = async () => {
 // After a send: refresh the grid thumbnail of every other server's copy that
 // got the poster. fetchExistingPoster() only refreshes the one on screen.
 const refreshSentThumbnails = async (sent: { server_id: string; rating_key: string }[]) => {
+  if (isApiMode.value) return
   const kind = 'tv-show'
   await Promise.all(sent.filter(t => t.rating_key && t.rating_key !== viewingRatingKey.value).map(async (t) => {
     try {
@@ -1757,7 +1772,7 @@ const refreshSentThumbnails = async (sent: { server_id: string; rating_key: stri
 }
 
 const updateGlobalPosterCache = (key: string, url: string | null) => {
-  if (typeof sessionStorage === 'undefined') return
+  if (isApiMode.value || typeof sessionStorage === 'undefined') return
   try {
     const raw = sessionStorage.getItem(POSTER_CACHE_KEY)
     const cache = raw ? JSON.parse(raw) : {}
@@ -1771,6 +1786,7 @@ const updateGlobalPosterCache = (key: string, url: string | null) => {
 }
 
 const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
+  if (isApiMode.value) { existingPoster.value = null; return }
   try {
     // Handle both boolean and Event parameter
     const refreshFlag = typeof forceRefresh === 'boolean'
@@ -1820,6 +1836,7 @@ const fetchExistingPoster = async (forceRefresh?: boolean | Event) => {
 }
 
 const fetchExistingLogo = async (forceRefresh = false) => {
+  if (isApiMode.value) { existingLogo.value = null; return }
   try {
     // Always resolves against the SERIES' own linked-server mapping,
     // regardless of whether a season is currently focused -- logos are
@@ -2209,7 +2226,7 @@ const renderAllSelectedSeasons = async () => {
 
 
 const doSave = async () => {
-  if (!bgUrl.value) return
+  if (isApiMode.value || !bgUrl.value) return
 
   // Flush the currently-focused season/series' live UI state into settingsCache
   // before reading from it below -- without this, if you're saving the season
@@ -2511,6 +2528,7 @@ async function getLinkedServersForItem(season: Season): Promise<LinkedServer[]> 
 }
 
 const doSendLogoOnly = async () => {
+  if (isApiMode.value) return
   if (!logoUrl.value) {
     notifyError('No logo selected to send.')
     return
@@ -2579,7 +2597,7 @@ function onSendModalConfirm(serverIds: string[]) {
 }
 
 const doSend = async () => {
-  if (!bgUrl.value) return
+  if (isApiMode.value || !bgUrl.value) return
 
   // Every selected season/series on a non-Plex-sourced show needs the
   // multi-server send path, no matter how many are selected -- the
@@ -2862,9 +2880,76 @@ const onRetryQueued = () => {
   success('Queued — will retry automatically once a textless poster is found.')
 }
 
+// API mode's one primary action: store the current preview as the Poster API image
+// for the FOCUSED poster (series, or one season). Quirk #13: lastPreview can still
+// hold another season's render right after a season switch, so only pin when the
+// shown image is one this file attributed to the focused season's own key.
+const lastPreviewIsFocused = computed(() => {
+  const season = currentSeason.value
+  const image = lastPreview.value
+  if (!season || !image) return false
+  if (renderedPreviews.value.some(p => p.seasonKey === season.key && p.imageUrl === image)) return true
+  const prefix = `${season.key}_`
+  return Object.entries(renderedPreviewCache.value).some(([k, v]) => v === image && k.startsWith(prefix))
+})
+const pinning = ref(false)
+const canPin = computed(() => !!tmdbId.value && lastPreviewIsFocused.value)
+const pinToPosterApi = async () => {
+  if (!isApiMode.value || pinning.value || !canPin.value) return
+  // Capture identity before the await.
+  const season = currentSeason.value
+  const image = lastPreview.value
+  const capturedTmdbId = tmdbId.value
+  if (!season || !image || !capturedTmdbId) return
+  const body: Record<string, unknown> = { type: 'tv', tmdb_id: capturedTmdbId, title: props.movie.title, image_data: image }
+  if (!season.isSeries) body.season = season.index
+  pinning.value = true
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(`Pin failed (${res.status})${text ? `: ${text}` : ''}`)
+    }
+    success(season.isSeries ? 'Series poster pinned to Poster API' : `${season.title} pinned to Poster API`)
+  } catch (err: unknown) {
+    notifyError(err instanceof Error ? err.message : 'Pin failed')
+  } finally {
+    pinning.value = false
+  }
+}
+
 // Fetch TV show seasons
 async function fetchSeasons() {
   if (!props.movie?.key) return
+
+  if (isApiMode.value) {
+    // No media-server season list: seasons come from TMDb. Synthetic, never-sent keys.
+    const seriesEntry = buildSeriesEntry()
+    seasons.value = [seriesEntry]
+    selectedSeasons.value = new Set([seriesEntry.key])
+    currentSeasonIndex.value = 0
+    try {
+      const res = await fetch(`${apiBase}/api/tmdb/tv/${Number(props.movie.tmdb_id)}/seasons`)
+      if (!res.ok) throw new Error('Failed to fetch seasons')
+      const data: { index: number; name?: string; poster_path?: string | null }[] = await res.json()
+      const mapped: Season[] = (Array.isArray(data) ? data : []).map(s => ({
+        key: `${props.movie.key}-s${s.index}`,
+        title: s.name || `Season ${s.index}`,
+        index: s.index,
+        thumb: s.poster_path ? `https://image.tmdb.org/t/p/original${s.poster_path}` : undefined,
+      }))
+      seasons.value = [seriesEntry, ...mapped]
+    } catch (err) {
+      console.error('Failed to fetch seasons:', err)
+      notifyError('Failed to load TV show seasons')
+    }
+    syncRenderedPlaceholders()
+    return
+  }
 
   const cached = seasonsCache.value[props.movie.key]
   if (cached && cached.length) {
@@ -4076,7 +4161,7 @@ watch(tmdbId, () => {
 
         <!-- Actions -->
         <div class="acc-actions">
-          <div class="pinned-labels">
+          <div v-if="!isApiMode" class="pinned-labels">
             <div class="pinned-labels-title">
               Labels to remove on send
               <span v-if="selectedLabels.size" class="pinned-labels-count">{{ selectedLabels.size }} selected</span>
@@ -4185,6 +4270,7 @@ watch(tmdbId, () => {
 
     <div class="preview-pane" :class="{ 'mobile-preview-small': mobilePreviewSmall }">
       <div class="preview-inner">
+        <template v-if="!isApiMode">
         <button v-if="currentCollapsed" type="button" class="current-expand" title="Show the current poster and logo" @click="currentCollapsed = false">Current ›</button>
         <div v-else class="preview-existing">
           <button type="button" class="current-collapse" title="Hide this column" @click="currentCollapsed = true">‹ Hide</button>
@@ -4221,6 +4307,7 @@ watch(tmdbId, () => {
             <div v-else class="empty-preview small">No logo</div>
           </div>
         </div>
+        </template>
 
         <div class="preview-content-wrapper">
           <div class="preview-main">
@@ -4235,7 +4322,12 @@ watch(tmdbId, () => {
               <span v-else-if="lastPreview && previewDirty" class="status-badge stale" title="Settings changed since this render. It re-renders on its own after a moment; click Preview if it does not.">Not up to date</span>
               <span v-else-if="lastPreview" class="status-badge success">Up to date</span>
             </div>
-            <div class="preview-actions">
+            <div v-if="isApiMode" class="preview-actions">
+              <button :title="currentSeason?.isSeries === false ? `Store this preview as the Poster API image for ${currentSeason.title}` : 'Store this preview as the Poster API image for the series'" class="btn-plex btn-inline" :disabled="loading || pinning || !canPin" @click="pinToPosterApi">
+                <span class="btn-label">{{ pinning ? 'Pinning...' : 'Pin to Poster API' }}</span>
+              </button>
+            </div>
+            <div v-else class="preview-actions">
               <button title="Send Logo Only" class="btn-send-logo btn-inline" :disabled="logoSending || !logoUrl" @click="doSendLogoOnly">
                 <svg v-if="logoSending" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
                 <span class="btn-label">{{ logoSending ? 'Sending...' : 'Send Logo Only' }}</span>
@@ -4332,7 +4424,7 @@ watch(tmdbId, () => {
   </div>
 
   <AddToRetryQueueModal
-    v-if="showRetryQueueModal"
+    v-if="showRetryQueueModal && !isApiMode"
     :rating-key="props.movie.key"
     media-type="tv"
     :library-id="retryQueueLibraryId"

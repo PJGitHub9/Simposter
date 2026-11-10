@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
+import { useServerless } from '@/composables/useServerless'
 import { getApiBase } from '@/services/apiBase'
 
 const props = defineProps<{
@@ -13,6 +14,8 @@ const props = defineProps<{
   tvdbApiKey: string
   fanartApiKey: string
   unsavedChanges: boolean
+  // Per-section unsaved flags from SettingsView.vue (sectionsWithChanges)
+  changed?: Record<string, boolean>
   testingKeys?: Record<string, boolean>
   apiKeyTestResults?: Record<string, string>
   // Which tab this instance is: General (appearance, display, API keys) or
@@ -70,18 +73,43 @@ const localTvdbApiKey = computed({
 })
 
 const settingsStore = useSettingsStore()
+const { serverless } = useServerless()
 // Audience/critic rating sources: the media server's own rating (read during
-// scans, no key needed) or an MDBList source (backend/server_ratings.py).
+// scans, no key needed), TMDb's user score (audience only, uses the TMDb key
+// you already have) or an MDBList source (backend/server_ratings.py).
 const serverRatingSources = [
-  { value: 'server', label: 'Your media server (first one that has it)' },
+  { value: 'server', label: 'Your media server (first one that has it, else TMDb)' },
   { value: 'plex', label: 'Plex' },
   { value: 'jellyfin', label: 'Jellyfin / Emby' },
 ]
+const SERVER_SOURCE_VALUES = new Set(serverRatingSources.map(s => s.value))
+// With no media server the server choices can't produce anything. The backend
+// then uses MDBList when there's a key (IMDb for audience, Rotten Tomatoes for
+// critic, server_ratings.MDBLIST_FALLBACK), else TMDb for audience, so show
+// that (no setting is changed just by opening this page). Picking something
+// else saves normally.
+const hasMdblistKey = computed(() => !!settingsStore.mdblist.value.apiKey)
+const audienceSource = computed({
+  get: () => {
+    const v = settingsStore.mdblist.value.audienceRatingSource
+    if (!(serverless.value && SERVER_SOURCE_VALUES.has(v))) return v
+    return hasMdblistKey.value ? 'imdb' : 'tmdb'
+  },
+  set: (v: string) => { settingsStore.mdblist.value.audienceRatingSource = v },
+})
+const criticIsServerless = computed(() =>
+  serverless.value && !hasMdblistKey.value && SERVER_SOURCE_VALUES.has(settingsStore.mdblist.value.criticRatingSource))
+const criticSource = computed({
+  get: () => {
+    const v = settingsStore.mdblist.value.criticRatingSource
+    return serverless.value && hasMdblistKey.value && SERVER_SOURCE_VALUES.has(v) ? 'tomatoes' : v
+  },
+  set: (v: string) => { settingsStore.mdblist.value.criticRatingSource = v },
+})
 const ratingSources = [
   { value: 'imdb', label: 'IMDb' },
   { value: 'tomatoes', label: 'Rotten Tomatoes (critics)' },
   { value: 'tomatoesaudience', label: 'Rotten Tomatoes (audience)' },
-  { value: 'tmdb', label: 'TMDb' },
   { value: 'trakt', label: 'Trakt' },
   { value: 'metacritic', label: 'Metacritic' },
   { value: 'metacriticuser', label: 'Metacritic (users)' },
@@ -287,7 +315,7 @@ const timezones = computed(() => {
     <h2>{{ part === 'ratings' ? 'Ratings & Lists' : 'General Settings' }}</h2>
 
     <template v-if="part !== 'ratings'">
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.appearance }]">
       <h3>Appearance</h3>
 
       <label>
@@ -325,7 +353,7 @@ const timezones = computed(() => {
       </label>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.libraryDisplay }]">
       <h3>Library Display</h3>
       <p class="section-description">
         Configure how movies and TV shows are displayed in library and batch edit views.
@@ -357,7 +385,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.apiKeys }]">
       <h3>API Keys</h3>
       <p class="section-description">
         Configure API keys for accessing metadata from external services.
@@ -440,41 +468,48 @@ const timezones = computed(() => {
     </template>
 
     <template v-else>
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>Overlay ratings</h3>
       <p class="section-description">
-        Where the <code>audience_rating</code> and <code>critic_rating</code> values in overlays come from. Your media server's
-        ratings are read during library scans and need nothing else; the MDBList sources need the MDBList key below.
+        Where the <code>audience_rating</code> and <code>critic_rating</code> values in overlays come from.
+        <template v-if="serverless">With no media server, the audience rating comes from TMDb (your TMDb key is enough); a critic rating needs an MDBList source and the MDBList key below.</template>
+        <template v-else>Your media server's ratings are read during library scans and need nothing else; TMDb uses your TMDb key; the MDBList sources need the MDBList key below.</template>
       </p>
       <div class="api-keys-grid">
         <label>
           <span class="label-text">Audience rating comes from</span>
-          <select v-model="settingsStore.mdblist.value.audienceRatingSource">
-            <optgroup label="Your media server (no key needed)">
-              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+          <select v-model="audienceSource">
+            <optgroup label="No extra key needed">
+              <template v-if="!serverless">
+                <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+              </template>
+              <option value="tmdb">TMDb (user score)</option>
             </optgroup>
             <optgroup label="MDBList (needs the key below)">
               <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
             </optgroup>
           </select>
-          <span class="help-text">Fills <code>audience_rating</code> (0–10). The default uses your media servers in the order they're listed in Media Servers, taking the first one that has a rating for the item. Plex uses the audience rating set in your Plex library (as Kometa does); Jellyfin/Emby uses the community rating. An MDBList source without an MDBList key also falls back to your media servers.</span>
+          <span v-if="serverless" class="help-text">Fills <code>audience_rating</code> (0–10). TMDb's user score works with no media server and no extra key. An MDBList source without an MDBList key falls back to TMDb.</span>
+          <span v-else class="help-text">Fills <code>audience_rating</code> (0–10). The default uses your media servers in the order they're listed in Media Servers, taking the first one that has a rating for the item, then TMDb's user score if none does. Plex uses the audience rating set in your Plex library (as Kometa does); Jellyfin/Emby uses the community rating. An MDBList source without an MDBList key also falls back to your media servers, then TMDb.</span>
         </label>
         <label>
           <span class="label-text">Critic rating comes from</span>
-          <select v-model="settingsStore.mdblist.value.criticRatingSource">
-            <optgroup label="Your media server (no key needed)">
-              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
+          <select v-model="criticSource">
+            <optgroup v-if="!serverless" label="Your media server (no key needed)">
+              <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label.replace(', else TMDb', '') }}</option>
             </optgroup>
+            <option v-if="criticIsServerless" :value="settingsStore.mdblist.value.criticRatingSource" disabled>None (needs a media server or MDBList)</option>
             <optgroup label="MDBList (needs the key below)">
               <option v-for="s in ratingSources" :key="s.value" :value="s.value">{{ s.label }}</option>
             </optgroup>
           </select>
-          <span class="help-text">Fills <code>critic_rating</code> (0–10). Plex: the library's critic rating; Jellyfin/Emby: the critic rating (0–100, shown as 0–10).</span>
+          <span v-if="serverless" class="help-text">Fills <code>critic_rating</code> (0–10). TMDb has no critic score, so with no media server this needs an MDBList source (e.g. Rotten Tomatoes) and the MDBList key below.</span>
+          <span v-else class="help-text">Fills <code>critic_rating</code> (0–10). Plex: the library's critic rating; Jellyfin/Emby: the critic rating (0–100, shown as 0–10). TMDb has no critic score.</span>
         </label>
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>MDBList (overlay ratings &amp; lists)</h3>
       <p class="section-description">
         Overlays can show ratings from IMDb, Rotten Tomatoes, TMDb, Trakt, Metacritic, Letterboxd and more, and only appear on
@@ -504,7 +539,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>WeTrakr (overlay lists)</h3>
       <p class="section-description">
         Show an overlay layer only on items in a WeTrakr list. Public lists work with just the Client ID. Your own private
@@ -542,7 +577,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>SIMKL (overlay lists)</h3>
       <p class="section-description">
         Show an overlay layer only on items in your SIMKL Plan to Watch, Watching, Completed, On Hold or Dropped list, or in a
@@ -583,7 +618,7 @@ const timezones = computed(() => {
       </div>
     </div>
 
-    <div class="section">
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
       <h3>Floppy (overlay lists)</h3>
       <p class="section-description">
         Show an overlay layer only on items in a list on your own Floppy server.
@@ -972,5 +1007,11 @@ button:disabled {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+/* Yellow highlight for a section with unsaved changes (flags from SettingsView.vue). */
+.section.section-unsaved {
+  background: rgba(255, 200, 0, 0.08);
+  border-color: rgba(255, 200, 0, 0.4);
 }
 </style>

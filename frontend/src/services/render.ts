@@ -69,8 +69,11 @@ export function useRenderService() {
     const disableOverlayCache = true
     const data = await post('preview', {
       ...payload,
-      // Include rating_key so backend can fetch media info for overlay badges
-      rating_key: movie.key,
+      // Include rating_key so backend can fetch media info for overlay badges.
+      // API-mode items have no media-server item; their key is synthetic.
+      rating_key: movie.apiMode ? undefined : movie.key,
+      // API-mode items: their TMDb id, so overlays can look up ratings, lists, etc.
+      tmdb_id: movie.apiMode && movie.tmdb_id ? Number(movie.tmdb_id) || undefined : undefined,
       // Only disable when explicitly requested
       disableOverlayCache,
       // Manual editor always renders the selected preset as-is, never falls back to another preset

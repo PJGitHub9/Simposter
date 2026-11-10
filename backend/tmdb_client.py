@@ -67,13 +67,7 @@ _rate_limit_requests = []  # List of (timestamp,) tuples
 
 def _apply_rate_limit():
     """Apply rate limiting based on UI settings (requests per 10 seconds)."""
-    # Get rate limit from UI settings
-    try:
-        from .api.ui_settings import _read_settings
-        ui_settings = _read_settings(include_env=False)
-        rate_limit = ui_settings.performance.tmdbRateLimit if ui_settings.performance else 40
-    except Exception:
-        rate_limit = 40  # Default to 40 requests per 10 seconds
+    rate_limit = db.get_performance_int("tmdbRateLimit", 40)
 
     with _rate_limit_lock:
         now = time.time()
@@ -322,6 +316,9 @@ def get_movie_details(tmdb_id: int) -> Dict[str, Any]:
         "original_language": original_language,
         "year": year,
         "release_date": release_date,
+        # TMDb's own user score (0-10) -- the "tmdb" overlay rating source.
+        "vote_average": data.get("vote_average"),
+        "vote_count": data.get("vote_count"),
     }
 
 
@@ -392,7 +389,30 @@ def get_tv_show_details(tmdb_id: int) -> Dict[str, Any]:
         "first_air_date": first_air_date,
         "number_of_seasons": number_of_seasons,
         "status": data.get("status", ""),
+        # TMDb's own user score (0-10) -- the "tmdb" overlay rating source.
+        "vote_average": data.get("vote_average"),
+        "vote_count": data.get("vote_count"),
     }
+
+
+def get_tv_seasons(tmdb_id: int) -> List[Dict[str, Any]]:
+    """Season list for a TV show from TMDb: [{index, name, poster_path}], in TMDb order.
+
+    Same cached `/tv/{id}` response get_tv_show_details() uses, so no extra request
+    once details are cached. Includes season 0 (Specials) when TMDb lists it.
+    """
+    data = _cached_tmdb_get(f"/tv/{tmdb_id}", {})
+    out: List[Dict[str, Any]] = []
+    for s in data.get("seasons") or []:
+        n = s.get("season_number")
+        if not isinstance(n, int):
+            continue
+        out.append({
+            "index": n,
+            "name": s.get("name") or f"Season {n}",
+            "poster_path": s.get("poster_path") or None,
+        })
+    return out
 
 
 def get_tv_season_images(tmdb_id: int, season_number: int, original_language: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
@@ -637,3 +657,31 @@ def get_watch_providers(tmdb_id: int, media_type: str = "movie", region: str = "
         pass
 
     return providers
+
+
+def _title_rows(data: Dict[str, Any], media_type: str) -> List[Dict[str, Any]]:
+    out = []
+    for r in (data.get("results") or []):
+        if media_type == "tv":
+            title, date = r.get("name") or r.get("original_name") or "", r.get("first_air_date") or ""
+        else:
+            title, date = r.get("title") or r.get("original_title") or "", r.get("release_date") or ""
+        if r.get("id") is None:
+            continue
+        out.append({"tmdb_id": r["id"], "title": title, "year": date[:4], "poster_path": r.get("poster_path") or None})
+    return out
+
+
+def search_titles(query: str, media_type: str) -> List[Dict[str, Any]]:
+    """Title search for the Poster API page. media_type is "movie" or "tv"."""
+    query = (query or "").strip()
+    if not query:
+        return []
+    path = "/search/tv" if media_type == "tv" else "/search/movie"
+    return _title_rows(_cached_tmdb_get(path, {"query": query}), media_type)
+
+
+def get_trending(media_type: str) -> List[Dict[str, Any]]:
+    """This week's trending titles ("movie" or "tv")."""
+    path = "/trending/tv/week" if media_type == "tv" else "/trending/movie/week"
+    return _title_rows(_cached_tmdb_get(path, {}), media_type)

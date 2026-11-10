@@ -101,6 +101,7 @@ def api_export_database(
 
         overlays = build_bundle(None, all_assets=True)
 
+        pinned = _export_pinned_posters()
         return {
             "format": _BACKUP_FORMAT,
             "version": _BACKUP_VERSION,
@@ -110,10 +111,56 @@ def api_export_database(
             "settings": settings_out,
             "presets": presets,
             "overlays": overlays,
+            "poster_api_pinned": pinned,
         }
     except Exception as e:
         logger.error(f"[DB EXPORT] Failed to export database: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to export database: {e}")
+
+
+def _export_pinned_posters() -> list:
+    """Pinned Poster API posters (hand-made, not regenerable) as base64 JPEG."""
+    import base64
+    out = []
+    try:
+        rows, _ = db.poster_api_cache_list("", None, "pinned", 0, 100000)
+    except Exception as e:
+        logger.warning(f"[DB EXPORT] Couldn't list pinned Poster API posters: {e}")
+        return out
+    for r in rows:
+        try:
+            data = Path(r["file_path"]).read_bytes()
+        except OSError:
+            continue
+        out.append({
+            "media_type": r["media_type"], "tmdb_id": r["tmdb_id"], "season_index": r["season_index"],
+            "title": r.get("title") or "", "image_b64": base64.b64encode(data).decode("ascii"),
+        })
+    return out
+
+
+def _import_pinned_posters(entries) -> int:
+    """Recreate pinned posters; malformed entries are skipped, never fatal."""
+    import base64
+    from .. import poster_api_store as store
+    n = 0
+    if not isinstance(entries, list):
+        return 0
+    for e in entries:
+        try:
+            media_type = e["media_type"]
+            if media_type not in ("movie", "tv"):
+                continue
+            season = int(e.get("season_index", -1))
+            img = base64.b64decode(e["image_b64"], validate=True)
+            if not img:
+                continue
+            key = store.CacheKey(media_type, int(e["tmdb_id"]), None if season < 0 else season, "")
+            store.put_entry(key, "pinned", img, e.get("title") or "", "")
+            n += 1
+        except Exception as err:
+            logger.warning(f"[DB IMPORT] Skipped a malformed pinned Poster API entry: {err}")
+    return n
 
 
 def _preset_row(p: Dict[str, Any]):
@@ -194,6 +241,10 @@ def api_import_database(data: Dict[str, Any]):
                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
                 preset_rows,
             )
+
+        pinned_restored = _import_pinned_posters(data.get("poster_api_pinned"))
+        if pinned_restored:
+            logger.info(f"[DB IMPORT] Restored {pinned_restored} pinned Poster API posters")
 
         overlays = data.get("overlays")
         if isinstance(overlays, dict):

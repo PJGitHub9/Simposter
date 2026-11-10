@@ -198,10 +198,15 @@ const removeCondition = (i: number) => {
             <button type="button" class="btn-small" :disabled="pasteBusy[i]" @click="addPasted(i, c)">{{ pasteBusy[i] ? 'Checking…' : 'Add' }}</button>
           </div>
           <p v-if="pasteMsg[i]" class="cond-note inline" :class="{ warn: !pasteMsg[i]?.ok }">{{ pasteMsg[i]?.text }}</p>
+          <p v-if="!hasMdblistKey && listKeys(c).some(k => k.includes('mdblist.com/'))" class="cond-note inline warn">
+            MDBList lists need an MDBList API key (Settings → Ratings & Lists). Until one is added, this layer never shows.
+          </p>
           <p v-if="listSources.loaded.value && !listSources.groups.value.length" class="cond-note inline">
             No lists found yet. Connect WeTrakr, SIMKL or Floppy in Settings → Ratings & Lists, or paste a list link.
           </p>
-          <p v-for="(msg, svc) in listSources.errors.value" :key="svc" class="cond-note inline warn">{{ providerLabel(String(svc)) }}: {{ msg }}</p>
+          <p v-for="(msg, svc) in listSources.errors.value" :key="svc" class="cond-note inline warn">
+            Your {{ providerLabel(String(svc)) }} lists couldn't be loaded into this menu ({{ msg }}). Lists from other services aren't affected.
+          </p>
         </div>
 
         <div v-else-if="!isUnsupported(c) && !isNoValue(c)" class="cond-value-row">
@@ -247,6 +252,18 @@ const removeCondition = (i: number) => {
           />
         </div>
 
+        <div v-if="!isUnsupported(c) && fieldDef(String(c.field))?.regional" class="cond-value-row cond-region">
+          <span class="cond-region-label">Country</span>
+          <input
+            class="cond-value cond-region-input"
+            type="text"
+            maxlength="2"
+            :value="(c.region || 'US').toUpperCase()"
+            placeholder="US"
+            title="Two-letter country code, e.g. US, GB, DE, AU"
+            @change="c.region = ($event.target as HTMLInputElement).value.replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 2) || 'US'"
+          />
+        </div>
         <p v-if="isUnsupported(c)" class="cond-note warn">
           An imported Kometa rule Simposter can't check, so {{ what }} never shows. Remove this condition to show it.
         </p>
@@ -280,6 +297,9 @@ const removeCondition = (i: number) => {
 .cond-op { flex: 1; min-width: 0; }
 .cond-value-row { padding-left: 2.75rem; }
 .cond-value { width: 100%; box-sizing: border-box; }
+.cond-region { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.cond-region-label { font-size: 12px; color: var(--text-muted, #a8b3cf); }
+.cond-region-input { width: 4.5em; text-transform: uppercase; }
 .cond select, .cond input { padding: 0.32rem 0.4rem; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border, #2a2f3e); border-radius: 5px; color: var(--text-primary, #fff); font-size: 0.78rem; }
 .cond select { background-color: var(--surface-soft, #141824); color-scheme: dark; }
 :root[data-theme='light'] .cond select { color-scheme: light; }

@@ -17,6 +17,8 @@ export interface FieldDef {
   options?: FieldOption[]
   /** Fields that don't apply to every server. */
   note?: string
+  /** Checked per country (the condition's region, US by default). */
+  regional?: boolean
 }
 
 const opts = (pairs: Array<[string, string]>): FieldOption[] => pairs.map(([value, label]) => ({ value, label }))
@@ -71,7 +73,7 @@ export const FIELDS: FieldDef[] = [
   {
     value: 'list', label: 'On a list', group: 'Lists', kind: 'list',
     placeholder: 'Paste a MDBList, WeTrakr, SIMKL or Floppy list link',
-    note: 'Lists from MDBList, WeTrakr, SIMKL or Floppy (set them up in Settings, General).',
+    note: 'Lists from MDBList, WeTrakr, SIMKL or Floppy (set them up in Settings → Ratings & Lists).',
   },
   {
     value: 'label', label: 'Label', group: 'Item', kind: 'text', placeholder: '4K',
@@ -112,6 +114,15 @@ export const FIELDS: FieldDef[] = [
   { value: 'title', label: 'Title', group: 'Item', kind: 'text', placeholder: 'Star Wars' },
   { value: 'studio', label: 'Studio', group: 'Item', kind: 'text', placeholder: 'a24' },
   { value: 'streaming_platform', label: 'Streaming platform', group: 'Item', kind: 'text', placeholder: 'netflix' },
+  {
+    value: 'content_rating', label: 'Content rating', group: 'Item', kind: 'text', placeholder: 'PG-13', regional: true,
+    note: "From TMDb: the certification in the chosen country (e.g. PG-13 in US, 12A in GB). Plex's form gb/12A matches too.",
+  },
+  { value: 'network', label: 'Network', group: 'Item', kind: 'text', placeholder: 'HBO', note: 'TV shows; from TMDb.' },
+  {
+    value: 'streaming', label: 'Streaming service', group: 'Item', kind: 'text', placeholder: 'Netflix or 8', regional: true,
+    note: "From TMDb: subscription services in the chosen country. Use the service's name or its TMDb provider id (Netflix is 8).",
+  },
 ]
 
 const ALIASES: Record<string, string> = {
@@ -255,7 +266,8 @@ export const describeCondition = (c: OverlayCondition): string => {
   const values = Array.isArray(c.value) ? c.value : [c.value]
   const shown = values.filter(v => v !== undefined && v !== null && v !== '').map(v => valueLabel(field, v))
   const valText = shown.length > 3 ? `${shown.slice(0, 3).join(', ')} +${shown.length - 3}` : shown.join(', ')
-  return `${name} ${opText} ${valText || '…'}`
+  const where = def?.regional ? ` (${(String(c.region || '').toUpperCase() || 'US')})` : ''
+  return `${name}${where} ${opText} ${valText || '…'}`
 }
 
 export interface TextVariable { key: string; label: string; group: string; example: string; note?: string }

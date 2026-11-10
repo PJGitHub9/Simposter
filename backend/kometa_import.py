@@ -104,6 +104,17 @@ _FILTER_FIELDS = {
     "tvdb_status": ("show_status", "status"),
     "tmdb_status": ("show_status", "status"),
     "added": ("days_since_added", "days"),
+    # From TMDb (overlay_engine._tmdb_facts): certification per country, show networks.
+    "content_rating": ("content_rating", "tag"),
+    "network": ("network", "tag"),
+}
+
+# Kometa's per-country content rating files -> the country whose TMDb
+# certification they should be checked against.
+_DEFAULT_RATING_REGIONS = {
+    "content_rating_uk": "GB", "content_rating_au": "AU", "content_rating_de": "DE",
+    "content_rating_nz": "NZ", "content_rating_us_movie": "US", "content_rating_us_show": "US",
+    "commonsense": "US",
 }
 
 # Kometa's tmdb_status values -> the show_status values the engine fills
@@ -454,9 +465,51 @@ def apply_template(
 # Loading files
 # --------------------------------------------------------------------------
 
+def _yaml_candidates(text: str):
+    """The text, then repaired versions of a block copied out of a bigger file:
+    commonly the first line lost its indent when the selection started at it
+    ("- default: ratings" at the left edge, its children still indented), or
+    every line keeps the indent it had in the original file."""
+    import textwrap
+    yield text
+    lines = text.replace("\t", "  ").splitlines()
+    nonblank = [i for i, l in enumerate(lines) if l.strip()]
+    if not nonblank:
+        return
+    yield textwrap.dedent("\n".join(lines))
+    first = nonblank[0]
+    rest = [len(lines[i]) - len(lines[i].lstrip()) for i in nonblank[1:]]
+    if not rest:
+        return
+    head = lines[first].lstrip()
+    # The first line's original indent is a little less than its children's, or the
+    # same as a sibling's ("- default: a" then "    - default: b").
+    child = min(rest)
+    tried = set()
+    for indent in (child - 2, child, child - 4, child - 1, child - 3, child - 6):
+        if indent <= 0 or indent in tried:
+            continue
+        tried.add(indent)
+        fixed = lines[:first] + [" " * indent + head] + lines[first + 1:]
+        yield textwrap.dedent("\n".join(fixed))
+
+
+def _lenient_yaml(text: str) -> Any:
+    """yaml.safe_load, retrying repaired versions of a pasted fragment
+    (_yaml_candidates). Raises the original error when none of them parses."""
+    first_error = None
+    for candidate in _yaml_candidates(text):
+        try:
+            return yaml.safe_load(candidate)
+        except yaml.YAMLError as e:
+            if first_error is None:
+                first_error = e
+    raise first_error  # type: ignore[misc]
+
+
 def _load_yaml(text: str) -> Dict[str, Any]:
     try:
-        data = yaml.safe_load(text)
+        data = _lenient_yaml(text)
     except yaml.YAMLError as e:
         raise ImportError_(f"YAML error: {e}")
     if data is None:
@@ -539,24 +592,38 @@ def _offset(value: Any) -> Any:
 
 
 def _kometa_text(text: str, messages: List[str]) -> str:
-    """Kometa text(<<var>>) -> Simposter {var}. Formatting suffixes are dropped."""
+    """Kometa text(<<var>>) -> Simposter {var}. The number formats Kometa offers for
+    ratings are kept: <<x%>> (rating x 10 as a whole number), <<x#>> (no trailing
+    ".0") and <<x/>> (halved); other formatting suffixes are dropped."""
     old_special = {f"{a}{s}" for a in ("audience_rating", "critic_rating", "user_rating") for s in ("", "0", "%", "#")}
     if text in old_special:
-        text = f"<<{text}>>"
+        # Kometa's old bare names (modules/overlay.py): "x%" -> "76%", "x0" -> "76", "x#" -> "7.6".
+        mod = text[-1] if text[-1] in "0%#" else ""
+        base = text[:-1] if mod else text
+        if mod == "#":
+            text = f"<<{base}#>>"
+        elif mod:
+            text = f"<<{base}%>>{'' if mod == '0' else '%'}"
+        else:
+            text = f"<<{text}>>"
 
     def repl(m: "re.Match[str]") -> str:
         var = m.group(1)
-        base = re.sub(r"[%#]+$", "", var)
-        base = re.sub(r"\[.*\]$", "", base)
-        if base != var:
+        base = re.sub(r"\[.*\]$", "", var)
+        fmt = ""
+        if base and base[-1] in "%#/":
+            base, fmt = base[:-1], base[-1]
+        stripped = re.sub(r"[%#/]+$", "", base)
+        if stripped != base or "[" in var:
             messages.append(f"formatting in <<{var}>> isn't supported; shows the plain value")
-        return "{" + base + "}"
+            base = stripped
+        return "{" + base + fmt + "}"
 
     return re.sub(r"<<([^<>]+?)>>", repl, text)
 
 
 def _text_vars(text: str) -> List[str]:
-    return re.findall(r"\{([A-Za-z0-9_.]+)\}", text)
+    return re.findall(r"\{([A-Za-z0-9_.]+)[%#/]?\}", text)
 
 
 def _regex_escape_list(values: List[Any]) -> str:
@@ -807,6 +874,21 @@ def map_definition(
             info.append(f"{key}: matched by {kind} ID ({len(ids)} item{'s' if len(ids) != 1 else ''}); re-import to pick up changes to the list")
             conditions.append({"field": field, "op": "eq", "value": ids[0]} if len(ids) == 1
                               else {"field": field, "op": "in", "value": ids})
+            continue
+        if key == "tmdb_discover" and isinstance(raw, dict) and raw.get("with_watch_providers") not in (None, ""):
+            # Streaming services in a country, from TMDb's watch providers (the
+            # subscription services; Kometa's discover can also count rent/buy).
+            ids = [p.strip() for p in re.split(r"[|,]", str(raw.get("with_watch_providers"))) if p.strip()]
+            other = sorted(k for k in raw if k not in ("with_watch_providers", "watch_region", "limit", "sort_by",
+                                                      "with_watch_monetization_types"))
+            if other:
+                messages.append(f"tmdb_discover {', '.join(other)} isn't supported; element hidden")
+                conditions.append(_never("_list_tmdb_discover"))
+                continue
+            region = re.sub(r"[^A-Za-z]", "", str(raw.get("watch_region") or "US")).upper()[:2] or "US"
+            info.append(f"tmdb_discover: matched by streaming service in {region} (TMDb watch providers, subscription services)")
+            conditions.append({"field": "streaming", "op": "eq" if len(ids) == 1 else "in",
+                               "value": ids[0] if len(ids) == 1 else ids, "region": region})
             continue
         if key.startswith(_LIST_BUILDER_PREFIXES):
             messages.append(f"{key} (a list of items) isn't supported yet; element hidden")
@@ -1101,6 +1183,143 @@ def expand_file(
         if element is not None:
             elements.append(element)
     return elements, report, file_messages
+
+
+# --------------------------------------------------------------------------
+# config.yml overlay_files entries ("- default: ratings" + template_variables)
+# --------------------------------------------------------------------------
+
+KOMETA_DEFAULTS_URL = "https://raw.githubusercontent.com/Kometa-Team/Kometa/master/defaults/overlays/{name}.yml"
+_DEFAULT_NAME_RE = re.compile(r"^[a-z0-9_]+$")
+_DEFAULT_CACHE_DAYS = 7
+
+
+def config_overlay_entries(text: str) -> Optional[List[Dict[str, Any]]]:
+    """The overlay_files entries of a pasted Kometa config.yml snippet, or None when
+    the YAML isn't one. Accepts a bare list ("- default: ratings"), an
+    "overlay_files:" block, or whole libraries ("libraries: Movies: overlay_files:")."""
+    try:
+        data = _lenient_yaml(text)
+    except yaml.YAMLError:
+        return None
+    if isinstance(data, dict):
+        if isinstance(data.get("overlay_files"), list):
+            data = data["overlay_files"]
+        elif isinstance(data.get("libraries"), dict):
+            found: List[Any] = []
+            for lib in data["libraries"].values():
+                if isinstance(lib, dict) and isinstance(lib.get("overlay_files"), list):
+                    found += lib["overlay_files"]
+            data = found or None
+        else:
+            return None
+    if not isinstance(data, list) or not data:
+        return None
+    entries = [e for e in data if isinstance(e, dict) and (e.get("default") or e.get("file"))]
+    return entries if entries and len(entries) == len(data) else None
+
+
+def kometa_default_file(name: str, messages: List[str]) -> Optional[str]:
+    """Kometa's defaults/overlays/<name>.yml: downloaded from Kometa's GitHub and kept
+    in config/cache/kometa_defaults/ (refreshed weekly, the cached copy is used when
+    GitHub can't be reached)."""
+    import time
+
+    name = str(name).strip().lower().removesuffix(".yml")
+    if not _DEFAULT_NAME_RE.match(name):
+        messages.append(f"'{name}' isn't a Kometa default overlay name")
+        return None
+    try:
+        from .config import EXTERNAL_IMAGE_FETCH_HEADERS, settings
+        cache = Path(settings.CONFIG_DIR) / "cache" / "kometa_defaults" / f"{name}.yml"
+    except Exception:
+        cache = None
+        EXTERNAL_IMAGE_FETCH_HEADERS = {}
+    if cache is not None and cache.is_file() and time.time() - cache.stat().st_mtime < _DEFAULT_CACHE_DAYS * 86400:
+        return cache.read_text(encoding="utf-8")
+    try:
+        from .middleware.validation import safe_get
+        r = safe_get(KOMETA_DEFAULTS_URL.format(name=name), strict=True, headers=EXTERNAL_IMAGE_FETCH_HEADERS, timeout=20)
+        if r.status_code == 404:
+            messages.append(f"Kometa has no default overlay file called '{name}'")
+            return None
+        r.raise_for_status()
+        text = r.text
+        if len(text) > 2_000_000:
+            raise ValueError("file too large")
+        if cache is not None:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(text, encoding="utf-8")
+        return text
+    except Exception as e:
+        if cache is not None and cache.is_file():
+            messages.append(f"Couldn't update Kometa's '{name}' file ({e}); used the copy downloaded earlier")
+            return cache.read_text(encoding="utf-8")
+        messages.append(f"Couldn't download Kometa's '{name}' default overlay file: {e}")
+        return None
+
+
+def expand_config_entries(
+    entries: List[Dict[str, Any]], library_type: str, yaml_files: Dict[str, str]
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    """Expand each config.yml overlay_files entry with its own template_variables
+    (like Kometa does) and combine them into one overlay. library_type may be "both"."""
+    elements: List[Dict[str, Any]] = []
+    report: List[Dict[str, Any]] = []
+    messages: List[str] = []
+    used_names: set = set()
+    for entry in entries:
+        tvars = entry.get("template_variables") or {}
+        if not isinstance(tvars, dict):
+            messages.append("template_variables must be a dictionary; ignored")
+            tvars = {}
+        rating_region = None
+        if entry.get("default"):
+            label = f"default: {entry['default']}"
+            text = kometa_default_file(str(entry["default"]), messages)
+            rating_region = _DEFAULT_RATING_REGIONS.get(str(entry["default"]).strip().lower().removesuffix(".yml"))
+        else:
+            label = f"file: {entry['file']}"
+            wanted = PurePosixPath(str(entry["file"]).replace("\\", "/")).name.lower()
+            text = next((t for f, t in yaml_files.items() if PurePosixPath(f).name.lower() == wanted), None)
+            if text is None:
+                messages.append(f"{entry['file']} wasn't uploaded; add it to the import")
+        if text is None:
+            continue
+        try:
+            if library_type == "both":
+                els, rep, msgs = expand_file_both(text, yaml_files, tvars)
+            else:
+                els, rep, msgs = expand_file(text, library_type, yaml_files, tvars)
+        except ImportError_ as e:
+            messages.append(f"{label}: {e}")
+            continue
+        messages += [f"{label}: {m}" for m in msgs]
+        # Mapping names can repeat across entries (Kometa keeps each file separate);
+        # rename a repeat so layer names, suppress lists and report rows stay distinct.
+        renames: Dict[str, str] = {}
+        for el in els:
+            n = el.get("name")
+            if n and n in used_names:
+                i = 2
+                while f"{n} ({i})" in used_names:
+                    i += 1
+                renames[n] = f"{n} ({i})"
+        for el in els:
+            if el.get("name") in renames:
+                el["name"] = renames[el["name"]]
+            used_names.add(el.get("name"))
+            if rating_region:
+                for cond in el.get("conditions") or []:
+                    if isinstance(cond, dict) and cond.get("field") == "content_rating":
+                        cond["region"] = rating_region
+        for r in rep:
+            if r.get("name") in renames:
+                r["name"] = renames[r["name"]]
+            r.setdefault("messages", [])
+        elements += els
+        report += rep
+    return elements, report, messages
 
 
 def _is_type_condition(cond: Any) -> bool:

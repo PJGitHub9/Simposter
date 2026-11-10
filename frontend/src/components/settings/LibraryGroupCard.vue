@@ -78,7 +78,7 @@
       <label class="checkbox-label">
         <input type="checkbox" :checked="mergeEnabled" @change="onMergeToggle" />
         <span>Merge items found on more than one linked server into a single poster</span>
-        <span v-if="mergeUnsaved" class="unsaved-dot" :title="mergeSaveFailed ? 'Could not save -- check your connection, or use Save Changes below' : 'Not saved yet'">● Unsaved</span>
+        <span v-if="mergeUnsaved" class="unsaved-dot" title="Not saved yet">● Unsaved</span>
       </label>
       <span class="help-text">
         On (default): the same movie/show on Plex and Jellyfin shows as one card, using whichever server the grid's "Show posters from" preference picks.
@@ -475,56 +475,14 @@ function stopEditingName() {
 const hasAnyMember = computed(() => props.group.members.length > 0)
 const hasMultipleMembers = computed(() => props.group.members.length > 1)
 const mergeEnabled = computed(() => props.group.mergeItems !== false)
-// Auto-saves immediately, matching the sibling "Show posters from" control
-// on the Movies/TV grid toolbar (Quirk #85) -- unlike every other field on
-// this card, this one can't wait for Settings' own page-wide Save button,
-// since forgetting to click it (or dismissing the "unsaved changes" confirm
-// dialog the wrong way when navigating off Settings) would otherwise leave
-// the Movies/TV grid silently out of sync with what the checkbox shows.
-// `mergeSavedOverride` tracks what was actually confirmed persisted this
-// session, independent of `initialGroup` (a prop only refreshed on a full
-// Settings mount) -- `mergeSaveFailed` covers the rare case the background
-// POST itself fails (offline, etc.), in which case the local store edit
-// still applies (nothing is lost), it just isn't confirmed saved yet; the
-// page's own Save Changes button remains a working fallback either way.
-const mergeSavedOverride = ref<boolean | null>(null)
-const mergeSaveFailed = ref(false)
-async function onMergeToggle(e: Event) {
+// Staged like every other field on this card: the page-wide Save sends it
+// (libraryGroups is in SettingsView's unsaved-changes diff, so the section
+// turns yellow). The dot marks it against the last-saved group.
+function onMergeToggle(e: Event) {
   const checked = (e.target as HTMLInputElement).checked
   groups.value = groups.value.map(g => g.id === props.group.id ? { ...g, mergeItems: checked } : g)
-  const anyMember = props.group.members[0]
-  if (!anyMember) return // a brand-new group with no members yet has nothing to resolve server-side
-  mergeSaveFailed.value = false
-  try {
-    const res = await fetch(`${apiBase}/api/media-server/library-group/merge-items`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        server_id: anyMember.serverId,
-        library_id: anyMember.libraryId,
-        media_type: props.mediaType,
-        merge_items: checked,
-      }),
-    })
-    if (res.ok) {
-      mergeSavedOverride.value = checked
-    } else {
-      mergeSaveFailed.value = true
-    }
-  } catch {
-    mergeSaveFailed.value = true
-  }
 }
-// Shows a small dot next to the checkbox whenever it differs from what's
-// actually confirmed persisted -- normally cleared the instant the
-// auto-save above succeeds, so this only lingers for the two edge cases
-// noted above (a brand-new group with no members, or a failed save).
-// `initialGroup` is null for a brand-new group, which never counts as
-// "unsaved" here -- the whole-section yellow border already covers "a new
-// group exists at all."
 const mergeUnsaved = computed(() => {
-  if (mergeSaveFailed.value) return true
-  if (mergeSavedOverride.value !== null) return mergeEnabled.value !== mergeSavedOverride.value
   if (!props.initialGroup) return false
   return mergeEnabled.value !== (props.initialGroup.mergeItems !== false)
 })

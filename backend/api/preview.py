@@ -244,7 +244,8 @@ def api_preview(req: PreviewRequest):
         _dt = f" [{display_title}]" if display_title else ""
 
         logger.info("[PREVIEW] %s: %s, preset '%s' (key %s)", "TV show" if is_tv_show else "Movie",
-                    display_title or "unknown title", req.preset_id or "none", rating_key)
+                    display_title or req.movie_title or "unknown title", req.preset_id or "none",
+                    rating_key or (f"tmdb {req.tmdb_id}" if req.tmdb_id else None))
 
         if rating_key and not is_tv_show:
             try:
@@ -691,6 +692,14 @@ def api_preview(req: PreviewRequest):
                 tmdb_id=tmdb_id, is_tv=is_tv_show,
                 log_prefix="[PREVIEW] ",
             )
+        elif req.tmdb_id:
+            # No media-server item (Template Manager's TMDb preview, the
+            # editor's Poster API mode): give overlays the TMDb id so ratings,
+            # lists, studio and release-date rules work, as Poster API renders do.
+            meta = render_options.get("metadata") or {}
+            meta.setdefault("tmdb_id", req.tmdb_id)
+            meta.setdefault("media_type", "tv" if (req.is_tv or is_tv_show) else "movie")
+            render_options["metadata"] = meta
 
         # Pass preset_id so the template renderer can look up linked overlay configs
         if req.preset_id:

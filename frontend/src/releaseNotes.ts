@@ -10,6 +10,190 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.60',
+    date: '2026-11-10',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Merging branches.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.57',
+    date: '2026-11-10',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Settings: turning the Poster API on or off took effect at once, without Save. It now waits for Save like every other setting: the section turns yellow, and the sidebar entry only appears or disappears after saving.',
+          'Settings → Libraries: the "Merge items" checkbox of a library group also saved on its own. It now waits for Save too.',
+          'Poster API page: Generate and Clear changed the API key straight away. They now only change the field; the new key takes effect when you click Save, and the old one keeps working until then.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'The Poster API docs and the "what’s new" overview now explain why connecting a media server is still recommended even if you only use the Poster API: badges from your actual files, ratings from the server, posters you already have, and posters kept up to date.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.56',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Setup wizard: on slower servers the last step could say "Failed to import preset" even though the starter presets were imported. Importing presets now finishes right away and prepares their effects in the background, and the rest of Simposter no longer stops responding while it does.',
+          'Template Manager and the Poster API editor: previews of a movie or show from TMDb now show rating, list and other TMDb-based overlay layers. They never had the TMDb id of the item before, so those layers were always left off.',
+          'Ratings with no media server: when the audience or critic source is "Your media server" and there is no server (or it has no rating), Simposter now uses MDBList if you have a key (IMDb for audience, Rotten Tomatoes for critic). Before, the critic rating was never filled.',
+          'The log now says which score is missing, e.g. "MDBList has no Rotten Tomatoes (critics) score for this item", instead of "ratings: none found".',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.55',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Faster API calls: every TMDb and TVDB request also asked Plex for its library list. It no longer does, so batch renders, scans, webhooks and new Poster API renders make one Plex request fewer per TMDb call (about 20% faster in a 100-poster test), and server-less installs no longer log a Plex warning for each one.',
+          'Poster API: posters it already has are served about 10× faster (0.3 s → 0.025 s each, and no slowdown when many arrive at once). The request history and hit counts are now saved in the background instead of during each request.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.54',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Security: the Poster API key is no longer written to Simposter\u2019s log. Request lines with ?key= showed it in full. If you shared a log since turning the Poster API on, change the key.',
+          'The short /poster address now honors group=, like /api/poster.',
+          'Searching the Poster API page for a very long number no longer shows an error.',
+        ],
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Removed 11 old API addresses nothing in Simposter used any more (a duplicate TV poster lookup, old cache/retry/scheduler/MDBList helpers).',
+          'The Poster API page, setup wizard and docs now show one address, /poster (with a line each for movies and TV shows), instead of three versions of the same link. It\u2019s the one a reverse proxy can pass on its own. Older /api/poster links keep working.',
+        ],
+      },
+    ],
+  },
+  {
+    version: 'v1.8.53',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Improvements',
+        items: [
+          'Text with an image next to it (e.g. a Rotten Tomatoes rating and its tomato) is now centered against the image, as Kometa does; it used to sit at the top. The Overlay Manager has a new Align option to put them at the top or bottom edges instead, and the Side option no longer shows blank for Left.',
+          'A layer that uses an MDBList list now shows a warning when there\u2019s no MDBList API key, since it can\u2019t show until one is added.',
+          'The note about a service whose sign-in failed (e.g. WeTrakr) now says it only affects that service\u2019s lists in the list menu.',
+          'Kometa imports that fail, save nothing, or skip layers are now written to the log with the reason (before, the reason only showed in the import window).'
+        ]
+      },
+      {
+        title: 'New Features',
+        items: [
+          'Kometa import: paste the overlay_files entries from your Kometa config.yml, such as "- default: ratings" with its template_variables (copied straight out of the file is fine, even when the first line lost its indent). Simposter downloads Kometa\u2019s built-in overlay file and builds the overlay with your settings.',
+          'New overlay rules: content rating (from TMDb, per country, e.g. PG-13 or 12A), TV network, and streaming service (subscription services in a country, from TMDb). Kometa\u2019s built-in content rating, network and streaming overlays now import with working badges.',
+          'Rating text formats from Kometa: {critic_rating%} shows the rating as a whole number out of 100 (7.6 \u2192 76), {critic_rating#} drops a trailing .0, and {critic_rating/} halves it. Imported Kometa rating overlays now show "76%" instead of "7.6%".'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.52',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster API request history: the Poster API page lists recent calls with what each one got back (a poster from your library, a pinned one, an earlier render, a new render, the stock TMDb poster, not found, or a wrong key), how long it took, and totals per result.',
+          'Poster API library groups: pick which movie and TV library group the Poster API uses (for example "4K Movies" or "Movies"), or add &group=Name to a request URL, so one app can get the 4K version and another the regular one. The group decides which existing poster is served and where the 4K/HDR/audio badges come from.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'The Poster API rendered a new poster even when the title\u2019s poster was already in your library. It now serves the poster your media server has (or the last one Simposter sent) without rendering.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Posters the Poster API serves straight from your library no longer get a tile on the Poster API page (they are files your library already has); they show in the request history instead.',
+          'The Poster API page only appears in the sidebar once the Poster API is turned on. The on/off switch moved to Settings \u2192 Media Servers.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.51',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Some changes in Settings could not be saved: changing the theme, poster density, timezone, default sort, duplicate grouping or any save location left the Save button on "No Changes", and a few other settings could lose their unsaved status after another change.',
+          'Clicking "Skip setup" in the setup wizard overwrote existing settings with the wizard defaults (timezone, performance, image quality, automation, scan schedule) and could clear your Plex library list.',
+          'Settings are no longer saved if they never loaded, which could otherwise write blank values (including API keys) over your real settings.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Every section in Settings now turns yellow when it has unsaved changes, and goes back to normal if you change a value back.',
+          'Running the setup wizard again starts from your current settings, keeps your scan schedule library selection, and keeps each Plex library’s auto-generate and ignore-label settings. Plex libraries are only changed when Plex was connected in that run.'
+        ]
+      }
+    ]
+  },
+  {
+    version: 'v1.8.50',
+    date: '2026-11-08',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Poster API: other apps (like Ether) can ask Simposter for a poster by TMDb id. You get the poster you pinned, the one already on your media server, or a fresh render from your Uniform Logo preset, and if a render takes too long the request is sent to the stock TMDb poster while the render finishes. Turn it on in the new Poster API page, with an optional key, default presets, and a tile per cached poster (regenerate, clear, open in the editor).',
+          'Run Simposter without a media server: the setup wizard has a "No media server" choice that skips the server and library steps and sets up the Poster API instead. The menu shrinks to Poster API, Template Manager, Overlays, Logs and Settings (Settings hides Libraries, Output and Automation), the quick start guide shows what you can do without a server, and previews and search use TMDb titles. Connect a server later and the full menu returns.',
+          'Pin a poster from the editor: open any TMDb title in the editor from the Poster API page or global search and click Pin. The Poster API then always serves that poster for the title.',
+          'TMDb ratings for overlays: "TMDb (user score)" is a new audience rating source that needs only your TMDb key. When your media server has no rating for a title (always the case with no media server), the audience rating now comes from TMDb, so rating overlays work out of the box.'
+        ]
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Saving Settings could reset some settings sections to defaults when the page did not send them.',
+          'The API rate limit did not apply to the /poster address, and the TMDb search limit was low enough that fast typing could return empty results.'
+        ]
+      },
+      {
+        title: 'Improvements',
+        items: [
+          'Cleanup has a new "Poster API renders" category, and database export and import include pinned posters.',
+          'Template Manager and Overlay Manager previews work with TMDb titles when you have no library.',
+          'Poster API defaults to the simposter-main preset, and the Copy buttons copy each URL with your API key already filled in.',
+          'The setup wizard shows a spinner while it imports the starter presets.',
+          'Poster API page: tick posters (or Select page / Select all) to regenerate or clear many at once. Pinning a poster from the editor removes the old rendered copy for that title, since the pinned one is served instead.',
+          'With no media server, Overlay Manager marks video, audio and edition badges as needing a media server (they read file details from a library scan).'
+        ]
+      }
+    ]
+  },
+  {
     version: 'v1.8.39',
     date: '2026-11-08',
     sections: [

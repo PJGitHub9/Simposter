@@ -5,9 +5,10 @@ import { useSettingsStore } from '@/stores/settings'
 // user's "Poster Density" setting rather than a hardcoded number, so Logos/
 // Backdrops/Square Art behave the same way instead of rendering (and
 // fetching art for) every item in the library at once.
-export function usePagedItems<T>(sourceItems: Ref<T[]>) {
+export function usePagedItems<T>(sourceItems: Ref<T[]>, fixedPageSize?: number) {
   const settings = useSettingsStore()
-  const pageSize = computed(() => settings.posterDensity.value || 20)
+  // `fixedPageSize` is for non-library grids (Poster API) that shouldn't follow Poster Density.
+  const pageSize = computed(() => fixedPageSize ?? (settings.posterDensity.value || 20))
   const page = ref(1)
 
   const totalPages = computed(() => Math.max(1, Math.ceil(sourceItems.value.length / pageSize.value)))

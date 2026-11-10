@@ -113,6 +113,17 @@ export type MDBListSettings = {
   cacheDays: number
 }
 
+export type PosterApiSettings = {
+  enabled: boolean
+  key: string // masked (SECRET_MASK) when set; the server keeps the real value
+  defaultMoviePreset: string
+  defaultTvPreset: string
+  waitSeconds: number
+  retentionDays: number
+  movieGroup?: string // library group id used when a request names none; '' = any library
+  tvGroup?: string
+}
+
 // List sources for overlay "On a list" rules (backend/list_sources.py).
 // Sign-in tokens are stored server-side, never here.
 export type WeTrakrSettings = { clientId: string }
@@ -207,6 +218,7 @@ export type UISettings = {
   tvdb?: TVDBSettings
   fanart?: FanartSettings
   mdblist?: Partial<MDBListSettings>
+  posterApi?: Partial<PosterApiSettings>
   wetrakr?: Partial<WeTrakrSettings>
   simkl?: Partial<SimklSettings>
   floppy?: Partial<FloppySettings>
@@ -253,6 +265,10 @@ const tmdb = ref<TMDBSettings>({ apiKey: '' })
 const tvdb = ref<TVDBSettings>({ apiKey: '', comingSoon: false })
 const fanart = ref<FanartSettings>({ apiKey: '' })
 const mdblist = ref<MDBListSettings>({ apiKey: '', audienceRatingSource: 'server', criticRatingSource: 'server', cacheDays: 7 })
+const posterApi = ref<PosterApiSettings>({ enabled: false, key: '', defaultMoviePreset: '', defaultTvPreset: '', waitSeconds: 10, retentionDays: 90 })
+// Whether the Poster API is on as last saved/loaded. The sidebar reads this, not
+// posterApi.enabled, so unticking the Settings checkbox doesn't hide the page until Save.
+const posterApiEnabledSaved = ref(false)
 const wetrakr = ref<WeTrakrSettings>({ clientId: '' })
 const simkl = ref<SimklSettings>({ clientId: '' })
 const floppy = ref<FloppySettings>({ url: '', token: '' })
@@ -348,6 +364,17 @@ async function loadSettings() {
       criticRatingSource: data.mdblist?.criticRatingSource ?? 'server',
       cacheDays: data.mdblist?.cacheDays ?? 7
     }
+    posterApi.value = {
+      enabled: data.posterApi?.enabled ?? false,
+      key: data.posterApi?.key ?? '',
+      defaultMoviePreset: data.posterApi?.defaultMoviePreset ?? '',
+      defaultTvPreset: data.posterApi?.defaultTvPreset ?? '',
+      waitSeconds: data.posterApi?.waitSeconds ?? 10,
+      retentionDays: data.posterApi?.retentionDays ?? 90,
+      movieGroup: data.posterApi?.movieGroup ?? '',
+      tvGroup: data.posterApi?.tvGroup ?? ''
+    }
+    posterApiEnabledSaved.value = posterApi.value.enabled
     wetrakr.value = { clientId: data.wetrakr?.clientId ?? '' }
     simkl.value = { clientId: data.simkl?.clientId ?? '' }
     floppy.value = { url: data.floppy?.url ?? '', token: data.floppy?.token ?? '' }
@@ -424,6 +451,14 @@ async function loadSettings() {
 // server(s) this save. The backend otherwise refuses an empty mediaServers
 // list when entries are already saved (a guard against accidental wipes).
 async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
+  // Never save before a successful load: every field would still hold its
+  // in-memory default, and saving those would overwrite the real settings
+  // (blank API keys, default automation, ...). Refuse and reload instead.
+  if (!loaded.value) {
+    await loadSettings()
+    error.value = 'Settings had not loaded yet, so nothing was saved. Check the values and save again.'
+    return
+  }
   loading.value = true
   error.value = null
   try {
@@ -449,6 +484,7 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       tvdb: { ...tvdb.value },
       fanart: { ...fanart.value },
       mdblist: { ...mdblist.value },
+      posterApi: { ...posterApi.value },
       wetrakr: { ...wetrakr.value },
       simkl: { ...simkl.value },
       floppy: { ...floppy.value },
@@ -467,6 +503,7 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       body: JSON.stringify(payload)
     })
     if (!res.ok) throw new Error(`API error ${res.status}`)
+    posterApiEnabledSaved.value = !!payload.posterApi?.enabled
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Failed to save settings'
     error.value = message
@@ -496,6 +533,8 @@ export function useSettingsStore() {
     tvdb,
     fanart,
     mdblist,
+    posterApi,
+    posterApiEnabledSaved,
     wetrakr,
     simkl,
     floppy,

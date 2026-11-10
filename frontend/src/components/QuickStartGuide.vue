@@ -1,7 +1,51 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
+// serverless: no media server is connected, so only the pages that exist in
+// that mode are shown (no libraries, Batch Edit or Local Assets).
+const props = defineProps<{ serverless?: boolean }>()
 const emit = defineEmits<{ (e: 'done'): void }>()
 
-const FEATURES = [
+const SERVERLESS_FEATURES = [
+  {
+    icon: '🔌',
+    name: 'Poster API',
+    desc: 'Copy a poster URL into apps like Ether. They ask for a poster by TMDb id and Simposter renders it with your preset.',
+    nav: 'Poster API',
+  },
+  {
+    icon: '📌',
+    name: 'Hand-tune a poster',
+    desc: 'Search any movie or show, open it in the editor, adjust it, then Pin to Poster API so that version is always served.',
+    nav: 'Poster API → Add poster',
+  },
+  {
+    icon: '🎨',
+    name: 'Template Manager',
+    desc: 'Create and customize presets — logo position, poster effects, text overlays, and fallback behaviour.',
+    nav: 'Template Manager',
+  },
+  {
+    icon: '📐',
+    name: 'Overlay Manager',
+    desc: 'Add badges and overlays on top of posters, like ratings, studios and streaming services.',
+    nav: 'Overlay Manager',
+  },
+  {
+    icon: '💾',
+    name: 'Backup & Restore',
+    desc: 'Export your presets, overlays, settings and pinned posters so you can restore or share them easily.',
+    nav: 'Settings → Advanced',
+  },
+  {
+    icon: '🖥️',
+    name: 'Add a media server later',
+    desc: 'Connect Plex, Jellyfin or Emby any time to unlock libraries, Batch Edit and sending posters to your server.',
+    nav: 'Settings → Media Servers',
+  },
+] as const
+
+const SERVER_FEATURES = [
   {
     icon: '🎬',
     name: 'Movie & TV Libraries',
@@ -39,6 +83,8 @@ const FEATURES = [
     nav: 'Settings → Backup',
   },
 ] as const
+
+const features = computed(() => (props.serverless ? SERVERLESS_FEATURES : SERVER_FEATURES))
 </script>
 
 <template>
@@ -54,7 +100,7 @@ const FEATURES = [
         </div>
 
         <div class="qs-grid">
-          <div v-for="f in FEATURES" :key="f.name" class="qs-card">
+          <div v-for="f in features" :key="f.name" class="qs-card">
             <div class="qs-card-icon">{{ f.icon }}</div>
             <div class="qs-card-name">{{ f.name }}</div>
             <div class="qs-card-desc">{{ f.desc }}</div>

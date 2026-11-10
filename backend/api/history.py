@@ -8,7 +8,6 @@ import time
 
 from .. import database as db
 from ..config import settings, logger
-from ..scheduler import schedule_poster_retry, cancel_poster_retry
 
 router = APIRouter()
 
@@ -125,12 +124,6 @@ def api_get_retry_queue(include_resolved: bool = Query(default=False)):
     return {"items": items, "pending_count": count}
 
 
-@router.get("/retry-queue/count")
-def api_get_retry_queue_count():
-    """Return just the pending retry count (for badge indicators)."""
-    return {"pending_count": db.get_retry_queue_count()}
-
-
 @router.delete("/retry-queue/{rating_key}")
 def api_remove_retry_item(rating_key: str):
     """Manually remove an item from the retry queue (dismiss)."""
@@ -239,17 +232,6 @@ def api_retry_now(rating_key: str):
     except Exception as e:
         logger.warning("[RETRY] Manual retry-now for %s [%s] failed after %.1fs: %s", rating_key, title, time.time() - _retry_start, e)
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/retry-queue/apply-settings")
-def api_apply_retry_settings(enabled: bool = Query(...), interval_hours: float = Query(default=24.0)):
-    """Apply retry scheduler settings (called when user saves settings)."""
-    if enabled:
-        schedule_poster_retry(interval_hours)
-    else:
-        cancel_poster_retry()
-    return {"status": "ok"}
-
 
 
 # ============================================================================

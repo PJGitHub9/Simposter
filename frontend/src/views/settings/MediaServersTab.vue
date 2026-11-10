@@ -211,6 +211,21 @@
     </div>
     </div>
 
+    <!-- Poster API: off by default; the sidebar page only appears once it's on
+         and saved. Saved with the rest of Settings, like every other field. -->
+    <div :class="['section', { 'section-unsaved': posterApiChanged }]">
+      <h3>Poster API</h3>
+      <p class="poster-api-text">
+        Lets other apps ask Simposter for a poster by TMDb id. Turning it on adds the Poster API page to the sidebar,
+        where you set the key and default presets.
+      </p>
+      <label class="poster-api-toggle">
+        <input type="checkbox" :checked="posterApiEnabled" @change="togglePosterApi(($event.target as HTMLInputElement).checked)" />
+        Enable Poster API
+      </label>
+      <router-link v-if="posterApiEnabled && settingsStore.posterApiEnabledSaved.value" to="/poster-api" class="poster-api-link">Open the Poster API page</router-link>
+    </div>
+
     <!-- "When the same item is found on more than one server, prefer..." used
          to live here as one global setting (Quirk #74). Moved to Settings ->
          Libraries, scoped per Library Group instead (see
@@ -257,6 +272,7 @@ const props = defineProps<{
   plexServersChanged?: boolean
   jellyfinServersChanged?: boolean
   embyServersChanged?: boolean
+  posterApiChanged?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -283,6 +299,14 @@ const localPlexToken = computed({
 
 const apiBase = getApiBase()
 const settingsStore = useSettingsStore()
+
+// Poster API on/off. Only changes the settings store; the page-wide Save sends
+// it (posterApi is part of the /api/ui-settings payload), and SettingsView's
+// unsaved-changes check picks it up (posterApiEnabled in both snapshots).
+const posterApiEnabled = computed(() => !!settingsStore.posterApi.value.enabled)
+function togglePosterApi(enabled: boolean) {
+  settingsStore.posterApi.value = { ...settingsStore.posterApi.value, enabled }
+}
 const servers = settingsStore.mediaServers
 
 // The primary Plex connection can be named too, same as any other server --
@@ -648,6 +672,24 @@ h3 {
   color: var(--text-secondary);
   font-style: italic;
   margin: 0 0 16px 0;
+}
+
+.poster-api-text {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.poster-api-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.poster-api-link {
+  margin-left: 16px;
+  color: var(--accent, #3dd6b7);
+  font-size: 14px;
 }
 
 .section {

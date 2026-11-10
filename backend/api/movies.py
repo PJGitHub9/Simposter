@@ -1512,15 +1512,6 @@ def api_thumb_art(rating_key: str, thumb: bool = False, force_refresh: bool = Fa
     return resp
 
 
-@router.get("/movies/tmdb")
-def api_movies_tmdb():
-    movies = get_plex_movies()
-    return [
-        {"title": m.title, "year": m.year, "rating_key": m.key, "tmdb_id": None}
-        for m in movies
-    ]
-
-
 @router.post("/movies/labels/bulk")
 def api_movie_labels_bulk(movie_keys: List[str] = Body(...)):
     """Get labels for multiple movies at once."""

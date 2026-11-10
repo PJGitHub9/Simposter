@@ -234,6 +234,10 @@ def rating_fields(normalized: Dict[str, Any]) -> Dict[str, Any]:
         ("critic_rating", "criticRatingSource", "server"),
     ):
         source = str(cfg.get(setting) or default).lower()
+        # A media-server source with no server value lands here only when
+        # MDBList is the fallback (see server_ratings.MDBLIST_FALLBACK).
+        from .server_ratings import mdblist_fallback_source
+        source = mdblist_fallback_source(field, source) or source
         value = _to_ten(source, raw.get(source))
         if value is not None:
             out[field] = value

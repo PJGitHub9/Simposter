@@ -1,12 +1,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { copyToClipboard } from '@/services/clipboard'
 import { getApiBase } from '@/services/apiBase'
 import { useSettingsStore, type MediaServerEntry } from '@/stores/settings'
 import { mediaServerId } from '@/services/mediaServerId'
+import { useServerless } from '@/composables/useServerless'
 
 const emit = defineEmits<{ (e: 'done'): void }>()
 
 const settings = useSettingsStore()
+const { anyServerConfigured } = useServerless()
+const router = useRouter()
 const apiBase = getApiBase()
 
 // Captured once, at mount, before anything in this run could change it --
@@ -32,7 +37,7 @@ const isRerun = settings.onboardingCompleted.value
 // 'servers' picks any combination of Plex/Jellyfin/Emby; 'connect' then shows
 // one identical section per picked server (all three treated the same), and
 // 'libraries' lists every connected server's libraries together.
-const STEPS = ['welcome', 'servers', 'connect', 'libraries', 'apikeys', 'automation', 'performance', 'notifications', 'finish'] as const
+const STEPS = ['welcome', 'servers', 'connect', 'libraries', 'apikeys', 'posterapi', 'automation', 'performance', 'notifications', 'finish'] as const
 type Step = typeof STEPS[number]
 const step = ref<Step>('welcome')
 
@@ -43,13 +48,20 @@ const step = ref<Step>('welcome')
 const wantsPlex = ref(true)
 const wantsJellyfinServer = ref(false)
 const wantsEmbyServer = ref(false)
-const canAdvanceServers = computed(() => wantsPlex.value || wantsJellyfinServer.value || wantsEmbyServer.value)
+// 'connect' (default) is the original flow. 'none' = no media server: Simposter runs as a
+// Poster API provider (welcome -> servers -> apikeys -> posterapi -> finish). On a re-run
+// with servers already configured this never removes them -- it only configures the Poster API.
+const connectMode = ref<'connect' | 'none'>('connect')
+const noServer = computed(() => connectMode.value === 'none')
+const canAdvanceServers = computed(() => noServer.value || wantsPlex.value || wantsJellyfinServer.value || wantsEmbyServer.value)
 
 // visibleSteps -- the step sequence for this run. Every step currently always
 // shows (the per-server choice lives inside 'connect'), but goNext()/goBack()
 // still navigate through this list so a future conditional step only needs a
 // filter rule here.
-const visibleSteps = computed<Step[]>(() => [...STEPS])
+const NO_SERVER_STEPS: Step[] = ['welcome', 'servers', 'apikeys', 'posterapi', 'finish']
+const visibleSteps = computed<Step[]>(() =>
+  noServer.value ? NO_SERVER_STEPS : STEPS.filter(s => s !== 'posterapi'))
 const stepIndex = computed(() => visibleSteps.value.indexOf(step.value))
 
 // ── Plex step ──────────────────────────────────────────────────────────────
@@ -152,6 +164,13 @@ const toggleTvLib = (key: string) => {
   else selectedTvLibs.value.add(key)
 }
 
+// Keeps a library's existing per-library settings (auto-generate, webhook
+// ignore labels, display name) when the wizard re-saves the Plex library list.
+const withExistingMapping = (m: { id: string; title: string; displayName: string }, existing: any[] | undefined) => {
+  const prev = (existing || []).find((e: any) => String(e?.id) === String(m.id))
+  return prev ? { ...prev, ...m, displayName: prev.displayName || m.displayName } : m
+}
+
 const initLibraries = () => {
   selectedMovieLibs.value = new Set(movieLibSections.value.map(s => s.key))
   selectedTvLibs.value = new Set(tvLibSections.value.map(s => s.key))
@@ -185,8 +204,8 @@ async function fetchNonPlexLibraries() {
 const nonPlexMovieLibs = computed(() => nonPlexDiscovered.value.filter(d => d.mediaType === 'movie'))
 const nonPlexTvLibs = computed(() => nonPlexDiscovered.value.filter(d => d.mediaType === 'tv'))
 const hasTvLibs = computed(() =>
-  selectedTvLibs.value.size > 0 ||
-  nonPlexTvLibs.value.some(d => selectedNonPlexLibs.value.has(nonPlexKey(d)))
+  !noServer.value && (selectedTvLibs.value.size > 0 ||
+  nonPlexTvLibs.value.some(d => selectedNonPlexLibs.value.has(nonPlexKey(d))))
 )
 
 // ── API Keys step ──────────────────────────────────────────────────────────
@@ -333,16 +352,18 @@ const saveSettings = async () => {
     // written -- but the rest of this object (url/token/library mappings) is
     // Plex-specific and only overwritten when Plex was actually chosen this run, so
     // re-running the wizard without Plex can't blank out a real prior Plex connection.
-    settings.plex.value = wantsPlex.value ? {
+    // Only when Plex was actually connected this run: otherwise the library
+    // lists are empty and saving them would wipe the existing Plex libraries.
+    settings.plex.value = wantsPlex.value && plexOk.value ? {
       ...settings.plex.value,
       url: plexUrl.value,
       token: plexToken.value,
       movieLibraryName: movieMappings[0]?.title || '',
       movieLibraryNames: movieMappings.map(m => m.title),
-      libraryMappings: movieMappings.map(m => ({ ...m })),
+      libraryMappings: movieMappings.map(m => withExistingMapping(m, settings.plex.value.libraryMappings)),
       tvShowLibraryName: tvMappings[0]?.title || '',
       tvShowLibraryNames: tvMappings.map(m => m.title),
-      tvShowLibraryMappings: tvMappings.map(m => ({ ...m })),
+      tvShowLibraryMappings: tvMappings.map(m => withExistingMapping(m, settings.plex.value.tvShowLibraryMappings)),
       sendLogosToPlex: sendLogosToPlex.value,
     } : {
       ...settings.plex.value,
@@ -395,12 +416,14 @@ const saveSettings = async () => {
       enabled: scanFrequency.value !== 'never',
       cronExpression: scanCronExpression.value || '0 1 * * *',
       // Empty = every library on every server (narrow it later in Settings -> Libraries).
-      libraryIds: [],
+      // A re-run keeps the selection made in Settings.
+      libraryIds: isRerun ? (settings.scheduler.value.libraryIds || []) : [],
     }
     // defaultLabelsToRemove keyed by library ID so SettingsView renders correctly --
     // Plex-only concept, skipped entirely when Plex wasn't chosen.
-    if (wantsPlex.value) {
-      const labelsRecord: Record<string, string[]> = {}
+    if (wantsPlex.value && plexOk.value) {
+      // Merge, so libraries not picked this run keep their own label lists.
+      const labelsRecord: Record<string, string[]> = { ...settings.defaultLabelsToRemove.value }
       allLibIds.forEach(id => { labelsRecord[id] = labelsToRemove })
       settings.defaultLabelsToRemove.value = labelsRecord
     }
@@ -533,12 +556,111 @@ const savePlexEarly = async () => {
     token: plexToken.value,
     movieLibraryName: movieMappings[0]?.title || '',
     movieLibraryNames: movieMappings.map(m => m.title),
-    libraryMappings: movieMappings,
+    libraryMappings: movieMappings.map(m => withExistingMapping(m, settings.plex.value.libraryMappings)),
     tvShowLibraryName: tvMappings[0]?.title || '',
     tvShowLibraryNames: tvMappings.map(m => m.title),
-    tvShowLibraryMappings: tvMappings,
+    tvShowLibraryMappings: tvMappings.map(m => withExistingMapping(m, settings.plex.value.tvShowLibraryMappings)),
   }
   await settings.save()
+}
+
+// ── Poster API step (no-media-server path only) ───────────────────────────
+type PaPreset = { id: string; name?: string }
+const paEnabled = ref(true)
+const paKey = ref('')            // plaintext only while newly generated; SECRET_MASK when one already exists
+const paKeyIsNew = ref(false)
+const paMoviePreset = ref('')
+const paTvPreset = ref('')
+const paWaitSeconds = ref(10)
+const paRetentionDays = ref(90)
+const paPresets = ref<PaPreset[]>([])
+const paSaving = ref(false)
+const paError = ref('')
+const paKeyEmpty = computed(() => !paKey.value)
+// With a freshly generated key the URLs carry the real key, ready to copy into
+// another app; a key that already existed comes back masked, so YOUR_KEY is shown.
+const paKeyForUrl = computed(() => (paKeyIsNew.value ? encodeURIComponent(paKey.value) : 'YOUR_KEY'))
+const paTemplates = computed(() => {
+  const base = apiBase.replace(/\/$/, '')
+  const q = paKey.value ? `&key=${paKeyForUrl.value}` : ''
+  return [
+    { label: 'Movies', value: `${base}/poster?tmdb_id={tmdb_id}&type=movie${q}` },
+    { label: 'TV shows', value: `${base}/poster?tmdb_id={tmdb_id}&type=tv${q}` },
+  ]
+})
+
+const loadPosterApiStep = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/presets`)
+    if (res.ok) paPresets.value = (await res.json())?.uniformlogo?.presets || []
+  } catch { /* selects fall back to the "(default)" option */ }
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/settings`)
+    if (res.ok) {
+      const d = await res.json()
+      paKey.value = d.key || ''
+      // Default to the starter preset simposter-main when nothing is chosen yet.
+      const starter = paPresets.value.some(p => p.id === 'simposter-main') ? 'simposter-main' : ''
+      paMoviePreset.value = d.defaultMoviePreset || starter
+      paTvPreset.value = d.defaultTvPreset || starter
+      paWaitSeconds.value = d.waitSeconds ?? 10
+      paRetentionDays.value = d.retentionDays ?? 90
+    }
+  } catch { /* defaults */ }
+}
+
+const paGenerateKey = async () => {
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/generate-key`, { method: 'POST' })
+    if (!res.ok) throw new Error(String(res.status))
+    paKey.value = (await res.json()).key
+    paKeyIsNew.value = true
+  } catch { paError.value = 'Failed to generate a key' }
+}
+const paCopy = async (text: string) => { await copyToClipboard(text) }
+
+// Saves the Poster API settings and the API keys entered earlier. Servers are never touched.
+const savePosterApiStep = async (): Promise<boolean> => {
+  paSaving.value = true
+  paError.value = ''
+  try {
+    const res = await fetch(`${apiBase}/api/poster-api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: paEnabled.value,
+        key: paKey.value,
+        defaultMoviePreset: paMoviePreset.value,
+        defaultTvPreset: paTvPreset.value,
+        waitSeconds: paWaitSeconds.value,
+        retentionDays: paRetentionDays.value,
+      }),
+    })
+    if (!res.ok) {
+      let msg = `Save failed (${res.status})`
+      try { const j = await res.json(); if (j?.detail) msg = String(j.detail) } catch { /* ignore */ }
+      paError.value = msg
+      return false
+    }
+    // Keep the store in step (R9) so the settings save below can't send a stale posterApi.
+    settings.posterApi.value = { ...(await res.json()) }
+    settings.tmdb.value = { apiKey: tmdbApiKey.value.trim() }
+    settings.tvdb.value = { ...settings.tvdb.value, apiKey: tvdbApiKey.value.trim() }
+    settings.fanart.value = { apiKey: fanartApiKey.value.trim() }
+    // No media server: audience ratings come from TMDb (the "server" default
+    // would fall back to it anyway; this makes Settings show what's used).
+    // Only when there really is no server (a re-run on an install with servers keeps its choice).
+    if (!anyServerConfigured.value && ['server', 'plex', 'jellyfin'].includes(settings.mdblist.value.audienceRatingSource)) {
+      settings.mdblist.value = { ...settings.mdblist.value, audienceRatingSource: 'tmdb' }
+    }
+    await settings.save()
+    return true
+  } catch (e) {
+    paError.value = e instanceof Error ? e.message : 'Save failed'
+    return false
+  } finally {
+    paSaving.value = false
+  }
 }
 
 // ── Navigation ─────────────────────────────────────────────────────────────
@@ -553,6 +675,8 @@ const connectedCount = computed(() =>
 )
 
 const canAdvance = computed(() => {
+  if (advancing.value) return false
+  if (step.value === 'posterapi') return !paSaving.value
   if (step.value === 'servers') return canAdvanceServers.value
   if (step.value === 'connect') return connectedCount.value > 0
   if (step.value === 'apikeys') return canAdvanceApiKeys.value
@@ -562,7 +686,28 @@ const canAdvance = computed(() => {
 // Navigate by scanning forward/backward through the FULL step list for the next
 // one that's in visibleSteps, rather than indexing into visibleSteps -- safe even
 // if a handler changes what's visible in the same tick it calls goNext().
+// True while a Next click is still working (saving, importing presets...), so
+// the button can show a spinner and can't be clicked twice.
+const advancing = ref(false)
 const goNext = async () => {
+  if (advancing.value) return
+  advancing.value = true
+  try {
+    await goNextInner()
+  } finally {
+    advancing.value = false
+  }
+}
+
+const goNextInner = async () => {
+  if (noServer.value) {
+    if (step.value === 'apikeys') {
+      // Import the starter presets now (not at the end) so the next step's selects have options.
+      if (!presetImported.value) await importDefaultPreset()
+      await loadPosterApiStep()
+    }
+    if (step.value === 'posterapi' && !(await savePosterApiStep())) return
+  }
   if (step.value === 'connect') {
     // A picked server that wasn't connected is skipped for this run.
     if (wantsPlex.value && !plexOk.value) wantsPlex.value = false
@@ -653,7 +798,7 @@ const goBack = () => {
 }
 
 // ── Close ──────────────────────────────────────────────────────────────────
-const markOnboardingDone = async () => {
+const markOnboardingDone = async (saveWizardSettings = true) => {
   try {
     // Defense-in-depth: saveSettings() (above) is only ever triggered from
     // ONE specific step-transition (`if (step.value === 'performance')` in
@@ -669,13 +814,29 @@ const markOnboardingDone = async () => {
     // no-op in the normal case (its own settingsSaved guard already fired),
     // and the real save in the bug case -- either way, this function is the
     // ONE path guaranteed to run on every close/skip.
-    await saveSettings()
+    // Skip (saveWizardSettings=false) only marks setup as done: the wizard's
+    // fields still hold their defaults then, and saving them would overwrite
+    // the real settings (timezone, performance, automation, scan schedule...).
+    if (saveWizardSettings) await saveSettings()
     settings.onboardingCompleted.value = true
     await settings.save()
   } catch { /* non-fatal */ }
 }
 
 const close = async () => {
+  if (noServer.value) {
+    // Poster-provider path: the keys and Poster API were already saved on the previous step.
+    // Skip the full wizard save (it would write library/scan/performance defaults over a real
+    // install's settings on a re-run) and only mark onboarding complete.
+    try {
+      settings.onboardingCompleted.value = true
+      await settings.save()
+    } catch { /* non-fatal */ }
+    await settings.load()
+    emit('done')
+    router.push('/poster-api')
+    return
+  }
   await markOnboardingDone()
   await settings.load()
   emit('done')
@@ -685,12 +846,34 @@ const close = async () => {
 }
 
 const skip = async () => {
-  await markOnboardingDone()
+  await markOnboardingDone(false)
   await settings.load()
   emit('done')
 }
 
 onMounted(() => {
+  // A re-run starts from the current settings, not the wizard's defaults, so
+  // stepping through it doesn't silently reset anything that isn't changed.
+  if (isRerun) {
+    if (settings.timezone.value) timezone.value = settings.timezone.value
+    concurrentRenders.value = settings.performance.value.concurrentRenders ?? concurrentRenders.value
+    outputFormat.value = (settings.imageQuality.value.outputFormat as any) || outputFormat.value
+    jpgQuality.value = settings.imageQuality.value.jpgQuality ?? jpgQuality.value
+    webpQuality.value = settings.imageQuality.value.webpQuality ?? webpQuality.value
+    existingContentMode.value = (settings.automation.value.existingContentMode as any) || existingContentMode.value
+    sendLogosToPlex.value = !!settings.plex.value.sendLogosToPlex
+    usingKometa.value = !!settings.automation.value.kometaCompatibility
+    sendLabel.value = !!settings.automation.value.labelToAdd
+    if (settings.automation.value.labelToAdd) labelName.value = settings.automation.value.labelToAdd
+    const sched = settings.scheduler.value
+    if (!sched.enabled) scanFrequency.value = 'never'
+    else if (sched.cronExpression === '0 1 * * *') scanFrequency.value = 'daily'
+    else if (sched.cronExpression === '0 1 * * 0') scanFrequency.value = 'weekly'
+    else { scanFrequency.value = 'custom'; customCron.value = sched.cronExpression || customCron.value }
+    const urls = settings.notifications.value.appriseUrls || []
+    wantsNotifications.value = !!settings.notifications.value.appriseEnabled && urls.length > 0
+    appriseUrls.value = urls.join('\n')
+  }
   if (settings.plex.value.url) plexUrl.value = settings.plex.value.url
   if (settings.plex.value.token) plexToken.value = settings.plex.value.token
   if (settings.tmdb.value.apiKey) tmdbApiKey.value = settings.tmdb.value.apiKey
@@ -747,6 +930,16 @@ onMounted(() => {
         <template v-else-if="step === 'servers'">
           <div class="ob-icon">🖥️</div>
           <h2 class="ob-title">Which media server(s) do you use?</h2>
+          <label class="ob-lib-row" :class="{ selected: !noServer }" @click="connectMode = 'connect'">
+            <span class="ob-checkbox" :class="{ checked: !noServer }" style="border-radius: 50%;"></span>
+            Connect a media server (recommended)
+          </label>
+          <label class="ob-lib-row" :class="{ selected: noServer }" @click="connectMode = 'none'">
+            <span class="ob-checkbox" :class="{ checked: noServer }" style="border-radius: 50%;"></span>
+            No media server — use Simposter as a poster provider (Poster API)
+          </label>
+          <p v-if="noServer" class="ob-sub">Simposter will serve posters by TMDb id to other apps. Any media servers you already connected stay as they are.</p>
+          <template v-if="!noServer">
           <p class="ob-sub">Pick any combination — Simposter can send posters to more than one server at once.</p>
           <label class="ob-lib-row" :class="{ selected: wantsPlex }" @click="wantsPlex = !wantsPlex">
             <span class="ob-checkbox" :class="{ checked: wantsPlex }">
@@ -769,6 +962,7 @@ onMounted(() => {
             <img src="/icons/emby.svg" class="ob-server-icon" alt="" />
             Emby
           </label>
+          </template>
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
             <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
@@ -945,9 +1139,71 @@ onMounted(() => {
               <div class="ob-hint-text">Recommended if you plan to make posters for Plex Collections — it's the only source of franchise/collection logos (TMDb has none).</div>
             </div>
           </div>
+          <div v-if="advancing && noServer" class="ob-hint-text">Importing the starter presets — this can take a few seconds…</div>
+          <div class="ob-actions">
+            <button class="ob-btn-ghost" :disabled="advancing" @click="goBack">Back</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">
+              <span v-if="advancing" class="ob-spinner" />
+              {{ advancing ? (noServer ? 'Importing presets…' : 'Saving…') : 'Next' }}
+            </button>
+          </div>
+        </template>
+
+        <!-- ── Poster API (no media server) ── -->
+        <template v-else-if="step === 'posterapi'">
+          <div class="ob-icon">🔌</div>
+          <h2 class="ob-title">Poster API</h2>
+          <p class="ob-sub">Other apps can request a poster by TMDb id and get it rendered with your preset.</p>
+          <div class="ob-form">
+            <label class="ob-lib-row" :class="{ selected: paEnabled }" @click="paEnabled = !paEnabled">
+              <span class="ob-checkbox" :class="{ checked: paEnabled }">
+                <svg v-if="paEnabled" width="12" height="12" viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              Enable Poster API
+            </label>
+            <div class="ob-key-row">
+              <label class="ob-label">API key</label>
+              <div class="ob-key-input-row">
+                <input class="ob-input ob-input-mono" type="text" :value="paKey" readonly placeholder="No key set" />
+                <button v-if="paKeyIsNew" class="ob-btn-test" @click="paCopy(paKey)">Copy</button>
+                <button class="ob-btn-test" @click="paGenerateKey">Generate</button>
+              </div>
+              <div v-if="paKeyEmpty" class="ob-hint-text">Anyone who can reach Simposter can use your TMDb quota through this API — set a key.</div>
+              <div v-else-if="paKeyIsNew" class="ob-hint-text">Copy it now — it is masked after setup.</div>
+            </div>
+            <div class="ob-key-row">
+              <label class="ob-label">Default movie preset</label>
+              <select class="ob-input" v-model="paMoviePreset">
+                <option value="">simposter-main (default)</option>
+                <option v-for="p in paPresets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+              </select>
+            </div>
+            <div class="ob-key-row">
+              <label class="ob-label">Default TV preset</label>
+              <select class="ob-input" v-model="paTvPreset">
+                <option value="">simposter-main (default)</option>
+                <option v-for="p in paPresets" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+              </select>
+            </div>
+            <div class="ob-key-row">
+              <label class="ob-label">URL templates</label>
+              <div v-for="t in paTemplates" :key="t.label" class="ob-hint-text">
+                {{ t.label }}: <code style="word-break: break-all;">{{ t.value }}</code>
+                <button class="ob-btn-test" style="margin-left: 6px;" @click="paCopy(t.value)">Copy</button>
+              </div>
+              <div class="ob-hint-text">
+                {tmdb_id} is the TMDb id.
+                <template v-if="paKeyIsNew"> The URLs include your new key, ready to paste into the other app.</template>
+                <template v-else-if="paKey"> Replace YOUR_KEY with your key.</template>
+              </div>
+            </div>
+            <div v-if="paError" class="ob-key-status error">✗ {{ paError }}</div>
+          </div>
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
-            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">Next</button>
+            <button class="ob-btn-primary" :disabled="!canAdvance" @click="goNext">
+              <span v-if="paSaving" class="ob-spinner" /><span v-else>Next</span>
+            </button>
           </div>
         </template>
 
@@ -1122,7 +1378,8 @@ onMounted(() => {
         <template v-else-if="step === 'finish'">
           <div class="ob-icon">🎉</div>
           <h2 class="ob-title">You're all set!</h2>
-          <p class="ob-sub">Simposter is configured and your library scan has started. A set of starter presets is ready to go.</p>
+          <p v-if="noServer" class="ob-sub">The Poster API is configured. A set of starter presets is ready to go.</p>
+          <p v-else class="ob-sub">Simposter is configured and your library scan has started. A set of starter presets is ready to go.</p>
 
           <div class="ob-preset-card" :class="{ imported: presetImported }">
             <div class="ob-preset-card-icon">{{ importingPreset ? '⏳' : presetImported ? '✅' : '🎨' }}</div>
@@ -1143,7 +1400,7 @@ onMounted(() => {
 
           <div class="ob-actions">
             <button class="ob-btn-ghost" @click="goBack">Back</button>
-            <button class="ob-btn-primary" @click="close">Go to Simposter</button>
+            <button class="ob-btn-primary" @click="close">{{ noServer ? 'Go to Poster API' : 'Go to Simposter' }}</button>
           </div>
         </template>
       </div>

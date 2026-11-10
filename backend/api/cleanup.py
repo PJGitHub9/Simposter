@@ -74,6 +74,11 @@ def _scan_dir_orphans(cache_dir: Path, known_keys: set) -> List[Path]:
     return orphans
 
 
+def _poster_api_thumb(row_id) -> Path:
+    from ..poster_api_store import cache_dir
+    return cache_dir() / "thumbs" / f"{row_id}.jpg"
+
+
 def _dir_size(paths: List[Path]) -> int:
     total = 0
     for p in paths:
@@ -211,6 +216,24 @@ def api_cleanup_scan(history_days: int = 180):
         "bytes": _dir_size([p for p in orphan_asset_paths if p.exists()]),
     })
 
+    # --- Poster API renders not served within retentionDays (rendered rows only) ---
+    from .. import poster_api_store as _pas
+    stale_days = _pas.get_settings().retentionDays
+    stale_rows = _pas.list_stale_rendered(stale_days)
+    scan["poster_api_renders"] = [str(r["id"]) for r in stale_rows]
+    stale_bytes = 0
+    for r in stale_rows:
+        stale_bytes += _dir_size([Path(r["file_path"])] + [p for p in [_poster_api_thumb(r["id"])] if p.exists()])
+    categories.append({
+        "id": "poster_api_renders",
+        "label": f"Poster API renders not served in {stale_days} days",
+        "description": "Posters the Poster API rendered on demand that nothing has requested recently. "
+                        "Pinned and library posters are never included; they re-render on the next request.",
+        "kind": "files",
+        "count": len(stale_rows),
+        "bytes": stale_bytes,
+    })
+
     # --- Old History entries (retention trim, not an orphan) ------------------
     history_count = db.get_poster_history_count_older_than(history_days)
     categories.append({
@@ -311,6 +334,41 @@ def api_cleanup_clean(req: CleanRequest):
                 manifest["categories"]["overlay_assets"] = {"kind": "asset_rows", "count": len(exported)}
             continue
 
+        if cid == "poster_api_renders":
+            import json
+            from .. import poster_api_store as _pas
+            wanted = set(_last_scan.get("poster_api_renders", []))
+            # Re-check staleness now: a poster served since the scan is no longer a candidate.
+            rows = [r for r in _pas.list_stale_rendered(_pas.get_settings().retentionDays)
+                    if str(r["id"]) in wanted and r["source"] == "rendered"]
+            if rows:
+                cat_dir = batch_dir / cid
+                cat_dir.mkdir(exist_ok=True)
+                exported = []
+                for r in rows:
+                    entry = {k: r[k] for k in ("media_type", "tmdb_id", "season_index", "preset_key", "source",
+                                               "file_path", "title", "preset_hash", "created_at",
+                                               "last_served_at", "hits")}
+                    src = Path(r["file_path"])
+                    if src.exists():
+                        dest = cat_dir / f"{r['id']}_{src.name}"
+                        shutil.move(str(src), str(dest))
+                        entry["trashed_path"] = str(dest)
+                        moved_files += 1
+                    thumb = _poster_api_thumb(r["id"])
+                    if thumb.exists():
+                        tdest = cat_dir / f"{r['id']}_thumb.jpg"
+                        shutil.move(str(thumb), str(tdest))
+                        entry["trashed_thumb"] = str(tdest)
+                        moved_files += 1
+                    db.poster_api_cache_delete(r["media_type"], r["tmdb_id"], r["season_index"],
+                                               r["preset_key"], r["source"])
+                    exported.append(entry)
+                    deleted_rows += 1
+                (batch_dir / "poster_api_renders.json").write_text(json.dumps(exported, default=str))
+                manifest["categories"]["poster_api_renders"] = {"kind": "poster_api_rows", "count": len(exported)}
+            continue
+
         # Plain file categories: preserve the original absolute path in the
         # manifest so Restore can put each file back exactly where it came from.
         paths = _last_scan.get(cid, [])
@@ -405,6 +463,30 @@ def api_cleanup_restore(req: TrashActionRequest):
                 rows = json.loads(rows_path.read_text())
                 db.restore_poster_history_rows(rows)
                 restored_rows += len(rows)
+        elif info.get("kind") == "poster_api_rows" and cid == "poster_api_renders":
+            import json
+            rows_path = batch_dir / "poster_api_renders.json"
+            if rows_path.exists():
+                for entry in json.loads(rows_path.read_text()):
+                    dest = Path(entry["file_path"])
+                    trashed = entry.get("trashed_path")
+                    if trashed and Path(trashed).exists():
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(trashed, str(dest))
+                        restored_files += 1
+                    elif not dest.exists():
+                        continue  # nothing to point the row at
+                    db.poster_api_cache_restore_row(entry)
+                    restored_rows += 1
+                    tt = entry.get("trashed_thumb")
+                    if tt and Path(tt).exists():
+                        new = db.poster_api_cache_get(entry["media_type"], entry["tmdb_id"], entry["season_index"],
+                                                      entry["preset_key"], entry["source"])
+                        if new:
+                            tdest = _poster_api_thumb(new["id"])
+                            tdest.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(tt, str(tdest))
+                            restored_files += 1
         elif info.get("kind") == "asset_rows" and cid == "overlay_assets":
             import json
             rows_path = batch_dir / "overlay_assets.json"

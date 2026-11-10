@@ -5,6 +5,7 @@ import { useMovies } from '../composables/useMovies'
 import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
 import { getApiBase } from '@/services/apiBase'
 import { useScanStore } from '@/stores/scan'
+import { useServerless } from '@/composables/useServerless'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { setSessionStorage, getSessionStorage } from '../composables/useSessionStorage'
 import { onboardingJustSaved } from '@/composables/useOnboardingLauncher'
@@ -43,6 +44,7 @@ interface Movie {
 }
 
 const settings = useSettingsStore()
+const { serverless } = useServerless()
 const saved = ref('')
 const allLibraryLabels = ref<Record<string, { type: 'movie' | 'show'; name: string; labels: string[] }>>({})
 const labelsLoading = ref(false)
@@ -86,7 +88,18 @@ const sectionsWithChanges = ref({
   // the untouched Plex/Emby sections too.
   mediaServersPlex: false,
   mediaServersJellyfin: false,
-  mediaServersEmby: false
+  mediaServersEmby: false,
+  // One flag per Settings section, all computed in checkForChanges() from the
+  // saved snapshot (so a value changed back to what's saved clears it again).
+  libraryDisplay: false,
+  ratings: false,
+  logoDefaults: false,
+  labels: false,
+  discord: false,
+  apprise: false,
+  cleanupSchedule: false,
+  rateLimits: false,
+  posterApi: false,
 })
 
 // Cooldown state to prevent rapid clicking
@@ -421,6 +434,7 @@ const captureSettingsSnapshot = () => {
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
     reuseCachedPosterDays: localReuseCachedPosterDays.value,
+    sendLogosToPlex: localSendLogosToPlex.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -453,7 +467,9 @@ const captureSettingsSnapshot = () => {
     // WeTrakr / SIMKL / Floppy list sources (GeneralTab), also bound to the store.
     wetrakr: JSON.parse(JSON.stringify(settings.wetrakr.value)),
     simkl: JSON.parse(JSON.stringify(settings.simkl.value)),
-    floppy: JSON.parse(JSON.stringify(settings.floppy.value))
+    floppy: JSON.parse(JSON.stringify(settings.floppy.value)),
+    // Poster API on/off (MediaServersTab), bound to the store.
+    posterApiEnabled: !!settings.posterApi.value.enabled
   })
   hasUnsavedChanges.value = false
 
@@ -471,6 +487,9 @@ const captureSettingsSnapshot = () => {
   sectionsWithChanges.value.mediaServersPlex = false
   sectionsWithChanges.value.mediaServersJellyfin = false
   sectionsWithChanges.value.mediaServersEmby = false
+  for (const key of Object.keys(sectionsWithChanges.value) as Array<keyof typeof sectionsWithChanges.value>) {
+    sectionsWithChanges.value[key] = false
+  }
 
   setTimeout(() => {
     watchersEnabled.value = true
@@ -528,6 +547,7 @@ const checkForChanges = () => {
     retryIntervalHours: localRetryIntervalHours.value,
     retryMaxAttempts: localRetryMaxAttempts.value,
     reuseCachedPosterDays: localReuseCachedPosterDays.value,
+    sendLogosToPlex: localSendLogosToPlex.value,
     discordEnabled: localDiscordEnabled.value,
     discordWebhookUrl: localDiscordWebhookUrl.value,
     discordNotifyLibraries: localDiscordNotifyLibraries.value,
@@ -554,7 +574,8 @@ const checkForChanges = () => {
     mdblist: settings.mdblist.value,
     wetrakr: settings.wetrakr.value,
     simkl: settings.simkl.value,
-    floppy: settings.floppy.value
+    floppy: settings.floppy.value,
+    posterApiEnabled: !!settings.posterApi.value.enabled
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
 
@@ -620,7 +641,42 @@ const checkForChanges = () => {
     JSON.stringify(localCleanupScheduleCategories.value) !== JSON.stringify(initial.cleanupScheduleCategories) ||
     localCleanupScheduleHistoryDays.value !== initial.cleanupScheduleHistoryDays
 
-
+  // Every remaining section is computed from the snapshot too, so its yellow
+  // highlight clears again when a value is changed back.
+  const differs = (keys: string[]) => {
+    const now = JSON.parse(currentSnapshot)
+    return keys.some(k => JSON.stringify(now[k]) !== JSON.stringify(initial[k]))
+  }
+  sectionsWithChanges.value.appearance = differs(['theme', 'posterDensity', 'timezone'])
+  sectionsWithChanges.value.libraryDisplay = differs(['deduplicateMovies', 'defaultSort'])
+  sectionsWithChanges.value.apiKeys = differs(['tmdbApiKey', 'tvdbApiKey', 'fanartApiKey', 'apiOrder'])
+  sectionsWithChanges.value.ratings = differs(['mdblist', 'wetrakr', 'simkl', 'floppy'])
+  sectionsWithChanges.value.posterApi = differs(['posterApiEnabled'])
+  sectionsWithChanges.value.imageQuality = differs(['outputFormat', 'jpgQuality', 'pngCompression', 'webpQuality'])
+  sectionsWithChanges.value.performance = differs(['concurrentRenders', 'useOverlayCache', 'memoryLimit'])
+  sectionsWithChanges.value.rateLimits = differs(['tmdbRateLimit', 'tvdbRateLimit'])
+  sectionsWithChanges.value.automation = differs([
+    'webhookAutoSend', 'webhookAutoLabels', 'labelToAdd', 'webhookAlwaysRegenerateSeason', 'webhookSecret',
+    'existingContentMode', 'retryUntilTemplateMet', 'retryIntervalHours', 'retryMaxAttempts', 'reuseCachedPosterDays',
+  ])
+  sectionsWithChanges.value.logoDefaults = differs(['sendLogosToPlex'])
+  sectionsWithChanges.value.labels = differs(['defaultLabelsToRemove', 'defaultTvLabelsToRemove', 'kometaCompatibility'])
+  sectionsWithChanges.value.discord = differs([
+    'discordEnabled', 'discordWebhookUrl', 'discordNotifyLibraries', 'discordNotifyBatch', 'discordNotifyManual',
+    'discordNotifyWebhook', 'discordNotifyAutoGenerate', 'discordNotifyMediaMirror', 'discordNotifyAppUpdates',
+    'discordNotifyOverlayRefresh',
+  ])
+  sectionsWithChanges.value.apprise = differs([
+    'appriseEnabled', 'appriseUrls', 'appriseNotifyLibraries', 'appriseNotifyBatch', 'appriseNotifyManual',
+    'appriseNotifyWebhook', 'appriseNotifyAutoGenerate', 'appriseNotifyMediaMirror', 'appriseNotifyAppUpdates',
+    'appriseNotifyOverlayRefresh',
+  ])
+  sectionsWithChanges.value.cleanupSchedule = differs([
+    'cleanupScheduleEnabled', 'cleanupScheduleCronExpression', 'cleanupScheduleCategories', 'cleanupScheduleHistoryDays',
+  ])
+  // Scheduled Scans (Libraries tab) only covers the scan schedule; the
+  // cleanup schedule has its own flag above.
+  sectionsWithChanges.value.scheduler = differs(['schedulerEnabled', 'schedulerCronExpression', 'schedulerLibraryIds'])
 }
 
 const saveSettings = async () => {
@@ -1355,6 +1411,25 @@ watch([
   localMovieSaveLocation,
   localTvShowSaveLocation,
   localCollectionSaveLocation,
+  localTvShowSaveMode,
+  localSendLogosToPlex,
+  localKometaCompatibility,
+  localWebhookAutoSend,
+  localWebhookAutoLabels,
+  localLabelToAdd,
+  localWebhookSecret,
+  localExistingContentMode,
+  localRetryUntilTemplateMet,
+  localRetryIntervalHours,
+  localRetryMaxAttempts,
+  localReuseCachedPosterDays,
+  localAppriseEnabled,
+  localAppriseUrls,
+  localAppriseNotifyLibraries,
+  localAppriseNotifyBatch,
+  localAppriseNotifyManual,
+  localAppriseNotifyWebhook,
+  localAppriseNotifyAutoGenerate,
   localSaveBatch,
   localSaveToAssetFolderOnSend,
   localDefaultLabelsToRemove,
@@ -1413,7 +1488,8 @@ watch([
   () => settings.mdblist.value,
   () => settings.wetrakr.value,
   () => settings.simkl.value,
-  () => settings.floppy.value
+  () => settings.floppy.value,
+  () => settings.posterApi.value.enabled
 ], () => {
   if (watchersEnabled.value) {
     checkForChanges()
@@ -1434,6 +1510,14 @@ watch(() => route.query.tab, (newTab) => {
     activeTab.value = newTab as any
   }
 })
+
+// With no media server, Libraries / Output / Automation are hidden (they only
+// configure server libraries, saving to disk and webhooks). A link or a
+// remembered ?tab= pointing at one lands on General instead.
+const SERVER_ONLY_TABS = new Set(['libraries', 'output', 'automation'])
+watch([serverless, activeTab], ([isServerless, tab]) => {
+  if (isServerless && SERVER_ONLY_TABS.has(tab)) activeTab.value = 'general'
+}, { immediate: true })
 
 // libraryGroups/mediaServers/automation.preferredPosterServer are bound
 // directly to the store with no local staging ref (Quirk #79/#119/#120),
@@ -1511,6 +1595,7 @@ onMounted(() => {
           Ratings &amp; Lists
         </button>
         <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'libraries' }]"
           @click="activeTab = 'libraries'"
         >
@@ -1524,6 +1609,7 @@ onMounted(() => {
           Media Servers
         </button>
         <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'output' }]"
           @click="activeTab = 'output'"
         >
@@ -1536,6 +1622,7 @@ onMounted(() => {
           Performance
         </button>
         <button
+          v-if="!serverless"
           :class="['tab', { active: activeTab === 'automation' }]"
           @click="activeTab = 'automation'"
         >
@@ -1565,6 +1652,7 @@ onMounted(() => {
     <!-- Tab Content -->
     <div class="tab-content-wrapper">
       <GeneralTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'general'"
         :theme="localTheme"
         :posterDensity="localPosterDensity"
@@ -1590,6 +1678,7 @@ onMounted(() => {
       />
 
       <GeneralTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'ratings'"
         part="ratings"
         :theme="localTheme"
@@ -1616,7 +1705,8 @@ onMounted(() => {
       />
 
       <LibrariesTab
-        v-if="activeTab === 'libraries'"
+        :changed="sectionsWithChanges"
+        v-if="activeTab === 'libraries' && !serverless"
         :plexUrl="localPlexUrl"
         :plexToken="localPlexToken"
         :libraries="localLibraries"
@@ -1665,6 +1755,7 @@ onMounted(() => {
         :plexServersChanged="sectionsWithChanges.mediaServersPlex"
         :jellyfinServersChanged="sectionsWithChanges.mediaServersJellyfin"
         :embyServersChanged="sectionsWithChanges.mediaServersEmby"
+        :posterApiChanged="sectionsWithChanges.posterApi"
         @update:plexUrl="localPlexUrl = $event"
         @update:plexToken="localPlexToken = $event"
         @test-connection="testPlexConnection"
@@ -1674,6 +1765,7 @@ onMounted(() => {
       />
 
       <OutputTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'output'"
         :movieSaveLocation="localMovieSaveLocation"
         :tvShowSaveLocation="localTvShowSaveLocation"
@@ -1701,6 +1793,7 @@ onMounted(() => {
       />
 
       <PerformanceTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'performance'"
         :concurrentRenders="localConcurrentRenders"
         :useOverlayCache="localUseOverlayCache"
@@ -1721,7 +1814,7 @@ onMounted(() => {
       />
 
       <AutomationTab
-        v-if="activeTab === 'automation'"
+        v-if="activeTab === 'automation' && !serverless"
         :webhookAutoSend="localWebhookAutoSend"
         :webhookAutoLabels="localWebhookAutoLabels"
         :labelToAdd="localLabelToAdd"
@@ -1748,6 +1841,7 @@ onMounted(() => {
       />
 
       <NotificationsTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'notifications'"
         :discordEnabled="localDiscordEnabled"
         :discordWebhookUrl="localDiscordWebhookUrl"
@@ -1796,6 +1890,7 @@ onMounted(() => {
       />
 
       <AdvancedTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'advanced'"
         :dbExporting="dbExporting"
         :dbImporting="dbImporting"
@@ -1813,6 +1908,7 @@ onMounted(() => {
         @save="saveSettings"
       />
       <CleanupTab
+        :changed="sectionsWithChanges"
         v-if="activeTab === 'cleanup'"
         :scheduleEnabled="localCleanupScheduleEnabled"
         :scheduleCronExpression="localCleanupScheduleCronExpression"
@@ -1830,6 +1926,10 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.serverless-note {
+  padding: 16px 0;
+  color: var(--text-secondary, inherit);
+}
 .view {
   display: flex;
   flex-direction: column;

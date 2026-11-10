@@ -846,8 +846,40 @@ def api_presets_export_selected(req: dict = Body(...)):
         raise HTTPException(status_code=500, detail=f"Failed to export: {e}")
 
 
+def _generate_overlay_caches_async(payload: dict) -> None:
+    """Build the overlay effect cache for every imported preset with an id, in a
+    background thread."""
+    targets = []
+    for template_id, tpl_data in payload.items():
+        presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
+        for preset in presets_list:
+            if isinstance(preset, dict) and preset.get("id"):
+                targets.append((template_id, preset["id"]))
+    if not targets:
+        return
+
+    def _run():
+        try:
+            from ..overlay_cache import refresh_preset
+            refreshed = 0
+            for template_id, preset_id in targets:
+                try:
+                    refreshed += 1 if refresh_preset(template_id, preset_id) else 0
+                except Exception as err:
+                    logger.warning(f"[PRESETS] Overlay cache for '{preset_id}' failed: {err}")
+            if refreshed:
+                logger.info(f"[PRESETS] Generated overlay cache for {refreshed} imported preset(s)")
+        except Exception as overlay_batch_err:
+            logger.warning(f"[PRESETS] Overlay cache generation for imported presets failed: {overlay_batch_err}")
+
+    import threading
+    threading.Thread(target=_run, name="preset-overlay-cache", daemon=True).start()
+
+
+# Plain def (not async): FastAPI runs it in a worker thread, so file writes in
+# restore_bundle()/merge_presets() never block other requests.
 @router.post("/presets/import")
-async def api_presets_import(payload: dict = Body(...)):
+def api_presets_import(payload: dict = Body(...)):
     """
     Import presets from JSON (merges with existing presets).
     Expected shape matches /presets: { template_id: { presets: [{id,name,options}, ...] } }
@@ -896,18 +928,12 @@ async def api_presets_import(payload: dict = Body(...)):
         # import always does, via _slugify_preset_name()) -- the id
         # merge_presets() assigns for an id-less "shared/compact" import isn't
         # returned from that call, so those still rely purely on self-heal.
-        try:
-            from ..overlay_cache import refresh_preset
-            refreshed = 0
-            for template_id, tpl_data in payload.items():
-                presets_list = tpl_data.get("presets", []) if isinstance(tpl_data, dict) else []
-                for preset in presets_list:
-                    if isinstance(preset, dict) and preset.get("id"):
-                        refreshed += 1 if refresh_preset(template_id, preset["id"]) else 0
-            if refreshed:
-                logger.info(f"[PRESETS] Generated overlay cache for {refreshed} imported preset(s)")
-        except Exception as overlay_batch_err:
-            logger.warning(f"[PRESETS] Overlay cache generation for imported presets failed: {overlay_batch_err}")
+        # Runs in a background thread: on a slow CPU each preset's effect layer
+        # can take over a minute, and doing it before replying made the request
+        # time out in the browser (onboarding showed "Failed to import preset"
+        # although the import had worked). A render before it finishes builds
+        # the missing layer itself.
+        _generate_overlay_caches_async(payload)
 
         return {"message": "Presets imported and merged", "overlay_configs": restored_overlays}
     except HTTPException:
