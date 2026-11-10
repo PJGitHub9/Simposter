@@ -23,6 +23,11 @@
       "status": "merged",
       "move_to": "webui-overhaul-dev",
       "message": "Collections are now part of webui-overhaul-dev."
+    },
+    "dev-noserver": {
+      "status": "merged",
+      "move_to": "webui-overhaul-dev",
+      "message": "The Poster API and server-less mode are now part of webui-overhaul-dev (v1.8.60 and later)."
     }
   }
 }
