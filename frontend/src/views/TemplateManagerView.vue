@@ -619,6 +619,9 @@ const previewPreset = async (templateId: string, preset: Preset) => {
         preset_id: preset.id,
         movie_title: movie.title,
         movie_year: movie.year || undefined,
+        // TMDb-sourced item: its id and type, so overlays can look up ratings, lists, etc.
+        tmdb_id: movie.tmdbId || undefined,
+        is_tv: movie.tmdbId ? movie.tmdbType === 'tv' : undefined,
         disableOverlayCache: !settings.performance.value.useOverlayCache,
         skip_fallback: true,
       })

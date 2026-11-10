@@ -7,9 +7,12 @@ CriticRating (0-100, stored /10). All values are 0-10.
 
 Settings > Ratings & Lists picks one source per field: "server" (the default:
 the first enabled media server in Settings > Media Servers that has a rating
-for the item), "plex", "jellyfin" (Jellyfin or Emby) or an MDBList source. When an MDBList source is picked but there is
-no MDBList key, the media server's value is used instead, so overlays that
-use a rating still work out of the box.
+for the item), "plex", "jellyfin" (Jellyfin or Emby), "tmdb" or an MDBList
+source. When an MDBList source is picked but there is no MDBList key, the
+media server's value is used instead, so overlays that use a rating still work
+out of the box. When a media-server source has no value (no server, or none
+for this item), MDBList is used if there is a key (IMDb for audience, Rotten
+Tomatoes for critic), then TMDb (audience only).
 
 Rows are keyed by (server_id, rating_key) and looked up by TMDb id, so a
 rating stored from the Plex copy also applies to the Jellyfin copy.
@@ -25,6 +28,11 @@ SERVER_SOURCES = ("server", "plex", "jellyfin")
 # on an install with no media server (Poster API / server-less mode).
 TMDB_SOURCE = "tmdb"
 LOCAL_SOURCES = SERVER_SOURCES + (TMDB_SOURCE,)
+# When a media-server source has no value (no server, or the server has no
+# rating for the item) and there is an MDBList key, these MDBList sources are
+# used instead, then TMDb (audience only).
+MDBLIST_FALLBACK = {"audience_rating": "imdb", "critic_rating": "tomatoes"}
+_FALLBACK_LABELS = {"imdb": "MDBList (IMDb)", "tomatoes": "MDBList (Rotten Tomatoes)"}
 
 
 def tmdb_audience_rating(media_type: str, tmdb_id: Any) -> Optional[float]:
@@ -204,10 +212,12 @@ def fill(ctx: Dict[str, Any], media_type: str, tmdb_id: Any, mdblist_ready: bool
             continue
         if source == TMDB_SOURCE:
             order: List[str] = [TMDB_SOURCE]
-        elif source == "server":
-            order = server_order() + [TMDB_SOURCE]
         elif source in SERVER_SOURCES:
-            order = [source]
+            # The server(s) first. With an MDBList key, MDBList comes next
+            # (fill_after_mdblist() then tries TMDb); without one, TMDb now.
+            order = server_order() if source == "server" else [source]
+            if not mdblist_ready:
+                order = order + [TMDB_SOURCE]
         elif not mdblist_ready:
             # MDBList source without a key: the servers instead, then TMDb.
             order = server_order() + [TMDB_SOURCE]
@@ -230,6 +240,53 @@ def fill(ctx: Dict[str, Any], media_type: str, tmdb_id: Any, mdblist_ready: bool
     return used
 
 
+def mdblist_fallback_source(field: str, source: str) -> Optional[str]:
+    """The MDBList source to use for a field whose chosen source is a media
+    server, or None when the chosen source isn't a media server."""
+    return MDBLIST_FALLBACK.get(field) if source in SERVER_SOURCES else None
+
+
+def fallback_label(field: str) -> str:
+    return _FALLBACK_LABELS.get(MDBLIST_FALLBACK.get(field, ""), "MDBList")
+
+
+def fill_after_mdblist(ctx: Dict[str, Any], media_type: str, tmdb_id: Any) -> Dict[str, str]:
+    """TMDb's audience score for a media-server source that neither a server
+    nor MDBList had a value for (used when an MDBList key is set; without one
+    fill() already tried TMDb)."""
+    used: Dict[str, str] = {}
+    if ctx.get("audience_rating") in (None, "") and _sources()["audience_rating"] in SERVER_SOURCES:
+        value = tmdb_audience_rating(media_type, tmdb_id)
+        if value is not None:
+            ctx["audience_rating"] = value
+            used["audience_rating"] = "TMDb"
+    return used
+
+
+def _any_server_enabled() -> bool:
+    from . import database as db
+    try:
+        servers = (db.get_ui_settings() or {}).get("mediaServers") or []
+    except Exception:
+        servers = []
+    return any(isinstance(s, dict) and s.get("enabled") is not False and s.get("type") in ("plex", "jellyfin", "emby")
+               for s in servers)
+
+
 def mdblist_fields_wanted() -> set:
-    """Which of audience/critic rating should still come from MDBList."""
-    return {f for f, s in _sources().items() if s not in LOCAL_SOURCES}
+    """Which of audience/critic rating should still come from MDBList (used to
+    decide whether to batch-fetch MDBList ratings before a render). A media-
+    server source counts only when no media server is enabled; otherwise the
+    server normally has the value and MDBList is asked per item only when it
+    doesn't."""
+    no_server = None
+    out = set()
+    for f, s in _sources().items():
+        if s not in LOCAL_SOURCES:
+            out.add(f)
+        elif s in SERVER_SOURCES:
+            if no_server is None:
+                no_server = not _any_server_enabled()
+            if no_server:
+                out.add(f)
+    return out

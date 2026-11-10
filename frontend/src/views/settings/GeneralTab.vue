@@ -83,18 +83,29 @@ const serverRatingSources = [
   { value: 'jellyfin', label: 'Jellyfin / Emby' },
 ]
 const SERVER_SOURCE_VALUES = new Set(serverRatingSources.map(s => s.value))
-// With no media server the server choices can't produce anything: "Your media
-// server" already falls back to TMDb there, so show it as TMDb (no setting is
-// changed just by opening this page). Picking something else saves normally.
+// With no media server the server choices can't produce anything. The backend
+// then uses MDBList when there's a key (IMDb for audience, Rotten Tomatoes for
+// critic, server_ratings.MDBLIST_FALLBACK), else TMDb for audience, so show
+// that (no setting is changed just by opening this page). Picking something
+// else saves normally.
+const hasMdblistKey = computed(() => !!settingsStore.mdblist.value.apiKey)
 const audienceSource = computed({
   get: () => {
     const v = settingsStore.mdblist.value.audienceRatingSource
-    return serverless.value && SERVER_SOURCE_VALUES.has(v) ? 'tmdb' : v
+    if (!(serverless.value && SERVER_SOURCE_VALUES.has(v))) return v
+    return hasMdblistKey.value ? 'imdb' : 'tmdb'
   },
   set: (v: string) => { settingsStore.mdblist.value.audienceRatingSource = v },
 })
 const criticIsServerless = computed(() =>
-  serverless.value && SERVER_SOURCE_VALUES.has(settingsStore.mdblist.value.criticRatingSource))
+  serverless.value && !hasMdblistKey.value && SERVER_SOURCE_VALUES.has(settingsStore.mdblist.value.criticRatingSource))
+const criticSource = computed({
+  get: () => {
+    const v = settingsStore.mdblist.value.criticRatingSource
+    return serverless.value && hasMdblistKey.value && SERVER_SOURCE_VALUES.has(v) ? 'tomatoes' : v
+  },
+  set: (v: string) => { settingsStore.mdblist.value.criticRatingSource = v },
+})
 const ratingSources = [
   { value: 'imdb', label: 'IMDb' },
   { value: 'tomatoes', label: 'Rotten Tomatoes (critics)' },
@@ -483,7 +494,7 @@ const timezones = computed(() => {
         </label>
         <label>
           <span class="label-text">Critic rating comes from</span>
-          <select v-model="settingsStore.mdblist.value.criticRatingSource">
+          <select v-model="criticSource">
             <optgroup v-if="!serverless" label="Your media server (no key needed)">
               <option v-for="s in serverRatingSources" :key="s.value" :value="s.value">{{ s.label.replace(', else TMDb', '') }}</option>
             </optgroup>

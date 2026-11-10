@@ -10,6 +10,21 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.56',
+    date: '2026-11-09',
+    sections: [
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Setup wizard: on slower servers the last step could say "Failed to import preset" even though the starter presets were imported. Importing presets now finishes right away and prepares their effects in the background, and the rest of Simposter no longer stops responding while it does.',
+          'Template Manager and the Poster API editor: previews of a movie or show from TMDb now show rating, list and other TMDb-based overlay layers. They never had the TMDb id of the item before, so those layers were always left off.',
+          'Ratings with no media server: when the audience or critic source is "Your media server" and there is no server (or it has no rating), Simposter now uses MDBList if you have a key (IMDb for audience, Rotten Tomatoes for critic). Before, the critic rating was never filled.',
+          'The log now says which score is missing, e.g. "MDBList has no Rotten Tomatoes (critics) score for this item", instead of "ratings: none found".',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.55',
     date: '2026-11-09',
     sections: [

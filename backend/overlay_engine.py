@@ -237,6 +237,30 @@ def _item_ids(ctx: Dict[str, Any]) -> Tuple[Optional[Any], Optional[Any], str]:
     return tmdb_id, tvdb_id, media_type
 
 
+_RATING_SOURCE_NAMES = {
+    "imdb": "IMDb", "tmdb": "TMDb", "trakt": "Trakt", "tomatoes": "Rotten Tomatoes (critics)",
+    "tomatoesaudience": "Rotten Tomatoes (audience)", "metacritic": "Metacritic",
+    "metacriticuser": "Metacritic (users)", "letterboxd": "Letterboxd", "myanimelist": "MyAnimeList",
+}
+
+
+def _rating_source_name(field: str, sources: Dict[str, str]) -> str:
+    """Which service a rating field reads from, for log notes."""
+    if field in ("audience_rating", "critic_rating"):
+        from . import server_ratings
+        src = sources.get(field, "")
+        src = server_ratings.mdblist_fallback_source(field, src) or src
+        return _RATING_SOURCE_NAMES.get(src, src or field)
+    if field == "mdb_rating":
+        return "MDBList score"
+    if field == "mdb_average_rating":
+        return "MDBList average"
+    if field.startswith("mdb_") and field.endswith("_rating"):
+        src = field[4:-7]
+        return _RATING_SOURCE_NAMES.get(src, src)
+    return field
+
+
 def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                   elements: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Data context for conditions and text variables. Starts from the overlay
@@ -410,11 +434,23 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
                     notes["ratings"] = "this item has no TMDb/TVDB ID"
                 data = mdb.get_ratings(media_type, tmdb_id=tmdb_id, tvdb_id=tvdb_id) if (tmdb_id or tvdb_id) else None
                 fields = mdb.rating_fields(data or {})
+                sources = server_ratings._sources()
                 for key, value in fields.items():
                     if ctx.get(key) in (None, ""):  # values from the media server win
                         ctx[key] = value
-                if (tmdb_id or tvdb_id) and not fields:
+                        if server_ratings.mdblist_fallback_source(key, sources.get(key, "")):
+                            used[key] = server_ratings.fallback_label(key)
+                # A media-server source neither the server nor MDBList had: TMDb.
+                used.update(server_ratings.fill_after_mdblist(ctx, media_type, tmdb_id))
+                if used:
+                    ctx["_rating_sources"] = used
+                if (tmdb_id or tvdb_id) and not fields and not used:
                     notes["ratings"] = "MDBList has no ratings for this item"
+                elif fields:
+                    missing = [f for f in wanted if ctx.get(f) in (None, "")]
+                    if missing:
+                        names = sorted({_rating_source_name(f, sources) for f in missing})
+                        notes["ratings"] = f"MDBList has no {' or '.join(names)} score for this item"
         except Exception as e:  # never fail a render over ratings
             from .config import logger
             logger.debug("[OVERLAY] MDBList lookup failed: %s", e)

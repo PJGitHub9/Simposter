@@ -68,6 +68,10 @@ class PreviewRequest(BaseModel):
     # a Jellyfin-specific issue. None (the default) preserves the exact
     # original guessing behavior for any caller that doesn't send this.
     is_tv: Optional[bool] = None
+    # TMDb id of an item with no media-server item (Template Manager's TMDb
+    # preview, the editor's Poster API mode). Only used when there's no
+    # rating_key, so overlays can still look up ratings, lists, studio, etc.
+    tmdb_id: Optional[int] = None
 
 
 class SaveRequest(PreviewRequest):

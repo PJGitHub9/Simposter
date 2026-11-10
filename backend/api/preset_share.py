@@ -26,6 +26,8 @@ from fastapi.responses import Response
 
 from ..config import logger, settings
 from .. import database as db
+from starlette.concurrency import run_in_threadpool
+
 from .presets import _compact_export, _full_export, _selected_presets, api_presets_import
 
 router = APIRouter()
@@ -231,5 +233,5 @@ async def api_preset_import_file(file: UploadFile = File(...)):
         if not isinstance(payload, dict):
             raise HTTPException(400, "Not a preset export")
     fonts_saved = payload.pop("_fonts_saved", 0)
-    result = await api_presets_import(payload)
+    result = await run_in_threadpool(api_presets_import, payload)
     return {**result, "fonts_saved": fonts_saved}

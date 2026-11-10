@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.56 (2026-11-09) — `dev-noserver` branch
+
+### Bug Fixes
+- **"Failed to import preset" at the end of the setup wizard** — `POST /api/presets/import` built every imported preset's overlay effect layer (`overlay_cache.refresh_preset()`) before replying. On a slow CPU that was ~80 s per preset (~7 minutes for the starter set), so the browser or proxy gave up and the wizard showed an error although the presets were saved. It was also an `async def`, so the whole server stopped answering for those minutes. The layers are now built in a background thread (`_generate_overlay_caches_async()`), the endpoint is a plain `def`, and `/presets/import-file` calls it through `run_in_threadpool`. A render before the layer is ready builds it itself.
+- **No ratings in TMDb-item previews** — `/api/preview` only gave overlays the item's ids through a library `rating_key`, so Template Manager's TMDb preview and the editor's Poster API mode (whose preview is what Pin stores) never had a TMDb id and drew no rating/list/studio/release-date layers. `PreviewRequest.tmdb_id` is new; used only without a `rating_key`. `TemplateManagerView.vue` sends it with `is_tv`, `render.ts` sends it for `apiMode` items.
+- **"Server" rating sources never used MDBList** — with the default "server" source and no media server, `audience_rating` fell back to TMDb and `critic_rating` was never filled, even with an MDBList key. A media-server source with no value now uses MDBList (`server_ratings.MDBLIST_FALLBACK`: IMDb audience, Rotten Tomatoes critic), then TMDb for audience (`fill_after_mdblist()`). An explicitly chosen MDBList source still never falls back to another service. `mdblist_fields_wanted()` counts server sources only when no server is enabled. Settings → General shows the source actually used in server-less mode.
+- **Clearer rating notes** — when MDBList returns ratings but not the ones an overlay uses, the render log says which (`_rating_source_name()` in `overlay_engine.py`) instead of "none found".
+
 ## v1.8.55 (2026-11-09) — `dev-noserver` branch
 
 ### Improvements
