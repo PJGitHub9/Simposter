@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getApiBase } from '@/services/apiBase'
+import { cronRunsDaily } from '@/services/cronDaily'
 import { useSettingsStore } from '@/stores/settings'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
 
@@ -93,6 +94,8 @@ const nextRun = ref<string | null>(null)
 
 const enabled = ref(false)
 const scheduleCron = ref('0 4 * * *')
+// Some overlay uses Maintainerr's {leaving} values, which change daily.
+const maintainerrOverlays = ref(false)
 const plexLabel = ref('Simposter-Overlay')
 const saving = ref(false)
 const saveMessage = ref('')
@@ -261,6 +264,7 @@ const fetchGroup = async () => {
     group.value = data.group || null
     tracked.value = data.tracked || 0
     nextRun.value = data.schedule?.next_run_time || null
+    maintainerrOverlays.value = !!data.maintainerrOverlays
     if (data.status) status.value = data.status
     applyConfig(group.value?.overlayRefresh)
   } catch {
@@ -429,6 +433,10 @@ onUnmounted(() => {
             </div>
             <span class="help-text">Cron format: minute hour day month weekday. Each run only re-sends posters whose overlay changed.</span>
             <span v-if="enabled && nextRun" class="next-run-note">Next run: {{ formatDate(nextRun) }}</span>
+            <span v-if="maintainerrOverlays && !(enabled && cronRunsDaily(scheduleCron))" class="daily-hint">
+              An overlay uses Maintainerr leaving dates, and <code>{leaving}</code> changes every day ("Wednesday", then
+              "tomorrow"). Refresh daily, shortly after midnight, so these posters stay current.
+            </span>
           </div>
 
           <div v-if="hasPlexMember" class="config-field">
@@ -752,6 +760,7 @@ onUnmounted(() => {
   line-height: 1.4;
 }
 
+.daily-hint { display: block; margin-top: 0.35rem; font-size: 0.78rem; color: #f0b429; line-height: 1.4; }
 .next-run-note {
   font-size: 12px;
   color: var(--accent, #3dd6b7);

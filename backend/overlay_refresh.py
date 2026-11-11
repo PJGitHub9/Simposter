@@ -705,6 +705,10 @@ def prepare_data(states: List[Dict[str, Any]]) -> Dict[str, int]:
         if not elements:
             return out
         needs = overlay_engine.needed_data(elements)
+        if needs.get("maintainerr"):
+            from . import maintainerr_client, maintainerr_data
+            if maintainerr_client.is_configured() and maintainerr_data.sync(force=True):
+                out["maintainerr"] = 1
         if needs["lists"]:
             out["lists"] = list_sources.refresh_due(needs["lists"])
         if needs["ratings"]:
@@ -716,12 +720,32 @@ def prepare_data(states: List[Dict[str, Any]]) -> Dict[str, int]:
                         out["ratings"] += mdb.prefetch_ratings(kind, ids)
     except Exception as e:
         logger.info("[OVERLAY_REFRESH] Updating lists/ratings before the run failed: %s", e)
-    if out["lists"] or out["ratings"]:
-        logger.info("[OVERLAY_REFRESH] Updated %d list(s) and %d rating(s) before checking", out["lists"], out["ratings"])
+    if out["lists"] or out["ratings"] or out.get("maintainerr"):
+        logger.info("[OVERLAY_REFRESH] Updated %d list(s), %d rating(s)%s before checking", out["lists"], out["ratings"],
+                    " and the Maintainerr removal dates" if out.get("maintainerr") else "")
     return out
 
 
 data_refresh_status: Dict[str, Any] = {"state": "idle"}
+
+
+def maintainerr_overlays_in_use() -> bool:
+    """Maintainerr is set up and some overlay uses its removal dates; the
+    Overlay Refresh page and Scheduler then suggest refreshing daily, since
+    {leaving} ("Wednesday" -> "tomorrow") changes from day to day."""
+    try:
+        from . import maintainerr_client, overlay_engine
+        if not maintainerr_client.is_configured():
+            return False
+        for cfg in db.get_all_overlay_configs():
+            els = [e for e in cfg.get("elements") or [] if isinstance(e, dict)]
+            if cfg.get("conditions"):
+                els.append({"conditions": cfg["conditions"]})
+            if els and overlay_engine.needed_data(els).get("maintainerr"):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def refresh_all_data() -> Dict[str, Any]:
@@ -739,6 +763,10 @@ def refresh_all_data() -> Dict[str, Any]:
             if cfg.get("conditions"):
                 elements.append({"conditions": cfg["conditions"]})
         needs = overlay_engine.needed_data(elements)
+        if needs.get("maintainerr"):
+            from . import maintainerr_client, maintainerr_data
+            if maintainerr_client.is_configured():
+                out["maintainerr"] = 1 if maintainerr_data.sync(force=True) else 0
         if needs["lists"]:
             out["lists"] = list_sources.refresh_due(needs["lists"], force=True)
             data_refresh_status["lists"] = out["lists"]

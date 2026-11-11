@@ -165,6 +165,7 @@ A **Text** layer can include values that are filled in per item. Use **+ Insert 
 | Item | `{title}`, `{year}`, `{edition}` (Plex only), `{studio}` |
 | Video | `{resolution}`, `{video_codec}` |
 | Audio | `{audio_codec}`, `{audio_channels}`, `{audio_language}` |
+| Maintainerr | `{leaving}`, `{leaving_date}`, `{leaving_day}`, `{leaving_days}` ([Maintainerr leaving dates](#maintainerr-leaving-dates)) |
 | Ratings | `{audience_rating}`, `{critic_rating}` (media server or MDBList); with MDBList also `{mdb_rating}`, `{mdb_imdb_rating}`, `{mdb_tomatoes_rating}`, `{mdb_tomatoesaudience_rating}`, `{mdb_metacritic_rating}`, `{mdb_metacriticuser_rating}`, `{mdb_tmdb_rating}`, `{mdb_trakt_rating}`, `{mdb_letterboxd_rating}`, `{mdb_myanimelist_rating}`, `{mdb_average_rating}` |
 
 If a value is missing for an item (no rating yet, no MDBList key), the layer isn't drawn at all rather than showing an empty or literal `{…}` text.
@@ -269,6 +270,25 @@ For a list rule, choose **On a list** and paste the list's URL (`https://mdblist
 - **Floppy**: your server's address (e.g. `http://192.168.1.10:8000`) and an app token from Floppy's Settings → Integrations → App tokens, with the `lists:read` scope.
 
 In the rule, the dropdown lists your own lists from every connected service, grouped by service. To use someone else's public list, choose **Paste a list link…** and paste its link. Lists are matched by TMDb ID and re-fetched as often as [Scheduler](#scheduler) says; until then the stored copy is used, so a render never waits on a list service. If a service can't be reached, layers that need its list stay off and the overlay log says why.
+
+### Maintainerr leaving dates
+
+[Maintainerr](https://github.com/Maintainerr/Maintainerr) removes items after they've been in one of its collections for a set number of days. Simposter can show that date on the poster. Add Maintainerr's address (e.g. `http://192.168.1.10:6246`) in **Settings → Ratings & Lists → Maintainerr** and click **Test** (needs Maintainerr 3.20 or newer; the API key is optional, only for a proxy that asks for one). Turn off Maintainerr's own overlays for these items, or the two will keep replacing each other's posters.
+
+Text values (Insert value → Maintainerr):
+
+| Value | Example |
+|-------|---------|
+| `{leaving}` | `today`, `tomorrow`, a weekday within the next 6 days (`Wednesday`), else `Nov 12` |
+| `{leaving_date}` | `Nov 12` |
+| `{leaving_day}` | `Wednesday` |
+| `{leaving_days}` | `6` |
+
+Write the sentence yourself: `Leaving {leaving}`. Show when fields: **Removal date** (date rules), **Days until removal** (`is at most 7`, or `is set` = in any Maintainerr collection) and **Maintainerr collection** (its name).
+
+Example: a red box layer with "Show when: Days until removal is set", and a text layer `Leaving {leaving}`. Items not in a Maintainerr collection get neither.
+
+Every active Maintainerr collection counts, whatever its action, including ones that only unmonitor, change the quality profile or do nothing (a "do nothing" collection with no day count makes its items due today). To show only real removals, add a **Maintainerr collection** rule naming the collections that delete. An item in several collections uses the earliest date, as Maintainerr does. The Plex and Jellyfin copies of a title get the same date. A season in a season collection gets its own date; any other season gets its show's. Simposter fetches Maintainerr's collections at most once an hour while rendering, and always just before an Overlay Refresh run. Because `{leaving}` changes from day to day, give the library group a daily [Overlay Refresh](#overlay-refresh) (e.g. `5 0 * * *`); the page shows a hint when it doesn't run daily. Postponing an item in Maintainerr moves its date, and the next refresh updates the poster.
 
 ---
 

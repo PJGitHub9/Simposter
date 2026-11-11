@@ -4,7 +4,7 @@
 // when several overlap lives in the config-level Badge sets panel.
 import { normalizeListUrl, type OverlayCondition, type OverlayRuleFields } from '@/services/overlayEngine'
 import { computed, onMounted, ref } from 'vue'
-import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist, rangeParts } from '@/services/overlayFields'
+import { FIELDS, FIELD_GROUPS, fieldDef, opsFor, opDef, needsMdblist, needsMaintainerr, rangeParts } from '@/services/overlayFields'
 import DateRangeInput from '@/components/overlay/DateRangeInput.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { listDisplayName, providerLabel, useListSources } from '@/composables/useListSources'
@@ -20,10 +20,14 @@ const hasMdblistKey = computed(() => !!settings.mdblist.value.apiKey)
 // "On a list" works with any list service set up in Settings → Ratings & Lists.
 const hasListSource = computed(() => hasMdblistKey.value || !!settings.wetrakr.value.clientId
   || !!settings.simkl.value.clientId || !!(settings.floppy.value.url && settings.floppy.value.token))
+// Maintainerr removal dates once a Maintainerr address is saved.
+const hasMaintainerr = computed(() => !!settings.maintainerr.value.url)
 const fieldsFor = (c: OverlayCondition) => {
   const current = fieldDef(String(c.field || ''))?.value
   const offered = (f: (typeof FIELDS)[number]) => f.value === current
-    || (f.kind === 'list' ? hasListSource.value : (hasMdblistKey.value || !needsMdblist(f)))
+    || (f.kind === 'list' ? hasListSource.value
+      : needsMaintainerr(f) ? hasMaintainerr.value
+      : (hasMdblistKey.value || !needsMdblist(f)))
   return FIELD_GROUPS
     .map(g => ({ group: g, fields: FIELDS.filter(f => f.group === g && offered(f)) }))
     .filter(g => g.fields.length)

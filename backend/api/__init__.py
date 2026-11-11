@@ -28,6 +28,7 @@ from . import (
     live_kometa,
     mdblist,
     list_sources,
+    maintainerr,
     version_info,
     cleanup,
     media_server,
@@ -65,6 +66,7 @@ router.include_router(kometa_import.router)
 router.include_router(live_kometa.router)
 router.include_router(mdblist.router)
 router.include_router(list_sources.router)
+router.include_router(maintainerr.router)
 router.include_router(version_info.router)
 router.include_router(cleanup.router)
 router.include_router(media_server.router)

@@ -6,6 +6,7 @@
 // (get_refresh_settings) and backend/overlay_refresh.py (prepare_data).
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getApiBase } from '@/services/apiBase'
+import { cronRunsDaily } from '@/services/cronDaily'
 
 interface GroupSchedule {
   id: string
@@ -22,6 +23,8 @@ const ratingsDays = ref(45)
 const listsHours = ref(24)
 const saved = ref({ ratingsDays: 45, listsHours: 24 })
 const groups = ref<GroupSchedule[]>([])
+// Some overlay uses Maintainerr's {leaving} values, which change daily.
+const maintainerrOverlays = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const message = ref<{ ok: boolean; text: string } | null>(null)
@@ -44,6 +47,7 @@ async function load() {
       listsHours.value = data.listsHours
       saved.value = { ratingsDays: data.ratingsDays, listsHours: data.listsHours }
       groups.value = data.groups || []
+      maintainerrOverlays.value = !!data.maintainerrOverlays
       applyStatus(data)
     }
   } catch { /* leave defaults */ }
@@ -203,7 +207,11 @@ onMounted(load)
       <tbody>
         <tr v-for="g in groups" :key="g.id">
           <td>{{ g.name || g.id }} <span class="kind">{{ g.mediaType === 'tv' ? 'TV' : 'Movies' }}</span></td>
-          <td>{{ g.enabled && g.scheduleCron ? describeCron(g.scheduleCron) : 'Off' }}</td>
+          <td>
+            {{ g.enabled && g.scheduleCron ? describeCron(g.scheduleCron) : 'Off' }}
+            <span v-if="maintainerrOverlays && !(g.enabled && cronRunsDaily(g.scheduleCron))" class="daily-hint"
+              title="An overlay uses Maintainerr leaving dates ({leaving} changes every day). Refresh this group daily so posters stay current.">⚠ refresh daily</span>
+          </td>
           <td>{{ g.enabled ? fmt(g.nextRun) : '' }}</td>
           <td class="row-actions">
             <button
@@ -258,5 +266,6 @@ onMounted(load)
 .groups th { text-align: left; font-weight: 600; color: var(--text-secondary, #888); padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border, #2a2f3e); }
 .groups td { padding: 0.45rem 0.5rem; border-bottom: 1px solid rgba(255, 255, 255, 0.04); color: var(--text-primary, #fff); }
 .kind { margin-left: 0.4rem; font-size: 0.68rem; color: var(--text-secondary, #888); }
+.daily-hint { margin-left: 0.4rem; font-size: 0.7rem; color: #f0b429; white-space: nowrap; }
 .link { color: var(--accent, #3dd6b7); }
 </style>

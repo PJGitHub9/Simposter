@@ -52,6 +52,7 @@ SECRET_FIELD_PATHS = (
     ("wetrakr", "clientId"),
     ("simkl", "clientId"),
     ("floppy", "token"),
+    ("maintainerr", "apiKey"),
     ("automation", "webhookSecret"),
     ("posterApi", "key"),
 )
@@ -367,7 +368,7 @@ def _media_server_secrets() -> list:
             row = conn.execute("SELECT value FROM settings WHERE key = 'mediaServers' LIMIT 1").fetchone()
             # List-source keys and sign-in tokens (backend/list_sources.py).
             extra = [r[0] for r in conn.execute(
-                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token', 'posterApi.key')"
+                "SELECT value FROM settings WHERE key IN ('wetrakr.clientId', 'simkl.clientId', 'floppy.token', 'posterApi.key', 'maintainerr.apiKey')"
             ).fetchall()]
             try:
                 for (data_json,) in conn.execute("SELECT data_json FROM list_source_auth").fetchall():

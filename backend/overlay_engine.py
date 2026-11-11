@@ -68,13 +68,52 @@ def _rating_field_names() -> set:
     return set(RATING_FIELDS) | {"user_rating"}
 
 
+# Maintainerr removal dates (backend/maintainerr_data.py): Show when fields and
+# text values. The fields use "removal_*" names, the text values "leaving_*", so
+# {leaving_date} ("Nov 12") never collides with the removal_date field (ISO).
+MAINTAINERR_FIELDS = {"removal_date", "days_until_removal", "maintainerr_collection"}
+MAINTAINERR_TEXT_KEYS = {"leaving", "leaving_date", "leaving_day", "leaving_days"} | MAINTAINERR_FIELDS
+
+
+def _fill_maintainerr(ctx: Dict[str, Any], notes: Dict[str, str]) -> None:
+    """Removal date and leaving values for the item, from the Maintainerr snapshot.
+    Values already in ctx (the preview's example values) win."""
+    if ctx.get("removal_date") not in (None, "") or ctx.get("leaving") not in (None, ""):
+        return
+    from . import maintainerr_client as mc
+    if not mc.is_configured():
+        notes["removal_date"] = "Maintainerr not set up (Settings → Ratings & Lists)"
+        return
+    from . import maintainerr_data as md
+    try:
+        md.ensure_fresh()
+        tmdb_id, tvdb_id, media_type = _item_ids(ctx)
+        if tvdb_id in (None, "") and ctx.get("tvdb_id"):
+            tvdb_id = ctx.get("tvdb_id")
+        match = md.lookup(ctx.get("rating_key"), tmdb_id, tvdb_id, media_type)
+    except Exception as e:
+        notes["removal_date"] = f"Maintainerr lookup failed: {e}"
+        return
+    if not match:
+        why = "not in any Maintainerr collection"
+        err = md.status().get("last_error")
+        if err:
+            why += f" (Maintainerr not reachable: {err})"
+        notes["removal_date"] = why
+        return
+    today = _parse_date(ctx.get("today")) or _date.today()
+    ctx.update(md.format_leaving(md.local_date(match["deletion"]), today))
+    ctx["maintainerr_collection"] = list(match["collections"])
+
+
 def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Which lazily-loaded data the elements use: stored file paths, MDBList
     ratings (conditions or text variables), and list membership (conditions;
     MDBList, WeTrakr, SIMKL or Floppy, see list_sources.py)."""
     rating_fields = _rating_field_names()
     needs = {"paths": False, "ratings": False, "lists": [], "ids": False, "added": False, "status": False,
-             "release": False, "rating_fields": [], "network": False, "content_ratings": [], "streaming": []}
+             "release": False, "rating_fields": [], "network": False, "content_ratings": [], "streaming": [],
+             "maintainerr": False}
     for element in elements:
         for cond in element.get("conditions") or []:
             if not isinstance(cond, dict):
@@ -94,6 +133,8 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
                 needs["release"] = True
             elif field == "show_status":
                 needs["status"] = True
+            elif field in MAINTAINERR_FIELDS:
+                needs["maintainerr"] = True
             elif field == "network":
                 needs["network"] = True
             elif field in _REGIONAL_FIELDS:
@@ -119,6 +160,8 @@ def needed_data(elements: List[Dict[str, Any]]) -> Dict[str, Any]:
                 needs["release"] = True
             if "show_status" in names:
                 needs["status"] = True
+            if names & MAINTAINERR_TEXT_KEYS:
+                needs["maintainerr"] = True
     return needs
 
 
@@ -274,6 +317,7 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
     needs.setdefault("network", False)
     needs.setdefault("content_ratings", [])
     needs.setdefault("streaming", [])
+    needs.setdefault("maintainerr", False)
     needs_paths = needs_paths or needs["paths"]
     ctx = dict(meta or {})
     # Why data a rule needs is missing (shown in the render log by data_summary()).
@@ -333,6 +377,8 @@ def build_context(meta: Dict[str, Any], needs_paths: bool = False,
             notes["days_since_added"] = "no date added stored yet, scan the library"
         if ctx.get("added_date") in (None, ""):
             notes["added_date"] = "no date added stored yet, scan the library"
+    if needs["maintainerr"]:
+        _fill_maintainerr(ctx, notes)
     if needs["release"] and ctx.get("release_date") in (None, ""):
         tmdb_id, _tvdb, media_type = _item_ids(ctx)
         if not tmdb_id:
@@ -1111,6 +1157,8 @@ FIELD_LABELS = {
     "days_since_added": "Days since added", "show_status": "Show status",
     "today": "Today's date", "added_date": "Date added", "release_date": "Release date",
     "days_since_release": "Days since release",
+    "removal_date": "Removal date", "days_until_removal": "Days until removal",
+    "maintainerr_collection": "Maintainerr collection",
     "content_rating": "Content rating", "network": "Network", "streaming": "Streaming service",
 }
 _OP_WORDS = {

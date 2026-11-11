@@ -12,7 +12,7 @@ import OverlayScheduler from '@/components/overlay/OverlayScheduler.vue'
 import OverlayWorkflowGuide from '@/components/overlay/OverlayWorkflowGuide.vue'
 import OverlayRefreshPrompt from '@/components/overlay/OverlayRefreshPrompt.vue'
 import { elementNoun, elementPlace, elementWhen } from '@/services/overlayLabels'
-import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist } from '@/services/overlayFields'
+import { FIELDS, fieldDef, opDef, TEXT_VARIABLES, TEXT_VARIABLE_GROUPS, needsMdblist, needsMaintainerr, MAINTAINERR_KEYS } from '@/services/overlayFields'
 import { useSettingsStore } from '@/stores/settings'
 import { listDisplayName, useListSources } from '@/composables/useListSources'
 import { mediaServerLabel } from '@/services/mediaServerLabel'
@@ -236,6 +236,12 @@ const previewStreaming = ref('Netflix, 8')
 const previewToday = ref('')
 const previewAddedDate = ref('2026-10-30')
 const previewReleaseDate = ref('2021-10-22')
+// Maintainerr: removal date (default: two days from now, so {leaving} shows a weekday) and a collection.
+const previewRemovalDate = ref((() => {
+  const d = new Date(); d.setDate(d.getDate() + 2)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+})())
+const previewMaintainerrCollection = ref('Leaving Soon')
 // Test mode: lists (by URL) the pretend item is on.
 const previewOnLists = ref<Set<string>>(new Set())
 
@@ -366,16 +372,38 @@ const loadPreviewLibraries = async () => {
     const res = await fetch(`${apiBase}/api/media-server/libraries`)
     if (res.ok) {
       const data = await res.json()
-      const libs = (data.libraries || []) as Array<{ serverId: string; libraryId: string; libraryName: string; mediaType: string }>
-      const multiServer = new Set(libs.map(l => l.serverId)).size > 1
-      previewLibraries.value = libs
+      const libs = ((data.libraries || []) as Array<{ serverId: string; libraryId: string; libraryName: string; mediaType: string }>)
         .filter(l => l.mediaType === 'movie' || l.mediaType === 'tv')
-        .map(l => ({
+      // One entry per library group (its servers' items come back merged, as on the
+      // library pages), opened through one member: Plex first, else the first one.
+      const grouped = new Set<string>()
+      const entries: Array<{key: string, title: string, type: string, server?: string}> = []
+      for (const g of settingsStore.libraryGroups.value || []) {
+        const members = g.members || []
+        if (!members.length) continue
+        members.forEach(m => grouped.add(`${m.serverId}:${m.libraryId}`))
+        const anchor = members.find(m => m.serverId === 'plex-1') || members[0]!
+        entries.push({
+          key: String(anchor.libraryId),
+          title: g.name || anchor.libraryName || String(anchor.libraryId),
+          type: g.mediaType === 'tv' ? 'show' : 'movie',
+          server: anchor.serverId,
+        })
+      }
+      // Libraries that aren't in any group yet are still listed on their own.
+      const loose = libs.filter(l => !grouped.has(`${l.serverId}:${l.libraryId}`))
+      const multiServer = new Set(libs.map(l => l.serverId)).size > 1
+      for (const l of loose) {
+        entries.push({
           key: String(l.libraryId),
           title: multiServer ? `${l.libraryName} (${mediaServerLabel(l.serverId, settingsStore.mediaServers.value)})` : l.libraryName,
           type: l.mediaType === 'tv' ? 'show' : 'movie',
           server: l.serverId,
-        }))
+        })
+      }
+      // Movies first, then TV, each alphabetical.
+      previewLibraries.value = entries.sort((a, b) =>
+        (a.type === b.type ? 0 : a.type === 'show' ? 1 : -1) || a.title.localeCompare(b.title))
     }
     if (!previewLibraries.value.length) {
       // Older setups without a media server list: Plex's own sections.
@@ -817,6 +845,10 @@ const layerWarnings = (el: OverlayElement): string[] => {
   if ((el.type === 'custom_image' || el.type === 'full_cover_image') && !el.asset_id && !el.url) out.push('No image picked yet.')
   if (el.type === 'text_label' && !String(el.text || '').trim() && !el.box_only) out.push('No text entered yet.')
   if (el.box_only && !el.back_color && !(Number(el.back_line_width) > 0)) out.push('This box has no color or border, so it draws nothing.')
+  if (!hasMaintainerr.value && ((el.conditions || []).some(c => MAINTAINERR_KEYS.has(String(c.field || '')))
+    || textKeys(el).some(k => MAINTAINERR_KEYS.has(k)))) {
+    out.push("Uses Maintainerr removal dates, but Maintainerr isn't set up (Settings → Ratings & Lists), so this layer never shows.")
+  }
   for (const c of el.conditions || []) {
     const field = String(c.field || '')
     if (!field) out.push('A "Show when" condition has no field picked.')
@@ -1116,6 +1148,11 @@ const itemNeeds = computed(() => {
     if (REGIONAL_FIELDS.includes(f)) used.add(regionalKey(f, conditionRegion(c)))
   }
   for (const el of els) for (const k of textKeys(el)) if (ITEM_DATA_FIELDS.has(k)) used.add(k)
+  // Maintainerr: the removal date is enough (the {leaving} values are worked out from it here).
+  const mtrUsed = [...els.flatMap(el => [...(el.conditions || []).map(c => String(c.field || '')), ...textKeys(el)]),
+    ...(selectedConfig.value?.conditions || []).map(c => String(c.field || ''))].filter(k => MAINTAINERR_KEYS.has(k))
+  if (mtrUsed.length) used.add('removal_date')
+  if (mtrUsed.includes('maintainerr_collection')) used.add('maintainerr_collection')
   return { ratings, lists: configLists.value, types, fields: [...used].sort() }
 })
 const itemNeedsKey = computed(() => JSON.stringify(itemNeeds.value))
@@ -1276,6 +1313,8 @@ const exampleContext = (overrides: Record<string, string> = {}, title?: string) 
   if (previewToday.value) meta.today = previewToday.value
   if (previewAddedDate.value) meta.added_date = previewAddedDate.value
   if (previewReleaseDate.value) meta.release_date = previewReleaseDate.value
+  if (previewRemovalDate.value) meta.removal_date = previewRemovalDate.value
+  if (previewMaintainerrCollection.value.trim()) meta.maintainerr_collection = [previewMaintainerrCollection.value.trim()]
   meta.lists = [...previewOnLists.value]
   if (title) meta.movie_title = title
   // Ratings without a test box (IMDb, Rotten Tomatoes, ...) use the list's example values.
@@ -2141,7 +2180,7 @@ watch(previewAudioLanguage, () => { nextTick(renderPreview) })
 watch(previewEdition, () => { nextTick(renderPreview) })
 watch(previewStreamingPlatform, () => { nextTick(renderPreview) })
 watch(previewStudio, () => { nextTick(renderPreview) })
-watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewContentRating, previewNetwork, previewStreaming, previewToday, previewAddedDate, previewReleaseDate, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
+watch([previewLabels, previewFilePath, previewRating, previewCriticRating, previewDaysAdded, previewShowStatus, previewContentRating, previewNetwork, previewStreaming, previewToday, previewAddedDate, previewReleaseDate, previewRemovalDate, previewMaintainerrCollection, previewOnLists, previewItemLabels, previewItemFilePaths, previewItemLists], () => { nextTick(renderPreview) })
 // Re-render when the simposter asset map loads (it arrives async after mount)
 watch(simposterAssetMap, () => { renderPreview() })
 // A new rating/list/badge type in the layers: fetch it for the real items being previewed.
@@ -2174,6 +2213,8 @@ const CONDITION_TEST_FIELD: Record<string, string> = {
   days_since_added: 'days_since_added', show_status: 'show_status',
   added_date: 'added_date', release_date: 'release_date', days_since_release: 'release_date',
   content_rating: 'content_rating', network: 'network', streaming: 'streaming',
+  removal_date: 'removal_date', days_until_removal: 'removal_date', leaving: 'removal_date', leaving_date: 'removal_date',
+  leaving_day: 'removal_date', leaving_days: 'removal_date', maintainerr_collection: 'maintainerr_collection',
 }
 const usedTestFields = computed(() => {
   const out = new Set<string>()
@@ -2279,8 +2320,10 @@ const commitRename = (el: OverlayElement) => {
 // {text} values that need MDBList are only offered once its API key is set.
 const settingsStore = useSettingsStore()
 const hasMdblistKey = computed(() => !!settingsStore.mdblist.value.apiKey)
+const hasMaintainerr = computed(() => !!settingsStore.maintainerr.value.url)
 const textVariableGroups = computed(() => TEXT_VARIABLE_GROUPS
-  .map(g => ({ group: g, vars: TEXT_VARIABLES.filter(v => v.group === g && (hasMdblistKey.value || !needsMdblist(v))) }))
+  .map(g => ({ group: g, vars: TEXT_VARIABLES.filter(v => v.group === g
+    && (needsMaintainerr(v) ? hasMaintainerr.value : (hasMdblistKey.value || !needsMdblist(v)))) }))
   .filter(g => g.vars.length))
 
 /** Put {key} into a text layer at the cursor (or at the end), from the "Insert value" list. */
@@ -3293,7 +3336,7 @@ onMounted(() => {
                             <option value="" disabled>+ Insert value…</option>
                             <optgroup v-for="g in textVariableGroups" :key="g.group" :label="g.group">
                               <option v-for="v in g.vars" :key="v.key" :value="v.key">
-                                {{ v.label }} (e.g. {{ v.example }}){{ v.note && !needsMdblist(v) ? ` · ${v.note}` : '' }}
+                                {{ v.label }} (e.g. {{ v.example }}){{ v.note && !needsMdblist(v) && !needsMaintainerr(v) ? ` · ${v.note}` : '' }}
                               </option>
                             </optgroup>
                           </select>
@@ -3579,6 +3622,14 @@ onMounted(() => {
                       <span>Release date</span>
                       <input type="date" v-model="previewReleaseDate" />
                     </label>
+                    <label v-if="showTest('removal_date')" class="preview-value-field">
+                      <span>Maintainerr removal date</span>
+                      <input type="date" v-model="previewRemovalDate" />
+                    </label>
+                    <label v-if="showTest('maintainerr_collection')" class="preview-value-field">
+                      <span>Maintainerr collection</span>
+                      <input type="text" v-model="previewMaintainerrCollection" placeholder="Leaving Soon" />
+                    </label>
                     <label v-if="showTest('show_status')" class="preview-value-field">
                       <span>Show status</span>
                       <select v-model="previewShowStatus">
@@ -3681,7 +3732,7 @@ onMounted(() => {
             <div v-else class="library-list">
               <button
                 v-for="lib in previewLibraries"
-                :key="lib.key"
+                :key="`${lib.server || ''}:${lib.key}`"
                 class="library-btn"
                 @click="selectLibrary(lib)"
               >

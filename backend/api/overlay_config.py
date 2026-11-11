@@ -364,7 +364,8 @@ def api_font_file(name: str):
 
 # Item data the preview fills on request (overlay_engine.build_context derives them).
 _PREVIEW_ITEM_FIELDS = {"days_since_added", "added_date", "release_date", "days_since_release", "show_status",
-                        "network"}
+                        "network", "removal_date", "days_until_removal", "maintainerr_collection",
+                        "leaving", "leaving_date", "leaving_day", "leaving_days"}
 # Per-country fields, requested as "content_rating@GB" / "streaming@US".
 _PREVIEW_REGIONAL_FIELDS = {"content_rating", "streaming"}
 

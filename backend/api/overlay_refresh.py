@@ -32,6 +32,7 @@ def api_overlay_refresh_group(server_id: str = "plex-1", library_id: str = "", m
         "tracked": db.count_overlay_states(refresh.group_pairs(group)),
         "schedule": scheduler_module.get_overlay_refresh_schedule(group["id"]),
         "status": refresh.get_status(group["id"]),
+        "maintainerrOverlays": refresh.maintainerr_overlays_in_use(),
     }
 
 
@@ -291,6 +292,7 @@ def api_overlay_data_refresh():
         })
     return {**list_sources.get_refresh_settings(), "groups": groups,
             "data_refresh": dict(refresh.data_refresh_status),
+            "maintainerrOverlays": refresh.maintainerr_overlays_in_use(),
             "runs": {g["id"]: refresh.get_status(g["id"]).get("state") for g in groups if g.get("id")}}
 
 

@@ -167,6 +167,26 @@ async function testSource(provider: ListProvider) {
   sourceTesting.value = { ...sourceTesting.value, [provider]: false }
 }
 
+// ---- Maintainerr (removal dates for "leaving soon" overlays)
+const mtrTesting = ref(false)
+const mtrTest = ref<{ ok: boolean; message: string } | null>(null)
+async function testMaintainerr() {
+  mtrTesting.value = true
+  mtrTest.value = null
+  try {
+    const res = await fetch(`${getApiBase()}/api/maintainerr/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: settingsStore.maintainerr.value.url, apiKey: settingsStore.maintainerr.value.apiKey }),
+    })
+    const data = await res.json()
+    mtrTest.value = { ok: !!data.ok, message: (data.ok ? '✓ ' : 'Error: ') + (data.message || 'No answer') }
+  } catch {
+    mtrTest.value = { ok: false, message: 'Error: could not reach the server' }
+  }
+  mtrTesting.value = false
+}
+
 function stopPolling(provider: string) {
   if (pollTimers[provider]) window.clearTimeout(pollTimers[provider])
   delete pollTimers[provider]
@@ -639,6 +659,34 @@ const timezones = computed(() => {
           </div>
           <span v-if="sourceTest.floppy" :class="['api-test-result', sourceTest.floppy.ok ? 'success' : 'error']">{{ sourceTest.floppy.message }}</span>
           <span class="help-text">In Floppy: Settings → Integrations → App tokens, with the <code>lists:read</code> scope.</span>
+        </label>
+      </div>
+    </div>
+
+    <div :class="['section', { 'section-unsaved': changed?.ratings }]">
+      <h3>Maintainerr (leaving dates)</h3>
+      <p class="section-description">
+        Show when Maintainerr will remove a movie or show, e.g. a "Leaving tomorrow" layer. Once saved, overlays can use
+        <code>{leaving}</code>, <code>{leaving_date}</code>, <code>{leaving_day}</code> and <code>{leaving_days}</code>,
+        and "Show when" rules on the removal date. Needs Maintainerr 3.20 or newer.
+      </p>
+      <p v-if="serverless" class="help-text">Maintainerr's items are matched to the libraries Simposter scans, so this needs a media server.</p>
+      <div class="api-keys-grid">
+        <label>
+          <span class="label-text">Maintainerr address</span>
+          <input v-model="settingsStore.maintainerr.value.url" type="text" placeholder="http://192.168.1.10:6246" />
+          <span class="help-text">The address you open Maintainerr at, including the port. If you change it, enter the API key again.</span>
+        </label>
+        <label>
+          <span class="label-text">API key (optional)</span>
+          <div class="input-with-button">
+            <input v-model="settingsStore.maintainerr.value.apiKey" type="password" placeholder="Only if a proxy needs it" />
+            <button class="secondary" type="button" :disabled="!settingsStore.maintainerr.value.url || mtrTesting" @click="testMaintainerr">
+              {{ mtrTesting ? 'Testing...' : 'Test' }}
+            </button>
+          </div>
+          <span v-if="mtrTest" :class="['api-test-result', mtrTest.ok ? 'success' : 'error']">{{ mtrTest.message }}</span>
+          <span class="help-text">Maintainerr's API doesn't need a key; it's sent as <code>X-Api-Key</code> if you enter one. Remember to turn off Maintainerr's own overlays for these items.</span>
         </label>
       </div>
     </div>

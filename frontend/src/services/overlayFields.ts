@@ -23,7 +23,7 @@ export interface FieldDef {
 
 const opts = (pairs: Array<[string, string]>): FieldOption[] => pairs.map(([value, label]) => ({ value, label }))
 
-export const FIELD_GROUPS = ['Video', 'Audio', 'File', 'Ratings', 'Lists', 'Dates', 'Item'] as const
+export const FIELD_GROUPS = ['Video', 'Audio', 'File', 'Ratings', 'Lists', 'Dates', 'Maintainerr', 'Item'] as const
 
 export const FIELDS: FieldDef[] = [
   {
@@ -122,6 +122,18 @@ export const FIELDS: FieldDef[] = [
   {
     value: 'streaming', label: 'Streaming service', group: 'Item', kind: 'text', placeholder: 'Netflix or 8', regional: true,
     note: "From TMDb: subscription services in the chosen country. Use the service's name or its TMDb provider id (Netflix is 8).",
+  },
+  {
+    value: 'removal_date', label: 'Removal date', group: 'Maintainerr', kind: 'date',
+    hint: 'The day Maintainerr will act on it.', note: 'Needs Maintainerr',
+  },
+  {
+    value: 'days_until_removal', label: 'Days until removal', group: 'Maintainerr', kind: 'number', placeholder: '7',
+    hint: 'Days until Maintainerr acts on it. "exists" = in any Maintainerr collection.', note: 'Needs Maintainerr',
+  },
+  {
+    value: 'maintainerr_collection', label: 'Maintainerr collection', group: 'Maintainerr', kind: 'text', placeholder: 'Leaving Soon',
+    hint: "A Maintainerr collection it's in.", note: 'Needs Maintainerr',
   },
 ]
 
@@ -302,9 +314,20 @@ export const TEXT_VARIABLES: TextVariable[] = [
   { key: 'mdb_metacriticuser_rating', label: 'Metacritic user score', group: 'Ratings', example: '7.6', note: 'Needs an MDBList API key' },
   { key: 'mdb_myanimelist_rating', label: 'MyAnimeList score', group: 'Ratings', example: '8.7', note: 'Needs an MDBList API key' },
   { key: 'mdb_average_rating', label: 'MDBList average', group: 'Ratings', example: '79', note: 'Needs an MDBList API key' },
+  { key: 'leaving', label: 'Leaving (today, tomorrow, Wednesday, Nov 12)', group: 'Maintainerr', example: 'tomorrow', note: 'Needs Maintainerr' },
+  { key: 'leaving_date', label: 'Leaving date', group: 'Maintainerr', example: 'Nov 12', note: 'Needs Maintainerr' },
+  { key: 'leaving_day', label: 'Leaving weekday', group: 'Maintainerr', example: 'Wednesday', note: 'Needs Maintainerr' },
+  { key: 'leaving_days', label: 'Days until leaving', group: 'Maintainerr', example: '6', note: 'Needs Maintainerr' },
 ]
 
-export const TEXT_VARIABLE_GROUPS = ['Item', 'Video', 'Audio', 'Ratings'] as const
+export const TEXT_VARIABLE_GROUPS = ['Item', 'Video', 'Audio', 'Ratings', 'Maintainerr'] as const
 
 /** Fields and {text} values that only have data with an MDBList API key. */
 export const needsMdblist = (item: { note?: string }): boolean => /MDBList/i.test(item.note || '')
+
+/** Fields and {text} values that only have data once Maintainerr is set up. */
+export const needsMaintainerr = (item: { note?: string }): boolean => /Maintainerr/i.test(item.note || '')
+
+/** Context keys that come from Maintainerr (rule fields and {text} values). */
+export const MAINTAINERR_KEYS = new Set(['removal_date', 'days_until_removal', 'maintainerr_collection',
+  'leaving', 'leaving_date', 'leaving_day', 'leaving_days'])

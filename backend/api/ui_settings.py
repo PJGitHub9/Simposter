@@ -362,7 +362,7 @@ def _read_settings(include_env: bool = True) -> UISettings:
         # Merge with defaults so newly added fields are included
         defaults = _default_ui_settings().model_dump(exclude_none=False, exclude_defaults=False)
         merged = {**defaults, **data}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "imageQuality", "performance", "automation", "scheduler", "notifications"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "maintainerr", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {**defaults.get(nested_key, {}), **data.get(nested_key, {})}
 
         # ENV variables are now copied to DB on container startup instead of runtime overrides
@@ -441,10 +441,20 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
                 return (p.scheme.lower(), p.netloc.lower())
             if _origin(_new_floppy.get("url")) != _origin(_old_floppy.get("url")):
                 incoming["floppy"] = {**_new_floppy, "token": ""}
+        # Same rule for the Maintainerr API key.
+        _old_mtr = (current.get("maintainerr") or {})
+        _new_mtr = (incoming.get("maintainerr") or {})
+        if "maintainerr" in payload.model_fields_set and isinstance(_new_mtr, dict)                 and _new_mtr.get("apiKey") in (SECRET_MASK, "", None):
+            from urllib.parse import urlparse as _urlparse
+            def _origin_m(u):
+                p = _urlparse(str(u or "").strip())
+                return (p.scheme.lower(), p.netloc.lower())
+            if _origin_m(_new_mtr.get("url")) != _origin_m(_old_mtr.get("url")):
+                incoming["maintainerr"] = {**_new_mtr, "apiKey": ""}
         incoming = _restore_unchanged_secrets(incoming, current)
         incoming = _restore_unchanged_media_server_secrets(incoming, current)
         merged = {**defaults, **current, **incoming}
-        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "imageQuality", "performance", "automation", "scheduler", "notifications"):
+        for nested_key in ("plex", "tmdb", "tvdb", "fanart", "mdblist", "posterApi", "wetrakr", "simkl", "floppy", "maintainerr", "imageQuality", "performance", "automation", "scheduler", "notifications"):
             merged[nested_key] = {
                 **defaults.get(nested_key, {}),
                 **current.get(nested_key, {}),
@@ -455,6 +465,8 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
         # stored section; only an explicitly-sent posterApi may change it.
         if "posterApi" not in payload.model_fields_set:
             merged["posterApi"] = current.get("posterApi") or defaults.get("posterApi")
+        if "maintainerr" not in payload.model_fields_set:
+            merged["maintainerr"] = current.get("maintainerr") or defaults.get("maintainerr")
 
         # mediaServers/libraryGroups are top-level LIST fields, unlike the dict-shaped
         # keys above -- {**current, **incoming} means `incoming`'s value wins outright
@@ -545,6 +557,18 @@ def save_ui_settings_endpoint(payload: UISettings, allow_empty_media_servers: bo
             else:
                 raise
         logger.info("[UI_SETTINGS] Saved to database")
+
+        # A different Maintainerr server (or key) makes the stored snapshot of
+        # removal dates meaningless; drop it so the next render fetches anew.
+        _mtr_before = current.get("maintainerr") or {}
+        _mtr_after = merged.get("maintainerr") or {}
+        _mtr_key = lambda d: (str(d.get("url") or ""), str(d.get("apiKey") or ""))
+        if _mtr_key(_mtr_before) != _mtr_key(_mtr_after):
+            try:
+                from .. import maintainerr_data
+                maintainerr_data.clear()
+            except Exception as mtr_err:
+                logger.debug("[UI_SETTINGS] Clearing the Maintainerr snapshot failed: %s", mtr_err)
 
         # Apply retry scheduler setting
         try:

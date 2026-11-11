@@ -129,6 +129,7 @@ export type PosterApiSettings = {
 export type WeTrakrSettings = { clientId: string }
 export type SimklSettings = { clientId: string }
 export type FloppySettings = { url: string; token: string }
+export type MaintainerrSettings = { url: string; apiKey: string }
 
 export type FanartSettings = {
   apiKey: string
@@ -222,6 +223,7 @@ export type UISettings = {
   wetrakr?: Partial<WeTrakrSettings>
   simkl?: Partial<SimklSettings>
   floppy?: Partial<FloppySettings>
+  maintainerr?: Partial<MaintainerrSettings>
   imageQuality?: ImageQualitySettings
   performance?: PerformanceSettings
   apiOrder?: string[]
@@ -272,6 +274,7 @@ const posterApiEnabledSaved = ref(false)
 const wetrakr = ref<WeTrakrSettings>({ clientId: '' })
 const simkl = ref<SimklSettings>({ clientId: '' })
 const floppy = ref<FloppySettings>({ url: '', token: '' })
+const maintainerr = ref<MaintainerrSettings>({ url: '', apiKey: '' })
 const imageQuality = ref<ImageQualitySettings>({ outputFormat: 'jpg', jpgQuality: 95, pngCompression: 6, webpQuality: 90 })
 const performance = ref<PerformanceSettings>({ concurrentRenders: 2, tmdbRateLimit: 40, tvdbRateLimit: 20, memoryLimit: 2048, useOverlayCache: true })
 const apiOrder = ref<string[]>(['tmdb', 'fanart', 'tvdb'])
@@ -378,6 +381,7 @@ async function loadSettings() {
     wetrakr.value = { clientId: data.wetrakr?.clientId ?? '' }
     simkl.value = { clientId: data.simkl?.clientId ?? '' }
     floppy.value = { url: data.floppy?.url ?? '', token: data.floppy?.token ?? '' }
+    maintainerr.value = { url: data.maintainerr?.url ?? '', apiKey: data.maintainerr?.apiKey ?? '' }
     imageQuality.value = {
       outputFormat: data.imageQuality?.outputFormat ?? 'jpg',
       jpgQuality: data.imageQuality?.jpgQuality ?? 95,
@@ -488,6 +492,7 @@ async function saveSettings(opts: { allowEmptyMediaServers?: boolean } = {}) {
       wetrakr: { ...wetrakr.value },
       simkl: { ...simkl.value },
       floppy: { ...floppy.value },
+      maintainerr: { ...maintainerr.value },
       imageQuality: { ...imageQuality.value },
       performance: { ...performance.value },
       apiOrder: apiOrder.value,
@@ -538,6 +543,7 @@ export function useSettingsStore() {
     wetrakr,
     simkl,
     floppy,
+    maintainerr,
     imageQuality,
     performance,
     apiOrder,

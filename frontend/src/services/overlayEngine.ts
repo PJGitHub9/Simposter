@@ -198,6 +198,20 @@ export const parseDate = (value: unknown): Date | null => {
   return date.getUTCMonth() === mo - 1 && date.getUTCDate() === d ? date : null
 }
 
+const LEAVING_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const LEAVING_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+/** Maintainerr leaving values for a removal date (both as parseDate() UTC midnights).
+ *  Keep identical to backend/maintainerr_data.py format_leaving(). */
+export const formatLeaving = (removal: Date, today: Date): Record<string, string | number> => {
+  const days = Math.max(0, Math.round((removal.getTime() - today.getTime()) / 86400000))
+  const short = `${LEAVING_MONTHS[removal.getUTCMonth()]} ${removal.getUTCDate()}`
+  const weekday = LEAVING_DAYS[removal.getUTCDay()] as string
+  const leaving = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days <= 6 ? weekday : short
+  const iso = `${removal.getUTCFullYear()}-${pad2(removal.getUTCMonth() + 1)}-${pad2(removal.getUTCDate())}`
+  return { removal_date: iso, days_until_removal: days, leaving, leaving_date: short, leaving_day: weekday, leaving_days: String(days) }
+}
+
 /** A yearly date, MM-DD (e.g. 12-25), as [month, day]. */
 const monthDay = (value: unknown): [number, number] | null => {
   const m = String(value ?? '').match(/^\s*(\d{1,2})-(\d{1,2})\s*$/)
@@ -237,6 +251,13 @@ export const buildContext = (meta: Record<string, unknown>): OverlayContext => {
   ctx.resolution = normalizeResolution(ctx.video_resolution)
   // Today's date for seasonal rules; the preview can set its own to test a season.
   if (!parseDate(ctx.today)) ctx.today = localToday()
+  // Maintainerr: the leaving values follow the removal date and "today", so
+  // "Pretend today is" and the example date work like a real render.
+  const removal = parseDate(ctx.removal_date)
+  if (removal) {
+    const f = formatLeaving(removal, parseDate(ctx.today) as Date)
+    for (const [k, v] of Object.entries(f)) if (k !== 'removal_date') ctx[k] = v
+  }
   if (parseDate(ctx.release_date)) {
     ctx.days_since_release = Math.round(((parseDate(ctx.today) as Date).getTime() - (parseDate(ctx.release_date) as Date).getTime()) / 86400000)
   }

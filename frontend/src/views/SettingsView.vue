@@ -468,6 +468,7 @@ const captureSettingsSnapshot = () => {
     wetrakr: JSON.parse(JSON.stringify(settings.wetrakr.value)),
     simkl: JSON.parse(JSON.stringify(settings.simkl.value)),
     floppy: JSON.parse(JSON.stringify(settings.floppy.value)),
+    maintainerr: JSON.parse(JSON.stringify(settings.maintainerr.value)),
     // Poster API on/off (MediaServersTab), bound to the store.
     posterApiEnabled: !!settings.posterApi.value.enabled
   })
@@ -575,6 +576,7 @@ const checkForChanges = () => {
     wetrakr: settings.wetrakr.value,
     simkl: settings.simkl.value,
     floppy: settings.floppy.value,
+    maintainerr: settings.maintainerr.value,
     posterApiEnabled: !!settings.posterApi.value.enabled
   })
   hasUnsavedChanges.value = currentSnapshot !== initialSettingsSnapshot.value
@@ -650,7 +652,7 @@ const checkForChanges = () => {
   sectionsWithChanges.value.appearance = differs(['theme', 'posterDensity', 'timezone'])
   sectionsWithChanges.value.libraryDisplay = differs(['deduplicateMovies', 'defaultSort'])
   sectionsWithChanges.value.apiKeys = differs(['tmdbApiKey', 'tvdbApiKey', 'fanartApiKey', 'apiOrder'])
-  sectionsWithChanges.value.ratings = differs(['mdblist', 'wetrakr', 'simkl', 'floppy'])
+  sectionsWithChanges.value.ratings = differs(['mdblist', 'wetrakr', 'simkl', 'floppy', 'maintainerr'])
   sectionsWithChanges.value.posterApi = differs(['posterApiEnabled'])
   sectionsWithChanges.value.imageQuality = differs(['outputFormat', 'jpgQuality', 'pngCompression', 'webpQuality'])
   sectionsWithChanges.value.performance = differs(['concurrentRenders', 'useOverlayCache', 'memoryLimit'])
@@ -1489,6 +1491,7 @@ watch([
   () => settings.wetrakr.value,
   () => settings.simkl.value,
   () => settings.floppy.value,
+  () => settings.maintainerr.value,
   () => settings.posterApi.value.enabled
 ], () => {
   if (watchersEnabled.value) {

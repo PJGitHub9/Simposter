@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.61 (2026-11-10) — `webui-overhaul-dev` branch
+
+### New Features
+- **Maintainerr leaving dates for overlays** — Settings → Ratings & Lists → Maintainerr (address, optional API key sent as `X-Api-Key`, Test). Simposter reads `GET /api/collections/overlay-data` (Maintainerr 3.20+) for movies, shows and seasons and keeps a snapshot (`maintainerr_items`, refreshed after an hour in the background, and always before an Overlay Refresh run). An item's removal date is the earliest `addDate + deleteAfterDays` of its collections, matched by its own id, then TMDb/TVDB id (so Plex and Jellyfin copies agree). Text values `{leaving}` (today / tomorrow / weekday within 6 days / "Nov 12"), `{leaving_date}`, `{leaving_day}`, `{leaving_days}`; Show when fields Removal date, Days until removal, Maintainerr collection. An item in no collection has none of these, so its leaving layers aren't drawn. Overlay Refresh re-sends a poster when the text changes; the Overlay Refresh page and Overlays → Scheduler suggest a daily schedule when an overlay uses these values. Turn off Maintainerr's own overlays for the same items.
+
+### Bug Fixes
+- **Overlay preview listed every server's library separately** — "A real movie or show" in the Overlay Manager listed each Plex/Jellyfin/Emby library on its own. It now lists library groups by name (opened through the group's Plex member, else its first member, so items come back merged as on the library pages), with libraries not in any group still listed on their own.
+
 ## v1.8.60 (2026-11-10) — `webui-overhaul-dev` branch
 
 ### Improvements

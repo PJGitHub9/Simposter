@@ -170,6 +170,11 @@ class FloppySettings(BaseModel):
     token: str = ""  # App token (Settings -> Integrations -> App tokens), scope lists:read
 
 
+class MaintainerrSettings(BaseModel):
+    url: str = ""     # e.g. http://192.168.1.10:6246 (a sub-path behind a proxy is fine)
+    apiKey: str = ""  # optional; Maintainerr's API doesn't check it, a proxy might
+
+
 class ImageQualitySettings(BaseModel):
     outputFormat: str = "jpg"  # jpg, png, webp
     jpgQuality: int = 95
@@ -443,6 +448,7 @@ class UISettings(BaseModel):
     wetrakr: WeTrakrSettings = Field(default_factory=WeTrakrSettings)
     simkl: SimklSettings = Field(default_factory=SimklSettings)
     floppy: FloppySettings = Field(default_factory=FloppySettings)
+    maintainerr: MaintainerrSettings = Field(default_factory=MaintainerrSettings)
     imageQuality: ImageQualitySettings = Field(default_factory=ImageQualitySettings)
     performance: PerformanceSettings = Field(default_factory=PerformanceSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)

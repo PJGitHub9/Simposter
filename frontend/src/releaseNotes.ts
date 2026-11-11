@@ -10,6 +10,25 @@ export interface ReleaseNote {
 // Update this array with each release. Keep the last ~5 versions for users who skip updates.
 export const releaseNotes: ReleaseNote[] = [
   {
+    version: 'v1.8.61',
+    date: '2026-11-10',
+    sections: [
+      {
+        title: 'New Features',
+        items: [
+          'Maintainerr leaving dates: add your Maintainerr address in Settings → Ratings & Lists, then overlays can show when an item will be removed, e.g. "Leaving {leaving}" gives "Leaving tomorrow", "Leaving Wednesday" or "Leaving Nov 12". Also {leaving_date}, {leaving_day}, {leaving_days}, and "Show when" rules on the removal date, days until removal and Maintainerr collection.',
+          'Overlay Refresh updates these posters as the date gets closer or when an item is kept; the page suggests refreshing daily when an overlay uses them.',
+        ],
+      },
+      {
+        title: 'Bug Fixes',
+        items: [
+          'Overlay preview: "A real movie or show" now lists your library groups instead of each server library separately.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'v1.8.60',
     date: '2026-11-10',
     sections: [

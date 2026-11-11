@@ -1269,6 +1269,37 @@ def init_database():
             )
         """)
 
+        # Maintainerr snapshot (backend/maintainerr_data.py): one row per item per
+        # collection, replaced as a whole on every successful sync.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS maintainerr_items (
+                media_type TEXT NOT NULL,
+                media_server_id TEXT NOT NULL,
+                tmdb_id INTEGER,
+                tvdb_id INTEGER,
+                collection_id INTEGER,
+                collection_name TEXT,
+                arr_action INTEGER,
+                deletion_date TEXT NOT NULL,
+                media_server_type TEXT
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_maintainerr_items_key ON maintainerr_items(media_server_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_maintainerr_items_tmdb ON maintainerr_items(tmdb_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_maintainerr_items_tvdb ON maintainerr_items(tvdb_id)")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS maintainerr_sync (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                fetched_at REAL,
+                last_error TEXT,
+                last_attempt_at REAL
+            )
+        """)
+        for _tbl, _col, _type in (("maintainerr_items", "media_server_type", "TEXT"),
+                                  ("maintainerr_sync", "last_attempt_at", "REAL")):
+            if _col not in [r[1] for r in cursor.execute(f"PRAGMA table_info({_tbl})").fetchall()]:
+                cursor.execute(f"ALTER TABLE {_tbl} ADD COLUMN {_col} {_type}")
+
         # Sign-in tokens for list sources (WeTrakr, SIMKL). Kept out of the
         # settings table, which every Settings save rebuilds from the page's
         # copy, so a stale page can never wipe a token the server just stored.
@@ -1611,6 +1642,8 @@ _STRING_ONLY_SETTINGS_KEYS = {
     "simkl.clientId",
     "floppy.url",
     "floppy.token",
+    "maintainerr.url",
+    "maintainerr.apiKey",
     "automation.webhookSecret",
     "posterApi.key",
     "posterApi.defaultMoviePreset",
